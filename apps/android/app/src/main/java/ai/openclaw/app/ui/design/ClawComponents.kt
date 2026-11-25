@@ -30,14 +30,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChatBubble
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -64,6 +59,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 internal enum class ClawStatus {
@@ -72,6 +68,17 @@ internal enum class ClawStatus {
   Warning,
   Danger,
 }
+
+internal fun ClawColors.statusColors(
+  status: ClawStatus,
+  neutral: Color = textMuted,
+): Pair<Color, Color> =
+  when (status) {
+    ClawStatus.Neutral -> neutral to surfaceRaised
+    ClawStatus.Success -> success to successSoft
+    ClawStatus.Warning -> warning to warningSoft
+    ClawStatus.Danger -> danger to dangerSoft
+  }
 
 @Composable
 internal fun ClawScaffold(
@@ -119,6 +126,9 @@ internal fun ClawPrimaryButton(
   modifier: Modifier = Modifier,
   enabled: Boolean = true,
   icon: ImageVector? = null,
+  loading: Boolean = false,
+  contentPadding: PaddingValues = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+  disabledContentColor: Color = ClawTheme.colors.textSubtle,
 ) {
   Button(
     onClick = onClick,
@@ -130,12 +140,20 @@ internal fun ClawPrimaryButton(
         containerColor = ClawTheme.colors.primary,
         contentColor = ClawTheme.colors.primaryText,
         disabledContainerColor = ClawTheme.colors.surfacePressed,
-        disabledContentColor = ClawTheme.colors.textSubtle,
+        disabledContentColor = disabledContentColor,
       ),
-    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+    contentPadding = contentPadding,
     elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp, pressedElevation = 0.dp),
   ) {
-    if (icon != null) {
+    if (loading) {
+      CircularProgressIndicator(
+        modifier = Modifier.size(18.dp),
+        color = ClawTheme.colors.textMuted,
+        strokeWidth = 2.dp,
+        trackColor = Color.Transparent,
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+    } else if (icon != null) {
       Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(16.dp))
       Spacer(modifier = Modifier.width(6.dp))
     }
@@ -277,13 +295,7 @@ internal fun ClawStatusPill(
   modifier: Modifier = Modifier,
 ) {
   val colors = ClawTheme.colors
-  val (accentColor, backgroundColor) =
-    when (status) {
-      ClawStatus.Neutral -> colors.textMuted to colors.surfaceRaised
-      ClawStatus.Success -> colors.success to colors.successSoft
-      ClawStatus.Warning -> colors.warning to colors.warningSoft
-      ClawStatus.Danger -> colors.danger to colors.dangerSoft
-    }
+  val (accentColor, backgroundColor) = colors.statusColors(status)
 
   Surface(
     modifier = modifier,
@@ -343,10 +355,12 @@ internal fun ClawPill(
 internal fun <T> ClawListPanel(
   items: List<T>,
   modifier: Modifier = Modifier,
+  contentPadding: PaddingValues = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = 4.dp),
+  dividerColor: Color = ClawTheme.colors.border.copy(alpha = 0.82f),
   row: @Composable (T) -> Unit,
 ) {
-  ClawPanel(modifier = modifier, contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = 4.dp)) {
-    ClawSeparatedColumn(items = items, row = row)
+  ClawPanel(modifier = modifier, contentPadding = contentPadding) {
+    ClawSeparatedColumn(items = items, dividerColor = dividerColor, row = row)
   }
 }
 
@@ -401,16 +415,20 @@ internal fun ClawTextBadge(
 internal fun ClawIconBadge(
   icon: ImageVector,
   modifier: Modifier = Modifier,
+  size: Dp = 28.dp,
+  iconSize: Dp = 14.dp,
+  color: Color = ClawTheme.colors.surfacePressed,
+  borderColor: Color = ClawTheme.colors.border,
 ) {
   Surface(
-    modifier = modifier.size(28.dp),
+    modifier = modifier.size(size),
     shape = CircleShape,
-    color = ClawTheme.colors.surfacePressed,
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
+    color = color,
+    border = BorderStroke(1.dp, borderColor),
     contentColor = ClawTheme.colors.text,
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(iconSize), tint = ClawTheme.colors.text)
     }
   }
 }
@@ -486,12 +504,10 @@ internal fun <T> segmentedControlRows(
   val rowCount = (options.size + maxOptionsPerRow - 1) / maxOptionsPerRow
   val minimumRowSize = options.size / rowCount
   val largerRowCount = options.size % rowCount
-  var startIndex = 0
   return List(rowCount) { rowIndex ->
+    val startIndex = rowIndex * minimumRowSize + minOf(rowIndex, largerRowCount)
     val rowSize = minimumRowSize + if (rowIndex < largerRowCount) 1 else 0
-    options.subList(startIndex, startIndex + rowSize).toList().also {
-      startIndex += rowSize
-    }
+    options.subList(startIndex, startIndex + rowSize).toList()
   }
 }
 
@@ -632,15 +648,6 @@ internal fun ClawComponentShowcase(modifier: Modifier = Modifier) {
 
   ClawScaffold(modifier = modifier) {
     Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.sm)) {
-      ClawTopBar(
-        title = "OpenClaw",
-        subtitle = "Local command center",
-        navigation = { ClawAvatarMark(text = "OC") },
-        actions = {
-          ClawIconButton(icon = Icons.Default.Search, contentDescription = "Search", onClick = {})
-        },
-      )
-
       Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -690,18 +697,6 @@ internal fun ClawComponentShowcase(modifier: Modifier = Modifier) {
       ClawEmptyState(
         title = "Nothing needs your attention",
         body = "OpenClaw will surface approvals, failed jobs, and channel issues here.",
-      )
-
-      ClawBottomNav(
-        items =
-          listOf(
-            ClawNavItem(key = "overview", label = "Home", icon = Icons.Default.Home),
-            ClawNavItem(key = "chat", label = "Chat", icon = Icons.Default.ChatBubble),
-            ClawNavItem(key = "voice", label = "Voice", icon = Icons.Default.Mic),
-            ClawNavItem(key = "settings", label = "Settings", icon = Icons.Default.Settings),
-          ),
-        selectedKey = "chat",
-        onSelect = {},
       )
     }
   }

@@ -4,6 +4,7 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
+@Suite(.testWaitLimit)
 @MainActor
 struct WorkActivityStoreTests {
     @Test func `replacement primary clears old work without retiring the new same-key tool`() async throws {
@@ -18,7 +19,8 @@ struct WorkActivityStoreTests {
             }
             store.setMainSessionKey("before-primary")
             _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
-            #expect(await self.eventually { store.mainSessionKey == "main" })
+            try await TestWait.observed("main activity session") { store.mainSessionKey == "main" }
+            #expect(store.mainSessionKey == "main")
 
             store.handleJob(sessionKey: "main", state: "started")
             store.handleTool(sessionKey: "main", phase: "start", name: "read", meta: "old-tool", args: nil)
@@ -35,7 +37,10 @@ struct WorkActivityStoreTests {
                     event: "heartbeat",
                     payload: AnyCodable(["ts": 1, "status": "work-lifetime-proof"]))),
                 socketGeneration: 1)
-            #expect(await self.eventually { control.lastHeartbeatEvent?.status == "work-lifetime-proof" })
+            try await TestWait.state("work lifetime heartbeat") {
+                control.lastHeartbeatEvent?.status == "work-lifetime-proof"
+            }
+            #expect(control.lastHeartbeatEvent?.status == "work-lifetime-proof")
             #expect(store.current == nil)
             #expect(store.iconState == .idle)
             #expect(store.lastToolUpdatedAt == nil)
@@ -49,15 +54,6 @@ struct WorkActivityStoreTests {
             #expect(store.lastToolUpdatedAt == newToolUpdatedAt)
             await control.disconnect()
         }
-    }
-
-    private func eventually(_ predicate: () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now + .seconds(2)
-        while ContinuousClock.now < deadline {
-            if predicate() { return true }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return predicate()
     }
 
     @Test func `main session job preempts other`() {
@@ -80,7 +76,7 @@ struct WorkActivityStoreTests {
         #expect(store.current == nil)
     }
 
-    @Test func `job stays working after tool result grace`() async {
+    @Test func `job stays working after tool result grace`() async throws {
         let store = WorkActivityStore()
 
         store.handleJob(sessionKey: "main", state: "started")
@@ -101,9 +97,8 @@ struct WorkActivityStoreTests {
             meta: nil,
             args: ["path": AnyCodable("/tmp/file.txt")])
 
-        for _ in 0..<50 {
-            if store.iconState == .workingMain(.job) { break }
-            try? await Task.sleep(nanoseconds: 100_000_000)
+        try await TestWait.observed("working job after tool result") {
+            store.iconState == .workingMain(.job)
         }
         #expect(store.iconState == .workingMain(.job))
 

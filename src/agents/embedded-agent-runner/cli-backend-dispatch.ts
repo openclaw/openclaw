@@ -1,16 +1,16 @@
 // Subscription-auth callers opt into CLI latency to avoid metered direct-API passthrough.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
-import { stripOpenClawMcpToolPrefix } from "../cli-runner/tool-policy.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
+import { resolveEmbeddedCliBackendDispatchEligibilityAsync } from "./cli-backend-dispatch-eligibility.js";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
-import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const log = createSubsystemLogger("agents/embedded-cli-dispatch");
@@ -19,23 +19,9 @@ type CliBackendDispatchParams = RunEmbeddedAgentInternalParams & {
   sessionTarget: SessionTranscriptRuntimeTarget;
 };
 
-type EmbeddedCliBackendDispatch = {
-  provider: string;
-  sessionFile: string;
-  /** Named loopback allowlist; the dispatch gate guarantees it is non-empty. */
-  toolsAllow: string[];
-};
-
 export async function runEmbeddedAgentViaCliBackendIfEligible(
   params: CliBackendDispatchParams,
 ): Promise<EmbeddedAgentRunResult | undefined> {
-  const dispatch = resolveEmbeddedCliBackendDispatch(params);
-  return dispatch ? await runEmbeddedAgentViaCliBackend(params, dispatch) : undefined;
-}
-
-function resolveEmbeddedCliBackendDispatch(
-  params: RunEmbeddedAgentParams,
-): EmbeddedCliBackendDispatch | undefined {
   if (params.cliBackendDispatch !== "subscription-auth") {
     return undefined;
   }
@@ -44,41 +30,65 @@ function resolveEmbeddedCliBackendDispatch(
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
     return undefined;
   }
-  // The CLI runner needs the caller-owned transcript path; runs without one
-  // stay on the passthrough where session targets are resolved internally.
-  const sessionFile = params.sessionFile?.trim();
+  // The CLI runner needs the caller-owned transcript path or the caller's in-memory session;
+  // runs without either stay on the passthrough where session targets are resolved internally.
+  const sessionFile =
+    params.sessionFile?.trim() ||
+    (params.sessionManager ? `in-memory:${params.sessionManager.getSessionId()}` : undefined);
   if (!sessionFile) {
     return undefined;
   }
-  const toolsAllow = resolveDispatchableToolsAllow(params);
-  if (!toolsAllow) {
+  // The CLI bridge supports only a named allowlist bounded by its loopback grant.
+  // Other policies stay on the embedded path so dispatch cannot widen tool access (#57326).
+  // A plugin's own tools and a caller output cap do not reach a CLI process either.
+  if (
+    params.disableTools ||
+    params.modelRun ||
+    params.runtimePluginToolGrant?.toolNames.length ||
+    params.streamParams?.maxTokens !== undefined
+  ) {
     return undefined;
   }
-  const eligibility = resolveEmbeddedCliBackendDispatchEligibility(params);
-  return eligibility ? { provider: eligibility.provider, sessionFile, toolsAllow } : undefined;
-}
-
-// The CLI bridge supports only a non-empty named allowlist bounded by its loopback grant.
-// Other policies stay on the embedded path so dispatch cannot widen tool access (#57326).
-function resolveDispatchableToolsAllow(params: RunEmbeddedAgentParams): string[] | undefined {
-  if (params.disableTools || params.modelRun) {
+  // Only tools that may execute reach the CLI: a session fork lists every session tool but runs
+  // only its own. An empty list is a tool-free run.
+  const allowed =
+    params.toolExecutionAllow?.filter(
+      (tool) => !params.toolsAllow || params.toolsAllow.includes(tool),
+    ) ?? params.toolsAllow;
+  if (!allowed) {
     return undefined;
   }
-  if (!params.toolsAllow || params.toolsAllow.length === 0) {
-    return undefined;
-  }
-  const names = params.toolsAllow.map((name) => normalizeToolPolicyName(name));
+  const names = allowed.map(normalizeToolPolicyName);
   if (names.some((name) => !name || name.includes("*"))) {
     return undefined;
   }
-  return [...new Set(names)];
-}
-
-async function runEmbeddedAgentViaCliBackend(
-  params: CliBackendDispatchParams,
-  dispatch: EmbeddedCliBackendDispatch,
-): Promise<EmbeddedAgentRunResult> {
+  const toolsAllow = [...new Set(names)];
+  const eligibility = await resolveEmbeddedCliBackendDispatchEligibilityAsync(params);
+  if (!eligibility) {
+    return undefined;
+  }
   const { runCliAgent } = await import("../cli-runner.runtime.js");
+  const { cliBackendAcceptsAuthProfileForwarding, resolveCliExecutionAuthProfileId } =
+    await import("../cli-execution-auth.js");
+  // A fresh CLI session uses the account order new CLI sessions use, so an OpenClaw-held
+  // subscription login reaches the CLI as it does for the session's own turns.
+  const { config, agentDir } = params;
+  const authProfileId =
+    config &&
+    agentDir &&
+    cliBackendAcceptsAuthProfileForwarding({
+      provider: eligibility.provider,
+      config,
+      agentId: params.agentId,
+    })
+      ? await resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: eligibility.provider,
+          authProfileProvider: params.provider ?? eligibility.provider,
+          config,
+          agentDir,
+          selected: { authProfileId: params.authProfileId },
+        })
+      : params.authProfileId;
   const admittedRunContext = await resolvePreparedRunAdmission({
     runId: params.runId,
     runtimeKind: "embedded",
@@ -89,30 +99,36 @@ async function runEmbeddedAgentViaCliBackend(
   // and user/plugin MCP servers remain unavailable.
   const cliToolAvailability = {
     native: [] as [],
-    openClaw: dispatch.toolsAllow,
+    openClaw: toolsAllow,
   };
   const onAgentToolResult = params.onAgentToolResult;
   const { storePath, expectedLifecycleRevision, expectedWriterRunId } = params.sessionTarget;
+  // A run under another session's policy (a session fork) reads that session's permission
+  // ceiling, sandbox and exec placement, as the CLI's grant takes them from the session entry.
+  const policySessionKey =
+    params.sandboxSessionKey && params.sandboxSessionKey !== params.sessionKey
+      ? params.sandboxSessionKey
+      : undefined;
+  const policySessionEntry = policySessionKey
+    ? await readSessionEntryReadOnlyInWorker({
+        agentId: params.agentId,
+        sessionKey: policySessionKey,
+        storePath,
+      })
+    : undefined;
   // Durable turns mirror CLI output for transcript readers and timeout salvage.
   // Detached runs may borrow the identity without owning its transcript.
   const transcript =
     params.sessionManager || params.sessionPersistence === "detached"
       ? undefined
       : createCliDispatchTranscriptRecorder({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
+          ...params,
           storePath,
-          sessionFile: dispatch.sessionFile,
-          runId: params.runId,
-          prompt: params.prompt,
-          provider: dispatch.provider,
-          model: params.model,
+          sessionFile,
+          provider: eligibility.provider,
           cwd: params.cwd ?? params.workspaceDir,
-          config: params.config,
           expectedLifecycleRevision,
           expectedWriterRunId,
-          ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
         });
   // Match native embedded tool names and soft-error signals after CLI transport decoding.
   const unsubscribe = onAgentEventForRun(params.runId, (evt) => {
@@ -163,7 +179,7 @@ async function runEmbeddedAgentViaCliBackend(
   params.abortSignal?.addEventListener("abort", flushOnAbort, { once: true });
   // Match native post-admission lifecycle and watchdog activation.
   log.info(
-    `dispatching embedded run through CLI backend: runId=${params.runId} provider=${dispatch.provider} model=${params.model ?? ""}`,
+    `dispatching embedded run through CLI backend: runId=${params.runId} provider=${eligibility.provider} model=${params.model ?? ""}`,
   );
   let finalAssistantText: string | undefined;
   try {
@@ -175,6 +191,7 @@ async function runEmbeddedAgentViaCliBackend(
     const result = await runCliAgent({
       admittedRunContext,
       sessionManager: params.sessionManager,
+      disableTrajectory: params.disableTrajectory,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionTarget: params.sessionTarget,
@@ -184,7 +201,7 @@ async function runEmbeddedAgentViaCliBackend(
       agentId: params.agentId,
       storePath,
       trigger: params.trigger,
-      sessionFile: dispatch.sessionFile,
+      sessionFile,
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       config: params.config,
@@ -193,12 +210,12 @@ async function runEmbeddedAgentViaCliBackend(
       images: params.images,
       imageOrder: params.imageOrder,
       media: params.media,
-      provider: dispatch.provider,
+      provider: eligibility.provider,
       model: params.model,
       ...(params.requestedRouteResolution === "resolved" && params.provider && params.model
         ? { requesterModel: { provider: params.provider, model: params.model } }
         : {}),
-      authProfileId: params.authProfileId,
+      authProfileId,
       modelHasVision: params.modelHasVision,
       contextWindow: params.contextWindow,
       thinkLevel: params.thinkLevel,
@@ -213,6 +230,20 @@ async function runEmbeddedAgentViaCliBackend(
       extraSystemPrompt: params.extraSystemPrompt,
       messageChannel: params.messageChannel,
       messageProvider: params.messageProvider,
+      // The requester and policy the embedded run would check its tools against.
+      ...(policySessionKey ? { runtimePolicySessionKey: policySessionKey } : {}),
+      ...(policySessionEntry ? { sessionEntry: policySessionEntry } : {}),
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      inputProvenance: params.inputProvenance,
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       abortSignal: params.abortSignal,
@@ -231,7 +262,22 @@ async function runEmbeddedAgentViaCliBackend(
     finalAssistantText = result.payloads?.find(
       (payload) => payload.isReasoning !== true && typeof payload.text === "string",
     )?.text;
-    return withoutCliSessionBinding(result);
+    // A one-shot dispatch has no session owner for a returned CLI binding.
+    const agentMeta = result.meta.agentMeta;
+    if (!agentMeta?.cliSessionBinding && agentMeta?.clearCliSessionBinding !== true) {
+      return result;
+    }
+    return {
+      ...result,
+      meta: {
+        ...result.meta,
+        agentMeta: {
+          ...agentMeta,
+          cliSessionBinding: undefined,
+          clearCliSessionBinding: undefined,
+        },
+      },
+    };
   } finally {
     params.abortSignal?.removeEventListener("abort", flushOnAbort);
     unsubscribe();
@@ -239,23 +285,4 @@ async function runEmbeddedAgentViaCliBackend(
     // file as soon as the caller observes the rejection.
     await transcript?.finalize(finalAssistantText);
   }
-}
-
-/** Dispatch runs own no session entry, so a returned CLI binding has no owner to persist it. */
-function withoutCliSessionBinding(result: EmbeddedAgentRunResult): EmbeddedAgentRunResult {
-  const agentMeta = result.meta.agentMeta;
-  if (!agentMeta?.cliSessionBinding && agentMeta?.clearCliSessionBinding !== true) {
-    return result;
-  }
-  return {
-    ...result,
-    meta: {
-      ...result.meta,
-      agentMeta: {
-        ...agentMeta,
-        cliSessionBinding: undefined,
-        clearCliSessionBinding: undefined,
-      },
-    },
-  };
 }

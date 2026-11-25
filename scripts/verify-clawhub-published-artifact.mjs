@@ -5,6 +5,7 @@ import { readdirSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readBoundedResponseBytes } from "./lib/bounded-response.mjs";
 import {
   parseClawHubArtifactOptions,
   readClawHubBootstrapManifest,
@@ -25,8 +26,6 @@ const PUBLISH_TAG_PATTERN = /^(?:alpha|beta|latest)$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 const TOOLCHAIN_VERSION_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
-
-class PermanentReadbackError extends Error {}
 
 class RetryableReadbackError extends Error {
   constructor(message, requestedDelayMs) {
@@ -71,79 +70,30 @@ function retryAfterMs(headers) {
   if (!retryAfter) {
     return undefined;
   }
-  const seconds = Number(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.min(MAX_DELAY_MS, Math.max(1, Math.round(seconds * 1_000)));
+  if (/^[0-9]+$/u.test(retryAfter)) {
+    return Number(retryAfter) * 1_000;
   }
   const dateMs = Date.parse(retryAfter);
   if (Number.isFinite(dateMs)) {
-    return Math.min(MAX_DELAY_MS, Math.max(1, dateMs - Date.now()));
+    return Math.max(0, dateMs - Date.now());
   }
   return undefined;
 }
 
 function retryableStatus(status) {
-  return status === 404 || status === 408 || status === 425 || status === 429 || status >= 500;
+  return [404, 408, 425, 429, 500, 502, 503, 504].includes(status);
 }
 
 async function cancelResponse(response) {
   await response.body?.cancel().catch(() => undefined);
 }
 
-async function readBoundedBytes(response, label, maximumBytes) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength !== null) {
-    const parsedLength = Number(contentLength);
-    if (Number.isFinite(parsedLength) && parsedLength > maximumBytes) {
-      await cancelResponse(response);
-      throw new PermanentReadbackError(`${label} exceeded ${maximumBytes} bytes.`);
-    }
-  }
-  if (!response.body) {
-    throw new RetryableReadbackError(`${label} returned no response body.`);
-  }
-  const reader = response.body.getReader();
-  const chunks = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      total += value.byteLength;
-      if (total > maximumBytes) {
-        await reader.cancel();
-        throw new PermanentReadbackError(`${label} exceeded ${maximumBytes} bytes.`);
-      }
-      chunks.push(value);
-    }
-  } catch (error) {
-    await reader.cancel().catch(() => undefined);
-    throw error;
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
 async function fetchResponse(url, options, context) {
-  let response;
-  try {
-    response = await context.fetchImpl(url, {
-      ...options,
-      redirect: "follow",
-      signal: context.signal,
-    });
-  } catch (error) {
-    throw new RetryableReadbackError(
-      `${url} request failed: ${error instanceof Error ? error.message : String(error)}.`,
-    );
-  }
+  const response = await context.fetchImpl(url, {
+    ...options,
+    redirect: "follow",
+    signal: context.signal,
+  });
   if (retryableStatus(response.status)) {
     const delay = retryAfterMs(response.headers);
     await cancelResponse(response);
@@ -151,22 +101,28 @@ async function fetchResponse(url, options, context) {
   }
   if (!response.ok) {
     await cancelResponse(response);
-    throw new PermanentReadbackError(`${url} returned HTTP ${response.status}.`);
+    throw new Error(`${url} returned HTTP ${response.status}.`);
   }
   return response;
 }
 
 async function fetchBoundedBody(url, options, context, maximumBytes) {
-  const response = await fetchResponse(url, options, context);
   try {
-    const bytes = await readBoundedBytes(response, url, maximumBytes);
+    const response = await fetchResponse(url, options, context);
+    const bytes = await readBoundedResponseBytes(response, url, maximumBytes, {
+      signal: context.signal,
+    });
+    if (!response.body) {
+      throw new Error(`${url} returned no response body.`);
+    }
     return { bytes, headers: response.headers };
   } catch (error) {
-    if (error instanceof PermanentReadbackError) {
+    if (error instanceof RetryableReadbackError) {
       throw error;
     }
-    throw new RetryableReadbackError(
-      `${url} body read failed: ${error instanceof Error ? error.message : String(error)}.`,
+    throw new Error(
+      `${url} read failed: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
 }
@@ -181,24 +137,23 @@ async function fetchJson(url, context) {
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch (error) {
-    throw new RetryableReadbackError(
+    throw new Error(
       `${url} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}.`,
+      { cause: error },
     );
   }
 }
 
 function requireObject(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new RetryableReadbackError(`${label} is missing or invalid.`);
+    throw new Error(`${label} is missing or invalid.`);
   }
   return value;
 }
 
 function requireExact(value, expected, label) {
   if (value !== expected) {
-    throw new RetryableReadbackError(
-      `${label} mismatch: expected ${String(expected)}, found ${String(value)}.`,
-    );
+    throw new Error(`${label} mismatch: expected ${String(expected)}, found ${String(value)}.`);
   }
 }
 
@@ -341,20 +296,42 @@ async function runBoundedRetry(label, operation, retryOptions = {}) {
     try {
       return await operation({ fetchImpl, signal });
     } catch (error) {
-      if (error instanceof PermanentReadbackError) {
+      // Native fetch wraps socket and permanent TLS failures alike. Only typed
+      // transport failures retry; completed content and identity failures do not.
+      const transportError = error?.cause ?? error;
+      const networkFailure =
+        transportError?.name === "TimeoutError" ||
+        [
+          "ECONNRESET",
+          "ECONNREFUSED",
+          "ETIMEDOUT",
+          "EAI_AGAIN",
+          "UND_ERR_SOCKET",
+          "UND_ERR_CONNECT_TIMEOUT",
+          "UND_ERR_HEADERS_TIMEOUT",
+          "UND_ERR_BODY_TIMEOUT",
+        ].some((code) => code === transportError?.code || code === transportError?.cause?.code);
+      if (!(error instanceof RetryableReadbackError) && !networkFailure) {
+        throw new Error(
+          `${label} readback failed: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
+      if ((error.retryAfterMs ?? 0) > MAX_DELAY_MS) {
         throw error;
       }
       lastError = error;
       if (attempt < attempts) {
-        const requestedDelay =
-          error instanceof RetryableReadbackError ? error.retryAfterMs : undefined;
-        await sleep(requestedDelay ?? Math.min(MAX_DELAY_MS, delayMs * attempt));
+        await sleep(Math.max(error.retryAfterMs ?? 0, Math.min(MAX_DELAY_MS, delayMs * attempt)));
       }
     }
   }
 
   const detail = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${label} did not stabilize after ${attempts} attempts; last failure ${detail}`);
+  throw new Error(
+    `${label} did not stabilize after ${attempts} attempts; last failure ${detail}. Retry readback, not publication.`,
+    { cause: lastError },
+  );
 }
 
 export async function verifyPublishedClawHubArtifacts(options) {

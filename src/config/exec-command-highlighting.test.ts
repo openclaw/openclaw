@@ -6,7 +6,7 @@ function configWithAgent(globalValue?: boolean, agentValue?: boolean): OpenClawC
   return {
     tools: { exec: { commandHighlighting: globalValue } },
     agents: {
-      list: [{ id: "alpha", tools: { exec: { commandHighlighting: agentValue } } }],
+      entries: { alpha: { tools: { exec: { commandHighlighting: agentValue } } } },
     },
   };
 }
@@ -32,7 +32,7 @@ describe("resolveExecCommandHighlighting", () => {
   it("agent without override falls back to global true", () => {
     const config = {
       tools: { exec: { commandHighlighting: true } },
-      agents: { list: [{ id: "alpha" }] },
+      agents: { entries: { alpha: {} } },
     } satisfies OpenClawConfig;
     expect(resolveExecCommandHighlighting({ config, agentId: "alpha" })).toBe(true);
   });

@@ -1,714 +1,419 @@
-import { describe, expect, it } from "vitest";
-import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-import { joinJsonlFrames, claudeStreamEvent, claudeTextDelta } from "./cli-output.test-helpers.js";
+import { expect, it, vi } from "vitest";
+import type * as Cli from "./cli-output-contracts.js";
+import {
+  createClaudeParser,
+  joinJsonlFrames,
+  claudeStreamEvent,
+  claudeTextDelta,
+  localCliBackend,
+} from "./cli-output.test-helpers.js";
 
-type ParserOptions = Parameters<typeof createCliJsonlStreamingParser>[0];
-
-const claudeBackend: ParserOptions["backend"] = {
-  command: "claude",
-  output: "jsonl",
-  jsonlDialect: "claude-stream-json",
-  sessionIdFields: ["session_id"],
-};
-
+type ParserOptions = Cli.CliJsonlStreamingParserOptions;
+type ExpectedOutput = Pick<Cli.CliOutput, "text"> & Partial<Cli.CliOutput>;
 function createParser(overrides: Partial<ParserOptions> = {}) {
-  return createCliJsonlStreamingParser({
-    backend: {
-      command: "local-cli",
-      output: "jsonl",
-      jsonlDialect: "claude-stream-json",
-      sessionIdFields: ["session_id"],
-    },
+  return createClaudeParser({
+    backend: localCliBackend,
     providerId: "local-cli",
-    onAssistantDelta: () => {},
     ...overrides,
   });
 }
-
-function claudeMessageStart(id?: string) {
-  return claudeStreamEvent({ type: "message_start", ...(id ? { message: { id } } : {}) });
+function finishFrames(parser: ReturnType<typeof createParser>, ...frames: unknown[]) {
+  const events = frames.map((frame) =>
+    typeof frame === "string" ? claudeTextDelta(frame) : frame,
+  );
+  parser.push(joinJsonlFrames(...events, ""));
+  parser.finish();
 }
-
-function claudeMessageStop() {
-  return claudeStreamEvent({ type: "message_stop" });
+function result(text: string, fields: Record<string, unknown> = {}) {
+  return { type: "result", result: text, ...fields };
 }
-
-function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number) {
+function init(sessionId: string) {
+  return { type: "init", session_id: sessionId };
+}
+const messageStart = claudeStreamEvent({ type: "message_start" });
+const messageStop = claudeStreamEvent({ type: "message_stop" });
+function message(text: string) {
+  return [messageStart, claudeTextDelta(text)];
+}
+function reply(text: string) {
+  return [claudeTextDelta(text), result(text)];
+}
+const draftMessage = [...message("Draft."), messageStop];
+const toolProtocol = '<invoke name="Bash">\n<parameter name="command">echo 1';
+function toolStart(id = "tool-1", index?: number) {
   return claudeStreamEvent({
     type: "content_block_start",
     ...(index === undefined ? {} : { index }),
-    content_block: contentBlock,
+    content_block: {
+      type: "tool_use",
+      id,
+      name: "Read",
+      ...(index === undefined ? {} : { input: {} }),
+    },
   });
 }
-
-function claudeSyntheticNoResponse(text = "No response requested.") {
+function itemMessage(text: string) {
+  return { type: "item.completed", item: { type: "agent_message", text } };
+}
+function assistant(content: unknown[], model = "claude-sonnet-4-6") {
   return {
     type: "assistant",
-    message: {
-      model: "<synthetic>",
-      role: "assistant",
-      content: [{ type: "text", text }],
-    },
+    message: { model, role: "assistant", content },
   };
 }
+function syntheticNoResponse(text = "No response requested.", model = "<synthetic>") {
+  return assistant([{ type: "text", text }], model);
+}
+function nativeInit(tools: string[], fields: Record<string, unknown> = {}) {
+  return { type: "system", subtype: "init", tools, ...fields };
+}
+function expectOutput(
+  parser: ReturnType<typeof createParser>,
+  sessionId: string,
+  expected: ExpectedOutput,
+) {
+  expect(parser.getOutput()).toEqual({ sessionId, usage: undefined, ...expected });
+}
+const stoppedFailure = {
+  errorText:
+    "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
+  terminalFailure: {
+    reason: "turn_stopped",
+    terminalReason: "hook_stopped",
+    stopReason: "tool_use",
+  },
+} satisfies Partial<Cli.CliOutput>;
 
-describe("createCliJsonlStreamingParser", () => {
-  it("observes exact parent native tools across chunked fresh and warm initialization", () => {
-    const snapshots: unknown[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
-      onAssistantDelta: () => {},
-      onNativeTools: (tools: unknown) => snapshots.push(tools),
-    });
-    const initial = JSON.stringify({
-      type: "system",
-      subtype: "init",
-      session_id: "reused-session",
-      tools: ["Read", "Bash", "mcp__openclaw__automations"],
-    });
-    parser.push(initial.slice(0, -2));
-    expect(snapshots).toEqual([]);
-    parser.push(
-      initial.slice(-2) +
-        "\n" +
-        joinJsonlFrames(
-          { type: "result", result: "first turn complete" },
-          { type: "system", subtype: "init", session_id: "reused-session", tools: ["Read"] },
-          { type: "result", result: "warm turn complete" },
-          { type: "system", subtype: "init", session_id: "replacement-session", tools: [] },
-        ),
-    );
-    parser.finish();
+it.each<[name: string, frames: unknown[], expected: string[][]]>([
+  [
+    "fresh and warm parent initialization",
+    [
+      nativeInit(["Read", "Bash", "mcp__openclaw__automations"], {
+        session_id: "reused-session",
+      }),
+      result("first turn complete"),
+      nativeInit(["Read"], { session_id: "reused-session" }),
+      result("warm turn complete"),
+      nativeInit([], { session_id: "replacement-session" }),
+    ],
+    [["Read", "Bash", "mcp__openclaw__automations"], ["Read"], []],
+  ],
+  [
+    "subagent and non-initialization exclusion",
+    [
+      nativeInit(["Read"], { parent_tool_use_id: null }),
+      nativeInit(["Bash"], { parent_tool_use_id: "child-call" }),
+      { type: "system", subtype: "status", tools: [] },
+      { type: "assistant", tools: ["Write"] },
+    ],
+    [["Read"]],
+  ],
+])("observes native tools across chunked %s", (_name, frames, expected) => {
+  const snapshots: unknown[] = [];
+  const parser = createClaudeParser({ onNativeTools: (tools) => snapshots.push(tools) });
+  const first = JSON.stringify(frames[0]);
+  parser.push(first.slice(0, -2));
+  expect(snapshots).toEqual([]);
+  parser.push(first.slice(-2) + "\n" + joinJsonlFrames(...frames.slice(1)));
+  parser.finish();
+  expect(snapshots).toEqual(expected);
+});
 
-    expect(snapshots).toEqual([["Read", "Bash", "mcp__openclaw__automations"], ["Read"], []]);
-  });
-
-  it("ignores subagent and non-initialization native tool lists", () => {
-    const snapshots: unknown[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
-      onAssistantDelta: () => {},
-      onNativeTools: (tools: unknown) => snapshots.push(tools),
-    });
-    parser.push(
-      joinJsonlFrames(
-        { type: "system", subtype: "init", parent_tool_use_id: null, tools: ["Read"] },
-        { type: "system", subtype: "init", parent_tool_use_id: "child-call", tools: ["Bash"] },
-        { type: "system", subtype: "status", tools: [] },
-        { type: "assistant", tools: ["Write"] },
-        "",
-      ),
-    );
-    parser.finish();
-
-    expect(snapshots).toEqual([["Read"]]);
-  });
-
-  it("forwards malformed and missing parent native tool lists for owner validation", () => {
-    const snapshots: unknown[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
-      onAssistantDelta: () => {},
-      onNativeTools: (tools: unknown) => snapshots.push(tools),
-    });
-    for (const tools of [["Read"], "Bash", null, ["Read", 7], undefined]) {
-      parser.push(JSON.stringify({ type: "system", subtype: "init", tools }) + "\n");
-    }
-    parser.finish();
-
-    expect(snapshots).toEqual([["Read"], "Bash", null, ["Read", 7], undefined]);
-  });
-
-  it("normalizes usage while incrementally streaming CLI JSONL", () => {
-    const parser = createParser();
-    parser.push(
-      joinJsonlFrames(
-        { type: "init", session_id: "openai-compatible-session" },
-        {
-          type: "result",
-          result: "OpenAI-compatible response",
-          usage: {
-            prompt_tokens: 17,
-            completion_tokens: 5,
-            total_tokens: 22,
-            prompt_tokens_details: { cached_tokens: 6 },
-          },
-        },
-        "",
-      ),
-    );
-    parser.finish();
-    expect(parser.getOutput()).toEqual({
-      text: "OpenAI-compatible response",
-      sessionId: "openai-compatible-session",
-      usage: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
-    });
-  });
-
-  it("streams Claude stream-json deltas for an explicit backend dialect", () => {
-    const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
-    const sessionIds: string[] = [];
-    const parser = createParser({
-      onAssistantDelta: (delta) => deltas.push(delta),
-      onSessionId: (sessionId) => sessionIds.push(sessionId),
-    });
-
-    parser.push(
-      joinJsonlFrames(
-        JSON.stringify({ type: "init", session_id: "session-stream" }),
-        claudeTextDelta("hello"),
-      ),
-    );
-    parser.finish();
-
-    expect(deltas).toEqual([
-      { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
-    ]);
-    expect(sessionIds).toEqual(["session-stream"]);
-  });
-
-  it("records Claude's exact synthetic empty terminal as a failure", () => {
-    const parser = createParser({ providerId: "claude-cli", backend: claudeBackend });
-
-    parser.push(
-      joinJsonlFrames(
-        claudeSyntheticNoResponse(),
-        { type: "result", subtype: "success", session_id: "synthetic-empty", result: "" },
-        "",
-      ),
-    );
-    parser.finish();
-
-    expect(parser.getOutput()).toEqual({
+it.each<[name: string, frames: unknown[], expected: ExpectedOutput]>([
+  [
+    "exact synthetic empty terminal",
+    [syntheticNoResponse()],
+    {
       text: "",
-      sessionId: "synthetic-empty",
-      usage: undefined,
       errorText: "Claude CLI returned a synthetic no-response result.",
       terminalFailure: { reason: "synthetic_no_response" },
-    });
-  });
-
-  it.each([
-    {
-      name: "records a Claude hook-stopped terminal result",
-      frames: [] as unknown[],
-      expected: {
-        text: "",
-        sessionId: "hook-stopped",
-        usage: undefined,
-        errorText:
-          "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
-        terminalFailure: {
-          reason: "turn_stopped",
-          terminalReason: "hook_stopped",
-          stopReason: "tool_use",
-        },
-      },
     },
-    {
-      name: "keeps streamed text when a hook stops the turn after a reply",
-      frames: [claudeTextDelta("streamed answer")] as unknown[],
-      expected: { text: "streamed answer", sessionId: "hook-stopped", usage: undefined },
-    },
-    {
-      name: "does not classify a backgrounded turn as a stop",
-      frames: [] as unknown[],
-      terminalReason: "background_requested",
-      expected: { text: "", sessionId: "hook-stopped", usage: undefined },
-    },
-  ])("$name", ({ frames, expected, terminalReason }) => {
-    const parser = createParser({ providerId: "claude-cli", backend: claudeBackend });
+  ],
+  ["ordinary lookalike", [syntheticNoResponse(undefined, "claude-sonnet-4-6")], { text: "" }],
+  ["different synthetic text", [syntheticNoResponse("No reply needed.")], { text: "" }],
+  ["real text", [syntheticNoResponse(), "real answer"], { text: "real answer" }],
+  [
+    "tool activity",
+    [
+      assistant([{ type: "tool_use", id: "tool-1", name: "Read", input: {} }]),
+      syntheticNoResponse(),
+    ],
+    { text: "" },
+  ],
+])("classifies %s without confusing legitimate empty replies", (_name, frames, expected) => {
+  const parser = createClaudeParser();
+  finishFrames(
+    parser,
+    ...frames,
+    result("", { subtype: "success", session_id: "synthetic-session" }),
+  );
+  expectOutput(parser, "synthetic-session", expected);
+});
 
-    parser.push(
-      joinJsonlFrames(
-        ...frames,
-        {
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          session_id: "hook-stopped",
-          stop_reason: "tool_use",
-          terminal_reason: terminalReason ?? "hook_stopped",
-          result: "",
-          num_turns: 4,
-        },
-        "",
-      ),
-    );
-    parser.finish();
-
-    expect(parser.getOutput()).toEqual(expected);
-  });
-
-  it("records a hook stop that follows an interim result", () => {
-    const parser = createParser({ providerId: "claude-cli", backend: claudeBackend });
-
-    parser.push(
-      joinJsonlFrames(
-        {
-          type: "result",
-          subtype: "success",
-          session_id: "interim-then-stop",
-          terminal_reason: "completed",
-          result: "Agent is running. I'll let you know when it finishes.",
-        },
-        {
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          session_id: "interim-then-stop",
-          stop_reason: "tool_use",
-          terminal_reason: "hook_stopped",
-          result: "",
-        },
-        "",
-      ),
-    );
-    parser.finish();
-
-    // The interim text was that result's reply, not this turn's: a stopped
-    // turn reports empty text like the JSON and JSONL result paths do.
-    expect(parser.getOutput()).toEqual({
-      text: "",
-      sessionId: "interim-then-stop",
-      usage: undefined,
-      errorText:
-        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
-      terminalFailure: {
-        reason: "turn_stopped",
-        terminalReason: "hook_stopped",
-        stopReason: "tool_use",
-      },
-    });
-  });
-
-  it.each([
-    {
-      name: "ordinary lookalike",
-      frames: [
-        {
-          ...claudeSyntheticNoResponse(),
-          message: { ...claudeSyntheticNoResponse().message, model: "claude-sonnet-4-6" },
-        },
-      ],
-      expectedText: "",
-    },
-    {
-      name: "different synthetic text",
-      frames: [claudeSyntheticNoResponse("No reply needed.")],
-      expectedText: "",
-    },
-    {
-      name: "real text",
-      frames: [claudeSyntheticNoResponse(), claudeTextDelta("real answer")],
-      expectedText: "real answer",
-    },
-    {
-      name: "tool activity",
-      frames: [
-        {
-          type: "assistant",
-          message: {
-            model: "claude-sonnet-4-6",
-            role: "assistant",
-            content: [{ type: "tool_use", id: "tool-1", name: "Read", input: {} }],
-          },
-        },
-        claudeSyntheticNoResponse(),
-      ],
-      expectedText: "",
-    },
-  ])("does not classify $name as a synthetic empty terminal", ({ frames, expectedText }) => {
-    const parser = createParser({ providerId: "claude-cli", backend: claudeBackend });
-
-    parser.push(
-      joinJsonlFrames(
-        ...frames,
-        { type: "result", subtype: "success", session_id: "not-synthetic", result: "" },
-        "",
-      ),
-    );
-    parser.finish();
-
-    expect(parser.getOutput()).toEqual({
-      text: expectedText,
-      sessionId: "not-synthetic",
-      usage: undefined,
-    });
-  });
-
-  it.each([
-    {
-      name: "uses streamed Claude assistant text when no result envelope arrives",
-      frames: [
-        { type: "init", session_id: "session-stream-no-result" },
-        claudeTextDelta("streamed answer"),
-      ],
-      expected: {
-        text: "streamed answer",
-        sessionId: "session-stream-no-result",
-        usage: undefined,
-      },
-    },
-    {
-      name: "preserves streamed Claude text when the final result event is empty",
-      frames: [
-        { type: "init", session_id: "session-stream" },
-        claudeTextDelta("hello"),
-        claudeTextDelta(" world"),
-        { type: "result", session_id: "session-stream", result: "" },
-      ],
-      expected: {
-        text: "hello world",
-        sessionId: "session-stream",
-        usage: undefined,
-      },
-    },
-  ])("$name", ({ frames, expected }) => {
-    const parser = createParser();
-
-    parser.push(joinJsonlFrames(...frames, ""));
-    parser.finish();
-
-    expect(parser.getOutput()).toEqual(expected);
-  });
-
-  it("keeps streamed pre-tool text when the result envelope carries only the final message", () => {
-    const deltas: Array<{ text: string; delta?: string }> = [];
-    const parser = createParser({
-      onAssistantDelta: (delta) => deltas.push(delta),
-    });
-
-    parser.push(
-      joinJsonlFrames(
-        JSON.stringify({ type: "init", session_id: "session-tool-split" }),
-        claudeMessageStart(),
-        claudeTextDelta("Marker caribou-lampion-473 explanation."),
-        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
-        claudeMessageStop(),
-        claudeMessageStart(),
-        claudeTextDelta("TEST DONE"),
-        JSON.stringify({ type: "result", session_id: "session-tool-split", result: "TEST DONE" }),
-        "",
-      ),
-    );
-    parser.finish();
-
-    expect(parser.getOutput()).toEqual({
-      text: "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
-      sessionId: "session-tool-split",
-      usage: undefined,
-    });
-    // Cumulative text must stay reconstructible from deltas for preview streams.
-    expect(deltas.map((entry) => entry.delta).join("")).toBe(
-      "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
-    );
-    expect(deltas.at(-1)?.text).toBe("Marker caribou-lampion-473 explanation.\n\nTEST DONE");
-  });
-
-  it.each([
-    {
-      name: "keeps pre-tool text when text, tool_use, and text share one assistant message",
-      frames: [
-        { type: "init", session_id: "session-single-message" },
-        claudeMessageStart(),
-        claudeTextDelta("Marker caribou-lampion-473 explanation."),
-        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
-        claudeTextDelta("TEST DONE"),
-        { type: "result", session_id: "session-single-message", result: "TEST DONE" },
-      ],
-      expectedText: "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
-    },
-    {
-      name: "keeps pre-tool text when a toolless closer message follows a tool-using message",
-      frames: [
-        { type: "init", session_id: "session-closer" },
-        claudeMessageStart(),
-        claudeTextDelta("Pre-tool analysis."),
-        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
-        claudeTextDelta("Post-tool summary."),
-        claudeMessageStop(),
-        claudeMessageStart(),
-        claudeTextDelta("DONE"),
-        { type: "result", session_id: "session-closer", result: "DONE" },
-      ],
-      expectedText: "Pre-tool analysis.\n\nPost-tool summary.\n\nDONE",
-    },
-  ])("$name", ({ frames, expectedText }) => {
-    const parser = createParser();
-
-    parser.push(joinJsonlFrames(...frames, ""));
-    parser.finish();
-
-    expect(parser.getOutput()?.text).toBe(expectedText);
-  });
-
-  it("judges post-interim-result segments on their own stream state", () => {
-    const deltas: Array<{ text: string; delta?: string }> = [];
-    const parser = createParser({
-      onAssistantDelta: (delta) => deltas.push(delta),
-    });
-
-    parser.push(
-      joinJsonlFrames(
-        JSON.stringify({ type: "init", session_id: "session-interim" }),
-        claudeMessageStart(),
-        claudeTextDelta("Interim answer."),
-        JSON.stringify({
-          type: "result",
-          session_id: "session-interim",
-          result: "Interim answer.",
-        }),
-        claudeMessageStart(),
-        claudeTextDelta("Pre-tool follow-up."),
-        claudeBlockStart({ type: "tool_use", id: "tool-2", name: "session_status" }),
-        claudeTextDelta("DONE"),
-        JSON.stringify({ type: "result", session_id: "session-interim", result: "DONE" }),
-        "",
-      ),
-    );
-    parser.finish();
-
-    expect(parser.getOutput()?.text).toBe("Interim answer.\nPre-tool follow-up.\n\nDONE");
-    // Preview snapshots stay cumulative across the interim result.
-    expect(deltas.at(-1)?.text).toBe("Interim answer.\n\nPre-tool follow-up.\n\nDONE");
-    expect(deltas.map((entry) => entry.delta).join("")).toBe(
-      "Interim answer.\n\nPre-tool follow-up.\n\nDONE",
-    );
-  });
-
-  it.each([
-    {
-      name: "does not duplicate existing newlines at message boundaries",
-      frames: [
-        { type: "init", session_id: "session-newlines" },
-        claudeMessageStart(),
-        claudeTextDelta("Pre-tool explanation.\n\n"),
-        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
-        claudeMessageStart(),
-        claudeTextDelta("TEST DONE"),
-        { type: "result", session_id: "session-newlines", result: "TEST DONE" },
-      ],
-      expectedText: "Pre-tool explanation.\n\nTEST DONE",
-    },
-    {
-      name: "keeps a later tool split's pre-tool text after an earlier ordinary boundary",
-      frames: [
-        { type: "init", session_id: "session-mixed" },
-        claudeMessageStart(),
-        claudeTextDelta("Superseded draft."),
-        claudeMessageStop(),
-        claudeMessageStart(),
-        claudeTextDelta("Important pre-tool text."),
-        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
-        claudeTextDelta("DONE"),
-        { type: "result", session_id: "session-mixed", result: "DONE" },
-      ],
-      expectedText: "Important pre-tool text.\n\nDONE",
-    },
-    {
-      name: "drops an earlier draft when a fresh message starts with a tool call",
-      frames: [
-        { type: "init", session_id: "session-tool-first" },
-        claudeMessageStart(),
-        claudeTextDelta("Superseded draft."),
-        claudeMessageStop(),
-        claudeMessageStart(),
-        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
-        claudeTextDelta("Fresh answer."),
-        { type: "result", session_id: "session-tool-first", result: "Fresh answer." },
-      ],
-      expectedText: "Fresh answer.",
-    },
-    {
-      name: "defers to the result envelope across message boundaries without a tool split",
-      frames: [
-        { type: "init", session_id: "session-draft" },
-        claudeMessageStart(),
-        claudeTextDelta("Superseded draft."),
-        claudeMessageStop(),
-        claudeMessageStart(),
-        claudeTextDelta("Final answer."),
-        { type: "result", session_id: "session-draft", result: "Final answer." },
-      ],
-      expectedText: "Final answer.",
-    },
-  ])("$name", ({ frames, expectedText }) => {
-    const parser = createParser();
-
-    parser.push(joinJsonlFrames(...frames, ""));
-    parser.finish();
-
-    expect(parser.getOutput()?.text).toBe(expectedText);
-  });
-
-  it.each([
-    {
-      name: "defers to the result envelope on a suffix match inside a single message",
-      frames: [
-        { type: "init", session_id: "session-suffix" },
-        claudeMessageStart(),
-        claudeTextDelta("discarded draft authoritative result"),
-        { type: "result", session_id: "session-suffix", result: "authoritative result" },
-      ],
-      expected: {
-        text: "authoritative result",
-        sessionId: "session-suffix",
-        usage: undefined,
-      },
-    },
-    {
-      name: "prefers the result envelope when streamed text diverges from it",
-      frames: [
-        { type: "init", session_id: "session-diverged" },
-        claudeTextDelta("draft wording"),
-        { type: "result", session_id: "session-diverged", result: "authoritative result" },
-      ],
-      expected: {
-        text: "authoritative result",
-        sessionId: "session-diverged",
-        usage: undefined,
-      },
-    },
-  ])("$name", ({ frames, expected }) => {
-    const parser = createParser();
-
-    parser.push(joinJsonlFrames(...frames, ""));
-    parser.finish();
-
-    expect(parser.getOutput()).toEqual(expected);
-  });
-
-  it("keeps pre-tool text in assistant deltas when no commentary consumer is wired", () => {
-    const deltas: Array<{ text: string; delta: string }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: claudeBackend,
-      providerId: "claude-cli",
-      onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
-    });
-
-    parser.push(
-      joinJsonlFrames(
-        JSON.stringify({ type: "init", session_id: "session-drop-commentary" }),
-        claudeTextDelta("Let me inspect the repo."),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 1,
-            content_block: { type: "tool_use", id: "toolu_1", name: "Read", input: {} },
-          },
-        }),
-      ) + "\n",
-    );
-    parser.finish();
-
-    expect(deltas).toEqual([
-      { text: "Let me inspect the repo.", delta: "Let me inspect the repo." },
-    ]);
-  });
-
-  it.each([
-    {
-      name: "does not fire onCommentaryText when no text precedes tool_use",
-      frames: [
-        { type: "init", session_id: "session-no-commentary" },
-        claudeBlockStart({ type: "tool_use", id: "toolu_1", name: "Bash", input: {} }, 0),
-      ],
-      expectedCommentary: [],
-    },
-    {
-      name: "does not duplicate commentary when consecutive tool_use blocks have no new text",
-      frames: [
-        { type: "init", session_id: "session-multi-commentary" },
-        claudeTextDelta("First, checking files."),
-        claudeBlockStart({ type: "tool_use", id: "toolu_1", name: "Read", input: {} }, 1),
-        claudeBlockStart({ type: "tool_use", id: "toolu_2", name: "Bash", input: {} }, 2),
-      ],
-      expectedCommentary: ["First, checking files."],
-    },
-    {
-      name: "emits only the new segment on text-tool-text-tool sequences",
-      frames: [
-        { type: "init", session_id: "session-segment" },
-        claudeTextDelta("Reading the file now."),
-        claudeBlockStart({ type: "tool_use", id: "toolu_a", name: "Read", input: {} }, 1),
-        claudeTextDelta(" Now searching."),
-        claudeBlockStart({ type: "tool_use", id: "toolu_b", name: "Grep", input: {} }, 3),
-      ],
-      expectedCommentary: ["Reading the file now.", "Now searching."],
-    },
-  ])("$name", ({ frames, expectedCommentary }) => {
-    const commentaryTexts: string[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: claudeBackend,
-      providerId: "claude-cli",
-      onAssistantDelta: () => undefined,
-      onCommentaryText: (text) => commentaryTexts.push(text),
-    });
-
-    parser.push(joinJsonlFrames(...frames, ""));
-    parser.finish();
-
-    expect(commentaryTexts).toEqual(expectedCommentary);
-  });
+it.each<[name: string, frames: unknown[], terminalReason: string, expected: ExpectedOutput]>([
+  ["empty hook-stopped turn", [], "hook_stopped", { text: "", ...stoppedFailure }],
+  [
+    "hook stop after streamed reply",
+    ["streamed answer"],
+    "hook_stopped",
+    { text: "streamed answer" },
+  ],
+  ["backgrounded turn", [], "background_requested", { text: "" }],
+  [
+    "hook stop after an interim result",
+    [
+      result("Agent is running. I'll let you know when it finishes.", {
+        subtype: "success",
+        terminal_reason: "completed",
+      }),
+    ],
+    "hook_stopped",
+    { text: "", ...stoppedFailure },
+  ],
+])("judges delivery for the current %s", (_name, frames, terminalReason, expected) => {
+  const parser = createClaudeParser();
+  finishFrames(
+    parser,
+    ...frames,
+    result("", {
+      subtype: "success",
+      is_error: false,
+      session_id: "hook-stopped",
+      stop_reason: "tool_use",
+      terminal_reason: terminalReason,
+    }),
+  );
+  expectOutput(parser, "hook-stopped", expected);
 });
 
 it.each([
-  { name: "discrete", results: ["First answer.", "Second answer.", "Final answer."] },
-  { name: "shared lexical prefix", results: ["Hi", "History matters.", "Final answer."] },
-  {
-    name: "shared paragraph prefix",
-    results: ["First answer.", "First answer.\nMore detail.", "Final answer."],
-  },
-])(
-  "delivers completed $name results before transport settlement and retains retry boundaries",
-  ({ results }) => {
-    const completed: string[] = [];
-    const indices: number[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
-      onAssistantDelta: () => {},
-      onCompletedReply: (text, assistantMessageIndex) => {
-        completed.push(text);
-        indices.push(assistantMessageIndex);
-      },
-    });
-    for (const result of results.slice(0, 2)) {
-      parser.push(
-        JSON.stringify({
-          type: "result",
-          subtype: "success",
-          result,
-          openclaw_interim_result: true,
-        }) + "\n",
-      );
-    }
-    expect(completed).toEqual(results.slice(0, 2));
-    expect(indices).toEqual([0, 1]);
-    parser.push(JSON.stringify({ type: "result", subtype: "success", result: results[2] }) + "\n");
-    parser.finish();
-    expect(completed).toEqual(results.slice(0, 2));
-    expect(parser.getOutput()).toMatchObject({
-      text: results.join("\n"),
-      textParts: results,
-    });
+  ["incomplete tool protocol", toolProtocol, true],
+  ["plain prose", "partial answer", false],
+  ["fenced example", "Example:\n```xml\n" + toolProtocol, false],
+  ["first-line indented example", "    " + toolProtocol.replace("\n", "\n    "), false],
+] as const)(
+  "retains only usable interrupted %s without synthetic callbacks",
+  (_name, text, rejected) => {
+    const parseJsonlEvent = vi.fn(() => null);
+    const parser = createClaudeParser({ parseJsonlEvent });
+    const frame = claudeTextDelta(text);
+    finishFrames(parser, frame);
+    expect(parser.hasTerminalResult()).toBe(false);
+    expect(parser.getOutput()).toMatchObject({ text: rejected ? "" : text.trim() });
+    expect(parser.getOutput()?.errorText).toEqual(rejected ? expect.any(String) : undefined);
+    expect(parseJsonlEvent).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify(frame),
+      expect.objectContaining({ backendId: "claude-cli" }),
+    );
   },
 );
 
+it("keeps incomplete tool markup in a completed explanation", () => {
+  const text = "Example:\n" + toolProtocol;
+  const parser = createClaudeParser();
+  finishFrames(parser, claudeTextDelta(text), result(text));
+  expect(parser.getOutput()).toMatchObject({ text });
+  expect(parser.getOutput()?.errorText).toBeUndefined();
+});
+
+it("rejects interrupted protocol projected by a custom Claude parser", () => {
+  const parser = createClaudeParser({
+    parseJsonlEvent: () => ({ kind: "text", text: toolProtocol }),
+  });
+  finishFrames(parser, { type: "custom-assistant", text: toolProtocol });
+  expect(parser.getOutput()).toMatchObject({ text: "", errorText: expect.any(String) });
+});
+
+it.each<
+  [
+    name: string,
+    frames: unknown[],
+    expectedText: string,
+    expectedRawFinalText?: string,
+    checkDelta?: true | "reconstruct",
+  ]
+>([
+  ["no result envelope", ["hello"], "hello", undefined, true],
+  ["empty result envelope", ["hello", " world", result("")], "hello world"],
+  [
+    "tool split inside one message",
+    [...message("Before."), toolStart(), ...reply("DONE")],
+    "Before.\n\nDONE",
+    "DONE",
+  ],
+  [
+    "pre-tool text and reconstructible deltas without a commentary consumer",
+    [...message("Before."), toolStart(), messageStop, messageStart, ...reply("DONE")],
+    "Before.\n\nDONE",
+    "DONE",
+    "reconstruct",
+  ],
+  [
+    "toolless closer after tool-using message",
+    [...message("Before."), toolStart(), "After.", messageStop, messageStart, ...reply("DONE")],
+    "Before.\n\nAfter.\n\nDONE",
+    "DONE",
+  ],
+  [
+    "existing newlines at message boundaries",
+    [...message("Before.\n\n"), toolStart(), messageStart, ...reply("DONE")],
+    "Before.\n\nDONE",
+    "DONE",
+  ],
+  [
+    "tool split after an ordinary boundary",
+    [...draftMessage, ...message("Before."), toolStart(), ...reply("DONE")],
+    "Before.\n\nDONE",
+    "DONE",
+  ],
+  [
+    "fresh message starting with a tool call",
+    [...draftMessage, messageStart, toolStart(), ...reply("Fresh answer.")],
+    "Fresh answer.",
+  ],
+  [
+    "message boundary without a tool split",
+    [...draftMessage, messageStart, ...reply("Final answer.")],
+    "Final answer.",
+  ],
+  [
+    "suffix match inside one message",
+    [messageStart, "discarded draft authoritative result", result("authoritative result")],
+    "authoritative result",
+  ],
+  [
+    "divergent streamed text",
+    ["draft wording", result("authoritative result")],
+    "authoritative result",
+  ],
+])(
+  "resolves streamed/result precedence for %s",
+  (_name, frames, expectedText, expectedRawFinalText, checkDelta) => {
+    const deltas: Parameters<ParserOptions["onAssistantDelta"]>[0][] = [];
+    const sessionIds: string[] = [];
+    const parser = createParser({
+      onAssistantDelta: (delta) => deltas.push(delta),
+      onSessionId: (id) => sessionIds.push(id),
+    });
+    finishFrames(parser, init("session-stream"), ...frames);
+    expectOutput(parser, "session-stream", {
+      text: expectedText,
+      ...(expectedRawFinalText === undefined ? {} : { rawFinalText: expectedRawFinalText }),
+    });
+    if (checkDelta === true) {
+      expect(deltas).toEqual([
+        { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
+      ]);
+      expect(sessionIds).toEqual(["session-stream"]);
+    }
+    if (checkDelta === "reconstruct") {
+      expect(deltas.map((entry) => entry.delta).join("")).toBe(expectedText);
+      expect(deltas.at(-1)?.text).toBe(expectedText);
+    }
+  },
+);
+
+const checkingMessage = [...message("Checking now."), toolStart("toolu_1", 1), messageStop];
+const finalMessage = [...message("Final answer"), messageStop];
+it.each<[name: string, frames: unknown[], expected: string, commentary?: boolean]>([
+  ["a tool call after stored item text", [itemMessage("Checking now."), toolStart()], ""],
+  ["a new message after stored item text", [itemMessage("Checking now."), messageStart], ""],
+  [
+    "a tool item after stored item text",
+    [itemMessage("Checking now."), { type: "item.completed", item: { type: "command_execution" } }],
+    "",
+  ],
+  [
+    "item text after an earlier boundary",
+    [messageStart, toolStart(), itemMessage("All done.")],
+    "All done.",
+  ],
+  ["a streamed final answer", finalMessage, "Final answer", true],
+  [
+    "a final answer after pre-tool commentary",
+    [...checkingMessage, ...finalMessage],
+    "Final answer",
+    true,
+  ],
+  ["a tool-only ending after commentary", checkingMessage, "", true],
+])("records the final message across %s", (_name, frames, expected, commentary) => {
+  const parser = commentary
+    ? createClaudeParser({ onCommentaryText: () => undefined })
+    : createParser();
+  finishFrames(
+    parser,
+    init(commentary ? "session-commentary-final" : "session-items"),
+    ...frames,
+    result(""),
+  );
+  const output = parser.getOutput();
+  expect(output?.rawFinalText ?? output?.text.trim()).toBe(expected);
+});
+
+it("judges post-interim-result segments on their own stream state", () => {
+  const deltas: Array<{ text: string; delta: string }> = [];
+  const parser = createParser({ onAssistantDelta: (delta) => deltas.push(delta) });
+  finishFrames(
+    parser,
+    init("session-interim"),
+    messageStart,
+    ...reply("Interim answer."),
+    ...message("Pre-tool follow-up."),
+    toolStart("tool-2"),
+    ...reply("DONE"),
+  );
+  expect(parser.getOutput()?.text).toBe("Interim answer.\nPre-tool follow-up.\n\nDONE");
+  expect(deltas.at(-1)?.text).toBe("Interim answer.\n\nPre-tool follow-up.\n\nDONE");
+  expect(deltas.map((entry) => entry.delta).join("")).toBe(
+    "Interim answer.\n\nPre-tool follow-up.\n\nDONE",
+  );
+});
+
+it.each<[name: string, frames: unknown[], expected: string[]]>([
+  ["no preceding text", [toolStart("toolu_1", 0)], []],
+  [
+    "consecutive tool blocks",
+    ["First, checking files.", toolStart("toolu_1", 1), toolStart("toolu_2", 2)],
+    ["First, checking files."],
+  ],
+  [
+    "new text segments",
+    ["Reading the file now.", toolStart("toolu_a", 1), " Now searching.", toolStart("toolu_b", 3)],
+    ["Reading the file now.", "Now searching."],
+  ],
+])("emits commentary once for %s", (_name, frames, expected) => {
+  const commentaryTexts: string[] = [];
+  const parser = createClaudeParser({ onCommentaryText: (text) => commentaryTexts.push(text) });
+  finishFrames(parser, init("session-commentary"), ...frames);
+  expect(commentaryTexts).toEqual(expected);
+});
+
+it("delivers completed shared-prefix results before settlement and retains retry boundaries", () => {
+  const results = ["Hi", "History matters.", "Final answer."];
+  const completed: string[] = [];
+  const indices: number[] = [];
+  const parser = createClaudeParser({
+    onCompletedReply: (text, index) => {
+      completed.push(text);
+      indices.push(index);
+    },
+  });
+  for (const text of results.slice(0, 2)) {
+    parser.push(
+      joinJsonlFrames(result(text, { subtype: "success", openclaw_interim_result: true }), ""),
+    );
+  }
+  expect(completed).toEqual(results.slice(0, 2));
+  expect(indices).toEqual([0, 1]);
+  finishFrames(parser, result("Final answer.", { subtype: "success" }));
+  expect(completed).toEqual(results.slice(0, 2));
+  expect(parser.getOutput()).toMatchObject({ text: results.join("\n"), textParts: results });
+});
+
 it("does not redeliver repeated or empty held result acknowledgments", () => {
   const completed: string[] = [];
-  const parser = createCliJsonlStreamingParser({
-    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-    providerId: "claude-cli",
-    onAssistantDelta: () => {},
-    onCompletedReply: (text) => completed.push(text),
-  });
-  for (const result of [
+  const parser = createClaudeParser({ onCompletedReply: (text) => completed.push(text) });
+  for (const text of [
     "First answer.",
     "",
     "First answer.",
@@ -717,12 +422,7 @@ it("does not redeliver repeated or empty held result acknowledgments", () => {
     "",
   ]) {
     parser.push(
-      JSON.stringify({
-        type: "result",
-        subtype: "success",
-        result,
-        openclaw_interim_result: true,
-      }) + "\n",
+      joinJsonlFrames(result(text, { subtype: "success", openclaw_interim_result: true }), ""),
     );
   }
   parser.finish();
@@ -732,9 +432,7 @@ it("does not redeliver repeated or empty held result acknowledgments", () => {
     textParts: ["First answer.", "Second answer."],
   });
   expect(parser.hasTerminalResult()).toBe(false);
-  parser.push(
-    JSON.stringify({ type: "result", subtype: "success", result: "Second answer." }) + "\n",
-  );
+  parser.push(joinJsonlFrames(result("Second answer.", { subtype: "success" }), ""));
   expect(parser.hasTerminalResult()).toBe(true);
   expect(parser.getOutput()?.textParts).toEqual(["First answer.", "Second answer."]);
 });
@@ -747,16 +445,10 @@ it.each([
     errors: ["synthetic failure"],
   },
   { subtype: "success", result: "", terminal_reason: "hook_stopped", stop_reason: "tool_use" },
-])("does not dispatch failed held results: $subtype $terminal_reason", (result) => {
+])("does not dispatch failed held results: $subtype $terminal_reason", (fields) => {
   const completed: string[] = [];
-  const parser = createCliJsonlStreamingParser({
-    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-    providerId: "claude-cli",
-    onAssistantDelta: () => {},
-    onCompletedReply: (text) => completed.push(text),
-  });
-  parser.push(JSON.stringify({ type: "result", ...result, openclaw_interim_result: true }) + "\n");
-  parser.finish();
+  const parser = createClaudeParser({ onCompletedReply: (text) => completed.push(text) });
+  finishFrames(parser, { type: "result", ...fields, openclaw_interim_result: true });
   expect(completed).toEqual([]);
   expect(parser.getOutput()?.errorText).toBeTruthy();
 });

@@ -39,27 +39,6 @@ type LegacySelfLike = {
   };
 };
 
-type LegacyReplyLike = {
-  quote?: {
-    context?: WhatsAppReplyContext;
-    id?: string;
-    body?: string;
-    sender?: {
-      displayName?: string;
-      jid?: string;
-      e164?: string;
-    };
-  };
-};
-
-type LegacyMentionsLike = {
-  group?: {
-    mentions?: {
-      jids?: string[];
-    };
-  };
-};
-
 function normalizeDeviceScopedJid(jid: string | null | undefined): string | null {
   return jid ? jid.replace(/:\d+/, "") : null;
 }
@@ -132,7 +111,18 @@ export function getSelfIdentity(msg: LegacySelfLike, authDir?: string): WhatsApp
 }
 
 export function getReplyContext(
-  msg: LegacyReplyLike,
+  msg: {
+    quote?: {
+      context?: WhatsAppReplyContext;
+      id?: string;
+      body?: string;
+      sender?: {
+        displayName?: string;
+        jid?: string;
+        e164?: string;
+      };
+    };
+  },
   authDir?: string,
 ): WhatsAppReplyContext | null {
   if (msg.quote?.context) {
@@ -159,7 +149,13 @@ export function getReplyContext(
 }
 
 export function getMentionIdentities(
-  msg: LegacyMentionsLike,
+  msg: {
+    group?: {
+      mentions?: {
+        jids?: string[];
+      };
+    };
+  },
   authDir?: string,
 ): WhatsAppIdentity[] {
   return (msg.group?.mentions?.jids ?? []).map((jid) =>

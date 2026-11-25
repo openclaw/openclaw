@@ -2,6 +2,7 @@
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentHarnessPolicy, type AgentHarnessPolicy } from "./policy.js";
 import { getRegisteredAgentHarness } from "./registry.js";
+import { resolveAgentHarnessSupport } from "./route-support.js";
 import { buildAgentHarnessSupportContext } from "./support.js";
 import type { AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
 
@@ -67,13 +68,16 @@ export function resolveAgentHarnessAvailabilityDecision(
   if (params.provider === undefined) {
     return { kind: "available", policy };
   }
-  const support = registered.harness.supports(
+  const support = resolveAgentHarnessSupport(
+    registered.harness,
     buildAgentHarnessSupportContext({
       ...params,
       provider,
       requestedRuntime: policy.runtime,
+      contextManagement: registered.harness.contextManagement,
       providerOwnership: params.resolveProviderOwnership?.(),
     }),
+    params.mode === "projection",
   );
   if (!support.supported && !policy.forcedByEnvironment) {
     if (implicit || support.fallbackRuntime === "openclaw") {

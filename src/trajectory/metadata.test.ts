@@ -1,80 +1,234 @@
-// Trajectory metadata tests cover metadata capture and normalization.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
-import {
-  redactPathForSupport,
-  type SupportRedactionContext,
-} from "../logging/diagnostic-support-redaction.js";
+import * as configRedaction from "../config/redact-snapshot.js";
+import * as supportRedaction from "../logging/diagnostic-support-redaction.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import type { SkillSnapshot } from "../skills/types.js";
 
 type ResolvedSkillEntry = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
 
-const loadPluginManifestRegistry = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
+const loadPluginMetadataSnapshot = vi.hoisted(() =>
+  vi.fn(() => ({ plugins: [], manifestRegistry: { plugins: [] } })),
+);
 
 vi.mock("../infra/git-commit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/git-commit.js")>()),
   resolveCommitHash: () => "abcdef0",
 }));
 
-vi.mock("../infra/os-summary.js", () => ({
-  resolveOsSummary: () => ({
-    platform: "darwin",
-    arch: "arm64",
-    release: "test-release",
-    label: "test-os",
-  }),
-}));
-
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: loadPluginManifestRegistry,
-}));
-
+// mock-isolation: Export metadata uses a fixed plugin snapshot, independent of installed plugins.
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: () => {
-    const registry = loadPluginManifestRegistry();
-    return {
-      plugins: registry.plugins,
-      manifestRegistry: registry,
-    };
-  },
+  loadPluginMetadataSnapshot,
 }));
 
 import { buildTrajectoryArtifacts, buildTrajectoryRunMetadata } from "./metadata.js";
 
+function metadata(options: Partial<Parameters<typeof buildTrajectoryRunMetadata>[0]> = {}) {
+  return buildTrajectoryRunMetadata({
+    workspaceDir: "/tmp/workspace",
+    timeoutMs: 30_000,
+    ...options,
+  });
+}
+
+function skill(name: string, description: string): ResolvedSkillEntry {
+  const baseDir = `/tmp/workspace/skills/${name}`;
+  const filePath = `${baseDir}/SKILL.md`;
+  return createCanonicalFixtureSkill({
+    name,
+    description,
+    filePath,
+    baseDir,
+    source: "workspace",
+  });
+}
+
 afterEach(() => {
+  vi.restoreAllMocks();
+  resetSecretRedactionRegistryForTest();
   resetPluginRuntimeStateForTest();
-  loadPluginManifestRegistry.mockClear();
+  loadPluginMetadataSnapshot.mockClear();
 });
 
 describe("trajectory metadata", () => {
-  it("uses prepared plugin metadata without rescanning manifests", () => {
-    const metadata = buildTrajectoryRunMetadata({
-      pluginMetadataSnapshot: {
-        plugins: [
-          {
-            id: "prepared-plugin",
-            name: "Prepared Plugin",
-            origin: "bundled",
-            channels: [],
-            providers: [],
-            cliBackends: [],
-            hooks: [],
-            skills: [],
+  it("redacts each immutable config once across interleaved attempts and replacements", () => {
+    const redact = vi.spyOn(configRedaction, "redactConfigObject");
+    const configs = [1, 2].map((port) =>
+      freezeJsonSnapshot({ gateway: { port, auth: { token: "synthetic-token" } } }),
+    );
+    for (let attempt = 0; attempt < 5; attempt++) {
+      for (const config of configs) {
+        expect(metadata({ config, timeoutMs: attempt }).config).toMatchObject({
+          redacted: { gateway: { port: config.gateway.port, auth: { token: REDACTED_SENTINEL } } },
+          runtime: { timeoutMs: attempt },
+        });
+      }
+    }
+    expect(redact).toHaveBeenCalledTimes(2);
+  });
+
+  it("recaptures mutable nested config while keeping immutable captures read-only", () => {
+    const config = Object.freeze({ gateway: { port: 1, auth: { token: "synthetic-token" } } });
+    expect(metadata({ config }).config).toMatchObject({ redacted: { gateway: { port: 1 } } });
+    config.gateway.port = 2;
+    config.gateway.auth.token = "synthetic-replacement";
+    expect(metadata({ config }).config).toMatchObject({
+      redacted: { gateway: { port: 2, auth: { token: REDACTED_SENTINEL } } },
+    });
+    const frozen = freezeJsonSnapshot(config);
+    const captured = metadata({ config: frozen }).config as { redacted: typeof config };
+    expect(() => {
+      captured.redacted.gateway.port = 3;
+    }).toThrow(TypeError);
+    expect(metadata({ config: frozen }).config).toMatchObject({
+      redacted: { gateway: { port: 2 } },
+    });
+  });
+
+  it("redacts shared immutable catalog entries once for interleaved snapshot selections and homes", () => {
+    const alpha = skill("alpha", "Alpha");
+    const beta = skill("beta", "Beta");
+    for (const entry of [alpha, beta]) {
+      Object.freeze(entry.sourceInfo);
+      Object.freeze(entry);
+    }
+    const sanitize = vi.spyOn(supportRedaction, "sanitizeSupportSnapshotValue");
+    const captures = [];
+    for (let round = 0; round < 3; round++) {
+      for (const home of ["/tmp/workspace", "/elsewhere"]) {
+        captures.push(
+          metadata({
+            env: { HOME: home, OPENCLAW_STATE_DIR: `${home}/.openclaw` },
+            skillsSnapshot: {
+              prompt: "",
+              skills: [],
+              version: round,
+              resolvedSkills: round === 1 ? [beta] : [beta, alpha],
+            },
+          }).skills,
+        );
+      }
+    }
+    expect(captures[0]).toMatchObject({
+      snapshotVersion: 0,
+      entries: [
+        { name: "alpha", filePath: "~/skills/alpha/SKILL.md" },
+        { name: "beta", filePath: "~/skills/beta/SKILL.md" },
+      ],
+    });
+    expect(captures[3]).toMatchObject({
+      snapshotVersion: 1,
+      entries: [{ name: "beta", filePath: "/tmp/workspace/skills/beta/SKILL.md" }],
+    });
+    expect(captures[4]).toMatchObject({ snapshotVersion: 2 });
+    for (const entry of [alpha, beta]) {
+      expect(sanitize.mock.calls.filter(([value]) => value === entry.sourceInfo)).toHaveLength(2);
+    }
+  });
+
+  it("refreshes immutable skill redaction when a new exact secret is registered", () => {
+    const entry = skill("guide", "Guide");
+    entry.sourceInfo.source = "orchid-canary-material";
+    Object.freeze(entry.sourceInfo);
+    Object.freeze(entry);
+    const options = { skillsSnapshot: { prompt: "", skills: [], resolvedSkills: [entry] } };
+    const before = metadata(options);
+    registerSecretValueForRedaction("orchid-canary-material");
+    const after = metadata(options);
+    expect(before.skills).toMatchObject({
+      entries: [{ sourceInfo: { source: "orchid-canary-material" } }],
+    });
+    expect(after.skills).toMatchObject({ entries: [{ sourceInfo: { source: "orchid…rial" } }] });
+    resetSecretRedactionRegistryForTest();
+    expect(metadata(options).skills).toMatchObject({
+      entries: [{ sourceInfo: { source: "orchid-canary-material" } }],
+    });
+  });
+
+  it.each(["secret", "home"])("rechecks %s changes made by an earlier skill accessor", (change) => {
+    const env = { HOME: "/tmp/workspace", OPENCLAW_STATE_DIR: "/synthetic/state" };
+    const cached = skill("beta", "Beta");
+    cached.sourceInfo.source = "orchid-canary-material";
+    Object.freeze(cached.sourceInfo);
+    Object.freeze(cached);
+    const capture = (resolvedSkills: ResolvedSkillEntry[]) =>
+      metadata({ env, skillsSnapshot: { prompt: "", skills: [], resolvedSkills } }).skills;
+    capture([cached]);
+    const earlier = skill("alpha", "Alpha");
+    Object.defineProperty(earlier.sourceInfo, "source", {
+      get() {
+        if (change === "secret") {
+          registerSecretValueForRedaction("orchid-canary-material");
+        } else {
+          env.HOME = "/another/home";
+        }
+        return "workspace";
+      },
+    });
+    expect(capture([earlier, cached])).toMatchObject({
+      entries: [
+        { name: "alpha" },
+        {
+          name: "beta",
+          filePath:
+            change === "home" ? "/tmp/workspace/skills/beta/SKILL.md" : "~/skills/beta/SKILL.md",
+          sourceInfo: {
+            source: change === "secret" ? "orchid…rial" : "orchid-canary-material",
           },
-        ],
-      } as never,
-      workspaceDir: "/tmp/workspace",
-      timeoutMs: 30_000,
+        },
+      ],
+    });
+    if (change === "home") {
+      env.HOME = "/tmp/workspace";
+      expect(capture([cached])).toMatchObject({
+        entries: [{ name: "beta", filePath: "~/skills/beta/SKILL.md" }],
+      });
+    }
+  });
+
+  it("preserves per-capture private key numbering and mutable nested source metadata", () => {
+    const nested = { note: "first" };
+    const first = skill("alpha", "Alpha");
+    const second = skill("beta", "Beta");
+    Object.assign(first.sourceInfo, { "a@example.test": "one", nested });
+    Object.assign(second.sourceInfo, { "b@example.test": "two" });
+    for (const entry of [first, second]) {
+      Object.freeze(entry.sourceInfo);
+      Object.freeze(entry);
+    }
+    const capture = (resolvedSkills: ResolvedSkillEntry[]) =>
+      metadata({ skillsSnapshot: { prompt: "", skills: [], resolvedSkills } }).skills;
+    expect(capture([first, second])).toMatchObject({
+      entries: [
+        { sourceInfo: { "<identifier#1>": "one", nested: { note: "first" } } },
+        { sourceInfo: { "<identifier#2>": "two" } },
+      ],
+    });
+    nested.note = "changed";
+    expect(capture([second, first])).toMatchObject({
+      entries: [
+        { sourceInfo: { "<identifier#2>": "one", nested: { note: "changed" } } },
+        { sourceInfo: { "<identifier#1>": "two" } },
+      ],
+    });
+  });
+
+  it("uses prepared plugin metadata without rescanning manifests", () => {
+    const captured = metadata({
+      pluginMetadataSnapshot: { plugins: [{ id: "prepared-plugin" }] } as never,
     });
 
-    expect(metadata.plugins).toMatchObject({
+    expect(captured.plugins).toMatchObject({
       source: "manifest-registry",
       entries: [{ id: "prepared-plugin" }],
     });
-    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it("redacts harness argv and local paths with the support redaction rules", () => {
@@ -87,32 +241,27 @@ describe("trajectory metadata", () => {
       "--config=/Users/tester/.openclaw/openclaw.json",
     ];
     try {
-      const metadata = buildTrajectoryRunMetadata({
+      const captured = metadata({
         env: {
           HOME: "/Users/tester",
           OPENCLAW_STATE_DIR: "/Users/tester/.openclaw",
         },
         workspaceDir: "/Users/tester/project",
         sessionFile: "/Users/tester/project/session.jsonl",
-        timeoutMs: 30_000,
       });
 
-      const harness = metadata.harness as {
-        invocation?: unknown[];
-        entrypoint?: string;
-        workspaceDir?: string;
-        sessionFile?: string;
-      };
-      expect(harness.invocation).toEqual([
-        "node",
-        "~/project/openclaw.js",
-        "--api-key",
-        "<redacted>",
-        "--config=$OPENCLAW_STATE_DIR/openclaw.json",
-      ]);
-      expect(harness.entrypoint).toBe("~/project/openclaw.js");
-      expect(harness.workspaceDir).toBe("~/project");
-      expect(harness.sessionFile).toBe("~/project/session.jsonl");
+      expect(captured.harness).toMatchObject({
+        invocation: [
+          "node",
+          "~/project/openclaw.js",
+          "--api-key",
+          "<redacted>",
+          "--config=$OPENCLAW_STATE_DIR/openclaw.json",
+        ],
+        entrypoint: "~/project/openclaw.js",
+        workspaceDir: "~/project",
+        sessionFile: "~/project/session.jsonl",
+      });
     } finally {
       process.argv = originalArgv;
     }
@@ -123,28 +272,14 @@ describe("trajectory metadata", () => {
     registry.plugins.push(
       createPluginRecord({
         id: "demo-plugin",
-        name: "Demo Plugin",
-        version: "1.2.3",
-        source: "bundled",
-        origin: "bundled",
         imported: true,
-        toolNames: ["demo_tool"],
-        channelIds: ["demo-channel"],
-        providerIds: ["demo-provider"],
-        agentHarnessIds: ["openclaw"],
+        toolNames: [" demo_tool ", "demo_tool", "demo_tool"],
       }),
     );
     setActivePluginRegistry(registry, "trajectory-metadata-test");
 
-    const metadata = buildTrajectoryRunMetadata({
-      config: {
-        providers: {
-          openai: {
-            apiKey: "super-secret",
-          },
-        },
-      } as never,
-      workspaceDir: "/tmp/workspace",
+    const captured = metadata({
+      config: { providers: { openai: { apiKey: "super-secret" } } } as never,
       sessionFile: "/tmp/workspace/session.jsonl",
       sessionKey: "agent:main:test",
       agentId: "main",
@@ -152,118 +287,27 @@ describe("trajectory metadata", () => {
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "responses",
-      timeoutMs: 30_000,
       reasoningLevel: "high",
       skillsSnapshot: {
         prompt: "skill prompt",
         version: 1,
         skills: [{ name: "weather" }],
-        resolvedSkills: [
-          {
-            name: "weather",
-            description: "Check weather",
-            filePath: "/tmp/workspace/skills/weather/SKILL.md",
-            baseDir: "/tmp/workspace/skills/weather",
-            source: "workspace",
-            sourceInfo: {
-              path: "/tmp/workspace/skills/weather/SKILL.md",
-              source: "workspace",
-              scope: "project",
-              origin: "top-level",
-              baseDir: "/tmp/workspace/skills/weather",
-            },
-            disableModelInvocation: false,
-          },
-        ],
+        resolvedSkills: [skill("weather", "Check weather")],
       },
       userPromptPrefixText: "prefix",
     });
 
-    const config = metadata.config as {
-      redacted?: { providers?: { openai?: { apiKey?: string } } };
-    };
-    const plugins = metadata.plugins as { source?: string; entries?: Array<{ id: string }> };
-    const skills = metadata.skills as { entries?: Array<{ id: string; filePath?: string }> };
-    expect(config.redacted?.providers?.openai?.apiKey).toBe(REDACTED_SENTINEL);
-    expect(plugins.source).toBe("active-registry");
-    expect(plugins.entries?.map((entry) => entry.id)).toEqual(["demo-plugin"]);
-    expect(skills.entries?.[0]?.id).toBe("weather");
-    expect(skills.entries?.[0]?.filePath).toBe("/tmp/workspace/skills/weather/SKILL.md");
-  });
-
-  it("tolerates skill snapshot entries with missing name/paths (symlink-escape rejects)", () => {
-    const metadata = buildTrajectoryRunMetadata({
-      workspaceDir: "/tmp/workspace",
-      sessionFile: "/tmp/workspace/session.jsonl",
-      timeoutMs: 30_000,
-      skillsSnapshot: {
-        prompt: "skill prompt",
-        version: 1,
-        skills: [],
-        resolvedSkills: [
-          {
-            name: "alpha",
-            description: "valid entry",
-            filePath: "/tmp/workspace/skills/alpha/SKILL.md",
-            baseDir: "/tmp/workspace/skills/alpha",
-            source: "workspace",
-            sourceInfo: {
-              path: "/tmp/workspace/skills/alpha/SKILL.md",
-              source: "workspace",
-              scope: "project",
-              origin: "top-level",
-              baseDir: "/tmp/workspace/skills/alpha",
-            },
-            disableModelInvocation: false,
-          },
-          {
-            name: undefined,
-            description: undefined,
-            filePath: undefined,
-            baseDir: undefined,
-            source: "workspace",
-            sourceInfo: undefined,
-            disableModelInvocation: false,
-          } as unknown as ResolvedSkillEntry,
-        ],
+    expect(captured).toMatchObject({
+      config: { redacted: { providers: { openai: { apiKey: REDACTED_SENTINEL } } } },
+      plugins: {
+        source: "active-registry",
+        entries: [{ id: "demo-plugin", toolNames: ["demo_tool", "demo_tool"] }],
       },
+      skills: { entries: [{ id: "weather", filePath: "/tmp/workspace/skills/weather/SKILL.md" }] },
     });
-
-    const skills = metadata.skills as { entries?: Array<{ name?: string }> };
-    expect(skills.entries?.map((e) => e.name)).toEqual(["alpha"]);
-  });
-
-  it("falls back to skills list when every resolvedSkills entry is partial", () => {
-    const metadata = buildTrajectoryRunMetadata({
-      workspaceDir: "/tmp/workspace",
-      sessionFile: "/tmp/workspace/session.jsonl",
-      timeoutMs: 30_000,
-      skillsSnapshot: {
-        prompt: "skill prompt",
-        version: 1,
-        skills: [{ name: "fallback-skill" }],
-        resolvedSkills: [
-          {
-            name: undefined,
-            description: undefined,
-            filePath: undefined,
-            baseDir: undefined,
-            source: "workspace",
-            sourceInfo: undefined,
-            disableModelInvocation: false,
-          } as unknown as ResolvedSkillEntry,
-        ],
-      },
-    });
-
-    const skills = metadata.skills as { entries?: Array<{ name?: string }> };
-    expect(skills.entries?.map((e) => e.name)).toEqual(["fallback-skill"]);
-  });
-
-  it("redactPathForSupport returns empty string for null/undefined input", () => {
-    const ctx: SupportRedactionContext = { env: {}, stateDir: "/tmp/.openclaw" };
-    expect(redactPathForSupport(undefined, ctx)).toBe("");
-    expect(redactPathForSupport(null, ctx)).toBe("");
+    const plugins = captured.plugins as { entries: Record<string, unknown>[] };
+    // Empty capabilities are not persisted and need no recorder projection work.
+    expect(plugins.entries[0]).not.toHaveProperty("cliBackendIds");
   });
 
   it("captures final artifact summaries for export sidecars", () => {
@@ -292,13 +336,10 @@ describe("trajectory metadata", () => {
       messagingToolSentTargets: [],
     });
 
-    expect(artifacts.finalStatus).toBe("success");
-    expect(artifacts.assistantTexts).toEqual(["done"]);
-    const lifecycle = artifacts.itemLifecycle as
-      | { startedCount?: number; completedCount?: number; activeCount?: number }
-      | undefined;
-    expect(lifecycle?.startedCount).toBe(2);
-    expect(lifecycle?.completedCount).toBe(2);
-    expect(lifecycle?.activeCount).toBe(0);
+    expect(artifacts).toMatchObject({
+      finalStatus: "success",
+      assistantTexts: ["done"],
+      itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+    });
   });
 });

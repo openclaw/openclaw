@@ -1,5 +1,3 @@
-// Human-readable hint for why a node command was rejected, kept out of the
-// oversized nodes.ts server-methods file.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../node-command-policy.js";
 

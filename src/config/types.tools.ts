@@ -1,4 +1,3 @@
-// Defines tool availability and allowlist configuration types.
 import type { z } from "zod";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig } from "./types.base.js";
@@ -60,18 +59,17 @@ export type ToolProfileId = NonNullable<SchemaToolsConfig["profile"]>;
 export type ToolLoopDetectionConfig = NonNullable<SchemaToolsConfig["loopDetection"]>;
 
 export type ToolSearchConfig = NonNullable<SchemaToolsConfig["toolSearch"]>;
+export type ToolSearchSelector = NonNullable<Exclude<ToolSearchConfig, boolean>["include"]>[number];
 
 export type CodeModeConfig = NonNullable<SchemaToolsConfig["codeMode"]>;
-
-export type SwarmConfig = NonNullable<SchemaToolsConfig["swarm"]>;
-
-export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
 export type ToolAllowDenyPolicyConfig = NonNullable<z.input<typeof ToolPolicySchema>>;
 
 export type ToolPolicyConfig = ToolAllowDenyPolicyConfig & {
   /** Built-in profile used as the base policy before allow/deny merges. */
   profile?: ToolProfileId;
+  /** Provider/model exec ceiling (`tools.byProvider` only); tightens, never loosens. */
+  exec?: { mode?: ExecToolConfig["mode"] };
 };
 
 export type GroupToolPolicyConfig = ToolAllowDenyPolicyConfig;
@@ -102,7 +100,7 @@ export function parseToolsBySenderTypedKey(
 /**
  * Per-sender overrides.
  *
- * Prefer explicit key prefixes:
+ * Use explicit key prefixes:
  * - channel:<channelId>:<senderId>
  * - id:<senderId>
  * - e164:<phone>
@@ -110,7 +108,7 @@ export function parseToolsBySenderTypedKey(
  * - name:<display-name>
  * - * (wildcard)
  *
- * Legacy unprefixed keys are supported for backward compatibility and are matched as senderId only.
+ * Doctor migrates retired unprefixed config keys to id: entries before runtime use.
  */
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
@@ -118,10 +116,6 @@ export type ExecToolConfig = Omit<NonNullable<SchemaToolsConfig["exec"]>, "safeB
   /** Preserve readonly authoring fixtures accepted by the safe-bin policy owner. */
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
 };
-
-export type FsToolsConfig = NonNullable<SchemaToolsConfig["fs"]>;
-
-export type SessionsSpawnToolsConfig = NonNullable<SchemaToolsConfig["sessions_spawn"]>;
 
 export type GitHubToolIdentityConfig = NonNullable<SchemaToolsConfig["github"]>;
 
@@ -150,3 +144,6 @@ export type ToolsConfig = Omit<
 };
 
 export type MessageToolsConfig = NonNullable<SchemaToolsConfig["message"]>;
+
+/** Required Gateway model-tool ceiling, separate from ordinary additive tool grants. */
+export type GatewayToolPolicyConfig = NonNullable<SchemaToolsConfig["gatewayPolicy"]>;

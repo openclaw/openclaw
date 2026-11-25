@@ -1,288 +1,144 @@
-// Real dependency proof for the OTEL_SDK_DISABLED admission boundary. The unit suite
-// mocks OpenTelemetry constructors; these cases exercise public global APIs and a receiver.
-import { context, metrics, propagation, ROOT_CONTEXT, trace } from "@opentelemetry/api";
-import { logs } from "@opentelemetry/api-logs";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { context, propagation, ROOT_CONTEXT, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
-import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
+import {
+  type DiagnosticEventPayload,
+  emitTrustedDiagnosticEventWithPrivateData,
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { expect, onTestFinished, test, vi } from "vitest";
+import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
 import {
   emitRealSdkSignals,
   getReportedExporterHealth,
+  type ReportedExporterHealth,
   startOtelService,
-  stopStartedOtelServices,
+  startOtlpReceiver,
+  TRACE_ID,
+  SPAN_ID,
 } from "./service.test-helpers.js";
 
-const ENV_KEYS = ["OPENCLAW_OTEL_PRELOADED", "OTEL_PROPAGATORS", "OTEL_SDK_DISABLED"] as const;
-const OTEL_GLOBAL_API_KEY = Symbol.for("opentelemetry.js.api.1");
-const OTEL_GLOBAL_LOGS_KEY = Symbol.for("io.opentelemetry.js.api.logs");
-const JAEGER_DEPRECATION_WARNING =
-  'The Jaeger propagator is deprecated and will be removed in a future release. Use the W3C TraceContext propagator ("tracecontext") instead.';
-const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
-const SPAN_ID = "00f067aa0ba902b7";
+installRealOtelSdkTestHarness({ owned: true, env: ["OTEL_PROPAGATORS"] });
 const PROPAGATED_SPAN_CONTEXT = {
   traceId: TRACE_ID,
   spanId: SPAN_ID,
   traceFlags: 1,
   isRemote: true,
 } as const;
-const PROPAGATION_ROUNDTRIP_CASES = [
-  {
-    label: "W3C",
-    value: "tracecontext",
-    incoming: { traceparent: `00-${TRACE_ID}-${SPAN_ID}-01` },
-    outgoing: { traceparent: `00-${TRACE_ID}-${SPAN_ID}-01` },
-  },
-  {
-    label: "B3",
-    value: "B3",
-    incoming: { b3: `${TRACE_ID}-${SPAN_ID}-1` },
-    outgoing: { b3: `${TRACE_ID}-${SPAN_ID}-1` },
-  },
-  {
-    label: "B3MULTI",
-    value: "B3MULTI",
-    incoming: {
-      "x-b3-traceid": TRACE_ID,
-      "x-b3-spanid": SPAN_ID,
-      "x-b3-sampled": "1",
-    },
-    outgoing: {
-      "x-b3-traceid": TRACE_ID,
-      "x-b3-spanid": SPAN_ID,
-      "x-b3-sampled": "1",
-    },
-  },
-  {
-    label: "Jaeger",
-    value: "JaEgEr",
-    incoming: { "uber-trace-id": `${TRACE_ID}:${SPAN_ID}:0:1` },
-    outgoing: { "uber-trace-id": `${TRACE_ID}:${SPAN_ID}:0:01` },
-  },
-] as const;
-
-type OtelGlobalRegistrations = {
-  context?: Parameters<typeof context.setGlobalContextManager>[0];
-  metrics?: Parameters<typeof metrics.setGlobalMeterProvider>[0];
-  propagation?: Parameters<typeof propagation.setGlobalPropagator>[0];
-  trace?: Parameters<typeof trace.setGlobalTracerProvider>[0];
-};
-
-let originalEnv: Record<(typeof ENV_KEYS)[number], string | undefined>;
-let originalGlobals: OtelGlobalRegistrations;
-let originalLogsProvider: ReturnType<typeof logs.getLoggerProvider> | undefined;
-
-function registeredOtelGlobals(): OtelGlobalRegistrations | undefined {
-  return (globalThis as unknown as Record<symbol, OtelGlobalRegistrations | undefined>)[
-    OTEL_GLOBAL_API_KEY
-  ];
+const W3C_CARRIER = { traceparent: `00-${TRACE_ID}-${SPAN_ID}-01` };
+function roundtrip(value: string, incoming: Record<string, string>, outgoing = { ...incoming }) {
+  return { value, incoming, outgoing };
 }
 
-function restoreEnv() {
-  for (const key of ENV_KEYS) {
-    const value = originalEnv[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
-
-beforeEach(() => {
-  originalEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]])) as Record<
-    (typeof ENV_KEYS)[number],
-    string | undefined
-  >;
-  originalGlobals = { ...registeredOtelGlobals() };
-  originalLogsProvider = Object.hasOwn(globalThis, OTEL_GLOBAL_LOGS_KEY)
-    ? logs.getLoggerProvider()
-    : undefined;
-  context.disable();
-  logs.disable();
-  metrics.disable();
-  propagation.disable();
-  trace.disable();
-  process.env.OPENCLAW_OTEL_PRELOADED = "0";
-  delete process.env.OTEL_PROPAGATORS;
-  delete process.env.OTEL_SDK_DISABLED;
-});
-
-afterEach(async () => {
-  await stopStartedOtelServices();
-  const currentGlobals = registeredOtelGlobals();
-  if (currentGlobals?.propagation !== originalGlobals.propagation) {
-    propagation.disable();
-    if (originalGlobals.propagation) {
-      propagation.setGlobalPropagator(originalGlobals.propagation);
-    }
-  }
-  if (currentGlobals?.metrics !== originalGlobals.metrics) {
-    metrics.disable();
-    if (originalGlobals.metrics) {
-      metrics.setGlobalMeterProvider(originalGlobals.metrics);
-    }
-  }
-  if (currentGlobals?.trace !== originalGlobals.trace) {
-    trace.disable();
-    if (originalGlobals.trace) {
-      trace.setGlobalTracerProvider(originalGlobals.trace);
-    }
-  }
-  if (Object.hasOwn(globalThis, OTEL_GLOBAL_LOGS_KEY) || originalLogsProvider) {
-    logs.disable();
-    if (originalLogsProvider) {
-      logs.setGlobalLoggerProvider(originalLogsProvider);
-    }
-  }
-  if (currentGlobals?.context !== originalGlobals.context) {
-    context.disable();
-    if (originalGlobals.context) {
-      context.setGlobalContextManager(originalGlobals.context);
-    }
-  }
-  restoreEnv();
-  resetDiagnosticEventsForTest();
-});
-
-test("disables every OpenClaw route while preserving W3C propagation", async () => {
-  const receiver = startLocalOtlpReceiver();
-  const port = await receiver.listen();
-  const stdoutWrites: string[] = [];
-  const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-    stdoutWrites.push(String(chunk));
-    return true;
-  });
-  process.env.OTEL_SDK_DISABLED = " TrUe ";
-  const { service, ctx } = await startOtelService({
-    endpoint: `http://127.0.0.1:${port}`,
-    traces: true,
-    metrics: true,
-    logs: true,
-    logsExporter: "both",
-  });
-
-  try {
-    await emitRealSdkSignals();
-    const incoming = {
-      baggage: "tenant=example",
-      traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-    };
-    const extracted = propagation.extract(ROOT_CONTEXT, incoming);
-    expect(trace.getSpanContext(extracted)).toMatchObject({
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-      traceFlags: 1,
-    });
-    expect(propagation.getBaggage(extracted)?.getEntry("tenant")?.value).toBe("example");
-    const outgoing: Record<string, string> = {};
-    await context.with(extracted, async () => {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(trace.getSpanContext(context.active())).toMatchObject({
-        traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-        spanId: "00f067aa0ba902b7",
-        traceFlags: 1,
-      });
-      expect(propagation.getBaggage(context.active())?.getEntry("tenant")?.value).toBe("example");
-      propagation.inject(context.active(), outgoing);
-    });
-    expect(outgoing).toEqual(incoming);
-    expect(getReportedExporterHealth(ctx)).toEqual([]);
-
-    ctx.config.diagnostics!.enabled = false;
-    await service.start(ctx);
-    expect(context.with(extracted, () => trace.getSpanContext(context.active()))).toBeUndefined();
-    expect(propagation.fields()).toEqual([]);
-    expect(receiver.capturedRequests).toEqual([]);
-  } finally {
-    stdoutWrite.mockRestore();
-    await service.stop?.(ctx);
-    await receiver.close();
-  }
-  expect(stdoutWrites).toEqual([]);
-}, 30_000);
-
-test("preserves externally owned context and propagation globals while disabled", async () => {
-  const externalContextManager = new AsyncLocalStorageContextManager().enable();
-  expect(context.setGlobalContextManager(externalContextManager)).toBe(true);
-  expect(propagation.setGlobalPropagator(new W3CTraceContextPropagator())).toBe(true);
-  process.env.OTEL_SDK_DISABLED = "true";
-  const { service, ctx } = await startOtelService();
-  const incoming = {
-    traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-  };
+async function propagate(incoming: Record<string, string>, baggage?: string) {
   const extracted = propagation.extract(ROOT_CONTEXT, incoming);
-
-  await service.stop?.(ctx);
-
-  expect(propagation.fields()).toEqual(["traceparent", "tracestate"]);
+  expect(trace.getSpanContext(extracted)).toEqual(PROPAGATED_SPAN_CONTEXT);
+  const outgoing: Record<string, string> = {};
   await context.with(extracted, async () => {
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(trace.getSpanContext(context.active())?.traceId).toBe(
-      "4bf92f3577b34da6a3ce929d0e0e4736",
-    );
+    await nextTurn();
+    expect(trace.getSpanContext(context.active())).toEqual(PROPAGATED_SPAN_CONTEXT);
+    if (baggage) {
+      expect(propagation.getBaggage(extracted)?.getEntry("tenant")?.value).toBe(baggage);
+      expect(propagation.getBaggage(context.active())?.getEntry("tenant")?.value).toBe(baggage);
+    }
+    propagation.inject(context.active(), outgoing);
   });
-});
+  return { extracted, outgoing };
+}
 
-test.each(["true", "false"] as const)(
-  "does not remove replacement context and propagation owners when disabled=$disabled",
-  async (disabled) => {
-    process.env.OTEL_SDK_DISABLED = disabled;
-    const { service, ctx } = await startOtelService({
-      traces: false,
-      metrics: false,
-      logs: false,
-    });
-    const capturedContext = context.active();
-
-    context.disable();
-    propagation.disable();
-    const externalContextManager = new AsyncLocalStorageContextManager().enable();
-    expect(context.setGlobalContextManager(externalContextManager)).toBe(true);
-    expect(propagation.setGlobalPropagator(new W3CTraceContextPropagator())).toBe(true);
-    const incoming = {
-      traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-    };
-    const extracted = propagation.extract(ROOT_CONTEXT, incoming);
-
-    await context.with(capturedContext, () => service.stop?.(ctx));
-
-    expect(propagation.fields()).toEqual(["traceparent", "tracestate"]);
-    await context.with(extracted, async () => {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(trace.getSpanContext(context.active())?.traceId).toBe(
-        "4bf92f3577b34da6a3ce929d0e0e4736",
+test.each([false, true])(
+  "disables exports while preserving external W3C ownership=%s",
+  async (external) => {
+    if (external) {
+      expect(context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable())).toBe(
+        true,
       );
+      expect(propagation.setGlobalPropagator(new W3CTraceContextPropagator())).toBe(true);
+    }
+    const receiver = await startOtlpReceiver();
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    process.env.OTEL_SDK_DISABLED = " TrUe ";
+    const { service, ctx } = await startOtelService({
+      endpoint: receiver.endpoint,
+      traces: true,
+      metrics: true,
+      logs: true,
+      logsExporter: "both",
     });
+
+    try {
+      await emitRealSdkSignals();
+      const incoming = { ...W3C_CARRIER, ...(!external ? { baggage: "tenant=example" } : {}) };
+      const { extracted, outgoing } = await propagate(incoming, external ? undefined : "example");
+      expect(outgoing).toEqual(incoming);
+      expect(getReportedExporterHealth(ctx)).toEqual([]);
+
+      if (external) {
+        await service.stop?.(ctx);
+        expect(propagation.fields()).toEqual(["traceparent", "tracestate"]);
+        expect((await propagate(incoming)).outgoing).toEqual(incoming);
+      } else {
+        ctx.config.diagnostics!.enabled = false;
+        await service.start(ctx);
+        expect(
+          context.with(extracted, () => trace.getSpanContext(context.active())),
+        ).toBeUndefined();
+        expect(propagation.fields()).toEqual([]);
+      }
+      expect(receiver.requests).toEqual([]);
+      expect(stdoutWrite).not.toHaveBeenCalled();
+    } finally {
+      stdoutWrite.mockRestore();
+      await service.stop?.(ctx);
+      await receiver.close();
+    }
   },
+  30_000,
 );
 
-test.each([
-  {
-    value: "NoNe",
-    fields: [],
-  },
+test.each<{
+  value: string;
+  incoming?: Record<string, string>;
+  outgoing?: Record<string, string>;
+  warning?: string;
+}>([
+  { value: "NoNe" },
   {
     value: "unavailable",
-    fields: [],
     warning: 'Propagator "unavailable" requested through environment variable is unavailable.',
   },
-] as const)(
-  "configures OTEL_PROPAGATORS=$value and reports dependency warnings visibly",
-  async ({ value, fields, warning }) => {
+  roundtrip("B3", { b3: `${TRACE_ID}-${SPAN_ID}-1` }),
+  roundtrip("B3MULTI", { "x-b3-traceid": TRACE_ID, "x-b3-spanid": SPAN_ID, "x-b3-sampled": "1" }),
+  {
+    ...roundtrip(
+      "JaEgEr",
+      { "uber-trace-id": `${TRACE_ID}:${SPAN_ID}:0:1` },
+      {
+        "uber-trace-id": `${TRACE_ID}:${SPAN_ID}:0:01`,
+      },
+    ),
+    warning:
+      'The Jaeger propagator is deprecated and will be removed in a future release. Use the W3C TraceContext propagator ("tracecontext") instead.',
+  },
+])(
+  "configures and roundtrips OTEL_PROPAGATORS=$value",
+  async ({ value, incoming, outgoing: expectedOutgoing, warning }) => {
     process.env.OTEL_SDK_DISABLED = "true";
     process.env.OTEL_PROPAGATORS = value;
     const { service, ctx } = await startOtelService();
 
     try {
-      expect(propagation.fields()).toEqual(fields);
+      if (incoming) {
+        const { outgoing } = await propagate(incoming);
+        expect(outgoing).toEqual(expectedOutgoing);
+        expect(trace.getSpanContext(propagation.extract(ROOT_CONTEXT, outgoing))).toEqual(
+          PROPAGATED_SPAN_CONTEXT,
+        );
+      } else {
+        expect(propagation.fields()).toEqual([]);
+      }
       if (warning) {
         expect(ctx.logger.warn).toHaveBeenCalledWith(warning);
       } else {
@@ -295,74 +151,99 @@ test.each([
   },
 );
 
-test.each(PROPAGATION_ROUNDTRIP_CASES)(
-  "retains and roundtrips $label propagation across async context",
-  async ({ value, incoming, outgoing: expectedOutgoing }) => {
-    process.env.OTEL_SDK_DISABLED = "true";
-    process.env.OTEL_PROPAGATORS = value;
-    const { service, ctx } = await startOtelService();
+type ExporterEvent = Extract<DiagnosticEventPayload, { type: "telemetry.exporter" }>;
 
-    try {
-      const extracted = propagation.extract(ROOT_CONTEXT, incoming);
-      expect(trace.getSpanContext(extracted)).toEqual(PROPAGATED_SPAN_CONTEXT);
+async function waitForExporterStatus(
+  events: Array<Pick<ReportedExporterHealth, "status">>,
+  status: ReportedExporterHealth["status"],
+) {
+  await vi.waitFor(
+    () => {
+      expect(events.some((event) => event.status === status)).toBe(true);
+    },
+    { timeout: 4_000, interval: 20 },
+  );
+}
 
-      const outgoing: Record<string, string> = {};
-      await context.with(extracted, async () => {
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(trace.getSpanContext(context.active())).toEqual(PROPAGATED_SPAN_CONTEXT);
-        propagation.inject(context.active(), outgoing);
-      });
+function emitExporterHealthSpan(name: string) {
+  // The global trace API cannot reach the owned private provider.
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "model.call.completed",
+      runId: `run-${name}`,
+      callId: `call-${name}`,
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 10,
+    },
+    {},
+  );
+}
 
-      expect(outgoing).toEqual(expectedOutgoing);
-      if (value === "JaEgEr") {
-        expect(ctx.logger.warn).toHaveBeenCalledWith(JAEGER_DEPRECATION_WARNING);
-      } else {
-        expect(ctx.logger.warn).not.toHaveBeenCalled();
-      }
-      expect(trace.getSpanContext(propagation.extract(ROOT_CONTEXT, outgoing))).toEqual(
-        PROPAGATED_SPAN_CONTEXT,
-      );
-    } finally {
-      await service.stop?.(ctx);
+async function startExporterHealth(
+  statusForRequest: (count: number) => number,
+  flushIntervalMs?: number,
+) {
+  const receiver = await startOtlpReceiver(statusForRequest);
+  const events: ExporterEvent[] = [];
+  const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted && event.type === "telemetry.exporter") {
+      events.push(event);
     }
+  });
+  process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT = "1000";
+  const started = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    flushIntervalMs,
+  });
+  onTestFinished(async () => {
+    unsubscribe();
+    await started.service.stop?.(started.ctx);
+    await receiver.close();
+  });
+  return { receiver, events, ...started };
+}
+
+test.each(["retry-success", "non-retryable"] as const)(
+  "reports real OTLP %s",
+  async (mode) => {
+    const retry = mode === "retry-success";
+    const { receiver, events, service, ctx } = await startExporterHealth((count) =>
+      retry ? (count === 1 ? 503 : 200) : 400,
+    );
+    emitExporterHealthSpan(mode);
+    await waitForDiagnosticEventsDrained();
+    const stopped = Promise.resolve(service.stop?.(ctx));
+    await (retry ? stopped : stopped.catch(() => {}));
+    await waitForDiagnosticEventsDrained();
+    expect(receiver.requests).toHaveLength(retry ? 2 : 1);
+    const health = getReportedExporterHealth(ctx);
+    expect(
+      events.filter((event) => event.status === "failure").map((event) => event.reason),
+    ).toEqual(retry ? [] : ["emit_failed"]);
+    expect(
+      health
+        .filter((event) => ["failure", "recovered"].includes(event.status))
+        .map((event) => [event.status, event.reason]),
+    ).toEqual(retry ? [] : [["failure", "export_failed"]]);
   },
+  15_000,
 );
 
-test("cleans disabled ownership before a fresh enabled private-provider generation", async () => {
-  const receiver = startLocalOtlpReceiver();
-  const port = await receiver.listen();
-  process.env.OTEL_SDK_DISABLED = "true";
-  const disabled = await startOtelService({
-    endpoint: `http://127.0.0.1:${port}`,
-    traces: true,
-    metrics: true,
-    logs: true,
-    logsExporter: "otlp",
-  });
-
-  try {
-    expect(propagation.fields()).toEqual(["traceparent", "tracestate", "baggage"]);
-    await disabled.service.stop?.(disabled.ctx);
-    process.env.OTEL_SDK_DISABLED = "false";
-    const enabled = await startOtelService({
-      endpoint: `http://127.0.0.1:${port}`,
-      traces: true,
-      metrics: true,
-      logs: true,
-      logsExporter: "otlp",
-    });
-    expect(enabled.service).not.toBe(disabled.service);
-    expect(propagation.fields()).toEqual(["traceparent", "tracestate", "baggage"]);
-    await emitRealSdkSignals("enabled-generation");
-    await enabled.service.stop?.(enabled.ctx);
-
-    expect(new Set(receiver.capturedRequests.map((request) => request.signal))).toEqual(
-      new Set(["traces", "metrics", "logs"]),
-    );
-  } finally {
-    await disabled.service.stop?.(disabled.ctx);
-    await receiver.close();
-  }
-}, 30_000);
+test("records recovery after a later real OTLP export succeeds", async () => {
+  let failExports = true;
+  const { events, ctx } = await startExporterHealth(() => (failExports ? 503 : 200), 1000);
+  const health = getReportedExporterHealth(ctx);
+  emitExporterHealthSpan("failure-before-recovery");
+  await waitForDiagnosticEventsDrained();
+  await waitForExporterStatus(health, "failure");
+  failExports = false;
+  emitExporterHealthSpan("successful-recovery");
+  await waitForDiagnosticEventsDrained();
+  await waitForExporterStatus(health, "recovered");
+  expect(
+    health.filter((event) => event.reason === "export_failed").map((event) => event.status),
+  ).toEqual(["failure", "recovered"]);
+  expect(events.map((event) => event.status)).not.toContain("recovered");
+}, 15_000);

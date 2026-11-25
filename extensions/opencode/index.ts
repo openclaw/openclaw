@@ -1,3 +1,15 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { ProviderStreamOptions } from "openclaw/plugin-sdk/llm";
+import {
+  describeImageWithModelPayloadTransform,
+  describeImagesWithModelPayloadTransform,
+  type MediaUnderstandingProvider,
+} from "openclaw/plugin-sdk/media-understanding";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  buildOauthProviderAuthResult,
+  resolveOAuthApiKeyMarker,
+} from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
@@ -5,9 +17,10 @@ import {
   buildProviderReplayFamilyHooks,
   matchesExactOrPrefix,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { createOpenAICompatibleCompletionsThinkingOffWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyOpencodeZenProviderConfig, OPENCODE_ZEN_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
@@ -24,7 +37,69 @@ import { registerOpenCodeSessionCatalog } from "./session-catalog-plugin.js";
 import { wrapOpencodeProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "opencode";
+const loadConsoleOAuth = createLazyRuntimeModule(() => import("./console-oauth.js"));
+
+async function signInWithOpencodeConsole(ctx: ProviderAuthContext) {
+  const credentials = await (await loadConsoleOAuth()).loginOpencodeConsole(ctx);
+  const notes = [
+    "OpenClaw is signed in to the OpenCode Console workspace you picked. Tokens refresh automatically.",
+  ];
+  ctx.assertCurrent?.();
+  const credentialOnly = {
+    profiles: [
+      {
+        profileId: `${PROVIDER_ID}:default`,
+        credential: { type: "oauth" as const, provider: PROVIDER_ID, ...credentials },
+      },
+    ],
+    notes,
+  };
+  if (ctx.credentialOnly) {
+    return credentialOnly;
+  }
+  // The starter model only becomes the default when this workspace offers it.
+  const defaultModel = await resolveOpencodeZenStarterModel({
+    apiKey: credentials.access,
+    preferredModelRef: OPENCODE_ZEN_DEFAULT_MODEL_REF,
+    ...(ctx.signal ? { signal: ctx.signal } : {}),
+  });
+  ctx.assertCurrent?.();
+  if (!defaultModel) {
+    return credentialOnly;
+  }
+  return buildOauthProviderAuthResult({
+    providerId: PROVIDER_ID,
+    defaultModel,
+    access: credentials.access,
+    refresh: credentials.refresh,
+    expires: credentials.expires,
+    profileName: "default",
+    notes,
+  });
+}
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
+
+const stripDisabledResponsesReasoning: ProviderStreamOptions["onPayload"] = (payload) => {
+  if (!isRecord(payload)) {
+    return;
+  }
+  const reasoning = payload.reasoning;
+  if (reasoning === "none" || (isRecord(reasoning) && reasoning.effort === "none")) {
+    delete payload.reasoning;
+  }
+};
+
+const opencodeMediaUnderstandingProvider: MediaUnderstandingProvider = {
+  id: "opencode",
+  capabilities: ["image"],
+  defaultModels: {
+    image: "minimax-m3",
+  },
+  describeImage: (request) =>
+    describeImageWithModelPayloadTransform(request, stripDisabledResponsesReasoning),
+  describeImages: (request) =>
+    describeImagesWithModelPayloadTransform(request, stripDisabledResponsesReasoning),
+};
 
 function isModernOpencodeModel(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
@@ -32,6 +107,11 @@ function isModernOpencodeModel(modelId: string): boolean {
     return false;
   }
   return !matchesExactOrPrefix(lower, MINIMAX_MODERN_MODEL_MATCHERS);
+}
+
+function normalizeZenBaseUrl<T extends { api?: string | null; baseUrl?: string }>(value: T) {
+  const baseUrl = normalizeOpencodeZenBaseUrl(value);
+  return baseUrl && baseUrl !== value.baseUrl ? { ...value, baseUrl } : undefined;
 }
 
 export default defineSingleProviderPluginEntry({
@@ -64,33 +144,28 @@ export default defineSingleProviderPluginEntry({
       ].join("\n"),
       noteTitle: "OpenCode",
     },
-    normalizeConfig: ({ providerConfig }) => {
-      const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({
-        api: providerConfig.api,
-        baseUrl: providerConfig.baseUrl,
-      });
-      return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
-        ? { ...providerConfig, baseUrl: normalizedBaseUrl }
-        : undefined;
-    },
-    normalizeResolvedModel: ({ model }) => {
-      const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({
-        api: model.api,
-        baseUrl: model.baseUrl,
-      });
-      return normalizedBaseUrl && normalizedBaseUrl !== model.baseUrl
-        ? { ...model, baseUrl: normalizedBaseUrl }
-        : undefined;
-    },
-    normalizeTransport: ({ api: apiLocal, baseUrl }) => {
-      const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({ api: apiLocal, baseUrl });
-      return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
-        ? {
-            api: apiLocal,
-            baseUrl: normalizedBaseUrl,
-          }
-        : undefined;
-    },
+    extraAuth: [
+      {
+        id: "oauth",
+        label: "OpenCode Console browser sign-in",
+        hint: "Sign in with your browser and pick a Console workspace",
+        kind: "device_code",
+        wizard: {
+          choiceId: "opencode-console",
+          choiceLabel: "OpenCode Console (browser sign-in)",
+          choiceHint: "Sign in in your browser and pick an OpenCode Console workspace",
+          groupId: "opencode",
+          groupLabel: "OpenCode",
+          groupHint: "Browser sign-in or shared Zen + Go API key",
+        },
+        run: signInWithOpencodeConsole,
+      },
+    ],
+    refreshOAuth: async (credential) =>
+      (await loadConsoleOAuth()).refreshOpencodeConsoleCredential(credential),
+    normalizeConfig: ({ providerConfig }) => normalizeZenBaseUrl(providerConfig),
+    normalizeResolvedModel: ({ model }) => normalizeZenBaseUrl(model),
+    normalizeTransport: ({ api, baseUrl }) => normalizeZenBaseUrl({ api, baseUrl }),
     resolveDynamicModel: ({ modelId }) => resolveOpencodeZenModel(modelId),
     prepareDynamicModel: async (ctx) => {
       const profileProvider = ctx.authProfileId
@@ -119,10 +194,18 @@ export default defineSingleProviderPluginEntry({
         if (ctx.providerIds !== undefined && !ctx.providerIds.includes(PROVIDER_ID)) {
           return null;
         }
-        const auth = resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, [
-          PROVIDER_ID,
-          "opencode-go",
-        ]);
+        // A browser sign-in reaches catalogs only through resolveProviderAuth; API keys,
+        // including the key shared with opencode-go, keep the existing lookup.
+        const oauth = ctx.resolveProviderAuth(PROVIDER_ID, {
+          oauthMarker: resolveOAuthApiKeyMarker(PROVIDER_ID),
+        });
+        const auth =
+          oauth.mode === "oauth" && oauth.discoveryApiKey
+            ? oauth
+            : resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, [
+                PROVIDER_ID,
+                "opencode-go",
+              ]);
         if (!auth) {
           return null;
         }
@@ -148,21 +231,16 @@ export default defineSingleProviderPluginEntry({
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
     resolveThinkingProfile: resolveOpencodeThinkingProfile,
-    wrapStreamFn: (ctx) => {
-      if (!ctx.streamFn) {
-        return undefined;
-      }
-      const baseStreamFn = ctx.streamFn;
-      const thinkingOff = createOpenAICompatibleCompletionsThinkingOffWrapper(
-        baseStreamFn,
-        ctx.thinkingLevel,
-      );
-      const thinkingStreamFn: typeof baseStreamFn = (model, context, options) =>
-        model.provider === PROVIDER_ID && model.id === "kimi-k3"
-          ? thinkingOff(model, context, options)
-          : baseStreamFn(model, context, options);
-      return wrapOpencodeProviderStream({ ...ctx, streamFn: thinkingStreamFn });
-    },
+    classifyFailoverReason: ({ status, errorType, code, errorMessage }) =>
+      status === 403 &&
+      (errorType === "FreeTierError" ||
+        code === "FreeTierError" ||
+        /\bFreeTierError\b|OpenCode's free tier can only be used from within OpenCode/.test(
+          errorMessage,
+        ))
+        ? "model_not_found"
+        : undefined,
+    wrapStreamFn: wrapOpencodeProviderStream,
   },
   register(api) {
     api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);

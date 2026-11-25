@@ -216,30 +216,16 @@ func extractMarkdownFencedLiteralValues(body string) ([]string, []string, []stri
 	directiveTokens := []string{}
 	allSquareTokens := []string{}
 	state := markdownLiteralFenceState{}
-	lines := []string{}
-	flush := func(info string) {
-		for _, line := range lines {
-			if info != "mermaid" {
-				allSquareTokens = append(allSquareTokens, extractSquareBracketValues(line)...)
-				directiveTokens = append(directiveTokens, extractDoubleBracketValues(line)...)
-			}
-			placeholders = append(placeholders, extractAngleBracketValues(line)...)
-		}
-		lines = lines[:0]
-	}
-
 	for _, line := range strings.Split(body, "\n") {
-		previous := state
 		if !state.consumeLine(line) {
-			if previous.delimiter != "" {
-				flush(previous.info)
-			}
 			continue
 		}
-		lines = append(lines, strings.TrimSpace(stripMarkdownQuotePrefix(line, state.quoteDepth)))
-	}
-	if state.delimiter != "" {
-		flush(state.info)
+		line = strings.TrimSpace(stripMarkdownQuotePrefix(line, state.quoteDepth))
+		if state.info != "mermaid" {
+			allSquareTokens = append(allSquareTokens, extractSquareBracketValues(line)...)
+			directiveTokens = append(directiveTokens, extractDoubleBracketValues(line)...)
+		}
+		placeholders = append(placeholders, extractAngleBracketValues(line)...)
 	}
 	closingNames := map[string]struct{}{}
 	for _, token := range allSquareTokens {

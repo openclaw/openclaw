@@ -23,8 +23,20 @@ describe("Telegram chunk delivery", () => {
       false,
     ],
     [telegramError(400, "message thread not found"), false],
+    [
+      new PlatformMessageNotDispatchedError("message thread not found", {
+        cause: telegramError(400, "message thread not found"),
+      }),
+      false,
+    ],
     [telegramError(401, "unauthorized"), false],
     [telegramError(429, "rate limited"), false],
+    [
+      new PlatformMessageNotDispatchedError("flood refusal", {
+        cause: telegramError(429, "rate limited"),
+      }),
+      false,
+    ],
     [telegramError(500, "server error"), false],
     [new Error("ambiguous transport failure"), false],
   ])("classifies %s as skippable=%s", (error, expected) => {

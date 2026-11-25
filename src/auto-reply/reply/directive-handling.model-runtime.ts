@@ -1,4 +1,3 @@
-/** Resolves and applies explicit runtime selections attached to `/model`. */
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
@@ -14,10 +13,11 @@ type ModelRuntimeDirectiveResolution =
   | { kind: "set"; runtime: string }
   | { kind: "invalid"; runtime: string; errorText: string };
 
-/** Preserves compatible runtime pins and validates explicit runtime selections. */
+/** Keeps a compatible pin within its provider and validates explicit runtime selections. */
 export function resolveModelRuntimeDirective(params: {
   rawRuntime?: string;
   provider: string;
+  previousProvider?: string;
   cfg: OpenClawConfig;
   sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
 }): ModelRuntimeDirectiveResolution {
@@ -33,6 +33,13 @@ export function resolveModelRuntimeDirective(params: {
   }
 
   const provider = normalizeProviderId(params.provider);
+  if (
+    !requestedRuntime &&
+    params.previousProvider &&
+    normalizeProviderId(params.previousProvider) !== provider
+  ) {
+    return { kind: "clear" };
+  }
   const compatibleRuntime = resolveCompatibleAgentRuntimeForProvider({
     provider,
     runtime,
@@ -43,7 +50,7 @@ export function resolveModelRuntimeDirective(params: {
   }
 
   if (!requestedRuntime) {
-    // A pin from the previous provider must not block the selected model's configured route.
+    // A stored pin can outlive changes to the runtime's provider support.
     return { kind: "clear" };
   }
 
@@ -59,23 +66,21 @@ export function applyModelRuntimeDirective(
   entry: Pick<SessionEntry, "agentRuntimeOverride" | "nativeRuntimeConsent">,
   resolution: ModelRuntimeDirectiveResolution,
 ): { updated: boolean } {
+  if (resolution.kind !== "clear" && resolution.kind !== "set") {
+    return { updated: false };
+  }
+  const runtime = resolution.kind === "set" ? resolution.runtime : undefined;
+  const updated =
+    entry.agentRuntimeOverride !== runtime ||
+    (entry.nativeRuntimeConsent !== undefined && entry.nativeRuntimeConsent !== runtime);
   if (resolution.kind === "clear") {
-    const updated =
-      entry.agentRuntimeOverride !== undefined || entry.nativeRuntimeConsent !== undefined;
     delete entry.agentRuntimeOverride;
+  }
+  if (updated || resolution.kind === "clear") {
     delete entry.nativeRuntimeConsent;
-    return { updated };
   }
   if (resolution.kind === "set") {
-    const updated =
-      entry.agentRuntimeOverride !== resolution.runtime ||
-      (entry.nativeRuntimeConsent !== undefined &&
-        entry.nativeRuntimeConsent !== resolution.runtime);
-    if (updated) {
-      delete entry.nativeRuntimeConsent;
-    }
     entry.agentRuntimeOverride = resolution.runtime;
-    return { updated };
   }
-  return { updated: false };
+  return { updated };
 }

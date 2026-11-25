@@ -1,5 +1,9 @@
-import type { BoundDeviceBootstrapContext } from "./device-bootstrap.worker-types.js";
+import type {
+  BoundDeviceBootstrapContext,
+  DeviceBootstrapBoundContextInput,
+} from "./device-bootstrap.worker-types.js";
 import type { DevicePairingPendingRequest, PairedDevice } from "./device-pairing.types.js";
+import type { NodeApprovalSurface } from "./node-pairing-surface.js";
 
 export type DevicePairingReadCommand =
   | { type: "devicePairing.list"; nowMs: number; publishedRevision?: string }
@@ -7,11 +11,19 @@ export type DevicePairingReadCommand =
   | { type: "devicePairing.pending"; requestId: string; nowMs: number }
   | {
       type: "devicePairing.bootstrapContext";
-      input: { token: string; deviceId: string; publicKey: string; nowMs: number };
+      input: DeviceBootstrapBoundContextInput;
     };
 
 export type DevicePairingBinding = { identity: string; generation?: string };
-export type DevicePairingBindingFact = { deviceId: string; binding: DevicePairingBinding | null };
+export type DevicePairingBindingFact = {
+  deviceId: string;
+  device: PairedDevice | null;
+  binding: DevicePairingBinding | null;
+};
+export type DevicePairingNodeSnapshot = {
+  readonly paired: readonly PairedDevice[];
+  readonly bindings: ReadonlyMap<string, DevicePairingBinding>;
+};
 export type DevicePairingReadReply = {
   ok: true;
   sourceAdmitted: true;
@@ -39,5 +51,13 @@ export type DevicePairingCommitReceipt = {
   revision: string;
   changed: DevicePairingBindingFact[];
   tokensReplaced?: { deviceId: string; roles: string[] };
+  retiredNodeToken?: { deviceId: string; expectedToken: string };
   workerEnvironment?: CloudWorkerSetupCompletionPublication;
+  nodeApproval?: {
+    nodeId: string;
+    pairingIdentity: string;
+    previousPairingGeneration?: string;
+    nextPairingGeneration: string;
+    surface: NodeApprovalSurface;
+  };
 };

@@ -6,6 +6,7 @@ import {
   type ThemesMutationResult,
 } from "../../../packages/gateway-protocol/src/schema/themes.js";
 import { normalizeThemeDefinition } from "../../../packages/gateway-protocol/src/theme.js";
+import { requesterProfileSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import { withGatewayPersonalToolUser } from "./gateway-caller-context.js";
@@ -14,12 +15,7 @@ import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 const ThemeToolSchema = Type.Object(
   {
     action: Type.String({ enum: ["list", "get", "set", "import"] }),
-    user: Type.Optional(
-      Type.String({
-        description:
-          "The person's requester_profile.id, required when several people have steered this turn.",
-      }),
-    ),
+    user: requesterProfileSchema(),
     id: Type.Optional(
       Type.Union([Type.String({ minLength: 1 }), Type.Null()], {
         description: "Theme ID; import uses a personal slug. Set null to clear the override.",

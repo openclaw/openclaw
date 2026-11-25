@@ -1,81 +1,32 @@
+import {
+  fixtureCatalog,
+  fixtureRuntime,
+  withFixtureLeases,
+} from "./agent-bundle-mcp-fixture.test-support.js";
 import { createRequesterMcpConnect } from "./agent-bundle-mcp-requester-connect.js";
-/** Shared runtime fixtures for the agent bundle MCP harness materializer tests. */
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 
-export function makeRuntime(params: {
-  sessionId: string;
-  requesterSenderId: string;
-}): SessionMcpRuntime {
-  const serverName = "user-mail";
-  const catalog = {
-    version: 1,
-    generatedAt: 0,
-    servers: {
-      [serverName]: {
-        serverName,
-        launchSummary: serverName,
-        toolCount: 1,
-      },
-    },
-    tools: [
-      {
-        serverName,
-        safeServerName: serverName,
-        toolName: "inbox",
-        description: "read inbox",
-        inputSchema: { type: "object", properties: {} },
-        fallbackDescription: "read inbox",
-      },
-    ],
-  };
-  let lastUsedAt = Date.now();
-  let activeLeases = 0;
-  return {
+type Requester = { sessionId: string; requesterSenderId: string };
+
+export function makeRuntime(params: Requester): SessionMcpRuntime {
+  const catalog = fixtureCatalog("user-mail", [{ toolName: "inbox", description: "read inbox" }]);
+  const runtime = fixtureRuntime(() => catalog, {
     sessionId: params.sessionId,
-    workspaceDir: "/workspace",
     configFingerprint: "fp",
     requesterScope: { requesterSenderId: params.requesterSenderId },
-    createdAt: Date.now(),
-    get lastUsedAt() {
-      return lastUsedAt;
-    },
-    get activeLeases() {
-      return activeLeases;
-    },
-    acquireLease: () => {
-      activeLeases += 1;
-      let released = false;
-      return () => {
-        if (released) {
-          return;
-        }
-        released = true;
-        activeLeases -= 1;
-      };
-    },
-    markUsed: () => {
-      lastUsedAt = Date.now();
-    },
     peekCatalog: () => catalog,
-    getCatalog: async () => catalog,
     callTool: async (_server, toolName) => ({
-      content: [
-        {
-          type: "text",
-          text: `live:${toolName}:${params.requesterSenderId}`,
-        },
-      ],
+      content: [{ type: "text", text: `live:${toolName}:${params.requesterSenderId}` }],
       isError: false,
     }),
-    dispose: async () => {},
-  };
+  });
+  runtime.createdAt = Date.now();
+  return withFixtureLeases(runtime, true);
 }
 
-export async function makeConnectRuntime(params: {
-  sessionId: string;
-  requesterSenderId: string;
-  publicOrigin?: string;
-}): Promise<SessionMcpRuntime> {
+export async function makeConnectRuntime(
+  params: Requester & { publicOrigin?: string },
+): Promise<SessionMcpRuntime> {
   const runtime = makeRuntime(params);
   const catalog = { version: 1, generatedAt: 0, servers: {}, tools: [] };
   runtime.peekCatalog = () => catalog;

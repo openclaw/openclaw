@@ -2,12 +2,14 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
-import { hasErrnoCode } from "./errors.js";
+import { requireDirectorySync, syncDirectory, syncDirectorySync } from "./directory-durability.js";
+import { ignoreMissingPath } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   packageActivationIdentity,
   resolvePackageActivationHelper,
   resolvePackageActivationControl,
+  resolvePackageActivationJournalPath,
   type PackageActivationJournal,
   type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
@@ -16,10 +18,7 @@ export function packageActivationIdentityOrAbsent(file: string, directory: boole
   try {
     return packageActivationIdentity(file, directory);
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? null;
   }
 }
 
@@ -47,7 +46,7 @@ export function inspectPackageActivationCustody(anchor: string, record: PackageA
       entry.source === descriptor.authority.installKey ||
       entry.source.startsWith(`${anchor}${path.sep}`) ||
       fs.realpathSync(path.dirname(entry.source)) !== path.dirname(entry.source) ||
-      packageActivationIdentity(path.dirname(entry.source), true) !== entry.sourceParentIdentity
+      packageActivationIdentity(path.dirname(entry.source), "parent") !== entry.sourceParentIdentity
     ) {
       throw new Error("Package preparation source parent changed.");
     }
@@ -179,4 +178,91 @@ export async function completePackageActivationCustody(
     }
   }
   journal.transition(record, "prepared", null, assertCurrent);
+}
+
+/** Recognized obsolete custody closes before best-effort evidence maintenance. */
+export function settlePackageActivationCustody(params: {
+  anchor: string;
+  journal: PackageActivationJournal;
+  record: PackageActivationRecord;
+  settlement: Extract<NonNullable<PackageActivationRecord["intent"]>, { settled: boolean }>;
+  assertCurrent: () => void;
+  // Once durably closed, archival may move the custody paths verified before close.
+  assertArchiveCurrent?: () => void;
+  onSettled?: () => void;
+}) {
+  const { anchor, journal, settlement, assertCurrent } = params;
+  const record = journal.transition(
+    params.record,
+    "superseded",
+    { ...settlement, settled: true },
+    assertCurrent,
+  );
+  params.onSettled?.();
+  const warning = archivePackageActivationCustody(
+    anchor,
+    journal,
+    record,
+    params.assertArchiveCurrent ?? assertCurrent,
+  );
+  return {
+    record,
+    warning: `${settlement.detail ?? settlement.kind}. ${warning ?? `Preserved at ${anchor}.superseded-${record.descriptor.operationId}`}`,
+    archiveWarning: warning,
+  };
+}
+
+/** Completed history is never a prerequisite for the next mutable update. */
+export function archivePackageActivationCustody(
+  anchor: string,
+  journal: PackageActivationJournal,
+  record: PackageActivationRecord,
+  assertCurrent: () => void,
+) {
+  const retained = `${anchor}.superseded-${record.descriptor.operationId}`;
+  try {
+    journal.archiveSettled(record, assertCurrent);
+    // Preparation moves the package and launchers out of this npm prefix.
+    // Preserve only its recorded stage, never sweep another updater's stages.
+    const descriptor = record.descriptor;
+    const stage = path.resolve(descriptor.originalStageRoot, "../../..");
+    if (
+      record.intent?.kind === "recovery-lease-missing" &&
+      record.intent.replacementIdentity === descriptor.previous.identity &&
+      record.publications.length === 0 &&
+      path.dirname(stage) === path.dirname(anchor) &&
+      path.basename(stage).startsWith(".openclaw.update-stage-") &&
+      descriptor.originalStageRoot ===
+        path.join(stage, "lib/node_modules", path.basename(descriptor.authority.installKey)) &&
+      fs.lstatSync(stage, { throwIfNoEntry: false })
+    ) {
+      const stageArchive = path.join(retained, "update-stage");
+      assertCurrent();
+      const candidateSource = descriptor.preparation.find((entry) => entry.name === "candidate")!;
+      if (
+        fs.realpathSync(stage) !== stage ||
+        !fs.lstatSync(stage).isDirectory() ||
+        fs.lstatSync(stageArchive, { throwIfNoEntry: false }) ||
+        packageActivationIdentity(path.dirname(descriptor.originalStageRoot), "parent") !==
+          candidateSource.sourceParentIdentity
+      ) {
+        throw new Error("Recorded package update stage changed before archival.");
+      }
+      fs.renameSync(stage, stageArchive);
+      for (const directory of [path.dirname(stage), retained]) {
+        assertCurrent();
+        requireDirectorySync(syncDirectorySync(directory), "Package update stage archive");
+      }
+    }
+  } catch (error) {
+    assertCurrent();
+    // Lost rename acknowledgements may leave only the archived journal. A still
+    // active journal must remain the exact closed record before warning instead.
+    if (fs.lstatSync(resolvePackageActivationJournalPath(anchor), { throwIfNoEntry: false })) {
+      journal.assertCurrent(record);
+    }
+    return `Closed recovery evidence could not be fully archived at ${retained}: ${formatErrorMessage(error)}`;
+  }
+  assertCurrent();
+  return undefined;
 }

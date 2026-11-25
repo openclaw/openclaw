@@ -11,6 +11,7 @@ const mode = process.env.OPENCLAW_TEST_NATIVE_RUNNER_MODE;
 if (!root || !sourceRoot || (mode !== "runner" && mode !== "watch")) {
   throw new Error("Native runner signal fixture is missing its private scope");
 }
+const { sendReceipt } = await import(pathToFileURL(path.join(root, "receipts.mjs")).href);
 registerSourceRunnerServiceFixture(sourceRoot);
 const fixture = fileURLToPath(import.meta.url);
 const release = path.join(root, "release");
@@ -20,6 +21,7 @@ const writePid = (role) => {
   const destination = path.join(root, `${role}.pid`);
   fs.writeFileSync(destination + ".tmp", String(process.pid));
   fs.renameSync(destination + ".tmp", destination);
+  sendReceipt(destination, "ready");
 };
 const waitForRelease = (mayTerminate) => {
   setInterval(() => {

@@ -1,12 +1,11 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { redactToolPayloadText } from "../logging/redact.js";
+import { SESSION_COMPANION_MAX_EXCHANGE_BYTES } from "../../packages/gateway-protocol/src/session-companion-contract.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import {
   selectSessionCompanionReferenceItems,
   type SessionCompanionThread,
 } from "./session-companion-state.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 
-const ANSWER_MAX_CHARS = 1200;
 const DELTA_MAX_BYTES = 4 * 1024;
 
 export type SessionCompanionPromptMessage = {
@@ -41,7 +40,7 @@ export function formatObserverDigest(snapshot: SessionObserverCompanionSnapshot)
 
 export function buildReferenceContext(params: {
   thread: SessionCompanionThread;
-  deltaNotes: Array<{ sequence: number; text: string }>;
+  deltaNotes: SessionObserverCompanionSnapshot["notes"];
 }): string {
   const history =
     params.thread.context.messages.length === 0
@@ -74,12 +73,13 @@ export function selectDeltaNotes(
   snapshot: SessionObserverCompanionSnapshot,
   afterSequence: number,
 ): {
-  notes: Array<{ sequence: number; text: string }>;
+  notes: SessionObserverCompanionSnapshot["notes"];
   lastSequence: number;
 } {
   const candidates = snapshot.notes
     .filter((note) => note.sequence > afterSequence)
-    .toSorted((left, right) => left.sequence - right.sequence);
+    // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array, preserving snapshot note order.
+    .sort((left, right) => left.sequence - right.sequence);
   return {
     notes: selectSessionCompanionReferenceItems(candidates.toReversed(), DELTA_MAX_BYTES),
     lastSequence: candidates.at(-1)?.sequence ?? afterSequence,
@@ -110,14 +110,24 @@ export function composePromptMessages(params: {
   return messages;
 }
 
-function isPrivateReferenceEcho(value: string): boolean {
-  return value.includes(PRIVATE_REFERENCE_BEGIN) || value.includes(PRIVATE_REFERENCE_END);
-}
-
-export function sanitizeAnswer(value: string): string {
-  const redacted = redactToolPayloadText(value).trim();
-  if (isPrivateReferenceEcho(redacted)) {
+export function sanitizeAnswer(value: string, question: string): string {
+  const redacted = value.trim();
+  if (redacted.includes(PRIVATE_REFERENCE_BEGIN) || redacted.includes(PRIVATE_REFERENCE_END)) {
     return "";
   }
-  return truncateUtf16Safe(redacted, ANSWER_MAX_CHARS);
+  const budget = SESSION_COMPANION_MAX_EXCHANGE_BYTES - Buffer.byteLength(question);
+  if (Buffer.byteLength(redacted) <= budget) {
+    return redacted;
+  }
+  const notice = "Side chat shortened this answer. Ask for a smaller section.";
+  const prefix = truncateUtf8Prefix(redacted, budget - Buffer.byteLength(notice) - 2);
+  // Never turn the partial tail of a URL into a different clickable destination.
+  let end = prefix.length;
+  if (!/\s/u.test(redacted[end] ?? "")) {
+    while (end > 0 && !/\s/u.test(prefix[end - 1]!)) {
+      end -= 1;
+    }
+  }
+  const complete = prefix.slice(0, end).trimEnd();
+  return complete ? `${complete}\n\n${notice}` : notice;
 }

@@ -32,7 +32,7 @@ export function formatModelName(modelString?: string | null): string {
     "gemini-pro": "Gemini Pro",
   };
 
-  const mappedName = modelMappings[modelName];
+  const mappedName = Object.hasOwn(modelMappings, modelName) ? modelMappings[modelName] : undefined;
   if (mappedName !== undefined) {
     return mappedName;
   }
@@ -58,14 +58,15 @@ export function isBotMentioned(
 
   const normalizedBotShip = normalizeShip(botShipName);
   const escapedShip = escapeRegExp(normalizedBotShip);
-  const mentionPattern = new RegExp(`(^|\\s)${escapedShip}(?=\\s|$)`, "i");
+  // Bold, italic and strike render as *, ** and ~~ around the ship.
+  const mentionPattern = new RegExp(`(^|[\\s*~])${escapedShip}(?=$|[\\s*~,.!?;:])`, "i");
   if (mentionPattern.test(messageText)) {
     return true;
   }
 
   if (nickname) {
     const escapedNickname = escapeRegExp(nickname);
-    const nicknamePattern = new RegExp(`(^|\\s)${escapedNickname}(?=\\s|$|[,!?.])`, "i");
+    const nicknamePattern = new RegExp(`(^|[\\s*~])${escapedNickname}(?=$|[\\s*~,.!?;:])`, "i");
     if (nicknamePattern.test(messageText)) {
       return true;
     }
@@ -109,7 +110,6 @@ export async function isDmAllowedWithIngress(
     senderShip,
     allowFrom: allowlist ?? [],
     conversation: { kind: "direct", id: "direct" },
-    dmPolicy: "allowlist",
   });
   return access.senderAccess.allowed;
 }
@@ -119,7 +119,6 @@ export async function resolveTlonMessageIngress(params: {
   allowFrom: string[];
   conversation: { kind: "direct" | "group"; id: string };
   accountId?: string;
-  dmPolicy?: "open" | "allowlist";
   groupPolicy?: "open" | "allowlist";
   contextBinding?: ChannelIngressContextBinding;
 }) {
@@ -130,7 +129,7 @@ export async function resolveTlonMessageIngress(params: {
     subject: { stableId: params.senderShip },
     conversation: params.conversation,
     contextBinding: params.contextBinding,
-    dmPolicy: params.dmPolicy ?? "allowlist",
+    dmPolicy: "allowlist",
     groupPolicy: params.groupPolicy ?? "open",
     allowFrom: params.allowFrom,
     groupAllowFrom: params.allowFrom,
@@ -140,14 +139,13 @@ export async function resolveTlonMessageIngress(params: {
 export async function resolveTlonCommandAuthorizationWithIngress(params: {
   senderShip: string;
   ownerShip: string | null | undefined;
-  useAccessGroups: boolean;
 }) {
   const normalizedOwner = params.ownerShip ? normalizeShip(params.ownerShip) : null;
   return await getTlonRuntime().channel.inbound.ingress.resolveStable({
     channelId: "tlon",
     accountId: "default",
     identity: tlonIngressIdentity,
-    useAccessGroups: params.useAccessGroups,
+    useAccessGroups: true,
     subject: { stableId: params.senderShip },
     conversation: {
       kind: "direct",
@@ -175,14 +173,12 @@ export function isGroupInviteAllowed(
   }).allowed;
 }
 
-function renderInlineItem(
-  item: unknown,
-  options?: {
-    linkMode?: "content-or-href" | "href";
-    allowBreak?: boolean;
-    allowBlockquote?: boolean;
-  },
-): string {
+// Inline styles and lists can nest arbitrarily deeply in remote content. Stop rendering past
+// this depth and degrade to truncated plain text rather than recursing until the
+// call stack overflows; legitimate inline markup never approaches this bound.
+const MAX_INLINE_DEPTH = 100;
+
+function renderInlineItem(item: unknown, topLevel = false, depth = 0, omitCode = false): string {
   if (typeof item === "string") {
     return item;
   }
@@ -203,44 +199,79 @@ function renderInlineItem(
       return "@all";
     }
   }
-  if (options?.allowBreak && "break" in record) {
+  if (topLevel && "break" in record) {
     return "\n";
   }
-  const inlineCode = readStringField(record, "inline-code");
-  if (inlineCode) {
-    return `\`${inlineCode}\``;
-  }
-  const code = readStringField(record, "code");
+  const code = readStringField(record, "inline-code") || readStringField(record, "code");
   if (code) {
-    return `\`${code}\``;
+    return omitCode ? " " : `\`${code}\``;
   }
   const link = asNullableRecord(record.link);
   const linkHref = link ? readStringField(link, "href") : undefined;
   if (link && linkHref) {
     const linkContent = readStringField(link, "content");
-    return options?.linkMode === "href" ? linkHref : linkContent || linkHref;
+    return topLevel ? linkHref : linkContent || linkHref;
   }
-  if (Array.isArray(record.bold)) {
-    return `**${extractInlineText(record.bold)}**`;
+  const task = asNullableRecord(record.task);
+  if (task && Array.isArray(task.content)) {
+    return depth >= MAX_INLINE_DEPTH
+      ? ""
+      : `[${task.checked === true ? "x" : " "}] ${extractInlineText(task.content, depth + 1, omitCode)}`;
   }
-  if (Array.isArray(record.italics)) {
-    return `*${extractInlineText(record.italics)}*`;
+  const bold = Array.isArray(record.bold) ? record.bold : undefined;
+  const italics = Array.isArray(record.italics) ? record.italics : undefined;
+  const strike = Array.isArray(record.strike) ? record.strike : undefined;
+  const blockquote = topLevel && Array.isArray(record.blockquote) ? record.blockquote : undefined;
+  const nested = bold ?? italics ?? strike ?? blockquote;
+  if (!nested) {
+    return "";
   }
-  if (Array.isArray(record.strike)) {
-    return `~~${extractInlineText(record.strike)}~~`;
+  if (depth >= MAX_INLINE_DEPTH) {
+    return "";
   }
-  if (options?.allowBlockquote && Array.isArray(record.blockquote)) {
-    return `> ${extractInlineText(record.blockquote)}`;
+  const inner = extractInlineText(nested, depth + 1, omitCode);
+  if (bold) {
+    return `**${inner}**`;
   }
-  return "";
+  if (italics) {
+    return `*${inner}*`;
+  }
+  if (strike) {
+    return `~~${inner}~~`;
+  }
+  return `> ${inner}`;
 }
 
-function extractInlineText(items: readonly unknown[]): string {
-  return items.map((item) => renderInlineItem(item)).join("");
+function extractInlineText(items: readonly unknown[], depth: number, omitCode: boolean): string {
+  return items.map((item) => renderInlineItem(item, false, depth, omitCode)).join("");
 }
 
-export function extractMessageText(content: unknown): string {
-  if (!content || !Array.isArray(content)) {
+function renderListing(value: unknown, depth: number, omitCode: boolean): string {
+  const listing = asNullableRecord(value);
+  if (!listing) {
+    return "";
+  }
+  if (Array.isArray(listing.item)) {
+    return extractInlineText(listing.item, depth, omitCode);
+  }
+  const list = asNullableRecord(listing.list);
+  if (!list || depth >= MAX_INLINE_DEPTH) {
+    return "";
+  }
+  const contents = Array.isArray(list.contents)
+    ? extractInlineText(list.contents, depth + 1, omitCode)
+    : "";
+  const items = Array.isArray(list.items) ? list.items : [];
+  const children = items.map((item, index) => {
+    const text = renderListing(item, depth + 1, omitCode);
+    const marker = list.type === "ordered" ? `${index + 1}. ` : "- ";
+    return text ? `${marker}${text.replace(/\n/g, `\n${" ".repeat(marker.length)}`)}` : "";
+  });
+  return [contents, ...children].filter(Boolean).join("\n");
+}
+
+export function extractMessageText(content: unknown, omitCode = false): string {
+  if (!Array.isArray(content)) {
     return "";
   }
 
@@ -251,25 +282,14 @@ export function extractMessageText(content: unknown): string {
         return "";
       }
 
-      // Handle inline content (text, ships, links, etc.)
       if (Array.isArray(verseRecord.inline)) {
-        return verseRecord.inline
-          .map((item) =>
-            renderInlineItem(item, {
-              linkMode: "href",
-              allowBreak: true,
-              allowBlockquote: true,
-            }),
-          )
-          .join("");
+        return verseRecord.inline.map((item) => renderInlineItem(item, true, 0, omitCode)).join("");
       }
 
-      // Handle block content (images, code blocks, etc.)
       const block = asNullableRecord(verseRecord.block);
       if (block) {
         const image = asNullableRecord(block.image);
 
-        // Image blocks
         if (image) {
           const imageSrc = readStringField(image, "src");
           if (imageSrc) {
@@ -279,29 +299,33 @@ export function extractMessageText(content: unknown): string {
           }
         }
 
-        // Code blocks
         const codeBlock = asNullableRecord(block.code);
-        if (codeBlock) {
+        if (codeBlock && !omitCode) {
           const lang = readStringField(codeBlock, "lang") ?? "";
           const code = readStringField(codeBlock, "code") ?? "";
-          return `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
+          let fenceLength = 3;
+          for (const match of code.matchAll(/`+/g)) {
+            fenceLength = Math.max(fenceLength, match[0].length + 1);
+          }
+          const fence = "`".repeat(fenceLength);
+          return `\n${fence}${lang}\n${code}\n${fence}\n`;
         }
 
-        // Header blocks
+        if (block.listing) {
+          return renderListing(block.listing, 0, omitCode);
+        }
+
         const header = asNullableRecord(block.header);
         if (header) {
           const headerContent = Array.isArray(header.content) ? header.content : [];
-          const text =
-            headerContent.map((item) => (typeof item === "string" ? item : "")).join("") || "";
+          const text = headerContent.map((item) => (typeof item === "string" ? item : "")).join("");
           return `\n## ${text}\n`;
         }
 
-        // Cite/quote blocks - parse the reference structure
         const cite = asNullableRecord(block.cite);
         if (cite) {
           const chanCite = asNullableRecord(cite.chan);
 
-          // ChanCite - reference to a channel message
           if (chanCite) {
             const nest = readStringField(chanCite, "nest");
             const where = readStringField(chanCite, "where");
@@ -314,13 +338,11 @@ export function extractMessageText(content: unknown): string {
             return `\n> [quoted from ${nest}]\n`;
           }
 
-          // GroupCite - reference to a group
           const group = readStringField(cite, "group");
           if (group) {
             return `\n> [ref: group ${group}]\n`;
           }
 
-          // DeskCite - reference to an app/desk
           const desk = asNullableRecord(cite.desk);
           if (desk) {
             const flag = readStringField(desk, "flag");
@@ -329,7 +351,6 @@ export function extractMessageText(content: unknown): string {
             }
           }
 
-          // BaitCite - reference with group+graph context
           const bait = asNullableRecord(cite.bait);
           if (bait) {
             const graph = readStringField(bait, "graph");

@@ -15,6 +15,22 @@ import {
 } from "./preauth-websocket-guard.js";
 const log = createSubsystemLogger("browser").child("extension-relay");
 
+export function trackAuthenticatedRelaySocket(
+  authority: BrowserRelayAuthV2Authority,
+  ws: WebSocket,
+): boolean {
+  if (
+    !authority.registerAuthenticatedConnection(ws, () =>
+      ws.close(4003, "browser relay key rotated"),
+    )
+  ) {
+    ws.terminate();
+    return false;
+  }
+  ws.once("close", () => authority.releaseConnection(ws));
+  return true;
+}
+
 export function authenticateExtensionWebSocket(params: {
   ws: WebSocket;
   authority: BrowserRelayAuthV2Authority;
@@ -39,16 +55,14 @@ export function authenticateExtensionWebSocket(params: {
   };
   const closePreAuthSocket = (code: number, reason: string) => {
     ws.close(code, reason);
-    const terminateTimer = setTimeout(() => ws.terminate(), 100);
-    terminateTimer.unref?.();
+    setTimeout(() => ws.terminate(), 100).unref();
   };
   const timer = setTimeout(() => {
     stage = "failed";
     ws.off("message", onMessage);
     ws.close(4008, "browser relay auth timeout");
     ws.terminate();
-  }, BROWSER_RELAY_CHALLENGE_TTL_MS);
-  timer.unref?.();
+  }, BROWSER_RELAY_CHALLENGE_TTL_MS).unref();
   const release = () => {
     clearTimeout(timer);
     removePreAuthGuard();

@@ -1,0 +1,91 @@
+.model-providers__label-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+}
+
+.model-providers__help-button {
+  border-radius: 0;
+}
+
+.model-providers__help-button:hover,
+.model-providers__help-button:focus-visible {
+  color: var(--text);
+}
+
+.model-providers__help-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.model-providers__defaults {
+  .settings-row__control:where(:not(.settings-row--nav > *)) {
+    flex: 0 1 auto;
+    width: 340px;
+  }
+
+  .model-picker,
+  .settings-segmented {
+    width: 100%;
+  }
+
+  .model-picker .picker-select__option {
+    /* Access metadata belongs to the option list, beside the model name. */
+    .picker-select__copy {
+      display: flex;
+      flex: 1;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .picker-select__label {
+      flex: 1;
+      white-space: nowrap;
+    }
+
+    .picker-select__description {
+      max-width: 50%;
+      color: var(--muted);
+      text-align: end;
+      white-space: nowrap;
+    }
+  }
+
+  .settings-segmented > .settings-segmented__btn {
+    flex: 1 1 auto;
+    white-space: normal;
+  }
+
+  @media (max-width: 640px) {
+    .settings-row:not(.settings-row--nav) {
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--space-2);
+    }
+
+    .settings-row__control:where(:not(.settings-row--nav > *)) {
+      width: 100%;
+      max-width: none;
+    }
+  }
+}
+
+.model-settings__fallback-control {
+  width: 100%;
+  min-width: 0;
+}
+
+.model-settings__edit-chain {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.model-settings__fallback-control > openclaw-multi-select {
+  margin-top: var(--space-2);
+}

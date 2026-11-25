@@ -51,7 +51,7 @@ export const qaLabGatewayDefinition = {
       {
         name: "qa_restart_wait",
         label: "QA Restart Wait",
-        description: "Hold a replay-safe QA call pending until restart aborts the run.",
+        description: "Hold a QA call pending until it completes or its run is aborted.",
         parameters: EMPTY_TOOL_PARAMETERS,
         async execute(_toolCallId, _params, signal) {
           await sleep(30_000, undefined, { signal });
@@ -59,18 +59,6 @@ export const qaLabGatewayDefinition = {
         },
       },
       { name: "qa_restart_wait" },
-    );
-    api.registerTool(
-      {
-        name: "qa_restart_unsafe_probe",
-        label: "QA Restart Unsafe Probe",
-        description: "Detect whether restart recovery permits a non-replay-safe plugin call.",
-        parameters: EMPTY_TOOL_PARAMETERS,
-        async execute() {
-          return jsonResult({ status: "unsafe-probe-executed" });
-        },
-      },
-      { name: "qa_restart_unsafe_probe" },
     );
     api.registerWorkerProvider(createStaticSshWorkerProvider());
     api.registerWebSearchProvider(createQaLabWebSearchProvider());

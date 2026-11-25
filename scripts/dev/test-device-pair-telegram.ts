@@ -12,32 +12,13 @@ type SendMessageTelegram = (
   },
 ) => Promise<{ chatId?: string; messageId?: string }>;
 
-type DevicePairTelegramDeps = {
-  executePluginCommand: typeof executePluginCommand;
-  getRuntimeConfig: typeof getRuntimeConfig;
-  loadOpenClawPlugins: typeof loadOpenClawPlugins;
-  matchPluginCommand: typeof matchPluginCommand;
-  sendMessageTelegram: SendMessageTelegram;
-};
-
-type DevicePairTelegramResult = {
-  accountId?: string;
-  chatId: string;
-  messageId?: string;
-  sent: boolean;
-};
+type DevicePairTelegramDeps = ReturnType<typeof createDefaultDeps>;
 
 class UsageError extends Error {
   readonly exitCode = 1;
 }
 
 class CliArgumentError extends UsageError {}
-
-type DevicePairTelegramArgs = {
-  accountId?: string;
-  chatId?: string;
-  help: boolean;
-};
 
 const BOOLEAN_FLAGS = new Set(["--help", "-h"]);
 const VALUE_FLAGS = new Set(["--account", "-a", "--chat", "-c"]);
@@ -93,7 +74,7 @@ function validateArgs(args: readonly string[]): void {
   }
 }
 
-function parseDevicePairTelegramArgs(args: readonly string[]): DevicePairTelegramArgs {
+function parseDevicePairTelegramArgs(args: readonly string[]) {
   validateArgs(args);
   return {
     accountId: readArg(args, "--account", "-a"),
@@ -111,13 +92,13 @@ async function loadTelegramRuntimeSendMessage(): Promise<SendMessageTelegram> {
   return runtime.sendMessageTelegram;
 }
 
-function createDefaultDeps(): DevicePairTelegramDeps {
+function createDefaultDeps() {
   return {
     executePluginCommand,
     getRuntimeConfig,
     loadOpenClawPlugins,
     matchPluginCommand,
-    sendMessageTelegram: async (...args) => {
+    sendMessageTelegram: async (...args: Parameters<SendMessageTelegram>) => {
       const sendMessageTelegram = await loadTelegramRuntimeSendMessage();
       return await sendMessageTelegram(...args);
     },
@@ -127,7 +108,7 @@ function createDefaultDeps(): DevicePairTelegramDeps {
 async function runDevicePairTelegram(
   args = process.argv.slice(2),
   deps: DevicePairTelegramDeps = createDefaultDeps(),
-): Promise<DevicePairTelegramResult> {
+) {
   const { accountId, chatId, help } = parseDevicePairTelegramArgs(args);
   if (help || !chatId) {
     throw new UsageError(usage());

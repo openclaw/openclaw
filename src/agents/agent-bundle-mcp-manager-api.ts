@@ -1,13 +1,16 @@
 /** Module-level session MCP runtime manager entry APIs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { logWarn } from "../logger.js";
 import { getBoundLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
+import {
+  peekSessionMcpRuntimeManager,
+  releaseSessionMcpRuntime,
+} from "./agent-bundle-mcp-manager-cleanup.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
-  McpToolCatalog,
   RequesterScopedMcpRuntimeHandle,
   SessionMcpConfigReload,
   SessionMcpRuntime,
@@ -15,6 +18,7 @@ import type {
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
 import { resetMcpStartupBackoff } from "./mcp-startup-backoff.js";
+export { captureSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-cleanup.js";
 
 function getSessionMcpRuntimeManager() {
   const manager = peekSessionMcpRuntimeManager();
@@ -28,17 +32,6 @@ export function setSessionMcpRuntimeScheduler(scheduler: GatewayScheduler): Prom
   return resolveGlobalSingleton(SESSION_MCP_RUNTIME_MANAGER_KEY, () =>
     createSessionMcpRuntimeManager({ scheduler }),
   ).setScheduler(scheduler);
-}
-
-function peekSessionMcpRuntimeManager():
-  | ReturnType<typeof createSessionMcpRuntimeManager>
-  | undefined {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  return Object.hasOwn(globalStore, SESSION_MCP_RUNTIME_MANAGER_KEY)
-    ? (globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY] as ReturnType<
-        typeof createSessionMcpRuntimeManager
-      >)
-    : undefined;
 }
 
 async function acquireManagedRuntime<T extends SessionMcpRuntimeLease | undefined>(
@@ -136,39 +129,6 @@ export async function retireSessionMcpRuntime(params: {
   }
 }
 
-/** Releases an acquisition after its consumer has taken ownership, or after failure. */
-export async function releaseSessionMcpRuntime(
-  lease: Pick<SessionMcpRuntimeLease, "runtime" | "retireUnusedServers"> & {
-    releaseLease?: () => void;
-  },
-  retainedServerNames?: ReadonlySet<string>,
-): Promise<void> {
-  lease.releaseLease?.();
-  try {
-    if (retainedServerNames) {
-      await lease.retireUnusedServers?.(retainedServerNames);
-    }
-  } catch (error) {
-    logWarn(`bundle-mcp: unused server cleanup failed: ${String(error)}`);
-  } finally {
-    await completeDeferredSessionMcpRuntimeRetirement(lease.runtime).catch((error: unknown) => {
-      logWarn(`bundle-mcp: deferred runtime cleanup failed: ${String(error)}`);
-    });
-  }
-}
-
-/** Completes deferred retirement after its final run, view, or request lease releases. */
-export async function completeDeferredSessionMcpRuntimeRetirement(
-  runtime: SessionMcpRuntime,
-): Promise<boolean> {
-  return (
-    (await peekSessionMcpRuntimeManager()?.completeDeferredRetirement(
-      runtime.sessionId,
-      runtime,
-    )) ?? false
-  );
-}
-
 export async function retireSessionMcpRuntimeForSessionKey(params: {
   sessionKey?: string | null;
   reason: string;
@@ -204,8 +164,4 @@ export async function disposeAllSessionMcpRuntimes(): Promise<void> {
   } else {
     resetMcpStartupBackoff();
   }
-}
-
-export function getSessionMcpRuntimeManagerForTesting(): SessionMcpRuntimeManager {
-  return getSessionMcpRuntimeManager();
 }

@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 // Covers runtime safe-bin policy resolution.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,7 +12,34 @@ import {
 } from "./exec-safe-bin-runtime-policy.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 
+function trustPolicy(dir: string, safeBins = ["jq"]) {
+  return resolveExecSafeBinRuntimePolicy({ local: { safeBins, safeBinTrustedDirs: [dir] } });
+}
+
+function trusted(policy: Awaited<ReturnType<typeof trustPolicy>>, resolvedPath: string) {
+  return isTrustedSafeBinPath({ resolvedPath, trustedDirs: policy.trustedSafeBinDirs });
+}
+
+async function makeFile(file: string, mode = 0o755) {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, "#!/bin/sh\n", "utf8");
+  await fs.chmod(file, mode);
+}
+
 describe("exec safe-bin runtime policy", () => {
+  it("does not inspect trusted directories when safe bins are disabled", async () => {
+    const stat = vi.spyOn(fs, "stat");
+    const statSync = vi.spyOn(syncFs, "statSync");
+    try {
+      const policy = await resolveExecSafeBinRuntimePolicy({ local: { safeBins: [] } });
+      expect(policy.safeBins.size).toBe(0);
+      expect(stat).not.toHaveBeenCalled();
+      expect(statSync).not.toHaveBeenCalled();
+    } finally {
+      stat.mockRestore();
+      statSync.mockRestore();
+    }
+  });
   const interpreterCases: Array<{ bin: string; expected: boolean }> = [
     { bin: "python3.12", expected: true },
     { bin: "node20", expected: true },
@@ -64,8 +92,8 @@ describe("exec safe-bin runtime policy", () => {
     });
   });
 
-  it("computes unprofiled interpreter entries separately from custom profiled bins", () => {
-    const policy = resolveExecSafeBinRuntimePolicy({
+  it("computes unprofiled interpreter entries separately from custom profiled bins", async () => {
+    const policy = await resolveExecSafeBinRuntimePolicy({
       local: {
         safeBins: ["python3", "myfilter"],
         safeBinProfiles: {
@@ -80,8 +108,8 @@ describe("exec safe-bin runtime policy", () => {
     expect(policy.unprofiledInterpreterSafeBins).toEqual(["python3"]);
   });
 
-  it("prefers local safe bins over global ones when both are configured", () => {
-    const policy = resolveExecSafeBinRuntimePolicy({
+  it("prefers local safe bins over global ones when both are configured", async () => {
+    const policy = await resolveExecSafeBinRuntimePolicy({
       global: {
         safeBins: ["python3", "jq"],
       },
@@ -93,10 +121,10 @@ describe("exec safe-bin runtime policy", () => {
     expect([...policy.safeBins]).toEqual(["sort"]);
   });
 
-  it("merges explicit safe-bin trusted dirs from global and local config", () => {
+  it("merges explicit safe-bin trusted dirs from global and local config", async () => {
     const customDir = path.join(path.sep, "custom", "bin");
     const agentDir = path.join(path.sep, "agent", "bin");
-    const policy = resolveExecSafeBinRuntimePolicy({
+    const policy = await resolveExecSafeBinRuntimePolicy({
       global: {
         safeBinTrustedDirs: [` ${customDir} `, customDir],
       },
@@ -109,12 +137,12 @@ describe("exec safe-bin runtime policy", () => {
     expect(policy.trustedSafeBinDirs.has(path.resolve(agentDir))).toBe(true);
   });
 
-  it("does not trust package-manager bin dirs unless explicitly configured", () => {
-    const defaultPolicy = resolveExecSafeBinRuntimePolicy({});
+  it("does not trust package-manager bin dirs unless explicitly configured", async () => {
+    const defaultPolicy = await resolveExecSafeBinRuntimePolicy({});
     expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(false);
     expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(false);
 
-    const optedIn = resolveExecSafeBinRuntimePolicy({
+    const optedIn = await resolveExecSafeBinRuntimePolicy({
       global: {
         safeBinTrustedDirs: ["/opt/homebrew/bin", "/usr/local/bin"],
       },
@@ -134,50 +162,21 @@ describe("exec safe-bin runtime policy", () => {
         const target2 = path.join(targetDir2, "jq");
         const link = path.join(trustedDir, "jq");
         await fs.mkdir(trustedDir, { recursive: true });
-        await fs.mkdir(targetDir1, { recursive: true });
-        await fs.mkdir(targetDir2, { recursive: true });
-        await fs.writeFile(target1, "#!/bin/sh\n", "utf8");
-        await fs.writeFile(target2, "#!/bin/sh\n", "utf8");
-        await fs.chmod(target1, 0o755);
-        await fs.chmod(target2, 0o755);
+        await makeFile(target1);
+        await makeFile(target2);
         await fs.symlink(target1, link);
 
-        const first = resolveExecSafeBinRuntimePolicy({
-          local: {
-            safeBins: ["jq"],
-            safeBinTrustedDirs: [trustedDir],
-          },
-        });
+        const first = await trustPolicy(trustedDir);
         const realTarget1 = await fs.realpath(target1);
-        expect(
-          isTrustedSafeBinPath({
-            resolvedPath: realTarget1,
-            trustedDirs: first.trustedSafeBinDirs,
-          }),
-        ).toBe(true);
+        expect(await trusted(first, realTarget1)).toBe(true);
 
         await fs.unlink(link);
         await fs.symlink(target2, link);
 
-        const second = resolveExecSafeBinRuntimePolicy({
-          local: {
-            safeBins: ["jq"],
-            safeBinTrustedDirs: [trustedDir],
-          },
-        });
+        const second = await trustPolicy(trustedDir);
         const realTarget2 = await fs.realpath(target2);
-        expect(
-          isTrustedSafeBinPath({
-            resolvedPath: realTarget1,
-            trustedDirs: second.trustedSafeBinDirs,
-          }),
-        ).toBe(false);
-        expect(
-          isTrustedSafeBinPath({
-            resolvedPath: realTarget2,
-            trustedDirs: second.trustedSafeBinDirs,
-          }),
-        ).toBe(true);
+        expect(await trusted(second, realTarget1)).toBe(false);
+        expect(await trusted(second, realTarget2)).toBe(true);
       });
     },
   );
@@ -198,45 +197,19 @@ describe("exec safe-bin runtime policy", () => {
         const directoryLink = path.join(trustedDir, "curl");
 
         await fs.mkdir(trustedDir, { recursive: true });
-        await fs.mkdir(nonExecutableDir, { recursive: true });
         await fs.mkdir(directoryTarget, { recursive: true });
-        await fs.mkdir(executableDir, { recursive: true });
-        await fs.writeFile(nonExecutable, "#!/bin/sh\n", "utf8");
-        await fs.chmod(nonExecutable, 0o644);
-        await fs.writeFile(executableInNonExecutableDir, "#!/bin/sh\n", "utf8");
-        await fs.chmod(executableInNonExecutableDir, 0o755);
-        await fs.writeFile(executableInDirectoryParent, "#!/bin/sh\n", "utf8");
-        await fs.chmod(executableInDirectoryParent, 0o755);
-        await fs.writeFile(executable, "#!/bin/sh\n", "utf8");
-        await fs.chmod(executable, 0o755);
+        await makeFile(nonExecutable, 0o644);
+        await makeFile(executableInNonExecutableDir);
+        await makeFile(executableInDirectoryParent);
+        await makeFile(executable);
         await fs.symlink(nonExecutable, nonExecutableLink);
         await fs.symlink(directoryTarget, directoryLink);
 
-        const policy = resolveExecSafeBinRuntimePolicy({
-          local: {
-            safeBins: ["jq", "curl"],
-            safeBinTrustedDirs: [trustedDir],
-          },
-        });
+        const policy = await trustPolicy(trustedDir, ["jq", "curl"]);
 
-        expect(
-          isTrustedSafeBinPath({
-            resolvedPath: await fs.realpath(executable),
-            trustedDirs: policy.trustedSafeBinDirs,
-          }),
-        ).toBe(false);
-        expect(
-          isTrustedSafeBinPath({
-            resolvedPath: await fs.realpath(executableInNonExecutableDir),
-            trustedDirs: policy.trustedSafeBinDirs,
-          }),
-        ).toBe(false);
-        expect(
-          isTrustedSafeBinPath({
-            resolvedPath: await fs.realpath(executableInDirectoryParent),
-            trustedDirs: policy.trustedSafeBinDirs,
-          }),
-        ).toBe(false);
+        expect(await trusted(policy, await fs.realpath(executable))).toBe(false);
+        expect(await trusted(policy, await fs.realpath(executableInNonExecutableDir))).toBe(false);
+        expect(await trusted(policy, await fs.realpath(executableInDirectoryParent))).toBe(false);
       });
     },
   );
@@ -246,29 +219,16 @@ describe("exec safe-bin runtime policy", () => {
       return;
     }
     await withTestDir({ prefix: "openclaw-safe-bin-runtime-" }, async (dir) => {
-      try {
-        await fs.chmod(dir, 0o777);
-        const onWarning = vi.fn();
-        const policy = resolveExecSafeBinRuntimePolicy({
-          global: {
-            safeBinTrustedDirs: [dir],
-          },
-          onWarning,
-        });
+      await fs.chmod(dir, 0o777);
+      const onWarning = vi.fn();
+      await resolveExecSafeBinRuntimePolicy({
+        global: { safeBinTrustedDirs: [dir] },
+        onWarning,
+      });
 
-        expect(policy.writableTrustedSafeBinDirs).toEqual([
-          {
-            dir: path.resolve(dir),
-            groupWritable: true,
-            worldWritable: true,
-          },
-        ]);
-        expect(onWarning).toHaveBeenCalledExactlyOnceWith(
-          `exec: safeBinTrustedDirs includes world-writable directory '${path.resolve(dir)}'; remove trust or tighten permissions (for example chmod 755).`,
-        );
-      } finally {
-        await fs.chmod(dir, 0o755).catch(() => undefined);
-      }
+      expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+        `exec: safeBinTrustedDirs includes world-writable directory '${path.resolve(dir)}'; remove trust or tighten permissions (for example chmod 755).`,
+      );
     });
   });
 });

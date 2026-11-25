@@ -7,6 +7,11 @@ import { buildQaConfidenceReport, renderQaConfidenceMarkdownReport } from "./con
 import { writeQaConfidenceSelfTestArtifacts } from "./confidence-self-test.js";
 
 type QaConfidenceManifest = Parameters<typeof buildQaConfidenceReport>[0]["manifest"];
+type Lane = QaConfidenceManifest["lanes"][number];
+
+function lane(id: string, artifact: string, options: Partial<Lane> = {}): Lane {
+  return { id, title: id, kind: "qa-suite-summary", artifact, required: true, ...options };
+}
 
 describe("qa confidence report", () => {
   let tempRoot: string;
@@ -40,34 +45,18 @@ describe("qa confidence report", () => {
       "missingVerdict" | "failureVerdict"
     > = {},
   ) {
-    return buildQaConfidenceReport({
-      manifest: {
-        version: 1,
-        profile: "codex-100",
-        lanes: [
-          {
-            id: "first-hour-live",
-            title: "First hour live",
-            kind: "qa-suite-summary",
-            artifact: "live/qa-suite-summary.json",
-            required: true,
-            ...laneOptions,
-          },
-        ],
-      },
-      artifactRoot: tempRoot,
-      strictZeroUnknowns: true,
-      generatedAt: "2026-05-13T00:00:00.000Z",
-    });
+    return buildLaneReport(lane("first-hour-live", "live/qa-suite-summary.json", laneOptions));
   }
 
   function buildLaneReport(
-    lane: QaConfidenceManifest["lanes"][number],
-    options: Omit<Parameters<typeof buildQaConfidenceReport>[0], "manifest" | "artifactRoot">,
+    entry: QaConfidenceManifest["lanes"][number],
+    options: Omit<Parameters<typeof buildQaConfidenceReport>[0], "manifest" | "artifactRoot"> = {},
   ) {
     return buildQaConfidenceReport({
-      manifest: { version: 1, profile: "codex-100", lanes: [lane] },
+      manifest: { version: 1, profile: "codex-100", lanes: [entry] },
       artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      generatedAt: "2026-05-13T00:00:00.000Z",
       ...options,
     });
   }
@@ -75,26 +64,17 @@ describe("qa confidence report", () => {
   async function buildStrictSuiteReport(payload: Record<string, unknown>, withBackfill = false) {
     await writeJson("report-only/qa-suite-summary.json", payload);
     const lanes: QaConfidenceManifest["lanes"] = [
-      {
-        id: "report-only",
-        title: "Report-only",
-        kind: "qa-suite-summary",
-        artifact: "report-only/qa-suite-summary.json",
-        required: true,
-        ...(withBackfill ? { skipBackfillLane: "backfill" } : {}),
-      },
+      lane(
+        "report-only",
+        "report-only/qa-suite-summary.json",
+        withBackfill ? { skipBackfillLane: "backfill" } : {},
+      ),
     ];
     if (withBackfill) {
       await writeJson("backfill/qa-suite-summary.json", {
         counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
       });
-      lanes.push({
-        id: "backfill",
-        title: "Passing backfill",
-        kind: "qa-suite-summary",
-        artifact: "backfill/qa-suite-summary.json",
-        required: true,
-      });
+      lanes.push(lane("backfill", "backfill/qa-suite-summary.json"));
     }
     return buildQaConfidenceReport({
       manifest: { version: 1, profile: "confidence-regression", lanes },
@@ -118,30 +98,16 @@ describe("qa confidence report", () => {
       version: 1,
       profile: "codex-100",
       lanes: [
-        {
-          id: "tool-defaults-direct",
-          title: "Tool defaults direct",
-          kind: "qa-suite-summary",
-          artifact: "tool-defaults/qa-suite-summary.json",
-          required: true,
-        },
-        {
-          id: "mock-token-efficiency",
-          title: "Mock token efficiency",
+        lane("tool-defaults-direct", "tool-defaults/qa-suite-summary.json"),
+        lane("mock-token-efficiency", "token/qa-runtime-token-efficiency-summary.json", {
           kind: "token-efficiency-summary",
-          artifact: "token/qa-runtime-token-efficiency-summary.json",
-          required: true,
           expectedTokenUsageSource: "mock-estimate",
-        },
-        {
-          id: "live-token-efficiency",
-          title: "Live token efficiency",
+        }),
+        lane("live-token-efficiency", "live/qa-runtime-token-efficiency-summary.json", {
           kind: "token-efficiency-summary",
-          artifact: "live/qa-runtime-token-efficiency-summary.json",
-          required: true,
           missingVerdict: "environment-blocked",
           missingReason: "OPENAI OAuth credentials are not available in this runner.",
-        },
+        }),
       ],
     };
 
@@ -155,7 +121,7 @@ describe("qa confidence report", () => {
     expect(report.pass).toBe(true);
     expect(report.globalPass).toBe(false);
     expect(report.counts).toMatchObject({ passed: 2, blocked: 1, unknown: 0, failed: 0 });
-    expect(report.lanes.map((lane) => lane.verdict)).toEqual([
+    expect(report.lanes.map((entry) => entry.verdict)).toEqual([
       "pass",
       "pass",
       "environment-blocked",
@@ -168,19 +134,6 @@ describe("qa confidence report", () => {
   });
 
   it("uses suite lifecycle status before terminal outcome counts", async () => {
-    const manifest: QaConfidenceManifest = {
-      version: 1,
-      profile: "codex-100",
-      lanes: [
-        {
-          id: "suite",
-          title: "Suite",
-          kind: "qa-suite-summary",
-          artifact: "suite/qa-suite-summary.json",
-          required: true,
-        },
-      ],
-    };
     for (const [runStatus, expectedPass, expectedLaneStatus, expectedDetails] of [
       ["missing", false, "unknown", "missing run.status"],
       ["running", false, "unknown", "still running"],
@@ -193,9 +146,7 @@ describe("qa confidence report", () => {
         scenarios: [{ name: "completed prefix", status: "pass" }],
       });
 
-      const report = await buildQaConfidenceReport({
-        manifest,
-        artifactRoot: tempRoot,
+      const report = await buildLaneReport(lane("suite", "suite/qa-suite-summary.json"), {
         strictGlobalPass: true,
       });
 
@@ -258,37 +209,15 @@ describe("qa confidence report", () => {
         version: 1,
         profile: "codex-100",
         lanes: [
-          {
-            id: "blocked-live",
-            title: "Blocked live",
-            kind: "qa-suite-summary",
-            artifact: "live/qa-suite-summary.json",
-            required: true,
+          lane("blocked-live", "live/qa-suite-summary.json", {
             missingVerdict: "environment-blocked",
             missingReason: "OPENAI_API_KEY missing.",
-          },
-          {
-            id: "missing-soak",
-            title: "Missing soak",
-            kind: "qa-suite-summary",
-            artifact: "soak/qa-suite-summary.json",
-            required: true,
-          },
-          {
-            id: "classified-fixture",
-            title: "Classified fixture",
-            kind: "qa-suite-summary",
-            artifact: "classified/qa-suite-summary.json",
-            required: true,
+          }),
+          lane("missing-soak", "soak/qa-suite-summary.json"),
+          lane("classified-fixture", "classified/qa-suite-summary.json", {
             failureVerdict: "fixture-bug",
-          },
-          {
-            id: "unknown-failure",
-            title: "Unknown failure",
-            kind: "qa-suite-summary",
-            artifact: "unknown/qa-suite-summary.json",
-            required: true,
-          },
+          }),
+          lane("unknown-failure", "unknown/qa-suite-summary.json"),
         ],
       },
       artifactRoot: tempRoot,
@@ -476,17 +405,11 @@ describe("qa confidence report", () => {
       });
 
       const report = await buildLaneReport(
-        {
-          id: "live-token-efficiency",
-          title: "Live token efficiency",
+        lane("live-token-efficiency", "live-token/qa-runtime-token-efficiency-summary.json", {
           kind: "token-efficiency-summary",
-          artifact: "live-token/qa-runtime-token-efficiency-summary.json",
-          required: true,
           ...(expectedSource ? { expectedTokenUsageSource: expectedSource } : {}),
-        },
-        {
-          strictGlobalPass: true,
-        },
+        }),
+        { strictGlobalPass: true },
       );
 
       expect(report.pass).toBe(passed);
@@ -685,17 +608,9 @@ describe("qa confidence report", () => {
     await writeJson("runtime/qa-runtime-parity-summary.json", {});
 
     const report = await buildLaneReport(
-      {
-        id: "runtime-parity",
-        title: "Runtime parity",
+      lane("runtime-parity", "runtime/qa-runtime-parity-summary.json", {
         kind: "runtime-parity-summary",
-        artifact: "runtime/qa-runtime-parity-summary.json",
-        required: true,
-      },
-      {
-        strictZeroUnknowns: true,
-        generatedAt: "2026-05-13T00:00:00.000Z",
-      },
+      }),
     );
 
     expect(report.pass).toBe(false);
@@ -735,17 +650,10 @@ describe("qa confidence report", () => {
       await writeJson("jsonl/qa-jsonl-replay-summary.json", { transcripts });
 
       const report = await buildLaneReport(
-        {
-          id: "jsonl-expanded",
-          title: "Expanded JSONL replay",
+        lane("jsonl-expanded", "jsonl/qa-jsonl-replay-summary.json", {
           kind: "jsonl-replay-summary",
-          artifact: "jsonl/qa-jsonl-replay-summary.json",
-          required: true,
           failureVerdict: "fixture-bug",
-        },
-        {
-          strictZeroUnknowns: true,
-        },
+        }),
       );
 
       expect(report.pass).toBe(expectedPass);
@@ -765,18 +673,10 @@ describe("qa confidence report", () => {
       await writeJson("confidence-self-test/qa-confidence-self-test-summary.json", artifact);
 
       const report = await buildLaneReport(
-        {
-          id: "confidence-self-test",
-          title: "Confidence self-test",
+        lane("confidence-self-test", "confidence-self-test/qa-confidence-self-test-summary.json", {
           kind: "self-test-summary",
-          artifact: "confidence-self-test/qa-confidence-self-test-summary.json",
-          required: true,
           failureVerdict: "qa-harness-bug",
-        },
-        {
-          strictZeroUnknowns: true,
-          generatedAt: "2026-05-13T00:00:00.000Z",
-        },
+        }),
       );
 
       expect(report.pass).toBe(false);
@@ -800,16 +700,12 @@ describe("qa confidence report", () => {
     });
 
     const report = await buildLaneReport(
-      {
-        id: "jsonl-expanded",
-        title: "Expanded JSONL replay",
+      lane("jsonl-expanded", "jsonl/qa-jsonl-replay-summary.json", {
         kind: "jsonl-replay-summary",
-        artifact: "jsonl/qa-jsonl-replay-summary.json",
-        required: true,
         failureVerdict: "fixture-bug",
         productImpact: "P4",
         qaImpact: "P1",
-      },
+      }),
       {
         strictZeroUnknowns: true,
         generatedAt: "2026-05-12T00:00:00.000Z",
@@ -831,7 +727,6 @@ describe("qa confidence report", () => {
   it("emits confidence self-test canaries for every drift class we need to catch", async () => {
     const { summary, summaryPath, reportPath } = await writeQaConfidenceSelfTestArtifacts({
       outputDir: tempRoot,
-      generatedAt: "2026-05-12T00:00:00.000Z",
     });
 
     expect(JSON.parse(await fs.readFile(summaryPath, "utf8"))).toEqual(summary);

@@ -55,14 +55,13 @@ export type ClawHubSkillFileState = {
 export async function checkClawHubSkillPlanAtPath(
   plan: ClawHubSkillFileState,
   skillDir: string,
-  readFile: typeof fs.readFile = fs.readFile,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const stat = await fs.lstat(skillDir);
     if (!stat.isDirectory() || stat.isSymbolicLink()) {
       return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during update.` };
     }
-    const content = await readFile(path.join(skillDir, plan.skillFilePath));
+    const content = await fs.readFile(path.join(skillDir, plan.skillFilePath));
     if (
       sha256Hex(content) !== plan.skillFileSha256 ||
       (await digestClawHubSkillTree(skillDir)) !== plan.fileTreeSha256

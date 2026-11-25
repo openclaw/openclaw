@@ -1,28 +1,17 @@
 import type { ScopeTree } from "openclaw/plugin-sdk/channel-policy";
-import {
-  normalizeOptionalLowercaseString,
-  uniqueStrings,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeChannelSlug } from "openclaw/plugin-sdk/channel-targets";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ZalouserGroupConfig } from "./types.js";
 
 type ZalouserGroups = Record<string, ZalouserGroupConfig>;
 
 const toGroupCandidate = (value?: string | null) => value?.trim() ?? "";
 
-function normalizeZalouserGroupSlug(raw?: string | null): string {
-  const trimmed = normalizeOptionalLowercaseString(raw) ?? "";
-  return trimmed
-    .replace(/^#/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 export function buildZalouserGroupCandidates(params: {
   groupId?: string | null;
   groupChannel?: string | null;
   groupName?: string | null;
   includeGroupIdAlias?: boolean;
-  includeWildcard?: boolean;
   allowNameMatching?: boolean;
 }): string[] {
   const groupId = toGroupCandidate(params.groupId);
@@ -34,12 +23,10 @@ export function buildZalouserGroupCandidates(params: {
     candidates.push(`group:${groupId}`);
   }
   if (params.allowNameMatching !== false) {
-    candidates.push(groupChannel, groupName, normalizeZalouserGroupSlug(groupName));
+    candidates.push(groupChannel, groupName, normalizeChannelSlug(groupName));
   }
-  if (params.includeWildcard !== false) {
-    candidates.push("*");
-  }
-  return uniqueStrings(candidates.map(toGroupCandidate).filter(Boolean));
+  candidates.push("*");
+  return uniqueStrings(candidates.filter(Boolean));
 }
 
 export function findZalouserGroupEntry(
@@ -56,7 +43,7 @@ export function resolveZalouserGroupScope(
   candidates: string[],
 ) {
   // Whole-entry selection: an exact candidate hides every wildcard field.
-  // Candidate construction owns aliases, names, and wildcard opt-in; the monitor
+  // Candidate construction owns aliases, names, and wildcard fallback; the monitor
   // requests group:<id>, groupName, and "*" through buildZalouserGroupCandidates.
   const tree: ScopeTree = { scopes: groups ?? {} };
   const key =

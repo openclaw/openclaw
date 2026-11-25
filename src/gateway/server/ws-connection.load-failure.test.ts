@@ -1,18 +1,12 @@
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { moduleNotFoundError } from "../stale-install.test-support.js";
 import {
   attachGatewayWsForTest,
   createGatewayWsTestLogger,
   createGatewayWsTestSocket,
 } from "./ws-connection.test-helpers.js";
-
-function moduleNotFoundError(filePath: string): Error {
-  return Object.assign(new Error(`Cannot find module '${filePath}'`), {
-    code: "ERR_MODULE_NOT_FOUND",
-    url: pathToFileURL(filePath).href,
-  });
-}
 
 async function connectWithMessageHandlerLoadError(error: Error) {
   vi.resetModules();

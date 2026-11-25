@@ -1,5 +1,3 @@
-// Resolves Docker upgrade-survivor baseline specs from requested tokens and
-// live release history JSON captured by release workflows.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
@@ -12,7 +10,6 @@ import {
   assertSupportedUpgradeSurvivorBaselineSpec,
   MINIMUM_UPGRADE_SURVIVOR_BASELINE,
   normalizeUpgradeSurvivorBaselineSpec,
-  OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE,
 } from "./lib/upgrade-survivor-policy.mjs";
 
 type ReleaseRecord = Partial<Record<"isPrerelease" | "publishedAt" | "tagName", unknown>>;
@@ -42,7 +39,6 @@ export function parseArgs(argv: string[]) {
 function splitSpecs(raw: unknown) {
   return scalarText(raw)
     .split(/[,\s]+/u)
-    .map((token) => token.trim())
     .filter(Boolean);
 }
 
@@ -150,9 +146,6 @@ function readStableReleases(file: string, publishedVersions?: Set<string>) {
     .toSorted((a, b) => b.publishedAt.localeCompare(a.publishedAt));
 }
 
-/**
- * Resolves the last N stable release versions from release metadata.
- */
 function resolveLastStable(args: Map<string, string>, count: number) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
@@ -171,9 +164,6 @@ function resolveLastStable(args: Map<string, string>, count: number) {
   );
 }
 
-/**
- * Resolves all stable release versions at or after the requested minimum.
- */
 function resolveAllSince(args: Map<string, string>, minimumVersion: string) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
@@ -214,11 +204,6 @@ function resolveSupportedLines(args: Map<string, string>) {
   if (!previous) {
     throw new Error(`no previous stable npm version before ${latest}`);
   }
-  if (!versions.has(OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE)) {
-    throw new Error(
-      `oldest supported baseline is not published: ${OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE}`,
-    );
-  }
   const extended = "extended-stable" in tags ? tags["extended-stable"] : undefined;
   if (
     extended !== undefined &&
@@ -232,18 +217,10 @@ function resolveSupportedLines(args: Map<string, string>) {
   }
   return omitUnpublishedCandidateBaseline(
     args,
-    dedupeSpecs([
-      latest,
-      previous,
-      ...(typeof extended === "string" ? [extended] : []),
-      OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE,
-    ]),
+    dedupeSpecs([latest, previous, ...(typeof extended === "string" ? [extended] : [])]),
   );
 }
 
-/**
- * Expands requested baseline tokens into normalized package/version specs.
- */
 export function resolveBaselines(args: Map<string, string>) {
   const requested = args.get("requested") ?? "";
   const fallback = args.get("fallback") ?? "openclaw@latest";

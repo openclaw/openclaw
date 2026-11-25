@@ -64,7 +64,7 @@ export function listBundledPluginMetadata(params?: {
   const includeSyntheticChannelConfigs =
     params?.includeSyntheticChannelConfigs ?? includeChannelConfigs;
   if (!resolvedScanDir || !fs.existsSync(resolvedScanDir)) {
-    return Object.freeze([]);
+    return [];
   }
 
   const entries: BundledPluginMetadata[] = [];
@@ -83,12 +83,12 @@ export function listBundledPluginMetadata(params?: {
       tryReadJsonSync<PackageManifest>(path.join(pluginDir, "package.json")) ?? undefined;
     const packageManifest = getPackageManifestMetadata(packageJson);
     const extensions = normalizeBundledPluginStringList(packageManifest?.extensions);
-    if (extensions.length === 0) {
+    const sourceEntry = extensions[0];
+    if (sourceEntry === undefined) {
       continue;
     }
-    const sourceEntry = extensions[0];
     const builtEntry = rewriteBundledPluginEntryToBuiltPath(sourceEntry);
-    if (!sourceEntry || !builtEntry) {
+    if (!builtEntry) {
       continue;
     }
 
@@ -114,12 +114,15 @@ export function listBundledPluginMetadata(params?: {
           })
         : manifestResult.manifest.channelConfigs;
 
+    const packageName = trimBundledPluginString(packageJson?.name);
+    const packageVersion = trimBundledPluginString(packageJson?.version);
+    const packageDescription = trimBundledPluginString(packageJson?.description);
     entries.push({
       dirName,
       idHint: deriveBundledPluginIdHint({
         entryPath: sourceEntry,
         manifestId: manifestResult.manifest.id,
-        packageName: trimBundledPluginString(packageJson?.name),
+        packageName,
         hasMultipleExtensions: extensions.length > 1,
       }),
       source: {
@@ -129,15 +132,9 @@ export function listBundledPluginMetadata(params?: {
       ...(setupSource ? { setupSource } : {}),
       ...(publicSurfaceArtifacts ? { publicSurfaceArtifacts } : {}),
       ...(runtimeSidecarArtifacts ? { runtimeSidecarArtifacts } : {}),
-      ...(trimBundledPluginString(packageJson?.name)
-        ? { packageName: trimBundledPluginString(packageJson?.name) }
-        : {}),
-      ...(trimBundledPluginString(packageJson?.version)
-        ? { packageVersion: trimBundledPluginString(packageJson?.version) }
-        : {}),
-      ...(trimBundledPluginString(packageJson?.description)
-        ? { packageDescription: trimBundledPluginString(packageJson?.description) }
-        : {}),
+      ...(packageName ? { packageName } : {}),
+      ...(packageVersion ? { packageVersion } : {}),
+      ...(packageDescription ? { packageDescription } : {}),
       ...(packageManifest ? { packageManifest } : {}),
       manifest: {
         ...manifestResult.manifest,
@@ -146,7 +143,7 @@ export function listBundledPluginMetadata(params?: {
     });
   }
 
-  return Object.freeze(entries);
+  return entries;
 }
 
 /** Finds bundled plugin metadata by manifest id. */

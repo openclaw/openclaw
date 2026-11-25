@@ -1,28 +1,30 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { maskApiKey } from "../security/secret-mask.js";
 import { shortenHomePath } from "../utils.js";
 import { formatRemainingShort } from "./auth-health.js";
+import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
+import { formatAuthProfileOAuthLabel } from "./auth-profiles/display.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
-  isProfileInCooldown,
-  resolveAuthProfileDisplayLabel,
-} from "./auth-profiles.js";
-import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
-import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
-import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./model-selection.js";
+  resolveAuthProfileOrder,
+} from "./auth-profiles/order.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveProfileUnusableUntilForDisplay } from "./auth-profiles/usage-state.js";
+import { resolveEnvApiKey } from "./model-auth-env.js";
+import { resolveUsableCustomProviderApiKey } from "./model-auth-provider-config.js";
+import { findNormalizedProviderValue } from "./model-selection-normalize.js";
 
 function resolveStoredCredentialLabel(params: { value: unknown; refValue: unknown }): string {
   const masked = maskApiKey(typeof params.value === "string" ? params.value : "");
   if (masked !== "missing") {
     return masked;
   }
-  if (coerceSecretRef(params.refValue)) {
+  if (parseSecretRef(params.refValue)) {
     return "ref";
   }
   return "missing";
@@ -63,7 +65,7 @@ export function formatModelCatalogAuthLabel(
       return true;
     }
     const mode = store.profiles[id]?.type ?? cfg.auth?.profiles?.[id]?.mode;
-    return !isStoredAuthProfileType(mode) || mode === "api_key";
+    return mode !== "oauth" && mode !== "token";
   });
   if (!order.length) {
     return label.fallback;
@@ -77,13 +79,9 @@ export function formatModelCatalogAuthLabel(
     if (lastGood === profileId) {
       flags.push("lastGood");
     }
-    if (isProfileInCooldown(store, profileId)) {
-      const until = store.usageStats?.[profileId]?.cooldownUntil;
-      flags.push(
-        typeof until === "number" && Number.isFinite(until) && until > now
-          ? `cooldown ${formatRemainingShort(until - now, { underMinuteLabel: "soon" })}`
-          : "cooldown",
-      );
+    const until = resolveProfileUnusableUntilForDisplay(store, profileId);
+    if (until && until > now) {
+      flags.push(`cooldown ${formatRemainingShort(until - now, { underMinuteLabel: "soon" })}`);
     }
     const profile = store.profiles[profileId];
     const expires =
@@ -98,10 +96,6 @@ export function formatModelCatalogAuthLabel(
     return `${label.profiles[profileId]}${flags.length ? ` (${flags.join(", ")})` : ""}`;
   });
   return `${profiles.join(", ")} (${label.source})`;
-}
-
-function isStoredAuthProfileType(value: unknown): value is AuthProfileCredential["type"] {
-  return value === "api_key" || value === "oauth" || value === "token";
 }
 
 function captureProfileLabel(
@@ -126,14 +120,7 @@ function captureProfileLabel(
   if (profile.type === "token") {
     return `${profileId}=token:${resolveStoredCredentialLabel({ value: profile.token, refValue: profile.tokenRef })}`;
   }
-  const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
-  const suffix =
-    display === profileId
-      ? ""
-      : display.startsWith(profileId)
-        ? display.slice(profileId.length).trim()
-        : `(${display})`;
-  return `${profileId}=OAuth${suffix ? ` ${suffix}` : ""}`;
+  return formatAuthProfileOAuthLabel({ cfg, store, profileId });
 }
 
 function captureFallbackLabel(
@@ -166,56 +153,77 @@ export type ModelCatalogAuthLabels = ReadonlyMap<
   { all: ModelCatalogAuthLabel; apiKey: ModelCatalogAuthLabel }
 >;
 
-/** Captures display labels from the generation's auth store and workspace environment. */
-export function prepareModelCatalogAuthLabels(params: {
+type LabelCaptureParams = {
   config: OpenClawConfig;
   agentDir: string;
-  authStorePath: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   store: AuthProfileStore;
   providers: Iterable<string>;
-}): ModelCatalogAuthLabels {
+};
+
+/** The full-catalog worker already owns the display path alongside its credential rows. */
+export function prepareModelCatalogAuthLabels(
+  params: LabelCaptureParams & { authStorePath: string },
+): ModelCatalogAuthLabels {
+  return captureModelCatalogAuthLabels(params, (capture) => capture(params.authStorePath));
+}
+
+/** A profile source is needed only when the captured generation can display a profile. */
+export function captureModelCatalogAuthLabels<T>(
+  params: LabelCaptureParams,
+  withProfileSource: (capture: (path: string) => ModelCatalogAuthLabels) => T,
+): ModelCatalogAuthLabels | T {
   const labels = new Map<string, { all: ModelCatalogAuthLabel; apiKey: ModelCatalogAuthLabel }>();
+  const providers = new Set([...params.providers].map(normalizeProviderId));
+  if (providers.size === 0) {
+    return labels;
+  }
   const profileIds = new Set([
     ...Object.keys(params.store.profiles),
     ...Object.keys(params.config.auth?.profiles ?? {}),
     ...Object.values(params.store.order ?? {}).flat(),
     ...Object.values(params.config.auth?.order ?? {}).flat(),
   ]);
-  const providers = new Set([...params.providers].map(normalizeProviderId));
-  if (providers.size === 0) {
+  const fallback = (provider: string) =>
+    captureFallbackLabel(provider, params.config, params.agentDir, params.env, params.workspaceDir);
+  if (profileIds.size === 0) {
+    for (const provider of providers) {
+      const label = fallback(provider);
+      labels.set(provider, { all: label, apiKey: label });
+    }
     return labels;
   }
-  const profileLabels = [...profileIds].map(
-    (id) => [id, captureProfileLabel(id, params.config, params.store)] as const,
-  );
-  for (const provider of providers) {
-    const all = {
-      provider,
-      profiles: Object.fromEntries(
-        profileLabels.map(([id, label]) => [
-          id,
-          !params.store.profiles[id] &&
-          isConfiguredAwsSdkAuthProfileForProvider({ cfg: params.config, provider, profileId: id })
-            ? `${id}=aws-sdk`
-            : label,
-        ]),
-      ),
-      source: `auth profile store: ${shortenHomePath(params.authStorePath)}`,
-      fallback: captureFallbackLabel(
+  return withProfileSource((pathname) => {
+    const profileLabels = [...profileIds].map(
+      (id) => [id, captureProfileLabel(id, params.config, params.store)] as const,
+    );
+    const source = `auth profile store: ${shortenHomePath(pathname)}`;
+    for (const provider of providers) {
+      const all = {
         provider,
-        params.config,
-        params.agentDir,
-        params.env,
-        params.workspaceDir,
-      ),
-      apiKeyOnly: false,
-    };
-    labels.set(provider, {
-      all,
-      apiKey: provider === "openai" ? { ...all, apiKeyOnly: true } : all,
-    });
-  }
-  return labels;
+        profiles: Object.fromEntries(
+          profileLabels.map(([id, label]) => [
+            id,
+            !params.store.profiles[id] &&
+            isConfiguredAwsSdkAuthProfileForProvider({
+              cfg: params.config,
+              provider,
+              profileId: id,
+            })
+              ? `${id}=aws-sdk`
+              : label,
+          ]),
+        ),
+        source,
+        fallback: fallback(provider),
+        apiKeyOnly: false,
+      };
+      labels.set(provider, {
+        all,
+        apiKey: provider === "openai" ? { ...all, apiKeyOnly: true } : all,
+      });
+    }
+    return labels;
+  });
 }

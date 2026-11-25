@@ -1,8 +1,7 @@
-import { defineLegacyConfigMigration, getRecord } from "../../../config/legacy.shared.js";
+import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 
-export const LEGACY_CONFIG_MIGRATION_RUNTIME_TOOL_SEARCH = defineLegacyConfigMigration({
+export const LEGACY_CONFIG_MIGRATION_RUNTIME_TOOL_SEARCH: LegacyConfigMigrationSpec = {
   id: "tools.toolSearch.structured-only",
-  describe: "Retire Tool Search code mode and its execution timeout",
   legacyRules: [
     {
       path: ["tools", "toolSearch", "mode"],
@@ -38,4 +37,4 @@ export const LEGACY_CONFIG_MIGRATION_RUNTIME_TOOL_SEARCH = defineLegacyConfigMig
       changes.push("Removed tools.toolSearch.codeTimeoutMs; Tool Search no longer executes code.");
     }
   },
-});
+};

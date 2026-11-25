@@ -13,7 +13,7 @@ describe("doctor session sqlite explicit store owner", () => {
       mode: "inspect",
       store,
       agent: "other",
-      cfg: { agents: { entries: { main: { default: true }, other: {} } } },
+      cfg: { agents: { entries: { main: {}, other: {} } } },
       env: { ...process.env, OPENCLAW_STATE_DIR: root },
     });
     expect(report.targets).toHaveLength(1);

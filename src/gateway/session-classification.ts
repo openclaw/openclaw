@@ -18,11 +18,26 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
+import { isReservedGitHubPublicationSessionKey } from "../shared/session-list-visibility.js";
+
+/** Presentation only: new custody has a creation stamp; deployed rows have reserved keys. */
+export function isGitHubPublicationTaskSession(
+  key: string,
+  entry?: { createdVia?: string; createdSurface?: string; parentSessionKey?: string },
+): boolean {
+  return Boolean(
+    entry?.createdSurface === "github-publication" ||
+    (entry?.createdVia === "spawn" &&
+      entry.parentSessionKey &&
+      isReservedGitHubPublicationSessionKey(key)),
+  );
+}
 
 const BACKGROUND_CLASSIFICATIONS = new Set<SessionClassification>([
   "acp",
   "cron",
   "dreaming",
+  "github-publication",
   "harness",
   "heartbeat",
   "hook",
@@ -36,6 +51,7 @@ type GatewaySessionClassification = {
   accountId?: string;
   peerKind?: SessionPeerKind;
   isMain: boolean;
+  isDock: boolean;
   // Classification only: this does not change session visibility, sharing,
   // retention, or authorization semantics.
   isBackground: boolean;
@@ -104,6 +120,8 @@ export function sessionClassificationForRow(
     classification = "heartbeat";
   } else if (isMain) {
     classification = "main";
+  } else if (isGitHubPublicationTaskSession(canonicalKey, entry)) {
+    classification = "github-publication";
   } else if (isSubagentSessionKey(canonicalKey)) {
     classification = "subagent";
   } else if (isAcpSessionKey(canonicalKey)) {
@@ -132,6 +150,7 @@ export function sessionClassificationForRow(
     ...(route?.accountId ? { accountId: route.accountId } : {}),
     ...(peerKind ? { peerKind } : {}),
     isMain,
+    isDock: entry?.createdSurface === "plugin-dock",
     isBackground: BACKGROUND_CLASSIFICATIONS.has(classification),
   };
 }

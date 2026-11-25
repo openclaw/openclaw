@@ -1,9 +1,34 @@
 import { describe, expect, it } from "vitest";
+import { fitCompactionSummary } from "../../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import {
+  assertCompactionRequestCanFitFromTokens,
   createCompactionRequestBudget,
   estimateCompactedRequestTokens,
+  replayTokenBudget,
+  resolveCompactionRetentionBudgetFromTokens,
   withCompactionQueuedContext,
 } from "./request-budget.js";
+
+it("reads history pressure only at the public budget's original estimation points", () => {
+  let reads = 0;
+  const tokens = () => {
+    reads += 1;
+    return 50;
+  };
+  const budget = { contextWindow: 100, reserveTokens: 10, fixedTokens: 20, pendingTokens: 5 };
+  assertCompactionRequestCanFitFromTokens(tokens, undefined, false);
+  assertCompactionRequestCanFitFromTokens(tokens, budget, true);
+  expect(resolveCompactionRetentionBudgetFromTokens(budget, tokens).maxTokens).toBe(65);
+  expect(reads).toBe(0);
+  expect(
+    resolveCompactionRetentionBudgetFromTokens({ ...budget, reserveTokens: 100 }, tokens).maxTokens,
+  ).toBe(49);
+  assertCompactionRequestCanFitFromTokens(tokens, budget, false);
+  expect(reads).toBe(2);
+  expect(() => assertCompactionRequestCanFitFromTokens(80, budget, false)).toThrow(
+    "retained history: 80",
+  );
+});
 
 describe("createCompactionRequestBudget", () => {
   it.each([
@@ -28,11 +53,11 @@ describe("createCompactionRequestBudget", () => {
         pendingUserIdempotencyKey: "pending-user",
       });
 
-      // The 48-character tool JSON contributes 16 tokens beside the 12-token boundary.
+      // The 48-character tool JSON, including 11 delimiters, adds 21 tokens beside the 12-token boundary.
       expect(budget).toEqual({
         contextWindow: 4_096,
         reserveTokens: 512,
-        fixedTokens: 34,
+        fixedTokens: 40,
         pendingTokens,
         pendingQueuedContextTokens: 0,
         pendingUserIdempotencyKey: "pending-user",
@@ -93,4 +118,29 @@ describe("createCompactionRequestBudget", () => {
       pendingQueuedContextTokens: 0,
     });
   });
+});
+
+it("keeps a replay summary fitted to its budget inside the window", () => {
+  const session = {
+    agent: { state: { systemPrompt: "Keep the project requirements. ".repeat(250) } },
+  };
+  const window = { contextWindow: 5_000, reserveTokens: 400 };
+  const replay = (summary: string) => [
+    { role: "compactionSummary" as const, summary, tokensBefore: 0, timestamp: 0 },
+    { role: "user" as const, content: "recent prompt", timestamp: 1 },
+  ];
+  const budget = replayTokenBudget(session, window, window, replay(""));
+  const fitted = fitCompactionSummary(
+    budget,
+    (chars) => ({ summary: "word ".repeat(chars) }),
+    9_000,
+  );
+  if (!fitted.ok) {
+    throw fitted.error;
+  }
+  const requestBudget = createCompactionRequestBudget({ ...window, ...session.agent.state });
+  expect(
+    estimateCompactedRequestTokens(replay(fitted.value.summary), requestBudget),
+  ).toBeLessThanOrEqual(4_600);
+  expect(replayTokenBudget(session, {}, window, replay(""))).toBeUndefined();
 });

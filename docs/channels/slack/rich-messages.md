@@ -10,6 +10,12 @@ sidebarTitle: "Charts, tables, and approvals"
 
 The Block Kit surfaces OpenClaw renders natively in Slack.
 
+When a reply includes both authored text and presentation blocks, OpenClaw
+avoids repeating text already represented by the rendered blocks. Authored
+Markdown uses the selected Slack account's formatting settings. Code whitespace
+and literal text remain distinct from styled text. Edits use the same comparison
+and preserve complete text when a presentation must fall back to one message.
+
 ## Native charts
 
 Slack's public [`data_visualization` Block Kit block](https://docs.slack.dev/reference/block-kit/blocks/data-visualization-block/)
@@ -45,7 +51,7 @@ Slack's limits are enforced before native rendering:
 Every native chart also carries a top-level text representation for screen
 readers, notifications, session mirroring, and clients that cannot render the
 block. Standard presentation sends to other OpenClaw channels receive that same
-deterministic chart data as text unless they advertise native chart support. If
+chart data as text unless they advertise native chart support. If
 Slack rejects the chart with `invalid_blocks`, OpenClaw
 removes the rejected native data blocks, keeps any sibling controls, and sends
 the complete chart representation as visible text.
@@ -103,7 +109,7 @@ Slack's published `data_table` limits are enforced before native rendering:
 
 Multiple valid table blocks can render natively while the message remains
 within the aggregate character limit. A table that cannot render within the
-native envelope becomes complete deterministic text instead of losing rows or
+native envelope becomes complete text instead of losing rows or
 cells. If that text exceeds one Slack message, sends and slash responses use
 ordered text chunks. Table edits fail with an explicit size error instead of
 silently truncating rows from an existing message.
@@ -135,6 +141,12 @@ Slack `read` actions. Only native table blocks are admitted from ordinary
 attachments; link-unfurl and other non-forwarded attachment text remains
 excluded.
 
+Rich-text dates in inbound messages and table cells preserve Slack's supplied
+fallback text. When that optional text is absent or blank, OpenClaw renders a
+valid Unix-seconds timestamp as an ISO UTC instant, such as
+`2023-11-14T22:13:20.000Z`. This keeps date-only messages readable without
+guessing the Slack viewer's timezone or relative-date formatting.
+
 ## Plugin-owned modal submissions
 
 Slack plugins that register an interactive handler can also receive modal
@@ -144,7 +156,7 @@ patterns when opening a Slack modal:
 
 - Set `callback_id` to `openclaw:<namespace>:<payload>`.
 - Or keep an existing `callback_id` and put `pluginInteractiveData:
-"<namespace>:<payload>"` in the modal `private_metadata`.
+  "<namespace>:<payload>"` in the modal `private_metadata`.
 
 The handler receives `ctx.interaction.kind` as `view_submission` or
 `view_closed`, normalized `inputs`, and the full raw `stateValues` object from
@@ -169,7 +181,7 @@ Slack can act as a native approval client with interactive buttons and interacti
 
 For Enterprise Grid org installs, the originating event's validated workspace
 is retained for the approval prompt, approver DM, button callback, and final
-message update. Approval delivery fails closed when an org-installed account
+message update. Approval delivery is blocked when an org-installed account
 does not have that event-owned workspace scope.
 
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.

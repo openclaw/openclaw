@@ -1,6 +1,9 @@
+import { isAscii } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Type, type Static } from "typebox";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
@@ -14,7 +17,7 @@ import { hasErrnoCode, isErrno } from "../../infra/errno.js";
 import { ensureAbsoluteDirectory, root, walkDirectory } from "../../infra/fs-safe.js";
 import { retainMutationAuthority } from "../../infra/mutation-authority.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
-import { SkillLibraryError } from "./errors.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 
 export const SKILL_LIBRARY_MAX_PATH_COMPONENTS = 16;
 export const SKILL_LIBRARY_MAX_TREE_ENTRIES = SKILL_LIBRARY_MAX_FILES * 2;
@@ -36,11 +39,7 @@ export class SkillTreeDirectoryError extends SkillLibraryError {
   }
 }
 
-type PreparedSkillBundle = {
-  revision: string;
-  files: Array<Static<typeof manifestSchema>[number] & { bytes: Buffer }>;
-};
-export type PreparedSkillLibraryBundle = PreparedSkillBundle & { description: string };
+export type PreparedSkillLibraryBundle = ReturnType<typeof prepareSkillLibraryBundle>;
 const portableCompare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const manifestSchema = Type.Array(
   Type.Object(
@@ -57,6 +56,24 @@ const manifestSchema = Type.Array(
 
 /** Published executable flags are portable metadata; host mode bits are not their authority. */
 export async function readSkillLibraryManifestTree(
+  directory: string,
+  manifestJson: string,
+  revision: string,
+): Promise<SkillLibraryFile[]> {
+  const nativeMode = getFsSafeNativeConfig().mode;
+  // The worker imports the bounded implementation without creating another host owner.
+  const { runSkillLibraryFilesystemTask } = await import("../runtime/refresh.js");
+  const result = await runSkillLibraryFilesystemTask(
+    { kind: "manifest", directory, manifestJson, revision },
+    nativeMode,
+  );
+  if (result.kind !== "manifest") {
+    throw new Error("Unexpected skill library manifest response");
+  }
+  return result.files;
+}
+
+export async function readSkillLibraryManifestTreeOnWorker(
   directory: string,
   manifestJson: string,
   revision: string,
@@ -90,8 +107,7 @@ export async function readSkillLibraryManifestTree(
     }
     files.push({
       path: file.path,
-      content: buffer.toString("base64"),
-      encoding: "base64",
+      ...encodeSkillLibraryFile(buffer),
       executable: file.executable,
     });
   }
@@ -127,9 +143,7 @@ function validateSkillBundlePath(filePath: string): void {
         part === "." ||
         part === ".." ||
         /[\\<>:"|?*]/u.test(part) ||
-        Array.from(part).some(
-          (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
-        ) ||
+        containsAsciiControlCharacter(part) ||
         /[ .]$/u.test(part) ||
         part !== part.normalize("NFC") ||
         /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(part) ||
@@ -148,8 +162,22 @@ export function decodeSkillLibraryFile(file: SkillLibraryFile): Buffer {
   return bytes;
 }
 
+function encodeSkillLibraryFile(buffer: Buffer): Pick<SkillLibraryFile, "content" | "encoding"> {
+  // ASCII stays a one-byte JS string; a single non-Latin-1 character can double it.
+  if (isAscii(buffer)) {
+    const content = buffer.toString("utf8");
+    if (
+      !content.includes("\0") &&
+      JSON.stringify(content).length - 2 <= Math.ceil(buffer.length / 3) * 4
+    ) {
+      return { content, encoding: "utf8" };
+    }
+  }
+  return { content: buffer.toString("base64"), encoding: "base64" };
+}
+
 /** Validate exact portable artifacts without imposing publication metadata on loaded skills. */
-export function prepareSkillBundle(files: readonly SkillLibraryFile[]): PreparedSkillBundle {
+export function prepareSkillBundle(files: readonly SkillLibraryFile[]) {
   if (files.length > SKILL_LIBRARY_MAX_FILES) {
     throw new SkillLibraryError("INVALID_BUNDLE", "Skill bundle exceeds 256 files.");
   }
@@ -202,9 +230,7 @@ export function prepareSkillBundle(files: readonly SkillLibraryFile[]): Prepared
   };
 }
 
-export function prepareSkillLibraryBundle(
-  files: readonly SkillLibraryFile[],
-): PreparedSkillLibraryBundle {
+export function prepareSkillLibraryBundle(files: readonly SkillLibraryFile[]) {
   const bundle = prepareSkillBundle(files);
   for (const file of bundle.files) {
     validateSkillLibraryPath(file.path);
@@ -449,8 +475,7 @@ export async function readSkillBundleTree(
     }
     files.push({
       path: portablePath,
-      content: buffer.toString("base64"),
-      encoding: "base64",
+      ...encodeSkillLibraryFile(buffer),
       executable: (stat.mode & 0o111) !== 0,
     });
   }

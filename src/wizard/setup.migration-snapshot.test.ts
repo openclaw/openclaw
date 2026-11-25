@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createMigrationSummaryFixture } from "../plugin-sdk/migration.test-support.js";
 import type { MigrationPlan } from "../plugins/migration-provider.types.js";
 import {
   buildSetupMigrationPlanSourceSnapshot,
@@ -39,15 +40,7 @@ it.runIf(process.platform !== "win32")(
         status: "planned",
         source: path.join(root, source),
       })),
-      summary: {
-        total: 3,
-        planned: 3,
-        migrated: 0,
-        skipped: 0,
-        conflicts: 0,
-        errors: 0,
-        sensitive: 0,
-      },
+      summary: createMigrationSummaryFixture(3, 3, 0),
     };
 
     const source = await buildSetupMigrationPlanSourceSnapshot(plan);

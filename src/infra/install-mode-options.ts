@@ -38,7 +38,6 @@ export function resolveInstallModeOptions<TLogger>(
 export function resolveTimedInstallModeOptions<TLogger>(
   params: TimedInstallModeOptions<TLogger>,
   defaultLogger: TLogger,
-  defaultTimeoutMs = 120_000,
 ): {
   logger: TLogger;
   timeoutMs: number;
@@ -48,7 +47,7 @@ export function resolveTimedInstallModeOptions<TLogger>(
 } {
   return {
     ...resolveInstallModeOptions(params, defaultLogger),
-    timeoutMs: params.timeoutMs ?? defaultTimeoutMs,
+    timeoutMs: params.timeoutMs ?? 120_000,
     // Target publication may switch update to install when the target is absent.
     // Carry the original request's work policy through that nested operation.
     workTimeoutMs:

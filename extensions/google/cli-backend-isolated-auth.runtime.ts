@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse as parseDotEnv } from "dotenv";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   asOptionalRecord,
   isRecord,
@@ -56,18 +57,7 @@ export type GeminiCliRestrictedAuthContext = {
   isolatedCompletionSystemPrompt?: string;
 };
 
-type GeminiCliAmbientAuth = {
-  selectedType?: string;
-  envOverrides: Record<string, string>;
-  safeSettings: Record<string, unknown>;
-};
-
-type GeminiCliAmbientEnv = {
-  auth: Record<string, string>;
-  transport: Record<string, string>;
-  unsafeAuth: Record<string, string>;
-  telemetryEnabled?: boolean;
-};
+type GeminiCliAmbientEnv = NonNullable<Awaited<ReturnType<typeof readGeminiCliAmbientAuthEnv>>>;
 
 // Gemini CLI 0.39.1 runs this commandUtils grammar before pasted-text unescape;
 // any immediate backslash suppresses inclusion. Parity logic would reject
@@ -137,12 +127,7 @@ export async function readGeminiCliJsonObject(
     }
     return { ...parsed };
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
+    if (extractErrorCode(error) === "ENOENT") {
       return {};
     }
     throw error;
@@ -192,9 +177,7 @@ function projectGeminiCliTrustedTransportEnv(
   );
 }
 
-async function readGeminiCliAmbientAuthEnv(
-  filePath: string,
-): Promise<GeminiCliAmbientEnv | undefined> {
+async function readGeminiCliAmbientAuthEnv(filePath: string) {
   try {
     const parsed = parseDotEnv(await fs.readFile(filePath, "utf8"));
     const telemetryValue = parsed.GEMINI_TELEMETRY_ENABLED?.trim().toLowerCase();
@@ -215,12 +198,7 @@ async function readGeminiCliAmbientAuthEnv(
         : {}),
     };
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
+    if (extractErrorCode(error) === "ENOENT") {
       return undefined;
     }
     throw error;
@@ -246,9 +224,7 @@ export async function resolveGeminiCliTrustedTransportEnv(
   return projectGeminiCliTrustedTransportEnv(ctx, await loadGeminiCliAmbientEnv(ctx));
 }
 
-export async function resolveGeminiCliAmbientAuth(
-  ctx: GeminiCliRestrictedAuthContext,
-): Promise<GeminiCliAmbientAuth> {
+export async function resolveGeminiCliAmbientAuth(ctx: GeminiCliRestrictedAuthContext) {
   const home = resolveGeminiCliAmbientHome(ctx);
   const settings = await readGeminiCliJsonObject(path.join(home, ".gemini", "settings.json"));
   const systemSettings = await readGeminiCliJsonObject(ctx.systemSettingsPath);

@@ -1,33 +1,23 @@
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { Context } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { runAgentLoop } from "../../../agent-core/src/agent-loop.js";
 import type { AgentTool } from "../../../agent-core/src/types.js";
-import { createZeroUsage } from "../usage.test-support.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { createAssistantOutput } from "./assistant-output.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
+import { outputItem, wireCall } from "./openai-stream-cases.test-support.js";
 import { failTransportStream } from "./transport-stream-shared.js";
 
-const model: Model = {
-  id: "test-responses",
-  name: "Test Responses",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://example.test",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1000,
-  maxTokens: 1000,
-};
+const model = makeProviderModel("openai-responses", "openai", "test-responses");
 
 it.each(["incomplete", "in_progress", "malformed"])(
   "settles an admitted async tool without starting later tools after %s rejection",
   async (rejection) => {
     const started = createDeferred();
     const release = createDeferred();
-    const drained = createDeferred();
     const settled = vi.fn();
     const execute = vi.fn<AgentTool["execute"]>(async () => {
       started.resolve();
@@ -36,38 +26,21 @@ it.each(["incomplete", "in_progress", "malformed"])(
       return { content: [], details: {} };
     });
     const response = createAssistantMessageEventStream();
-    const output: AssistantMessage = {
-      role: "assistant",
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: createZeroUsage(),
-      stopReason: "stop",
-      timestamp: 0,
-    };
-    const tool = (index: number) => ({
-      type: "function_call",
-      id: `fc_${index}`,
-      call_id: `call_${index}`,
-      name: "probe",
-      arguments: "{}",
-      status: "completed",
+    const output = { ...createAssistantOutput(model), timestamp: 0 };
+    const tool = (index: number, args = "{}", status = "completed") => ({
+      ...wireCall(String(index), "probe", args),
+      status,
       async: true,
     });
     const wire = (async function* () {
-      yield { type: "response.output_item.done", output_index: 0, item: tool(0) };
+      yield outputItem("done", tool(0));
       await started.promise;
-      yield {
-        type: "response.output_item.done",
-        output_index: 1,
-        item: {
-          ...tool(1),
-          status: rejection === "malformed" ? "completed" : rejection,
-          arguments: '{"cut":',
-        },
-      };
-      yield { type: "response.output_item.done", output_index: 2, item: tool(2) };
+      yield outputItem(
+        "done",
+        tool(1, '{"cut":', rejection === "malformed" ? "completed" : rejection),
+        1,
+      );
+      yield outputItem("done", tool(2), 2);
       yield {
         type: "response.incomplete",
         response: {
@@ -79,21 +52,16 @@ it.each(["incomplete", "in_progress", "malformed"])(
         },
       };
     })();
+    const agentTool: AgentTool = {
+      name: "probe",
+      label: "Probe",
+      description: "Probe",
+      parameters: Type.Object({}),
+      execute,
+    };
     const run = runAgentLoop(
       [{ role: "user", content: "probe", timestamp: 0 }],
-      {
-        systemPrompt: "",
-        messages: [],
-        tools: [
-          {
-            name: "probe",
-            label: "Probe",
-            description: "Probe",
-            parameters: Type.Object({}),
-            execute,
-          },
-        ],
-      },
+      { systemPrompt: "", messages: [], tools: [agentTool] },
       { model, convertToLlm: (messages) => messages as Context["messages"] },
       () => {},
       undefined,
@@ -102,11 +70,9 @@ it.each(["incomplete", "in_progress", "malformed"])(
     response.push({ type: "start", partial: output });
     const processing = processResponsesStream(wire, output, response, model, {
       asyncToolExecution: true,
-    })
-      .catch((error: unknown) => failTransportStream({ stream: response, output, error }))
-      .finally(() => drained.resolve());
+    }).catch((error: unknown) => failTransportStream({ stream: response, output, error }));
     try {
-      await drained.promise;
+      await processing;
       expect(settled).not.toHaveBeenCalled();
       expect(execute).toHaveBeenCalledTimes(1);
       expect(output.usage.totalTokens).toBe(29);

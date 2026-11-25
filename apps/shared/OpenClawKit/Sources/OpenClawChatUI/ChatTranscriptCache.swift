@@ -39,7 +39,6 @@ private final class CanonicalMessageProofHub: @unchecked Sendable {
 /// databases. The facade owns no SQLite connection; every gateway store from
 /// one container shares exactly one GRDB queue per database file.
 public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
-    OpenClawChatCanonicalTranscriptMerging,
     OpenClawChatCommandOutbox
 {
     public static let maxCachedSessions = 50
@@ -59,11 +58,13 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
     public static let outboxSettingsGatewayUpgradeRequiredError = "settings_gateway_upgrade_required"
     public static let outboxSettingsReviewRequiredError = "settings_review_required"
     public static let outboxSettingsChangedError = "settings_changed"
+    public static let outboxQueueModeUpgradeRequiredError = "queue_mode_client_upgrade_required"
 
     static func outboxDisplayError(_ lastError: String?) -> String? {
         guard let lastError else { return nil }
         switch lastError {
-        case self.outboxClientUpgradeRequiredError, self.outboxSettingsUpgradeRequiredError:
+        case self.outboxClientUpgradeRequiredError, self.outboxSettingsUpgradeRequiredError,
+             self.outboxQueueModeUpgradeRequiredError:
             return String(localized: "A previous app version could not safely send this message. Review and retry it.")
         case self.outboxSettingsGatewayUpgradeRequiredError:
             return String(localized: "Update the gateway before sending queued messages with session settings.")
@@ -71,6 +72,8 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             return String(localized: "Session settings were not captured. Review and retry this message.")
         case self.outboxSettingsChangedError:
             return String(localized: "Session settings changed. Review and retry this message.")
+        case self.outboxExpiredError:
+            return String(localized: "Queued for more than 48 hours")
         default:
             break
         }
@@ -82,11 +85,11 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 
     private var sendOwnership: OpenClawChatSendOwnership?
     private var pendingEnqueues = 0
-    private let databases: OpenClawClientDatabases
+    let databases: OpenClawClientDatabases
     public nonisolated let gatewayID: String
-    private var isRetired = false
+    private(set) var isRetired = false
     private var hasRecoveredInterruptedSends = false
-    private nonisolated var outboxChangeHub: OutboxChangeHub {
+    nonisolated var outboxChangeHub: OutboxChangeHub {
         self.databases.outboxChangeHub
     }
 
@@ -121,46 +124,18 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 
     public func loadSessions(agentID: String?) async -> [OpenClawChatSessionEntry] {
         guard !self.isRetired else { return [] }
-        let normalizedAgentID = Self.normalizedAgentID(agentID)
-        let gatewayID = self.gatewayID
-        do {
-            return try await self.databases.cacheQueue.write { db in
-                let rows = try Row.fetchAll(
-                    db,
-                    sql: """
-                    SELECT payload_json FROM cached_agent_sessions
-                    WHERE gateway_id = ? AND agent_id = ? ORDER BY position
-                    """,
-                    arguments: [gatewayID, normalizedAgentID])
-                do {
-                    return try rows.map { row in
-                        let payload: String = row["payload_json"]
-                        return try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(payload.utf8))
-                    }
-                } catch {
-                    cacheLogger.error(
-                        "gateway session cache decode failed: \(error.localizedDescription, privacy: .public)")
-                    // Decode and cleanup share one agent partition transaction;
-                    // corruption in one roster must not erase another agent.
-                    try db.execute(
-                        sql: """
-                        DELETE FROM cached_agent_sessions
-                        WHERE gateway_id = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, normalizedAgentID])
-                    try db.execute(
-                        sql: """
-                        DELETE FROM cached_session_rosters
-                        WHERE gateway_id = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, normalizedAgentID])
-                    return []
-                }
-            }
-        } catch {
-            cacheLogger.error("gateway session cache read failed: \(error.localizedDescription, privacy: .public)")
-            return []
-        }
+        return await self.loadCachedRows(
+            OpenClawChatSessionEntry.self,
+            select: """
+            SELECT payload_json FROM cached_agent_sessions
+            WHERE gateway_id = ? AND agent_id = ? ORDER BY position
+            """,
+            discard: """
+            DELETE FROM cached_session_rosters
+            WHERE gateway_id = ? AND agent_id = ?
+            """,
+            arguments: [self.gatewayID, Self.normalizedAgentID(agentID)],
+            context: "gateway session cache")
     }
 
     public func loadTranscript(sessionKey: String) async -> [OpenClawChatMessage] {
@@ -169,39 +144,48 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 
     public func loadTranscript(sessionKey: String, agentID: String?) async -> [OpenClawChatMessage] {
         guard !self.isRetired else { return [] }
-        let normalizedAgentID = Self.normalizedAgentID(agentID)
-        let gatewayID = self.gatewayID
+        return await self.loadCachedRows(
+            OpenClawChatMessage.self,
+            select: """
+            SELECT payload_json FROM cached_messages
+            WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+            ORDER BY position
+            """,
+            discard: """
+            DELETE FROM cached_transcripts
+            WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
+            """,
+            arguments: [self.gatewayID, sessionKey, Self.normalizedAgentID(agentID)],
+            context: "gateway transcript cache")
+    }
+
+    private func loadCachedRows<Value: Decodable & Sendable>(
+        _ type: Value.Type,
+        select: String,
+        discard: String,
+        arguments: [String],
+        context: String) async -> [Value]
+    {
         do {
             return try await self.databases.cacheQueue.write { db in
-                let rows = try Row.fetchAll(
-                    db,
-                    sql: """
-                    SELECT payload_json FROM cached_messages
-                    WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
-                    ORDER BY position
-                    """,
-                    arguments: [gatewayID, sessionKey, normalizedAgentID])
+                let arguments = StatementArguments(arguments)
+                let rows = try Row.fetchAll(db, sql: select, arguments: arguments)
                 do {
                     return try rows.map { row in
                         let payload: String = row["payload_json"]
-                        return try JSONDecoder().decode(OpenClawChatMessage.self, from: Data(payload.utf8))
+                        return try JSONDecoder().decode(type, from: Data(payload.utf8))
                     }
                 } catch {
                     cacheLogger.error(
-                        "gateway transcript cache decode failed: \(error.localizedDescription, privacy: .public)")
-                    // Keep the failed read and partition cleanup atomic; an
-                    // overlapping history write must survive this recovery.
-                    try db.execute(
-                        sql: """
-                        DELETE FROM cached_transcripts
-                        WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, sessionKey, normalizedAgentID])
+                        "\(context, privacy: .public) decode failed: \(error.localizedDescription, privacy: .public)")
+                    // Failed decoding and exact-partition cleanup share the read's transaction.
+                    try db.execute(sql: discard, arguments: arguments)
                     return []
                 }
             }
         } catch {
-            cacheLogger.error("gateway transcript cache read failed: \(error.localizedDescription, privacy: .public)")
+            cacheLogger
+                .error("\(context, privacy: .public) read failed: \(error.localizedDescription, privacy: .public)")
             return []
         }
     }
@@ -257,29 +241,17 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
                             pair.1,
                         ])
                 }
-                let staleOwners = try String.fetchAll(
-                    db,
+                try db.execute(
                     sql: """
-                    SELECT agent_id FROM cached_session_rosters
-                    WHERE gateway_id = ?
-                    ORDER BY last_used_at DESC, agent_id
-                    LIMIT -1 OFFSET ?
+                    DELETE FROM cached_session_rosters
+                    WHERE rowid IN (
+                        SELECT rowid FROM cached_session_rosters
+                        WHERE gateway_id = ?
+                        ORDER BY last_used_at DESC, agent_id
+                        LIMIT -1 OFFSET ?
+                    )
                     """,
                     arguments: [gatewayID, Self.maxCachedSessionOwners])
-                for staleOwner in staleOwners {
-                    try db.execute(
-                        sql: """
-                        DELETE FROM cached_agent_sessions
-                        WHERE gateway_id = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, staleOwner])
-                    try db.execute(
-                        sql: """
-                        DELETE FROM cached_session_rosters
-                        WHERE gateway_id = ? AND agent_id = ?
-                        """,
-                        arguments: [gatewayID, staleOwner])
-                }
             }
         } catch {
             cacheLogger.error("gateway session cache write failed: \(error.localizedDescription, privacy: .public)")
@@ -456,25 +428,17 @@ extension OpenClawChatSQLiteTranscriptCache {
                     pair.1,
                 ])
         }
-        let stale = try Row.fetchAll(
-            db,
+        try db.execute(
             sql: """
-            SELECT session_key, agent_id FROM cached_transcripts
-            WHERE gateway_id = ?
-            ORDER BY updated_at DESC, rowid DESC
-            LIMIT -1 OFFSET \(self.maxCachedTranscripts)
+            DELETE FROM cached_transcripts
+            WHERE rowid IN (
+                SELECT rowid FROM cached_transcripts
+                WHERE gateway_id = ?
+                ORDER BY updated_at DESC, rowid DESC
+                LIMIT -1 OFFSET ?
+            )
             """,
-            arguments: [gatewayID])
-        for row in stale {
-            let staleSessionKey: String = row["session_key"]
-            let staleAgentID: String = row["agent_id"]
-            try db.execute(
-                sql: """
-                DELETE FROM cached_transcripts
-                WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
-                """,
-                arguments: [gatewayID, staleSessionKey, staleAgentID])
-        }
+            arguments: [gatewayID, self.maxCachedTranscripts])
     }
 }
 
@@ -508,6 +472,15 @@ extension OpenClawChatSQLiteTranscriptCache {
     }
 
     public func enqueueCommand(_ command: OpenClawChatOutboxCommand) async -> Bool {
+        await self.enqueueCommand(command, consumingComposerDraft: nil)
+    }
+
+    /// The consumed draft clears in the outbox insert's transaction, so a crash
+    /// cannot leave both a queued message and the draft that produced it.
+    func enqueueCommand(
+        _ command: OpenClawChatOutboxCommand,
+        consumingComposerDraft consumption: OpenClawChatComposerDraftConsumption?) async -> Bool
+    {
         let scope = OpenClawChatSendOwnership.Scope(
             sessionKey: command.deliverySessionKey, agentID: command.agentID, routingContract: command.routingContract)
         let ownership = self.sendOwnership
@@ -548,9 +521,9 @@ extension OpenClawChatSQLiteTranscriptCache {
                     sql: """
                     INSERT INTO outbox_commands(
                         gateway_id, client_uuid, session_key, delivery_session_key,
-                        routing_contract, agent_id, text, thinking, expected_settings_json, created_at,
+                        routing_contract, agent_id, text, thinking, queue_mode, expected_settings_json, created_at,
                         status, attempt_version, branch_epoch, retry_count, last_error, attachment_bytes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         gatewayID,
@@ -561,6 +534,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                         command.agentID ?? "",
                         command.text,
                         command.thinking,
+                        command.queueMode?.rawValue,
                         Self.encodeSessionSettingsExpectation(command.expectedSessionSettings),
                         command.createdAt,
                         command.status.rawValue,
@@ -572,6 +546,9 @@ extension OpenClawChatSQLiteTranscriptCache {
                     ])
                 try OpenClawClientDatabases.insertOutboxAttachments(
                     command.attachments, in: db, gatewayID: gatewayID, commandID: command.id)
+                if let consumption {
+                    try Self.consumeComposerDraft(consumption, in: db, gatewayID: gatewayID)
+                }
                 return true
             }
         } catch {
@@ -594,6 +571,33 @@ extension OpenClawChatSQLiteTranscriptCache {
             }
         } catch {
             cacheLogger.error("outbox read failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    public func loadCommandStatusesIfAvailable() async -> [(id: String, status: OpenClawChatOutboxCommand.Status)]? {
+        guard !self.isRetired else { return nil }
+        let gatewayID = self.gatewayID
+        do {
+            return try await self.databases.stateQueue.write { db in
+                try Self.applyOutboxStaleness(db, gatewayID: gatewayID)
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT client_uuid, status FROM outbox_commands
+                    WHERE gateway_id = ? ORDER BY created_at, enqueue_sequence
+                    """,
+                    arguments: [gatewayID])
+                return try rows.map { row in
+                    let statusRaw: String = row["status"]
+                    guard let status = OpenClawChatOutboxCommand.Status(rawValue: statusRaw) else {
+                        throw DatabaseError(message: "unknown outbox status")
+                    }
+                    return (id: row["client_uuid"], status: status)
+                }
+            }
+        } catch {
+            cacheLogger.error("outbox status read failed \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
@@ -661,7 +665,8 @@ extension OpenClawChatSQLiteTranscriptCache {
                     sql: """
                     UPDATE outbox_commands
                     SET status = 'sending',
-                        settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1
+                        settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1,
+                        queue_mode_authorization = COALESCE(queue_mode_authorization, 0) + 1
                     WHERE gateway_id = ? AND client_uuid = ? AND status = 'queued'
                     """,
                     arguments: [gatewayID, id])
@@ -770,8 +775,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                 let hadUnacknowledgedSend: Int = row["had_unacknowledged_send"]
                 let wasPossiblyAccepted = wasBranchParked &&
                     (parkedWasAccepted != 0 || hadUnacknowledgedSend != 0)
-                let normalizedReplacementID = replacementID?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let nextID = normalizedReplacementID?.isEmpty == false ? normalizedReplacementID! : UUID().uuidString
+                let nextID = replacementID?.trimmedNonEmpty ?? UUID().uuidString
                 let updateID = wasPossiblyAccepted ? nextID : id
                 try db.execute(
                     sql: """
@@ -780,6 +784,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                         attempt_version = ?,
                         branch_epoch = ?, parked_was_accepted = 0, had_unacknowledged_send = 0,
                         settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1,
+                        queue_mode_authorization = COALESCE(queue_mode_authorization, 0) + 1,
                         retry_count = 0, last_error = '', created_at = ?,
                         agent_id = ?, delivery_session_key = ?, routing_contract = ?,
                         expected_settings_json = ?
@@ -843,25 +848,10 @@ extension OpenClawChatSQLiteTranscriptCache {
 
     public func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
         guard !self.isRetired else { return .unavailable }
-        let messageKey = "\(id):user"
         let gatewayID = self.gatewayID
-        let proofHub = self.canonicalMessageProofHub
         do {
-            let (deleted, isProven) = try await databases.stateQueue.writeWithoutTransaction { db in
-                let isProven = proofHub.lockProofDecision(for: messageKey)
-                defer { proofHub.unlockProofDecision() }
-                var deleted = false
-                try db.inTransaction(.immediate) {
-                    try db.execute(
-                        sql: """
-                        DELETE FROM outbox_commands
-                        WHERE gateway_id = ? AND client_uuid = ? AND status IN ('queued', 'failed')
-                        """,
-                        arguments: [gatewayID, id])
-                    deleted = db.changesCount > 0
-                    return .commit
-                }
-                return (deleted, isProven)
+            let (deleted, isProven) = try await self.decideAgainstCanonicalProof(commandID: id) { db, _ in
+                try Self.deleteRemovableCommand(db, gatewayID: gatewayID, id: id)
             }
             guard deleted else { return isProven ? .confirmed : .missing }
             if isProven {
@@ -873,6 +863,39 @@ extension OpenClawChatSQLiteTranscriptCache {
         } catch {
             return .unavailable
         }
+    }
+
+    /// Runs `body` in one immediate transaction while canonical proof for the
+    /// command's user turn cannot change, so a user removal never hides or
+    /// copies back a turn history already proved delivered.
+    func decideAgainstCanonicalProof<T: Sendable>(
+        commandID id: String,
+        _ body: @escaping @Sendable (Database, _ isProven: Bool) throws -> T) async throws -> (T, isProven: Bool)
+    {
+        let messageKey = "\(id):user"
+        let proofHub = self.canonicalMessageProofHub
+        return try await self.databases.stateQueue.writeWithoutTransaction { db in
+            let isProven = proofHub.lockProofDecision(for: messageKey)
+            defer { proofHub.unlockProofDecision() }
+            var outcome: T?
+            try db.inTransaction(.immediate) {
+                outcome = try body(db, isProven)
+                return .commit
+            }
+            guard let outcome else { throw DatabaseError(message: "outbox proof decision did not run") }
+            return (outcome, isProven)
+        }
+    }
+
+    /// Removal succeeds only before a sender claims the row.
+    nonisolated static func deleteRemovableCommand(_ db: Database, gatewayID: String, id: String) throws -> Bool {
+        try db.execute(
+            sql: """
+            DELETE FROM outbox_commands
+            WHERE gateway_id = ? AND client_uuid = ? AND status IN ('queued', 'failed')
+            """,
+            arguments: [gatewayID, id])
+        return db.changesCount > 0
     }
 
     public func confirmCommand(
@@ -1285,6 +1308,11 @@ extension OpenClawChatSQLiteTranscriptCache {
         }
         let lastError: String = row["last_error"]
         let expectedSettingsJSON: String? = row["expected_settings_json"]
+        let queueModeRaw: String? = row["queue_mode"]
+        let queueMode = queueModeRaw.flatMap(OpenClawChatQueueMode.init(rawValue:))
+        guard queueModeRaw == nil || queueMode != nil else {
+            throw DatabaseError(message: "unknown outbox queue mode")
+        }
         return try OpenClawChatOutboxCommand(
             id: id,
             sessionKey: row["session_key"],
@@ -1296,6 +1324,7 @@ extension OpenClawChatSQLiteTranscriptCache {
             text: row["text"],
             attachments: attachments,
             thinking: row["thinking"],
+            queueMode: queueMode,
             expectedSessionSettings: Self.decodeSessionSettingsExpectation(expectedSettingsJSON),
             createdAt: row["created_at"],
             status: status,
@@ -1373,37 +1402,17 @@ extension OpenClawChatSQLiteTranscriptCache {
         scope: OpenClawChatOutboxScope? = nil) throws -> [OpenClawChatOutboxScope]
     {
         let cutoff = Date().timeIntervalSince1970 - 5 * 60
-        // if/else keeps these SQL literals out of the ternary shape the native
-        // i18n extractor treats as user-facing conditional text.
-        let sql: String
-        let arguments: StatementArguments
-        if let scope {
-            sql = """
-            SELECT session_key, agent_id FROM outbox_branch_scopes
-            WHERE gateway_id = ? AND session_key = ? AND agent_id = ? AND switch_pending_since <= ?
-            """
-            arguments = [gatewayID, scope.sessionKey, scope.agentID ?? "", cutoff]
-        } else {
-            sql = """
-            SELECT session_key, agent_id FROM outbox_branch_scopes
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+            UPDATE outbox_branch_scopes
+            SET switch_pending_since = NULL, needs_reconciliation = 1,
+                branch_state_revision = branch_state_revision + 1
             WHERE gateway_id = ? AND switch_pending_since <= ?
-            """
-            arguments = [gatewayID, cutoff]
-        }
-        let rows = try Row.fetchAll(db, sql: sql, arguments: arguments)
-        guard !rows.isEmpty else { return [] }
-        for row in rows {
-            let sessionKey: String = row["session_key"]
-            let agentID: String = row["agent_id"]
-            try db.execute(
-                sql: """
-                UPDATE outbox_branch_scopes
-                SET switch_pending_since = NULL, needs_reconciliation = 1,
-                    branch_state_revision = branch_state_revision + 1
-                WHERE gateway_id = ? AND session_key = ? AND agent_id = ?
-                """,
-                arguments: [gatewayID, sessionKey, agentID])
-        }
+              AND (? IS NULL OR (session_key = ? AND agent_id = ?))
+            RETURNING session_key, agent_id
+            """,
+            arguments: [gatewayID, cutoff, scope?.sessionKey, scope?.sessionKey, scope?.agentID ?? ""])
         return rows.map { row in
             OpenClawChatOutboxScope(sessionKey: row["session_key"], agentID: row["agent_id"])
         }
@@ -1535,10 +1544,6 @@ extension OpenClawChatSQLiteTranscriptCache {
     private static func encodeJSON(_ value: some Encodable) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(value)
-        guard let result = String(data: data, encoding: .utf8) else {
-            throw CocoaError(.fileWriteInapplicableStringEncoding)
-        }
-        return result
+        return try String(bytes: encoder.encode(value), encoding: .utf8)!
     }
 }

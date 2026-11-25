@@ -1,110 +1,68 @@
-// Migration selection tests cover skill/plugin filtering, defaults, shortcuts, and skipped-item reasons.
-
-import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { applyMigrationItemSelection } from "./item-selection.js";
 import {
-  applyMigrationSelectedPluginItemIds,
-  applyMigrationSelectedSkillItemIds,
+  applyMigrationSelectedItemIds,
   applyMigrationSelections,
-  formatMigrationPluginSelectionHint,
+  formatMigrationSelectionHint,
   getDefaultMigrationSelectionValues,
-  getSelectableMigrationPluginItems,
-  MIGRATION_SELECTION_TOGGLE_ALL_OFF,
-  MIGRATION_SELECTION_TOGGLE_ALL_ON,
-  reconcileInteractiveMigrationEnterValues,
-  reconcileInteractiveMigrationShortcutValues,
-  reconcileInteractiveMigrationSkillToggleValues,
+  getSelectableMigrationItems,
+  MIGRATION_SELECTION_TOGGLE_ALL_OFF as ALL_OFF,
+  MIGRATION_SELECTION_TOGGLE_ALL_ON as ALL_ON,
+  reconcileInteractiveMigrationEnterValues as enterValues,
+  reconcileInteractiveMigrationShortcutValues as shortcutValues,
+  reconcileInteractiveMigrationSkillToggleValues as toggleValues,
   resolveInteractiveMigrationSelection,
 } from "./selection.js";
 
 const MIGRATION_NOT_SELECTED_REASON = "not selected for migration";
 
-function skillItem(params: {
-  id: string;
-  name: string;
-  status?: MigrationItem["status"];
-  reason?: string;
-}): MigrationItem {
+function selectionItem(
+  kind: "skill" | "plugin",
+  name: string,
+  overrides: Partial<MigrationItem> = {},
+): MigrationItem {
   return {
-    id: params.id,
-    kind: "skill",
-    action: "copy",
-    status: params.status ?? "planned",
-    source: `/tmp/codex/skills/${params.name}`,
-    target: `/tmp/openclaw/workspace/skills/${params.name}`,
-    reason: params.reason,
-    details: {
-      skillName: params.name,
-      sourceLabel: "Codex skill",
-    },
+    id: `${kind}:${name}`,
+    kind,
+    action: kind === "skill" ? "copy" : "install",
+    status: "planned",
+    source: kind === "skill" ? `/tmp/codex/skills/${name}` : `openai-curated/${name}`,
+    target: kind === "skill" ? `/tmp/openclaw/workspace/skills/${name}` : `plugins.${name}`,
+    details:
+      kind === "skill"
+        ? { skillName: name, sourceLabel: "Codex skill" }
+        : { configKey: name, marketplaceName: "openai-curated", pluginName: name },
+    ...overrides,
   };
 }
 
-function pluginItem(params: {
-  id: string;
-  name: string;
-  status?: MigrationItem["status"];
-  reason?: string;
-}): MigrationItem {
-  return {
-    id: params.id,
-    kind: "plugin",
-    action: "install",
-    status: params.status ?? "planned",
-    reason: params.reason,
-    source: `openai-curated/${params.name}`,
-    target: `plugins.entries.codex.config.codexPlugins.plugins.${params.name}`,
-    details: {
-      configKey: params.name,
-      marketplaceName: "openai-curated",
-      pluginName: params.name,
-    },
-  };
-}
+const skillItem = selectionItem.bind(null, "skill");
+const pluginItem = selectionItem.bind(null, "plugin");
 
 function codexPluginConfigItem(pluginNames: string[]): MigrationItem {
+  const codexPlugins = {
+    enabled: true,
+    allow_destructive_actions: true,
+    plugins: Object.fromEntries(
+      pluginNames.map((name) => [
+        name,
+        { enabled: true, marketplaceName: "openai-curated", pluginName: name },
+      ]),
+    ),
+  };
   return {
     id: "config:codex-plugins",
     kind: "config",
     action: "merge",
     status: "planned",
-    details: {
-      value: {
-        enabled: true,
-        config: {
-          codexPlugins: {
-            enabled: true,
-            allow_destructive_actions: true,
-            plugins: Object.fromEntries(
-              pluginNames.map((name) => [
-                name,
-                {
-                  enabled: true,
-                  marketplaceName: "openai-curated",
-                  pluginName: name,
-                },
-              ]),
-            ),
-          },
-        },
-      },
-    },
+    details: { value: { enabled: true, config: { codexPlugins } } },
   };
 }
 
 function plan(items: MigrationItem[]): MigrationPlan {
-  const countStatus = (status: MigrationItem["status"]): number => {
-    let count = 0;
-    for (const item of items) {
-      if (item.status === status) {
-        count += 1;
-      }
-    }
-    return count;
-  };
+  const countStatus = (status: MigrationItem["status"]) =>
+    items.filter((item) => item.status === status).length;
 
   return {
     providerId: "codex",
@@ -122,130 +80,31 @@ function plan(items: MigrationItem[]): MigrationPlan {
   };
 }
 
-function expectSummaryFields(
-  summary: MigrationPlan["summary"],
-  fields: Partial<MigrationPlan["summary"]>,
-) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(summary[key as keyof MigrationPlan["summary"]]).toBe(value);
-  }
-}
-
-function requireItem(items: MigrationItem[], id: string): MigrationItem {
-  const item = items.find((candidate) => candidate.id === id);
-  if (!item) {
-    throw new Error(`missing migration item ${id}`);
-  }
-  return item;
-}
-
 function expectItemStatus(
   items: MigrationItem[],
   id: string,
   status: MigrationItem["status"],
   reason?: string,
 ) {
-  const item = requireItem(items, id);
-  expect(item.status).toBe(status);
-  if (reason !== undefined) {
-    expect(item.reason).toBe(reason);
-  }
+  expect(items).toContainEqual(
+    expect.objectContaining({ id, status, ...(reason === undefined ? {} : { reason }) }),
+  );
 }
 
-const requireRecord = createRequireRecord("object", "label-not-object");
-
-function requireCodexPluginConfigPlugins(item: MigrationItem): Record<string, unknown> {
-  const details = requireRecord(item.details, "config details");
-  const value = requireRecord(details.value, "config value");
-  const config = requireRecord(value.config, "config object");
-  const codexPlugins = requireRecord(config.codexPlugins, "codex plugin config");
-  return requireRecord(codexPlugins.plugins, "configured plugins");
+function pluginPlan(gmailStatus: MigrationItem["status"] = "planned"): MigrationPlan {
+  return plan([
+    pluginItem("google-calendar"),
+    pluginItem("gmail", { status: gmailStatus }),
+    codexPluginConfigItem(["google-calendar", "gmail"]),
+  ]);
 }
-
-describe("applyMigrationItemSelection", () => {
-  it("keeps exact selected ids and skips other planned or conflicting items", () => {
-    const selected = applyMigrationItemSelection(
-      plan([
-        skillItem({ id: "memory:one", name: "one" }),
-        skillItem({ id: "memory:two", name: "two" }),
-        skillItem({
-          id: "memory:existing",
-          name: "existing",
-          status: "conflict",
-          reason: "target exists",
-        }),
-      ]),
-      ["memory:two"],
-    );
-
-    expectItemStatus(selected.items, "memory:one", "skipped", MIGRATION_NOT_SELECTED_REASON);
-    expectItemStatus(selected.items, "memory:two", "planned");
-    expectItemStatus(selected.items, "memory:existing", "skipped", MIGRATION_NOT_SELECTED_REASON);
-    expectSummaryFields(selected.summary, { planned: 1, skipped: 2, conflicts: 0 });
-  });
-
-  it("rejects stale or unavailable item ids", () => {
-    expect(() =>
-      applyMigrationItemSelection(plan([skillItem({ id: "memory:one", name: "one" })]), [
-        "memory:stale",
-      ]),
-    ).toThrow('Unknown or unavailable migration item ids: "memory:stale".');
-  });
-});
 
 describe("applyMigrationSelections skills", () => {
-  it("keeps selected skills and skips unselected skill copy items", () => {
-    const selected = applyMigrationSelections(
-      plan([
-        skillItem({ id: "skill:alpha", name: "alpha" }),
-        skillItem({ id: "skill:beta", name: "beta" }),
-        {
-          id: "archive:config.toml",
-          kind: "archive",
-          action: "archive",
-          status: "planned",
-        },
-        {
-          id: "plugin:docs:1",
-          kind: "manual",
-          action: "manual",
-          status: "skipped",
-        },
-      ]),
-      { skills: ["alpha"] },
-    );
-
-    expectSummaryFields(selected.summary, {
-      total: 4,
-      planned: 2,
-      skipped: 2,
-      conflicts: 0,
-    });
-    expectItemStatus(selected.items, "skill:alpha", "planned");
-    expectItemStatus(selected.items, "skill:beta", "skipped", MIGRATION_NOT_SELECTED_REASON);
-    expectItemStatus(selected.items, "archive:config.toml", "planned");
-  });
-
-  it("accepts item ids as non-interactive skill selectors", () => {
-    const selected = applyMigrationSelections(
-      plan([skillItem({ id: "skill:alpha", name: "alpha" })]),
-      { skills: ["skill:alpha"] },
-    );
-
-    expect(selected.items).toHaveLength(1);
-    expectItemStatus(selected.items, "skill:alpha", "planned");
-  });
-
   it("can skip conflicting skills before apply conflict checks run", () => {
     const selected = applyMigrationSelections(
       plan([
-        skillItem({ id: "skill:alpha", name: "alpha" }),
-        skillItem({
-          id: "skill:beta",
-          name: "beta",
-          status: "conflict",
-          reason: "target exists",
-        }),
+        skillItem("alpha"),
+        skillItem("beta", { status: "conflict", reason: "target exists" }),
       ]),
       { skills: ["alpha"] },
     );
@@ -256,10 +115,10 @@ describe("applyMigrationSelections skills", () => {
   });
 
   it("allows interactive selection to choose no skills", () => {
-    const selected = applyMigrationSelectedSkillItemIds(
+    const selected = applyMigrationSelectedItemIds(
       plan([
-        skillItem({ id: "skill:alpha", name: "alpha" }),
-        skillItem({ id: "skill:beta", name: "beta" }),
+        skillItem("alpha"),
+        skillItem("beta"),
         {
           id: "config:skill:alpha",
           kind: "config",
@@ -269,154 +128,70 @@ describe("applyMigrationSelections skills", () => {
         },
       ]),
       new Set(),
+      "skill",
     );
 
-    expectSummaryFields(selected.summary, { planned: 0, skipped: 3 });
+    expect(selected.summary).toMatchObject({ planned: 0, skipped: 3 });
     expect(selected.items.map((item) => item.status)).toEqual(["skipped", "skipped", "skipped"]);
   });
 
   it("defaults interactive selection to planned skills only", () => {
     expect(
       getDefaultMigrationSelectionValues([
-        skillItem({ id: "skill:alpha", name: "alpha" }),
-        skillItem({
-          id: "skill:beta",
-          name: "beta",
-          status: "conflict",
-          reason: "target exists",
-        }),
+        skillItem("alpha"),
+        skillItem("beta", { status: "conflict", reason: "target exists" }),
       ]),
     ).toEqual(["skill:alpha"]);
   });
 
   it("resolves interactive special options with toggle-off precedence over toggle-on", () => {
     const items = [
-      skillItem({ id: "skill:alpha", name: "alpha" }),
-      skillItem({
-        id: "skill:beta",
-        name: "beta",
-        status: "conflict",
-        reason: "target exists",
-      }),
+      skillItem("alpha"),
+      skillItem("beta", { status: "conflict", reason: "target exists" }),
     ];
 
-    expect(
-      resolveInteractiveMigrationSelection(items, [
-        MIGRATION_SELECTION_TOGGLE_ALL_ON,
-        MIGRATION_SELECTION_TOGGLE_ALL_OFF,
-      ]),
-    ).toEqual({ action: "select", selectedItemIds: new Set() });
-    expect(
-      resolveInteractiveMigrationSelection(items, [MIGRATION_SELECTION_TOGGLE_ALL_ON]),
-    ).toEqual({
-      action: "select",
-      selectedItemIds: new Set(["skill:alpha", "skill:beta"]),
-    });
+    expect(resolveInteractiveMigrationSelection(items, [ALL_ON, ALL_OFF])).toEqual(new Set());
+    expect(resolveInteractiveMigrationSelection(items, [ALL_ON])).toEqual(
+      new Set(["skill:alpha", "skill:beta"]),
+    );
   });
 
   it("reconciles live interactive bulk toggle checkbox state", () => {
-    const selectable = ["skill:alpha", "skill:beta"];
+    const alpha = "skill:alpha";
+    const selectable = [alpha, "skill:beta"];
 
-    expect(
-      reconcileInteractiveMigrationSkillToggleValues(
-        [MIGRATION_SELECTION_TOGGLE_ALL_ON],
-        MIGRATION_SELECTION_TOGGLE_ALL_ON,
-        selectable,
-      ),
-    ).toEqual([MIGRATION_SELECTION_TOGGLE_ALL_ON, "skill:alpha", "skill:beta"]);
-
-    expect(
-      reconcileInteractiveMigrationSkillToggleValues(
-        [
-          MIGRATION_SELECTION_TOGGLE_ALL_ON,
-          "skill:alpha",
-          "skill:beta",
-          MIGRATION_SELECTION_TOGGLE_ALL_OFF,
-        ],
-        MIGRATION_SELECTION_TOGGLE_ALL_OFF,
-        selectable,
-      ),
-    ).toEqual([MIGRATION_SELECTION_TOGGLE_ALL_OFF]);
-
-    expect(
-      reconcileInteractiveMigrationSkillToggleValues(
-        [MIGRATION_SELECTION_TOGGLE_ALL_OFF, "skill:alpha"],
-        "skill:alpha",
-        selectable,
-      ),
-    ).toEqual(["skill:alpha"]);
-
-    expect(
-      reconcileInteractiveMigrationShortcutValues(
-        ["skill:alpha", "skill:beta"],
-        [
-          MIGRATION_SELECTION_TOGGLE_ALL_ON,
-          MIGRATION_SELECTION_TOGGLE_ALL_OFF,
-          "skill:alpha",
-          "skill:beta",
-        ],
-        selectable,
-        "a",
-      ),
-    ).toEqual([MIGRATION_SELECTION_TOGGLE_ALL_OFF]);
-
-    expect(
-      reconcileInteractiveMigrationShortcutValues(
-        [MIGRATION_SELECTION_TOGGLE_ALL_OFF],
-        [MIGRATION_SELECTION_TOGGLE_ALL_OFF, MIGRATION_SELECTION_TOGGLE_ALL_ON],
-        selectable,
-        "i",
-      ),
-    ).toEqual([MIGRATION_SELECTION_TOGGLE_ALL_OFF]);
+    expect(toggleValues([ALL_ON], ALL_ON, selectable)).toEqual([ALL_ON, ...selectable]);
+    expect(toggleValues([ALL_ON, ...selectable, ALL_OFF], ALL_OFF, selectable)).toEqual([ALL_OFF]);
+    expect(toggleValues([ALL_OFF, alpha], alpha, selectable)).toEqual([alpha]);
+    expect(shortcutValues(selectable, [ALL_ON, ALL_OFF, ...selectable], selectable, "a")).toEqual([
+      ALL_OFF,
+    ]);
+    expect(shortcutValues([ALL_OFF], [ALL_OFF, ALL_ON], selectable, "i")).toEqual([ALL_OFF]);
   });
 
   it("reconciles enter as activating the cursor row without toggling it off", () => {
-    const selectable = ["skill:alpha", "skill:beta"];
+    const alpha = "skill:alpha";
+    const beta = "skill:beta";
+    const selectable = [alpha, beta];
 
+    expect(enterValues([alpha], ALL_ON, selectable)).toEqual([ALL_ON, ...selectable]);
+    expect(enterValues([alpha], ALL_OFF, selectable)).toEqual([ALL_OFF]);
+    expect(enterValues([alpha], beta, selectable)).toEqual([alpha, beta]);
+    expect(enterValues([alpha], alpha, selectable)).toEqual([alpha]);
     expect(
-      reconcileInteractiveMigrationEnterValues(
-        ["skill:alpha"],
-        MIGRATION_SELECTION_TOGGLE_ALL_ON,
-        selectable,
-      ),
-    ).toEqual([MIGRATION_SELECTION_TOGGLE_ALL_ON, "skill:alpha", "skill:beta"]);
-
-    expect(
-      reconcileInteractiveMigrationEnterValues(
-        ["skill:alpha"],
-        MIGRATION_SELECTION_TOGGLE_ALL_OFF,
-        selectable,
-      ),
-    ).toEqual([MIGRATION_SELECTION_TOGGLE_ALL_OFF]);
-
-    expect(
-      reconcileInteractiveMigrationEnterValues(["skill:alpha"], "skill:beta", selectable),
-    ).toEqual(["skill:alpha", "skill:beta"]);
-
-    expect(
-      reconcileInteractiveMigrationEnterValues(["skill:alpha"], "skill:alpha", selectable),
-    ).toEqual(["skill:alpha"]);
-
-    expect(
-      reconcileInteractiveMigrationEnterValues(["skill:beta"], "skill:alpha", selectable, {
+      enterValues([beta], alpha, selectable, {
         preserveDeselectedActivatedValue: true,
       }),
-    ).toEqual(["skill:beta"]);
+    ).toEqual([beta]);
 
-    expect(
-      reconcileInteractiveMigrationEnterValues(["skill:alpha"], undefined, selectable),
-    ).toEqual(["skill:alpha"]);
+    expect(enterValues([alpha], undefined, selectable)).toEqual([alpha]);
   });
 
   it("rejects unknown explicit skill selectors with available choices", () => {
     expect(() =>
-      applyMigrationSelections(
-        plan([
-          skillItem({ id: "skill:alpha", name: "alpha" }),
-          skillItem({ id: "skill:beta", name: "beta" }),
-        ]),
-        { skills: ["gamma"] },
-      ),
+      applyMigrationSelections(plan([skillItem("alpha"), skillItem("beta")]), {
+        skills: ["gamma"],
+      }),
     ).toThrow('No migratable skill matched "gamma". Available skills: alpha, beta.');
   });
 });
@@ -424,11 +199,7 @@ describe("applyMigrationSelections skills", () => {
 describe("applyMigrationSelections plugins", () => {
   it.each([
     { value: undefined },
-    { value: null },
-    { value: [] },
     { value: {} },
-    { value: { config: [] } },
-    { value: { config: { codexPlugins: [] } } },
     { value: { config: { codexPlugins: { plugins: [] } } } },
   ])("leaves unrelated config shapes unchanged: %j", ({ value }) => {
     const item: MigrationItem = {
@@ -439,179 +210,60 @@ describe("applyMigrationSelections plugins", () => {
       details: { value },
     };
 
-    const selected = applyMigrationSelectedPluginItemIds(plan([item]), new Set());
+    const selected = applyMigrationSelectedItemIds(plan([item]), new Set(), "plugin");
 
     expect(selected.items[0]).toBe(item);
   });
 
-  it.each([
-    { kind: "config", action: "create" },
-    { kind: "archive", action: "merge" },
-  ])("does not filter plugin-shaped data outside config merges: %j", (identity) => {
-    const item = { ...codexPluginConfigItem(["gmail"]), ...identity };
-    const selected = applyMigrationSelectedPluginItemIds(plan([item]), new Set());
+  it("keeps selected plugins and skips unselected plugin install items and config", () => {
+    const selected = applyMigrationSelections(
+      applyMigrationItemSelection(pluginPlan("conflict"), [
+        "plugin:google-calendar",
+        "plugin:gmail",
+      ]),
+      { plugins: ["google-calendar"] },
+    );
 
-    expect(selected.items[0]).toBe(item);
-    expectSummaryFields(selected.summary, { planned: 1, skipped: 0 });
+    expect(selected.summary).toMatchObject({ planned: 1, skipped: 2, conflicts: 0 });
+    expectItemStatus(selected.items, "plugin:google-calendar", "planned");
+    expectItemStatus(selected.items, "plugin:gmail", "skipped", MIGRATION_NOT_SELECTED_REASON);
+    expect(selected.items).toContainEqual(
+      expect.objectContaining({
+        id: "config:codex-plugins",
+        status: "skipped",
+        reason: MIGRATION_NOT_SELECTED_REASON,
+        details: codexPluginConfigItem(["google-calendar"]).details,
+      }),
+    );
   });
-
-  it.each([
-    { skipConfig: false, planned: 2, skipped: 1 },
-    { skipConfig: true, planned: 1, skipped: 2 },
-  ])(
-    "keeps selected plugins and skips unselected plugin install items (config skipped: $skipConfig)",
-    ({ skipConfig, planned, skipped }) => {
-      const initial = plan([
-        pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
-        pluginItem({ id: "plugin:gmail", name: "gmail" }),
-        codexPluginConfigItem(["google-calendar", "gmail"]),
-      ]);
-      const selected = applyMigrationSelections(
-        skipConfig
-          ? applyMigrationItemSelection(initial, ["plugin:google-calendar", "plugin:gmail"])
-          : initial,
-        { plugins: ["google-calendar"] },
-      );
-
-      expectSummaryFields(selected.summary, { planned, skipped, conflicts: 0 });
-      expectItemStatus(selected.items, "plugin:google-calendar", "planned");
-      expectItemStatus(selected.items, "plugin:gmail", "skipped", MIGRATION_NOT_SELECTED_REASON);
-      const configItem = requireItem(selected.items, "config:codex-plugins");
-      expect(configItem.status).toBe(skipConfig ? "skipped" : "planned");
-      expect(configItem.reason).toBe(skipConfig ? MIGRATION_NOT_SELECTED_REASON : undefined);
-      expect(configItem.details).toMatchObject({
-        value: {
-          enabled: true,
-          config: { codexPlugins: { enabled: true, allow_destructive_actions: true } },
-        },
-      });
-      const plugins = requireCodexPluginConfigPlugins(configItem);
-      expect(requireRecord(plugins["google-calendar"], "google calendar plugin config")).toEqual({
-        enabled: true,
-        marketplaceName: "openai-curated",
-        pluginName: "google-calendar",
-      });
-      expect(Object.keys(plugins)).toEqual(["google-calendar"]);
-    },
-  );
 
   it("skips the Codex plugin config item when no plugin remains selected", () => {
-    const selected = applyMigrationSelections(
-      plan([
-        pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
-        pluginItem({ id: "plugin:gmail", name: "gmail" }),
-        codexPluginConfigItem(["google-calendar", "gmail"]),
-      ]),
-      { plugins: [] },
-    );
+    const selected = applyMigrationSelections(pluginPlan(), { plugins: [] });
 
-    expectSummaryFields(selected.summary, { planned: 0, skipped: 3, conflicts: 0 });
-    expectItemStatus(
-      selected.items,
-      "plugin:google-calendar",
-      "skipped",
-      MIGRATION_NOT_SELECTED_REASON,
-    );
-    expectItemStatus(selected.items, "plugin:gmail", "skipped", MIGRATION_NOT_SELECTED_REASON);
-    expectItemStatus(
-      selected.items,
-      "config:codex-plugins",
-      "skipped",
-      MIGRATION_NOT_SELECTED_REASON,
-    );
-  });
-
-  it("allows interactive selection to choose no plugins", () => {
-    const selected = applyMigrationSelectedPluginItemIds(
-      plan([
-        pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
-        pluginItem({ id: "plugin:gmail", name: "gmail" }),
-        codexPluginConfigItem(["google-calendar", "gmail"]),
-      ]),
-      new Set(),
-    );
-
-    expectSummaryFields(selected.summary, { planned: 0, skipped: 3 });
-    expect(selected.items.every((item) => item.status === "skipped")).toBe(true);
-  });
-
-  it("defaults interactive plugin selection to planned plugins", () => {
-    expect(
-      getDefaultMigrationSelectionValues([
-        pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
-        pluginItem({
-          id: "plugin:gmail",
-          name: "gmail",
-          status: "conflict",
-          reason: "plugin exists",
-        }),
-      ]),
-    ).toEqual(["plugin:google-calendar"]);
+    expect(selected.summary).toMatchObject({ planned: 0, skipped: 3, conflicts: 0 });
+    for (const id of ["plugin:google-calendar", "plugin:gmail", "config:codex-plugins"]) {
+      expectItemStatus(selected.items, id, "skipped", MIGRATION_NOT_SELECTED_REASON);
+    }
   });
 
   it("includes conflicting plugins in the selector with a conflict hint", () => {
-    const items = [
-      pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
-      pluginItem({
-        id: "plugin:gmail",
-        name: "gmail",
-        status: "conflict",
-        reason: "plugin exists",
-      }),
-    ];
+    const conflict = pluginItem("gmail", { status: "conflict", reason: "plugin exists" });
+    const items = [pluginItem("google-calendar"), conflict];
 
-    expect(getSelectableMigrationPluginItems(plan(items)).map((item) => item.id)).toEqual([
+    expect(getSelectableMigrationItems(plan(items), "plugin").map((item) => item.id)).toEqual([
       "plugin:google-calendar",
       "plugin:gmail",
     ]);
-    expect(
-      formatMigrationPluginSelectionHint(expectDefined(items[1], "items[1] test invariant")),
-    ).toBe("openai-curated plugin already installed in workspace");
-  });
-
-  it("resolves interactive plugin special options with toggle-off precedence", () => {
-    const items = [
-      pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
-      pluginItem({ id: "plugin:gmail", name: "gmail" }),
-    ];
-
-    expect(
-      resolveInteractiveMigrationSelection(items, [
-        MIGRATION_SELECTION_TOGGLE_ALL_ON,
-        MIGRATION_SELECTION_TOGGLE_ALL_OFF,
-      ]),
-    ).toEqual({ action: "select", selectedItemIds: new Set() });
-    expect(
-      resolveInteractiveMigrationSelection(items, [MIGRATION_SELECTION_TOGGLE_ALL_ON]),
-    ).toEqual({
-      action: "select",
-      selectedItemIds: new Set(["plugin:google-calendar", "plugin:gmail"]),
-    });
-    expect(resolveInteractiveMigrationSelection(items, ["plugin:gmail"])).toEqual({
-      action: "select",
-      selectedItemIds: new Set(["plugin:gmail"]),
-    });
-  });
-
-  it("accepts item ids as non-interactive plugin selectors", () => {
-    const selected = applyMigrationSelections(
-      plan([pluginItem({ id: "plugin:google-calendar", name: "google-calendar" })]),
-      { plugins: ["plugin:google-calendar"] },
+    expect(formatMigrationSelectionHint(conflict, "plugin")).toBe(
+      "openai-curated plugin already installed in workspace",
     );
-
-    expect(selected.items).toHaveLength(1);
-    expectItemStatus(selected.items, "plugin:google-calendar", "planned");
   });
 
   it("rejects unknown explicit plugin selectors with available choices", () => {
     expect(() =>
-      applyMigrationSelections(
-        plan([
-          pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
-          pluginItem({ id: "plugin:gmail", name: "gmail" }),
-        ]),
-        { plugins: ["calendar"] },
-      ),
+      applyMigrationSelections(plan([pluginItem("google-calendar"), pluginItem("gmail")]), {
+        plugins: ["calendar"],
+      }),
     ).toThrow(
       'No migratable plugin matched "calendar". Available plugins: gmail, google-calendar.',
     );

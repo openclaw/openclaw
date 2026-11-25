@@ -7,17 +7,11 @@ type DockPanelLayout<TDock extends DockPanelPlacement> = {
   width: number;
 };
 
-export type DockPanelLayoutStore<TDock extends DockPanelPlacement> = {
-  defaults: DockPanelLayout<TDock>;
-  minHeight: number;
-  minWidth: number;
-  maxHeight(): number;
-  maxWidth(): number;
-  load(): DockPanelLayout<TDock>;
-  save(layout: DockPanelLayout<TDock>): void;
-};
+export type DockPanelLayoutStore<TDock extends DockPanelPlacement> = ReturnType<
+  typeof createDockPanelLayout<TDock>
+>;
 
-type DockPanelLayoutOptions<TDock extends DockPanelPlacement> = {
+export function createDockPanelLayout<TDock extends DockPanelPlacement>(options: {
   storageKey: string;
   minHeight: number;
   minWidth: number;
@@ -25,11 +19,7 @@ type DockPanelLayoutOptions<TDock extends DockPanelPlacement> = {
   supportedDocks: readonly TDock[];
   defaultHeight: number;
   defaultWidth: number;
-};
-
-export function createDockPanelLayout<TDock extends DockPanelPlacement>(
-  options: DockPanelLayoutOptions<TDock>,
-) {
+}) {
   const defaults: DockPanelLayout<TDock> = {
     open: false,
     dock: options.defaultDock,
@@ -54,7 +44,7 @@ export function createDockPanelLayout<TDock extends DockPanelPlacement>(
     minWidth: options.minWidth,
     maxHeight,
     maxWidth,
-    load(): DockPanelLayout<TDock> {
+    load(this: void): DockPanelLayout<TDock> {
       try {
         const raw = globalThis.localStorage?.getItem(options.storageKey);
         if (!raw) {
@@ -73,7 +63,7 @@ export function createDockPanelLayout<TDock extends DockPanelPlacement>(
         return { ...defaults };
       }
     },
-    save(layout: DockPanelLayout<TDock>): void {
+    save(this: void, layout: DockPanelLayout<TDock>): void {
       try {
         globalThis.localStorage?.setItem(options.storageKey, JSON.stringify(layout));
       } catch {

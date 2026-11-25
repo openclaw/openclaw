@@ -1,4 +1,3 @@
-// Channel bot-pair loop guard shared by turn adapters.
 import {
   createPairLoopGuard,
   resolvePairLoopGuardSettings,
@@ -6,7 +5,6 @@ import {
   type PairLoopGuardResult,
 } from "../../plugin-sdk/pair-loop-guard-runtime.js";
 
-/** Facts used to detect repeated bot-to-bot channel reply loops. */
 export type ChannelBotLoopProtectionFacts = {
   scopeId: string;
   conversationId: string;
@@ -21,7 +19,6 @@ export type ChannelBotLoopProtectionFacts = {
 
 const channelBotPairLoopGuard = createPairLoopGuard({ pruneIntervalMs: 60_000 });
 
-/** Records a bot pair interaction and returns whether the loop guard should suppress it. */
 export function recordChannelBotPairLoopAndCheckSuppression(
   params: ChannelBotLoopProtectionFacts,
 ): PairLoopGuardResult {
@@ -31,11 +28,7 @@ export function recordChannelBotPairLoopAndCheckSuppression(
     senderId: params.senderId,
     receiverId: params.receiverId,
     eventId: params.eventId,
-    settings: resolvePairLoopGuardSettings({
-      config: params.config,
-      defaultsConfig: params.defaultsConfig,
-      defaultEnabled: params.defaultEnabled,
-    }),
+    settings: resolvePairLoopGuardSettings(params),
     nowMs: params.nowMs,
   });
 }

@@ -1,53 +1,11 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-
-/** Supported source families for transcript providers. */
-export type TranscriptSourceKind =
-  | "live-audio"
-  | "live-caption"
-  | "posthoc-transcript"
-  | "recording-stt";
-
-/** Provider-specific locator for a live, recorded, or imported transcript source. */
-export type TranscriptSourceLocator = {
-  providerId: string;
-  kind?: TranscriptSourceKind;
-  accountId?: string;
-  guildId?: string;
-  channelId?: string;
-  meetingUrl?: string;
-  threadTs?: string;
-  fileId?: string;
-  [key: string]: string | undefined;
-};
-
-/** Speaker/participant identity attached to an utterance. */
-export type TranscriptParticipant = {
-  id?: string;
-  label: string;
-};
-
-/** One captured or imported transcript utterance. */
-export type TranscriptUtterance = {
-  id?: string;
-  sessionId?: string;
-  startedAt?: string;
-  endedAt?: string;
-  speaker?: TranscriptParticipant;
-  text: string;
-  final?: boolean;
-  metadata?: Record<string, unknown>;
-};
-
-/** Durable transcript session metadata. */
-export type TranscriptSessionDescriptor = {
-  sessionId: string;
-  title?: string;
-  source: TranscriptSourceLocator;
-  startedAt: string;
-  stoppedAt?: string;
-  metadata?: Record<string, unknown>;
-};
+import type {
+  TranscriptSourceKind,
+  TranscriptSourceLocator,
+  TranscriptUtterance,
+  TranscriptSessionDescriptor,
+} from "./types.js";
 
 /** Request passed to providers that can start live transcript capture. */
 export type TranscriptStartRequest = {

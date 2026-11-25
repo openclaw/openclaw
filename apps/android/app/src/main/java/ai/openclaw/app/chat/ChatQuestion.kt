@@ -22,7 +22,7 @@ data class ChatQuestionPrompt(
   val terminalObservedAtMs: Long? = null,
   val recoveryUnavailable: Boolean = false,
   // Process-only input can contain secrets; it must not enter saved or persisted state.
-  val draft: ChatQuestionDraft = ChatQuestionDraft(),
+  val draft: ChatQuestionDraft = if (record.status == "pending") ChatQuestionDraft.fromQuestions(record.questions) else ChatQuestionDraft(),
   internal val promptOwner: Any = Any(),
 ) {
   fun status(nowMs: Long = System.currentTimeMillis()): ChatQuestionStatus =
@@ -41,6 +41,21 @@ data class ChatQuestionDraft(
   val otherText: Map<String, String> = emptyMap(),
   val secretStoreAllowedHostsText: String? = null,
 ) {
+  companion object {
+    fun fromQuestions(questions: List<Question>): ChatQuestionDraft {
+      val selected = mutableMapOf<String, Set<String>>()
+      val text = mutableMapOf<String, String>()
+      for (question in questions) {
+        if (question.isSecret == true) continue
+        val defaults = question.defaultAnswers ?: continue
+        val values = question.options.map { it.value ?: it.label }.toSet()
+        selected[question.questionId] = defaults.filter { it in values }.toSet()
+        text[question.questionId] = defaults.filter { it !in values }.joinToString(if (question.answerFormat == "lines") "\n" else "")
+      }
+      return ChatQuestionDraft(selectedOptions = selected, otherText = text)
+    }
+  }
+
   fun secretStoreAllowedHosts(questions: List<Question>): List<String>? {
     val store = questions.firstOrNull()?.secretStore?.takeIf { it.kind == "secret" } ?: return null
     return secretStoreAllowedHostsText?.split(Regex("[,\\s]+"))?.filter { it.isNotEmpty() } ?: store.allowedHosts.orEmpty()
@@ -48,17 +63,15 @@ data class ChatQuestionDraft(
 
   fun toggle(
     question: Question,
-    label: String,
+    value: String,
   ): ChatQuestionDraft {
-    if (question.options.none { it.label == label }) return this
+    if (question.options.none { (it.value ?: it.label) == value }) return this
     val selected = selectedOptions[question.questionId].orEmpty()
     val next =
-      if (question.multiSelect == true) {
-        if (label in selected) selected - label else selected + label
-      } else if (selected == setOf(label)) {
-        emptySet()
-      } else {
-        setOf(label)
+      when {
+        question.multiSelect == true -> if (value in selected) selected - value else selected + value
+        selected == setOf(value) -> emptySet()
+        else -> setOf(value)
       }
     return copy(
       selectedOptions = selectedOptions + (question.questionId to next),
@@ -71,7 +84,7 @@ data class ChatQuestionDraft(
     value: String,
   ): ChatQuestionDraft {
     if (question.options.isNotEmpty() && question.isOther != true) return this
-    val clearOptions = question.multiSelect != true && (if (question.isSecret == true) value.isNotEmpty() else value.isNotBlank())
+    val clearOptions = question.multiSelect != true && (if (question.isSecret == true || question.presentation == "form") value.isNotEmpty() else value.isNotBlank())
     return copy(
       selectedOptions = if (clearOptions) selectedOptions + (question.questionId to emptySet()) else selectedOptions,
       otherText = otherText + (question.questionId to value),
@@ -82,10 +95,12 @@ data class ChatQuestionDraft(
     val result = linkedMapOf<String, List<String>>()
     for (question in questions) {
       val selected = selectedOptions[question.questionId].orEmpty()
-      val values = question.options.mapNotNull { option -> option.label.takeIf { it in selected } }.toMutableList()
-      val text = otherText[question.questionId]?.let { if (question.isSecret == true) it else it.trim() }
-      text?.takeIf { it.isNotEmpty() }?.let(values::add)
-      if (values.isEmpty()) return null
+      val values = question.options.mapNotNull { option -> (option.value ?: option.label).takeIf { it in selected } }.toMutableList()
+      val text = otherText[question.questionId]?.let { if (question.isSecret == true || question.presentation == "form") it else it.trim() }
+      text?.takeIf { it.isNotEmpty() }?.let { value ->
+        if (question.answerFormat == "lines") values.addAll(value.replace("\r\n", "\n").split('\n')) else values.add(value)
+      }
+      if (values.isEmpty() && question.allowEmpty != true) return null
       result[question.questionId] = values
     }
     return result

@@ -7,12 +7,22 @@ import type { CodexPluginConfig } from "./config.js";
 import { normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 
 type OpenClawCodingToolsFactory =
-  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
-type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
+  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingToolsAsync"];
+type OpenClawDynamicTool = Awaited<ReturnType<OpenClawCodingToolsFactory>>[number];
 
 export const CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME = "node_exec";
 export const CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME = "gateway_exec";
 export const CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME = "gateway_process";
+const CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS = new Set([
+  "exec",
+  "process",
+  "sandbox_exec",
+  "sandbox_process",
+  CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
+  CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
+  CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
+]);
+
 const PROCESS_FOLLOWUP_TEXT =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
@@ -89,17 +99,25 @@ export function createGatewayProcessProjection(
   });
 }
 
-export function createSandboxExecProjection(execTool: OpenClawDynamicTool): OpenClawDynamicTool {
-  return {
-    ...execTool,
-    name: "sandbox_exec",
+export function createSandboxShellProjection(
+  tool: OpenClawDynamicTool,
+  kind: "exec" | "process",
+): OpenClawDynamicTool {
+  const projected = {
+    ...tool,
+    name: `sandbox_${kind}`,
     description:
-      "Run a shell command through OpenClaw's configured sandbox backend for this session. Use when OpenClaw sandboxing is active or when a command must execute in the sandbox backend, such as an SSH-backed sandbox or Docker container-path bind layout. Use Codex's native shell only when no OpenClaw sandbox is active and native Code Mode is available.",
-    execute: withProcessFollowupText(
-      execTool,
-      "Use sandbox_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
-    ),
+      kind === "exec"
+        ? "Run a shell command through OpenClaw's configured sandbox backend for this session. Use when OpenClaw sandboxing is active or when a command must execute in the sandbox backend, such as an SSH-backed sandbox or Docker container-path bind layout. Use Codex's native shell only when no OpenClaw sandbox is active and native Code Mode is available."
+        : "Manage background shell sessions through OpenClaw's configured sandbox backend for this session: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for sandbox follow-up; use Codex's native shell session handling only when no OpenClaw sandbox is active and native Code Mode is available.",
   };
+  if (kind === "exec") {
+    projected.execute = withProcessFollowupText(
+      tool,
+      "Use sandbox_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+    );
+  }
+  return projected;
 }
 
 function withProcessFollowupText(
@@ -121,13 +139,19 @@ function withProcessFollowupText(
   };
 }
 
-export function createSandboxProcessProjection(
-  processTool: OpenClawDynamicTool,
-): OpenClawDynamicTool {
-  return {
-    ...processTool,
-    name: "sandbox_process",
-    description:
-      "Manage background shell sessions through OpenClaw's configured sandbox backend for this session: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for sandbox follow-up; use Codex's native shell session handling only when no OpenClaw sandbox is active and native Code Mode is available.",
-  };
+/** Keeps replacement shell tools direct even when model metadata mandates Codex Code Mode. */
+export function placeDisabledNativeShellToolsInDirectNamespace<
+  T extends { name: string; catalogMode?: string },
+>(tools: T[], nativeToolSurfaceEnabled: boolean | undefined): T[] {
+  if (nativeToolSurfaceEnabled !== false) {
+    return tools;
+  }
+  for (const tool of tools) {
+    if (CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS.has(normalizeCodexDynamicToolName(tool.name))) {
+      // Runtime tools can carry non-enumerable policy metadata and prototype behavior.
+      // Preserve the prepared object identity while changing only its Codex catalog placement.
+      tool.catalogMode = "direct-only";
+    }
+  }
+  return tools;
 }

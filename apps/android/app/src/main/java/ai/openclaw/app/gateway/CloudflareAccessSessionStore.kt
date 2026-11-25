@@ -53,15 +53,10 @@ internal class CloudflareAccessSessionStore(
     val task: Deferred<Snapshot>,
   )
 
-  private class Retirement(
-    val id: UUID,
-    val task: Deferred<Unit>,
-  )
-
   private val mutex = Mutex()
   private val sessions = mutableMapOf<CloudflareAccessOrigin, Snapshot>()
   private val attempts = mutableMapOf<CloudflareAccessOrigin, Attempt>()
-  private val retirements = mutableMapOf<CloudflareAccessOrigin, Retirement>()
+  private val retirements = mutableMapOf<CloudflareAccessOrigin, Deferred<Unit>>()
   private val mutableStates = MutableStateFlow<Map<CloudflareAccessOrigin, State>>(emptyMap())
   val states = mutableStates.asStateFlow()
   private var revision = 0L
@@ -192,9 +187,9 @@ internal class CloudflareAccessSessionStore(
   }
 
   private fun queueRetirement(origin: CloudflareAccessOrigin): Deferred<Unit> {
-    val previous = retirements[origin]?.task
-    val id = UUID.randomUUID()
-    val task =
+    val previous = retirements[origin]
+    lateinit var task: Deferred<Unit>
+    task =
       scope.async(start = CoroutineStart.LAZY) {
         try {
           previous?.join()
@@ -202,11 +197,11 @@ internal class CloudflareAccessSessionStore(
           if (!persistence.delete(origin)) throw CloudflareAccessException(CloudflareAccessException.Kind.StorageFailed)
         } finally {
           withContext(NonCancellable) {
-            mutex.withLock { if (retirements[origin]?.id == id) retirements.remove(origin) }
+            mutex.withLock { if (retirements[origin] === task) retirements.remove(origin) }
           }
         }
       }
-    retirements[origin] = Retirement(id, task)
+    retirements[origin] = task
     task.start()
     return task
   }

@@ -1,45 +1,45 @@
+import type { ArtifactsListResult } from "../../../../../packages/gateway-protocol/src/schema/artifacts.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
+import type { PanelUnavailableReason } from "../../../app/panel-availability.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
-import type { FileSidebarNavigation } from "./chat-sidebar-content-types.ts";
-import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
+import type {
+  SessionWorkspaceFilter,
+  SessionWorkspaceTreeState,
+  SessionWorkspaceNavigation,
+  SessionWorkspaceDirectory,
+  SessionWorkspaceMobileNavigation,
+  SessionWorkspacePreview,
+  SidebarContent,
+  SidebarSelection,
+} from "./chat-sidebar-content-types.ts";
 
-export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
-
-export type SessionWorkspaceProps = {
-  filter: SessionWorkspaceFilter;
-  browserPath: string;
-  browserSearch: string;
-  sessionKey: string;
-  list: SessionWorkspaceListResult | null;
+export type SessionWorkspaceArtifacts = {
+  attachments?: NonNullable<ArtifactsListResult["attachments"]> & { atRequest: WeakSet<object> };
+  /** Completion of the owner's admitted read; presentation observes without issuing another RPC. */
+  readResult?: Promise<void>;
+  items: NonNullable<SessionWorkspaceListResult["artifacts"]>;
+  /** At least one successful response; remains true through refresh/error. */
+  resolved: boolean;
+  /** Cached response is current; invalidation clears this without dropping items. */
+  loaded: boolean;
   loading: boolean;
   error: string | null;
-  activeId: string | null;
-  onRefresh: () => void;
-  onBrowsePath: (path: string) => void;
-  onOpenFile: (path: string, origin: "session" | "workspace") => void;
-  onSearch: (search: string) => void;
-  onSetFilter: (filter: SessionWorkspaceFilter) => void;
-  onOpenArtifact: (artifactId: string) => void;
-  onToggleTerminal?: () => void;
-  onToggleBrowser?: () => void;
-  onToggleDesktop?: () => void;
-  /** Opens the session diff panel; absent until a usable checkout is known. */
-  onOpenDiff?: () => void;
-};
-
-export type SessionWorkspacePreview = {
-  id: string;
-  label: string;
-  content: SidebarSelection;
-  canonicalKey?: string;
-  requestIds?: string[];
-  navigation?: FileSidebarNavigation;
-  navigationOrder?: number;
 };
 
 export type SessionWorkspaceState = {
+  fileLinksRevision?: number;
+  readResult?: Promise<void>;
+  catalogNavigation?: SessionWorkspaceNavigation;
+  pendingPreview?: { id: string; disposition: "pinned" | "preview" };
+  mobileNavigation?: SessionWorkspaceMobileNavigation;
+  tree?: SessionWorkspaceTreeState;
+  directories?: Record<string, SessionWorkspaceDirectory>;
+  artifacts?: SessionWorkspaceArtifacts;
+  /** Native messageRole=assistant variant, never substituted for the Files catalog. */
+  assistantArtifacts?: SessionWorkspaceArtifacts;
+
   navigationOrder?: number;
   previews: SessionWorkspacePreview[];
   activePreviewId: string | null;
@@ -62,7 +62,9 @@ export type SessionWorkspaceState = {
 // Re-renders must preserve the document identity or the mounted diff panel
 // treats its loader as new and requests sessions.diff again.
 export type SessionWorkspaceHost = {
+  chatMessages?: readonly unknown[];
   sessionKey: string;
+  readonly sessionWorkspaceReadDisabledReason?: string | null;
   sessions: SessionCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -71,6 +73,7 @@ export type SessionWorkspaceHost = {
   resourceBasePath?: string;
   terminalAvailable?: boolean;
   browserPanelAvailable?: boolean;
+  browserPanelUnavailableReason?: PanelUnavailableReason | null;
   assistantAgentId?: string | null;
   agentsList?: SessionScopeHost["agentsList"];
   settings?: UiSettings;
@@ -78,6 +81,5 @@ export type SessionWorkspaceHost = {
   sessionWorkspaceDraftScope?: string;
   sessionWorkspaceDraftContext?: { sessionTitle?: string; paneLabel?: string };
   sidebarContent: SidebarSelection | null;
-  requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarSelection | null) => void;
 };

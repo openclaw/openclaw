@@ -236,6 +236,41 @@
       "table": "auth_profile_state",
       "indexes": [],
       "note": "Shared auth runtime state folded into config_machine_state key authProfiles.state in state schema 13; the agent-DB table of the same name is unaffected."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 20,
+      "table": "skill_workshop_proposals",
+      "indexes": [],
+      "note": "Same-version retirement in state schema 20: Doctor exports pending and quarantined drafts to <workshop-skills>/.archive/.retired-proposals/, then drops the table."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 20,
+      "table": "skill_workshop_proposal_events",
+      "indexes": [],
+      "note": "Proposal lifecycle history; dropped with skill_workshop_proposals in state schema 20."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 20,
+      "table": "skill_workshop_proposal_rollbacks",
+      "indexes": [],
+      "note": "Proposal apply recovery; dropped with skill_workshop_proposals in state schema 20."
+    },
+    {
+      "database": "state",
+      "status": "completed",
+      "targetVersion": 20,
+      "table": "skill_workshop_collection_reviews",
+      "indexes": [
+        "idx_skill_workshop_collection_reviews_owner_time",
+        "idx_skill_workshop_collection_reviews_workspace_time"
+      ],
+      "note": "Collection-review backup outcomes; collection backups were removed and the table dropped with skill_workshop_proposals in state schema 20."
     }
   ]
 }

@@ -1,7 +1,6 @@
-// Shares bundled plugin config merge behavior across setup and runtime code.
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { matchRootFileOpenFailure, type RootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
@@ -39,7 +38,7 @@ export function extractBundleServerMap(
 export function readBundleJsonObject(params: {
   rootDir: string;
   relativePath: string;
-  onOpenFailure?: (failure: RootFileOpenFailure) => ReadBundleJsonResult;
+  allowMissing?: boolean;
 }): ReadBundleJsonResult {
   const file = readPluginCacheFile({
     rootDir: params.rootDir,
@@ -48,8 +47,20 @@ export function readBundleJsonObject(params: {
     maxBytes: null,
   });
   if (!file.ok && file.failurePhase !== "read") {
-    const result = params.onOpenFailure?.(file.failure) ?? { ok: true as const, raw: {} };
-    return result.ok ? result : { ...result, reason: "open" };
+    if (params.allowMissing === undefined) {
+      return { ok: true, raw: {} };
+    }
+    return matchRootFileOpenFailure<ReadBundleJsonResult>(file.failure, {
+      path: () =>
+        params.allowMissing
+          ? { ok: true, raw: {} }
+          : { ok: false, error: `unable to read ${params.relativePath}: path`, reason: "open" },
+      fallback: (failure) => ({
+        ok: false,
+        error: `unable to read ${params.relativePath}: ${failure.reason}`,
+        reason: "open",
+      }),
+    });
   }
   const parsed = file.ok
     ? parsePluginCacheJson(file)
@@ -62,26 +73,7 @@ export function readBundleJsonObject(params: {
     : { ok: false, error: `${params.relativePath} must contain a JSON object` };
 }
 
-export function resolveBundleJsonOpenFailure(params: {
-  failure: RootFileOpenFailure;
-  relativePath: string;
-  allowMissing?: boolean;
-}): ReadBundleJsonResult {
-  return matchRootFileOpenFailure(params.failure, {
-    path: () => {
-      if (params.allowMissing) {
-        return { ok: true, raw: {} };
-      }
-      return { ok: false, error: `unable to read ${params.relativePath}: path` };
-    },
-    fallback: (failure) => ({
-      ok: false,
-      error: `unable to read ${params.relativePath}: ${failure.reason}`,
-    }),
-  });
-}
-
-export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
+export function loadEnabledBundleConfig<TConfig>(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
@@ -94,8 +86,7 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   loadNativePluginConfig?: (params: {
     record: PluginManifestRecord;
   }) => { config: TConfig; diagnostics: string[] } | undefined;
-  createDiagnostic: (pluginId: string, message: string) => TDiagnostic;
-}): { config: TConfig; diagnostics: TDiagnostic[] } {
+}): { config: TConfig; diagnostics: Array<{ pluginId: string; message: string }> } {
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
   if (!normalizedPlugins.enabled) {
     return { config: params.createEmptyConfig(), diagnostics: [] };
@@ -108,7 +99,7 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
       config: params.cfg,
       includeDisabled: true,
     });
-  const diagnostics: TDiagnostic[] = [];
+  const diagnostics: Array<{ pluginId: string; message: string }> = [];
   let merged = params.createEmptyConfig();
 
   for (const record of registry.plugins) {
@@ -142,7 +133,7 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     }
     merged = applyMergePatch(merged, loaded.config) as TConfig;
     for (const message of loaded.diagnostics) {
-      diagnostics.push(params.createDiagnostic(record.id, message));
+      diagnostics.push({ pluginId: record.id, message });
     }
   }
 

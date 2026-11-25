@@ -70,16 +70,24 @@ export async function promptTelegramAllowFromForAccount(params: {
     parseId: parseTelegramAllowFromId,
     invalidWithoutTokenNote: t("wizard.telegram.allowFromInvalid"),
     resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseTelegramAllowFromId(entry);
-        return { input: entry, resolved: Boolean(id), id };
+      entries.map((input) => {
+        const id = parseTelegramAllowFromId(input);
+        return { input, resolved: Boolean(id), id };
       }),
   });
+  return applyTelegramAllowFrom(params.cfg, accountId, unique);
+}
+
+export function applyTelegramAllowFrom(
+  cfg: OpenClawConfig,
+  accountId: string,
+  allowFrom: string[],
+) {
   return patchChannelConfigForAccount({
-    cfg: params.cfg,
+    cfg,
     channel,
     accountId,
-    patch: { dmPolicy: "allowlist", allowFrom: unique },
+    patch: { dmPolicy: "allowlist", allowFrom },
     setupSurface: telegramSetupAdapter,
   });
 }

@@ -1,4 +1,3 @@
-// Resolves plugin root directories for bundled and installed plugins.
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveUserPath } from "../utils.js";
@@ -10,12 +9,6 @@ export type PluginSourceRoots = {
   stock?: string;
   global: string;
   workspace?: string;
-};
-
-type PluginCacheInputs = {
-  roots: PluginSourceRoots;
-  loadPaths: string[];
-  devSourceRoot: string | null;
 };
 
 export function resolvePluginSourceRoots(params: {
@@ -35,7 +28,11 @@ export function resolvePluginCacheInputs(params: {
   workspaceDir?: string;
   loadPaths?: readonly string[];
   env?: NodeJS.ProcessEnv;
-}): PluginCacheInputs {
+}): {
+  roots: PluginSourceRoots;
+  loadPaths: string[];
+  devSourceRoot: string | null;
+} {
   const env = params.env ?? process.env;
   const roots = resolvePluginSourceRoots({
     workspaceDir: params.workspaceDir,

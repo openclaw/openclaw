@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { runQaTelegramSuite } from "./src/live-transports/telegram/cli.runtime.js";
 
 const qaChannelLoads = vi.hoisted(() => vi.fn());
 const qaChannelProtocolLoads = vi.hoisted(() => vi.fn());
@@ -25,9 +26,7 @@ describe("QA Lab plugin entrypoint", () => {
     expect(qaChannelProtocolLoads).not.toHaveBeenCalled();
   });
 
-  it("loads the package Telegram harness without the private QA transport runtime", async () => {
-    const { runQaTelegramSuite } = await import("./src/live-transports/telegram/cli.runtime.js");
-
+  it("loads the package Telegram harness without the private QA transport runtime", () => {
     expect(runQaTelegramSuite).toBeTypeOf("function");
     expect(qaChannelLoads).not.toHaveBeenCalled();
     expect(qaChannelProtocolLoads).not.toHaveBeenCalled();

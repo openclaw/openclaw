@@ -237,6 +237,23 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
             "exec.approval.gateway-a.%2F",
         ])
         #expect(slashIdentifiers.isDisjoint(with: escapedIdentifiers))
+
+        let dottedOwner = MockNotificationCenter()
+        let dottedApproval = MockNotificationCenter()
+        await ApprovalNotificationBridge.removeNotifications(
+            for: ApprovalNotificationPrompt(approvalId: "c", gatewayDeviceId: "a.b"),
+            notificationCenter: dottedOwner)
+        await ApprovalNotificationBridge.removeNotifications(
+            for: ApprovalNotificationPrompt(approvalId: "b.c", gatewayDeviceId: "a"),
+            notificationCenter: dottedApproval)
+        #expect(dottedOwner.pendingRemovedIdentifiers == [[
+            "exec.approval-v2.3:a.b.c",
+            "exec.approval.a.b.c",
+        ]])
+        #expect(dottedApproval.pendingRemovedIdentifiers == [[
+            "exec.approval-v2.1:a.b.c",
+            "exec.approval.a.b.c",
+        ]])
     }
 
     @Test func `legacy ownerless approval pushes remain parseable for authenticated route validation`() {

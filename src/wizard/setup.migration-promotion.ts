@@ -1,6 +1,6 @@
-// Setup migration promotion owns durable journals, rollback, and path validation.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   probePathCaseInsensitiveSync,
   probePathSuffixAliasesSync,
@@ -8,8 +8,19 @@ import {
 } from "@openclaw/fs-safe/advanced";
 import { isNotFoundPathError, isPathInside } from "@openclaw/fs-safe/path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readClientCredentialBootstrapSource } from "../infra/client-credential-migration.js";
+import { readClientCredentialReceipt } from "../infra/client-credential-readiness.js";
+import {
+  emptyClientCredentialReceipt,
+  readClientCredentialFileIdentity,
+} from "../infra/client-credential-receipt.js";
+import type { ClientCredentialDatabase } from "../infra/client-credential-schema.js";
+import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import { readDurableJsonFile, writeJsonAtomic } from "../infra/json-files.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { hashSetupMigrationConfig } from "./setup.migration-canonical.js";
 import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 
@@ -351,12 +362,6 @@ async function listMissingPromotionParents(target: string): Promise<string[]> {
   return missing;
 }
 
-async function reserveEmptyTargetBackupPath(target: string): Promise<string> {
-  const reserved = await fs.mkdtemp(path.join(path.dirname(target), ".openclaw-migration-empty-"));
-  await fs.rmdir(reserved);
-  return reserved;
-}
-
 export async function recordPromotionTargetState(component: PromotionComponent): Promise<void> {
   component.createdParentPaths = await listMissingPromotionParents(component.finalPath);
   if (!(await migrationPathEntryExists(component.finalPath))) {
@@ -369,7 +374,11 @@ export async function recordPromotionTargetState(component: PromotionComponent):
     );
   }
   component.targetWasEmptyDirectory = true;
-  component.emptyTargetBackupPath = await reserveEmptyTargetBackupPath(component.finalPath);
+  const backup = await fs.mkdtemp(
+    path.join(path.dirname(component.finalPath), ".openclaw-migration-empty-"),
+  );
+  await fs.rmdir(backup);
+  component.emptyTargetBackupPath = backup;
 }
 
 export async function moveRecordedEmptyTarget(component: PromotionComponent): Promise<void> {
@@ -442,7 +451,7 @@ export async function assertSupportedStagedStateTree(params: {
       );
     }
   };
-  await assertEntries(params.stagedStateDir, new Set(["agents", "migration", "state"]));
+  await assertEntries(params.stagedStateDir, new Set(["agents", "client", "migration", "state"]));
   await assertEntries(path.join(params.stagedStateDir, "agents"), new Set([params.agentId]));
   await assertEntries(
     path.join(params.stagedStateDir, "agents", params.agentId),
@@ -453,6 +462,43 @@ export async function assertSupportedStagedStateTree(params: {
     path.join(params.stagedStateDir, "migration", params.providerId),
     new Set([params.reportDirName]),
   );
+  await assertEntries(path.join(params.stagedStateDir, "client"), new Set(["credentials.sqlite"]));
+  const env = { OPENCLAW_STATE_DIR: params.stagedStateDir };
+  using credentials = openClientCredentialCustody(env, { migration: true, readOnly: true });
+  if (!credentials) {
+    return;
+  }
+  // Bootstrap's empty companion belongs to the discarded staged shared database.
+  // Client credential import is unsupported; never replace the live local owner.
+  const sharedFile = readClientCredentialFileIdentity(resolveOpenClawStateSqlitePath(env));
+  const stored = readClientCredentialReceipt(credentials.database);
+  const expectedReceipt = emptyClientCredentialReceipt(sharedFile);
+  if (sharedFile && stored?.receipt.source) {
+    using source = openNodeSqliteDatabase(sharedFile.path, { readOnly: true });
+    expectedReceipt.source = readClientCredentialBootstrapSource(source, sharedFile.path);
+  }
+  const db = getNodeSqliteKysely<ClientCredentialDatabase>(credentials.database);
+  const materialTables = [
+    "device_identities",
+    "device_auth_tokens",
+    "gateway_origin_device_tokens",
+    "native_exec_socket_credentials",
+  ] as const;
+  if (
+    !sharedFile ||
+    stored?.phase !== "complete" ||
+    !isDeepStrictEqual(stored.receipt, expectedReceipt) ||
+    materialTables.some((table) =>
+      executeSqliteQueryTakeFirstSync(
+        credentials.database,
+        db.selectFrom(table).selectAll().limit(1),
+      ),
+    )
+  ) {
+    throw new Error(
+      "Migration provider wrote unsupported staged client credentials. Client identity, token, and socket imports are not supported.",
+    );
+  }
 }
 
 export async function assertDisjointPromotionTargets(

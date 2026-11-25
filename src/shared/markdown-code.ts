@@ -21,7 +21,14 @@ function longestBacktickRun(value: string): number {
  */
 export function formatInlineCodeSpan(value: string): string {
   const delimiter = "`".repeat(longestBacktickRun(value) + 1);
-  const padding = value.startsWith("`") || value.endsWith("`") || value.includes("\n") ? " " : "";
+  // CommonMark strips one edge U+0020 unless the content is entirely U+0020.
+  const padding =
+    value.startsWith("`") ||
+    value.endsWith("`") ||
+    value.includes("\n") ||
+    (value.startsWith(" ") && value.endsWith(" ") && /[^ ]/.test(value))
+      ? " "
+      : "";
   return `${delimiter}${padding}${value}${padding}${delimiter}`;
 }
 

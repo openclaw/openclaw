@@ -189,11 +189,7 @@ final class WatchDirectNode {
         if enabled {
             self.connect()
         } else {
-            self.disconnectActiveSession()
-            self.connectionGeneration &+= 1
-            self.connectTask?.cancel()
-            self.connectTask = nil
-            self.isConnected = false
+            self.stopConnection()
             self.statusText = self.isConfigured
                 ? String(localized: "Direct connection is off")
                 : String(localized: "Use iPhone Settings to enable direct connection.")
@@ -202,9 +198,7 @@ final class WatchDirectNode {
 
     func connect() {
         guard self.isForeground, self.isEnabled, let configuration else { return }
-        self.disconnectActiveSession()
-        self.connectTask?.cancel()
-        self.connectionGeneration &+= 1
+        self.stopConnection()
         let generation = self.connectionGeneration
         self.connectTask = Task { [weak self] in
             await self?.run(configuration, generation: generation)
@@ -218,21 +212,14 @@ final class WatchDirectNode {
 
     func disconnectForBackground() {
         self.isForeground = false
-        self.disconnectActiveSession()
-        self.connectionGeneration &+= 1
-        self.connectTask?.cancel()
-        self.connectTask = nil
-        self.isConnected = false
+        self.stopConnection()
         if self.isEnabled, self.isConfigured {
             self.statusText = String(localized: "Reconnects when OpenClaw is active")
         }
     }
 
     func forget() {
-        self.disconnectActiveSession()
-        self.connectionGeneration &+= 1
-        self.connectTask?.cancel()
-        self.connectTask = nil
+        self.stopConnection()
         if let configuration {
             if let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: .primary) {
                 self.clearCredentials(deviceId: identity.deviceId, gatewayID: configuration.gatewayID)
@@ -243,7 +230,6 @@ final class WatchDirectNode {
             account: Self.keychainAccount)
         configuration = nil
         self.endpointText = nil
-        self.isConnected = false
         self.setEnabled(false)
     }
 
@@ -303,41 +289,31 @@ final class WatchDirectNode {
             role: "node",
             gatewayID: configuration.gatewayID,
             profile: .primary)?.token
-        guard storedToken != nil || link.bootstrapToken != nil else {
+        let observedTokens = DeviceAuthStore.observeTokens(
+            deviceId: identity.deviceId,
+            gatewayID: configuration.gatewayID)
+        var credential: ConnectCredential
+        if let bootstrapToken = link.bootstrapToken {
+            credential = .bootstrap(bootstrapToken)
+        } else if let storedToken {
+            credential = .device(storedToken)
+        } else {
             throw HTTPError(status: 401, detail: String(localized: "No watch device credential"))
         }
         let response: WatchNodeConnectResponse
-        let usedBootstrap: Bool
-        if let bootstrapToken = link.bootstrapToken {
-            do {
-                response = try await self.establishSession(
-                    identity: identity,
-                    baseURL: baseURL,
-                    credential: .bootstrap(bootstrapToken))
-                usedBootstrap = true
-            } catch let error as HTTPError where error.status == 401 {
-                guard let storedToken else { throw error }
-                response = try await self.establishSession(
-                    identity: identity,
-                    baseURL: baseURL,
-                    credential: .device(storedToken))
-                usedBootstrap = false
-            }
-        } else if let storedToken {
-            response = try await self.establishSession(
-                identity: identity,
-                baseURL: baseURL,
-                credential: .device(storedToken))
-            usedBootstrap = false
-        } else {
-            throw HTTPError(status: 401, detail: String(localized: "No watch device credential"))
+        do {
+            response = try await self.establishSession(identity: identity, baseURL: baseURL, credential: credential)
+        } catch let error as HTTPError where error.status == 401 {
+            guard case .bootstrap = credential, let storedToken else { throw error }
+            credential = .device(storedToken)
+            response = try await self.establishSession(identity: identity, baseURL: baseURL, credential: credential)
         }
         // A successful bootstrap response has already consumed the one-time code.
         // Finish that durable handoff across background/toggle cancellation, but
         // never let an obsolete attempt overwrite a forgotten or newer setup.
         do {
             guard self.isInstalledConfiguration(configuration) else { throw CancellationError() }
-            guard usedBootstrap || response.voiceCredential == nil else {
+            if case .device = credential, response.voiceCredential != nil {
                 throw HTTPError(
                     status: 0,
                     detail: String(localized: "Voice access requires a new setup from iPhone Settings."))
@@ -348,7 +324,9 @@ final class WatchDirectNode {
                 token: response.deviceToken,
                 scopes: [],
                 gatewayID: configuration.gatewayID,
-                profile: .primary)
+                profile: .primary,
+                expectedToken: observedTokens["node"],
+                onlyIfUnchanged: true)
             else {
                 throw HTTPError(
                     status: 0,
@@ -361,7 +339,9 @@ final class WatchDirectNode {
                    token: voice.deviceToken,
                    scopes: voice.scopes,
                    gatewayID: configuration.gatewayID,
-                   profile: .primary)
+                   profile: .primary,
+                   expectedToken: observedTokens[voice.role],
+                   onlyIfUnchanged: true)
             {
                 throw HTTPError(
                     status: 0,
@@ -393,12 +373,7 @@ final class WatchDirectNode {
             let poll = try JSONDecoder().decode(PollResponse.self, from: pollData)
             guard let event = poll.event else { continue }
             guard event.event == "node.invoke.request", let invoke = event.payload else { continue }
-            let invokeRequest = BridgeInvokeRequest(
-                id: invoke.id,
-                command: invoke.command,
-                paramsJSON: invoke.paramsJSON,
-                nodeId: invoke.nodeId)
-            let result = await handleInvoke(invokeRequest)
+            let result = await handleInvoke(invoke)
             try requireCurrentConnection(generation, configuration: configuration)
             _ = try await self.request(
                 baseURL: baseURL,
@@ -570,7 +545,7 @@ final class WatchDirectNode {
         self.endpointText = sanitized.endpointText
     }
 
-    private func handleInvoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+    private func handleInvoke(_ request: InvokeRequest) async -> BridgeInvokeResponse {
         do {
             switch request.command {
             case OpenClawDeviceCommand.info.rawValue:
@@ -593,7 +568,7 @@ final class WatchDirectNode {
         }
     }
 
-    private func handleNotification(_ request: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+    private func handleNotification(_ request: InvokeRequest) async throws -> BridgeInvokeResponse {
         let params = try JSONDecoder().decode(
             OpenClawSystemNotifyParams.self, from: Data((request.paramsJSON ?? "{}").utf8))
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -615,14 +590,7 @@ final class WatchDirectNode {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        switch params.priority ?? .active {
-        case .passive:
-            content.interruptionLevel = .passive
-        case .timeSensitive:
-            content.interruptionLevel = .timeSensitive
-        case .active:
-            content.interruptionLevel = .active
-        }
+        content.interruptionLevel = (params.priority ?? .active).interruptionLevel
         let sound = params.sound?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         content.sound = sound.map { ["none", "silent", "off"].contains($0) } == true ? nil : .default
         try await self.notificationCenter.add(UNNotificationRequest(
@@ -717,10 +685,9 @@ final class WatchDirectNode {
     private static func loadConfiguration() -> WatchGatewayConfiguration? {
         guard let raw = GenericPasswordKeychainStore.loadString(
             service: keychainService,
-            account: keychainAccount),
-            let data = raw.data(using: .utf8)
+            account: keychainAccount)
         else { return nil }
-        return try? JSONDecoder().decode(WatchGatewayConfiguration.self, from: data)
+        return try? JSONDecoder().decode(WatchGatewayConfiguration.self, from: Data(raw.utf8))
     }
 
     private static func saveConfiguration(_ configuration: WatchGatewayConfiguration) -> Bool {
@@ -767,6 +734,13 @@ final class WatchDirectNode {
         guard let session = activeSession else { return }
         self.activeSession = nil
         self.sendDisconnect(session)
+    }
+
+    private func stopConnection() {
+        self.disconnectActiveSession()
+        self.connectionGeneration &+= 1
+        self.connectTask?.cancel()
+        self.connectTask = nil
     }
 
     private func releaseActiveSession(_ session: ActiveSession) {

@@ -9,10 +9,7 @@ import ai.openclaw.app.ui.design.sessionColor
 import ai.openclaw.app.ui.design.sessionColorStripe
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
-import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,7 +44,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -55,16 +51,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.PointerInputChange
-import androidx.compose.ui.input.pointer.PointerInputScope
-import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -80,7 +71,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import kotlinx.coroutines.CancellationException
 import kotlin.math.abs
 
 @Composable
@@ -147,6 +137,19 @@ internal fun SidebarSectionTitle(
 }
 
 @Composable
+internal fun SidebarDisclosureIcon(
+  expanded: Boolean,
+  palette: SidebarPalette,
+) {
+  Icon(
+    imageVector = if (expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+    contentDescription = null,
+    tint = palette.muted,
+    modifier = Modifier.size(18.dp),
+  )
+}
+
+@Composable
 internal fun SidebarCollapsibleHeader(
   label: String,
   expanded: Boolean,
@@ -156,30 +159,24 @@ internal fun SidebarCollapsibleHeader(
   iconContent: (@Composable () -> Unit)? = null,
   trailingContent: (@Composable () -> Unit)? = null,
   attention: SidebarAttention? = null,
+  /** Work in children this collapsed section hides; announced with the expansion state. */
+  hiddenActivity: SidebarSessionActivity? = null,
 ) {
+  val expansionState = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
+  val activityState = hiddenActivity?.let { sidebarSessionActivityLabel(it) }
   Row(
     modifier =
       modifier
         .fillMaxWidth()
-        .heightIn(min = 44.dp)
+        .heightIn(min = 48.dp)
         .clip(RoundedCornerShape(10.dp))
         .clickable(role = Role.Button, onClick = onClick)
-        .semantics { stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed") }
+        .semantics { stateDescription = listOfNotNull(expansionState, activityState).joinToString(", ") }
         .padding(horizontal = 8.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    Icon(
-      imageVector =
-        if (expanded) {
-          Icons.Default.KeyboardArrowDown
-        } else {
-          Icons.AutoMirrored.Filled.KeyboardArrowRight
-        },
-      contentDescription = null,
-      tint = palette.muted,
-      modifier = Modifier.size(18.dp),
-    )
+    SidebarDisclosureIcon(expanded, palette)
     iconContent?.invoke()
     Text(
       text = label,
@@ -190,6 +187,7 @@ internal fun SidebarCollapsibleHeader(
       overflow = TextOverflow.Ellipsis,
     )
     attention?.let { SidebarAttentionIndicator(it, palette) }
+    hiddenActivity?.let { SidebarSessionActivityIndicator(activity = it, palette = palette) }
     trailingContent?.invoke()
   }
 }
@@ -217,7 +215,6 @@ internal fun SidebarActionRow(
 @Composable
 internal fun SidebarNavigationRow(
   destination: SidebarDestination,
-  rowHost: SidebarRowHost,
   selected: Boolean,
   pinned: Boolean? = null,
   palette: SidebarPalette,
@@ -235,7 +232,6 @@ internal fun SidebarNavigationRow(
 
   SidebarRowDrag(
     dragKey = destination,
-    rowHost = rowHost,
     onDragCommit = { onMove(it) },
     onDragActiveChange = onDragActiveChange,
     commitOnRelease = false,
@@ -304,6 +300,8 @@ internal enum class SidebarSessionActivity {
   Failed,
 }
 
+private val sidebarFailureStatuses = setOf("failed", "timeout", "killed", "error")
+
 internal fun sidebarSessionActivity(
   status: String?,
   lastRunError: String?,
@@ -314,21 +312,21 @@ internal fun sidebarSessionActivity(
   val normalizedStatus = status?.trim()?.lowercase()
   val active = isSessionRunActive(hasActiveRun, normalizedStatus)
   return when {
-    !lastRunError.isNullOrBlank() ||
-      normalizedStatus == "failed" ||
-      normalizedStatus == "timeout" ||
-      normalizedStatus == "killed" ||
-      normalizedStatus == "error" -> SidebarSessionActivity.Failed
-
+    !lastRunError.isNullOrBlank() || normalizedStatus in sidebarFailureStatuses -> SidebarSessionActivity.Failed
     normalizedStatus == "queued" && active -> SidebarSessionActivity.Queued
-
     continuing || active -> SidebarSessionActivity.Running
-
     unread -> SidebarSessionActivity.Unread
-
     else -> null
   }
 }
+
+internal fun sidebarSessionActivityLabel(activity: SidebarSessionActivity): String =
+  when (activity) {
+    SidebarSessionActivity.Failed -> nativeString("Run failed")
+    SidebarSessionActivity.Queued -> nativeString("Queued")
+    SidebarSessionActivity.Running -> nativeString("Working")
+    SidebarSessionActivity.Unread -> nativeString("Needs attention")
+  }
 
 @Composable
 internal fun SidebarSessionActivityIndicator(
@@ -336,12 +334,15 @@ internal fun SidebarSessionActivityIndicator(
   palette: SidebarPalette,
 ) {
   when (activity) {
-    SidebarSessionActivity.Queued -> {
+    SidebarSessionActivity.Queued,
+    SidebarSessionActivity.Failed,
+    -> {
+      val failed = activity == SidebarSessionActivity.Failed
       Icon(
-        imageVector = Icons.Default.HourglassEmpty,
-        contentDescription = nativeString("Queued"),
-        modifier = Modifier.size(15.dp),
-        tint = palette.muted,
+        imageVector = if (failed) Icons.Default.ErrorOutline else Icons.Default.HourglassEmpty,
+        contentDescription = if (failed) nativeString("Run failed") else nativeString("Queued"),
+        modifier = Modifier.size(if (failed) 16.dp else 15.dp),
+        tint = if (failed) ClawTheme.colors.danger else palette.muted,
       )
     }
 
@@ -363,28 +364,31 @@ internal fun SidebarSessionActivityIndicator(
             .clearAndSetSemantics { stateDescription = nativeString("Needs attention") },
       )
     }
-
-    SidebarSessionActivity.Failed -> {
-      Icon(
-        imageVector = Icons.Default.ErrorOutline,
-        contentDescription = nativeString("Run failed"),
-        modifier = Modifier.size(16.dp),
-        tint = ClawTheme.colors.danger,
-      )
-    }
   }
 }
+
+/** Disclosure for a session row that owns nested child sessions. */
+internal data class SidebarSessionChildren(
+  val count: Int,
+  val expanded: Boolean,
+  /** Work hidden inside a collapsed parent, so it stays visible without expanding. */
+  val collapsedActivity: SidebarSessionActivity?,
+  val onToggle: () -> Unit,
+)
+
+private val sidebarChildIndent = 16.dp
 
 @Composable
 internal fun SidebarSessionRow(
   session: ChatSessionEntry,
-  rowHost: SidebarRowHost,
   selected: Boolean,
   palette: SidebarPalette,
   onClick: () -> Unit,
   onDragCommit: ((Int) -> Unit)? = null,
   onDragActiveChange: (Boolean) -> Unit = {},
   attention: SidebarAttention? = null,
+  depth: Int = 0,
+  children: SidebarSessionChildren? = null,
 ) {
   val activity =
     sidebarSessionActivity(
@@ -394,16 +398,9 @@ internal fun SidebarSessionRow(
       unread = session.unread == true,
     )
   val sessionStateDescription =
-    attention?.status ?: when (activity) {
-      SidebarSessionActivity.Failed -> nativeString("Run failed")
-      SidebarSessionActivity.Queued -> nativeString("Queued")
-      SidebarSessionActivity.Running -> nativeString("Working")
-      SidebarSessionActivity.Unread -> nativeString("Needs attention")
-      null -> nativeString("Selected").takeIf { selected }
-    }
+    attention?.status ?: activity?.let { sidebarSessionActivityLabel(it) } ?: nativeString("Selected").takeIf { selected }
   SidebarRowSurface(
     selected = selected,
-    rowHost = rowHost,
     stateDescription = sessionStateDescription,
     palette = palette,
     stripeColor = ClawTheme.colors.sessionColor(session.color),
@@ -411,6 +408,7 @@ internal fun SidebarSessionRow(
     dragKey = session.key,
     onDragCommit = onDragCommit,
     onDragActiveChange = onDragActiveChange,
+    contentPadding = PaddingValues(start = 12.dp + sidebarChildIndent * depth, end = 12.dp, top = 8.dp, bottom = 8.dp),
   ) {
     Column(modifier = Modifier.weight(1f)) {
       Text(
@@ -421,7 +419,7 @@ internal fun SidebarSessionRow(
         overflow = TextOverflow.Ellipsis,
       )
       Text(
-        text = attention?.status ?: sidebarSessionSubtitle(session, sessionStateDescription),
+        text = attention?.status ?: sessionListSubtitle(session, fallback = sessionSourceLabel(session.key), activeRunLabel = sessionStateDescription),
         style = ClawTheme.type.caption,
         color = palette.muted,
         maxLines = 1,
@@ -441,6 +439,42 @@ internal fun SidebarSessionRow(
         tint = palette.muted,
       )
     }
+    children?.let { SidebarSessionChildrenToggle(it, palette) }
+  }
+}
+
+@Composable
+private fun SidebarSessionChildrenToggle(
+  children: SidebarSessionChildren,
+  palette: SidebarPalette,
+) {
+  // The toggle merges the count and chevron into one control, read as "3, Expand child sessions".
+  Row(
+    modifier =
+      Modifier
+        .heightIn(min = 48.dp)
+        .clip(RoundedCornerShape(10.dp))
+        .clickable(role = Role.Button, onClick = children.onToggle)
+        .testTag("sidebar-session-children-toggle")
+        .padding(horizontal = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    if (!children.expanded) {
+      children.collapsedActivity?.let { SidebarSessionActivityIndicator(activity = it, palette = palette) }
+    }
+    Text(text = children.count.toString(), style = ClawTheme.type.caption, color = palette.muted)
+    Icon(
+      imageVector = if (children.expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+      contentDescription =
+        if (children.expanded) {
+          nativeString("Collapse child sessions")
+        } else {
+          nativeString("Expand child sessions")
+        },
+      tint = palette.muted,
+      modifier = Modifier.size(18.dp),
+    )
   }
 }
 
@@ -455,13 +489,11 @@ internal fun SidebarRowSurface(
   dragKey: Any? = null,
   onDragCommit: ((Int) -> Unit)? = null,
   onDragActiveChange: (Boolean) -> Unit = {},
-  rowHost: SidebarRowHost? = null,
   contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
   content: @Composable RowScope.() -> Unit,
 ) {
   SidebarRowDrag(
     dragKey = dragKey,
-    rowHost = rowHost,
     enabled = enabled,
     onDragCommit = onDragCommit,
     onDragActiveChange = onDragActiveChange,
@@ -505,7 +537,6 @@ internal fun SidebarRowSurface(
 @Composable
 private fun SidebarRowDrag(
   dragKey: Any?,
-  rowHost: SidebarRowHost?,
   enabled: Boolean = true,
   onDragCommit: ((Int) -> Unit)?,
   onDragActiveChange: (Boolean) -> Unit,
@@ -518,7 +549,6 @@ private fun SidebarRowDrag(
   val currentOnDragActiveChange by rememberUpdatedState(onDragActiveChange)
   var dragOffset by remember(dragKey) { mutableFloatStateOf(0f) }
   var dragging by remember(dragKey) { mutableStateOf(false) }
-  var dragGeneration by remember(dragKey) { mutableLongStateOf(0L) }
   val cancelDrag = {
     dragOffset = 0f
     if (dragging) {
@@ -538,11 +568,10 @@ private fun SidebarRowDrag(
       Modifier
     } else {
       Modifier.pointerInput(dragKey, dragThresholdPx) {
-        detectSidebarRowDrag(
-          rowHost = rowHost,
-          onDragStart = { generation ->
+        // Compose owns pointer cancellation; a fold during a held drag is best effort.
+        detectDragGesturesAfterLongPress(
+          onDragStart = {
             dragOffset = 0f
-            dragGeneration = generation
             dragging = true
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             currentOnDragActiveChange(true)
@@ -561,7 +590,7 @@ private fun SidebarRowDrag(
       }
     }
 
-  val visualDragging = dragging && dragGeneration == (rowHost?.generation ?: 0L)
+  val visualDragging = dragging
   Box(
     modifier =
       Modifier
@@ -584,52 +613,3 @@ private fun SidebarRowDrag(
     }
   }
 }
-
-private suspend fun PointerInputScope.detectSidebarRowDrag(
-  rowHost: SidebarRowHost?,
-  onDragStart: (Long) -> Unit,
-  onDragEnd: () -> Unit,
-  onDragCancel: () -> Unit,
-  onDrag: (PointerInputChange, Offset) -> Unit,
-) {
-  awaitEachGesture {
-    var claimed = false
-    try {
-      val down = awaitFirstDown(requireUnconsumed = false)
-      val generation = rowHost?.generation ?: 0L
-      val longPress = awaitLongPressOrCancellation(down.id)
-      if (longPress != null) {
-        claimed = generation == (rowHost?.generation ?: 0L)
-        if (claimed) onDragStart(generation)
-        // Retain consumption through release, even after the row loses mutation authority.
-        val ended =
-          drag(longPress.id) { change ->
-            if (claimed && generation == (rowHost?.generation ?: 0L)) {
-              onDrag(change, change.positionChange())
-            }
-            change.consume()
-          }
-        if (ended) currentEvent.changes.forEach { if (it.changedToUp()) it.consume() }
-        if (claimed) {
-          claimed = false
-          if (ended && generation == (rowHost?.generation ?: 0L)) onDragEnd() else onDragCancel()
-        }
-      }
-    } catch (cancel: CancellationException) {
-      if (claimed) onDragCancel()
-      throw cancel
-    }
-  }
-}
-
-internal fun sidebarSessionSubtitle(
-  session: ChatSessionEntry,
-  activeRunLabel: String?,
-  nowMs: Long = System.currentTimeMillis(),
-): String =
-  sessionListSubtitle(
-    session = session,
-    fallback = sessionSourceLabel(session.key),
-    nowMs = nowMs,
-    activeRunLabel = activeRunLabel,
-  )

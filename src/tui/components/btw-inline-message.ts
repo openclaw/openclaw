@@ -1,7 +1,7 @@
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { tuiTheme as theme } from "../theme/theme.js";
 import { sanitizeRenderableLine, sanitizeRenderableText } from "../tui-formatters.js";
-import { AssistantMessageComponent } from "./assistant-message.js";
+import { MarkdownMessageComponent } from "./markdown-message.js";
 
 type BtwInlineMessageParams = {
   question: string;
@@ -31,7 +31,7 @@ export class BtwInlineMessage extends Container {
     if (params.isError) {
       this.addChild(new Text(theme.error(text), 1, 0));
     } else {
-      this.addChild(new AssistantMessageComponent(text));
+      this.addChild(new MarkdownMessageComponent("assistant", text));
     }
     this.addChild(new Text(theme.dim("Press Enter or Esc to dismiss"), 1, 0));
   }

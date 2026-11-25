@@ -5,14 +5,14 @@
 
 import {
   createToolArgumentPreviewSchedule,
-  createSseByteGuard,
   parseStreamingJson,
   parseTerminalToolCallArguments,
-  type SseByteGuard,
   type ToolArgumentPreviewSchedule,
 } from "@openclaw/ai/internal/runtime";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseWithLimit } from "../../infra/http-body.js";
+import { withResponseBodyTimeout } from "../../infra/http-response-body-timeout.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -26,13 +26,8 @@ import { AssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 
 const PROXY_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
-const PROXY_SSE_STREAM_MAX_BYTES = 16 * 1024 * 1024;
-const PROXY_SSE_PENDING_BUFFER_MAX_BYTES = PROXY_SSE_STREAM_MAX_BYTES;
+const PROXY_SSE_PENDING_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
 const PROXY_SSE_READ_IDLE_TIMEOUT_MS = 120_000;
-
-type StreamingToolCall = ToolCall & {
-  partialJson: string;
-};
 
 /**
  * Proxy event types - server sends these with partial field stripped to reduce bandwidth.
@@ -66,6 +61,7 @@ type ProxySerializableStreamOptions = Pick<
   | "maxTokens"
   | "reasoning"
   | "cacheRetention"
+  | "promptCacheTtl"
   | "sessionId"
   | "promptCacheKey"
   | "metadata"
@@ -109,6 +105,7 @@ function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializabl
     maxTokens: options.maxTokens,
     reasoning: options.reasoning,
     cacheRetention: options.cacheRetention,
+    promptCacheTtl: options.promptCacheTtl,
     sessionId: options.sessionId,
     promptCacheKey: options.promptCacheKey,
     metadata: options.metadata,
@@ -124,21 +121,13 @@ function sanitizeProxyModel(model: Model): Model {
   return safeModel;
 }
 
-type ProxyRequestAbort = {
-  signal: AbortSignal;
-  clear: () => void;
-};
-
 function createProxyRequestTimeoutError(timeoutMs: number): Error {
   const error = new Error(`Proxy request timed out after ${timeoutMs}ms`);
   error.name = "TimeoutError";
   return error;
 }
 
-function buildProxyRequestAbort(
-  callerSignal: AbortSignal | undefined,
-  timeoutMs: number,
-): ProxyRequestAbort {
+function buildProxyRequestAbort(callerSignal: AbortSignal | undefined, timeoutMs: number) {
   const timeoutController = new AbortController();
   const timeoutId = setTimeout(() => {
     timeoutController.abort(createProxyRequestTimeoutError(timeoutMs));
@@ -151,77 +140,6 @@ function buildProxyRequestAbort(
       clearTimeout(timeoutId);
     },
   };
-}
-
-function isProxyRequestTimeoutError(params: {
-  error: unknown;
-  callerSignal: AbortSignal | undefined;
-  requestSignal: AbortSignal;
-}): boolean {
-  if (params.callerSignal?.aborted || !params.requestSignal.aborted) {
-    return false;
-  }
-  if (!(params.error instanceof Error)) {
-    return false;
-  }
-  return (
-    params.error.name === "AbortError" ||
-    params.error.name === "TimeoutError" ||
-    params.error.message === "Request was aborted"
-  );
-}
-
-async function readProxyErrorData(
-  response: Response,
-  readIdleTimeoutMs: number,
-): Promise<{ error?: string } | undefined> {
-  const bytes = await readResponseWithLimit(response, PROXY_ERROR_BODY_MAX_BYTES, {
-    onOverflow: ({ maxBytes }) => new Error(`Proxy error body exceeded ${maxBytes} bytes`),
-    chunkTimeoutMs: readIdleTimeoutMs,
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`Proxy error body stalled: no data received for ${chunkTimeoutMs}ms`),
-  });
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { error?: string };
-}
-
-async function readProxySseChunk(
-  reader: Pick<SseByteGuard, "read">,
-  readIdleTimeoutMs: number,
-  cancel: (reason?: unknown) => Promise<void>,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let timedOut = false;
-  return await new Promise((resolve, reject) => {
-    const timeoutError = new Error(
-      `Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`,
-    );
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      void cancel(timeoutError);
-      reject(timeoutError);
-    }, readIdleTimeoutMs);
-    void reader.read().then(
-      (result) => {
-        clearTimeout(timeoutId);
-        if (!timedOut) {
-          resolve(result);
-        }
-      },
-      (error: unknown) => {
-        clearTimeout(timeoutId);
-        if (!timedOut) {
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      },
-    );
-  });
-}
-
-function assertProxySsePendingBufferWithinLimit(buffer: string): void {
-  const size = new TextEncoder().encode(buffer).byteLength;
-  if (size <= PROXY_SSE_PENDING_BUFFER_MAX_BYTES) {
-    return;
-  }
-  throw new Error(`Proxy SSE pending buffer exceeded ${PROXY_SSE_PENDING_BUFFER_MAX_BYTES} bytes`);
 }
 
 export function streamProxy(
@@ -273,14 +191,15 @@ export function streamProxy(
       })
         .catch((error: unknown) => {
           if (
-            isProxyRequestTimeoutError({
-              error,
-              callerSignal: options.signal,
-              requestSignal: requestAbort.signal,
-            })
+            !options.signal?.aborted &&
+            requestAbort.signal.aborted &&
+            error instanceof Error &&
+            (error.name === "AbortError" ||
+              error.name === "TimeoutError" ||
+              error.message === "Request was aborted")
           ) {
             throw new Error(`Proxy request timed out after ${readIdleTimeoutMs}ms`, {
-              cause: error instanceof Error ? error : undefined,
+              cause: error,
             });
           }
           throw error;
@@ -292,7 +211,15 @@ export function streamProxy(
       if (!response.ok) {
         let errorMessage = `Proxy error: ${response.status} ${response.statusText}`;
         try {
-          const errorData = await readProxyErrorData(response, readIdleTimeoutMs);
+          const bytes = await readResponseWithLimit(response, PROXY_ERROR_BODY_MAX_BYTES, {
+            onOverflow: ({ maxBytes }) => new Error(`Proxy error body exceeded ${maxBytes} bytes`),
+            chunkTimeoutMs: readIdleTimeoutMs,
+            onIdleTimeout: ({ chunkTimeoutMs }) =>
+              new Error(`Proxy error body stalled: no data received for ${chunkTimeoutMs}ms`),
+          });
+          const errorData = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as {
+            error?: string;
+          };
           if (errorData?.error) {
             errorMessage = `Proxy error: ${errorData.error}`;
           }
@@ -305,12 +232,9 @@ export function streamProxy(
       }
 
       reader = response.body!.getReader();
-      const sseReader = createSseByteGuard(reader, {
-        maxBytes: PROXY_SSE_STREAM_MAX_BYTES,
-        onOverflow: ({ maxBytes }) => new Error(`Proxy SSE stream exceeded ${maxBytes} bytes`),
-      });
       const decoder = new TextDecoder();
       let buffer = "";
+      let pendingBytes = 0;
       let terminalEventSeen = false;
       const toolArgumentPreviewSchedules = new Map<number, ToolArgumentPreviewSchedule>();
 
@@ -334,7 +258,16 @@ export function streamProxy(
       };
 
       while (!terminalEventSeen) {
-        const { done, value } = await readProxySseChunk(sseReader, readIdleTimeoutMs, cancelReader);
+        const { done, value } = await withResponseBodyTimeout({
+          timeoutMs: readIdleTimeoutMs,
+          onTimeout: () =>
+            new Error(`Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`),
+          cancel: cancelReader,
+          read: () =>
+            reader!.read().catch((error: unknown) => {
+              throw toStringifiedError(error);
+            }),
+        });
         if (done) {
           readerReachedEof = cancellation === undefined;
           break;
@@ -344,16 +277,26 @@ export function streamProxy(
           throw new Error("Request aborted by user");
         }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        assertProxySsePendingBufferWithinLimit(buffer);
-
-        for (const line of lines) {
-          terminalEventSeen = processSseLine(line);
-          if (terminalEventSeen) {
+        for (let offset = 0; offset < value.byteLength && !terminalEventSeen;) {
+          const newline = value.indexOf(10, offset);
+          const end = newline === -1 ? value.byteLength : newline;
+          // Charge only the outstanding line, before decoding or retaining it.
+          pendingBytes += end - offset;
+          if (pendingBytes > PROXY_SSE_PENDING_BUFFER_MAX_BYTES) {
+            throw new Error(
+              `Proxy SSE pending buffer exceeded ${PROXY_SSE_PENDING_BUFFER_MAX_BYTES} bytes`,
+            );
+          }
+          buffer += decoder.decode(value.subarray(offset, newline === -1 ? end : end + 1), {
+            stream: true,
+          });
+          if (newline === -1) {
             break;
           }
+          terminalEventSeen = processSseLine(buffer.slice(0, -1));
+          buffer = "";
+          pendingBytes = 0;
+          offset = end + 1;
         }
       }
 
@@ -420,67 +363,68 @@ function processProxyEvent(
       };
       return { type: "text_start", contentIndex: proxyEvent.contentIndex, partial };
 
-    case "text_delta": {
+    case "text_delta":
+    case "thinking_delta":
+    case "toolcall_delta": {
       const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "text") {
-        content.text += proxyEvent.delta;
-        return {
-          type: "text_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
+      const expectedType =
+        proxyEvent.type === "text_delta"
+          ? "text"
+          : proxyEvent.type === "thinking_delta"
+            ? "thinking"
+            : "toolCall";
+      if (content?.type !== expectedType) {
+        throw new Error(`Received ${proxyEvent.type} for non-${expectedType} content`);
       }
-      throw new Error("Received text_delta for non-text content");
+      if (content.type === "text") {
+        content.text += proxyEvent.delta;
+      } else if (content.type === "thinking") {
+        content.thinking += proxyEvent.delta;
+      } else {
+        const partialJson = (content.partialJson ?? "") + proxyEvent.delta;
+        content.partialJson = partialJson;
+        const previewSchedule = toolArgumentPreviewSchedules.get(proxyEvent.contentIndex);
+        if (!previewSchedule) {
+          throw new Error("Received toolcall_delta without a preview schedule");
+        }
+        if (previewSchedule(partialJson.length)) {
+          content.arguments = parseStreamingJson(partialJson);
+        }
+        partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
+      }
+      return {
+        type: proxyEvent.type,
+        contentIndex: proxyEvent.contentIndex,
+        delta: proxyEvent.delta,
+        partial,
+      };
     }
 
-    case "text_end": {
+    case "text_end":
+    case "thinking_end": {
       const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "text") {
+      const expectedType = proxyEvent.type === "text_end" ? "text" : "thinking";
+      if (content?.type !== expectedType) {
+        throw new Error(`Received ${proxyEvent.type} for non-${expectedType} content`);
+      }
+      if (content.type === "text") {
         if (proxyEvent.contentSignature !== undefined) {
           content.textSignature = proxyEvent.contentSignature;
         }
-        return {
-          type: "text_end",
-          contentIndex: proxyEvent.contentIndex,
-          content: content.text,
-          partial,
-        };
+      } else {
+        content.thinkingSignature = proxyEvent.contentSignature;
       }
-      throw new Error("Received text_end for non-text content");
+      return {
+        type: proxyEvent.type,
+        contentIndex: proxyEvent.contentIndex,
+        content: content.type === "text" ? content.text : content.thinking,
+        partial,
+      };
     }
 
     case "thinking_start":
       partial.content[proxyEvent.contentIndex] = { type: "thinking", thinking: "" };
       return { type: "thinking_start", contentIndex: proxyEvent.contentIndex, partial };
-
-    case "thinking_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "thinking") {
-        content.thinking += proxyEvent.delta;
-        return {
-          type: "thinking_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received thinking_delta for non-thinking content");
-    }
-
-    case "thinking_end": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "thinking") {
-        content.thinkingSignature = proxyEvent.contentSignature;
-        return {
-          type: "thinking_end",
-          contentIndex: proxyEvent.contentIndex,
-          content: content.thinking,
-          partial,
-        };
-      }
-      throw new Error("Received thinking_end for non-thinking content");
-    }
 
     case "toolcall_start": {
       const content = {
@@ -489,7 +433,7 @@ function processProxyEvent(
         name: proxyEvent.toolName,
         arguments: {},
         partialJson: "",
-      } satisfies StreamingToolCall;
+      } satisfies ToolCall;
       partial.content[proxyEvent.contentIndex] = content;
       toolArgumentPreviewSchedules.set(
         proxyEvent.contentIndex,
@@ -498,38 +442,14 @@ function processProxyEvent(
       return { type: "toolcall_start", contentIndex: proxyEvent.contentIndex, partial };
     }
 
-    case "toolcall_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "toolCall") {
-        const streamingContent = content as StreamingToolCall;
-        streamingContent.partialJson += proxyEvent.delta;
-        const previewSchedule = toolArgumentPreviewSchedules.get(proxyEvent.contentIndex);
-        if (!previewSchedule) {
-          throw new Error("Received toolcall_delta without a preview schedule");
-        }
-        if (previewSchedule(streamingContent.partialJson.length)) {
-          content.arguments = parseStreamingJson(streamingContent.partialJson);
-        }
-        partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
-        return {
-          type: "toolcall_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received toolcall_delta for non-toolCall content");
-    }
-
     case "toolcall_end": {
       const content = partial.content[proxyEvent.contentIndex];
       if (content?.type === "toolCall") {
-        const streamingContent = content as StreamingToolCall;
-        content.arguments = streamingContent.partialJson
-          ? parseTerminalToolCallArguments(streamingContent.partialJson)
+        content.arguments = content.partialJson
+          ? parseTerminalToolCallArguments(content.partialJson)
           : {};
         toolArgumentPreviewSchedules.delete(proxyEvent.contentIndex);
-        delete (content as Partial<StreamingToolCall>).partialJson;
+        delete content.partialJson;
         return {
           type: "toolcall_end",
           contentIndex: proxyEvent.contentIndex,

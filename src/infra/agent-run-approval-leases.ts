@@ -31,9 +31,9 @@ export class AgentRunApprovalLeases {
         ? root
         : this.leases.get(requestedParent.claimId)?.authority;
     if (!parent) {
-      throw new Error("agent run approval authority is no longer active");
+      throw new Error("The approval scope ended. Start a new turn to retry.");
     }
-    const signals = Object.freeze([...new Set(inputSignals)]);
+    const signals = [...new Set(inputSignals)];
     for (const signal of signals) {
       signal.throwIfAborted();
     }

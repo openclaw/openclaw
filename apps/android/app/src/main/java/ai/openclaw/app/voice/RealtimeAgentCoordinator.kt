@@ -1,6 +1,7 @@
 package ai.openclaw.app.voice
 
 import ai.openclaw.app.asJsonStringOrNull
+import ai.openclaw.app.node.parseJsonParamsObject
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -10,7 +11,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -80,11 +80,9 @@ internal class RealtimeAgentCoordinator(
   private val onUnhandledCompletion: (RealtimeAgentUnhandledCompletion) -> Unit = {},
   private val maxCachedCompletions: Int = MAX_CACHED_COMPLETIONS,
 ) {
-  private val json = Json { ignoreUnknownKeys = true }
   private val lock = Any()
   private val parentContext = parentScope.coroutineContext
   private val parentJob = parentContext[Job]
-  private var transportGeneration = Any()
   private var activeSession: RealtimeAgentSession? = null
   private var sessionScope: CoroutineScope? = null
   private val correlationJobs = LinkedHashSet<Job>()
@@ -128,7 +126,6 @@ internal class RealtimeAgentCoordinator(
     val staleJobs =
       synchronized(lock) {
         clearSessionLocked()
-        transportGeneration = Any()
         val jobs = correlationJobs.toList()
         correlationJobs.clear()
         pendingCalls.clear()
@@ -148,9 +145,9 @@ internal class RealtimeAgentCoordinator(
       synchronized(lock) {
         val session = activeSession ?: return false
         val resultScope = sessionScope ?: return false
-        Triple(session, resultScope, transportGeneration)
+        session to resultScope
       }
-    val (session, resultScope, generation) = sessionAndScopes
+    val (session, resultScope) = sessionAndScopes
     when (name) {
       AGENT_CONSULT_TOOL -> {
         val pendingCall = RealtimeAgentPendingCall(callId = callId, session = session)
@@ -173,11 +170,7 @@ internal class RealtimeAgentCoordinator(
           }
           val shouldStart =
             synchronized(lock) {
-              if (
-                activeSession == session &&
-                transportGeneration === generation &&
-                isPendingLocked(pendingCall)
-              ) {
+              if (activeSession == session && isPendingLocked(pendingCall)) {
                 pendingCall.job = job
                 correlationJobs += job
                 true
@@ -259,7 +252,7 @@ internal class RealtimeAgentCoordinator(
           if (args != null) put("args", args)
         }
       val response = requestGateway("talk.client.toolCall", params.toString(), TOOL_CALL_TIMEOUT_MILLIS)
-      val ack = runCatching { json.parseToJsonElement(response) as? JsonObject }.getOrNull()
+      val ack = parseJsonParamsObject(response)
       val runId = ack?.get("runId").asJsonStringOrNull()
       if (runId.isNullOrBlank()) {
         if (finishPending(pendingCall)) submitError(session, callId, "tool call returned no run id")
@@ -363,7 +356,7 @@ internal class RealtimeAgentCoordinator(
           if (mode != null) put("mode", JsonPrimitive(mode))
         }
       val response = requestGateway("talk.session.steer", params.toString(), TOOL_CALL_TIMEOUT_MILLIS)
-      val result = runCatching { json.parseToJsonElement(response) as? JsonObject }.getOrNull()
+      val result = parseJsonParamsObject(response)
       if (result == null) {
         submitError(session, callId, "control call returned no result")
       } else {

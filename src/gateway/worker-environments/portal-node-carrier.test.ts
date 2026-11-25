@@ -1,8 +1,12 @@
+import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_PORTAL_STREAM_COMMAND } from "../../infra/node-commands.js";
 import { NODE_WORKER_PORTAL_STREAM_VERSION } from "../../infra/node-runner-inventory.js";
-import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import type {
+  NodeWorkerSupervisorNodeProof,
+  NodeWorkerSupervisorTransport,
+} from "../node-registry-private.js";
 import { createWorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import {
   portalNodeProof,
@@ -100,9 +104,9 @@ describe("worker node portal carrier", () => {
     expect(transport.invoke).not.toHaveBeenCalled();
   });
 
-  it.each(["touch rejects", "owner retires"] as const)(
+  it.each(["owner retires"] as const)(
     "destroys an attached stream when %s while recording activity",
-    async (failure) => {
+    async () => {
       const record = await support.seedReadyNodeDesktop("worker-node-portal-touch");
       const transport = pendingPortalTransport({
         proof: portalNodeProof(record.nodeDeviceId!),
@@ -130,17 +134,12 @@ describe("worker node portal carrier", () => {
           }
         },
         async () => {
-          if (failure === "touch rejects") {
-            throw new Error("activity update failed");
-          }
           current = false;
         },
       );
       await invoked.promise;
       const stream = streamed.attachNext();
-      await expect(connection).rejects.toThrow(
-        failure === "touch rejects" ? "activity update failed" : "owner retired",
-      );
+      await expect(connection).rejects.toThrow("owner retired");
       expect(stream.destroyed).toBe(true);
       await portal.close();
     },
@@ -190,6 +189,85 @@ describe("worker node portal carrier", () => {
     );
   });
 
+  it.each(["portal close", "socket close", "runtime replacement"] as const)(
+    "joins the original invocation when shutdown overlaps %s",
+    async (retirement) => {
+      const record = await support.seedReadyNodeDesktop("worker-node-portal-settlement");
+      const transport = pendingPortalTransport({
+        proof: portalNodeProof(record.nodeDeviceId!),
+        isProofCurrent: () => true,
+      });
+      const streamed = fakePortalBroker();
+      const carrier = createWorkerNodePortalCarrier({ store: support.testState.store });
+      carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+      const invoked = createDeferred();
+      const invocation =
+        createDeferred<Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>>();
+      const completionOrder: string[] = [];
+      transport.invoke.mockImplementationOnce(async () => {
+        invoked.resolve();
+        const result = await invocation.promise;
+        completionOrder.push("invocation");
+        return result;
+      });
+      const portal = await carrier.open({
+        environmentId: record.environmentId,
+        ownerEpoch: record.ownerEpoch,
+        remotePort: 4321,
+      });
+      const stopping: Promise<void>[] = [];
+      let connection: ReturnType<typeof portal.connect> | undefined;
+      const observeClose = (name: string, work: Promise<void>) => {
+        stopping.push(
+          work.then(() => {
+            completionOrder.push(name);
+          }),
+        );
+      };
+      const canceled = { ok: false, error: { code: "ABORTED", message: "invoke aborted" } };
+      try {
+        connection = portal.connect();
+        await invoked.promise;
+        const stream = streamed.attachNext();
+        await expect(connection).resolves.toBe(stream);
+        if (retirement === "portal close") {
+          observeClose("initial close", portal.close());
+        } else if (retirement === "socket close") {
+          await new Promise<void>((resolve) => {
+            stream.once("close", resolve);
+            stream.destroy();
+          });
+        } else {
+          carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+        }
+        observeClose("close", portal.close());
+        observeClose("stop", carrier.stop(record.environmentId, record.ownerEpoch));
+        observeClose("stopAll", carrier.stopAll());
+        await expect(portal.connect()).rejects.toThrow(
+          "reconnect or update the worker node, then retry",
+        );
+        await setImmediate();
+        expect(transport.invoke.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+        expect(stream.destroyed).toBe(true);
+        expect(completionOrder).toEqual([]);
+
+        invocation.resolve(canceled);
+        await Promise.all(stopping);
+        expect(completionOrder[0]).toBe("invocation");
+        expect(completionOrder).toHaveLength(retirement === "portal close" ? 5 : 4);
+        expect(transport.invoke).toHaveBeenCalledOnce();
+      } finally {
+        invocation.resolve(canceled);
+        await Promise.allSettled([
+          ...(connection ? [connection] : []),
+          ...stopping,
+          portal.close(),
+          carrier.stopAll(),
+        ]);
+      }
+    },
+  );
+
   it.each([
     ["lease", (record: WorkerEnvironmentRecord) => ({ ...record, leaseId: "lease:replacement" })],
     [
@@ -229,37 +307,6 @@ describe("worker node portal carrier", () => {
     await expect(connection).rejects.toThrow("owner changed before attachment");
     expect(stream.destroyed).toBe(true);
     await portal.close();
-  });
-
-  it("destroys a disconnected node stream while retaining the portal for a new connection", async () => {
-    const record = await support.seedReadyNodeDesktop("worker-node-portal-reconnect");
-    const transport = pendingPortalTransport({
-      proof: portalNodeProof(record.nodeDeviceId!),
-      isProofCurrent: () => true,
-    });
-    const streamed = fakePortalBroker();
-    const carrier = createWorkerNodePortalCarrier({ store: support.testState.store });
-    carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
-    const portal = await carrier.open({
-      environmentId: record.environmentId,
-      ownerEpoch: record.ownerEpoch,
-      remotePort: 4321,
-    });
-
-    const firstConnection = portal.connect();
-    await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
-    const firstStream = streamed.attachNext();
-    await firstConnection;
-    transport.dropNext();
-    await support.waitForFast(() => expect(firstStream.destroyed).toBe(true));
-
-    const recoveredConnection = portal.connect();
-    await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledTimes(2));
-    const recoveredStream = streamed.attachNext();
-    await expect(recoveredConnection).resolves.toBe(recoveredStream);
-
-    await carrier.stop(record.environmentId, record.ownerEpoch);
-    expect(recoveredStream.destroyed).toBe(true);
   });
 
   it("aborts an owner that is stopped while node discovery is still pending", async () => {

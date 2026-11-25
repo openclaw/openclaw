@@ -1,10 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { writeFileWindowFully } from "./file-descriptor.js";
-import { root as createFsSafeRoot } from "./fs-safe.js";
+import { FsSafeError, root as createFsSafeRoot } from "./fs-safe.js";
 import {
+  legacyAuditFileIdentitiesMatch,
   legacyAuditRawCheckpointsMatch,
   legacyAuditSourceGenerationKey,
   openLegacyAuditRawCheckpointStore,
@@ -20,6 +22,12 @@ import {
   type AuditRecoveryProgress,
   type ParsedAuditRecoveryRestoreJournal,
 } from "./state-migrations.audit-recovery-protocol.js";
+import {
+  moveLegacyMigrationFileNoReplace,
+  recoverLegacyMigrationLinkedMove,
+  inspectLegacyMigrationLinkedMove,
+  LegacyMigrationMoveUnavailableError,
+} from "./state-migrations.no-replace-move.js";
 
 export type AuditMigrationRoot = Awaited<ReturnType<typeof createFsSafeRoot>>;
 export type LegacyAuditSourceSnapshot = LegacyAuditFileCheckpoint & {
@@ -37,8 +45,7 @@ function auditRecoveryJournalTargetsSnapshot(
   journal: Pick<ParsedAuditRecoveryRestoreJournal, "target">,
 ): boolean {
   return (
-    snapshot.dev === journal.target.dev &&
-    snapshot.ino === journal.target.ino &&
+    legacyAuditFileIdentitiesMatch(snapshot, journal.target) &&
     snapshot.rawBytes.length >= journal.target.size
   );
 }
@@ -68,10 +75,14 @@ export async function readLegacyAuditSourceSnapshot(
   root: AuditMigrationRoot,
   relativePath: string,
 ): Promise<LegacyAuditSourceSnapshot> {
-  const { buffer: rawBytes, stat } = await root.read(relativePath, { maxBytes: Infinity });
+  const {
+    buffer: rawBytes,
+    stat,
+    exactIdentity,
+  } = await root.read(relativePath, { maxBytes: Infinity });
   return {
-    dev: stat.dev,
-    ino: stat.ino,
+    dev: String(exactIdentity.dev),
+    ino: String(exactIdentity.ino),
     mtimeMs: stat.mtimeMs,
     size: rawBytes.length,
     raw: rawBytes.toString("utf8"),
@@ -82,9 +93,20 @@ export async function readLegacyAuditSourceSnapshot(
 export async function readLegacyAuditSourcePrefixSnapshotForBackup(
   root: AuditMigrationRoot,
   relativePath: string,
+  linkedPeer?: string,
 ): Promise<LegacyAuditSourceSnapshot> {
-  const opened = await root.open(relativePath);
+  const identity = linkedPeer
+    ? await inspectLegacyMigrationLinkedMove(root, relativePath, linkedPeer)
+    : undefined;
+  if (linkedPeer && !identity) {
+    throw new FsSafeError("hardlink", "legacy audit backup link pair changed");
+  }
+  const opened = await root.open(relativePath, { hardlinks: linkedPeer ? "allow" : "reject" });
   try {
+    const exact = fs.fstatSync(opened.handle.fd, { bigint: true });
+    if (identity && (identity.dev !== exact.dev || identity.ino !== exact.ino)) {
+      throw new FsSafeError("path-mismatch", "legacy audit backup linked source changed");
+    }
     const before = await opened.handle.stat();
     if (!before.isFile()) {
       throw new Error("legacy audit source is not a regular file");
@@ -94,12 +116,22 @@ export async function readLegacyAuditSourcePrefixSnapshotForBackup(
       throw new Error("legacy audit source was truncated while backup was reading it");
     }
     const after = await opened.handle.stat();
-    if (before.dev !== after.dev || before.ino !== after.ino || after.size < before.size) {
+    const afterExact = fs.fstatSync(opened.handle.fd, { bigint: true });
+    if (exact.dev !== afterExact.dev || exact.ino !== afterExact.ino || after.size < before.size) {
       throw new Error("legacy audit source changed other than by append during backup");
     }
+    if (identity && linkedPeer) {
+      const afterPair = await inspectLegacyMigrationLinkedMove(root, relativePath, linkedPeer);
+      if (!afterPair || afterPair.dev !== identity.dev || afterPair.ino !== identity.ino) {
+        throw new FsSafeError(
+          "path-mismatch",
+          "legacy audit backup link pair changed during capture",
+        );
+      }
+    }
     const checkpoint = {
-      dev: before.dev,
-      ino: before.ino,
+      dev: String(exact.dev),
+      ino: String(exact.ino),
       mtimeMs: before.mtimeMs,
       size: before.size,
     };
@@ -112,13 +144,28 @@ export async function readLegacyAuditSourcePrefixSnapshotForBackup(
 export async function readLegacyAuditRecoverySourceForBackup(
   root: AuditMigrationRoot,
   relativePath: string,
+  linkedPeer?: string,
 ): Promise<LegacyAuditSourceSnapshot> {
-  const current = await readLegacyAuditSourcePrefixSnapshotForBackup(root, relativePath);
+  const current = await readLegacyAuditSourcePrefixSnapshotForBackup(
+    root,
+    relativePath,
+    linkedPeer,
+  );
   const restoreRelativePath = `${relativePath}${AUDIT_RECOVERY_RESTORE_SUFFIX}`;
   if (!(await root.exists(restoreRelativePath))) {
     return current;
   }
-  const restoreSnapshot = await readLegacyAuditSourceSnapshot(root, restoreRelativePath);
+  const stagingRelativePath = `${relativePath}${AUDIT_RECOVERY_STAGING_SUFFIX}`;
+  const linkedJournal = await inspectLegacyMigrationLinkedMove(
+    root,
+    restoreRelativePath,
+    stagingRelativePath,
+  );
+  const restoreSnapshot = await readLegacyAuditSourcePrefixSnapshotForBackup(
+    root,
+    restoreRelativePath,
+    linkedJournal ? stagingRelativePath : undefined,
+  );
   const journal = parseAuditRecoveryRestoreJournal(restoreSnapshot.raw);
   const progress = await readAuditRecoveryProgress({ root, relativePath, journal });
   const scrubbedContent = buildScrubbedAuditRecoveryContent(
@@ -279,7 +326,7 @@ async function stageAuditRecoveryRestore(params: {
     mode: 0o600,
     durable: "file",
   });
-  await params.root.move(stagingRelativePath, restoreRelativePath);
+  await moveLegacyMigrationFileNoReplace(params.root, stagingRelativePath, restoreRelativePath);
   await syncAuditRecoveryDirectory(params.root, params.relativePath);
   const journal = parseAuditRecoveryRestoreJournal(journalRaw);
   const progress: AuditRecoveryProgress = {
@@ -313,6 +360,7 @@ export async function restoreInterruptedAuditRecoveryArchive(params: {
     return true;
   }
   try {
+    await recoverLegacyMigrationLinkedMove(params.root, restoreRelativePath, stagingRelativePath);
     const currentSnapshot = await readLegacyAuditSourceSnapshot(params.root, params.relativePath);
     const restoreSnapshot = await readLegacyAuditSourceSnapshot(params.root, restoreRelativePath);
     const journal = parseAuditRecoveryRestoreJournal(restoreSnapshot.raw);
@@ -353,8 +401,10 @@ export async function restoreInterruptedAuditRecoveryArchive(params: {
       });
       const verification = await readLegacyAuditSourceSnapshot(params.root, params.relativePath);
       if (
-        writable.stat.dev !== verification.dev ||
-        writable.stat.ino !== verification.ino ||
+        !legacyAuditFileIdentitiesMatch(
+          { dev: String(writable.exactIdentity.dev), ino: String(writable.exactIdentity.ino) },
+          verification,
+        ) ||
         !auditRecoveryJournalTargetsSnapshot(verification, journal) ||
         !auditRecoveryStateMatchesJournal({
           current: verification.rawBytes,
@@ -442,6 +492,9 @@ export async function scrubLegacyAuditRecoveryArchive(params: {
       scrubPattern,
     });
   } catch (error) {
+    if (error instanceof LegacyMigrationMoveUnavailableError) {
+      throw error;
+    }
     params.warnings.push(
       `Failed staging ${params.label} legacy recovery restore journal: ${String(error)}`,
     );
@@ -461,7 +514,14 @@ export async function scrubLegacyAuditRecoveryArchive(params: {
   }
   try {
     await using opened = writable;
-    if (!legacyAuditRawCheckpointsMatch(params.expectedSnapshot, opened.stat)) {
+    if (
+      !legacyAuditRawCheckpointsMatch(params.expectedSnapshot, {
+        dev: String(opened.exactIdentity.dev),
+        ino: String(opened.exactIdentity.ino),
+        mtimeMs: opened.stat.mtimeMs,
+        size: opened.stat.size,
+      })
+    ) {
       params.warnings.push(
         `Skipped scrubbing changed ${params.label} legacy recovery archive; rerun openclaw doctor --fix`,
       );
@@ -536,9 +596,10 @@ export async function recordLegacyAuditRawCheckpoint(params: {
     let checkpoint: LegacyAuditRawCheckpoint;
     try {
       const stat = await opened.handle.stat();
+      const exact = fs.fstatSync(opened.handle.fd, { bigint: true });
       checkpoint = {
-        dev: stat.dev,
-        ino: stat.ino,
+        dev: String(exact.dev),
+        ino: String(exact.ino),
         mtimeMs: stat.mtimeMs,
         size: stat.size,
         phase: params.phase,

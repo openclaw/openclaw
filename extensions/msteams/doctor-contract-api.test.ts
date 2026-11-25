@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -48,7 +49,9 @@ describe("msteams doctor state migration", () => {
 
   beforeEach(async () => {
     resetPluginStateStoreForTests();
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-doctor-"));
+    stateDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-doctor-")),
+    );
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   });
 
@@ -56,6 +59,36 @@ describe("msteams doctor state migration", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("retains malformed UTF-8 delegated tokens without importing replacement characters", async () => {
+    const filePath = path.join(stateDir, "msteams-delegated.json");
+    const bytes = Buffer.from(
+      JSON.stringify({
+        accessToken: "utf8-marker",
+        refreshToken: "synthetic-refresh",
+        expiresAt: 1_800_000_000_000,
+        scopes: ["User.Read"],
+      }),
+    );
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    await fs.writeFile(filePath, bytes);
+    const context = createDoctorContext(env);
+    const result = await migrationById(
+      "msteams-delegated-token-json-to-plugin-state",
+    ).migrateLegacyState({ config: {}, env, stateDir, oauthDir: stateDir, context });
+    expect(result.changes).toEqual([]);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings.join("\n")).toContain("left it in place");
+    expect(await fs.readFile(filePath)).toEqual(bytes);
+    expect(
+      await context
+        .openPluginStateKeyedStore({
+          namespace: MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+          maxEntries: MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
+        })
+        .lookup(MSTEAMS_DELEGATED_TOKEN_KEY),
+    ).toBeUndefined();
   });
 
   it.each([
@@ -75,7 +108,7 @@ describe("msteams doctor state migration", () => {
             question: "Lunch?",
             options: ["Pizza", "Sushi"],
             maxSelections: 1,
-            createdAt: new Date().toISOString(),
+            createdAt: "2026-05-01T00:00:00.000Z",
             votes: {},
           },
         },
@@ -112,6 +145,7 @@ describe("msteams doctor state migration", () => {
         oauthDir: path.join(stateDir, "oauth"),
         context: createDoctorContext(env),
       };
+      expect(await migration.collectBackupResources?.(params)).toEqual([]);
       await expect(migration.detectLegacyState(params)).resolves.toBeNull();
       const filePath = path.join(stateDir, file);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -134,46 +168,144 @@ describe("msteams doctor state migration", () => {
     },
   );
 
-  it("imports delegated OAuth tokens into plugin state before archiving the file", async () => {
+  it("retains delegated tokens when the import write rejects", async () => {
     const filePath = path.join(stateDir, "msteams-delegated.json");
-    const token: MSTeamsDelegatedTokens = {
-      accessToken: "delegated-access",
-      refreshToken: "delegated-refresh",
+    const source = JSON.stringify({
+      accessToken: "synthetic-access",
+      refreshToken: "synthetic-refresh",
       expiresAt: 1_800_000_000_000,
-      scopes: ["User.Read", "offline_access"],
-      userPrincipalName: "user@example.com",
-    };
-    await fs.writeFile(filePath, JSON.stringify(token));
-    const migration = migrationById("msteams-delegated-token-json-to-plugin-state");
+      scopes: ["User.Read"],
+    });
+    await fs.writeFile(filePath, source);
     const context = createDoctorContext(env);
-    const params = {
+    const result = await migrationById(
+      "msteams-delegated-token-json-to-plugin-state",
+    ).migrateLegacyState({
       config: {},
       env,
       stateDir,
       oauthDir: path.join(stateDir, "oauth"),
-      context,
-    };
-
-    await expect(migration.detectLegacyState(params)).resolves.toEqual({
-      preview: [
-        `- Microsoft Teams delegated OAuth token -> plugin state (${MSTEAMS_DELEGATED_TOKEN_NAMESPACE})`,
-      ],
+      context: {
+        openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
+          const store = context.openPluginStateKeyedStore<T>(options);
+          return {
+            ...store,
+            registerIfAbsent: async () => {
+              throw new Error("synthetic write failure");
+            },
+          };
+        },
+      },
     });
-    const result = await migration.migrateLegacyState(params);
 
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      "Migrated Microsoft Teams delegated OAuth token -> plugin state",
-      expect.stringContaining("Archived Microsoft Teams delegated OAuth token legacy source"),
-    ]);
-    const store = context.openPluginStateKeyedStore<MSTeamsDelegatedTokens>({
-      namespace: MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
-      maxEntries: MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    });
-    await expect(store.lookup(MSTEAMS_DELEGATED_TOKEN_KEY)).resolves.toEqual(token);
-    await fs.access(`${filePath}.migrated`);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("synthetic write failure")]);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe(source);
+    await expect(fs.access(`${filePath}.archives`)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it.each(["empty", "collision", "blocked", "relative-symlink"])(
+    "imports delegated OAuth tokens before archiving (archive=%s)",
+    async (archive) => {
+      const filePath = path.join(stateDir, "msteams-delegated.json");
+      const token: MSTeamsDelegatedTokens = {
+        accessToken: "delegated-access",
+        refreshToken: "delegated-refresh",
+        expiresAt: 1_800_000_000_000,
+        scopes: ["User.Read", "offline_access"],
+        userPrincipalName: "user@example.com",
+      };
+      if (archive === "relative-symlink") {
+        await fs.writeFile(path.join(stateDir, "tokens.json"), JSON.stringify(token));
+        await fs.symlink("tokens.json", filePath);
+      } else {
+        await fs.writeFile(filePath, JSON.stringify(token));
+      }
+      const archiveDirectory = `${filePath}.archives`;
+      const archiveBase = path.join(archiveDirectory, "msteams-delegated.json");
+      await fs.writeFile(`${filePath}.migrated`, "old root archive");
+      await fs.writeFile(`${filePath}.migrated.2`, "old root collision");
+      if (archive === "collision") {
+        await fs.mkdir(archiveDirectory);
+        await fs.writeFile(`${archiveBase}.migrated`, "earlier archive");
+        await fs.writeFile(`${archiveBase}.migrated.2`, "another earlier archive");
+      } else if (archive === "blocked") {
+        await fs.writeFile(archiveDirectory, "not a directory");
+      }
+      const migration = migrationById("msteams-delegated-token-json-to-plugin-state");
+      const context = createDoctorContext(env);
+      const params = {
+        config: {},
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context,
+      };
+
+      await expect(migration.detectLegacyState(params)).resolves.toEqual({
+        preview: [
+          `- Microsoft Teams delegated OAuth token -> plugin state (${MSTEAMS_DELEGATED_TOKEN_NAMESPACE})`,
+        ],
+      });
+      const before = (await listDirectoryTreeStrict(stateDir))
+        .map((walkEntry) => walkEntry.relativePath)
+        .toSorted();
+      expect(await migration.collectBackupResources?.(params)).toEqual([
+        { path: filePath, kind: "file" },
+        { path: archiveDirectory, kind: "directory" },
+      ]);
+      expect(
+        (await listDirectoryTreeStrict(stateDir))
+          .map((walkEntry) => walkEntry.relativePath)
+          .toSorted(),
+      ).toEqual(before);
+      expect(await fs.readFile(filePath, "utf8")).toBe(JSON.stringify(token));
+      const result = await migration.migrateLegacyState(params);
+
+      const store = context.openPluginStateKeyedStore<MSTeamsDelegatedTokens>({
+        namespace: MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+        maxEntries: MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+      await expect(store.lookup(MSTEAMS_DELEGATED_TOKEN_KEY)).resolves.toEqual(token);
+      expect(await fs.readFile(`${filePath}.migrated`, "utf8")).toBe("old root archive");
+      expect(await fs.readFile(`${filePath}.migrated.2`, "utf8")).toBe("old root collision");
+      if (archive === "blocked" || archive === "relative-symlink") {
+        expect(result.changes).toEqual([
+          "Migrated Microsoft Teams delegated OAuth token -> plugin state",
+        ]);
+        expect(result.warnings).toEqual([
+          expect.stringContaining("Failed archiving Microsoft Teams delegated OAuth token"),
+        ]);
+        expect(await fs.readFile(filePath, "utf8")).toBe(JSON.stringify(token));
+        if (archive === "blocked") {
+          expect(await fs.readFile(archiveDirectory, "utf8")).toBe("not a directory");
+        } else {
+          expect(await fs.readlink(filePath)).toBe("tokens.json");
+          expect(await fs.readFile(path.join(stateDir, "tokens.json"), "utf8")).toBe(
+            JSON.stringify(token),
+          );
+          await expect(fs.access(archiveDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      } else {
+        expect(result.warnings).toEqual([]);
+        expect(result.changes).toEqual([
+          "Migrated Microsoft Teams delegated OAuth token -> plugin state",
+          expect.stringContaining("Archived Microsoft Teams delegated OAuth token legacy source"),
+        ]);
+        const archivePath =
+          archive === "collision" ? `${archiveBase}.migrated.3` : `${archiveBase}.migrated`;
+        expect(await fs.readFile(archivePath, "utf8")).toBe(JSON.stringify(token));
+        await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+        if (archive === "collision") {
+          expect(await fs.readFile(`${archiveBase}.migrated`, "utf8")).toBe("earlier archive");
+          expect(await fs.readFile(`${archiveBase}.migrated.2`, "utf8")).toBe(
+            "another earlier archive",
+          );
+        }
+      }
+    },
+  );
 });
 
 describe("msteams streaming legacy config rules", () => {

@@ -1,4 +1,3 @@
-// Stores active runtime plugin registry state and activation metadata.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import type { PluginLoadOptions } from "./loader-types.js";

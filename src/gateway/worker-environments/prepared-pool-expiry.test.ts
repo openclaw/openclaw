@@ -1,238 +1,134 @@
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { createWorkerCredentialBroker } from "./credential-broker.js";
-import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
-import { PROJECT_KEY, RECEIPT, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
-import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
-import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import { expect, it, vi } from "vitest";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import {
+  PREPARATION_KEY,
+  usePreparedPoolFixture,
+  type PoolOptions,
+} from "./prepared-pool.test-support.js";
 
-class TestWorkerServiceError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-describe("prepared worker expiry during admitted work", () => {
-  const fixture = usePreparedPoolFixture();
-
-  it.each(["enrollment", "readiness"] as const)(
-    "retains capacity until cleanup and refuses late %s without aborting admitted work",
-    async (boundary) => {
-      const reserve = await fixture.seed("admitted-reserve", { reserve: true });
-      const entered = createDeferred();
-      const releaseWork = createDeferred();
-      const destroyEntered = createDeferred();
-      const releaseDestroy = createDeferred();
-      fixture.releases.push(
-        () => releaseWork.resolve(),
-        () => releaseDestroy.resolve(),
-      );
-      let operationSignal: AbortSignal | undefined;
-      const prepareInstallation = async () => ({
-        install: "bundle" as const,
-        ...RECEIPT,
-        tarballBytes: 1,
-        tarballSha256: "f".repeat(64),
-        tarballPath: path.join(fixture.root, "unused.tgz"),
-      });
-      const shared = {
-        store: fixture.store,
-        now: () => fixture.nowMs,
-        prepareInstallation,
-        isStopping: () => false,
-        inState: (record, ...states) => states.includes(record.state),
-        withLock: async (_environmentId, task) => await task(),
-        serviceError: (code, message) => new TestWorkerServiceError(code, message),
-        move: async (record, to, patch, assertCurrent) =>
-          await fixture.store.transition({
-            environmentId: record.environmentId,
-            from: record.state,
-            expectedOwnerEpoch: record.ownerEpoch,
-            to,
-            patch,
-            assertCurrent,
-          }),
-      } satisfies Pick<
-        WorkerProviderLifecycleOptions,
-        | "store"
-        | "now"
-        | "prepareInstallation"
-        | "isStopping"
-        | "inState"
-        | "withLock"
-        | "serviceError"
-        | "move"
-      >;
-      const prepareNodeEnrollment = vi.fn<
-        NonNullable<WorkerProviderLifecycleOptions["prepareNodeEnrollment"]>
-      >(async (record) => {
-        const enrolled = await fixture.store.ensureNodeEnrollment(record.environmentId);
-        return {
-          mode: "connect",
-          setupCode: "synthetic-setup",
-          setupId: enrolled.nodeSetupId!,
-          openclawVersion: RECEIPT.openclawVersion,
-          displayName: "Expiry fixture",
-          nodeBootstrap: {
-            url: "https://gateway.example.test/bootstrap",
-            token: "t".repeat(43),
-            sha256: "e".repeat(64),
-            bytes: 1,
-            openclawVersion: RECEIPT.openclawVersion,
-            enabledPluginIds: [],
-          },
-          waitForDeviceId: async () => "expiry-node",
-        };
-      });
-      const ensureNodeWorkerBundle = vi.fn(async () => {
-        entered.resolve();
-        await releaseWork.promise;
-        return RECEIPT;
-      });
-      const registerPreparedWorkspace = vi.fn(async () => {});
-      const lifecycle = createWorkerProviderLifecycle({
-        warn: () => {},
-        ...shared,
-        getConfig: () => fixture.config,
-        resolveProvider: () => fixture.provider,
-        projectNamespace: "gateway",
-        prepareNodeBootstrap: async () => "e".repeat(64),
-        prepareNodeEnrollment,
-        ensureNodeWorkerBundle,
-        registerPreparedWorkspace,
-        credentialBroker: createWorkerCredentialBroker({
-          ...shared,
-          cancelInferenceEnvironment: async () => {},
-        }),
-        callProvider: async (_environmentId, run) => await run(),
-        callBootstrap: async (_installation, run) => await run(fixture.abort.signal),
-        bootstrapWorker: async () => RECEIPT,
-        isServiceError: (error, code) =>
-          error instanceof TestWorkerServiceError && error.code === code,
-        saveError: (record, error) =>
-          fixture.store.recordError({
-            environmentId: record.environmentId,
-            state: record.state,
-            error: String(error),
-          }),
-      });
-      fixture.provider.requiresNodeEnrollment = true;
-      fixture.provider.supportedExecutionModes = ["worker-turn"];
-      fixture.provider.supportsProjectPreparation = () => true;
-      fixture.provider.resolvePreparationTarget = () => ({
-        machineClass: "standard",
-        platform: "linux",
-        arch: "x64",
-      });
-      fixture.provider.resolveAllocation = vi.fn(async () => ({
-        leaseId: "expiry-lease",
-        sharedHost: false,
-      }));
-      fixture.provider.destroy = vi.fn(async () => {
-        destroyEntered.resolve();
-        await releaseDestroy.promise;
-      });
-      fixture.provider.provision = vi.fn(async (_profile, _operationId, options) => {
-        operationSignal = options?.signal;
-        if (boundary === "enrollment") {
-          entered.resolve();
-          await releaseWork.promise;
-        } else {
-          const preparedWorkspace = {
-            workspaceDir: `/worker/.openclaw-worker/prepared/gateway/${"9".repeat(64)}/workspace`,
-            homeDir: `/worker/.openclaw-worker/prepared/gateway/${"9".repeat(64)}/home`,
-            sourceManifestRef: `sha256:${"1".repeat(64)}`,
-            preparedManifestRef: `sha256:${"2".repeat(64)}`,
-          };
-          await options!.project!.prepare({
-            runScript: async () =>
-              JSON.stringify({
-                ready: true,
-                preparedWorkspace,
-                retainedWorkspace: {
-                  ...preparedWorkspace,
-                  baseCommit: options?.project?.baseCommit,
-                },
-              }),
-            runScriptWithBudget: async () => {
-              throw new Error("Completed fixture must not rerun setup");
-            },
-            upload: async () => {
-              throw new Error("Completed fixture must not upload source");
-            },
-          });
-        }
-        const enrollment = await options!.beginNodeEnrollment!();
-        if (enrollment.mode !== "connect") {
-          throw new Error("Fresh reserve must use its pending enrollment");
-        }
-        await completeWorkerNodeSetupForTest({
-          baseDir: fixture.root,
-          store: fixture.store,
-          setupId: enrollment.setupId,
-          deviceId: "expiry-node",
-          completedAtMs: fixture.nowMs,
-        });
-        return { leaseId: "expiry-lease", node: { deviceId: "expiry-node" }, sharedHost: false };
-      });
-      const owner = fixture.pool({
-        reconcile: async (record, signal, beforeReconcile) => {
-          await lifecycle.resumePrepared(record, signal, beforeReconcile);
-        },
-      });
-      let settled = false;
-      const running = fixture.schedule(owner).finally(() => {
-        settled = true;
-      });
-      await Promise.race([
-        entered.promise,
-        running.then(() => {
-          throw new Error("Provisioning ended before admitted work");
-        }),
-      ]);
-      fixture.nowMs = reserve.preparation!.expiresAtMs;
-      const repeated = fixture.schedule(owner);
-      const capacity = () =>
-        fixture.store.preparedCapacity({
-          profileId: reserve.profileId,
-          projectKey: PROJECT_KEY,
-          target: 1,
-          maxTotal: 1,
-        });
-      expect(operationSignal?.aborted).toBe(false);
-      expect(settled).toBe(false);
-      expect(capacity()).toBe(0);
-      expect(fixture.provider.destroy).not.toHaveBeenCalled();
-      expect(fixture.store.get(reserve.environmentId)?.preparation).toEqual(reserve.preparation);
-      releaseWork.resolve();
-      await Promise.race([
-        destroyEntered.promise,
-        running.then(() => {
-          throw new Error("Provisioning ended before cleanup");
-        }),
-      ]);
-      expect(settled).toBe(false);
-      expect(capacity()).toBe(0);
-      expect(prepareNodeEnrollment).toHaveBeenCalledTimes(boundary === "enrollment" ? 0 : 1);
-      expect(ensureNodeWorkerBundle).toHaveBeenCalledTimes(boundary === "enrollment" ? 0 : 1);
-      expect(registerPreparedWorkspace).not.toHaveBeenCalled();
-      expect(fixture.store.getCredential(reserve.environmentId)).toBeUndefined();
-      expect(fixture.store.get(reserve.environmentId)).toMatchObject({
-        destroyRequestedAtMs: fixture.nowMs,
-        bootstrapReceipt: null,
-        preparation: reserve.preparation,
-      });
-      releaseDestroy.resolve();
-      await Promise.all([running, repeated]);
-      expect(settled).toBe(true);
-      expect(fixture.provider.provision).toHaveBeenCalledOnce();
-      expect(fixture.provider.destroy).toHaveBeenCalledOnce();
-      expect(fixture.store.get(reserve.environmentId)?.state).toBe("destroyed");
-      expect(capacity()).toBe(1);
-    },
+const f = usePreparedPoolFixture();
+const prune = (owner = f.pool()) =>
+  f.store.pruneTerminalEnvironments({ canPruneDemand: owner.canPruneDemand });
+const expectDemand = (leaseId: string | null, demandAtMs: number) =>
+  expect(f.provider.notePreparedDemand).toHaveBeenLastCalledWith(
+    { leaseId, profile: {} },
+    { preparationKey: PREPARATION_KEY, demandAtMs },
   );
+
+it.each(["available", "missing", "throwing"] as const)(
+  "retains terminal demand beyond seven days (%s policy)",
+  async (policyState) => {
+    const dayMs = 24 * 60 * 60 * 1_000;
+    const source = await f.attachSeed("source");
+    await f.teardown(source);
+    const placements = createWorkerSessionPlacementStore({ database: f.database });
+    const placement = (await placements.getAsync(`session:${source.environmentId}`))!;
+    await placements.retireSessionPlacementAsync({
+      sessionId: placement.sessionId,
+      expectedState: "failed",
+      expectedGeneration: placement.generation,
+    });
+    await f.reopenStore();
+    f.nowMs += 8 * dayMs;
+    f.provider.resolvePreparedIdleTimeoutMs = () => 10 * dayMs;
+    const resolveProvider = () => {
+      if (policyState === "throwing") {
+        throw new Error("provider unavailable");
+      }
+      return policyState === "missing" ? undefined : f.provider;
+    };
+    const owner = f.pool({ resolveProvider });
+    expect(await prune(owner)).toBe(0);
+    expect(f.store.get(source.environmentId)?.lastActivatedAtMs).toBe(1_000);
+    if (policyState === "available") {
+      await f.schedule(owner);
+      expect(f.reserves()).toMatchObject([{ preparation: { expiresAtMs: 1_000 + 10 * dayMs } }]);
+    }
+    f.nowMs += 2 * dayMs;
+    // Policy recovery permits metadata cleanup only after the original deadline.
+    expect(await prune()).toBe(1);
+    expect(f.store.get(source.environmentId)).toBeUndefined();
+  },
+);
+
+it("pins expiry to demand through maintenance and database reopen", async () => {
+  await f.attachSeed("source");
+  const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
+  const owner = f.pool({ reconcile });
+  await f.schedule(owner);
+  const reserve = f.reserves()[0]!;
+  expect(reserve.preparation).toMatchObject({ demandAtMs: 1_000, expiresAtMs: 2_000 });
+  f.nowMs = 1_900;
+  await f.schedule(owner);
+  expect(f.reserves()).toEqual([reserve]);
+  expect(f.provider.notePreparedDemand).not.toHaveBeenCalled();
+
+  await f.reopenStore();
+  f.nowMs = 2_000;
+  await f.schedule(f.pool({ reconcile }));
+  expect(f.reserves()).toHaveLength(1);
+  expect(f.store.get(reserve.environmentId)).toMatchObject({
+    destroyRequestedAtMs: 2_000,
+    preparation: reserve.preparation,
+  });
+  expect(reconcile.mock.lastCall?.[0]).toMatchObject({ destroyRequestedAtMs: 2_000 });
+  f.nowMs = 2_100;
+  await f.schedule(f.pool());
+  expect(f.reserves()).toHaveLength(1);
 });
+
+it("retains activated demand through teardown and database reopen", async () => {
+  const source = await f.attachSeed("source");
+  const owner = f.pool();
+  await f.schedule(owner);
+  const reserve = await f.ready(f.reserves()[0]!);
+  await owner.noteDemand(reserve.environmentId);
+  expect(f.provider.notePreparedDemand).not.toHaveBeenCalled();
+  f.nowMs = 1_500;
+  await owner.noteDemand(source.environmentId);
+  expectDemand(source.leaseId, 1_000);
+  const consumed = await f.attach(reserve);
+  await owner.noteDemand(consumed.environmentId);
+  expectDemand(consumed.leaseId, 1_500);
+  await f.teardown(source);
+  await f.teardown(consumed);
+  await f.reopenStore();
+  await f.schedule(f.pool());
+  expect(
+    f.reserves().find((record) => record.preparation?.consumedAtMs === null)?.preparation,
+  ).toMatchObject({ demandAtMs: 1_500, expiresAtMs: 2_500 });
+  expect(f.store.get(consumed.environmentId)?.preparation).toMatchObject({
+    consumedAtMs: 1_500,
+    expiresAtMs: 2_000,
+  });
+});
+
+it.each([
+  ["provisioning", true],
+  ["syncing", false],
+] as const)(
+  "does not renew consumed %s demand (failed=%s) before or after expiry",
+  async (stage, fail) => {
+    const source = await f.attachSeed("source");
+    await f.schedule(f.pool());
+    await f.teardown(source);
+    const reserve = await f.ready(f.reserves()[0]!);
+    f.nowMs = 1_900;
+    const consumed = await f.attach(reserve, stage);
+    if (fail) {
+      await f.teardown(consumed);
+    }
+    await f.reopenStore();
+    f.nowMs = 1_950;
+    const owner = f.pool();
+    await owner.noteDemand(consumed.environmentId);
+    await f.schedule(owner);
+    expect(f.provider.notePreparedDemand).not.toHaveBeenCalled();
+    const replacement = f.reserves().filter((record) => record.preparation?.consumedAtMs === null);
+    expect(replacement).toMatchObject([{ preparation: { demandAtMs: 1_000, expiresAtMs: 2_000 } }]);
+    f.nowMs = 2_050;
+    await f.schedule(owner);
+    expect(f.reserves()).toHaveLength(2);
+    expect(f.store.get(replacement[0]!.environmentId)?.destroyRequestedAtMs).toBe(2_050);
+  },
+);

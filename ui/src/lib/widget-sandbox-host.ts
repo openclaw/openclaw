@@ -1,13 +1,18 @@
-import { toStringifiedError } from "@openclaw/normalization-core";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { generateUUID } from "./uuid.ts";
 
-export const WIDGET_LOAD_TIMEOUT_MS = 10_000;
+// A slow resource gets a notice without throwing away its in-flight work. The
+// terminal deadline uses the same budget as ordinary Gateway reads.
+export const WIDGET_LOAD_NOTICE_MS = 10_000;
+export const WIDGET_LOAD_TIMEOUT_MS = DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS;
 export class WidgetRenderTimeoutError extends Error {}
 
 type WidgetSandboxHostOptions = {
   frame: HTMLIFrameElement;
   sandboxOrigin: string;
   sandboxUrl: string;
+  sandboxShellHtml?: string;
   documentKey: string;
   /** Restricts the untrusted inner document, not the trusted transport shell. */
   allowScripts?: boolean;
@@ -16,6 +21,8 @@ type WidgetSandboxHostOptions = {
   onRendered?: () => void;
   onError: (error: unknown) => void;
   onReadyTimeout: () => void;
+  onPending?: () => void;
+  retryDocument?: (error: unknown) => boolean;
 };
 
 /** Fetches widget bytes alongside the isolated proxy, then joins their readiness. */
@@ -23,10 +30,14 @@ export class WidgetSandboxHost {
   private active = true;
   private proxyReady = false;
   private readyTimer: number | null = null;
+  private retryTimer: number | null = null;
+  private slowTimer: number | null = null;
+  private retryDelayMs = 1_000;
   private documentLoaded = false;
   private renderId: string | null = null;
   private pendingDocument: string | null = null;
-  private activeLoad: { controller: AbortController; timeout: number } | null = null;
+  private activeLoad: { controller: AbortController; timeout: number; notice: number } | null =
+    null;
 
   constructor(private options: WidgetSandboxHostOptions) {
     // Owners finish installing their bridge before an immediate load can report back.
@@ -43,6 +54,10 @@ export class WidgetSandboxHost {
 
   get loaded(): boolean {
     return this.documentLoaded;
+  }
+
+  get rendered(): boolean {
+    return this.loaded && this.renderId === null;
   }
 
   update(options: WidgetSandboxHostOptions): void {
@@ -67,6 +82,7 @@ export class WidgetSandboxHost {
     this.active = active;
     if (!active) {
       this.clearReadyTimeout();
+      this.clearRetry();
       this.cancelLoad();
       return;
     }
@@ -74,6 +90,7 @@ export class WidgetSandboxHost {
   }
 
   reset(): void {
+    this.clearRetry();
     this.cancelLoad();
     this.clearReadyTimeout();
     this.renderId = null;
@@ -89,6 +106,21 @@ export class WidgetSandboxHost {
 
   handleMessage(event: MessageEvent): void {
     if (event.source !== this.frame.contentWindow || event.origin !== this.options.sandboxOrigin) {
+      return;
+    }
+    if (
+      event.data?.method === "ui/notifications/sandbox-bootstrap-ready" &&
+      event.data?.params?.version === 1 &&
+      this.options.sandboxShellHtml !== undefined
+    ) {
+      this.frame.contentWindow?.postMessage(
+        {
+          jsonrpc: "2.0",
+          method: "ui/notifications/sandbox-bootstrap-shell",
+          params: { html: this.options.sandboxShellHtml },
+        },
+        this.options.sandboxOrigin,
+      );
       return;
     }
     if (event.data?.method === "ui/notifications/sandbox-resource-loaded") {
@@ -107,6 +139,7 @@ export class WidgetSandboxHost {
     }
     // Readiness is one-shot, so retain it even while a mounted widget is hidden.
     this.proxyReady = true;
+    this.clearRetry();
     this.clearReadyTimeout();
     this.start();
   }
@@ -120,7 +153,7 @@ export class WidgetSandboxHost {
   }
 
   private start(): void {
-    if (!this.active || !this.frame.isConnected) {
+    if (!this.active || !this.frame.isConnected || this.retryTimer !== null) {
       return;
     }
     this.scheduleReadyTimeout();
@@ -129,9 +162,11 @@ export class WidgetSandboxHost {
   }
 
   private clearReadyTimeout(): void {
-    if (this.readyTimer !== null) {
-      window.clearTimeout(this.readyTimer);
-      this.readyTimer = null;
+    for (const key of ["slowTimer", "readyTimer"] as const) {
+      if (this[key] !== null) {
+        window.clearTimeout(this[key]);
+        this[key] = null;
+      }
     }
   }
 
@@ -142,6 +177,12 @@ export class WidgetSandboxHost {
     ) {
       return;
     }
+    this.slowTimer = window.setTimeout(() => {
+      this.slowTimer = null;
+      if (this.active && this.frame.isConnected) {
+        this.options.onPending?.();
+      }
+    }, WIDGET_LOAD_NOTICE_MS);
     this.readyTimer = window.setTimeout(() => {
       this.readyTimer = null;
       if (this.active && !this.proxyReady && this.frame.isConnected) {
@@ -159,10 +200,32 @@ export class WidgetSandboxHost {
   private retrySandboxFrame(): void {
     this.proxyReady = false;
     this.reset();
-    // A new ticket cannot recover an outer frame that never reached its script.
-    this.frame.src = this.options.sandboxUrl;
     this.options.onReadyTimeout();
-    this.start();
+    this.scheduleRetry(() => {
+      // A new ticket cannot recover an outer frame that never reached its script.
+      this.frame.src = this.options.sandboxUrl;
+      this.start();
+    });
+  }
+
+  private clearRetry(): void {
+    if (this.retryTimer !== null) {
+      window.clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  private scheduleRetry(retry: () => void): void {
+    if (!this.active || !this.frame.isConnected || this.retryTimer !== null) {
+      return;
+    }
+    this.retryTimer = window.setTimeout(() => {
+      this.retryTimer = null;
+      if (this.active && this.frame.isConnected) {
+        retry();
+      }
+    }, this.retryDelayMs);
+    this.retryDelayMs = Math.min(this.retryDelayMs * 2, 30_000);
   }
 
   private cancelLoad(): void {
@@ -171,36 +234,37 @@ export class WidgetSandboxHost {
     this.activeLoad = null;
     if (load) {
       window.clearTimeout(load.timeout);
+      window.clearTimeout(load.notice);
       load.controller.abort();
     }
   }
 
   private async loadDocument(): Promise<void> {
     const { loadDocument } = this.options;
-    if (
-      this.loaded ||
-      this.pendingDocument !== null ||
-      this.activeLoad !== null ||
-      !this.frame.contentWindow
-    ) {
+    if (this.loaded || this.pendingDocument !== null || this.activeLoad !== null) {
       return;
     }
     const controller = new AbortController();
     const load = {
       controller,
+      notice: window.setTimeout(() => {
+        if (this.activeLoad === load) {
+          this.options.onPending?.();
+        }
+      }, WIDGET_LOAD_NOTICE_MS),
       timeout: window.setTimeout(
         () => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
         WIDGET_LOAD_TIMEOUT_MS,
       ),
     };
     this.activeLoad = load;
-    let rejectAborted!: () => void;
-    const aborted = new Promise<never>((_resolve, reject) => {
-      rejectAborted = () => reject(toStringifiedError(controller.signal.reason));
-      controller.signal.addEventListener("abort", rejectAborted, { once: true });
-    });
     try {
-      const html = await Promise.race([loadDocument(controller.signal), aborted]);
+      const html = await racePromiseWithAbortSignal(
+        () => loadDocument(controller.signal),
+        controller.signal,
+        ({ reason }) =>
+          reason instanceof Error ? reason : new DOMException("Aborted", "AbortError"),
+      );
       if (!this.active || this.activeLoad !== load || !this.frame.isConnected) {
         return;
       }
@@ -208,11 +272,15 @@ export class WidgetSandboxHost {
       this.deliverDocument();
     } catch (error) {
       if (this.activeLoad === load && this.active && this.frame.isConnected) {
-        this.options.onError(error);
+        const failure = controller.signal.aborted ? controller.signal.reason : error;
+        this.options.onError(failure);
+        if (this.options.retryDocument?.(failure)) {
+          this.scheduleRetry(() => this.start());
+        }
       }
     } finally {
       window.clearTimeout(load.timeout);
-      controller.signal.removeEventListener("abort", rejectAborted);
+      window.clearTimeout(load.notice);
       if (this.activeLoad === load) {
         this.activeLoad = null;
       }
@@ -240,6 +308,7 @@ export class WidgetSandboxHost {
     );
     this.pendingDocument = null;
     this.documentLoaded = true;
+    this.retryDelayMs = 1_000;
     this.options.onLoaded();
   }
 }

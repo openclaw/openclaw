@@ -1,4 +1,5 @@
 import {
+  agentControlText,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
   resolveMessagePresentationControlValue,
@@ -15,7 +16,6 @@ const MATTERMOST_QUESTION_CONTEXT_KEY = "oc_question";
 
 export type MattermostQuestionSelection = { questionId: string; optionIndex: number };
 
-/** One interactive button as this plugin hands it to the attachment builder. */
 type MattermostPresentationButton = {
   id: string;
   text: string;
@@ -91,7 +91,8 @@ export function resolveMattermostPresentation(params: {
                     },
                   ];
             }
-            if (action) {
+            // Typed callbacks render only when a message action authored them for the agent.
+            if (action && !(action.type === "callback" && agentControlText(action.value))) {
               return [];
             }
             const value = resolveMessagePresentationControlValue(button);

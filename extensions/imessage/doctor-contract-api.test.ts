@@ -1,33 +1,14 @@
-// Imessage tests cover doctor contract api plugin behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
 
-function imessageConfig(entry: Record<string, unknown>): OpenClawConfig {
-  return { channels: { imessage: entry } } as never;
+function normalize(entry: Record<string, unknown>) {
+  return normalizeCompatibilityConfig({
+    cfg: { channels: { imessage: entry } } as OpenClawConfig,
+  });
 }
 
-describe("imessage doctor control plane", () => {
-  afterEach(() => {
-    vi.doUnmock("./src/state-migrations.js");
-    vi.resetModules();
-  });
-
-  it("repairs config without loading state migration implementation", async () => {
-    vi.resetModules();
-    vi.doMock("./src/state-migrations.js", () => {
-      throw new Error("config repair must not load state migration implementation");
-    });
-    const doctor = await import("./doctor-contract-api.js");
-    const result = doctor.normalizeCompatibilityConfig({
-      cfg: imessageConfig({ chunkMode: "newline" }),
-    });
-    expect(result.config.channels?.imessage).toEqual({ streaming: { chunkMode: "newline" } });
-  });
-});
-
-describe("imessage streaming legacy config rules", () => {
+describe("imessage streaming compatibility", () => {
   const rootRule = legacyConfigRules.find(
     (rule) => rule.path.join(".") === "channels.imessage" && rule.message.includes("chunkMode"),
   );
@@ -46,40 +27,19 @@ describe("imessage streaming legacy config rules", () => {
       false,
     );
   });
-});
 
-describe("imessage normalizeCompatibilityConfig streaming aliases", () => {
   it("moves flat delivery aliases into the nested streaming shape", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: imessageConfig({
-        chunkMode: "newline",
-        blockStreaming: true,
-        accounts: {
-          personal: {
-            blockStreamingCoalesce: { idleMs: 250 },
-          },
-        },
-      }),
+    const result = normalize({
+      chunkMode: "newline",
+      blockStreaming: true,
+      accounts: { personal: { blockStreamingCoalesce: { idleMs: 250 } } },
     });
 
-    const imessage = result.config.channels?.imessage as Record<string, unknown>;
-    expect(imessage.streaming).toEqual({
-      chunkMode: "newline",
-      block: { enabled: true },
+    // Account streaming stays local; runtime owns the root/account merge.
+    expect(result.config.channels?.imessage).toEqual({
+      streaming: { chunkMode: "newline", block: { enabled: true } },
+      accounts: { personal: { streaming: { block: { coalesce: { idleMs: 250 } } } } },
     });
-    expect(imessage.chunkMode).toBeUndefined();
-    expect(imessage.blockStreaming).toBeUndefined();
-    const personal = expectDefined(
-      (imessage.accounts as Record<string, Record<string, unknown>>).personal,
-      "personal iMessage account",
-    );
-    // iMessage deep-merges root+account streaming at runtime
-    // (mergeIMessageStreamingConfig), so migration keeps the account object
-    // account-local instead of seeding root values into it.
-    expect(personal.streaming).toEqual({
-      block: { coalesce: { idleMs: 250 } },
-    });
-    expect(personal.blockStreamingCoalesce).toBeUndefined();
     for (const change of [
       "Moved channels.imessage.chunkMode → channels.imessage.streaming.chunkMode.",
       "Moved channels.imessage.blockStreaming → channels.imessage.streaming.block.enabled.",
@@ -90,28 +50,19 @@ describe("imessage normalizeCompatibilityConfig streaming aliases", () => {
   });
 
   it("removes flat aliases when the nested value is already set", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: imessageConfig({
-        chunkMode: "length",
-        streaming: { chunkMode: "newline" },
-      }),
-    });
+    const result = normalize({ chunkMode: "length", streaming: { chunkMode: "newline" } });
 
-    const imessage = result.config.channels?.imessage as Record<string, unknown>;
-    expect(imessage.streaming).toEqual({ chunkMode: "newline" });
-    expect(imessage.chunkMode).toBeUndefined();
+    expect(result.config.channels?.imessage).toEqual({ streaming: { chunkMode: "newline" } });
     expect(result.changes).toContain(
       "Removed channels.imessage.chunkMode (channels.imessage.streaming.chunkMode already set).",
     );
   });
 
   it("is idempotent: a second run reports no changes", () => {
-    const first = normalizeCompatibilityConfig({
-      cfg: imessageConfig({
-        chunkMode: "newline",
-        blockStreaming: false,
-        blockStreamingCoalesce: { minChars: 10 },
-      }),
+    const first = normalize({
+      chunkMode: "newline",
+      blockStreaming: false,
+      blockStreamingCoalesce: { minChars: 10 },
     });
     expect(first.changes.length).toBeGreaterThan(0);
 

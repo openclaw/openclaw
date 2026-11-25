@@ -1,25 +1,17 @@
-/**
- * Browser screenshot normalization helpers that bound screenshots for media
- * transport and model input.
- */
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
-  isImageProcessorUnavailableError,
   resizeToJpeg,
 } from "openclaw/plugin-sdk/media-runtime";
 
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE = 2000;
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
 
-/** Downscales/re-encodes screenshots to fit Browser plugin byte and dimension caps. */
 export async function normalizeBrowserScreenshot(
   buffer: Buffer,
   opts?: {
     maxSide?: number;
-    maxBytes?: number;
   },
 ): Promise<{
   buffer: Buffer;
@@ -27,7 +19,7 @@ export async function normalizeBrowserScreenshot(
   sourceDimensions: { width: number; height: number } | null;
 }> {
   const maxSide = Math.max(1, Math.round(opts?.maxSide ?? DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE));
-  const maxBytes = Math.max(1, Math.round(opts?.maxBytes ?? DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES));
+  const maxBytes = DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES;
 
   const meta = await getImageMetadata(buffer);
   const width = meta?.width ?? 0;
@@ -44,24 +36,14 @@ export async function normalizeBrowserScreenshot(
   let smallestSize: number | undefined;
   for (const side of sideGrid) {
     for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
-      let out: Buffer;
-      try {
-        out = await resizeToJpeg({
-          buffer,
-          maxSide: side,
-          quality,
-          withoutEnlargement: true,
-        });
-      } catch (err) {
-        if (isImageProcessorUnavailableError(err)) {
-          throw toErrorObject(err, "Non-Error thrown");
-        }
-        throw err;
-      }
+      const out = await resizeToJpeg({
+        buffer,
+        maxSide: side,
+        quality,
+        withoutEnlargement: true,
+      });
 
-      if (smallestSize === undefined || out.byteLength < smallestSize) {
-        smallestSize = out.byteLength;
-      }
+      smallestSize = Math.min(smallestSize ?? Infinity, out.byteLength);
 
       if (out.byteLength <= maxBytes) {
         return { buffer: out, contentType: "image/jpeg", sourceDimensions: meta };

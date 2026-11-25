@@ -19,7 +19,6 @@ import {
   extractFinishExactlyDirective,
   extractExactMarkerDirective,
   resolveWhatsAppStructuredReply,
-  extractToolErrorForNamedCall,
   resolveHeartbeatPromptReply,
   readFirstMediaPath,
 } from "./mock-openai-directives.js";
@@ -30,7 +29,8 @@ import {
   extractToolOutput,
   extractLatestToolOutput,
   buildSlackMpimHistoryReply,
-  extractAllUserTexts,
+  extractCurrentRuntimeContextTexts,
+  hasCurrentGeneratedMediaDelivery,
   extractUserTurnTexts,
   extractAllRequestTexts,
   extractCurrentImageRequest,
@@ -47,7 +47,10 @@ import {
 } from "./mock-openai-tooling.js";
 
 function readCompletedImageGenerationMediaPath(prompt: string): string | undefined {
-  const eventStart = prompt.lastIndexOf("[Internal task completion event]");
+  const eventStart = Math.max(
+    prompt.lastIndexOf("[Internal task completion event]"),
+    prompt.lastIndexOf("A background task completed."),
+  );
   if (eventStart < 0) {
     return undefined;
   }
@@ -133,12 +136,26 @@ export function buildImageInspectionReply(
   return undefined;
 }
 
+export function buildImageGenerationCompletionReply(input: ResponsesInputItem[]) {
+  const { current } = splitMockConversationContext(extractLastUserText(input));
+  const completionContexts = [current, ...extractCurrentRuntimeContextTexts(input).toReversed()];
+  const completedImageMediaPath = completionContexts
+    .map(readCompletedImageGenerationMediaPath)
+    .find(Boolean);
+  if (!completedImageMediaPath) {
+    return undefined;
+  }
+  const reply = "Protocol note: generated the QA lighthouse image successfully.";
+  return hasCurrentGeneratedMediaDelivery(input)
+    ? reply
+    : `${reply}\nMEDIA:${completedImageMediaPath}`;
+}
+
 export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
-  const latestRawUserText = extractAllUserTexts(input).at(-1) ?? "";
-  const completedImageMediaPath = readCompletedImageGenerationMediaPath(latestRawUserText);
-  if (completedImageMediaPath) {
-    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${completedImageMediaPath}`;
+  const imageCompletionReply = buildImageGenerationCompletionReply(input);
+  if (imageCompletionReply) {
+    return imageCompletionReply;
   }
   const toolOutput = extractToolOutput(input);
   const scenarioToolOutput =
@@ -183,11 +200,7 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
-  const sessionsSpawnError = extractToolErrorForNamedCall({
-    input,
-    name: "sessions_spawn",
-    toolJson,
-  });
+  const toolError = typeof toolJson?.error === "string" ? toolJson.error.trim() : "";
 
   const slackMpimHistoryReply = buildSlackMpimHistoryReply(prompt);
   if (slackMpimHistoryReply !== undefined) {
@@ -196,8 +209,11 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
   }
-  if (sessionsSpawnError) {
-    return `Protocol note: sessions_spawn failed: ${sessionsSpawnError}`;
+  if (
+    toolError &&
+    input.some((item) => item.type === "function_call" && item.name === "sessions_spawn")
+  ) {
+    return `Protocol note: sessions_spawn failed: ${toolError}`;
   }
   if (/remember this fact/i.test(prompt) && exactReplyDirective) {
     return exactReplyDirective;
@@ -267,37 +283,24 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
   }
-  if ((toolOutput || allInputText) && /repo contract followthrough check/i.test(allInputText)) {
+  if (/repo contract followthrough check/i.test(allInputText)) {
     const repoEvidenceText = [scenarioToolOutput, allInputText].filter(Boolean).join("\n");
-    if (
+    const complete =
       /successfully (?:wrote|created|updated|replaced)/i.test(repoEvidenceText) ||
-      /status:\s*complete/i.test(repoEvidenceText)
-    ) {
-      return [
-        "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
-        "Wrote: repo-contract-summary.txt",
-        "Status: complete",
-      ].join("\n");
-    }
+      /status:\s*complete/i.test(repoEvidenceText);
     return [
       "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
       "Wrote: repo-contract-summary.txt",
-      "Status: blocked",
+      `Status: ${complete ? "complete" : "blocked"}`,
     ].join("\n");
   }
   if (toolOutput && /personal task followthrough check/i.test(allInputText)) {
-    const taskEvidenceText = scenarioToolOutput;
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
-      return [
-        "Pending: maintainer feedback before publishing",
-        "Blocked: publishing needs explicit user approval",
-        "Done: local evidence captured in personal-task-status.txt",
-      ].join("\n");
-    }
     return [
       "Pending: maintainer feedback before publishing",
       "Blocked: publishing needs explicit user approval",
-      "Done: blocked until personal-task-status.txt exists",
+      /successfully (?:wrote|created|updated|replaced)/i.test(scenarioToolOutput)
+        ? "Done: local evidence captured in personal-task-status.txt"
+        : "Done: blocked until personal-task-status.txt exists",
     ].join("\n");
   }
   if (/session memory ranking check/i.test(prompt) && orbitCode) {

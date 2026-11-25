@@ -4,11 +4,14 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 export type FollowupReply = AgentWaitResult & { replyText?: string };
 type FollowupCustody = {
   run<T>(work: () => T): T;
+  /** Re-enters the sending turn's requester, when one was retained, for that person's next turn. */
+  runWithRequester<T>(work: () => Promise<T>): Promise<T>;
   assertCurrent(): void;
   signal: AbortSignal;
   release(): void;
 };
 export type FollowupRequesterAuthority = {
+  bind(params: { entry: SubagentRunRecord; runs: ReadonlyMap<string, SubagentRunRecord> }): void;
   release(): void;
   run<T>(runId: string, run: () => Promise<T>): Promise<T>;
 };
@@ -56,6 +59,6 @@ export interface FollowupCompletionOwner {
     assertCurrent?: () => void,
   ): Promise<FollowupSettlement>;
   take(timeoutMs?: number): Promise<FollowupReply | undefined>;
-  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): () => void;
+  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): void;
   close(error?: unknown): void;
 }

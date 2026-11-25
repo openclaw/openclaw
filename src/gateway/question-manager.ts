@@ -1,4 +1,3 @@
-// Gateway question manager.
 // Tracks transient operator questions and short-lived terminal records in memory.
 import { randomUUID } from "node:crypto";
 import {
@@ -14,13 +13,18 @@ import type {
   QuestionWaitAnswerResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { bindMcpFormQuestionRecord } from "../agents/mcp-form-resource-context.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import {
   retainGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import type { QuestionSessionAccess } from "./question-session-access.types.js";
+import type {
+  QuestionClientAuthorization,
+  QuestionSessionAccess,
+} from "./question-session-access.types.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -56,8 +60,12 @@ type QuestionManagerRequest = {
   onResolved?:
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => void)
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => Promise<void>);
+  /** Host-owned human decision boundary; never accepted from wire data. */
+  authorizeClient?: QuestionClientAuthorization;
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
+  /** Producer authority is independent of optional ordinary-session disclosure access. */
+  requesterLifetime?: { signal?: AbortSignal; release: () => void };
   requesterRun?: OperationalRunInstanceRef;
   /** Trusted handler binds the run; the manager owns expiry and terminal release. */
   registerHumanInputWait?: (isPending: () => boolean) => ((resolved: boolean) => void) | undefined;
@@ -72,18 +80,27 @@ type QuestionEntry = {
   job: GatewayScheduledJob;
   waiters: Set<Waiter>;
   onResolved?: QuestionManagerRequest["onResolved"];
+  /** Host-owned human decision boundary; never accepted from wire data. */
+  authorizeClient?: QuestionClientAuthorization;
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
+  requesterLifetime?: QuestionManagerRequest["requesterLifetime"];
   requesterRun?: OperationalRunInstanceRef;
   admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
   releaseHumanInputWait?: (resolved: boolean) => void;
+  releaseRequesterWatch?: () => void;
+  committing?: boolean;
+  commitUnknown?: boolean;
+  retired?: boolean;
 };
 
 /** Private entry identity. Never reselect a successor by its public question id. */
 export type QuestionObservation = {
   readonly record: QuestionRecord;
   readonly ordinary: boolean;
+  readonly requesterRun?: OperationalRunInstanceRef;
   readonly sessionAccess?: QuestionSessionAccess;
+  readonly authorizeClient?: QuestionClientAuthorization;
   isCurrent: () => boolean;
   refreshRequester: () => void;
 };
@@ -100,6 +117,19 @@ function waitResult(entry: QuestionEntry, includeResolutionId: boolean): Questio
     answers: record.answers ?? { answers: {} },
     ...(includeResolutionId && resolutionId ? { resolutionId } : {}),
   };
+}
+
+function canonicalizeQuestionAnswer(question: Question, value: string): string {
+  if (question.options.some((option) => option.value !== undefined && option.value === value)) {
+    return value;
+  }
+  const preserveBytes = question.isSecret || question.presentation === "form";
+  const candidate = preserveBytes ? value : value.trim();
+  const matches = question.options.filter(
+    (option) => (preserveBytes ? option.label : option.label.trim()) === candidate,
+  );
+  const matched = matches.length === 1 ? matches[0] : undefined;
+  return matched ? (matched.value ?? matched.label) : candidate;
 }
 
 /** Process-local lifecycle owner for pending questions. */
@@ -129,7 +159,10 @@ export class QuestionManager {
     if (this.closed) {
       throw new Error("Question manager is closed");
     }
-    if (params.isRequesterActive && !params.isRequesterActive()) {
+    if (
+      params.requesterLifetime?.signal?.aborted ||
+      (params.isRequesterActive && !params.isRequesterActive())
+    ) {
       throw new QuestionManagerError(
         QuestionManagerErrorCodes.REQUESTER_INACTIVE,
         "the agent run that requested this question is no longer active",
@@ -172,14 +205,32 @@ export class QuestionManager {
       waiters: new Set(),
       onResolved: params.onResolved,
       sessionAccess: params.sessionAccess,
+      authorizeClient: params.authorizeClient,
       isRequesterActive: params.isRequesterActive,
+      requesterLifetime: params.requesterLifetime,
       requesterRun: params.requesterRun,
       admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
     this.entries.set(record.id, entry);
+    bindMcpFormQuestionRecord(
+      record,
+      () =>
+        this.entries.get(record.id) === entry &&
+        entry.record === record &&
+        entry.record.status === "pending",
+    );
     entry.releaseHumanInputWait = params.registerHumanInputWait?.(
       () => this.get(id)?.status === "pending" && this.entries.get(id) === entry,
     );
+    const signal = entry.requesterLifetime?.signal;
+    if (signal) {
+      const refresh = () => this.refreshRequester(entry);
+      signal.addEventListener("abort", refresh, { once: true });
+      entry.releaseRequesterWatch = () => signal.removeEventListener("abort", refresh);
+      if (signal.aborted) {
+        refresh();
+      }
+    }
     return record;
   }
 
@@ -210,17 +261,23 @@ export class QuestionManager {
         return entry.record;
       },
       ordinary: entry.ordinary,
+      requesterRun: entry.requesterRun,
       sessionAccess: entry.sessionAccess,
+      authorizeClient: entry.authorizeClient,
       isCurrent: () => this.entries.get(entry.record.id) === entry,
       refreshRequester: () => this.refreshRequester(entry),
     };
   }
 
   private refreshRequester(entry: QuestionEntry): void {
-    if (this.entries.get(entry.record.id) !== entry || entry.record.status !== "pending") {
+    if (
+      this.entries.get(entry.record.id) !== entry ||
+      entry.record.status !== "pending" ||
+      entry.committing
+    ) {
       return;
     }
-    const active = entry.isRequesterActive?.();
+    const active = entry.requesterLifetime?.signal?.aborted ? false : entry.isRequesterActive?.();
     // Liveness can reset/reuse the public id or settle the captured entry reentrantly.
     // A worker-confirmed source loss must retire only this still-pending observation.
     if (
@@ -308,8 +365,7 @@ export class QuestionManager {
       }
       signal?.addEventListener("abort", waiter, { once: true });
       if (timeoutMs !== undefined) {
-        timer = setTimeout(waiter, resolveTimerTimeoutMs(timeoutMs, 1));
-        timer.unref?.();
+        timer = setTimeout(waiter, resolveTimerTimeoutMs(timeoutMs, 1)).unref();
       }
     });
   }
@@ -332,8 +388,62 @@ export class QuestionManager {
       answers: canonical,
       ...(resolvedBy ? { resolvedBy } : {}),
     };
-    this.finish(entry);
+    void this.finish(entry);
     return { status: "answered", answers: canonical };
+  }
+
+  /** Async persistence keeps the v2026.8.1 SDK's ordinary resolve() synchronous. */
+  resolveWithCommit(
+    id: string,
+    answers: QuestionAnswers,
+    resolvedBy: string | undefined,
+    options: { commit: (assertCurrent: () => void) => Promise<void>; resolutionId?: string },
+  ): Promise<QuestionResolveResult> {
+    const entry = this.requirePendingEntry(id);
+    const canonical = this.validateAnswers(entry.record.questions, answers);
+    entry.committing = true;
+    const assertCurrent = () => {
+      const active = entry.isRequesterActive?.();
+      if (
+        this.closed ||
+        entry.retired ||
+        this.entries.get(id) !== entry ||
+        entry.record.status !== "pending" ||
+        entry.record.expiresAtMs <= this.scheduler.now() ||
+        active === false
+      ) {
+        throw new QuestionManagerError(
+          QuestionManagerErrorCodes.REQUESTER_INACTIVE,
+          "The question ended or changed. Request a new question.",
+        );
+      }
+    };
+    return this.publications.track(async () => {
+      try {
+        assertCurrent();
+        await options.commit(assertCurrent);
+        // A known commit owns the terminal fact even if authority retires before its ACK arrives.
+        entry.resolutionId = options.resolutionId;
+        entry.record = {
+          ...entry.record,
+          status: "answered",
+          answers: canonical,
+          ...(resolvedBy ? { resolvedBy } : {}),
+        };
+        await this.finish(entry);
+        return { status: "answered", answers: canonical };
+      } catch (error) {
+        entry.commitUnknown = hasSqliteWorkerOutcomeUnknown(error);
+        throw error;
+      } finally {
+        entry.committing = false;
+        if (entry.retired) {
+          this.releaseEntry(entry);
+        } else {
+          this.get(id);
+        }
+      }
+    });
   }
 
   cancel(id: string, resolvedBy?: string): QuestionResolveResult {
@@ -347,7 +457,7 @@ export class QuestionManager {
       status: "cancelled",
       ...(resolvedBy ? { resolvedBy } : {}),
     };
-    this.finish(entry);
+    void this.finish(entry);
     return { status: "cancelled" };
   }
 
@@ -366,16 +476,34 @@ export class QuestionManager {
     const entries = [...this.entries.values()];
     this.entries.clear();
     for (const entry of entries) {
-      entry.sessionAccess?.release();
-      entry.job.cancel();
-      const releaseHumanInputWait = entry.releaseHumanInputWait;
-      entry.releaseHumanInputWait = undefined;
-      releaseHumanInputWait?.(false);
-      entry.admissionContinuation?.release();
-      entry.admissionContinuation = null;
-      for (const waiter of entry.waiters) {
-        waiter();
+      if (entry.committing) {
+        entry.retired = true;
+        entry.job.cancel();
       }
+    }
+    for (const entry of entries) {
+      if (!entry.committing) {
+        this.releaseEntry(entry);
+      }
+    }
+  }
+
+  private releaseEntry(entry: QuestionEntry): void {
+    if (this.entries.get(entry.record.id) === entry) {
+      this.entries.delete(entry.record.id);
+    }
+    entry.releaseRequesterWatch?.();
+    entry.releaseRequesterWatch = undefined;
+    entry.sessionAccess?.release();
+    entry.requesterLifetime?.release();
+    entry.job.cancel();
+    const releaseHumanInputWait = entry.releaseHumanInputWait;
+    entry.releaseHumanInputWait = undefined;
+    releaseHumanInputWait?.(false);
+    entry.admissionContinuation?.release();
+    entry.admissionContinuation = null;
+    for (const waiter of entry.waiters) {
+      waiter();
     }
   }
 
@@ -384,17 +512,24 @@ export class QuestionManager {
     const record = this.get(id);
     const entry = this.entries.get(id);
     if (!record || !entry || entry.record !== record) {
-      throw this.notFound(id);
+      throw new QuestionManagerError(
+        QuestionManagerErrorCodes.NOT_FOUND,
+        `question '${id}' was not found`,
+      );
     }
     return entry;
   }
 
   private requirePendingEntry(id: string): QuestionEntry {
     const entry = this.requireEntry(id);
-    if (entry.record.status !== "pending") {
+    if (entry.record.status !== "pending" || entry.committing || entry.commitUnknown) {
       throw new QuestionManagerError(
         QuestionManagerErrorCodes.ALREADY_TERMINAL,
-        `question '${id}' is already ${entry.record.status}`,
+        entry.commitUnknown
+          ? `question '${id}' has an unknown write outcome; do not resubmit this answer`
+          : entry.committing
+            ? `question '${id}' is already being resolved`
+            : `question '${id}' is already ${entry.record.status}`,
       );
     }
     return entry;
@@ -418,28 +553,33 @@ export class QuestionManager {
         ? answers.answers[question.questionId]
         : undefined;
       if (!values || values.length === 0) {
+        if (question.allowEmpty) {
+          canonical.answers[question.questionId] = [];
+          continue;
+        }
         throw this.invalidAnswer(question.questionId, "requires an answer");
       }
-      if (values.some((value) => (question.isSecret ? value.length === 0 : !value.trim()))) {
+      if (
+        values.some((value) =>
+          question.isSecret || question.presentation === "form"
+            ? value.length === 0
+            : !value.trim(),
+        )
+      ) {
         throw this.invalidAnswer(question.questionId, "contains an empty answer");
       }
       if (!question.multiSelect && values.length > 1) {
         throw this.invalidAnswer(question.questionId, "does not allow multiple answers");
       }
-      // Store the declared option label when a value matches trim-insensitively;
-      // downstream renderers compare answers to option labels exactly.
-      const canonicalValues = values.map((value) => {
-        // Masked free-text answers preserve exact bytes, including whitespace.
-        if (question.isSecret) {
-          return value;
-        }
-        const matched = question.options.find((option) => option.label.trim() === value.trim());
-        return matched ? matched.label : value.trim();
-      });
+      // Store the option's canonical value (value ?? label) so installed clients
+      // sending labels and clients sending values converge on the same answer.
+      const canonicalValues = values.map((value) => canonicalizeQuestionAnswer(question, value));
       if (
         question.options.length > 0 &&
         !question.isOther &&
-        canonicalValues.some((value) => !question.options.some((option) => option.label === value))
+        canonicalValues.some(
+          (value) => !question.options.some((option) => (option.value ?? option.label) === value),
+        )
       ) {
         throw this.invalidAnswer(question.questionId, "contains an unknown option");
       }
@@ -455,23 +595,18 @@ export class QuestionManager {
     );
   }
 
-  private notFound(id: string): QuestionManagerError {
-    return new QuestionManagerError(
-      QuestionManagerErrorCodes.NOT_FOUND,
-      `question '${id}' was not found`,
-    );
-  }
-
   private expire(id: string): void {
     const entry = this.entries.get(id);
-    if (!entry || entry.record.status !== "pending") {
+    if (!entry || entry.record.status !== "pending" || entry.committing) {
       return;
     }
     entry.record = { ...entry.record, status: "expired" };
-    this.finish(entry);
+    void this.finish(entry);
   }
 
-  private finish(entry: QuestionEntry): void {
+  private finish(entry: QuestionEntry): Promise<void> {
+    entry.releaseRequesterWatch?.();
+    entry.releaseRequesterWatch = undefined;
     entry.job.cancel();
     const continuation = entry.admissionContinuation;
     entry.admissionContinuation = null;
@@ -496,13 +631,16 @@ export class QuestionManager {
       try {
         // Enter the original continuation before these callbacks can release its last parked root.
         settle();
-        const { id, status, answers } = entry.record;
+        const { id, status, answers, resolvedBy } = entry.record;
         if (status !== "pending" && this.entries.get(id) === entry) {
           const event: QuestionResolvedEvent =
             status === "answered"
               ? { id, status, answers: answers ?? { answers: {} } }
               : { id, status };
-          await entry.onResolved?.(event, this.observeEntry(entry));
+          await entry.onResolved?.(
+            { ...event, ...(resolvedBy ? { resolvedBy } : {}) },
+            this.observeEntry(entry),
+          );
         }
       } finally {
         continuation?.release();
@@ -510,7 +648,7 @@ export class QuestionManager {
     };
     // Track before invoking: synchronous truth and callbacks retain their ordering,
     // while worker preparation and rejected publication are joined by Gateway shutdown.
-    void this.publications
+    return this.publications
       .track(async () => {
         try {
           let publication: Promise<void>;
@@ -533,6 +671,7 @@ export class QuestionManager {
                 if (this.entries.get(entry.record.id) === entry) {
                   this.entries.delete(entry.record.id);
                   entry.sessionAccess?.release();
+                  entry.requesterLifetime?.release();
                 }
               },
             });

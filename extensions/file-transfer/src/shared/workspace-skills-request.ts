@@ -1,6 +1,7 @@
 import path from "node:path";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { containsParentRefSegment } from "./policy.js";
+import { skillSourceArchive } from "./workspace-skill-source.js";
 
 /** Admission paths for the existing native Skills operations. */
 export function readWorkspaceSkillsRequest(input: unknown) {
@@ -31,6 +32,27 @@ export function readWorkspaceSkillsRequest(input: unknown) {
   };
   const add = (value: unknown, kind: "read" | "write" = "read") => {
     paths.push({ path: path.posix.resolve(readPath(value)), kind });
+  };
+  const addSkill = (value: unknown, kind: "read" | "write") => {
+    if (typeof value !== "string") {
+      throw new Error("Skill operation requires a target");
+    }
+    // Native owners validate registry reference syntax. Its final component is
+    // the only possible installed directory, including @owner/slug references.
+    const slug = path.posix.basename(value.trim());
+    if (!slug || slug === "." || slug === ".." || slug.includes("\\") || slug.includes("\0")) {
+      throw new Error("Invalid Skill target");
+    }
+    const target = path.posix.join(workspaceDir, "skills", slug);
+    add(target, kind);
+    for (const file of [
+      "SKILL.md",
+      ".clawhub/origin.json",
+      ".clawdhub/origin.json",
+      ".openclaw/source-origin.json",
+    ]) {
+      add(path.posix.join(target, file), kind);
+    }
   };
   switch (params.operation) {
     case "discovery":
@@ -82,6 +104,66 @@ export function readWorkspaceSkillsRequest(input: unknown) {
     case "readResources":
       add(asOptionalRecord(request.skill)?.baseDir);
       break;
+    case "applyRoot":
+      add(skillSourceArchive(workspaceDir, request.sourceArchive), "write");
+      if (typeof request.slug !== "string" || !/^[a-z0-9][a-z0-9-]*$/i.test(request.slug)) {
+        throw new Error("Invalid Skill install slug");
+      }
+      add(path.posix.join(workspaceDir, "skills"), "write");
+      addSkill(request.slug, "write");
+      break;
+    case "removeSkill": {
+      const plan = asOptionalRecord(request.plan);
+      if (plan?.workspaceDir !== workspaceDir) {
+        throw new Error("Skill removal plan does not match the workspace");
+      }
+      add(plan.targetDir, "write");
+      addSkill(plan.slug, "write");
+      add(path.posix.join(workspaceDir, "skills"), "write");
+      for (const directory of [".clawhub", ".clawdhub"]) {
+        add(path.posix.join(workspaceDir, directory, "lock.json"), "write");
+      }
+      break;
+    }
+    case "recordSource":
+    case "clawhubRecordInstall":
+    case "clawhubVerifyTarget":
+    case "clawhubPreflight":
+    case "clawhubReadLock":
+    case "clawhubUpdateSlug":
+    case "clawhubUpdateTarget":
+    case "clawhubUpdateGuard":
+    case "clawhubCheckInstall":
+    case "clawhubReadFiles":
+    case "clawhubPlanRemoval": {
+      const writes =
+        params.operation === "recordSource" || params.operation === "clawhubRecordInstall";
+      const kind = writes ? "write" : "read";
+      add(path.posix.join(workspaceDir, "skills"), kind);
+      for (const directory of [".clawhub", ".clawdhub"]) {
+        add(path.posix.join(workspaceDir, directory, "lock.json"), kind);
+      }
+      if (writes) {
+        const slug = asOptionalRecord(request.origin)?.slug;
+        if (typeof slug !== "string" || !/^[a-z0-9][a-z0-9-]*$/i.test(slug)) {
+          throw new Error("Invalid Skill provenance slug");
+        }
+        addSkill(slug, "write");
+      }
+      const reference =
+        request.slug ?? request.requestedSlug ?? asOptionalRecord(request.requested)?.slug;
+      if (reference !== undefined) {
+        addSkill(reference, kind);
+      }
+      if (request.skillDir) {
+        const skillDir = readPath(request.skillDir);
+        if (path.posix.dirname(skillDir) !== path.posix.join(workspaceDir, "skills")) {
+          throw new Error("Skill target is outside the workspace");
+        }
+        addSkill(path.posix.basename(skillDir), kind);
+      }
+      break;
+    }
     case "installDependencies":
       // The command grant admits execution of Gateway-approved native recipes.
       // A file read grant alone cannot enable this command.

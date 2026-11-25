@@ -1,11 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import type {
   WorkerEnvironmentIntentInput,
   WorkerEnvironmentRecord,
@@ -14,7 +15,8 @@ import type {
   WorkerEnvironmentAttachmentRecord,
   WorkerEnvironmentSessionIdentity,
 } from "./session-attachment.js";
-import type { WorkerEnvironmentMutationMethods } from "./store-worker-contract.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
+import type { WorkerEnvironmentMutationMethods } from "./store.types.js";
 
 type AttachmentTable = {
   session_id: string;
@@ -30,24 +32,11 @@ type AttachmentTable = {
 type AttachmentDatabase = Pick<StateDatabase, "worker_environments"> & {
   worker_environment_session_attachments: AttachmentTable;
 };
-const query = (db: DatabaseSync) => getNodeSqliteKysely<AttachmentDatabase>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<AttachmentDatabase>(db);
 
-export const WORKER_ENVIRONMENT_SESSION_ATTACHMENTS_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS worker_environment_session_attachments (
-  session_id TEXT PRIMARY KEY,
-  session_key TEXT NOT NULL,
-  agent_id TEXT NOT NULL,
-  session_lifecycle_revision TEXT,
-  environment_id TEXT NOT NULL UNIQUE,
-  generation INTEGER NOT NULL CHECK (generation >= 1),
-  created_at_ms INTEGER NOT NULL,
-  last_used_at_ms INTEGER NOT NULL,
-  closed_at_ms INTEGER,
-  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
-) STRICT;
-CREATE INDEX IF NOT EXISTS worker_environment_session_attachments_session_key
-ON worker_environment_session_attachments(agent_id, session_key);
-`;
+export const WORKER_ENVIRONMENT_SESSION_ATTACHMENTS_SCHEMA_SQL = getOpenClawStateFeatureSchemaSql(
+  "worker_environment_session_attachments",
+);
 
 function fromRow(row: Selectable<AttachmentTable>): WorkerEnvironmentAttachmentRecord {
   return {
@@ -65,7 +54,7 @@ function fromRow(row: Selectable<AttachmentTable>): WorkerEnvironmentAttachmentR
   };
 }
 
-function get(db: DatabaseSync, sessionId: string) {
+function get(db: EngineConnection, sessionId: string) {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -76,7 +65,10 @@ function get(db: DatabaseSync, sessionId: string) {
   return row ? fromRow(row) : undefined;
 }
 
-export function readWorkerEnvironmentSessionAttachments(db: DatabaseSync, ids?: readonly string[]) {
+export function readWorkerEnvironmentSessionAttachments(
+  db: EngineConnection,
+  ids?: readonly string[],
+) {
   if (ids?.length === 0) {
     return [];
   }
@@ -87,7 +79,7 @@ export function readWorkerEnvironmentSessionAttachments(db: DatabaseSync, ids?: 
 }
 
 export function hasWorkerEnvironmentSessionAttachment(
-  db: DatabaseSync,
+  db: EngineConnection,
   environmentId: string,
 ): boolean {
   return Boolean(
@@ -102,13 +94,15 @@ export function hasWorkerEnvironmentSessionAttachment(
 }
 
 export function createWorkerEnvironmentSessionAttachmentStore(options: {
-  read: () => DatabaseSync;
-  write: <T>(operation: (db: DatabaseSync) => T) => T;
+  db: EngineConnection;
   now: () => number;
-  createIntent: (db: DatabaseSync, input: WorkerEnvironmentIntentInput) => WorkerEnvironmentRecord;
-  getEnvironment: (db: DatabaseSync, environmentId: string) => WorkerEnvironmentRecord | undefined;
+  createIntent: (input: WorkerEnvironmentIntentInput) => WorkerEnvironmentRecord;
+  getEnvironment: (
+    db: EngineConnection,
+    environmentId: string,
+  ) => WorkerEnvironmentRecord | undefined;
 }) {
-  const { read, write, now } = options;
+  const { db, now } = options;
   const assertIdentity = (
     record: WorkerEnvironmentAttachmentRecord,
     expected: WorkerEnvironmentSessionIdentity,
@@ -122,128 +116,116 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
     }
   };
   return {
-    getSessionAttachmentRecord: (sessionId: string) => get(read(), sessionId),
-    createSessionAttachmentIntent(this: void, input, assertCurrent) {
-      return write((db) => {
-        assertCurrent();
-        const previous = get(db, input.sessionId);
-        if (previous) {
-          assertIdentity(previous, input);
-          const environment = options.getEnvironment(db, previous.environmentId);
-          if (environment && !["destroyed", "failed"].includes(environment.state)) {
-            throw new Error(
-              "Conversation already owns a worker environment; stop it before replacing it",
-            );
-          }
-          if (previous.environmentId === input.environmentId) {
-            throw new Error(
-              "This environment request was already stopped; use a new idempotency key",
-            );
-          }
+    getSessionAttachmentRecord: (sessionId: string) => get(db, sessionId),
+    createSessionAttachmentIntent(this: void, input) {
+      const previous = get(db, input.sessionId);
+      if (previous) {
+        assertIdentity(previous, input);
+        const environment = options.getEnvironment(db, previous.environmentId);
+        if (environment && !["destroyed", "failed"].includes(environment.state)) {
+          throw new Error(
+            "Conversation already owns a worker environment; stop it before replacing it",
+          );
         }
-        const environment = options.createIntent(db, input);
-        if (environment.state !== "requested") {
-          throw new Error("Environment request already belongs to an earlier allocation");
+        if (previous.environmentId === input.environmentId) {
+          throw new Error(
+            "This environment request was already stopped; use a new idempotency key",
+          );
         }
-        const at = now();
-        const values = {
-          environment_id: input.environmentId,
-          generation: (previous?.generation ?? 0) + 1,
-          session_lifecycle_revision: input.sessionLifecycleRevision ?? null,
-          created_at_ms: at,
-          last_used_at_ms: at,
-          closed_at_ms: null,
-        };
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .insertInto("worker_environment_session_attachments")
-            .values({
-              session_id: input.sessionId,
-              session_key: input.sessionKey,
-              agent_id: input.agentId,
-              ...values,
-            })
-            .onConflict((oc) => oc.column("session_id").doUpdateSet(values)),
-        );
-        return { attachment: get(db, input.sessionId)!, environment };
-      });
+      }
+      const environment = options.createIntent(input);
+      if (environment.state !== "requested") {
+        throw new Error("Environment request already belongs to an earlier allocation");
+      }
+      const at = now();
+      const values = {
+        environment_id: input.environmentId,
+        generation: (previous?.generation ?? 0) + 1,
+        session_lifecycle_revision: input.sessionLifecycleRevision ?? null,
+        created_at_ms: at,
+        last_used_at_ms: at,
+        closed_at_ms: null,
+      };
+      const row = executeWorkerEnvironmentWrite(
+        db,
+        query(db)
+          .insertInto("worker_environment_session_attachments")
+          .values({
+            session_id: input.sessionId,
+            session_key: input.sessionKey,
+            agent_id: input.agentId,
+            ...values,
+          })
+          .onConflict((oc) => oc.column("session_id").doUpdateSet(values))
+          .returningAll(),
+      ).rows[0];
+      return { attachment: fromRow(row!), environment };
     },
-    closeSessionAttachment(this: void, sessionId, assertCurrent = () => {}) {
-      return write((db) => {
-        assertCurrent();
-        const current = get(db, sessionId);
-        if (!current || current.closedAtMs !== null) {
-          return current;
-        }
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_environment_session_attachments")
-            .set({ closed_at_ms: now() })
-            .where("session_id", "=", sessionId),
-        );
-        return get(db, sessionId);
-      });
+    closeSessionAttachment(this: void, sessionId) {
+      const current = get(db, sessionId);
+      if (!current || current.closedAtMs !== null) {
+        return current;
+      }
+      const row = executeWorkerEnvironmentWrite(
+        db,
+        query(db)
+          .updateTable("worker_environment_session_attachments")
+          .set({ closed_at_ms: now() })
+          .where("session_id", "=", sessionId)
+          .returningAll(),
+      ).rows[0];
+      return row ? fromRow(row) : undefined;
     },
     cancelSessionAttachmentReservation(this: void, record) {
-      write((db) => {
-        const current = get(db, record.sessionId);
-        const environment = options.getEnvironment(db, record.environmentId);
-        if (
-          !current ||
-          current.environmentId !== record.environmentId ||
-          current.generation !== record.generation ||
-          !environment ||
-          environment.state !== "requested" ||
-          environment.leaseId !== null
-        ) {
-          throw new Error("Conversation environment reservation changed before cancellation");
-        }
-        const at = now();
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_environment_session_attachments")
-            .set({ closed_at_ms: current.closedAtMs ?? at })
-            .where("session_id", "=", current.sessionId),
-        );
-        // Closing and cancelling the intent commit together: recovery must never allocate an
-        // environment whose required requester presentation was rejected before provisioning.
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_environments")
-            .set({
-              destroy_requested_at_ms: environment.destroyRequestedAtMs ?? at,
-              teardown_terminal_state: "destroyed",
-              updated_at_ms: at,
-            })
-            .where("environment_id", "=", environment.environmentId)
-            .where("state", "=", "requested"),
-        );
-      });
+      const current = get(db, record.sessionId);
+      const environment = options.getEnvironment(db, record.environmentId);
+      if (
+        !current ||
+        current.environmentId !== record.environmentId ||
+        current.generation !== record.generation ||
+        !environment ||
+        environment.state !== "requested" ||
+        environment.leaseId !== null
+      ) {
+        throw new Error("Conversation environment reservation changed before cancellation");
+      }
+      const at = now();
+      executeWorkerEnvironmentWrite(
+        db,
+        query(db)
+          .updateTable("worker_environment_session_attachments")
+          .set({ closed_at_ms: current.closedAtMs ?? at })
+          .where("session_id", "=", current.sessionId),
+      );
+      // Closing and cancelling the intent commit together: recovery must never allocate an
+      // environment whose required requester presentation was rejected before provisioning.
+      executeWorkerEnvironmentWrite(
+        db,
+        query(db)
+          .updateTable("worker_environments")
+          .set({
+            destroy_requested_at_ms: environment.destroyRequestedAtMs ?? at,
+            teardown_terminal_state: "destroyed",
+            updated_at_ms: at,
+          })
+          .where("environment_id", "=", environment.environmentId)
+          .where("state", "=", "requested"),
+      );
     },
-    touchSessionAttachment(this: void, record, assertCurrent) {
-      write((db) => {
-        assertCurrent();
-        const current = get(db, record.sessionId);
-        if (
-          !current ||
-          current.environmentId !== record.environmentId ||
-          current.generation !== record.generation ||
-          current.closedAtMs !== null
-        ) {
-          throw new Error("Conversation environment attachment is no longer current");
-        }
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_environment_session_attachments")
-            .set({ last_used_at_ms: now() })
-            .where("session_id", "=", record.sessionId),
-        );
-      });
+    touchSessionAttachment(this: void, record) {
+      const result = executeWorkerEnvironmentWrite(
+        db,
+        query(db)
+          .updateTable("worker_environment_session_attachments")
+          .set({ last_used_at_ms: now() })
+          .where("session_id", "=", record.sessionId)
+          .where("environment_id", "=", record.environmentId)
+          .where("generation", "=", record.generation)
+          .where("closed_at_ms", "is", null),
+      );
+      if (result.numAffectedRows !== 1n) {
+        throw new Error("Conversation environment attachment is no longer current");
+      }
     },
   } satisfies Pick<
     WorkerEnvironmentMutationMethods,

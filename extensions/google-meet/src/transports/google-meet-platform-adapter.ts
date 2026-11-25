@@ -44,15 +44,6 @@ type GoogleMeetDialInPlan = {
   dtmfSequence?: string;
 };
 
-function parsePermissionGrantNotes(result: unknown): string[] {
-  const unsupportedPermissions = filterStringEntries(asRecord(result).unsupportedPermissions);
-  const notes = ["Granted Meet microphone/camera permissions through browser control."];
-  if (unsupportedPermissions.includes("speakerSelection")) {
-    notes.push("Chrome did not accept the optional Meet speaker-selection permission.");
-  }
-  return notes;
-}
-
 const manualActionCategories = new Map<string, MeetingManualActionCategory>([
   ["browser-control-unavailable", "browser-control-unavailable"],
   ["google-login-required", "login-required"],
@@ -62,10 +53,6 @@ const manualActionCategories = new Map<string, MeetingManualActionCategory>([
   ["meet-permission-required", "permission-required"],
   ["meet-session-conflict", "session-conflict"],
 ]);
-
-function classifyManualActionReason(reason: string): MeetingManualActionCategory {
-  return manualActionCategories.get(reason) ?? "custom";
-}
 
 export const GOOGLE_MEET_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
   MeetingBrowserJoinSession<GoogleMeetMode>,
@@ -174,7 +161,12 @@ export const GOOGLE_MEET_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
           `Could not grant Meet media permissions automatically: ${formatErrorMessage(error)}`,
         ];
       }
-      return parsePermissionGrantNotes(result);
+      const unsupportedPermissions = filterStringEntries(asRecord(result).unsupportedPermissions);
+      const notes = ["Granted Meet microphone/camera permissions through browser control."];
+      if (unsupportedPermissions.includes("speakerSelection")) {
+        notes.push("Chrome did not accept the optional Meet speaker-selection permission.");
+      }
+      return notes;
     },
   },
   create: {
@@ -196,7 +188,7 @@ export const GOOGLE_MEET_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     },
   },
   parsing: {
-    classifyManualActionReason,
+    classifyManualActionReason: (reason) => manualActionCategories.get(reason) ?? "custom",
     displayName: "Meet",
     invalidTranscriptMessage: "Google Meet transcript payload is invalid.",
     malformedStatusMessage: "Google Meet browser status JSON is malformed.",

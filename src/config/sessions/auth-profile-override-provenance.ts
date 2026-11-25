@@ -9,6 +9,7 @@ type ProviderLoginSessionEntry = Pick<
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
+  | "authProfileOverrideRequired"
 >;
 
 type ProviderLoginSessionAdoption =
@@ -25,8 +26,13 @@ type ProviderLoginSessionAdoption =
 
 type AuthProfileOverrideProvenance = Pick<
   SessionEntry,
-  "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+  | "authProfileOverrideRequired"
 >;
+type SessionAuthProfileOverrideSnapshot = AuthProfileOverrideProvenance &
+  Pick<SessionEntry, "sessionId">;
 
 export function resolveSessionAuthProfileOverrideSource(
   entry: AuthProfileOverrideProvenance | undefined,
@@ -46,15 +52,17 @@ export function resolveCollapsedSessionAuthPinSource(
   return source === "user-link" ? "user" : source;
 }
 
-function matchesLoginSnapshot(
-  current: ProviderLoginSessionEntry,
-  snapshot: ProviderLoginSessionEntry,
+/** Compare stored pin identity without normalizing its provenance. */
+export function matchesSessionAuthProfileOverrideSnapshot(
+  current: SessionAuthProfileOverrideSnapshot,
+  snapshot: SessionAuthProfileOverrideSnapshot,
 ): boolean {
   return (
     current.sessionId === snapshot.sessionId &&
     current.authProfileOverride === snapshot.authProfileOverride &&
     current.authProfileOverrideSource === snapshot.authProfileOverrideSource &&
-    current.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount
+    current.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount &&
+    current.authProfileOverrideRequired === snapshot.authProfileOverrideRequired
   );
 }
 
@@ -94,7 +102,7 @@ export function decideProviderLoginSessionAdoption(params: {
     return { status: "unchanged" };
   }
   if (params.snapshot) {
-    if (!matchesLoginSnapshot(params.current, params.snapshot)) {
+    if (!matchesSessionAuthProfileOverrideSnapshot(params.current, params.snapshot)) {
       return { status: "rejected" };
     }
   } else {

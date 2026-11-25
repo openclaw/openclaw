@@ -1,4 +1,3 @@
-// Scans included config files and resolves include graphs.
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -37,13 +36,12 @@ export async function collectIncludePathsRecursive(params: {
   configPath: string;
   parsed: unknown;
   env?: NodeJS.ProcessEnv;
-  allowedRoots?: readonly string[];
 }): Promise<string[]> {
   const includedPaths = new Set<string>();
   // Canonical paths dedupe permission targets; lexical bases preserve relative
   // include contexts and may need revisiting when first reached too deeply.
   const walkedDepthByBase = new Map<string, number>();
-  const allowedRoots = params.allowedRoots ?? resolveIncludeRoots(params.env);
+  const allowedRoots = resolveIncludeRoots(params.env);
   const resolveInclude = createConfigIncludeResolutionSession(params.configPath, allowedRoots);
 
   const walk = (basePath: string, parsed: unknown, depth: number): void => {

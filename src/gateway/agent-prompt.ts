@@ -1,6 +1,4 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
-// Gateway agent prompt builder.
-// Converts conversation entries into the latest-message-plus-history prompt.
 import { buildHistoryContext, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 
@@ -33,7 +31,6 @@ function toPromptBody(entry: ConversationEntry): string | null {
     : body;
 }
 
-/** Build the prompt text sent to an agent from ordered conversation entries. */
 export function buildAgentMessageFromConversationEntries(entries: ConversationEntry[]): string {
   // Prefer the last user/tool entry as "current message" so the agent responds to
   // the latest user input or tool output, not the assistant's previous message.

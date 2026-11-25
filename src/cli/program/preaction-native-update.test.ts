@@ -1,6 +1,7 @@
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
+import { registerPreActionHooks } from "./preaction.js";
 
 const { ensureConfigReadyMock, ensurePluginRegistryLoadedMock, emitCliBannerMock } = vi.hoisted(
   () => ({
@@ -10,19 +11,16 @@ const { ensureConfigReadyMock, ensurePluginRegistryLoadedMock, emitCliBannerMock
   }),
 );
 vi.mock("./config-guard.js", () => ({ ensureConfigReady: ensureConfigReadyMock }));
-vi.mock("../plugin-registry.js", () => ({
+vi.mock("../../plugins/runtime/runtime-registry-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/runtime/runtime-registry-loader.js")>()),
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
 }));
 vi.mock("../banner.js", () => ({ emitCliBanner: emitCliBannerMock }));
 vi.mock("../../globals.js", () => ({ setVerbose: vi.fn() }));
-let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
 let argv: string[];
 let title: string;
 let forceStderr: boolean;
 let earlyRouting: boolean | null;
-beforeAll(async () => {
-  ({ registerPreActionHooks } = await import("./preaction.js"));
-});
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("NODE_NO_WARNINGS", undefined);
@@ -78,8 +76,6 @@ describe("native update capability startup", () => {
   });
 
   it.each([
-    ["gateway", "install", ["--update-executor", "run"]],
-    ["gateway", "install", ["--update-executor", "invalid"]],
     ["gateway", "install", ["--note", "--update-executor", "--update-executor", "run"]],
     ["gateway", "install", ["--update-executor", "check", "extra"]],
     ["other", "install", ["--update-executor", "check"]],

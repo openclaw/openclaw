@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
+import { resolveNativeDeclarationFixtureSources } from "./native-declaration-fixture-sources.js";
 
 function write(root: string, relative: string, content: string) {
   const target = path.join(root, relative);
@@ -19,7 +20,7 @@ export function installDistArtifactScripts(
   if (compiler && !fs.existsSync(path.join(root, "node_modules/typescript/package.json"))) {
     materializeNativeCompiler(root);
   }
-  for (const script of ["tsx.mjs", ...scripts]) {
+  for (const script of ["tsx.mjs", "generate-kysely-types.mts", ...scripts]) {
     write(
       root,
       `scripts/${script}`,
@@ -31,6 +32,7 @@ export function installDistArtifactScripts(
     "scripts/windows-cmd-helpers.mjs",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
+    ...(compiler ? resolveNativeDeclarationFixtureSources() : []),
   ]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.cpSync(path.join(sourceRoot, file), path.join(root, file), { recursive: true });

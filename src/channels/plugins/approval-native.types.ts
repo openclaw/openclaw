@@ -4,61 +4,42 @@ import type { ExecApprovalRequest } from "../../infra/exec-approvals-core.js";
 import type { PluginApprovalRequest } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequest } from "../../infra/system-agent-approvals.js";
 
-/**
- * Native channel surface that can receive approval prompts.
- */
 export type ChannelApprovalNativeSurface = "origin" | "approver-dm";
 
-/**
- * Native channel destination for an approval prompt.
- */
 export type ChannelApprovalNativeTarget = {
   to: string;
   threadId?: string | number | null;
-};
-
-/**
- * Preferred native delivery surface for approval prompts.
- */
-type ChannelApprovalNativeDeliveryPreference = ChannelApprovalNativeSurface | "both";
-
-/**
- * Approval request shapes supported by native channel approval delivery.
- */
-type ChannelApprovalNativeRequest =
-  | ExecApprovalRequest
-  | PluginApprovalRequest
-  | SystemAgentApprovalRequest;
-
-/**
- * Capabilities returned by native channel approval delivery inspection.
- */
-type ChannelApprovalNativeDeliveryCapabilities = {
-  enabled: boolean;
-  preferredSurface: ChannelApprovalNativeDeliveryPreference;
-  supportsOriginSurface: boolean;
-  supportsApproverDmSurface: boolean;
-  notifyOriginWhenDmOnly?: boolean;
 };
 
 type ChannelApprovalNativeContext = {
   cfg: OpenClawConfig;
   accountId?: string | null;
   approvalKind: ChannelApprovalKind;
-  request: ChannelApprovalNativeRequest;
+  request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 };
 
-/**
- * Adapter implemented by channel plugins that support native approval delivery.
- */
 export type ChannelApprovalNativeAdapter = {
-  describeDeliveryCapabilities: (
-    params: ChannelApprovalNativeContext,
-  ) => ChannelApprovalNativeDeliveryCapabilities;
+  describeDeliveryCapabilities: (params: ChannelApprovalNativeContext) => {
+    enabled: boolean;
+    preferredSurface: ChannelApprovalNativeSurface | "both";
+    supportsOriginSurface: boolean;
+    supportsApproverDmSurface: boolean;
+    notifyOriginWhenDmOnly?: boolean;
+  };
   resolveOriginTarget?: (
     params: ChannelApprovalNativeContext,
   ) => ChannelApprovalNativeTarget | null | Promise<ChannelApprovalNativeTarget | null>;
   resolveApproverDmTargets?: (
     params: ChannelApprovalNativeContext,
   ) => ChannelApprovalNativeTarget[] | Promise<ChannelApprovalNativeTarget[]>;
+};
+
+/** Native delivery discovery that can await worker-owned account state. */
+export type ChannelApprovalNativeAdapterAsync = Omit<
+  ChannelApprovalNativeAdapter,
+  "describeDeliveryCapabilities"
+> & {
+  describeDeliveryCapabilities: (
+    params: ChannelApprovalNativeContext,
+  ) => Promise<ReturnType<ChannelApprovalNativeAdapter["describeDeliveryCapabilities"]>>;
 };

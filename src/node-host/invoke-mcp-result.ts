@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createMcpStructuredContentMirrorMatcher } from "../agents/mcp-structured-mirror.js";
 import { boundedJsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../infra/json-utf8-bytes.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
@@ -33,22 +34,23 @@ export function boundMcpToolResultPayload(result: {
       MCP_INVOKE_PAYLOAD_MAX_BYTES - usedBytes - prefixBytes - reservedMarkerBytes,
     );
     const measured = boundedJsonUtf8Bytes(result.structuredContent, availableBytes);
-    if (measured.complete && measured.bytes <= availableBytes) {
+    if (measured.complete) {
       structuredContent = result.structuredContent;
       usedBytes += prefixBytes + measured.bytes;
     } else {
       payloadTruncated = true;
     }
   }
-  const mirroredStructuredContent = structuredContent
-    ? JSON.stringify(structuredContent, null, 2)
+  const isStructuredMirror = structuredContent
+    ? createMcpStructuredContentMirrorMatcher(structuredContent)
     : undefined;
   const normalizedBlocks = result.content.filter(
     (block): block is McpInvokeContentBlock =>
       isRecord(block) &&
-      (mirroredStructuredContent === undefined ||
+      (isStructuredMirror === undefined ||
         block.type !== "text" ||
-        block.text !== mirroredStructuredContent),
+        typeof block.text !== "string" ||
+        !isStructuredMirror(block.text)),
   );
   const totalTextBytes = normalizedBlocks.reduce<number>(
     (total, block) =>
@@ -98,7 +100,7 @@ export function boundMcpToolResultPayload(result: {
       MCP_INVOKE_PAYLOAD_MAX_BYTES - usedBytes - separatorBytes - reservedMarkerBytes,
     );
     const measured = boundedJsonUtf8Bytes(block, availableBytes);
-    if (!measured.complete || measured.bytes > availableBytes) {
+    if (!measured.complete) {
       payloadTruncated = true;
       continue;
     }

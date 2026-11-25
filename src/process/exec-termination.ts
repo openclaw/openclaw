@@ -1,13 +1,18 @@
 import type { ChildProcess } from "node:child_process";
 import { constants as osConstants } from "node:os";
 import process from "node:process";
+import { hasErrnoCode } from "../infra/errno.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { isChildProcessTreeAlive } from "./child-process-tree.js";
+import { sleep } from "../utils/sleep.js";
+import { isChildProcessTreeAliveAsync, isProcessGroupGoneByKernel } from "./child-process-tree.js";
+import { readCommandProcessStartTime } from "./command-process-identity.js";
 import {
+  COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS,
   COMMAND_PROCESS_TREE_KILL_GRACE_MS,
   runOutsideCommandProcessScope,
   spawnCommand,
+  waitForCommandProcessGroupExit,
 } from "./exec-spawn.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
@@ -19,7 +24,7 @@ type TerminationChild = Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "
 export function createCommandTerminationController(params: {
   child: TerminationChild;
   /** Remote process identity arrives before a pending termination can target its tree. */
-  spawned?: Promise<void>;
+  spawned?: Promise<number | null | void>;
   cancelController: AbortController;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
@@ -30,17 +35,27 @@ export function createCommandTerminationController(params: {
   isCommandSettled: () => boolean;
 }): {
   terminate: () => boolean;
+  cancel: () => void;
   settle: () => Promise<"normal" | "cooperative" | "forced" | "uncertain">;
 } {
   let processTreeSettlement: Promise<void> | undefined;
   let cleanup: "normal" | "cooperative" | "forced" | "uncertain" = "normal";
   const readOriginalStart = () =>
     params.processTree && params.child.pid && process.platform !== "win32"
-      ? getFileLockProcessStartTime(params.child.pid)
+      ? readCommandProcessStartTime(params.child.pid, { child: params.child })
       : null;
-  let awaitingSpawn = params.spawned !== undefined;
+  const preparation =
+    params.spawned ??
+    ((process.platform === "linux" || process.platform === "android") && params.processTree
+      ? Promise.resolve(undefined)
+      : undefined);
+  let awaitingSpawn = preparation !== undefined;
   let terminateWhenSpawned = false;
-  let originalStart = awaitingSpawn ? null : readOriginalStart();
+  let originalStart: number | null = null;
+  if (!preparation && params.processTree && params.child.pid && process.platform !== "win32") {
+    originalStart = getFileLockProcessStartTime(params.child.pid);
+  }
+  let identityReady: Promise<void> | undefined;
   let windowsTerminationPromise: Promise<void> | undefined;
 
   const isDirectChildAlive = () =>
@@ -67,9 +82,7 @@ export function createCommandTerminationController(params: {
       if (graceful) {
         taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T"]));
         // Awaited cleanup stays live after both the child and taskkill handles close.
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, params.killGraceMs);
-        });
+        await sleep(params.killGraceMs);
         if (isDirectChildAlive()) {
           taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T", "/F"]));
         }
@@ -88,7 +101,10 @@ export function createCommandTerminationController(params: {
   const terminate = (): boolean => {
     if (awaitingSpawn) {
       terminateWhenSpawned = true;
-      return false;
+      // The live direct handle still authorizes graceful cancellation during birth preparation.
+      if (params.child.pid === undefined || !isDirectChildAlive()) {
+        return false;
+      }
     }
     const childPid = params.child.pid;
     const directChildAlive = isDirectChildAlive();
@@ -109,9 +125,16 @@ export function createCommandTerminationController(params: {
       if (processTreeSettlement) {
         return !force;
       }
-      const groupAlive = () => isChildProcessTreeAlive({ pid: childPid });
+      const groupAlive = () => isChildProcessTreeAliveAsync({ pid: childPid });
       const forceAndObserve = async () => {
-        const start = getFileLockProcessStartTime(childPid);
+        if (identityReady) {
+          await identityReady;
+        }
+        if (!isDirectChildAlive() && !(await groupAlive())) {
+          return;
+        }
+        const observed = readCommandProcessStartTime(childPid);
+        const start = observed instanceof Promise ? await observed : observed;
         if (start !== null && start !== originalStart) {
           cleanup = "uncertain";
           if (isDirectChildAlive()) {
@@ -119,68 +142,72 @@ export function createCommandTerminationController(params: {
           }
           return;
         }
+        if (!isDirectChildAlive() && isProcessGroupGoneByKernel(childPid)) {
+          return;
+        }
         cleanup = "forced";
         terminateProcessTree(childPid, { force: true, detached: true });
         scheduleAdoptedChildZombieReapAfterExit(params.child, true);
-        const deadline = Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
         // Signal delivery is not exit. Observe only this group; never re-signal a retired PID.
-        while (groupAlive()) {
-          const currentStart = getFileLockProcessStartTime(childPid);
-          const remaining = deadline - Date.now();
-          if (currentStart !== null && currentStart !== originalStart) {
+        cleanup =
+          (await waitForCommandProcessGroupExit(childPid, async () => {
+            const current = await readCommandProcessStartTime(childPid);
+            return current === null || current === originalStart;
+          })) === "exited"
+            ? "forced"
+            : "uncertain";
+      };
+      // Kernel absence remains an immediate result; denied probes are joined below.
+      if (!directChildAlive && isProcessGroupGoneByKernel(childPid)) {
+        return false;
+      }
+      processTreeSettlement = (async () => {
+        if (force) {
+          await forceAndObserve();
+          return;
+        }
+        if (!isDirectChildAlive()) {
+          if (identityReady) {
+            await identityReady;
+          }
+          if (!(await groupAlive())) {
+            return;
+          }
+          const start = await readCommandProcessStartTime(childPid);
+          if (start !== null && start !== originalStart) {
             cleanup = "uncertain";
             return;
           }
+          // Keep the final identity check adjacent to delivery after async observation.
+          if (isProcessGroupGoneByKernel(childPid)) {
+            return;
+          }
+        }
+        cleanup = "cooperative";
+        try {
+          process.kill(-childPid, params.killSignal ?? "SIGTERM");
+        } catch (error) {
+          if (!hasErrnoCode(error, "ESRCH")) {
+            cleanup = "uncertain";
+          }
+        }
+        scheduleAdoptedChildZombieReapAfterExit(
+          params.child,
+          true,
+          params.killGraceMs + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS,
+        );
+        const deadline = performance.now() + params.killGraceMs;
+        while (await groupAlive()) {
+          const remaining = deadline - performance.now();
           if (remaining <= 0) {
-            cleanup = groupAlive() ? "uncertain" : "forced";
+            await forceAndObserve();
             return;
           }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, Math.min(25, remaining));
-          });
+          await sleep(Math.min(25, remaining));
         }
-      };
-      // A timeout signal is policy, not evidence of forced cleanup. Once the
-      // root and its group are gone, do not signal or relabel that normal exit.
-      if (!directChildAlive && !groupAlive()) {
-        return false;
-      }
-      if (force) {
-        processTreeSettlement = forceAndObserve();
-        return false;
-      }
-      cleanup = "cooperative";
-      try {
-        process.kill(-childPid, params.killSignal ?? "SIGTERM");
-      } catch (error) {
-        // SAFETY: Node's kill error carries errno; retain failed sends until group exit is observed.
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-          cleanup = "uncertain";
-        }
-      }
-      // The first registration must outlive graceful cleanup and its force fallback.
-      scheduleAdoptedChildZombieReapAfterExit(
-        params.child,
-        true,
-        params.killGraceMs + COMMAND_PROCESS_TREE_KILL_GRACE_MS,
-      );
-      processTreeSettlement = new Promise<void>((resolve) => {
-        const deadline = Date.now() + params.killGraceMs;
-        const check = () => {
-          if (!groupAlive()) {
-            cleanup = "cooperative";
-            resolve();
-            return;
-          }
-          if (Date.now() < deadline) {
-            setTimeout(check, Math.min(25, deadline - Date.now()));
-            return;
-          }
-          void forceAndObserve().then(resolve);
-        };
-        check();
-      });
-      return true;
+        cleanup = "cooperative";
+      })();
+      return !force;
     }
     if (!directChildAlive) {
       return false;
@@ -193,6 +220,7 @@ export function createCommandTerminationController(params: {
   };
 
   const settle = async (): Promise<"normal" | "cooperative" | "forced" | "uncertain"> => {
+    await identityReady;
     if (windowsTerminationPromise) {
       await windowsTerminationPromise;
       return "forced";
@@ -201,13 +229,33 @@ export function createCommandTerminationController(params: {
     return cleanup;
   };
 
-  if (params.spawned) {
-    void params.spawned.then(
-      () => {
-        originalStart = readOriginalStart();
+  const cancel = () => {
+    const abortDeferred = terminate();
+    if (!abortDeferred) {
+      params.cancelController.abort();
+    } else {
+      // Async tree observation can confirm absence after cancellation deferred its abort.
+      void settle().then(
+        () => {
+          if (!params.isCommandSettled()) {
+            params.cancelController.abort();
+          }
+        },
+        () => {}, // The caller retains the settlement failure.
+      );
+    }
+  };
+
+  if (preparation) {
+    identityReady = preparation.then(
+      async (prepared) => {
+        const observed =
+          typeof prepared === "number" || prepared === null ? prepared : readOriginalStart();
+        originalStart = observed instanceof Promise ? await observed : observed;
         awaitingSpawn = false;
-        if (terminateWhenSpawned && !terminate()) {
-          params.cancelController.abort();
+        if (terminateWhenSpawned) {
+          // The runner owns cancellation; an ordinary early exit only requests tree settlement.
+          terminate();
         }
       },
       () => {
@@ -215,5 +263,5 @@ export function createCommandTerminationController(params: {
       },
     );
   }
-  return { terminate, settle };
+  return { terminate, cancel, settle };
 }

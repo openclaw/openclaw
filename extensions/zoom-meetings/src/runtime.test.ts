@@ -5,10 +5,9 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
-import { zoomMeetingsConfig } from "./config.js";
-import { ZoomMeetingsRuntime } from "./runtime.js";
+import { zoomMeetingsPlugin } from "../index.js";
 
-const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
+const resolveZoomMeetingsConfig = zoomMeetingsPlugin.config.resolveConfig;
 const testState = useMeetingTestState(createOpenClawTestState);
 
 const URL = "https://zoom.us/j/12345678904?pwd=runtime";
@@ -72,18 +71,18 @@ function runtimeHarness(options?: RuntimeHarnessOptions) {
   return harness;
 }
 
-type RuntimeInstance = InstanceType<typeof ZoomMeetingsRuntime>;
+type RuntimeInstance = InstanceType<typeof zoomMeetingsPlugin.Runtime>;
 type RuntimeHarness = ReturnType<typeof runtimeHarness>;
 
 function runtimeFixture(
   options: {
     harness?: RuntimeHarnessOptions;
     config?: Parameters<typeof resolveZoomMeetingsConfig>[0];
-    fullConfig?: ConstructorParameters<typeof ZoomMeetingsRuntime>[0]["fullConfig"];
+    fullConfig?: ConstructorParameters<typeof zoomMeetingsPlugin.Runtime>[0]["fullConfig"];
   } = {},
 ) {
   const harness = runtimeHarness(options.harness);
-  const runtime = new ZoomMeetingsRuntime({
+  const runtime = new zoomMeetingsPlugin.Runtime({
     config: resolveZoomMeetingsConfig(
       options.config ?? {
         defaultMode: "transcribe",

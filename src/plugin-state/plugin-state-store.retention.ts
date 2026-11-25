@@ -1,10 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { Expression } from "kysely";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   bindPluginStateEntry,
   countLivePluginStateNamespaceEntries,
@@ -15,6 +17,7 @@ import {
   isRetainedPluginStateNamespace,
   PLUGIN_STATE_EXPIRY_BATCH_ROWS,
   resolvePluginStateExpiresAtMs,
+  selectLivePluginStateRows,
   upsertPluginStateEntry,
   type PluginStateCountRow,
   type PluginStateDatabase,
@@ -22,97 +25,148 @@ import {
 import type { PluginStateOverflowPolicy } from "./plugin-state-store.types.js";
 
 type PluginStateCountParams = { pluginId: string; now: number };
-const pluginStateCountQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareSqliteQuerySync<PluginStateCountParams, PluginStateCountRow>>
->();
+const pluginStateCountQuery = createSqliteQueryCache((db: EngineConnection) =>
+  prepareSqliteQuerySync<PluginStateCountParams, PluginStateCountRow>(db, (parameter) =>
+    selectLivePluginStateRows(db, {
+      pluginId: parameter((value) => value.pluginId),
+      now: parameter((value) => value.now),
+    }).select((eb) => eb.fn.countAll<number | bigint>().as("count")),
+  ),
+);
 
 export function countLivePluginStateEntries(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: PluginStateCountParams,
 ): number {
-  let query = pluginStateCountQueries.get(db);
-  if (!query) {
-    query = prepareSqliteQuerySync<PluginStateCountParams, PluginStateCountRow>(db, (parameter) =>
-      getPluginStateKysely(db)
-        .selectFrom("plugin_state_entries")
-        .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
-        .where(
-          "plugin_id",
-          "=",
-          parameter((value) => value.pluginId),
-        )
-        .where((eb) =>
-          eb.or([
-            eb("expires_at", "is", null),
-            eb(
-              "expires_at",
-              ">",
-              parameter((value) => value.now),
-            ),
-          ]),
-        ),
-    );
-    pluginStateCountQueries.set(db, query);
-  }
-  const row = query(params).rows[0];
+  const row = pluginStateCountQuery(db)(params).rows[0];
   return coerceRequiredSqliteNumber(row?.count ?? 0);
-}
-
-function deleteOldestPluginStateNamespaceEntries(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; protectedKey: string; now: number; limit: number },
-): number {
-  const kysely = getPluginStateKysely(db);
-  const keys = kysely
-    .selectFrom("plugin_state_entries")
-    .select("entry_key")
-    .where("plugin_id", "=", params.pluginId)
-    .where("namespace", "=", params.namespace)
-    .where("entry_key", "!=", params.protectedKey)
-    .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
-    .orderBy("created_at", "asc")
-    .orderBy("entry_key", "asc")
-    .limit(params.limit);
-  const result = executeSqliteQuerySync(
-    db,
-    kysely
-      .deleteFrom("plugin_state_entries")
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("entry_key", "in", keys),
-  );
-  return Number(result.numAffectedRows ?? 0);
 }
 
 type PluginStateRetention = {
   namespaceCount: number;
   nextExpiry: number;
   now: number;
-  sweepPending: boolean;
+  sweepPending: false | "known" | "unknown";
 };
 
-export function readPluginStateRetention(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; now: number },
-): PluginStateRetention {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
-      .select((eb) => [
-        eb.fn.countAll<number | bigint>().as("namespace_count"),
-        eb.fn.min<number | bigint | null>("expires_at").as("next_expiry"),
-      ])
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
+type PluginStateRetentionParams = { pluginId: string; namespace: string; now: number };
+type PluginStateRetentionRow = {
+  namespace_count: number | bigint | null;
+  next_expiry: number | bigint | null;
+  first_expiry: number | bigint | null;
+};
+
+function selectPluginStateRetention(db: EngineConnection, now: Expression<number>) {
+  // Expired rows trigger cleanup; only a live deadline invalidates the retained count.
+  return getPluginStateKysely(db)
+    .selectFrom("plugin_state_entries")
+    .select((eb) => [
+      eb.fn
+        .sum<number | bigint | null>(
+          eb
+            .case()
+            .when(eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)]))
+            .then(1)
+            .else(0)
+            .end(),
+        )
+        .as("namespace_count"),
+      eb.fn
+        .min<number | bigint | null>(
+          eb.case().when("expires_at", ">", now).then(eb.ref("expires_at")).else(null).end(),
+        )
+        .as("next_expiry"),
+      eb.fn.min<number | bigint | null>("expires_at").as("first_expiry"),
+    ]);
+}
+
+const pluginStateRetentionQuery = createSqliteQueryCache((db: EngineConnection) =>
+  prepareSqliteQuerySync<PluginStateRetentionParams, PluginStateRetentionRow>(db, (parameter) =>
+    selectPluginStateRetention(
+      db,
+      parameter((value) => value.now),
+    )
+      .where(
+        "plugin_id",
+        "=",
+        parameter((value) => value.pluginId),
+      )
+      .where(
+        "namespace",
+        "=",
+        parameter((value) => value.namespace),
+      ),
+  ),
+);
+
+type PluginStateRetentionBatchParams = {
+  pluginId: string;
+  namespaces: readonly string[];
+  now: number;
+};
+// Separate indexed aggregates keep undeclared namespaces out of the query plan.
+const pluginStateRetentionBatchQueries = Array.from({ length: 4 }, (_, lastIndex) =>
+  createSqliteQueryCache((db: EngineConnection) =>
+    prepareSqliteQuerySync<
+      PluginStateRetentionBatchParams,
+      PluginStateRetentionRow & { namespace: string }
+    >(db, (parameter) => {
+      const select = (index: number) =>
+        selectPluginStateRetention(
+          db,
+          parameter((value) => value.now),
+        )
+          .select(parameter((value) => value.namespaces[index]!).as("namespace"))
+          .where(
+            "plugin_id",
+            "=",
+            parameter((value) => value.pluginId),
+          )
+          .where(
+            "namespace",
+            "=",
+            parameter((value) => value.namespaces[index]!),
+          );
+      let query = select(0);
+      for (let index = 1; index <= lastIndex; index++) {
+        query = query.unionAll(select(index));
+      }
+      return query;
+    }),
+  ),
+);
+
+export function readPluginStateRetentionBatch(
+  db: EngineConnection,
+  params: PluginStateRetentionBatchParams,
+): Map<string, PluginStateRetention> {
+  const read = pluginStateRetentionBatchQueries[params.namespaces.length - 1]!;
+  const rows = new Map(read(db)(params).rows.map((row) => [row.namespace, row]));
+  return new Map(
+    params.namespaces.map((namespace) => [
+      namespace,
+      pluginStateRetentionFromRow(rows.get(namespace), params.now),
+    ]),
   );
+}
+
+export function readPluginStateRetention(
+  db: EngineConnection,
+  params: PluginStateRetentionParams,
+): PluginStateRetention {
+  return pluginStateRetentionFromRow(pluginStateRetentionQuery(db)(params).rows[0], params.now);
+}
+
+function pluginStateRetentionFromRow(
+  row: PluginStateRetentionRow | undefined,
+  now: number,
+): PluginStateRetention {
   return {
     namespaceCount: coerceRequiredSqliteNumber(row?.namespace_count ?? 0),
     nextExpiry: normalizeSqliteNumber(row?.next_expiry ?? null) ?? Infinity,
-    now: params.now,
-    sweepPending: true,
+    now,
+    sweepPending:
+      (normalizeSqliteNumber(row?.first_expiry ?? null) ?? Infinity) <= now ? "known" : false,
   };
 }
 
@@ -125,9 +179,9 @@ export function enforcePostRegisterLimits(params: {
   now: number;
   retention?: PluginStateRetention;
   protectedKey: string;
-}): void {
+}): string[] {
   if (isRetainedPluginStateNamespace(params.namespace)) {
-    return;
+    return [];
   }
   if (params.maxEntries === undefined) {
     throw createPluginStateError({
@@ -137,7 +191,7 @@ export function enforcePostRegisterLimits(params: {
     });
   }
   if (params.overflowPolicy === "reject-new") {
-    return;
+    return [];
   }
   const namespaceCount =
     params.retention?.namespaceCount ??
@@ -147,18 +201,30 @@ export function enforcePostRegisterLimits(params: {
       now: params.now,
     });
   if (namespaceCount <= params.maxEntries) {
-    return;
+    return [];
   }
-  const deleted = deleteOldestPluginStateNamespaceEntries(params.store.db, {
-    pluginId: params.pluginId,
-    namespace: params.namespace,
-    protectedKey: params.protectedKey,
-    now: params.now,
-    limit: namespaceCount - params.maxEntries,
-  });
+  const kysely = getPluginStateKysely(params.store.db);
+  const keys = selectLivePluginStateRows(params.store.db, params)
+    .select("entry_key")
+    .where("entry_key", "!=", params.protectedKey)
+    .orderBy("created_at", "asc")
+    .orderBy("entry_key", "asc")
+    .limit(namespaceCount - params.maxEntries);
+  const result = executeSqliteQuerySync(
+    params.store.db,
+    kysely
+      .deleteFrom("plugin_state_entries")
+      .where("plugin_id", "=", params.pluginId)
+      .where("namespace", "=", params.namespace)
+      .where("entry_key", "in", keys)
+      .returning(["plugin_id", "namespace", "entry_key"]),
+  );
+  pluginStatePublication.stageDeletions(params.store.db, result.rows);
+  const deleted = result.rows.length;
   if (params.retention) {
     params.retention.namespaceCount -= deleted;
   }
+  return result.rows.map((row) => row.entry_key);
 }
 
 export function assertCanInsertPluginStateEntry(params: {
@@ -169,6 +235,7 @@ export function assertCanInsertPluginStateEntry(params: {
   overflowPolicy: PluginStateOverflowPolicy;
   now: number;
   retention?: PluginStateRetention;
+  additionalEntries?: 0 | 1;
 }): void {
   if (isRetainedPluginStateNamespace(params.namespace)) {
     return;
@@ -190,7 +257,7 @@ export function assertCanInsertPluginStateEntry(params: {
       namespace: params.namespace,
       now: params.now,
     });
-  if (namespaceCount >= params.maxEntries) {
+  if (namespaceCount + (params.additionalEntries ?? 1) > params.maxEntries) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       operation: "register",
@@ -218,8 +285,10 @@ export function registerPluginStateEntry(
   store: PluginStateDatabase,
   params: PluginStateRegisterEntryParams,
   retention?: PluginStateRetention,
+  existingEntry?: boolean,
+  onEviction?: (keys: readonly string[]) => void,
+  now = Date.now(),
 ): void {
-  const now = Date.now();
   const expiresAt = resolvePluginStateExpiresAtMs({
     ttlMs: params.ttlMs,
     namespace: params.namespace,
@@ -233,16 +302,22 @@ export function registerPluginStateEntry(
     Object.assign(retention, readPluginStateRetention(store.db, { ...params, now }));
   }
   if (!retention || retention.sweepPending) {
-    const deleted = deleteExpiredPluginStateEntries(store.db, now, params);
+    const deleted = deleteExpiredPluginStateEntries(
+      store.db,
+      now,
+      params,
+      retention?.sweepPending === "known",
+    );
     if (retention) {
-      retention.sweepPending = deleted === PLUGIN_STATE_EXPIRY_BATCH_ROWS;
+      retention.sweepPending = deleted === PLUGIN_STATE_EXPIRY_BATCH_ROWS ? "unknown" : false;
     }
   }
   // Quotas and batch counts need existence, never the previous JSON payload.
   const existing =
-    retention || params.overflowPolicy === "reject-new"
+    existingEntry ??
+    (retention || params.overflowPolicy === "reject-new"
       ? hasPluginStateEntry(store.db, { ...params, now })
-      : false;
+      : false);
   if (!existing) {
     assertCanInsertPluginStateEntry({
       store,
@@ -266,11 +341,12 @@ export function registerPluginStateEntry(
     retention.nextExpiry = Math.min(retention.nextExpiry, expiresAt ?? Infinity);
     retention.now = now;
   }
-  enforcePostRegisterLimits({
+  const evicted = enforcePostRegisterLimits({
     store,
     ...params,
     now,
     protectedKey: params.key,
     retention,
   });
+  onEviction?.(evicted);
 }

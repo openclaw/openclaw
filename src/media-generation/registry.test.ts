@@ -1,5 +1,6 @@
 /** Tests media-generation provider registry aliases and plugin capability integration. */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   ImageGenerationProviderPlugin,

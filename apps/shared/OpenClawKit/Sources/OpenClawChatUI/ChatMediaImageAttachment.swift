@@ -76,46 +76,22 @@ struct ChatMediaImageAttachment: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(self.label)
                 .accessibilityHint(String(localized: "Opens image preview"))
+                #if os(macOS)
                 .sheet(isPresented: self.$showsFullImage) {
-                    ZStack(alignment: .topTrailing) {
-                        Color.black.ignoresSafeArea()
-                        ScrollView([.horizontal, .vertical]) {
-                            OpenClawPlatformImageFactory.image(image)
-                                .resizable()
-                                .scaledToFit()
-                                .padding(20)
-                        }
-                        Button {
-                            self.showsFullImage = false
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.title2)
-                                .symbolRenderingMode(.hierarchical)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.white)
-                        .padding(16)
-                        .accessibilityLabel(String(localized: "Close image preview"))
-                    }
+                    ChatMediaImagePreview(image: image) { self.showsFullImage = false }
                 }
+                #else
+                .fullScreenCover(isPresented: self.$showsFullImage) {
+                    ChatMediaImagePreview(image: image) { self.showsFullImage = false }
+                }
+                #endif
             case .unavailable:
-                HStack(spacing: 8) {
-                    Image(systemName: "photo.badge.exclamationmark")
-                    Text(String(localized: "Image unavailable"))
-                        .font(OpenClawChatTypography.footnote)
-                    Spacer()
-                    Button {
-                        self.retryGeneration &+= 1
-                    } label: {
-                        Text(String(localized: "Retry"))
-                            .font(OpenClawChatTypography.footnote)
-                    }
-                    .buttonStyle(.plain)
+                ChatMediaUnavailableRow(
+                    systemImage: "photo.badge.exclamationmark",
+                    message: String(localized: "Image unavailable"))
+                {
+                    self.retryGeneration &+= 1
                 }
-                .foregroundStyle(.secondary)
-                .padding(10)
-                .background(Color.black.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
         .task(id: "\(self.artifactId):\(self.resolverReady):\(self.retryGeneration)") {
