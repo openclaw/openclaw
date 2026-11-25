@@ -34,6 +34,11 @@ import {
   sessionClientCredentialPath,
 } from "./session-message-client.test-support.js";
 import { registerCronSessionCompletionEventTests } from "./session-message-cron.test-support.js";
+import {
+  formatChatDeliveryOutcomes,
+  recordChatDeliveryFrame,
+  type ChatDeliveryObservation,
+} from "./session-message-delivery.test-support.js";
 import { findWatchedPresenceEntry, getConnId } from "./session-message-presence.test-support.js";
 import { registerTerminalSubagentSessionEventTest } from "./session-message-subagent.test-support.js";
 import { createWorkerFanoutFixture } from "./session-message-worker.test-support.js";
@@ -420,28 +425,45 @@ describe("session.message websocket events", () => {
     });
     await connectOk(otherWs, { scopes: ["operator.read"], caps: scopedCaps });
     await connectOk(legacyWs, { scopes: ["operator.read"] });
-    await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
-    await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
+    for (const [ws, key] of [
+      [mainWs, "main"],
+      [otherWs, "other"],
+    ] as const) {
+      const response = await rpcReq(ws, "sessions.messages.subscribe", { key });
+      expect({
+        ok: response.ok,
+        key: typeof response.payload?.key === "string" ? response.payload.key : undefined,
+        subscribed:
+          typeof response.payload?.subscribed === "boolean"
+            ? response.payload.subscribed
+            : undefined,
+      }).toEqual({ ok: true, key: `agent:main:${key}`, subscribed: true });
+    }
 
     // Fixture preparation has no delivery deadline; arm observers after readiness, before send.
     await prepareGatewayReplyRuntimeForTest();
     using otherChats = collectEventPayloads(otherWs, "chat");
+    const observations: ChatDeliveryObservation[] = [];
     const chatEvents = [
       { label: "session-scoped", ws: mainWs },
       { label: "legacy", ws: legacyWs },
     ].map(({ label, ws }) => {
       const armedAt = performance.now();
-      return onceMessage(ws, matchingEvent("chat", { sessionKey: "agent:main:main" })).catch(
-        (cause: unknown) => {
-          throw new Error(
-            `Chat delivery observer ${label} failed after ${Math.round(performance.now() - armedAt)}ms`,
-            { cause },
-          );
-        },
-      );
+      const observation: (typeof observations)[number] = { label, count: 0 };
+      observations.push(observation);
+      const matches = matchingEvent("chat", { sessionKey: "agent:main:main" });
+      return onceMessage(ws, (frame) => {
+        recordChatDeliveryFrame(observation, frame);
+        return matches(frame);
+      }).catch((cause: unknown) => {
+        throw new Error(
+          `Chat delivery observer ${label} failed after ${Math.round(performance.now() - armedAt)}ms`,
+          { cause },
+        );
+      });
     });
 
-    const [send, ...delivered] = await Promise.all([
+    const [send, ...delivered] = await Promise.allSettled([
       rpcReq(mainWs, "chat.send", {
         sessionKey: "main",
         message: "/status",
@@ -458,7 +480,14 @@ describe("session.message websocket events", () => {
       }),
       ...chatEvents,
     ]);
-    expect(send.ok, JSON.stringify(send)).toBe(true);
+    const diagnostic = formatChatDeliveryOutcomes(send, delivered, observations);
+    const failures = [send, ...delivered].flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (send.status === "rejected" || failures.length > 0) {
+      throw new AggregateError(failures, `Chat delivery outcomes: ${diagnostic}`);
+    }
+    expect(send.value.ok, diagnostic).toBe(true);
     expect(delivered).toHaveLength(2);
     // Reasserting existing membership replies after any chat frame already queued on this socket.
     const barrier = rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
