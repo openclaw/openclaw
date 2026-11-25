@@ -86,7 +86,9 @@ environment variable. It redacts the connection from child output.
 Arguments after `--` go to the normal test runner. Start with a file or directory
 to replace the default targets; options alone retain all suites. For example,
 append `-- src/infra/postgres-sync/locks.test.ts --maxWorkers=1` for a smoke test.
-Use `--shard 1/4`, `--shard 2/4`, `--shard 3/4`, or `--shard 4/4` for the CI partitions.
+Use `--shard 1/6` through `--shard 6/6` to reproduce the PostgreSQL 17
+partitions in `ci.yml`. For the separate scheduled qualification workflow, use
+`--shard 1/4` through `--shard 4/4`.
 The shared weighted allocator balances the existing target inventory using committed
 `config/postgres-conformance-timings.json` measurements. Refresh those advisory
 weights from per-file case spans in PostgreSQL conformance job logs when costs change;
