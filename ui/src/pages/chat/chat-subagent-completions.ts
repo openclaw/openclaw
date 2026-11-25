@@ -21,7 +21,7 @@ import {
   type ChatProjection,
 } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
-import { chatItemStartsUserTurn, readProjectedContinuation } from "./chat-turn-boundary.ts";
+import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 
 /** Read the result before call/result coalescing moves it to the invocation's start. */
 export function projectSubagentCompletions(
@@ -185,10 +185,7 @@ export function projectSubagentCompletions(
       previous?.kind === "message" &&
       earlier.length &&
       hidden?.has(previous.key) === hidden?.has(item.key) &&
-      // A settle that steers into the run the previous one woke joins its row;
-      // a receipt that resumes the chat keeps its own row.
-      (transcriptRunId(previous.message) === transcriptRunId(item.message) ||
-        readProjectedContinuation(item.message) === undefined)
+      transcriptRunId(previous.message) === transcriptRunId(item.message)
     ) {
       const owner = asOptionalRecord(previous.message)!;
       const derivations = getMessageDerivations(owner);

@@ -74,7 +74,10 @@ export function subagentCompletionMessage(
   const runId =
     normalizeOptionalString(metadata?.steerTargetRunId) ??
     normalizeOptionalString(metadata?.runId) ??
-    normalizeOptionalString(record?.runId);
+    normalizeOptionalString(record?.runId) ??
+    // A wake that started its own run carries that run's send key, so the
+    // receipt opens the turn the parent spends on the result.
+    normalizeOptionalString(record?.idempotencyKey)?.match(/^(.+):user$/)?.[1];
   return {
     role: "assistant",
     phase: "commentary",

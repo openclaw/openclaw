@@ -453,7 +453,13 @@ it("projects recorded subagent completions without exposing the private continua
   });
   const projected = projectChatDisplayMessages([input]);
   expect(projected).toMatchObject([
-    { role: "assistant", phase: "commentary", subagentCompletions: [completion] },
+    // The receipt belongs to the run its wake started, which is the parent's turn on the result.
+    {
+      role: "assistant",
+      phase: "commentary",
+      subagentCompletions: [completion],
+      runId: "completion-turn",
+    },
   ]);
   expect(JSON.stringify(projected)).not.toContain("PRIVATE");
   expect(projectChatDisplayMessages(projected)).toEqual(projected);

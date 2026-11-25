@@ -162,8 +162,8 @@ describe("grouped chat rendering", () => {
           messages: [
             { role: "user", content: "Fix the composer", timestamp: 1 },
             createAssistantMessage("Handed off.", { timestamp: 2, runId: "ask" }),
-            // The first settle wakes the parent; the next one steers into that run.
-            receipt("child-one", 10),
+            // The first settle wakes the parent's run; the next one steers into it.
+            receipt("child-one", 10, { runId: "announce:child-one" }),
             receipt("child-two", 11, { runId: "announce:child-one" }),
           ],
         }),
