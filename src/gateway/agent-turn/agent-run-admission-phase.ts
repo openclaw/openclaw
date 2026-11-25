@@ -633,8 +633,8 @@ export async function prepareAgentRunDispatch(
         ...params,
         sessionId: params.getAdmittedSessionId(),
         spawnedBy: params.sessionEntry?.spawnedBy,
-        isCurrent: params.hasCurrentClientAuthority,
         inputProvenance: userTurn.inputProvenance,
+        grant: capturedOperator.authority?.grant,
       },
       activeRunAbort.controller.signal,
     );

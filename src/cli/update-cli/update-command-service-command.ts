@@ -18,7 +18,10 @@ import {
 import { GATEWAY_UPDATE_EXECUTOR_CONTRACT } from "../../daemon/service-update-authority.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { GIT_RELEASE_LAUNCHER } from "../../infra/git-release-paths.js";
+import {
+  GIT_RELEASE_LAUNCHER,
+  resolveGitReleaseLauncherForEntrypoint,
+} from "../../infra/git-release-paths.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
@@ -111,7 +114,10 @@ export async function stageUpdatedInstallGatewayService(
       port: params.gatewayPort,
       runtime: pin.pin?.runtime ?? "node",
       runtimePath: executable,
-      serviceCli: { executable, entrypoint },
+      serviceCli: {
+        executable,
+        entrypoint: resolveGitReleaseLauncherForEntrypoint(entrypoint) ?? entrypoint,
+      },
       existingCommand: command,
       existingEnvironment: managed.environment,
       existingEnvironmentValueSources: managed.environmentValueSources,

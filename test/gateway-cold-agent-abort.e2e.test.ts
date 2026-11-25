@@ -86,11 +86,13 @@ it(
               runIds: [runId],
             });
             // The agent RPC retains its cancellation wire status; agent.wait retains the terminal outcome.
+            // Cancelled before the provider replied, the run had no effects, so it is replay-safe.
             expect(await final).toEqual({
               runId,
               status: "timeout",
               summary: "aborted",
               stopReason: "rpc",
+              replaySafe: true,
             });
             expect(await client.request("agent.wait", { runId, timeoutMs: 1_000 })).toMatchObject({
               status: "error",

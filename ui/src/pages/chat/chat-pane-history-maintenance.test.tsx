@@ -159,18 +159,6 @@ it.each([
     expect(transcript.isPositionSettled).toBe(true);
     container.dispatchEvent(new Event("scroll"));
 
-    class HistoryIntersectionObserver {
-      constructor(private readonly callback: IntersectionObserverCallback) {}
-      observe() {
-        this.callback(
-          [{ isIntersecting: true } as IntersectionObserverEntry],
-          this as unknown as IntersectionObserver,
-        );
-      }
-      unobserve() {}
-      disconnect() {}
-    }
-    vi.stubGlobal("IntersectionObserver", HistoryIntersectionObserver);
     await vi.advanceTimersByTimeAsync(150);
     stopObserving();
     expect(scrolling).toBe(false);

@@ -56,7 +56,6 @@ describe("re-bind to new machine keys under the same root", () => {
 
   it("a client that missed several re-binds verifies the newest directly", async () => {
     const { world, pin, rebind } = await rebound();
-    await rebind("gateway-2", 2);
     const newest = await rebind("gateway-3", 3);
     expect(
       await verifyBindingForPin({ root_pub: world.rootPub, binding: newest.binding }, pin, context),

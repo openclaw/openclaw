@@ -349,13 +349,25 @@ export function buildRoleSnapshotFromAiSnapshot(
   const refs: RoleRefMap = {};
 
   const out: string[] | undefined = suppliedOptions === undefined ? undefined : [];
+  // Unnamed generic wrappers don't count toward maxDepth, matching CDP role snapshots.
+  const ancestors: Array<{ indent: number; childDepth: number }> = [];
   for (const line of lines) {
-    const depth = getIndentLevel(line);
+    const indent = getIndentLevel(line);
+    let parent = ancestors.at(-1);
+    while (parent && parent.indent >= indent) {
+      ancestors.pop();
+      parent = ancestors.at(-1);
+    }
+    const depth = parent?.childDepth ?? 0;
+    const parsed = parseSnapshotLine(line);
+    if (parsed) {
+      const wrapper = parsed.role === "generic" && !parsed.nameToken;
+      ancestors.push({ indent, childDepth: depth + (wrapper ? 0 : 1) });
+    }
     if (options.maxDepth !== undefined && depth > options.maxDepth) {
       continue;
     }
 
-    const parsed = parseSnapshotLine(line);
     if (!parsed) {
       if (!options.interactive) {
         out?.push(line);

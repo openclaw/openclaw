@@ -52,6 +52,9 @@ export function projectTranscriptActivity(
       if (group?.kind !== "group") {
         return undefined;
       }
+      if (group.compaction) {
+        return { key: group.key, running: group.compaction.phase === "active" };
+      }
       const messages = group.messages.filter(
         ({ message }) => transcriptRunId(message) === activityRunId,
       );

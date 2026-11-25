@@ -13,6 +13,7 @@ import {
   writeGatewayRestartIntentSync,
   writeGatewayServiceRestartIntentSync,
 } from "../../infra/restart-intent.js";
+import { releaseOpenClawStateDatabaseCustody } from "../../state/openclaw-state-db-cache.js";
 
 export function createServiceRestartIntent(params: {
   serviceNoun: string;
@@ -73,6 +74,7 @@ export function createServiceRestartIntent(params: {
             assertCurrent: assertGatewayServiceUpdateCurrent,
           })
         : writeGatewayRestartIntentSync({ ...options, targetPid: runtime?.pid });
+      await releaseOpenClawStateDatabaseCustody();
     },
     clear: () => {
       if (recorded) {

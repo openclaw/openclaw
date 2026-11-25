@@ -4,7 +4,7 @@ import {
   resolveToolDetailForArgs,
   type ToolDisplaySpec,
 } from "../../../../src/agents/tool-display-common.js";
-import { TOOL_DISPLAY_CONFIG } from "../../../../src/agents/tool-display-config.js";
+import { TOOL_DISPLAY_CONFIG } from "../../../../src/agents/tool-display-detail-config.js";
 import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js";
 import { resolveToolDisplayIdentity } from "./tool-display-identity.ts";
 

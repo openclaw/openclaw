@@ -112,18 +112,14 @@ Agent questions appear above the message box. You can keep writing or queue a
 follow-up while the question is expanded; sending a chat message does not answer
 the question. Use its choices and **Submit**, or **Skip**, to resolve it.
 
-## Edit a failed message
+<a id="edit-a-failed-message" />
 
-If a model rejects a message (for example, because it contains too many images),
-choose **Edit message** on the latest failed reply. Confirm the rewind to return
-that message and its attachments to the composer, remove or change attachments,
-and send again. The rejected turn remains in a saved conversation branch, but is
-excluded from the active model context.
+## Rewind and fork
 
-Send or clear any existing composer draft first; recovery never replaces it.
-Editing requires permission to rewind the conversation and is unavailable while
-a run is active. **Try again** still continues the existing conversation without
-replaying the original message, because earlier actions may already have run.
+To edit a failed message, hover over your original message and choose **Rewind**,
+or right-click it and choose **Rewind to here**. Confirm to load the message and
+its attachments into the composer. Rewind replaces any draft already there.
+
 Rewinding does not undo external actions. Rewinding and switching branches keep
 the existing conversation and move only its active branch, so neither copies the
 transcript. Both still read its history navigation, and a selection far from the
@@ -286,7 +282,7 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 
 If the New Session page fails during its initial render, the UI attempts one automatic page reload per browser tab. A repeated failure shows **Retry** instead of starting a reload loop. Automatic recovery is skipped if session storage is unavailable, the serving document cannot be reached, or unsaved work blocks reloading. Errors after the composer has rendered use in-page retry instead.
 
-Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The handoff waits for the session list and expanded child-session reads to finish or report an error; elapsed reconnect time alone does not replace saved rows. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
+Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The handoff waits for the session list and expanded child-session reads to finish or report an error; elapsed reconnect time alone does not replace saved rows. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. New session becomes available once the connected Gateway grants session-creation access, without waiting for cached rows to be replaced. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
 On a warm chat reload, browsers that retain the previous page during navigation can reveal the cached sidebar and conversation together. If that cached page is slow to prepare, the usual loading layout appears instead. Missing cached content, sign-in, and route errors release the loading view immediately.
 
@@ -371,6 +367,8 @@ over the worker's bulk download, which resumes after page requests settle.
 If the selected session changes while its message subscription is being admitted, chat retries that read with fresh access checks for up to one minute. Saved replies load after the subscription succeeds, without resending your message. Switching chats or losing access stops recovery; a persistent failure leaves **Retry** available.
 
 Opening a nested session from a **Waiting on** link, a direct URL, or browser history expands its owning sidebar group and session ancestors so you can see where the session belongs. Other branches keep their disclosure state, and ordinary refreshes do not undo a branch you collapse while staying in the same session.
+
+On a page reload, the sidebar remembers branches you opened manually. Branches opened automatically for another chat start collapsed; the sidebar still reveals the path to the nested chat you're opening.
 
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
@@ -522,7 +520,9 @@ with a reported zero exit code still shows **failed** in its summary and expande
 result. Nonzero exit codes remain visible as diagnostics; captured output and
 reported exit facts are unchanged.
 
-Failed replies show **Try again** at the right of the heading. A compact
+Failed replies show one action at the right of the heading: **Open Models** when
+the provider rejects the saved key or reports a billing problem, **Start a new
+session** when the harness needs an update, and **Try again** otherwise. A compact
 **Copy error** icon beside the title appears on hover or keyboard focus, and
 stays visible on touch devices. **Details** appears only when the diagnostic
 contains more than the visible summary. To change models, use the model picker

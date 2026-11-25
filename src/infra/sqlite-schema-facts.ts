@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { postgresPhysicalFactsKey } from "./database-engine/physical-facts-contract.js";
 import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js";
 import type { EngineConnection, PostgresSqlConnection } from "./sql-connection.js";
@@ -36,6 +36,7 @@ import { observeSchemaLifetime } from "./sqlite-schema-lifetime.js";
 import { canPreserveTransactionSnapshot } from "./sqlite-schema-mutation.js";
 import {
   finishSqliteReadScope,
+  postgresReadSnapshots,
   observeSqliteTransactionState as observeTransactionState,
   sqliteSchemaOwners as owners,
   type SqliteSchemaOwner as SchemaOwner,
@@ -55,12 +56,7 @@ export type {
   SqliteReadScopeRevision,
 } from "./sqlite-schema-scope.js";
 
-const postgresReadSnapshots = resolveGlobalSingleton(
-  Symbol.for("openclaw.postgresReadSnapshots"),
-  () => new WeakMap<PostgresSqlConnection, PostgresReadSnapshotRevision>(),
-);
-
-/** The transaction owner supplies one admitted lifetime immediately after read-only BEGIN. */
+/** Retain admitted schema before BEGIN can overlap a sibling's schema publication. */
 export function beginPostgresReadSnapshotScope(database: PostgresSqlConnection): () => void {
   const schema = getPostgresPhysicalFacts(database);
   // These readers declare no key dependencies, so capture the whole-store receipt.
@@ -80,7 +76,7 @@ function isPostgresReadReceiptCurrent(
   database: PostgresSqlConnection,
   revision: PostgresReadSnapshotRevision,
 ): boolean {
-  const schema = getPostgresPhysicalFacts(database);
+  const schema = getSqliteDatabaseAdmission(database, postgresPhysicalFactsKey);
   return (
     database.isOpen &&
     schema?.namespace === revision.schema.namespace &&

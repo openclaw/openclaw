@@ -5,10 +5,14 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { copyOwnedBuffer } from "../shared/owned-buffer.js";
 import { hasChildProcessExited, releaseChildProcessOutputAfterExit } from "./child-process.js";
 import type { CommandInputOptions } from "./command-stdin-file.js";
-import { resolveMaxOutputBytes, type CommandOutputStream } from "./exec-output.js";
+import {
+  appendCapturedOutput,
+  resolveMaxOutputBytes,
+  type CapturedBytes,
+  type CommandOutputStream,
+} from "./exec-output.js";
 import {
   CommandProcessCleanupError,
   createSanitizedCommandError,
@@ -308,39 +312,31 @@ export async function runCommandBuffered(
     };
   }
 
-  const chunks: Record<CommandOutputStream, Buffer[]> = { stdout: [], stderr: [] };
-  const capturedBytes: Record<CommandOutputStream, number> = { stdout: 0, stderr: 0 };
-  const maxCombinedOutputBytes = resolveOptionalIntegerOption(
-    asPositiveFiniteNumber(options.maxCombinedOutputBytes),
-    { min: 1 },
-  );
+  const stdout: CapturedBytes = { chunks: [], bytes: 0, truncatedBytes: 0 };
+  const stderr: CapturedBytes = { chunks: [], bytes: 0, truncatedBytes: 0 };
+  const maxCombinedOutputBytes =
+    resolveOptionalIntegerOption(asPositiveFiniteNumber(options.maxCombinedOutputBytes), {
+      min: 1,
+    }) ?? Number.POSITIVE_INFINITY;
   let outputLimitStream: CommandOutputStream | undefined;
   const appendChunk = (chunk: Buffer, stream: CommandOutputStream): boolean => {
     if (options.discardOutput?.[stream]) {
       return true;
     }
-    const maxBytes = resolveMaxOutputBytes(options.maxOutputBytes, stream);
-    const combinedBytes = capturedBytes.stdout + capturedBytes.stderr;
-    const combinedRemaining =
-      maxCombinedOutputBytes === undefined
-        ? Number.POSITIVE_INFINITY
-        : Math.max(0, maxCombinedOutputBytes - combinedBytes);
-    const remaining = Math.max(0, Math.min(maxBytes - capturedBytes[stream], combinedRemaining));
-    if (remaining > 0) {
-      // Pipe chunks stay immutable until concatenation; only clipped views need owned storage.
-      const captured =
-        chunk.byteLength > remaining ? copyOwnedBuffer(chunk.subarray(0, remaining)) : chunk;
-      chunks[stream].push(captured);
-      capturedBytes[stream] += captured.byteLength;
-    }
-    if (chunk.byteLength > remaining) {
+    const capture = stream === "stdout" ? stdout : stderr;
+    const maxBytes = Math.min(
+      resolveMaxOutputBytes(options.maxOutputBytes, stream),
+      maxCombinedOutputBytes - (stream === "stdout" ? stderr.bytes : stdout.bytes),
+    );
+    const truncatedBytes = capture.truncatedBytes;
+    appendCapturedOutput(capture, chunk, maxBytes, "head");
+    if (capture.truncatedBytes > truncatedBytes) {
       outputLimitStream ??= stream;
       return false;
     }
     return true;
   };
-  const capturedOutput = (stream: CommandOutputStream) =>
-    Buffer.concat(chunks[stream], capturedBytes[stream]);
+  const capturedOutput = ({ chunks, bytes }: CapturedBytes) => Buffer.concat(chunks, bytes);
 
   try {
     const result = await runCommandWithTimeout(argv, {
@@ -377,8 +373,8 @@ export async function runCommandBuffered(
         ? new CommandProcessCleanupError()
         : undefined;
     return {
-      stdout: capturedOutput("stdout"),
-      stderr: capturedOutput("stderr"),
+      stdout: capturedOutput(stdout),
+      stderr: capturedOutput(stderr),
       code: termination === "exit" ? result.code : null,
       signal: result.signal,
       killed: result.killed,
@@ -398,8 +394,8 @@ export async function runCommandBuffered(
         ? metadata.outputErrorStream
         : undefined;
     return {
-      stdout: capturedOutput("stdout"),
-      stderr: capturedOutput("stderr"),
+      stdout: capturedOutput(stdout),
+      stderr: capturedOutput(stderr),
       code: typeof metadata.exitCode === "number" ? metadata.exitCode : null,
       signal: null,
       killed: false,

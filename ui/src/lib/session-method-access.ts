@@ -26,6 +26,8 @@ export type SessionMethodAccessRequest = {
   method: string;
   params?: unknown;
   requiredScope?: OperatorScope;
+  /** Optional UI copy for a missing grant; other denials keep their own explanation. */
+  missingScopeReasonKey?: string;
   /** Only callers exposing a scoped action opt into the Gateway's narrow alternative. */
   sessionScope?: boolean;
   /** Opt into the explicit desired-state mutation allowlist. */
@@ -42,6 +44,7 @@ export function sessionAccessRowForBatch(rows: readonly SessionAccessRow[]) {
 function deniedAccess(
   requiredScope: OperatorScope,
   cause: Exclude<SessionMethodAccess, { allowed: true }>["cause"],
+  missingScopeReasonKey?: string,
 ): SessionMethodAccess {
   return {
     allowed: false,
@@ -52,9 +55,8 @@ function deniedAccess(
         disconnected: "sessionsView.actionRequiresConnection",
         "method-unavailable": "sessionsView.actionUnavailable",
         "session-not-owned": "sessionsView.actionRequiresOwnership",
-        "missing-scope": "sessionsView.actionRequiresScope",
+        "missing-scope": missingScopeReasonKey ?? "sessionsView.actionPermissionDenied",
       }[cause],
-      { scope: requiredScope },
     ),
   };
 }
@@ -82,7 +84,7 @@ export function readSessionMethodScopeAccess(
     !Array.isArray(scopes) ||
     !roleScopesAllow({ role, requestedScopes: [requiredScope], allowedScopes: scopes })
   ) {
-    return deniedAccess(requiredScope, "missing-scope");
+    return deniedAccess(requiredScope, "missing-scope", request.missingScopeReasonKey);
   }
   const patch =
     request.method === "sessions.patchMany" && isRecord(request.params)

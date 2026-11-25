@@ -86,14 +86,6 @@
           "dryRun": {
             "type": "boolean"
           },
-          "effect": {
-            "description": "Alias for effectId.",
-            "type": "string"
-          },
-          "effectId": {
-            "description": "sendWithEffect id/name.",
-            "type": "string"
-          },
           "emoji": {
             "description": "Unicode emoji or custom name:id (also <:name:id> / <a:name:id>). Use action:\"emoji-list\" for server emojis.",
             "type": "string"
@@ -114,9 +106,6 @@
           },
           "gatewayUrl": {
             "type": "string"
-          },
-          "gifPlayback": {
-            "type": "boolean"
           },
           "groupId": {
             "type": "string"
@@ -486,10 +475,6 @@
             ],
             "type": "object"
           },
-          "quoteText": {
-            "description": "Telegram reply quote text.",
-            "type": "string"
-          },
           "remove": {
             "type": "boolean"
           },
@@ -501,12 +486,6 @@
           },
           "target": {
             "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
-            "type": "string"
-          },
-          "targetAuthor": {
-            "type": "string"
-          },
-          "targetAuthorUuid": {
             "type": "string"
           },
           "targets": {

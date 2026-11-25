@@ -37,6 +37,7 @@ export type CliLoopbackBundleMcp = {
  */
 export async function prepareCliLoopbackBundleMcp(params: {
   run: RunCliAgentParams;
+  storeAdmission?: object;
   config: OpenClawConfig;
   workspaceDir: string;
   agentId: string;
@@ -94,6 +95,7 @@ export async function prepareCliLoopbackBundleMcp(params: {
   try {
     const acquisition = await acquireSessionMcpRuntime({
       ...mcpConfig,
+      storeAdmission: params.storeAdmission,
       sessionId: run.sessionId,
       sessionKey: run.sessionKey,
       agentId: params.agentId,
@@ -113,6 +115,7 @@ export async function prepareCliLoopbackBundleMcp(params: {
       // Calls bind to this turn's verified sender; a senderless turn
       // (completion, automation, child run) gets an explicit refusal.
       requesterScoped = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+        storeAdmission: params.storeAdmission,
         workspaceDir: params.workspaceDir,
         cfg: params.config,
         toolOverrides: run.toolOverrides,

@@ -58,7 +58,7 @@ it.for([
               candidate === "repeated-edited-truncation"
                 ? 34
                 : candidate === "observed-repeated-truncation"
-                  ? 38
+                  ? 46
                   : 80,
           },
           (_, index) => `192.0.2.${index}`,
@@ -97,31 +97,43 @@ it.for([
     await io.readConfigFileSnapshot({ recoverSuspicious: true });
     await expectFiles({ [configPath]: truncated });
     let rejected = truncated;
-    const edits =
+    const baselineBytes = Buffer.byteLength(healthy);
+    const sizeDropThreshold = Math.floor(baselineBytes / 2);
+    const edits: { port: number; trustedProxies?: string[] }[] =
       candidate === "observed-repeated-truncation"
-        ? [19203, 1]
+        ? [
+            // Put the stamped backup and the final edit on opposite sides of the size threshold
+            // with enough margin for both stable and prerelease writer metadata.
+            { port: 19203, trustedProxies: ["198.51.100.1", "198.51.100.2", "198.51.100.3"] },
+            { port: 19204, trustedProxies: undefined },
+          ]
         : candidate === "repeated-edited-truncation"
-          ? [19203, 19204]
+          ? [{ port: 19203 }, { port: 19204 }]
           : candidate === "edited-truncation" || candidate === "newer-backup"
-            ? [19203]
+            ? [{ port: 19203 }]
             : [];
-    for (const port of edits) {
+    for (const gatewayEdit of edits) {
       const before = await io.readConfigFileSnapshot();
       const predecessor = rejected;
       await io.writeConfigFile(
-        { ...before.sourceConfig, gateway: { ...before.sourceConfig.gateway, port } },
+        { ...before.sourceConfig, gateway: { ...before.sourceConfig.gateway, ...gatewayEdit } },
         { baseSnapshot: before },
       );
       rejected = await fs.readFile(configPath, "utf8");
       // Later metadata-stamped predecessors can hide the original size reduction.
       await expectFiles({ [`${configPath}.bak`]: predecessor });
+      if (gatewayEdit.trustedProxies) {
+        expect(Buffer.byteLength(rejected)).toBeGreaterThanOrEqual(sizeDropThreshold);
+      }
     }
     if (candidate === "observed-repeated-truncation") {
-      await io.readConfigFileSnapshot();
+      const rejectedBytes = Buffer.byteLength(rejected);
+      expect(rejectedBytes).toBeLessThan(sizeDropThreshold);
+      const reread = await io.readConfigFileSnapshot();
       expect(
         readConfigHealthStateFromStore({ env: process.env, homedir: () => home, logger: console })
           .entries?.[configPath]?.lastObservedSuspiciousSignature,
-      ).toContain("size-drop-vs-last-good");
+      ).toBe(`${reread.hash}:size-drop-vs-last-good:${baselineBytes}->${rejectedBytes}`);
     }
     if (candidate === "newer-backup") {
       // The health owner witnessed this newer backup before the loss was inherited.
