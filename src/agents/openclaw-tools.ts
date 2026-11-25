@@ -637,7 +637,7 @@ function* createOpenClawToolsSteps(
       ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
       requesterProfileId: options?.gatewayUiCommandTarget?.profileId,
-      supportsActiveOnly: !embedded,
+      gatewayBacked: !embedded,
       requireSessionReadOwner: embedded,
     }),
     createSessionsHistoryTool({

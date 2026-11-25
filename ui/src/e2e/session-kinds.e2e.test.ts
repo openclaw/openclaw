@@ -168,18 +168,15 @@ suite.define(() => {
         sessionRow("agent:main:beta", "Beta conversation", 4),
         sessionRow("agent:main:room", "Project room", 3, { kind: "group" }),
         sessionRow("cron:weekly", "Weekly check", 2),
-        sessionRow("agent:main:pinned", "Pinned conversation", 1, { pinned: true, pinnedAt: 100 }),
+        sessionRow("agent:main:pinned", "Pinned conversation", 1),
       ];
       await installMockGateway(page, {
         sessionKey: "unknown",
-        methodResponses: {
-          "sessions.list": {
-            count: sessions.length,
-            defaults: { contextTokens: null, model: null, modelProvider: null },
-            path: "",
-            sessions,
-            ts: 10,
-          },
+        sessions,
+        presenceUsers: [{ id: "reader", self: true }],
+        bootstrapPreferences: {
+          profileId: "reader",
+          entries: { "ui.railShortcuts": ["session:agent:main:pinned"] },
         },
       });
       await page.goto(`${suite.server.baseUrl}sessions`);

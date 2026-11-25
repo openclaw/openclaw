@@ -186,12 +186,23 @@ import shared navigation or pinned sessions, and writes nothing until you edit
 your pins or the rail. Both use the existing `ui.railShortcuts` preference; older
 `ui.sidebarEntries` values remain stored but are ignored. Shortcuts saved under
 the new preference, including an empty list, remain unchanged.
-Concurrent saves use conflict checks and preserve unrelated pin edits.
+Concurrent saves use conflict checks and preserve unrelated pin edits. Older native apps and direct RPC
+integrations that do not advertise `personal-session-pins` keep their shared pin list;
+they never receive the profile's private pin list to write back to shared configuration.
+After upgrading, pin the chats you want on your own sidebar. Historical shared pins
+have no recorded pinner and are not copied into anyone's profile. Calls without a
+verified person can still list visible sessions without a pin filter; sign in to
+filter by pins or change them. Admitted session tools always use their requester’s pins. Direct integrations
+opt in on their connection and verify Gateway support before writing a personal pin.
 
-The browser keeps device-specific geometry and transient presentation, such as
-sidebar width and scroll position. Navigation changes on read-only connections
-or connections without a durable profile stay browser-local rather than writing
-another person’s layout or shared Gateway configuration.
+The Control UI ships with its Gateway. For a writable signed-in profile, the
+Sessions table and sidebar use each list response's Gateway time to decide when
+a snoozed pin returns. Editing pin order takes effect immediately. On read-only
+connections or without a durable profile, the browser keeps its own layout and
+uses device time. The Gateway selects those windows in ordinary session order:
+a pin saved on another device cannot displace a newer session. The browser orders
+its own pins among the loaded rows and does not upload them. Sidebar width and
+scroll position also stay on the device.
 
 While New session loads agent defaults, restores saved choices, or checks the
 workspace, **Start session** stays disabled. Trying Enter or pressing the disabled
@@ -557,7 +568,7 @@ conversations. Select the separate **Users** view in the rail to see who is
 online. Category, person, and project grouping controls remain in chip mode;
 team mode keeps empty agent rows visible.
 
-The sidebar uses a window of at most 300 sessions across agents for activity and previews. This does not limit saved rail shortcuts; a personal pin does not reserve a place in that window. The open conversation can remain visible outside it. **Involving me** loads the same bounded window filtered by the Gateway; the other filters apply to the loaded sessions.
+The sidebar uses a window of at most 300 sessions across agents for activity and previews. For a writable signed-in profile, eligible saved pins take priority before the Gateway cuts the page. Browser-local pins do not reserve a place in that window. The window does not limit saved rail shortcuts, and the open conversation can remain visible outside it. **Involving me** loads the same bounded window filtered by the Gateway; the other filters apply to the loaded sessions.
 
 A saved session shortcut whose title has not loaded is labeled **Open session**. Selecting it looks up that session on demand. A missing session shows **Session not found**; a failed lookup asks you to try again.
 
@@ -686,7 +697,7 @@ Root sessions and ordinary Home-linked dashboard sessions can be pinned. Spawned
 An ordinary conversation's **Actions** menu also offers **Move to group**.
 Existing ordinary chats that still link to Home remain top-level sessions.
 
-A pinned parent is a single rail shortcut. Its indented child tree and expand/collapse controls remain in the Sessions list, subject to the current filters.
+Pinning a session in **Pinned** is personal. With a writable signed-in profile, the `sessions_list` tool reads that same list in sidebar order, and a `sessions` pin or unpin updates it for the requester only. Read-only tools can still list the requester's saved pins; they do not read a browser's device-local layout. Dragging a session to the rail creates a separate shortcut; removing either does not remove the other. A parent dragged to the rail is a single shortcut. Its indented child tree and expand/collapse controls remain in the Sessions list, subject to the current filters.
 
 The root menu keeps everyday actions together: **Pin/Unpin**, **Rename**, **Mark as unread/read**, **Copy link**, **Open in**, **Assign to…**, **Move to group**, and **Archive/Restore**. Assignment appears only when the eligible directory contains more than one person or agent, including yourself; online presence does not determine eligibility. The sidebar also offers **Snooze/Wake session** beside Archive. A session with children has one **Archive session** submenu with **Session only** and **Archive session and children…**; the latter still confirms the affected conversations.
 

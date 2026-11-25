@@ -1,5 +1,8 @@
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
-import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
+import {
+  DEFAULT_RAIL_SHORTCUTS,
+  parseSidebarSessionReference,
+} from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
 import {
   pluginTabForLocation,
   type PluginTab,
@@ -133,7 +136,7 @@ export type SidebarZoneEntry =
 
 // Below the fixed Users item, the rail starts with Automations, Customize and
 // Usage; every other page waits in the "more" menu until it is pinned.
-export const DEFAULT_SIDEBAR_ENTRIES: string[] = ["route:cron", "route:plugins", "route:usage"];
+export const DEFAULT_SIDEBAR_ENTRIES = DEFAULT_RAIL_SHORTCUTS;
 
 /**
  * Parse the compact persisted representation used by browser and synced prefs.
@@ -206,17 +209,7 @@ export function isRailSectionPin(entry: string): boolean {
   return entry.startsWith("route:");
 }
 
-/** Personal session pins render in the Sessions list's Pinned section, not the rail. */
-export function personalSessionPinKeys(entries: readonly string[]): Set<string> {
-  const keys = new Set<string>();
-  for (const value of entries) {
-    const entry = parseSidebarEntry(value);
-    if (entry?.type === "session" && !entry.rail) {
-      keys.add(entry.key);
-    }
-  }
-  return keys;
-}
+export { personalSessionPinKeys } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
 
 /**
  * Normalize a persisted sidebar-zone list. Returns null when the value is not a
