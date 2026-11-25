@@ -46,6 +46,7 @@ import { formatSlackTarget } from "./target-parsing.js";
 import { resolveSlackBotToken } from "./token.js";
 import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
 import type { SlackAttachment } from "./types.js";
+import { addSlackAuthorProfiles, type SlackMessageUserProfile } from "./user-profiles.js";
 
 export type { SlackActionClientOpts } from "./action-context.js";
 
@@ -69,47 +70,6 @@ export type SlackMessageSummary = {
     mimetype?: string;
   }>;
 };
-
-type SlackMessageUserProfile = {
-  display_name?: string;
-  real_name?: string;
-  name?: string;
-};
-
-async function addSlackAuthorProfiles(
-  client: WebClient,
-  messages: SlackMessageSummary[],
-): Promise<SlackMessageSummary[]> {
-  const userIds = new Set(
-    messages.flatMap((message) => (message.user && !message.user_profile ? [message.user] : [])),
-  );
-  if (userIds.size === 0) {
-    return messages;
-  }
-  const profiles = new Map(
-    await Promise.all(
-      [...userIds].map(async (userId) => {
-        try {
-          const { user } = await client.users.info({ user: userId });
-          const profile: SlackMessageUserProfile = {
-            display_name: normalizeOptionalString(user?.profile?.display_name),
-            real_name: normalizeOptionalString(user?.profile?.real_name ?? user?.real_name),
-            name: normalizeOptionalString(user?.name),
-          };
-          const named = profile.display_name || profile.real_name || profile.name;
-          return [userId, named ? profile : undefined] as const;
-        } catch (error) {
-          logVerbose(`slack read: users.info failed for ${userId}: ${String(error)}`);
-          return [userId, undefined] as const;
-        }
-      }),
-    ),
-  );
-  return messages.map((message) => {
-    const profile = message.user && !message.user_profile ? profiles.get(message.user) : undefined;
-    return profile ? { ...message, user_profile: profile } : message;
-  });
-}
 
 function renderSlackReadMessageText(message: SlackMessageSummary): SlackMessageSummary {
   if (!hasSlackMessageTableBlock(message)) {
@@ -250,16 +210,20 @@ function normalizeSlackReadTimestamp(
   return formatEpochSeconds(parsed);
 }
 
-async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
-  if (opts.client && !opts.assertDirectAdapterHandoff) {
-    return opts.client;
-  }
-  const accountId = opts.cfg
+function resolveActionAccountId(opts: SlackActionClientOpts): string {
+  return opts.cfg
     ? resolveSlackAccount({
         cfg: requireRuntimeConfig(opts.cfg, "Slack actions"),
         accountId: opts.accountId,
       }).accountId
     : normalizeAccountId(opts.accountId);
+}
+
+async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
+  if (opts.client && !opts.assertDirectAdapterHandoff) {
+    return opts.client;
+  }
+  const accountId = resolveActionAccountId(opts);
   assertSlackDetachedTargetAllowed(accountId, opts.teamId);
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   const clientTeamId = opts.omitTeamId ? undefined : opts.teamId;
@@ -610,7 +574,13 @@ export async function readSlackMessages(
     .map(renderSlackReadMessageText);
   return {
     messages: opts.includeAuthorProfiles
-      ? await addSlackAuthorProfiles(client, messages)
+      ? await addSlackAuthorProfiles({
+          accountId: resolveActionAccountId(opts),
+          teamId: opts.teamId,
+          token: opts.client ? opts.token : resolveToken(opts.token, opts.accountId, opts.cfg),
+          client,
+          messages,
+        })
       : messages,
     hasMore: exactMessageId ? false : Boolean(result.has_more),
   };
