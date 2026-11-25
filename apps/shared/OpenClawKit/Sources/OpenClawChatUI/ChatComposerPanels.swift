@@ -78,6 +78,15 @@ final class ChatComposerPanelController {
         self.panel = nil
     }
 
+    /// Bumped when VoiceOver closes the effort bar, so its chip takes the VoiceOver cursor back.
+    private(set) var effortChipFocusRequest = 0
+
+    func escapeEffortBar() {
+        guard self.panel == .effort else { return }
+        self.dismiss()
+        self.effortChipFocusRequest += 1
+    }
+
     func requestSignIn() {
         self.opensSignIn = true
         self.dismiss()
@@ -165,6 +174,8 @@ struct ChatComposerPanelHost: ViewModifier {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
             ChatEffortBar(viewModel: self.viewModel)
+                // VoiceOver's two-finger scrub closes the bar and returns to the effort chip.
+                    .accessibilityAction(.escape) { self.controller.escapeEffortBar() }
         }
         .frame(width: composer.width, height: room)
         .position(x: composer.midX, y: top + room / 2)
@@ -179,6 +190,7 @@ struct ChatComposerPanelButton<Label: View>: View {
     let isFocused: Bool
     @ViewBuilder let label: () -> Label
     @Environment(\.openClawChatComposerPanels) private var panels
+    @AccessibilityFocusState private var hasVoiceOverFocus: Bool
 
     var body: some View {
         Button {
@@ -195,6 +207,10 @@ struct ChatComposerPanelButton<Label: View>: View {
             self.label()
         }
         .buttonStyle(.plain)
+        .accessibilityFocused(self.$hasVoiceOverFocus)
+        .onChange(of: self.panels?.effortChipFocusRequest) { _, _ in
+            if self.panel == .effort { self.hasVoiceOverFocus = true }
+        }
     }
 }
 
