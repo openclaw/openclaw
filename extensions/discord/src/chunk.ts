@@ -2,7 +2,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { chunkByParagraph, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { chunkTextForOutbound, findCodeRegions } from "openclaw/plugin-sdk/text-chunking";
-import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
+import { createGraphemeChunkEndFinder } from "openclaw/plugin-sdk/text-grapheme";
 
 type ChunkDiscordTextOpts = {
   /** Max characters per Discord message. Default: 2000. */
@@ -425,8 +425,9 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
     const span = spans[firstSpanEndingAfter(position)];
     return Boolean(span && span.start < position && position < span.end);
   };
+  const findEnd = createGraphemeChunkEndFinder(source);
   const boundary = (start: number, end: number) => {
-    let safe = findGraphemeChunkEnd(source, start, end);
+    let safe = findEnd(start, end);
     const prefixSpan = firstPrefixEndingAfter(safe);
     if (prefixSpan && prefixSpan.base + prefixSpan.code.prefix.start < safe) {
       return prefixSpan.base + prefixSpan.code.prefix.start;

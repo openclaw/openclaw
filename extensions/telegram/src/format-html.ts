@@ -1,5 +1,5 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
+import { createGraphemeChunkEndFinder } from "openclaw/plugin-sdk/text-grapheme";
 
 export function escapeTelegramHtml(text: string): string {
   if (!/[&<>]/.test(text)) {
@@ -190,14 +190,14 @@ export function prepareTelegramHtmlTextSplitter(source: string): TelegramHtmlTex
   }
   parts.push(source.slice(sourceOffset));
   const decoded = entities.length > 0 ? parts.join("") : source;
+  const findEnd = createGraphemeChunkEndFinder(decoded);
 
   return (start: number, maxLength: number, allowPartialGrapheme: boolean): number => {
     const sourceEnd = start + maxLength;
     const preferredEnd = findTelegramHtmlWordSafeSplitIndex(source, start, sourceEnd);
     return mapTelegramHtmlTextOffset(
       entities,
-      findGraphemeChunkEnd(
-        decoded,
+      findEnd(
         mapTelegramHtmlTextOffset(entities, start, "decoded"),
         mapTelegramHtmlTextOffset(entities, sourceEnd, "decoded"),
         mapTelegramHtmlTextOffset(entities, preferredEnd, "decoded"),
