@@ -338,13 +338,6 @@ export const formatElevatedEvent = (level: SessionEntry["elevatedLevel"]) =>
       ? "Elevated ASK - exec runs on host; approvals may still apply."
       : "Elevated OFF - exec stays in sandbox.";
 
-export const formatReasoningEvent = (level: SessionEntry["reasoningLevel"]) =>
-  level === "stream"
-    ? "Reasoning STREAM - emit live <think>."
-    : level === "on"
-      ? "Reasoning ON - include <think>."
-      : "Reasoning OFF - hide <think>.";
-
 export function formatElevatedUnavailableText(params: {
   runtimeSandboxed: boolean;
   failures?: Array<{ gate: string; key: string }>;
