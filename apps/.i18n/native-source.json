@@ -1208,6 +1208,8 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.0bea58a046e447f1","source":"%@ percent of the context window used"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.0102e81a57d2e118","source":"%@ tokens used"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.a799c14c4eedce0e","source":"Couldn’t attach %@"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.8201fb1f40190c2a","source":"Opens the image full screen."},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f207bfe572fa02c8","source":"Photo"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.71fc1cf8303ab11a","source":"Preparing %@"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.d898f7816310ec73","source":"Remove %@"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.31a51cac63324c00","source":"Remove attachment: %@"},

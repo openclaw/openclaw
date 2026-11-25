@@ -67,6 +67,31 @@ struct ChatAttachmentRailTests {
         #expect(ChatAttachmentTile.detail(for: bare) == "2 KB")
     }
 
+    @Test func `a tap on a staged photo pages through the draft's photos from their own bytes`() throws {
+        let picked = Self.attachment(
+            OpenClawChatGeneratedAttachmentName.picked(.photo) + ".jpg", "image/jpeg", bytes: 3, preview: Self.photo)
+        let named = Self.attachment("beach.png", "image/png", bytes: 5, preview: Self.photo)
+        let pdf = Self.attachment("notes.pdf", "application/pdf", bytes: 2048)
+        var failed = OpenClawPreparingAttachment(
+            id: UUID(), fileName: "photo-3F2A91C4.heic", mimeType: "image/heic",
+            preview: Self.photo, durationSeconds: nil)
+        failed.failure = "Couldn’t attach photo-3F2A91C4.heic."
+        let preparing = OpenClawPreparingAttachment(
+            id: UUID(), fileName: "photo-5C77A0B9.heic", mimeType: "image/heic",
+            preview: Self.photo, durationSeconds: nil)
+        let tiles = [picked, pdf, named].map(ChatAttachmentTileModel.init)
+            + [failed, preparing].map(ChatAttachmentTileModel.init)
+
+        let gallery = ChatAttachmentTileModel.viewerGallery(tiles)
+        // Only staged photos open; a file, a failed or a preparing tile does not.
+        #expect(gallery.items.map(\.artifactId) == [tiles[0].viewerID, tiles[2].viewerID])
+        #expect(tiles.map(\.opensInViewer) == [true, false, true, false, false])
+        #expect(gallery.items.map(\.title) == [nil, "beach.png"])
+        #expect(gallery.items.allSatisfy { $0.label == "Photo" })
+        #expect(try #require(gallery.media[tiles[2].viewerID]).data.count == 5)
+        #expect(gallery.media[tiles[2].viewerID]?.mimeType == "image/png")
+    }
+
     @Test func `a tile keeps its size from the pick to the staged attachment`() {
         let photo = OpenClawPreparingAttachment(
             id: UUID(), fileName: "photo-3F2A91C4.heic", mimeType: "image/heic", preview: nil, durationSeconds: nil)

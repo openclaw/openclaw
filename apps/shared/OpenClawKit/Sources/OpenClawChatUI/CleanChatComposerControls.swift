@@ -458,6 +458,7 @@ private struct ChatAttachmentThumbnailRail: View {
 
     var body: some View {
         let metrics = ChatAttachmentRailMetrics.self
+        let gallery = ChatAttachmentTileModel.viewerGallery(self.tiles)
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: metrics.gap) {
                 // A prepared attachment keeps its tile's id, so the spinner gives way to it in place.
@@ -468,7 +469,8 @@ private struct ChatAttachmentThumbnailRail: View {
                             ? max(
                                 metrics.fileCardMinWidth,
                                 self.scroll.viewportWidth - 2 * CleanChatComposerMetrics.editorInlineInset)
-                            : .infinity)
+                            : .infinity,
+                        gallery: gallery)
                     {
                         self.onRemove(tile.id)
                     }
@@ -543,6 +545,8 @@ struct ChatAttachmentTileModel: Identifiable {
     let durationSeconds: Double?
     /// Unknown until the file is read.
     let byteCount: Int?
+    /// The staged bytes, which the viewer shows at full size.
+    let data: Data?
     let status: Status
 
     init(_ attachment: OpenClawPendingAttachment) {
@@ -552,6 +556,7 @@ struct ChatAttachmentTileModel: Identifiable {
         self.preview = attachment.preview
         self.durationSeconds = attachment.durationSeconds
         self.byteCount = attachment.data.count
+        self.data = attachment.data
         self.status = .ready
     }
 
@@ -562,7 +567,35 @@ struct ChatAttachmentTileModel: Identifiable {
         self.preview = preparing.preview
         self.durationSeconds = preparing.durationSeconds
         self.byteCount = nil
+        self.data = nil
         self.status = preparing.failure.map { .failed($0, retry: preparing.retry) } ?? .preparing
+    }
+
+    /// The viewer's key for a draft photo; never a Gateway id, so it cannot meet a transcript image.
+    var viewerID: String {
+        "draft-attachment:\(self.id.uuidString)"
+    }
+
+    /// Whether a tap opens the tile in the viewer: a staged photo with its bytes in hand.
+    var opensInViewer: Bool {
+        self.isImage && self.isReady && self.preview != nil && self.data != nil
+    }
+
+    /// The draft's photos the viewer pages through, in rail order, with the bytes each page shows.
+    static func viewerGallery(_ tiles: [ChatAttachmentTileModel]) -> ChatDraftPhotoGallery {
+        let photos = tiles.filter(\.opensInViewer)
+        return ChatDraftPhotoGallery(
+            items: photos.map { tile in
+                ChatImageViewerItem(
+                    artifactId: tile.viewerID,
+                    label: String(localized: "Photo"),
+                    // A name the app made up at pick time names nothing, so the bar shows none.
+                    title: OpenClawChatGeneratedAttachmentName.isGenerated(tile.fileName) ? nil : tile.fileName,
+                    pixelSize: nil)
+            },
+            media: Dictionary(uniqueKeysWithValues: photos.compactMap { tile in
+                tile.data.map { (tile.viewerID, OpenClawChatMediaData(data: $0, mimeType: tile.mimeType)) }
+            }))
     }
 
     /// An image is a square from the pick on, whether or not its pixels are in hand yet.
@@ -585,9 +618,17 @@ struct ChatAttachmentTileModel: Identifiable {
     }
 }
 
+/// The draft's photos as viewer pages, and the staged bytes each page shows.
+struct ChatDraftPhotoGallery {
+    var items: [ChatImageViewerItem] = []
+    var media: [String: OpenClawChatMediaData] = [:]
+}
+
 struct ChatAttachmentTile: View {
     let tile: ChatAttachmentTileModel
     let maxCardWidth: CGFloat
+    /// The draft's photos, so a tapped photo pages through the others in the viewer.
+    var gallery = ChatDraftPhotoGallery()
     let onRemove: @MainActor () -> Void
     @ScaledMetric(relativeTo: .caption) private var cardMinWidth = ChatAttachmentRailMetrics.fileCardMinWidth
     @ScaledMetric(relativeTo: .caption) private var cardMaxWidth = ChatAttachmentRailMetrics.fileCardMaxWidth
@@ -617,10 +658,38 @@ struct ChatAttachmentTile: View {
             .accessibilityLabel(self.accessibilityLabel)
             .accessibilityValue(self.accessibilityValue)
             .accessibilityAddTraits(self.isImage && self.tile.isReady ? .isImage : [])
+            .accessibilityHint(self.tile.opensInViewer ? String(localized: "Opens the image full screen.") : "")
+            .accessibilityAction { self.openViewer() }
             .overlay { self.failureControl }
             .overlay(alignment: .topTrailing) { self.removeButton }
             .animation(.easeOut(duration: 0.2), value: self.tile.isReady)
             .help(self.tile.fileName)
+    }
+
+    /// The staged photo, opened in the transcript's viewer from the bytes the draft holds. The
+    /// viewer grows out of this tile and returns to it; the draft underneath is left as it was.
+    private func viewerButton(_ preview: OpenClawPlatformImage) -> some View {
+        let size = ChatAttachmentRailMetrics.tileSize
+        return Button(action: self.openViewer) {
+            ChatImageViewerThumbnail(image: preview, artifactId: self.tile.viewerID, fillsProposal: true)
+                .frame(width: size, height: size)
+                .allowsHitTesting(false)
+                .overlay { Color.clear.contentShape(Rectangle()) }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func openViewer() {
+        guard self.tile.opensInViewer, let preview = self.tile.preview else { return }
+        let media = self.gallery.media
+        ChatImageViewerController.present(
+            items: ChatImageViewerItem.viewerItems(
+                self.gallery.items,
+                opening: self.tile.viewerID,
+                label: String(localized: "Photo")),
+            artifactId: self.tile.viewerID,
+            thumbnail: preview,
+            load: { id in media[id].map(OpenClawChatLoadedMedia.data) })
     }
 
     private var accessibilityLabel: Text {
@@ -650,7 +719,9 @@ struct ChatAttachmentTile: View {
         let metrics = ChatAttachmentRailMetrics.self
         if self.isImage {
             ZStack {
-                if let preview = self.tile.preview {
+                if let preview = self.tile.preview, self.tile.opensInViewer {
+                    self.viewerButton(preview)
+                } else if let preview = self.tile.preview {
                     OpenClawPlatformImageFactory.image(preview)
                         .resizable()
                         .scaledToFill()
