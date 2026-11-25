@@ -220,14 +220,17 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       }
     }
     // An on-demand tool is called by name before its definition is sent, so the stream knows it.
+    // Without one, live names stay the visible set itself, as before.
+    const onDemandNames = (
+      preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef?.current?.entries ?? []
+    )
+      .filter((entry) => entry.onDemand && !entry.requiresExactId)
+      .map((entry) => normalizeToolPolicyName(entry.name));
     const liveAllowedToolNames = deferredDirectoryToolsCallable
       ? collectUniqueCatalogToolNames(uncompactedEffectiveTools)
-      : new Set([
-          ...visibleAllowedToolNames,
-          ...(preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef?.current?.entries ?? [])
-            .filter((entry) => entry.onDemand && !entry.requiresExactId)
-            .map((entry) => normalizeToolPolicyName(entry.name)),
-        ]);
+      : onDemandNames.length > 0
+        ? new Set([...visibleAllowedToolNames, ...onDemandNames])
+        : visibleAllowedToolNames;
     if (deferredDirectoryToolsCallable) {
       // Hidden Tool Search controls are not deferred catalog entries.
       for (const controlName of TOOL_SEARCH_CONTROL_TOOL_NAMES) {
