@@ -64,7 +64,7 @@ for (const task of ["sessions.catalog.list", "sessions.resolve", "status", "heal
 let clones = 0;
 let stacks = 0;
 const clone = globalThis.structuredClone;
-const prepare = Error.prepareStackTrace;
+const prepare = Error.prepareStackTrace?.bind(Error);
 if (counts) {
   globalThis.structuredClone = (value, options) => {
     if (
@@ -81,7 +81,7 @@ if (counts) {
     if (error.name === "AbortError") {
       stacks++;
     }
-    return prepare?.(error, frames) ?? `${error}\n${frames.join("\n")}`;
+    return prepare?.(error, frames) ?? error.toString();
   };
 }
 
@@ -131,11 +131,15 @@ for (const listeners of [1, 2, 4]) {
       { includePrivateData: false },
     ),
   );
-  for (let i = 0; i < 2_000; i++) sample();
+  for (let i = 0; i < 2_000; i++) {
+    sample();
+  }
   deliveries = 0;
   const samples = counts ? 1_000 : 20_000;
   await measure(`memory/${listeners}`, samples, () => {
-    for (let i = 0; i < samples; i++) sample();
+    for (let i = 0; i < samples; i++) {
+      sample();
+    }
     assert.equal(deliveries, samples * listeners);
     return deliveries;
   });
@@ -163,7 +167,9 @@ for (const captureSignal of [false, true]) {
   const run = async (items: number) => {
     let completed = 0;
     const runJob = async () => {
-      if (captureSignal) getAsyncWorkSignal();
+      if (captureSignal) {
+        getAsyncWorkSignal();
+      }
       await trackAsyncWork(async () => {
         completed++;
       });
@@ -180,5 +186,3 @@ for (const captureSignal of [false, true]) {
   await measure(captureSignal ? "drain/signal" : "drain/unobserved", items, () => run(items));
 }
 await scheduler.stop();
-globalThis.structuredClone = clone;
-Error.prepareStackTrace = prepare;

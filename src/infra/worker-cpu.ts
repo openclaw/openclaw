@@ -648,8 +648,12 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     recordWorkerHeap(source, record.heapUsed);
     // The private port already cloned these rows. Seal the nested rows shared with samples.
     delete record.gc;
-    if (record.heapSpaces) freezeOwnedDiagnosticSnapshot(record.heapSpaces);
-    if (record.retainedData) freezeOwnedDiagnosticSnapshot(record.retainedData);
+    if (record.heapSpaces) {
+      freezeOwnedDiagnosticSnapshot(record.heapSpaces);
+    }
+    if (record.retainedData) {
+      freezeOwnedDiagnosticSnapshot(record.retainedData);
+    }
     source.heap = { value: record, sampledAt: performance.now() };
     source.memoryPending = false;
     source.memoryUnavailable = false;
