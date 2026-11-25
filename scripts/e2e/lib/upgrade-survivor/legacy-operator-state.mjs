@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { compareReleaseVersions } from "../../../lib/release-version.mjs";
 import { assertAgentReplyContainsMarker } from "../agent-turn-output.mjs";
 import { readTcpPortEnv } from "../env-limits.mjs";
 import { readJson } from "../fixtures/common.mjs";
@@ -96,12 +97,24 @@ function approvalsCommand() {
   return /^\s+approvals\b/mu.test(help) ? "approvals" : "exec-approvals";
 }
 
+function baselineUsesPluginWorkshop() {
+  return (
+    (compareReleaseVersions(
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION ?? "",
+      "2026.11.10",
+    ) ?? -1) >= 0
+  );
+}
+
 export function seedLegacyOperatorState() {
-  // Published baselines expose either the retired boolean or the later mode.
-  // Read their schema before authoring settings; never retry a rejected write.
+  // Read the published schema before authoring the opt-out; never retry a rejected write.
   const schema = cli(["config", "schema"], "legacy-operator-config-schema", { json: true });
-  const autonomous =
-    schema.properties?.skills?.properties?.workshop?.properties?.autonomous?.properties ?? {};
+  const pluginWorkshop = baselineUsesPluginWorkshop();
+  const workshop = pluginWorkshop
+    ? schema.properties?.plugins?.properties?.entries?.properties?.["skill-workshop"]?.properties
+        ?.config
+    : schema.properties?.skills?.properties?.workshop;
+  const autonomous = workshop?.properties?.autonomous?.properties ?? {};
   const hasEnabled = Object.hasOwn(autonomous, "enabled");
   assert.notEqual(
     hasEnabled,
@@ -109,9 +122,14 @@ export function seedLegacyOperatorState() {
     "legacy operator Workshop schema must expose exactly one autonomous field",
   );
   assert(
-    hasEnabled
-      ? autonomous.enabled?.type === "boolean"
-      : Array.isArray(autonomous.mode?.anyOf) &&
+    pluginWorkshop
+      ? !hasEnabled &&
+          autonomous.mode?.type === "string" &&
+          Array.isArray(autonomous.mode.enum) &&
+          autonomous.mode.enum.includes("off")
+      : hasEnabled
+        ? autonomous.enabled?.type === "boolean"
+        : Array.isArray(autonomous.mode?.anyOf) &&
           autonomous.mode.anyOf.some(
             (option) => option.type === "string" && option.const === "off",
           ),
@@ -167,7 +185,8 @@ export function seedLegacyOperatorState() {
   set("agents.defaults.model.primary", MODEL);
   // Preserve an authored workspace skill without autonomous learning; the
   // restrictive plugin allowlist intentionally excludes unrelated defaults.
-  set(`skills.workshop.autonomous.${workshopAutonomousField}`, hasEnabled ? false : "off");
+  const workshopPath = pluginWorkshop ? "plugins.entries.skill-workshop.config" : "skills.workshop";
+  set(`${workshopPath}.autonomous.${workshopAutonomousField}`, hasEnabled ? false : "off");
   seedLegacyOperatorAuth();
   // Every fixture client shares this container's loopback network namespace.
   set("plugins.entries.device-pair", {
@@ -612,10 +631,12 @@ export function assertLegacyOperatorConfig(stage) {
   const coreWorkshop = Object.hasOwn(config.skills ?? {}, "workshop");
   const pluginEntry = config.plugins?.entries?.["skill-workshop"];
   const pluginWorkshop = Object.hasOwn(pluginEntry ?? {}, "config");
-  // Published baselines and older candidates keep core settings. Newer Doctor
-  // moves them into marked plugin config and deletes the retired core key.
+  // Older baselines author core settings; Doctor moves those into marked plugin config.
+  // Newer baselines author plugin settings directly and must keep that placement.
   assert.notEqual(coreWorkshop, pluginWorkshop, "legacy operator Workshop locations changed");
-  if (stage === "baseline") {
+  if (baselineUsesPluginWorkshop()) {
+    assert(pluginWorkshop, "legacy operator Workshop plugin placement changed");
+  } else if (stage === "baseline") {
     assert(coreWorkshop, "legacy operator baseline Workshop placement changed");
   }
   if (pluginWorkshop) {
