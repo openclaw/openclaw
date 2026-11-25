@@ -22,7 +22,9 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const uncertainRoots = new Set<string>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
-    if (uncertainRoots.size) throw new Error("Retaining fixtures with uncertain child settlement");
+    if (uncertainRoots.size) {
+      throw new Error("Retaining fixtures with uncertain child settlement");
+    }
     cleanup();
   }),
 );
@@ -74,6 +76,14 @@ describe("disabled control admission", () => {
     sources.sourceIdentities[1] = sources.sourceIdentities[0]!;
     expect(() => validateWorkloadDefinition(sources)).toThrow("duplicate inputs");
     expect(() => validateWorkloadDefinition({ ...definition(), pnpmVersion: "12.14.0" })).toThrow();
+    for (const critical of [false, undefined, 1, "true", null]) {
+      expect(() =>
+        validateWorkloadDefinition({
+          ...definition(),
+          lane: { ...definition().lane, critical },
+        }),
+      ).toThrow("unique cases and complete source identities");
+    }
   });
   it("binds executable native bytes and rejects script wrappers and other architectures", () => {
     const file = path.join(realpathSync(tempDirs.make("native-pnpm-")), "pnpm");
@@ -106,13 +116,15 @@ function fixture(
     | "exit",
 ) {
   const corepack = process.env.COREPACK_HOME;
-  if (!corepack || !path.isAbsolute(corepack))
+  if (!corepack || !path.isAbsolute(corepack)) {
     throw new Error(
       "Fixture requires preprovisioned setup-pnpm-store-cache COREPACK_HOME; no install attempted",
     );
+  }
   const pnpm = path.join(corepack, "v1/pnpm/12.15.0/node_modules/@pnpm/exe.linux-x64/pnpm");
-  if (!existsSync(pnpm))
+  if (!existsSync(pnpm)) {
     throw new Error("Preprovisioned Linux native pnpm 12.15.0 is missing; no install attempted");
+  }
   hashPreparedPnpmExecutable(pnpm);
   const root = realpathSync(tempDirs.make("disabled-control-"));
   const harness = path.join(root, "harness");
@@ -155,8 +167,9 @@ function fixture(
     "package.json": '{"type":"module"}',
     "pnpm-lock.yaml": "fixture",
   };
-  for (const [file, bytes] of Object.entries(sources))
+  for (const [file, bytes] of Object.entries(sources)) {
     writeFileSync(path.join(workload, file), bytes);
+  }
   writeFileSync(path.join(workload, ".gitignore"), ".ignored/\n");
   const git = (cwd: string, args: string[]) => {
     const result = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 10_000 });
@@ -251,7 +264,9 @@ it
       timeoutMs: 40_000,
     });
     const record = JSON.parse(readFileSync(path.join(output, "disabled.json"), "utf8"));
-    if (record.processTreeSettled) uncertainRoots.delete(f.root);
+    if (record.processTreeSettled) {
+      uncertainRoots.delete(f.root);
+    }
     expect(record).toMatchObject({
       scope: "disabled-only",
       timingAdmission: false,
@@ -277,16 +292,18 @@ it
         expect(record.inventoryError).toContain("Prepared workload changed");
         expect(record.checks.inventory.status).toBe("failed");
       }
-      if (mode === "wrong-oracle" || mode === "mutation")
+      if (mode === "wrong-oracle" || mode === "mutation") {
         expect(record.checks.oracle.status).toBe("failed");
+      }
       if (mode === "cache-activity" || mode === "unknown-diagnostic") {
         expect(record.checks.diagnostic.status).toBe("failed");
       }
-      if (mode === "exit")
+      if (mode === "exit") {
         expect(record.checks.oracle).toEqual({
           status: "unavailable",
           reason: expect.stringContaining("exited with status 7"),
         });
+      }
     } else {
       expect(result.exitCode, readFileSync(path.join(f.root, "cli.log"), "utf8")).toBe(0);
       expect(record.status).toBe("success");
