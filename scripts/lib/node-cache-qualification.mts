@@ -430,7 +430,11 @@ export function readNodeCacheQualification(input: {
       seedSha256,
       receipts: [...bindings.values()]
         .filter((entry) => entry.path.startsWith(qualification + path.sep))
-        .map((entry) => ({ ...entry, path: path.relative(qualification, entry.path) })),
+        .map(({ path: file, bytes, sha256: contentSha256 }) => ({
+          path: path.relative(qualification, file),
+          bytes,
+          sha256: contentSha256,
+        })),
     },
     revalidate,
   };
