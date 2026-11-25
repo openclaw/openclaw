@@ -142,7 +142,9 @@ describeLive("agent exec clean-install Code Mode with environment authentication
       codeModeEngaged: true,
       final: "DONE",
     });
-    expect(result.toolSummary?.tools, failureReceipt).toEqual(expect.arrayContaining(["read", "write"]));
+    expect(result.toolSummary?.tools, failureReceipt).toEqual(
+      expect.arrayContaining(["read", "write"]),
+    );
     expect(result.toolSummary?.failures, failureReceipt).toBe(0);
     await expect(fs.readFile(outputPath, "utf8"), failureReceipt).resolves.toBe(
       `${input}processed\n`,
