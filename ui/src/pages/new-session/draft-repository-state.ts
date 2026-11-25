@@ -138,6 +138,17 @@ export class DraftRepositoryStateOwner {
       : this.checkoutScope?.project === selectedProject && this.checkoutScope.agentId === agentId;
   }
 
+  checkoutUnavailableReason(
+    sourceStatus: "checking" | "unavailable" | undefined,
+  ): string | undefined {
+    if (sourceStatus === "unavailable") {
+      return t("newSession.repositorySourceUnavailable");
+    }
+    return sourceStatus === "checking"
+      ? t("newSession.checkingPlace")
+      : this.currentCheckoutUnavailableReason;
+  }
+
   get currentCheckoutUnavailable(): "checking" | "unavailable" | "worktree" | undefined {
     const snapshot = this.read();
     if (snapshot.remotePlacement) {

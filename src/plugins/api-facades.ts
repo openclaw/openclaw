@@ -22,6 +22,7 @@ export type OpenClawPluginApiWithoutFacades = Omit<OpenClawPluginApi, keyof Plug
 const identitySensitiveRegistrations = new Set([
   "registerCompactionProvider",
   "registerDecisionProvider",
+  "registerRepositorySource",
   "registerGatewayAccessPolicy",
   "registerRepositoryIntegration",
   "registerHttpRoute",

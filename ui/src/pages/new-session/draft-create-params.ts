@@ -31,6 +31,7 @@ export function buildSelectedSessionCreateParams(
     projectId: selectedDraftProjectId(place),
     projectGitUrl: place.hostedEnvironment ? undefined : place.browser.remoteProject?.cloneUrl,
     repository: place.remoteRepository,
+    repositorySource: place.browser.remoteProject?.sourceId,
     deviceFolder: place.deviceFolder,
     worktree: place.worktree,
     worktreeSource: place.freshWorkspace ? "empty" : undefined,
@@ -108,6 +109,9 @@ export function buildSelectedSessionCreateParams(
     ...(projectId ? { projectId } : {}),
     ...(projectGitUrl ? { projectGitUrl } : {}),
     ...(repository ? { repository: { ...repository } } : {}),
+    ...((projectGitUrl || repository) && draft.repositorySource
+      ? { repositorySource: draft.repositorySource }
+      : {}),
     ...(deviceFolder ? { deviceFolder: { ...deviceFolder, path: deviceFolder.path.trim() } } : {}),
     ...(customFolder ? { cwd: customFolder } : {}),
     ...(emptyWorkspace ? { worktree: true, worktreeSource: "empty" as const } : {}),

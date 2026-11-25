@@ -28,6 +28,7 @@ import type {
   PluginSessionActionRegistryRegistration,
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
+import { createRepositorySourceRegistrar } from "./repository-source-registration.js";
 import { validateJsonSchemaValue, type JsonSchemaValue } from "./schema-validator.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 import {
@@ -476,6 +477,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
   };
 
   return {
+    registerRepositorySource: createRepositorySourceRegistrar(state),
     registerSessionExtension,
     registerTrustedToolPolicy,
     registerToolMetadata,

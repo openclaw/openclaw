@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { TLSSocket } from "node:tls";
+import { Value } from "typebox/value";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { PluginsControlUiCatalogSchema } from "../../packages/gateway-protocol/src/public-schema-plugins.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -224,6 +226,44 @@ beforeAll(async () => {
 });
 
 registerPluginCompilerLifecycleTests(activateFixture);
+
+it("discovers only active repository sources without browser assets or custom UI activation", async () => {
+  const registry = createEmptyPluginRegistry();
+  const source = {
+    id: "repositories",
+    label: "Example repositories",
+    searchMethod: "example.search",
+  };
+  const record = createPluginRecord({ id: "repository-example", repositorySources: [source] });
+  registry.plugins.push(
+    record,
+    createPluginRecord({ id: "disabled-source", enabled: false, repositorySources: [source] }),
+    createPluginRecord({ id: "failed-source", status: "error", repositorySources: [source] }),
+  );
+  setActivePluginRegistry(registry);
+  const catalog = await listControlUiPluginCatalog();
+  expect(catalog.plugins).toEqual([]);
+  expect(catalog.repositorySources).toEqual([{ ...source, pluginId: "repository-example" }]);
+  expect(catalog.diagnostics).toEqual([]);
+
+  record.enabled = false;
+  const disabled = await listControlUiPluginCatalog();
+  expect(disabled.repositorySources).toEqual([]);
+  expect(disabled.revision).not.toBe(catalog.revision);
+});
+
+it("keeps Settings metadata out of the browser module catalog", async () => {
+  const fixture = activateFixture();
+  fixture.record.controlUi = {
+    ...fixture.record.controlUi!,
+    settingsViews: [{ section: "memory", panel: "overview" }],
+  };
+  fixture.manifest(fixture.record.uiCapabilities);
+
+  const catalog = await listControlUiPluginCatalog();
+  expect(catalog.plugins.map((plugin) => plugin.pluginId)).toEqual(["native-ui"]);
+  expect(Value.Check(PluginsControlUiCatalogSchema, catalog)).toBe(true);
+});
 
 it("omits settings-only presentations from activation while keeping ordinary plugins", async () => {
   const fixture = activateFixture();

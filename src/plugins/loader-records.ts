@@ -64,6 +64,7 @@ export function createPluginRecord(params: {
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  repositorySources?: PluginRecord["repositorySources"];
   uiCapabilities?: PluginRecord["uiCapabilities"];
   mcpServers?: Record<string, PluginManifestMcpServer>;
 }): PluginRecord {
@@ -118,6 +119,7 @@ export function createPluginRecord(params: {
     contracts: params.contracts,
     dashboard: params.dashboard,
     controlUi: params.controlUi,
+    repositorySources: params.repositorySources,
     uiCapabilities: params.uiCapabilities,
     mcpServers: params.mcpServers,
   };

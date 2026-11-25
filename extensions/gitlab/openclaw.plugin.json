@@ -1,0 +1,26 @@
+{
+  "id": "gitlab",
+  "name": "GitLab",
+  "description": "Start sessions from public GitLab repositories.",
+  "categories": ["developer-tools"],
+  "activation": {
+    "onStartup": true
+  },
+  "repositorySources": [
+    {
+      "id": "repositories",
+      "label": "GitLab",
+      "searchMethod": "gitlab.repositories.search"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "HTTPS address of the GitLab server. Defaults to https://gitlab.com."
+      }
+    }
+  }
+}

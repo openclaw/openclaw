@@ -264,6 +264,7 @@ export type PluginRecord = {
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  repositorySources?: import("./manifest-types.js").PluginManifest["repositorySources"];
   uiCapabilities?: PluginManifestRecord["uiCapabilities"];
   mcpServers?: Record<string, PluginManifestMcpServer>;
   memorySlotSelected?: boolean;
@@ -394,6 +395,12 @@ export type PluginRegistry = {
     pluginConfig?: Record<string, unknown>;
   })[];
   gatewayAccessPolicies: Array<PluginRegistrationOwner & { policy: PluginGatewayAccessPolicy }>;
+  repositorySources: Array<
+    PluginRegistrationOwner & {
+      provider: import("./repository-source-types.js").RepositorySourceV1;
+      assertCurrent: () => void;
+    }
+  >;
   repositoryIntegrations: Array<
     PluginRegistrationOwner & {
       assertCurrent: () => void;

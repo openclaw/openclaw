@@ -40,10 +40,11 @@ async function mountSearch() {
     client: context.gateway.snapshot.client,
     connectionEpoch: 1,
   });
+  const methods = ["projects.searchRemote"];
   Object.assign(context.gateway.snapshot, {
     hello: {
       ...context.gateway.snapshot.hello,
-      features: { methods: ["projects.searchRemote"] },
+      features: { methods },
     },
   });
   vi.spyOn(browser, "projects", "get").mockReturnValue(projects);
@@ -155,6 +156,86 @@ describe("remote project search slot", () => {
     typeQuery("absent");
     expect(view.container.querySelector('[data-value="project:sample"]')).toBeNull();
     expect(view.getByText("No local projects match", { exact: true })).not.toBeNull();
+  });
+
+  it("renders contributed sources beside native results and retains the source on selection", async () => {
+    const { browser, context, request, view, typeQuery } = await mountSearch();
+    Object.assign(context, {
+      plugins: {
+        registryStatus: "complete",
+        repositorySources: [
+          {
+            pluginId: "forge",
+            id: "repositories",
+            key: "forge/repositories",
+            label: "Example Forge",
+            searchMethod: "forge.repositories.search",
+          },
+        ],
+        subscribe: () => () => undefined,
+      },
+    });
+    context.gateway.snapshot.hello!.features!.methods = [
+      "projects.searchRemote",
+      "forge.repositories.search",
+    ];
+    const native = createDeferred<ProjectsSearchRemoteResult>();
+    const contributed = createDeferred<ProjectsSearchRemoteResult>();
+    request.mockImplementation((method) =>
+      method === "forge.repositories.search" ? contributed.promise : native.promise,
+    );
+    typeQuery("sample");
+    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+    contributed.resolve(result("contributed"));
+    await waitForSolid(() => expect(view.queryByText("example/contributed")).not.toBeNull());
+    expect(view.queryByText("Example Forge")).not.toBeNull();
+    // A slow native search cannot hide a completed contributed source.
+    expect(view.queryByText("example/native")).toBeNull();
+    native.resolve(result("native"));
+    await waitForSolid(() => expect(view.queryByText("example/native")).not.toBeNull());
+    view.getByText("example/contributed").click();
+    flush();
+    expect(browser.remoteProject).toMatchObject({
+      sourceId: "forge/repositories",
+      identity: "example/contributed",
+      cloneUrl: "https://github.com/example/contributed.git",
+    });
+    expect(browser.repositorySourceStatus).toBeUndefined();
+    Object.assign(context.plugins, { repositorySources: [] });
+    browser.synchronize();
+    expect(browser.repositorySourceStatus).toBe("unavailable");
+  });
+
+  it("starts a query typed before its only repository source becomes available", async () => {
+    const { browser, context, request, view, typeQuery } = await mountSearch();
+    context.gateway.snapshot.hello!.features!.methods = [];
+    Object.assign(context, {
+      plugins: {
+        registryStatus: "pending",
+        repositorySources: [],
+        subscribe: () => () => undefined,
+      },
+    });
+    typeQuery("available");
+    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+    expect(request).not.toHaveBeenCalled();
+    Object.assign(context.plugins, {
+      registryStatus: "complete",
+      repositorySources: [
+        {
+          pluginId: "forge",
+          id: "repositories",
+          key: "forge/repositories",
+          label: "Example Forge",
+          searchMethod: "forge.repositories.search",
+        },
+      ],
+    });
+    context.gateway.snapshot.hello!.features!.methods = ["forge.repositories.search"];
+    request.mockResolvedValue(result("available"));
+    browser.synchronize();
+    await waitForSolid(() => expect(view.queryByText("example/available")).not.toBeNull());
+    expect(request.mock.calls.filter(([method]) => method === "projects.searchRemote")).toEqual([]);
   });
 
   it.each(["client", "epoch"] as const)(

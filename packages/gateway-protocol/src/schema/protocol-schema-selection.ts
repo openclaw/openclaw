@@ -76,6 +76,7 @@ const EXCLUDED_SCHEMA_EXPORTS = [
   "PluginDiscoveryDetailSchema",
   "PluginInstalledComponentsSchema",
   "PluginJsonValueSchema",
+  "PluginUiCapabilitiesSchema",
   "PrincipalRefV1Schema",
   "ProjectRecentRepositorySchema",
   "QuestionRequestedEventSchema",

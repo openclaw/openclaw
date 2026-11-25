@@ -286,10 +286,21 @@ function projectBrowserCatalog(registry: PluginRegistry | null): PluginsControlU
     const diagnostic = browserPluginStates.get(record)?.diagnostic;
     return diagnostic ? [diagnostic] : [];
   });
+  // Source discovery is backend metadata, independent of browser assets and Labs policy.
+  const repositorySources = (registry?.plugins ?? [])
+    .filter((record) => record.enabled && record.status === "loaded")
+    .flatMap((record) =>
+      (record.repositorySources ?? []).map((source) =>
+        Object.assign({}, source, { pluginId: record.id }),
+      ),
+    )
+    .toSorted((left, right) =>
+      `${left.pluginId}/${left.id}`.localeCompare(`${right.pluginId}/${right.id}`),
+    );
   const revision = createHash("sha256")
-    .update(JSON.stringify({ plugins, diagnostics }))
+    .update(JSON.stringify({ plugins, repositorySources, diagnostics }))
     .digest("hex");
-  return { revision, plugins, diagnostics };
+  return { revision, plugins, repositorySources, diagnostics };
 }
 
 async function loadControlUiPluginCatalog(
