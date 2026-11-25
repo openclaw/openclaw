@@ -423,6 +423,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     bootstrapUserProfileId: params.bootstrapUserProfileId,
     sessionUserProfileId: params.sessionUserProfileId,
     gatewayUiCommandTarget: params.gatewayUiCommandTarget,
+    mcpRequesterProfileId: params.mcpRequesterProfileId,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
     chatType: params.chatType,
