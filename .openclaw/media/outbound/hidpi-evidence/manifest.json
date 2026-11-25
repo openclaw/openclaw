@@ -1,0 +1,52 @@
+[
+  {
+    "name": "beta-after-annotated.png",
+    "bytes": 118440,
+    "sha256": "ab59f7f6830b68cbe86bdde3cdd2c4d06c27f6cbbe704d2beb012dc528571556"
+  },
+  {
+    "name": "beta-after-clean.png",
+    "bytes": 110230,
+    "sha256": "8fa4504c71630fae65a917576c86aaa544dc0aa4c0f4188fec0165229782c4d9"
+  },
+  {
+    "name": "beta-before-annotated.png",
+    "bytes": 114438,
+    "sha256": "1f8e55be6f80ae31d2009f853a8dbe2a45a79b46262197418ff59c037664d11b"
+  },
+  {
+    "name": "beta-before-clean.png",
+    "bytes": 107592,
+    "sha256": "8015ea6b12701f1e1a0aad07321a839e951f0d2b2e8781858c55cad058e9e3f9"
+  },
+  {
+    "name": "beta-reproduction-reference.ts",
+    "bytes": 11388,
+    "sha256": "fd1a5bea8b465cb1d1516a052505ebdc8264712a7184d99073cf12d332653d45"
+  },
+  {
+    "name": "cleanup-ports.json",
+    "bytes": 190,
+    "sha256": "b248ad6822dff8c9400adc89d1f67317f3564509dd245e878896aeeee33caf33"
+  },
+  {
+    "name": "cleanup.json",
+    "bytes": 1176,
+    "sha256": "0dbf9506d0f56ffc5e5a2dbcac48a97e281a01c04c6fe1a7b97e9e1f251bad9f"
+  },
+  {
+    "name": "main-reproduction-reference.ts",
+    "bytes": 11133,
+    "sha256": "bfedc92d43ad5bd9f022ba75a72823c185cc64579f78cea77d26f880fe1c345c"
+  },
+  {
+    "name": "observations.json",
+    "bytes": 30665,
+    "sha256": "31cddaa4f77b64247b804c278a5ce5bda9530bcf63b3765a2ad74989d0cf98a0"
+  },
+  {
+    "name": "report.txt",
+    "bytes": 4543,
+    "sha256": "346f2722d1ba9b1b6f8e61bc2933de050d560f7a2ea2203692fa63a080864cb3"
+  }
+]
