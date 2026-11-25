@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFailed, vi } from "vitest";
 import * as apple from "../../scripts/apple-app-i18n.ts";
 type Entry = Parameters<typeof apple.buildIosCatalog>[1][number];
 const emptyCatalog = { sourceLanguage: "en", strings: {}, version: "1.0" };
@@ -93,21 +93,50 @@ it("verification and compile-macos reject raw macOS interpolation and retain sha
 });
 
 it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
+  const stages: Array<{ stage: string; started: number; finished?: number }> = [];
+  const startStage = (stage: string) => {
+    const record: (typeof stages)[number] = { stage, started: performance.now() };
+    if (stages.length < 45) {
+      stages.push(record);
+    }
+    return () => {
+      record.finished = performance.now();
+    };
+  };
+  // Keep failure diagnostics bounded without wrapping or rescheduling the real checks.
+  onTestFailed(() => {
+    const observedAt = performance.now();
+    console.error(
+      "Apple catalog drift stages:",
+      JSON.stringify(
+        stages.map(({ stage, started, finished }) => ({
+          stage,
+          elapsedMs: Math.round((finished ?? observedAt) - started),
+          completed: finished !== undefined,
+        })),
+      ),
+    );
+  });
   try {
     // Source PRs defer generated locale files; normalize all sibling artifacts in memory.
     probe.captureWrites = true;
+    const finishSync = startStage("sync");
     const { build, macosBuild } = await apple.syncAppleAppI18n();
+    finishSync();
     const catalogs = [
       {
+        platform: "ios",
         filePath: path.resolve("apps/ios/Resources/Localizable.xcstrings"),
         catalog: build.catalog,
       },
       {
+        platform: "macos",
         filePath: path.resolve("apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings"),
         catalog: macosBuild.catalog,
       },
     ];
-    for (const { filePath, catalog } of catalogs) {
+    for (const { platform, filePath, catalog } of catalogs) {
+      const finishPrepare = startStage(`${platform}:prepare`);
       const warnings: string[] = [];
       const options = { reportObsolete: (message: string) => warnings.push(message) };
       const strings = expectDefined(catalog.strings, "active catalog strings");
@@ -125,18 +154,25 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
         },
       };
       const serialized = apple.serializeAppleCatalog(obsolete);
-      const reject = async (invalid: string) => {
+      finishPrepare();
+      const reject = async (stage: string, invalid: string) => {
+        const finish = startStage(`${platform}:${stage}`);
         probe.catalogs.set(filePath, invalid);
         await expect(apple.checkAppleAppI18n(options)).rejects.toThrow();
+        finish();
       };
       probe.catalogs.set(filePath, serialized);
+      const finishStrict = startStage(`${platform}:strict-stale`);
       await expect(apple.checkAppleAppI18n()).rejects.toThrow("is stale");
+      finishStrict();
+      const finishWarning = startStage(`${platform}:obsolete-warning`);
       await expect(apple.checkAppleAppI18n(options)).resolves.toBeUndefined();
       expect(warnings).toEqual([
         `Apple obsolete catalog rows: ${path.relative(process.cwd(), filePath).replaceAll("\\", "/")} (keys=2)`,
       ]);
+      finishWarning();
 
-      for (const row of [
+      for (const [index, row] of [
         "null",
         "42",
         '{"localizations":null}',
@@ -146,8 +182,11 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
         '{"localizations":{"en":{"stringUnit":{"state":42,"value":"Retired"}}}}',
         '{"comment":42}',
         '{"localizations":{"en":{"variations":{}}}}',
-      ]) {
-        await reject(serialized.replace(`"${retired}": {}`, `"${retired}": ${row}`));
+      ].entries()) {
+        await reject(
+          `malformed-${index}`,
+          serialized.replace(`"${retired}": {}`, `"${retired}": ${row}`),
+        );
       }
 
       const mutate = (change: (copy: typeof obsolete, row: (typeof strings)[string]) => void) => {
@@ -155,7 +194,8 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
         change(copy, expectDefined(copy.strings[activeKey], "active catalog entry"));
         return apple.serializeAppleCatalog(copy);
       };
-      for (const invalid of [
+      const finishMutants = startStage(`${platform}:mutants`);
+      const invalidCatalogs = [
         mutate((copy) => delete copy.strings[activeKey]),
         mutate((_copy, row) => delete row.localizations?.de),
         mutate((_copy, row) => {
@@ -167,10 +207,14 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
         apple.serializeAppleCatalog({ ...obsolete, version: "2.0" }),
         `${serialized}\n`,
         `${serialized}malformed\n`,
-      ]) {
-        await reject(invalid);
+      ];
+      finishMutants();
+      for (const [index, invalid] of invalidCatalogs.entries()) {
+        await reject(`invalid-${index}`, invalid);
       }
+      const finishRestore = startStage(`${platform}:restore`);
       probe.catalogs.set(filePath, apple.serializeAppleCatalog(catalog));
+      finishRestore();
     }
   } finally {
     probe.captureWrites = false;

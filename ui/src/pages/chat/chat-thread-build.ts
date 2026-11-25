@@ -21,12 +21,14 @@ import { pluginInlineViewItems } from "../../lib/chat/plugin-inline-views.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { hasAutomationActivity } from "./chat-automation-projection-loader.ts";
 import {
-  buildCompactionDividerItem,
+  buildCompactionActivityItem,
+  buildLiveCompactionActivity,
   buildGuardianNoticeItem,
   buildResetDividerItem,
   clearWorkingProgress,
   isContextCompactionMessage,
   matchesCompactionOperation,
+  resolveLegacyCompactionMatch,
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
@@ -81,6 +83,7 @@ import {
   createToolCallLookup,
   optionalRunIdentity,
   resolveRunInsertionBounds,
+  createCompactionRunLookup,
 } from "./chat-thread-run-identity.ts";
 import {
   createRecordedToolKeyLookup,
@@ -181,9 +184,9 @@ export function buildChatItems(
   const historyItems = buildMessageItems(history);
   const canvasTurns = collectCanvasTurns(historyItems, normalizedHistory, matchesSearch);
   const compaction = props.compactionStatus;
-  const compactionKey = compaction
-    ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
-    : undefined;
+  const liveCompaction = compaction ? buildLiveCompactionActivity(compaction) : undefined;
+  const { manualMarker, hasSameRunMarker } = resolveLegacyCompactionMatch(history, compaction);
+  const compactionRunIdentity = createCompactionRunLookup(history, props.runId);
   let hasPersistedCompaction = false;
   let latestResetAt: number | undefined;
   const projectSubmittedModel = createSubmittedModelNoticeProjector();
@@ -240,8 +243,10 @@ export function buildChatItems(
       continue;
     }
     if (marker?.kind === "compaction" || isContextCompactionMessage(msg)) {
-      const matchesLive = compaction != null && matchesCompactionOperation(msg, compaction);
-      const divider = buildCompactionDividerItem(
+      const matchesLive = compaction?.itemId
+        ? matchesCompactionOperation(msg, compaction)
+        : msg === manualMarker;
+      const activity = buildCompactionActivityItem(
         marker ?? {},
         rawMessageTimestamp(msg) ?? Date.now(),
         i,
@@ -250,9 +255,13 @@ export function buildChatItems(
         facts?.indexedDividers.push(msg);
       }
       items.push({
-        ...divider,
-        compactionId: divider.key,
-        ...(matchesLive && compactionKey ? { key: compactionKey } : {}),
+        ...activity,
+        compactionId: activity.key,
+        ...compactionRunIdentity(marker?.runId),
+        ...(matchesLive && liveCompaction?.durationMs != null
+          ? { durationMs: liveCompaction.durationMs }
+          : {}),
+        ...(msg === manualMarker && liveCompaction ? { key: liveCompaction.key } : {}),
       });
       hasPersistedCompaction ||= matchesLive;
       continue;
@@ -449,20 +458,6 @@ export function buildChatItems(
     });
   }
   const projections: ChatProjection[] = [];
-  if (compaction && compactionKey && !hasPersistedCompaction) {
-    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
-    projections.push({
-      item: {
-        ...buildCompactionDividerItem(
-          {},
-          timestamp,
-          0,
-          compaction.phase === "complete" ? "complete" : "active",
-        ),
-        key: compactionKey,
-      },
-    });
-  }
   const keyedSegments = segments.filter(streamSegmentHasItemId);
   const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
   const toolLookup = createToolCallLookup<ChatProjection>();
@@ -483,6 +478,18 @@ export function buildChatItems(
         afterUserSendId,
       ),
     );
+  // Keep itemless progress separate without duplicating an already recorded completion.
+  if (
+    liveCompaction &&
+    !hasPersistedCompaction &&
+    (liveCompaction.phase === "active" || !hasSameRunMarker)
+  ) {
+    const owner = compactionRunIdentity(compaction?.runId);
+    projections.push({
+      item: { ...liveCompaction, ...owner },
+      bounds: owner && resolveProjectionBounds(owner.runId),
+    });
+  }
   if (!searchFiltering) {
     const recordedPermissions = new Set(
       props.guardianNotices?.some((notice) => notice.permissionMissing)

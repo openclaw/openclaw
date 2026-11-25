@@ -14,6 +14,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openMoreModelSettings } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent config save",
@@ -66,9 +67,7 @@ suite.define(() => {
       await gateway.waitForRequest("agents.list");
       await gateway.waitForRequest("config.get");
       const agentsPage = page.locator("openclaw-agents-page");
-      const primary = agentsPage.locator(
-        'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
-      );
+      const primary = agentsPage.locator("openclaw-select-picker:has(#agent-primary-model)");
       const decision = agentsPage.locator("openclaw-select-picker:has(#agent-decision-model)");
       const trigger = primary.locator(".picker-select__trigger");
       const error = agentsPage
@@ -88,6 +87,7 @@ suite.define(() => {
       await expect.poll(() => error.count()).toBe(0);
       await expect.poll(() => trigger.getAttribute("disabled")).toBeNull();
 
+      await openMoreModelSettings(agentsPage);
       expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
       const indicator = page.locator("openclaw-settings-save-indicator");
       const writesBeforeReconnect = (await gateway.getRequests("config.set")).length;
@@ -153,6 +153,7 @@ suite.define(() => {
         hash: "saved-agent-config",
       });
       await expect.poll(() => pickerValue(primary)).toBe("openai/after-reload");
+      await openMoreModelSettings(agentsPage);
       expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
       await expect.poll(() => indicator.textContent()).toContain("Apply changes");
     });
