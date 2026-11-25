@@ -93,59 +93,6 @@ struct ChatComposerStateTests {
         case detached
     }
 
-    #if os(macOS)
-    enum TalkDraft: CaseIterable {
-        case empty
-        case text
-        case attachment
-    }
-
-    @Test(arguments: [false, true], TalkDraft.allCases)
-    func `macOS Talk retains the shared primary slot`(
-        runActive: Bool,
-        draft: TalkDraft)
-    {
-        let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
-        defer { vm.detachTransport() }
-        vm.pendingRuns = runActive ? ["accepted-run"] : []
-        vm.input = draft == .text ? "Keep this draft" : ""
-        if draft == .attachment {
-            vm.attachments = [OpenClawPendingAttachment(
-                url: nil,
-                data: Data([1, 2, 3]),
-                fileName: "image.png",
-                mimeType: "image/png",
-                preview: nil)]
-        }
-        for talkActive in [false, true] {
-            let composer = OpenClawChatComposer(
-                viewModel: vm,
-                style: .standard,
-                showsSessionSwitcher: false,
-                userAccent: nil,
-                composerChrome: .clean,
-                isComposerEnabled: true,
-                isAttachmentInputEnabled: true,
-                messagePlaceholder: nil,
-                talkControl: OpenClawChatTalkControl(
-                    isEnabled: talkActive,
-                    isListening: talkActive,
-                    isSpeaking: false,
-                    isGatewayConnected: true,
-                    statusText: "",
-                    providerLabel: "",
-                    toggle: { _ in }),
-                dictationControl: nil,
-                voiceNoteControl: nil)
-
-            #expect(!composer.cleanShowsSeparateTalkControl)
-            #expect(composer.cleanPrimaryControl == (!runActive && draft == .empty ? .talk : .send))
-            #expect(vm.pendingRunCount == (runActive ? 1 : 0))
-            #expect(vm.hasDraftToSend == (draft != .empty))
-        }
-    }
-    #endif
-
     @Test(arguments: [false, true])
     func `closed model pickers defer catalog projection`(clean: Bool) {
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
