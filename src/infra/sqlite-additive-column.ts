@@ -1,4 +1,4 @@
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { hasUnquotedSqlKeyword, quoteSqliteIdentifier, readSqlToken } from "./sqlite-schema-sql.js";
 
 const SQLITE_STRICT_DATATYPES: Record<string, true> = {
@@ -24,8 +24,8 @@ export function isCompatibleAdditiveColumnDefinition(definition: string): boolea
   }
   // Evaluate only this column in an isolated engine: checks must accept both an
   // old writer's omitted value and an explicit NULL, without consulting other rows.
-  const { DatabaseSync, constants } = requireNodeSqlite();
-  using probe = new DatabaseSync(":memory:");
+  const { constants } = requireNodeSqlite();
+  using probe = openNodeSqliteDatabase(":memory:");
   const deterministic = new Set<string>();
   for (const entry of probe.prepare("PRAGMA function_list").all()) {
     if (entry.builtin && typeof entry.flags === "number" && (entry.flags & 0x800) !== 0) {
