@@ -246,14 +246,14 @@ it("excludes incognito roots and descendants and restores no live mutation facts
       privateRow,
     ],
     (current) => ({
-      childrenDisplayMode: "expanded",
+      childrenDisplayMode: "expanded-by-user",
       snapshotSubtitle:
         current.key === row.key ? { subtitle: "Private child approval details" } : undefined,
     }),
   );
   expect(captured).toHaveLength(1);
   expect(captured[0]?.children.map((child) => child.key)).toEqual([publicChild.key]);
-  expect(captured[0]?.childrenDisplayMode).toBe("expanded");
+  expect(captured[0]?.childrenDisplayMode).toBe("expanded-by-user");
   expect(captured[0]?.snapshotSubtitle).toBeUndefined();
   const restored = restoreSnapshotSession(captured[0]!, row.key);
   expect(restored).toMatchObject({ visuallyActive: true, pinnable: false });

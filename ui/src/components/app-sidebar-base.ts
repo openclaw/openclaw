@@ -331,10 +331,11 @@ export abstract class AppSidebarBase {
   }
 
   readNewSessionAccess(): SessionMethodAccess {
-    return this.readSessionMutationAccess({
+    return readSessionMethodAccess(this.connected ? this.context.gateway.snapshot : null, {
       method: "sessions.create",
       params: {},
       sessionScope: true,
+      missingScopeReasonKey: "sessionsView.createPermissionDenied",
     });
   }
 

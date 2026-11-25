@@ -81,13 +81,14 @@ it.each([true, false])(
         f.records().filter((row) => row.kind === "request" && row.invocation === phase).length,
       ]),
     );
-    // Preview also acquires the immutable qualification waiver policy.
+    // Preview acquires the waiver policy and stable-client qualification evidence.
+    // Every process revalidates the stable-client run before proceeding.
     expect(counts).toEqual({
-      preview: 53,
-      consume: 25,
-      authorize: 22,
-      "consume-beta": 25,
-      "authorize-beta": 22,
+      preview: 57,
+      consume: 26,
+      authorize: 23,
+      "consume-beta": 26,
+      "authorize-beta": 23,
     });
     console.log(JSON.stringify({ scenario: "ordinary-cli", requestsByProcess: counts }));
     // Carrier replay avoids downloading immutable qualification evidence again.
@@ -304,8 +305,8 @@ it("charges direct carrier retries and refuses pagination beyond the transport c
   expect(
     requests.filter((row) => row.route?.startsWith("actions/runs/5001/artifacts?")),
   ).toHaveLength(2);
-  expect(requests).toHaveLength(26);
-  expect(retried.stderr).toContain('"limit":54,"used":26');
+  expect(requests).toHaveLength(27);
+  expect(retried.stderr).toContain('"limit":54,"used":27');
   expect(f.records().some((row) => row.invocation === "retried" && row.kind === "retry-wait")).toBe(
     true,
   );

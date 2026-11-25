@@ -13,6 +13,7 @@ import {
   isSqliteSnapshotCapacityError,
   SqliteSnapshotCapacityError,
 } from "./sqlite-snapshot-capacity-error.js";
+import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
@@ -32,7 +33,6 @@ function createTempDatabasePath(sql: string): string {
 it.each([
   ["synchronous copy", prepareSqliteReadOnlyLocationSyncInProcess],
   ["asynchronous copy", prepareSqliteReadOnlyCopyInProcess],
-  ["online backup", prepareSqliteReadOnlyLocationInProcess],
 ] as const)("refuses an undersized cache before an 8.4 GB %s", async (_mode, prepare) => {
   const databasePath = createTempDatabasePath("CREATE TABLE probe(value);");
   const stagingRoot = tempDirs.make("sqlite-snapshot-capacity-");
@@ -64,6 +64,72 @@ it.each([
   expect(fs.readFileSync(databasePath)).toEqual(original);
   expect(fs.readdirSync(stagingRoot)).toEqual([]);
 });
+
+it.each(["overwrite WAL", "WAL-only growth"] as const)(
+  "budgets the logical image instead of retained %s frames",
+  async (workload) => {
+    const directory = tempDirs.make("sqlite-native-capacity-");
+    const databasePath = path.join(directory, "source.sqlite");
+    const targetPath = path.join(directory, "snapshot.sqlite");
+    const stagingRoot = tempDirs.make("sqlite-native-capacity-staging-");
+    const sqlite = requireNodeSqlite();
+    using source = new sqlite.DatabaseSync(databasePath);
+    source.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_autocheckpoint = 0;
+      CREATE TABLE payload(value BLOB NOT NULL);
+    `);
+    if (workload === "overwrite WAL") {
+      source.exec("INSERT INTO payload VALUES(zeroblob(32768));");
+    }
+    source.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    if (workload === "WAL-only growth") {
+      source.exec("INSERT INTO payload VALUES(zeroblob(32768));");
+    }
+    const update = source.prepare("UPDATE payload SET value = ?;");
+    for (let generation = 1; generation <= 8; generation++) {
+      update.run(Buffer.alloc(32768, generation));
+    }
+
+    const pageSize = Number(source.prepare("PRAGMA page_size;").get()?.page_size);
+    const logicalBytes = Number(source.prepare("PRAGMA page_count;").get()?.page_count) * pageSize;
+    const mainBytes = fs.statSync(databasePath).size;
+    const familyBytes = mainBytes + fs.statSync(`${databasePath}-wal`).size;
+    const availableBytes = 2 * logicalBytes;
+    expect(familyBytes).toBeGreaterThan(availableBytes);
+    if (workload === "WAL-only growth") {
+      expect(mainBytes).toBeLessThan(logicalBytes - pageSize);
+    }
+    const space = fs.statfsSync(stagingRoot);
+    const statfs = vi
+      .spyOn(fs, "statfsSync")
+      .mockReturnValue(Object.assign({}, space, { bsize: 1, bavail: logicalBytes - pageSize }));
+    // A native image includes pages committed only to WAL, not just current main-file bytes.
+    await expect(
+      prepareSqliteReadOnlyLocationInProcess(databasePath, stagingRoot),
+    ).rejects.toBeInstanceOf(SqliteSnapshotCapacityError);
+    expect(fs.readdirSync(stagingRoot)).toEqual([]);
+
+    statfs.mockReturnValue(Object.assign({}, space, { bsize: 1, bavail: availableBytes }));
+    // A physical family copy still needs space for every retained WAL frame.
+    await expect(
+      prepareSqliteReadOnlyCopyInProcess(databasePath, stagingRoot),
+    ).rejects.toBeInstanceOf(SqliteSnapshotCapacityError);
+    expect(fs.readdirSync(stagingRoot)).toEqual([]);
+
+    // The same volume has room for both the logical native image and its compacted output.
+    await createVerifiedSqliteSnapshot({ sourcePath: databasePath, targetPath });
+    using snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+    expect(
+      snapshot
+        .prepare("SELECT length(value) AS bytes, hex(substr(value, 1, 1)) AS marker FROM payload;")
+        .get(),
+    ).toEqual({ bytes: 32768, marker: "08" });
+    expect(snapshot.prepare("PRAGMA integrity_check;").get()).toEqual({
+      integrity_check: "ok",
+    });
+  },
+);
 
 it("keeps a failed copy blocking when snapshot cleanup also fails", async () => {
   const databasePath = createTempDatabasePath("CREATE TABLE probe(value);");

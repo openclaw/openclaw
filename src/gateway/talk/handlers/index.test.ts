@@ -1227,7 +1227,7 @@ describe("talk.session unified handlers", () => {
         result: { status: "working" },
         options: { suppressResponse: true, willContinue: true },
       },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.talk"] } } as never,
       isWebchatConnect: () => false,
       respond: toolRespond as never,
       context: {} as never,
@@ -1886,7 +1886,7 @@ describe("talk.client.toolCall handler", () => {
             name: "openclaw_agent_consult",
             args: { question: "Continue the call" },
           },
-          client: { connId },
+          client: { connId, connect: { scopes: ["operator.talk"] } },
           context: { getRuntimeConfig: () => ({}) },
         });
         return respond;
@@ -1952,7 +1952,7 @@ describe("talk.client.toolCall handler", () => {
         toolsAllow: configured
           ? undefined
           : ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
-        transcript: { display: false, excludeFromContext: true },
+        transcript: { display: false },
         prepareAssistantTranscriptMessage: expect.any(Function),
         beforeDispatch: expect.any(Function),
       });
@@ -2296,7 +2296,7 @@ describe("talk.client.create handler", () => {
           ? { sessionKey: "main", transport: "webrtc" }
           : { sessionKey: "main", model: "gpt-live-1" },
         client: handoff
-          ? { connId: "conn-1" }
+          ? { connId: "conn-1", connect: { scopes: ["operator.talk"] } }
           : { connId: "conn-1", connect: { scopes: ["operator.write"] } },
         config: realtimeConfig(
           handoff

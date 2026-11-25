@@ -325,6 +325,13 @@ describe("Pi session catalog", () => {
       path.join(directory, "duplicate.jsonl"),
     );
     expire();
+    await expect(
+      listLocalPiSessionPage({}, true, {
+        hostId: "gateway",
+        threadId: transcriptRequest.threadId,
+        sourceHomeId: source,
+      }),
+    ).resolves.toEqual({ sessions: [] });
     await expect(readLocalPiTranscriptPage(transcriptRequest, source)).rejects.toThrow("ambiguous");
     await createPiStore();
     await expect(readLocalPiTranscriptPage(transcriptRequest, source)).rejects.toThrow(

@@ -88,6 +88,7 @@ export const SessionCatalogPullRequestSummarySchema = closedObject({
 });
 
 export const SessionCatalogSessionSchema = closedObject({
+  previewImageDigest: Type.Optional(Type.String({ pattern: "^sha256:[0-9a-f]{64}$" })),
   originalUrl: Type.Optional(Type.String({ maxLength: 4096 })),
   threadId: NonEmptyString,
   sourceHomeId: Type.Optional(NonEmptyString),
@@ -213,6 +214,7 @@ export const SessionCatalogTranscriptItemSchema = closedObject({
 });
 
 export const SessionsCatalogReadParamsSchema = closedObject({
+  includePreviewImage: Type.Optional(Type.Literal(true)),
   profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   ...SessionCatalogLocatorSchema.properties,
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -220,6 +222,16 @@ export const SessionsCatalogReadParamsSchema = closedObject({
 });
 
 export const SessionsCatalogReadResultSchema = closedObject({
+  /** Optional display-only media, requested by a viewer separately from transcript items. */
+  previewImage: Type.Optional(
+    closedObject({
+      name: Type.String({ minLength: 1, maxLength: 255 }),
+      mimeType: Type.Literal("image/png"),
+      digest: Type.String({ pattern: "^sha256:[0-9a-f]{64}$" }),
+      data: Type.String({ minLength: 4, maxLength: 699052 }),
+    }),
+  ),
+
   hostId: NonEmptyString,
   label: Type.Optional(Type.String()),
   threadId: NonEmptyString,

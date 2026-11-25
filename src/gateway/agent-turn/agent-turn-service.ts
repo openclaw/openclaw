@@ -376,6 +376,7 @@ export function createAgentTurnService(
             principal,
             sessionKey: canonicalSessionKey,
             agentId: sessionAgentId,
+            entry,
           });
           if (sessionAuthorizationError) {
             io.emitAcceptance([false, undefined, sessionAuthorizationError]);

@@ -34,7 +34,6 @@ import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
-import type { FailedMessageEditSource } from "../failed-message-edit.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation-state.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { createAsyncQuestionPresentation } from "./chat-async-question.ts";
@@ -184,7 +183,6 @@ export type ChatThreadProps = Omit<
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
     onStartNewSession?: (runId: string, summary: string) => void;
-    failedMessageEditSource?: FailedMessageEditSource;
     failureActionsRunId?: string;
     onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
@@ -430,9 +428,9 @@ export function handleTranscriptSelectionMouseDown(event: MouseEvent) {
   ) {
     return undefined;
   }
-  // The row margin and the empty side of a message are layout, not prose.
-  // A multi-click can select an inter-turn newline. Leave single presses native for drags.
-  if (!event.shiftKey && target.matches(".chat-virtual-row, .chat-group")) {
+  // A multi-click on layout can select a newline or the next list item's first word.
+  // Leave single presses native so drags can still start in the gap.
+  if (!event.shiftKey && target.matches(".chat-virtual-row, .chat-group, .chat-text :is(ul, ol)")) {
     event.preventDefault();
     thread.focus({ preventScroll: true });
     thread.ownerDocument.getSelection()?.removeAllRanges();

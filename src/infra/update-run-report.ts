@@ -21,6 +21,7 @@ import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
+import { resolveUpdateRunVerifiedServingVersion } from "./update-run-notice.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "./update-run-owed-step.js";
 import {
   isAcknowledgedAbandonedUpdateRun,
@@ -118,24 +119,6 @@ export function formatUpdateRunCurrentHealth(health: UpdateRunReportHealth): str
   return health.kind === "responding"
     ? `Current health: Gateway answered on the recorded port (${bounded(health.version, 120)}).`
     : "Current health unavailable; saved verification describes the update attempt only.";
-}
-
-/** Serving observation is independent of permission to restart or roll back. */
-export function resolveUpdateRunVerifiedServingVersion(
-  verification: UpdateRunRecord["verification"],
-  observation: Pick<UpdateRunRecord["steps"][number], "failureFacts" | "exitCode"> | undefined,
-): string | undefined {
-  if (observation?.exitCode !== 0 || observation.failureFacts?.length) {
-    return undefined;
-  }
-  const { recovery } = verification;
-  return recovery?.serviceRestartSafe && recovery.service === "healthy"
-    ? recovery.version
-    : verification.versionMatch &&
-        (verification.coreReady ?? verification.readyz) &&
-        verification.settled
-      ? verification.runningVersion
-      : undefined;
 }
 
 /** Public-report callers redact identifiers before using this shared formatter. */

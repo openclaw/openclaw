@@ -47,6 +47,7 @@ function describePendingInputMessage(
 export function preparePendingInputQueueItems(
   inputs: ChatPendingInputsPage["items"],
   preparation: PendingInputPreparation,
+  cancelling?: ReadonlySet<string>,
 ): ChatQueueDisplayItem[] {
   return inputs
     .filter(
@@ -63,6 +64,7 @@ export function preparePendingInputQueueItems(
       createdAt: input.acceptedAt,
       pendingRunId: input.runId,
       serverQueued: true,
+      removing: cancelling?.has(input.id),
       sender: normalizeMessage(input.message).sender ?? undefined,
     }));
 }

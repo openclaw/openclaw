@@ -4,9 +4,11 @@ import { convertMessages } from "../../../../packages/ai/src/openai-completions-
 import { buildAnthropicRequest } from "../../../../packages/ai/src/transports/anthropic-messages.js";
 import { resolveOpenAICompletionsCompat } from "../../../../packages/ai/src/transports/openai-completions-compat.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { applyInputProvenanceToUserMessage } from "../../../sessions/input-provenance.js";
 import { buildCopilotDynamicHeaders } from "../../copilot-dynamic-headers.js";
 import { resolveProviderRequestCapabilities } from "../../provider-attribution.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { applySessionForkRequest } from "../session-fork-request.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./attempt-tool-call-replay-sanitization.js";
 
 const model: Model = {
@@ -78,6 +80,52 @@ it.each([
     ]),
   );
   expect([...optOut]).toEqual([3]);
+});
+
+it("appends a live fork question after the complete Chat Completions parent request", () => {
+  const activeModel = { ...model, baseUrl: "http://127.0.0.1:11434/v1" };
+  const question = applyInputProvenanceToUserMessage(user("Review the conversation"), {
+    kind: "internal_system",
+    sourceTool: "session_fork",
+    sourceSessionKey: "agent:main:explicit:parent",
+  });
+  const encode = (messages: Context["messages"]) =>
+    convertMessages(
+      activeModel,
+      sanitize(activeModel, messages),
+      resolveOpenAICompletionsCompat(activeModel, resolveProviderRequestCapabilities),
+    );
+  const parent = { messages: encode([...history, carrier]) };
+  const fork = { messages: encode([...history, question, carrier]) };
+  applySessionForkRequest(
+    fork,
+    { preparedRequest: parent, ownOutputLimit: false },
+    { api: "openai-completions", allowedTools: [] },
+  );
+  expect(fork.messages).toEqual([
+    ...parent.messages,
+    { role: "user", content: "Review the conversation" },
+  ]);
+  expect(encode([current, user("Ordinary follow-up")])).toEqual([
+    {
+      role: "user",
+      content: [
+        { type: "text", text: current.content },
+        { type: "text", text: "Ordinary follow-up" },
+      ],
+    },
+  ]);
+  expect(
+    sanitize({ ...model, api: "bedrock-converse-stream" }, [current, question]).messages,
+  ).toMatchObject([
+    {
+      role: "user",
+      content: [
+        { type: "text", text: current.content },
+        { type: "text", text: question.content },
+      ],
+    },
+  ]);
 });
 
 it("keeps the user's Anthropic cache breakpoint and bytes through a tool loop", async () => {

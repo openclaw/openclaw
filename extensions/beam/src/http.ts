@@ -12,12 +12,7 @@ import type { BeamPublisher } from "../upload-operation-api.js";
 import type { BeamStore } from "./store.js";
 import { BEAM_MAX_BODY_BYTES, BEAM_SESSION_SHARE_ROUTE, parseBeamUpload } from "./types.js";
 
-export function createBeamRequestHandler(params: {
-  store: BeamStore;
-  now?: () => number;
-  resolveAuthority?: typeof getGatewayRequestAuthorityV1;
-  resolveControlUiBasePath: () => string | undefined;
-}): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
+export function createBeamIngressLimits() {
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: 60_000,
     maxRequests: 60,
@@ -27,6 +22,17 @@ export function createBeamRequestHandler(params: {
     maxInFlightPerKey: 2,
     maxTrackedKeys: 2_048,
   });
+  return { rateLimiter, inFlightLimiter };
+}
+
+export function createBeamRequestHandler(params: {
+  store: BeamStore;
+  now?: () => number;
+  limits?: ReturnType<typeof createBeamIngressLimits>;
+  resolveAuthority?: typeof getGatewayRequestAuthorityV1;
+  resolveControlUiBasePath: () => string | undefined;
+}): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
+  const { rateLimiter, inFlightLimiter } = params.limits ?? createBeamIngressLimits();
 
   return async (req, res) => {
     const authority = (params.resolveAuthority ?? getGatewayRequestAuthorityV1)();

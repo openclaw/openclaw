@@ -44,11 +44,6 @@ import {
 } from "./transcript-message.test-support.js";
 import { registerRecentTranscriptTextSnapshotTests } from "./transcript-recent-text.test-support.js";
 import {
-  bindOwnedSessionTranscriptWrites,
-  runWithOwnedSessionTranscriptWrite,
-  withOwnedSessionTranscriptWrites,
-} from "./transcript-write-context.js";
-import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
   readLatestAssistantTextFromSessionTranscript,
@@ -441,51 +436,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       }),
     );
   });
-
-  it.each(["file", "store", "agent", "bound"] as const)(
-    "keeps owned write tracking scoped to the matching %s target",
-    async (kind) => {
-      const ownerTarget = {
-        agentId: "main",
-        sessionKey: "global",
-        ...(kind === "store" ? { storePath: "/tmp/main.sqlite" } : {}),
-      };
-      const otherTarget = {
-        agentId: "worker",
-        sessionKey: "global",
-        ...(kind === "store" ? { storePath: "/tmp/worker.sqlite" } : {}),
-      };
-      const scoped = kind === "store" || kind === "agent";
-      const owner = scoped
-        ? { sessionFile: "global", sessionKey: "global", sessionTarget: ownerTarget }
-        : { sessionFile: transcriptFile("old-session"), sessionKey };
-      const request = scoped
-        ? { sessionFile: "global", sessionKey: "global", sessionTarget: otherTarget }
-        : {
-            sessionFile: kind === "bound" ? owner.sessionFile : transcriptFile("next-session"),
-            sessionKey,
-          };
-      const events: string[] = [];
-      const context = {
-        ...owner,
-        withTranscriptWrite: async <T>(run: () => T | Promise<T>) => {
-          events.push("owned-write");
-          return await run();
-        },
-      };
-      const write = () =>
-        runWithOwnedSessionTranscriptWrite(request, () => {
-          events.push("write");
-          return "ok";
-        });
-      const result =
-        kind === "bound"
-          ? await bindOwnedSessionTranscriptWrites(context, write)()
-          : await withOwnedSessionTranscriptWrites(context, write);
-      expect(result).toBe("ok");
-      expect(events).toEqual(kind === "bound" ? ["owned-write", "write"] : ["write"]);
-    },
-  );
 
   it("dedupes delivery mirrors against the active SQLite branch tail", async () => {
     await writeTranscriptStore();

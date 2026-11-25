@@ -568,8 +568,10 @@ function* buildMessageToolSchemaSteps(
   const includePresentation = yield* resolveIncludeCapabilitySteps(params, "presentation");
   const includeDeliveryPin = yield* resolveIncludeCapabilitySteps(params, "delivery-pin");
   const includeBestEffort = resolveIncludeBestEffort(params);
+  const schemaActions = actions.length > 0 ? actions : ["send"];
   const extraProperties = yield* resolveChannelMessageToolSchemaPropertiesSteps({
     channels: resolveMessageToolDiscoveryChannels(params),
+    advertisedActions: schemaActions,
     ...buildMessageActionDiscoveryInput(
       params,
       normalizeMessageChannel(params.currentChannelProvider) ?? undefined,
@@ -579,7 +581,7 @@ function* buildMessageToolSchemaSteps(
           resolveDiscoveryAccountId(params, channel, contextualAccountId)
       : undefined,
   });
-  return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
+  return buildMessageToolSchemaFromActions(schemaActions, {
     includeClawHub:
       normalizeMessageChannel(params.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL,
     includePresentation,

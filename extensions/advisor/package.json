@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/advisor",
-  "version": "2026.11.7",
+  "version": "2026.11.10",
   "private": true,
   "description": "OpenClaw periodic agent advisor",
   "type": "module",

@@ -328,6 +328,7 @@ it.each(["session_status", "sessions_send"] as const)(
         },
         toolCallIdPrefix: nested ? "rpc" : "http",
         authenticatedUserProfile: profile,
+        operatorScopes: ["operator.admin"],
         senderIsOwner: true,
       });
     if (profile) {

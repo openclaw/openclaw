@@ -1,6 +1,6 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import { extractQueryTerms, formatUsageQueryToken } from "../../../../src/shared/usage-query.js";
 import type { SessionsUsageOverview } from "../../../../src/shared/usage-types.js";
 import type { CostDailyEntry, UsageSessionEntry } from "./usage-state-types.ts";
 
@@ -72,10 +72,6 @@ const buildDailyCsv = (daily: CostDailyEntry[]): string =>
     totalCost: (day) => day.totalCost,
   });
 
-// The query parser splits on whitespace outside double quotes, so multiword values need quotes.
-const formatQueryToken = (key: string, value: string): string =>
-  /\s/u.test(value) ? `${key}:"${value}"` : `${key}:${value}`;
-
 const buildQuerySuggestions = (
   query: string,
   terms: ReturnType<typeof extractQueryTerms>,
@@ -125,7 +121,7 @@ const buildQuerySuggestions = (
     .slice(0, 6)
     .map((candidate) => ({
       label: `${key}:${candidate}`,
-      value: formatQueryToken(key, candidate),
+      value: formatUsageQueryToken(key, candidate),
     }));
 };
 
@@ -160,7 +156,7 @@ const setQueryTokensForKey = (query: string, key: string, values: string[]): str
   }
   const next = [
     ...tokens,
-    ...Array.from(remaining.values(), (value) => formatQueryToken(key, value)),
+    ...Array.from(remaining.values(), (value) => formatUsageQueryToken(key, value)),
   ];
   return next.length ? `${next.join(" ")} ` : "";
 };

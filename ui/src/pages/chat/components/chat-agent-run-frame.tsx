@@ -32,6 +32,7 @@ import {
 } from "../chat-turn-boundary.ts";
 import { ChatHandoffResume } from "./chat-handoff-sessions.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { McpConnectCards } from "./chat-mcp-connect-card.tsx";
 import {
   ActivityGroup,
   MessageGroup,
@@ -264,10 +265,11 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
               : [],
         )
         .at(0) ?? null);
+  const replyGroups = source.detachedGroups ? [...source.detachedGroups, ...groups] : groups;
   const sourcePreviews = actionOwner
     ? extractChatSourcePreviews({
         // Cited results can sit in an earlier rollup that no visible reply owns.
-        groups: frame.detachedGroups ? [...frame.detachedGroups, ...groups] : groups,
+        groups: replyGroups,
         answer: actionOwner.message,
         runId: frame.runId,
         basePath: opts.basePath,
@@ -312,6 +314,7 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     bodyParts,
     firstBubbleKey,
     sourcePreviews,
+    replyGroups,
     resumes,
   };
 }
@@ -332,13 +335,14 @@ function RunFrame(props: FrameProps) {
   const footerReactionMessageKey = () =>
     shellOptions().bubbleMode ? undefined : state().actionOwner?.key;
   const firstBubbleKey = createMemo(() => state().firstBubbleKey);
+  const completedFragment = () => Boolean(props.frame.fragment && !props.frame.fragment.last);
   const frameContent = [
     <FrameBody
       parts={state().bodyParts}
       options={props.options}
       // Completed nonfinal fragments cannot contain widgets. Keep the final
       // reply's owner unchanged as it transitions from active to completed.
-      completedFragment={Boolean(props.frame.fragment && !props.frame.fragment.last)}
+      completedFragment={completedFragment()}
     >
       {(input) => {
         const part = () => input().part;
@@ -447,6 +451,9 @@ function RunFrame(props: FrameProps) {
         );
       }}
     </FrameBody>,
+    <Show when={props.frame.outcome.kind !== "active" && !completedFragment()}>
+      <McpConnectCards groups={state().replyGroups} />
+    </Show>,
     <Show when={state().sourcePreviews.length > 0}>
       <ChatLazyBoundary>
         <ChatSourcePreviews

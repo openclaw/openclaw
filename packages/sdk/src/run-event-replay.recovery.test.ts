@@ -189,9 +189,9 @@ describe("SDK automatic recovery bounds", () => {
       const release = replay.observeRun("run-0");
       await reconnect().task;
       expect(calls).toHaveLength(expectedCalls);
-      expect(replay.snapshot("run-0").every((event) => event.type === "raw" && !event.raw)).toBe(
-        true,
-      );
+      const events = replay.snapshot("run-0");
+      expect(events).not.toHaveLength(0);
+      expect(events.every((event) => event.type === "raw" && !event.raw)).toBe(true);
       release();
     },
   );

@@ -16,6 +16,7 @@ import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "./restart-health.constants.js";
 const service = vi.hoisted(() => ({ readCommand: vi.fn(), restart: vi.fn() }));
 const runServiceStart = vi.hoisted(() => vi.fn());
 const runServiceRestart = vi.hoisted(() => vi.fn());
+const repairLoadedGatewayServiceForStart = vi.hoisted(() => vi.fn());
 const terminateStaleGatewayPids = vi.hoisted(() => vi.fn());
 const waitForGatewayHealthyRestart = vi.hoisted(() => vi.fn());
 const waitForGatewayHttpReadiness = vi.hoisted(() => vi.fn());
@@ -59,7 +60,8 @@ vi.mock("./lifecycle-core.js", () => ({
   runServiceStop: vi.fn(),
   runServiceUninstall: vi.fn(),
 }));
-vi.mock("./start-repair.js", () => ({ repairLoadedGatewayServiceForStart: vi.fn() }));
+// mock-isolation: lifecycle observations use synthetic repair facts and must not install a real service.
+vi.mock("./start-repair.js", () => ({ repairLoadedGatewayServiceForStart }));
 vi.mock("./restart-health.js", () => ({
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
@@ -73,6 +75,8 @@ vi.mock("./restart-health.js", () => ({
 }));
 
 const { runDaemonStart, runDaemonRestart } = await import("./lifecycle.js");
+// A static recovery import initializes the restart-health mock before its formatter dependency.
+const { waitForGatewayUpdateRecovery } = await import("./lifecycle-context.js");
 
 describe("Gateway service readiness", () => {
   beforeEach(() => {
@@ -86,6 +90,7 @@ describe("Gateway service readiness", () => {
       environment: {},
     });
     runServiceStart.mockReset();
+    repairLoadedGatewayServiceForStart.mockReset();
     runServiceRestart.mockReset().mockImplementation(async (params: RestartParams) => {
       await params.postRestartCheck?.({
         activationAccepted: true,
@@ -111,6 +116,91 @@ describe("Gateway service readiness", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  it.each([
+    { action: "start", repair: false },
+    { action: "restart", repair: false },
+    { action: "recovery", repair: false },
+    { action: "start", repair: true },
+    { action: "restart", repair: true },
+  ] as const)(
+    "keeps $action readiness on preactivation facts (repair=$repair)",
+    async ({ action, repair }) => {
+      const command = {
+        programArguments: ["openclaw", "gateway", "--port", "18789"],
+        environment: {},
+      };
+      const repairedCommand = {
+        programArguments: ["openclaw", "gateway", "--port", "19001"],
+        environment: { OPENCLAW_GATEWAY_TOKEN: "repaired-service-token" },
+      };
+      const repairedConfig = { gateway: { auth: { token: "repaired-config-token" } } };
+      let activated = false;
+      service.readCommand.mockImplementation(async () => {
+        if (activated) {
+          throw new Error("Service command storage is no longer available after activation.");
+        }
+        return command;
+      });
+      repairLoadedGatewayServiceForStart.mockImplementation(async () => {
+        activated = true;
+        readServiceConfig.mockRejectedValue(new Error("Runtime config custody was handed off."));
+        readCliConfig.mockRejectedValue(new Error("Caller config custody was handed off."));
+        return {
+          result: action === "start" ? "started" : "restarted",
+          loaded: true,
+          lifecycle: {
+            command: repairedCommand,
+            env: repairedCommand.environment,
+            config: repairedConfig,
+          },
+        };
+      });
+      runServiceStart.mockImplementation(async ({ repairLoadedService, postStartCheck }) => {
+        if (repair) {
+          await repairLoadedService({ json: true, stdout: process.stdout, state: {}, issues: [] });
+        }
+        activated = true;
+        await postStartCheck({ warnings: [], fail: vi.fn() });
+      });
+      runServiceRestart.mockImplementation(async (params: RestartParams) => {
+        if (repair) {
+          await params.repairLoadedService?.({
+            json: true,
+            stdout: process.stdout,
+            state: {},
+            issues: [],
+          });
+        }
+        activated = true;
+        await params.postRestartCheck?.({
+          ...createDaemonActionContext({ action: "restart", json: true }),
+          json: true,
+          activationAccepted: true,
+        });
+        return true;
+      });
+      waitForGatewayHealthyRestart.mockImplementation(async (options) => {
+        activated = true;
+        expect(await options.service.readCommand(process.env)).toBe(
+          repair ? repairedCommand : command,
+        );
+        if (repair) {
+          expect(options.config).toBe(repairedConfig);
+          expect(options.env.OPENCLAW_GATEWAY_TOKEN).toBe("repaired-service-token");
+          expect(options.port).toBe(19001);
+        }
+        return { healthy: true };
+      });
+
+      if (action === "recovery") {
+        expect((await waitForGatewayUpdateRecovery("2026.11.8")).healthy).toBe(true);
+      } else {
+        await (action === "start" ? runDaemonStart : runDaemonRestart)({ json: true });
+      }
+      expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["custom-command", "remote-target"] as const)(
     "keeps ordinary managed restart for %s",
@@ -177,7 +267,7 @@ describe("Gateway service readiness", () => {
           error: expect.stringContaining("Restored 2026.11.8; Gateway ready."),
         }),
       );
-      expect(waitForReleaseUpdateFailure).toHaveBeenCalledWith("adopted-run");
+      expect(waitForReleaseUpdateFailure).toHaveBeenCalledWith();
     },
   );
 

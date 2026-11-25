@@ -498,10 +498,12 @@ The account and connection indicators describe identity and connectivity, not me
 The composer count covers only its conversation and does not promise automatic sending.
 Draft text and saved messages awaiting destination recovery are separate.
 
-While a connected chat finishes account recovery, Send stays unavailable and
-explains that recovery is pending. Your draft stays in the composer. Once recovery
-finishes, ordinary messages can enter the queue even if chat history is still loading.
-Stop and approval controls keep their existing availability.
+Send stays unavailable while the browser is making its first Gateway connection
+or the connected chat is finishing account recovery. Your draft stays in the
+composer. Once recovery finishes, ordinary messages can enter the queue even if
+chat history is still loading. If the browser already knows the account for this
+Gateway, you can still queue messages during a disconnect. Stop and approval
+controls keep their existing availability.
 
 These Inbox entries are a read-only view of the current account’s browser-tab/Gateway outbox,
 not a new server-side or cross-device inbox. They show available conversation labels, not message text,

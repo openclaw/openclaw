@@ -146,6 +146,7 @@ describe("before_model_request on CLI runtimes", () => {
       signal: new AbortController().signal,
       context: {
         params: { workspaceDir: "/tmp" },
+        backendResolved: { id: "claude-cli" },
         beforeModelRequest: createCliModelRequestGate({
           hookRunner,
           hookContext: { agentId: "main" },

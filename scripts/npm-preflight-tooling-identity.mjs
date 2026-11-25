@@ -14,7 +14,11 @@ import {
   retainedPublicationArtifactSource,
   releaseEvidenceProducerTuple,
 } from "./lib/release-evidence-identity.mjs";
-import { verifyNpmBundleProducer } from "./npm-prepared-bundle.mjs";
+import {
+  isBuildOnlyNpmPreflight,
+  SEALED_NPM_PREFLIGHT_SCHEMA,
+  verifyNpmBundleProducer,
+} from "./npm-prepared-bundle.mjs";
 import {
   runReleaseToolingGh,
   validateReleaseToolingIdentity,
@@ -28,7 +32,7 @@ const QUALIFIED_WORKFLOWS = new Set([FULL_RELEASE_WORKFLOW, ARTIFACT_WORKFLOW]);
 /**
  * @typedef {object} NpmPreflightProducerOptions
  * @property {unknown} manifest
- * @property {unknown} [fastTrackApproval]
+ * @property {unknown} [fastTrackRequest]
  * @property {string} repository
  * @property {string} workflowFullRef
  * @property {string} workflowSha
@@ -71,7 +75,7 @@ export function validateNpmPreflightProducer({
   fullReleaseRunId,
   fullReleaseRunAttempt,
 }) {
-  if (QUALIFIED_WORKFLOWS.has(workflowPath) && manifest?.version !== 3) {
+  if (QUALIFIED_WORKFLOWS.has(workflowPath) && ![3, 4].includes(manifest?.version)) {
     throw new Error("FRV npm preflight requires qualified version 3 producer evidence.");
   }
   // Published v1 preflights did not record the original ref qualifier. Keep
@@ -79,7 +83,17 @@ export function validateNpmPreflightProducer({
   if (manifest?.version === 1 && !Object.hasOwn(manifest, "producer")) {
     return { originalWorkflowRef: null, provenance: "legacy-unrecorded" };
   }
-  if (![2, 3].includes(manifest?.version) || !isRecord(manifest.producer)) {
+  if (
+    manifest?.version === 4 &&
+    (!QUALIFIED_WORKFLOWS.has(workflowPath) ||
+      !isBuildOnlyNpmPreflight(manifest) ||
+      fullReleaseManifest?.rerunGroup !== "build-only" ||
+      fullReleaseManifest?.publicationArtifacts?.npmPreflight?.schema !==
+        SEALED_NPM_PREFLIGHT_SCHEMA)
+  ) {
+    throw new Error("Build-only npm preflight requires its exact full release artifact binding.");
+  }
+  if (![2, 3, 4].includes(manifest?.version) || !isRecord(manifest.producer)) {
     throw new Error("npm preflight producer metadata is missing or unsupported.");
   }
   if (
@@ -101,7 +115,7 @@ export function validateNpmPreflightProducer({
     workflowSha,
     runId: String(runId),
     runAttempt: String(runAttempt),
-    ...(manifest.version === 3
+    ...([3, 4].includes(manifest.version)
       ? {
           producerWorkflowPath: ".github/workflows/openclaw-npm-preflight.yml",
           jobId: manifest.producer.jobId,
@@ -110,7 +124,7 @@ export function validateNpmPreflightProducer({
       : {}),
   };
   if (
-    manifest.version === 3 &&
+    [3, 4].includes(manifest.version) &&
     (!/^[1-9][0-9]*$/u.test(manifest.producer.jobId ?? "") ||
       typeof manifest.producer.jobName !== "string" ||
       !/(?:^| \/ )Qualify prepared npm package$/u.test(manifest.producer.jobName) ||
@@ -147,17 +161,17 @@ export function validateNpmPreflightProducer({
 /** @param {NpmPreflightProducerOptions & {manifestSha256?: string, runGh?: typeof runReleaseToolingGh}} options */
 export function verifyNpmPreflightProducer({
   runGh = runReleaseToolingGh,
-  fastTrackApproval = process.env.FAST_TRACK_APPROVAL_JSON,
+  fastTrackRequest = process.env.FAST_TRACK_REQUEST_JSON,
   ...options
 }) {
   const identity = validateNpmPreflightProducer(options);
-  if (options.manifest.version !== 3) {
+  if (![3, 4].includes(options.manifest.version)) {
     return identity;
   }
   const producer = options.manifest.producer;
   if (QUALIFIED_WORKFLOWS.has(options.workflowPath)) {
     const { descriptor: qualified } = resolveFullReleaseNpmPreflight({
-      fastTrackApproval,
+      fastTrackRequest,
       manifest: options.fullReleaseManifest,
       repository: options.repository,
       runId: options.fullReleaseRunId ?? options.runId,
@@ -222,7 +236,10 @@ export function validateFullReleaseNpmPreflight({
         (manifest.receiptRecovery || manifest.publicationArtifactSource) &&
         retainedSource?.workflow.sha === toolingSha
       )) ||
-    qualified?.schema !== "openclaw.qualified-npm-preflight/v1" ||
+    qualified?.schema !==
+      (manifest.rerunGroup === "build-only"
+        ? SEALED_NPM_PREFLIGHT_SCHEMA
+        : "openclaw.qualified-npm-preflight/v1") ||
     qualified.source?.sha !== sourceSha ||
     !/^[a-f0-9]{64}$/u.test(qualified.manifestSha256 ?? "") ||
     !/^[1-9][0-9]*$/u.test(qualified.artifact?.id ?? "") ||
@@ -253,17 +270,17 @@ export function validateFullReleaseNpmPreflight({
 
 // The FRV run authorizes publication; its descriptor identifies the independent
 // producer whose immutable archive survives a rerun of that authorization.
-/** @param {FullReleaseNpmPreflightOptions & {repository: string, fastTrackApproval?: unknown, runGh?: typeof runReleaseToolingGh}} options */
+/** @param {FullReleaseNpmPreflightOptions & {repository: string, fastTrackRequest?: unknown, runGh?: typeof runReleaseToolingGh}} options */
 export function resolveFullReleaseNpmPreflight({
   runGh = runReleaseToolingGh,
-  fastTrackApproval = process.env.FAST_TRACK_APPROVAL_JSON,
+  fastTrackRequest = process.env.FAST_TRACK_REQUEST_JSON,
   ...options
 }) {
   const descriptor = validateFullReleaseNpmPreflight(options);
   const producer = descriptor.producer;
   // This resolves transport and the exact successful seal only. Publication consumers
   // must authenticate the packet through the full evidence owner before publishing.
-  const inlineException = Boolean(fastTrackApproval) && producer.runId === String(options.runId);
+  const inlineException = Boolean(fastTrackRequest) && producer.runId === String(options.runId);
   const { run } = verifyNpmBundleProducer({
     producer,
     repository: options.repository,
@@ -335,6 +352,16 @@ export async function downloadFullReleaseNpmPreflight({
   ) {
     throw new Error("Downloaded npm preflight manifest differs from its qualified descriptor.");
   }
+  const npmManifest = JSON.parse(manifestBytes.toString("utf8"));
+  if (
+    (descriptor.schema === SEALED_NPM_PREFLIGHT_SCHEMA) !== isBuildOnlyNpmPreflight(npmManifest) ||
+    (descriptor.schema === SEALED_NPM_PREFLIGHT_SCHEMA &&
+      npmManifest.npmDistTag !== options.manifest.sourceAdmission?.publicationSelection?.npmDistTag)
+  ) {
+    throw new Error(
+      "Npm preflight validation mode or exact publication channel differs from its descriptor.",
+    );
+  }
   mkdirSync(outputDir, { recursive: true });
   if (readdirSync(outputDir).length !== 0) {
     throw new Error("Qualified npm preflight destination must be empty.");
@@ -400,7 +427,7 @@ export function validateNpmPreflightQualification({
  *   publisherSha: string, producerRunId: string | number, producerRunAttempt: string | number,
  *   publisherFullRef?: string, runGh?: typeof runReleaseToolingGh,
  *   publicationAuthority?: Parameters<typeof verifyReleaseToolingIdentity>[0],
- *   fastTrackApproval?: unknown,
+ *   fastTrackRequest?: unknown,
  *   evidenceClient?: Parameters<typeof import("./release-ci-summary.mjs").validateReleaseRunEvidence>[1] }} options
  */
 export async function verifyNpmPreflightPublicationLineage({
@@ -412,7 +439,7 @@ export async function verifyNpmPreflightPublicationLineage({
   producerRunId,
   producerRunAttempt,
   evidenceClient,
-  fastTrackApproval,
+  fastTrackRequest,
   publisherFullRef = "refs/heads/main",
   publicationAuthority,
 }) {
@@ -426,7 +453,7 @@ export async function verifyNpmPreflightPublicationLineage({
     publisherSha,
     publisherFullRef,
     client: evidenceClient,
-    fastTrackApproval,
+    fastTrackRequest,
   });
   const qualified = validateNpmPreflightQualification({
     manifest,

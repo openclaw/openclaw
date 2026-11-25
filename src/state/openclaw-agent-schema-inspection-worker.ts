@@ -165,8 +165,10 @@ export function createAgentSchemaInspectionWorker() {
                 if (metadata.store !== "agent") {
                   throw new Error("PostgreSQL agent inspection requires an agent store.");
                 }
+                const floor =
+                  metadata.minReader !== metadata.version ? { minReader: metadata.minReader } : {};
                 if (!input.inspectOwnership) {
-                  return { version: metadata.version };
+                  return { version: metadata.version, ...floor };
                 }
                 const { rows } = await client.query<{
                   agent_id: string | null;
@@ -177,11 +179,13 @@ export function createAgentSchemaInspectionWorker() {
                 const row = rows[0];
                 return {
                   version: metadata.version,
+                  ...floor,
                   agentSchemaMeta: row
                     ? {
                         agentId: normalizeNullableString(row.agent_id),
                         role: row.role,
                         schemaVersion: row.schema_version,
+                        ...floor,
                       }
                     : null,
                 };
@@ -257,10 +261,14 @@ export function createAgentSchemaInspectionWorker() {
             metadata?.agentId === validation.agentId &&
             (input.agentId === undefined || input.agentId === validation.agentId) &&
             metadata.role === "agent" &&
-            metadata.schemaVersion === input.supportedVersion
+            metadata.schemaVersion === input.supportedVersion &&
+            (metadata.minReader ?? metadata.schemaVersion) <= input.supportedVersion
           ) {
             return {
               version: input.supportedVersion,
+              ...(metadata.minReader !== undefined && metadata.minReader !== metadata.schemaVersion
+                ? { minReader: metadata.minReader }
+                : {}),
               integrityGateOutcome: "cached",
               agentSchemaMeta: metadata,
             };
