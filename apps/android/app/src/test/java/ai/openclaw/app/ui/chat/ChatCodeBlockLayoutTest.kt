@@ -1,5 +1,9 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatComposerOwner
+import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
 import android.content.ClipData
@@ -7,9 +11,11 @@ import android.content.ClipboardManager
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -18,9 +24,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -76,6 +85,126 @@ class ChatCodeBlockLayoutTest {
     assertCopiedSource(code)
     click("Start of code")
     visibleGlyph("FIRST_CODE")
+  }
+
+  @Test
+  fun settlingAndRefreshingKeepEachFencesOwnReadingPosition() {
+    val code = (0..260).joinToString("\n") { "line $it" }
+    val fence = "```text\n$code\n```"
+    val twoFences = "$fence\n\n$fence"
+    val text = "Live result.\n\n$twoFences"
+
+    fun message(
+      id: String,
+      body: String = text,
+    ) = ChatMessage(id, "assistant", listOf(ChatMessageContent(text = body)), null, runId = "run", entryId = id)
+    val older = message("older")
+    val commentary = message("commentary", "Separate commentary.\n\n$twoFences")
+    val note = message("note", "Finished the calculation.")
+    val final = message("final", "$text\n\n$fence")
+    val live = ChatTimelineItem.StreamingAssistant(text)
+    val session = mutableStateOf("session")
+    val run = mutableStateOf("run")
+    val history = mutableStateOf(listOf(older))
+    val row = mutableStateOf<ChatTimelineItem?>(live)
+    show {
+      val item = row.value
+      val owner = ChatComposerOwner("gateway", "main", session.value)
+      val stream = if (item === live) ChatController.StreamingAssistant(ChatController.ChatRunOwner(owner, run.value), text) else null
+      val forRow = key(session.value) { rememberChatCodeReaderForRow(history.value, stream, owner, if (stream == null) 0 else 2, ChatMessage::content) }
+      LazyColumn {
+        if (item != null) {
+          item(key = chatTimelineItemKey(item)) {
+            val markdown =
+              when (item) {
+                is ChatTimelineItem.StreamingAssistant -> {
+                  item.text
+                }
+
+                is ChatTimelineItem.Message -> {
+                  item.message.content
+                    .single()
+                    .text
+                    .orEmpty()
+                }
+
+                else -> {
+                  error("Expected an assistant row")
+                }
+              }
+            CompositionLocalProvider(LocalChatCodeReaderHandoff provides forRow(item)) {
+              ChatMarkdown(markdown, ClawTheme.colors.text, isStreaming = item === live)
+            }
+          }
+        }
+      }
+    }
+
+    val lists = hasScrollToIndexAction()
+    val fences = composeRule.onAllNodes(lists and hasAnyAncestor(lists), useUnmergedTree = true)
+
+    fun offsets() = fences.fetchSemanticsNodes().map { it.config[SemanticsProperties.VerticalScrollAxisRange].value() }
+
+    fun read(
+      index: Int,
+      distance: Float,
+    ) {
+      fences[index].performSemanticsAction(SemanticsActions.ScrollBy) { scroll -> assertTrue(scroll(0f, distance)) }
+      composeRule.waitForIdle()
+    }
+
+    read(0, 160f)
+    read(1, 420f)
+    val positions = listOf(160f, 420f)
+    val start = listOf(0f, 0f)
+    assertEquals(positions, offsets())
+    // A terminal event clears the stream before the refreshed history may arrive.
+    composeRule.runOnIdle { row.value = null }
+    composeRule.waitForIdle()
+    composeRule.runOnIdle {
+      history.value = listOf(older, commentary)
+      row.value = ChatTimelineItem.Message(commentary)
+    }
+    assertEquals("Separate commentary must start at the top of both fences", start, offsets())
+    composeRule.runOnIdle {
+      history.value = listOf(older, commentary, note)
+      row.value = ChatTimelineItem.Message(note)
+    }
+    assertTrue(offsets().isEmpty())
+    composeRule.runOnIdle {
+      history.value = listOf(older, commentary, note, final)
+      row.value = ChatTimelineItem.Message(final)
+    }
+    assertEquals(positions + 0f, offsets())
+    composeRule.runOnIdle {
+      val refreshed = final.copy(timestampMs = 2L)
+      history.value = listOf(older, commentary, note, refreshed)
+      row.value = ChatTimelineItem.Message(refreshed)
+    }
+    assertEquals(positions + 0f, offsets())
+
+    composeRule.runOnIdle { row.value = ChatTimelineItem.Message(older) }
+    assertEquals(start, offsets())
+    composeRule.runOnIdle {
+      val sibling = message("another")
+      history.value = listOf(older, sibling)
+      row.value = ChatTimelineItem.Message(sibling)
+    }
+    assertEquals(start, offsets())
+    composeRule.runOnIdle {
+      row.value = live
+      run.value = "next-run"
+    }
+    assertEquals(start, offsets())
+    read(0, 120f)
+    composeRule.runOnIdle { run.value = "third-run" }
+    assertEquals(start, offsets())
+    read(1, 100f)
+    composeRule.runOnIdle { run.value = "next-run" }
+    assertTrue(offsets()[0] > 0f)
+    assertEquals(0f, offsets()[1], 0f)
+    composeRule.runOnIdle { session.value = "another-session" }
+    assertEquals(start, offsets())
   }
 
   @Test
