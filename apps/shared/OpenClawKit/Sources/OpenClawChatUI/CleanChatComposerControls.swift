@@ -76,10 +76,7 @@ enum CleanChatComposerMetrics {
     static let footerBlockInset: CGFloat = 6
     static let rowGap: CGFloat = 4
     static let regularModelMaxWidth: CGFloat = 148
-    #if os(iOS)
-    /// The phone's cap gives the 10 pt that full 44 pt effort and mic targets take back to the row.
-    static let phoneModelMaxWidth: CGFloat = regularModelMaxWidth - 10
-    #endif
+    static let effortTrailingPadding: CGFloat = 6
     static let compactModelWidth: CGFloat = controlTouchSize
 }
 

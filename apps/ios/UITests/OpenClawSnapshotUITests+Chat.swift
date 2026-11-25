@@ -46,7 +46,9 @@ extension OpenClawSnapshotUITests {
             XCTAssertLessThanOrEqual(control.frame.maxX, surface.frame.maxX)
             XCTAssertLessThanOrEqual(abs(control.frame.midY - send.frame.midY), 1)
         }
-        self.assertNoHorizontalOverlap(controls)
+        // A long model name reaches over the shield's empty 8 pt, and the mic over the effort chip's
+        // trailing padding; no target covers another control's glyph.
+        self.assertNoHorizontalOverlap(controls, allowing: 8)
         self.attachScreenshot(named: "accessibility-model-and-send-controls")
     }
 

@@ -134,21 +134,18 @@ extension OpenClawChatComposer {
     @ViewBuilder
     var cleanTrailingControls: some View {
         #if os(iOS)
-        // The model chip always shows its name and truncates when the row runs out of room. At accessibility
-        // sizes the model and effort chips take a row of their own above the voice and send controls.
-        if self.dynamicTypeSize.isAccessibilitySize, !self.cleanShowsCameraFlip {
-            VStack(alignment: .trailing, spacing: 0) {
-                HStack(spacing: 0) {
-                    self.cleanInlineModelPicker(compact: false)
-                    self.cleanInlineEffortMenu
-                }
-                // The mic and the primary button come as separate views; keep them on one row.
-                HStack(spacing: 0) {
-                    self.cleanCaptureAndPrimaryControls
-                }
-            }
-        } else {
+        // The model's full name stays on one row with the other controls while it fits. When it does
+        // not (a long name, a narrow phone, a large text size), the model and effort chips take a row of
+        // their own above the voice and send controls instead of cutting the name.
+        if self.cleanShowsCameraFlip {
             self.cleanInlineControls(compactModel: false)
+        } else if self.dynamicTypeSize.isAccessibilitySize {
+            self.cleanStackedControls
+        } else {
+            ViewThatFits(in: .horizontal) {
+                self.cleanInlineControls(compactModel: false)
+                self.cleanStackedControls
+            }
         }
         #else
         ViewThatFits(in: .horizontal) {
@@ -157,6 +154,21 @@ extension OpenClawChatComposer {
         }
         #endif
     }
+
+    #if os(iOS)
+    private var cleanStackedControls: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            HStack(spacing: 0) {
+                self.cleanInlineModelPicker(compact: false)
+                self.cleanInlineEffortMenu
+            }
+            // The mic and the primary button come as separate views; keep them on one row.
+            HStack(spacing: 0) {
+                self.cleanCaptureAndPrimaryControls
+            }
+        }
+    }
+    #endif
 
     private func cleanInlineControls(compactModel: Bool) -> some View {
         // Labels carry their own side padding: 14 pt between the model and effort pair,
@@ -172,7 +184,10 @@ extension OpenClawChatComposer {
             #else
             if !self.cleanShowsCameraFlip {
                 self.cleanInlineModelPicker(compact: compactModel)
+                // The mic's target takes the empty padding after the gauge's chevron, so the model's
+                // name gets that width instead of a wider gap before the mic.
                 self.cleanInlineEffortMenu
+                    .padding(.trailing, -CleanChatComposerMetrics.effortTrailingPadding)
             }
             #endif
             self.cleanCaptureAndPrimaryControls
@@ -286,10 +301,7 @@ extension OpenClawChatComposer {
         .contentShape(Rectangle())
         #elseif os(iOS)
         // Always the name, never an icon: it hugs short names and truncates long ones.
-        CleanComposerModelChipLabel(
-            name: self.viewModel.composerInlineModelLabel,
-            capped: !self.dynamicTypeSize.isAccessibilitySize)
-        {
+        CleanComposerModelChipLabel(name: self.viewModel.composerInlineModelLabel) {
             self.cleanPhoneMenuChevron
         }
         #else
@@ -366,7 +378,7 @@ extension OpenClawChatComposer {
             }
             .foregroundStyle(CleanChatComposerMetrics.footerInk)
             .padding(.leading, 7)
-            .padding(.trailing, 6)
+            .padding(.trailing, CleanChatComposerMetrics.effortTrailingPadding)
             // The gauge and chevron are 42.3 pt wide; the rest of a full target goes on the leading side.
             .frame(minWidth: CleanChatComposerMetrics.controlTouchSize, alignment: .trailing)
             .frame(height: self.cleanControlHeight)
@@ -543,49 +555,27 @@ extension OpenClawChatComposer {
 }
 
 #if os(iOS)
-/// The model chip's label: the name and a chevron. It hugs short names, stops at a width cap on one row,
-/// and truncates down to a readable minimum when the row is tight.
+/// The model chip's label: the name and a chevron. The shield's 44 pt target already leaves visible
+/// space before the name, so the chip pads only toward the effort gauge. The row decides whether the
+/// full name fits on one line; stacked, a very long name truncates down to a readable minimum.
 private struct CleanComposerModelChipLabel<Chevron: View>: View {
     let name: String
-    let capped: Bool
     @ViewBuilder let chevron: () -> Chevron
     /// About five characters, an ellipsis and the chevron at the default text size.
     @ScaledMetric(relativeTo: .callout) private var minimumWidth: CGFloat = 72
 
     var body: some View {
-        CleanComposerWidthCap(cap: self.capped ? CleanChatComposerMetrics.phoneModelMaxWidth : .infinity) {
-            HStack(spacing: 3) {
-                Text(self.name)
-                    .font(OpenClawChatTypography.composerControlLabel)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                self.chevron()
-            }
-            .foregroundStyle(CleanChatComposerMetrics.footerInk)
-            .padding(.leading, 8)
-            .padding(.trailing, 7)
+        HStack(spacing: 3) {
+            Text(self.name)
+                .font(OpenClawChatTypography.composerControlLabel)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            self.chevron()
         }
+        .foregroundStyle(CleanChatComposerMetrics.footerInk)
+        .padding(.trailing, 7)
         .frame(minWidth: self.minimumWidth, minHeight: CleanChatComposerMetrics.controlTouchSize)
         .contentShape(Rectangle())
-    }
-}
-
-/// Proposes at most `cap` and keeps the child's own width, so a short label hugs instead of filling the cap.
-private struct CleanComposerWidthCap: Layout {
-    let cap: CGFloat
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
-        guard let child = subviews.first else { return .zero }
-        return child.sizeThatFits(ProposedViewSize(
-            width: min(proposal.width ?? self.cap, self.cap),
-            height: proposal.height))
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
-        subviews.first?.place(
-            at: CGPoint(x: bounds.minX, y: bounds.midY),
-            anchor: .leading,
-            proposal: ProposedViewSize(bounds.size))
     }
 }
 
@@ -625,7 +615,11 @@ private struct CleanComposerPhoneLayout: Layout {
         let gap = CleanChatComposerMetrics.rowGap
         let top = self.expanded ? CleanChatComposerMetrics.expandedEditorTopInset : trailingEdge
         let leading = subviews[1].sizeThatFits(.unspecified)
-        let trailingWidth = max(0, width - leadingEdge - trailingEdge - leading.width)
+        // Open, the trailing controls may reach over the empty end of the last leading target (the shield
+        // draws a 36 pt glyph slot in its 44 pt target), so a long model name gets that width too.
+        let overlap = self.expanded ? CleanChatComposerMetrics.controlTouchSize - CleanChatComposerMetrics
+            .glyphControlWidth : 0
+        let trailingWidth = max(0, width - leadingEdge - trailingEdge - leading.width + overlap)
         let trailing = subviews[2].sizeThatFits(ProposedViewSize(
             width: self.expanded ? trailingWidth : nil, height: nil))
         let fieldX = self.expanded ? CleanChatComposerMetrics.editorInlineInset : leadingEdge + leading.width

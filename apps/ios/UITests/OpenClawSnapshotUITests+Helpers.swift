@@ -191,8 +191,10 @@ extension OpenClawSnapshotUITests {
         XCTAssertGreaterThanOrEqual(element.frame.height + tolerance, minimum, file: file, line: line)
     }
 
+    /// `allowing` is how far a target may reach over its neighbor's empty padding.
     func assertNoHorizontalOverlap(
         _ elements: [XCUIElement],
+        allowing allowedOverlap: CGFloat = 0,
         file: StaticString = #filePath,
         line: UInt = #line)
     {
@@ -200,7 +202,7 @@ extension OpenClawSnapshotUITests {
         for (left, right) in zip(ordered, ordered.dropFirst()) {
             XCTAssertLessThanOrEqual(
                 left.frame.maxX,
-                right.frame.minX + 0.5,
+                right.frame.minX + allowedOverlap + 0.5,
                 "\(left.identifier) overlaps \(right.identifier)",
                 file: file,
                 line: line)
