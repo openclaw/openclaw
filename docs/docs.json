@@ -1452,6 +1452,7 @@
                     "group": "App platforms",
                     "pages": [
                       "install/boat",
+                      "install/boxd",
                       "install/cloudflare",
                       "install/daytona",
                       "install/exe-dev",
