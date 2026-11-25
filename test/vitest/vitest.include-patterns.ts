@@ -209,6 +209,11 @@ function intersectDirectoryTestPattern(
     const result: string[] = [];
     let hasAmbiguousOverlap = false;
     for (const pattern of includePatterns) {
+      // Literal inventory members remain provable beside dynamic owner globs.
+      if (isLiteralComparisonPath(pattern)) {
+        if (matchesGlob(pattern, candidatePattern)) result.push(...emit(pattern, pattern));
+        continue;
+      }
       const includeRoot = directoryTestPatternRoot(pattern);
       // Equal complete templates differ only in their terminal test extensions.
       // A partial match cannot hide another owner's unresolved overlap.

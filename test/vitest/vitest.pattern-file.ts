@@ -348,7 +348,7 @@ export function createVitestCliDiscovery(args: string[], root = repoRoot) {
   );
   // Vitest's project grammar is case-insensitive, anchored, and star-only.
   // File glob matchers would incorrectly interpret ?, [] and extglobs here.
-  const projects = (parsed?.options.project ?? []).map((pattern) => ({
+  const projects = [parsed?.options.project ?? []].flat().map((pattern) => ({
     excluded: pattern.startsWith("!"),
     matcher: new RegExp(
       `^${(pattern.startsWith("!") ? pattern.slice(1) : pattern)

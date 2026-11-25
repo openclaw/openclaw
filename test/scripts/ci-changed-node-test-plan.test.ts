@@ -1913,7 +1913,7 @@ describe("CI changed Node test plan", () => {
     expect(jobs?.[0]?.requiresDist).toBe(false);
   });
 
-  it("retains separate whole inventories for a mixed tooling pair", () => {
+  it("selects only requested files across a mixed tooling pair", () => {
     const jobs = createSelectedNodeTestShardBundles([
       "test/scripts/control-ui-i18n.test.ts",
       "test/scripts/docker-build-helper.test.ts",
@@ -1924,7 +1924,12 @@ describe("CI changed Node test plan", () => {
       "test/vitest/vitest.tooling-docker.config.ts",
       "test/vitest/vitest.tooling-isolated.config.ts",
     ]);
-    expect(groups?.[0]?.includePatterns).toBeUndefined();
+    expect(groups?.[0]?.includePatterns).toEqual([
+      "test/scripts/control-ui-i18n.test.ts",
+      "test/scripts/docker-build-helper.test.ts",
+    ]);
+    expect(jobs?.[0]?.planConcurrency).toBe(1);
+    expect(jobs?.[0]?.requiresDist).toBe(false);
   });
 
   it("routes lifecycle edits to the prepared QA config without losing boundary coverage", () => {

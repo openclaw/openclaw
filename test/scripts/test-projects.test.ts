@@ -1434,11 +1434,18 @@ export const single = {
     withTinyFileTree({ [keep]: "", [drop]: "" }, (cwd) => {
       const args = ["--watch", directory, drop, "keep"];
       const includes = [`${directory}/**/*.test.ts`, drop];
-      expectRun(planRuns(args, cwd, undefined, { env: {} }), "agents-tools", {
-        includePatterns: includes,
-        forwardedArgs: ["--watch", "keep"],
-        watchMode: true,
-      });
+      expect(planRuns(args, cwd, undefined, { env: {} })).toEqual([
+        {
+          config: configFile("database-worker-watch"),
+          databaseWorkerWatchOwner: configFile("agents-tools"),
+          databaseWorkerWatchTests: databaseWorkerCoreTestFiles.filter((file) =>
+            file.startsWith(`${directory}/`),
+          ),
+          includePatterns: includes,
+          forwardedArgs: ["--watch", "keep"],
+          watchMode: true,
+        },
+      ]);
       const [spec] = runSpecs(args, { cwd, baseEnv: {} });
       expect(spec?.includePatterns).toEqual(includes);
       expect(spec?.pnpmArgs.at(-1)).toBe("keep");
@@ -1656,6 +1663,12 @@ export const single = {
           ? [[], ["--dir", path.join(cwd, "test/scripts")]]
           : [[]]) {
           const args = ["--watch", target, ...extra];
+          if (extra.length) {
+            expect(() => runSpecs(args, { cwd, baseEnv })).toThrow(
+              "watch mode with mixed test suites is not supported",
+            );
+            args.push("--project=tooling-isolated");
+          }
           const [spec] = runSpecs(args, { cwd, baseEnv });
           expect(spec?.config).toBe(configFile("tooling-isolated"));
           expect(spec?.includePatterns).toEqual([
@@ -1708,8 +1721,12 @@ export const single = {
         const inherited = absoluteFirst ? [absolute, relative] : [relative, absolute];
         const includeFile = path.join(cwd, "include.json");
         fs.writeFileSync(includeFile, JSON.stringify(inherited));
-        const args = ["--watch", "test/scripts", "--dir", path.join(cwd, "test/scripts")];
         const baseEnv = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+        const args = ["--watch", "test/scripts", "--dir", path.join(cwd, "test/scripts")];
+        expect(() => planRuns(args, cwd, undefined, { env: baseEnv })).toThrow(
+          "watch mode with mixed test suites is not supported",
+        );
+        args.push("--project=tooling-isolated");
         expectRun(planRuns(args, cwd, undefined, { env: baseEnv }), "tooling-isolated", {
           includePatterns: inherited,
           forwardedArgs: ["--watch", ...args.slice(2)],
@@ -1751,7 +1768,16 @@ export const single = {
       withTinyFileTree(
         { [isolated]: "import fs from 'node:fs';", [processFile]: "import fs from 'node:fs';" },
         (cwd) => {
-          const forwarded = ["--exclude", processFile, ...(explicitDir ? ["--dir", cwd] : [])];
+          const dir = explicitDir ? ["--dir", cwd] : [];
+          const projects = ["--project=tooling-isolated", "--project=cli-process"];
+          const forwarded = ["--exclude", processFile, ...dir, ...projects];
+          if (explicitDir) {
+            expect(() =>
+              planRuns(["--watch", target, "--exclude", processFile, ...dir], cwd, undefined, {
+                env: {},
+              }),
+            ).toThrow("watch mode with mixed test suites is not supported");
+          }
           const args = ["--watch", target, ...forwarded];
           expectRun(planRuns(args, cwd, undefined, { env: {} }), "tooling-isolated", {
             includePatterns: [target],
@@ -1762,9 +1788,9 @@ export const single = {
           expect(spec?.config).toBe(configFile("tooling-isolated"));
           expect(spec?.includePatterns).toEqual([target]);
           expect(spec?.pnpmArgs).toEqual(expect.arrayContaining(forwarded));
-          expect(() => planRuns(["--watch", target], cwd, undefined, { env: {} })).toThrow(
-            "watch mode with mixed test suites is not supported",
-          );
+          expect(() =>
+            planRuns(["--watch", target, ...dir, ...projects], cwd, undefined, { env: {} }),
+          ).toThrow("watch mode with mixed test suites is not supported");
         },
       );
     },

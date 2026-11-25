@@ -42,7 +42,7 @@ const discover = (
     ...cli.resolveNativeVitestExcludes(
       cli.relativizeScopedPatterns(exclude ?? [], scopedDir),
       selection.include,
-      path.resolve(root ?? process.cwd(), scopedDir),
+      dir,
       dir,
     ),
     ...selection.exclude,
@@ -256,6 +256,38 @@ it("retains negative constraints from either operand without treating extglobs a
   ).toEqual({ include: [], exclude: ["test/scripts/blocked.test.ts"] });
   expect(cliPatterns.intersectIncludePatterns(files, null, cli.matchesVitestGlob)).toBeNull();
 });
+
+it.each([false, true])(
+  "intersects mixed literal inventories without hiding ambiguity (reverse: %s)",
+  (reverse) => {
+    const worker = "test/scripts/upgrade-survivor-acp-metadata.test.ts";
+    const requested = "test/scripts/upgrade-survivor-*.test.ts";
+    const ordered = (patterns: string[]) => (reverse ? patterns.toReversed() : patterns);
+    const owners = ordered(["src/infra/**/*.test.ts", worker, "test/scripts/other.test.ts"]);
+    expect(intersect(owners, [requested])).toEqual([worker]);
+    const root = tempDirs.make("mixed-inventory-");
+    const absolute = (pattern: string) => cli.resolveNativeVitestPattern(pattern, root);
+    expect(
+      cliPatterns.intersectIncludePatterns(
+        [...owners, "!test/scripts/owner-blocked.test.ts"],
+        [absolute(requested), `!${absolute("test/scripts/request-blocked.test.ts")}`],
+        cli.matchesNativeVitestGlob,
+        root,
+        root,
+        cli.resolveNativeVitestPattern,
+      ),
+    ).toEqual({
+      include: [absolute(worker)],
+      exclude: [
+        absolute("test/scripts/owner-blocked.test.ts"),
+        absolute("test/scripts/request-blocked.test.ts"),
+      ],
+    });
+    expect(() =>
+      intersect(ordered([worker, "test/**/upgrade-survivor-*.test.ts"]), [requested]),
+    ).toThrow("cannot safely intersect");
+  },
+);
 
 it("preserves each origin when narrowing a recursive basename beneath a directory", () => {
   const root = tempDirs.make("openclaw-pattern-origins-");
@@ -660,7 +692,7 @@ it("applies native basename filters after discovering unprepared owner includes"
   expect(args).toEqual(originalArgs);
 });
 
-it("keeps owner exclusions anchored when absolute selections use another native directory", () => {
+it("keeps fallback exclusions dir-relative and absolute exclusions physical", () => {
   const root = tempDirs.make("vitest-native-exclusions-");
   const files = [
     "test/scripts/owned.test.ts",
@@ -674,9 +706,15 @@ it("keeps owner exclusions anchored when absolute selections use another native 
   const args = ["run", "--dir", path.join(root, "test/scripts"), "--exclude", "cli.test.ts"];
   const originalArgs = [...args];
   expect(discover(include, args, "", {}, include, root, exclusions)).toEqual({
-    available: ["test/scripts/keep.test.ts"],
-    selected: ["test/scripts/keep.test.ts"],
+    available: ["test/scripts/keep.test.ts", "test/scripts/owned.test.ts"],
+    selected: ["test/scripts/keep.test.ts", "test/scripts/owned.test.ts"],
   });
+  expect(
+    discover(include, args, "", {}, include, root, [
+      convertPathToPattern(path.resolve(root, "test/scripts/owned.test.ts")),
+      "**/node_modules/**",
+    ]),
+  ).toEqual({ available: ["test/scripts/keep.test.ts"], selected: ["test/scripts/keep.test.ts"] });
   expect(cli.resolveNativeVitestExcludes(exclusions, ["test/**/*.test.ts"], root)).toEqual(
     exclusions,
   );

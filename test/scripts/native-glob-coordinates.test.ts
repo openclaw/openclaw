@@ -532,18 +532,38 @@ it.skipIf(process.platform === "win32").for([
         }
         const final = records();
         const modules = final.filter((record) => record.kind === "module");
-        expect(modules).toHaveLength(cliProcess ? 2 : 7);
-        for (const [file, owner] of [[seed, seedOwner], ...additions]) {
-          const expectedCount =
-            !cliProcess && (file === seed || file === additions[1]?.[0]) ? 2 : 1;
-          const matches = modules.filter((record) => record.file === file);
-          expect(matches).toHaveLength(expectedCount);
-          for (const record of matches) {
-            expect(record.owner).toBe(owner);
-            expect(record.state).toBe("passed");
-            expect(record.tests).toHaveLength(1);
-            expect(record.tests?.[0]?.state).toBe("passed");
-          }
+        const expectedModules = [
+          [seed, seedOwner, "generation 1"],
+          ...additions.map(([file, owner]) => [file, owner, "generation 1"]),
+        ];
+        if (!cliProcess) {
+          expectedModules.push(
+            [seed, seedOwner, "generation 2"],
+            [additions[1]![0], "tooling-isolated", "generation 2"],
+          );
+        }
+        if (!cliProcess && discoveryDir !== ".") {
+          // Relative fallback exclusions follow dir; absolute selections still
+          // admit these outside-dir files to the ordinary tooling owner.
+          expectedModules.push(
+            [additions[0]![0], "tooling", "generation 1"],
+            [additions[1]![0], "tooling", "generation 1"],
+            [additions[1]![0], "tooling", "generation 2"],
+            [additions[2]![0], "tooling", "generation 1"],
+          );
+        }
+        const moduleTuples = modules.map((record) => [
+          record.file,
+          record.owner,
+          record.tests?.[0]?.name,
+        ]);
+        expect(moduleTuples.toSorted(), JSON.stringify(moduleTuples)).toEqual(
+          expectedModules.toSorted(),
+        );
+        for (const record of modules) {
+          expect(record.state).toBe("passed");
+          expect(record.tests).toHaveLength(1);
+          expect(record.tests?.[0]?.state).toBe("passed");
         }
         expect(
           final.filter((record) => record.kind === "run").every((record) => record.errors === 0),

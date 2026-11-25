@@ -35,7 +35,7 @@ function selectedFiles(plans: ReturnType<typeof buildVitestRunPlans>): string[] 
 function expectedPlan(owner: string, directory: string, watchMode = false) {
   return {
     config: `test/vitest/vitest.${owner}.config.ts`,
-    forwardedArgs: [],
+    forwardedArgs: watchMode ? ["--watch"] : [],
     includePatterns: [`${directory}/**/*.test.ts`],
     watchMode,
   };

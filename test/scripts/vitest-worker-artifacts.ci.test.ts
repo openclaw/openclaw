@@ -151,10 +151,11 @@ function ciEnv(probe: string, parallelism: number, repeatSpec = false): NodeJS.P
     OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]",
     OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
       ["first-group", "second-group"].map((shard_name, index) => ({
-        // A second finite spec exercises later loans over the same parent's IPC channel.
+        // Unit support accepts the fixture-owned external selection; the isolated
+        // tooling inventory would exclude it and never exercise the later loan.
         configs: [
           "test/vitest/vitest.tooling.config.ts",
-          ...(repeatSpec && index === 0 ? ["test/vitest/vitest.tooling-isolated.config.ts"] : []),
+          ...(repeatSpec && index === 0 ? ["test/vitest/vitest.unit-support.config.ts"] : []),
         ],
         includePatterns: [probe],
         shard_name,
@@ -211,6 +212,9 @@ it.runIf(process.platform !== "win32").for([
           for (const group of ["first-group", "second-group"]) {
             const members = observations.filter((observation) => observation.group === group);
             expect(members).toHaveLength(group === "first-group" && parallelism === 1 ? 2 : 1);
+            if (group === "first-group" && parallelism === 1) {
+              expect(distinct(members.map(({ parent }) => parent))).toBe(1);
+            }
           }
           const generations = observations.map(({ generation }) => generation);
           expect(distinct(generations)).toBe(shared ? 1 : 2);

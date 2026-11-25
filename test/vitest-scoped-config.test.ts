@@ -831,7 +831,7 @@ describe("scoped vitest configs", () => {
   );
 
   it.each([false, true])(
-    "preserves owner and unit-fast exclusions with absolute selections (alternate dir: %s)",
+    "keeps fallback exclusions dir-relative and unit-fast exclusions physical (alternate dir: %s)",
     async (alternateDir) => {
       const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
       const isolated = "test/scripts/vitest-fork-shutdown.test.ts";
@@ -867,11 +867,28 @@ describe("scoped vitest configs", () => {
             expandDirectories: false,
             absolute: true,
           });
-          expect(files).toEqual(cliExclude.includes(absolute(owned)) ? [] : [absolute(owned)]);
+          const expected =
+            createConfig === createToolingVitestConfig && alternateDir
+              ? [ordinary, isolated, docker]
+              : [owned];
+          expect(files.toSorted()).toEqual(
+            expected
+              .map(absolute)
+              .filter((file) => !cliExclude.includes(file))
+              .toSorted(),
+          );
           memberships.push(...files);
         }
         expect(memberships).not.toContain(absolute(thin));
-        expect(new Set(memberships).size).toBe(memberships.length);
+        expect(memberships.toSorted()).toEqual(
+          (alternateDir
+            ? [ordinary, isolated, docker, isolated, docker]
+            : [ordinary, isolated, docker]
+          )
+            .map(absolute)
+            .filter((file) => !cliExclude.includes(file))
+            .toSorted(),
+        );
       }
     },
   );
