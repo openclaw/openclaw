@@ -443,14 +443,14 @@ function makeAacTimingFixture(mediaTicks: number, edits: readonly (number | unde
     const payload = Buffer.concat(parts);
     return Buffer.concat([words(payload.length + 8), Buffer.from(type), payload]);
   }
-  const movieTicks = Math.max(...edits.map((edit) => edit ?? mediaTicks));
+  const movieTicks = Math.max(...edits.map((ticks) => ticks ?? mediaTicks));
   const mvhd = box("mvhd", words(0, 0, 0, timescale, movieTicks), Buffer.alloc(80));
-  const tracks = edits.map((edit, index) => {
-    const tkhd = box("tkhd", words(3, 0, 0, index + 1, 0, edit ?? mediaTicks), Buffer.alloc(60));
+  const tracks = edits.map((ticks, index) => {
+    const tkhd = box("tkhd", words(3, 0, 0, index + 1, 0, ticks ?? mediaTicks), Buffer.alloc(60));
     const edts =
-      edit === undefined
+      ticks === undefined
         ? Buffer.alloc(0)
-        : box("edts", box("elst", words(0, 1, edit, 448, 0x00010000)));
+        : box("edts", box("elst", words(0, 1, ticks, 448, 0x00010000)));
     const mdhd = box("mdhd", words(0, 0, 0, timescale, mediaTicks, 0));
     const hdlr = box("hdlr", words(0, 0), Buffer.from("soun"), Buffer.alloc(13));
     const mp4a = box("mp4a", words(0, 1, 0, 0, 0x00010010, 0, timescale * 65536));
