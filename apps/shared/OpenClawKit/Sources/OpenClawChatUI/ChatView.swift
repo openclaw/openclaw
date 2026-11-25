@@ -1164,7 +1164,7 @@ extension OpenClawChatView {
             activeRunIDs: activeRunIDs,
             runWorking: runWorking,
             runDurations: runDurations,
-            isMessageVisible: self.shouldDisplayMessage)
+            isMessageVisible: { self.shouldDisplayMessage($0, activeRunIDs: activeRunIDs) })
         if self.collapsesCompletedWork {
             rows = ChatTranscriptRow.collapseCompletedWork(
                 rows,
@@ -1176,9 +1176,9 @@ extension OpenClawChatView {
         rows = rows.compactMap { row in
             switch row {
             case let .message(message):
-                return self.shouldDisplayMessage(message) ? row : nil
+                return self.shouldDisplayMessage(message, activeRunIDs: activeRunIDs) ? row : nil
             case let .completedWork(work):
-                let visible = work.messages.filter(self.shouldDisplayMessage)
+                let visible = work.messages.filter { self.shouldDisplayMessage($0, activeRunIDs: activeRunIDs) }
                 return visible.isEmpty ? nil : .completedWork(work.replacingMessages(visible))
             default:
                 return row
@@ -1486,17 +1486,8 @@ extension OpenClawChatView {
     }
     #endif
 
-    private func dismissKeyboardIfNeeded() {
-        #if canImport(UIKit)
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder),
-            to: nil,
-            from: nil,
-            for: nil)
-        #endif
-    }
-
-    private func shouldDisplayMessage(_ message: OpenClawChatMessage) -> Bool {
+    private func shouldDisplayMessage(_ message: OpenClawChatMessage, activeRunIDs: Set<String>) -> Bool {
+        if let shown = self.displayOptions.presetVisibility(of: message, activeRunIDs: activeRunIDs) { return shown }
         let primaryText = ChatMessageVisibleText.displayText(
             in: message,
             includeThinking: self.displayOptions.contains(.reasoning))
