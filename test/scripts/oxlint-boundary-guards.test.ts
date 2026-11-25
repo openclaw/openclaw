@@ -51,7 +51,7 @@ const cases = [
 const allowlists = [
   ["no-operator-permission-read", "", ADMISSION_FILES, 59],
   ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 19],
-  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 24],
+  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 22],
   ["no-turn-authority-derivation", "Capability module:", CAPABILITY_PROVENANCE_FILES, 3],
 ] as const;
 
