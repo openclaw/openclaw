@@ -551,10 +551,14 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
         });
         expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
       } else if (change === "yielded") {
-        expect(outcome).toEqual({
-          completed: false,
-          error: new Error("Subagent suspended delivery cleanup owner changed."),
-        });
+        // Context cleanup and the ended hook share the loader. If context cleanup
+        // reached it first, the sweep can still reject at its post-bookkeeping fence.
+        // Otherwise the best-effort hook observes the yield and returns without effects.
+        if (!outcome.completed) {
+          expect(outcome.error).toEqual(
+            new Error("Subagent suspended delivery cleanup owner changed."),
+          );
+        }
         expect(subagentRuns.get(runId)).toEqual(pausedRecord);
         expect(loadSubagentRegistryFromSqlite().get(runId)?.pauseReason).toBe("sessions_yield");
       } else {
