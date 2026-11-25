@@ -238,11 +238,11 @@ function ScratchFields(props: {
 
   return (
     <Loading>
-      <section class="settings-section">
-        <details>
-          <summary class="settings-section__heading">
-            {t("cron.scratch.title")} <Icon name="chevronDown" class="cron-scratch-chevron" />
-          </summary>
+      <details class="cron-scratch">
+        <summary class="cron-advanced__summary">
+          {t("cron.scratch.title")} <Icon name="chevronDown" />
+        </summary>
+        <section class="settings-section">
           <p class="settings-section__desc">{t("cron.scratch.help")}</p>
           <button
             type="button"
@@ -316,8 +316,8 @@ function ScratchFields(props: {
               {view.message}
             </p>
           </Show>
-        </details>
-      </section>
+        </section>
+      </details>
     </Loading>
   );
 }

@@ -126,7 +126,9 @@ function DetailHeader(
 ) {
   const title = () =>
     props.mode === "job"
-      ? (props.selectedJob?.displayName ?? props.selectedJob?.name ?? props.form.name)
+      ? props.editing && props.canManage
+        ? t("cron.detail.editTitle")
+        : (props.selectedJob?.displayName ?? props.selectedJob?.name ?? props.form.name)
       : t("cron.detail.newTitle");
   const reading = () => props.mode === "job" && !props.editing;
   const description = () => (reading() ? props.selectedJob?.description?.trim() : undefined);

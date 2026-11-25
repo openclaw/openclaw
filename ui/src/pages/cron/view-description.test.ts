@@ -8,7 +8,7 @@ it.each([
   { displayName: "Morning health report", expected: "Morning health report", enabled: true },
   { displayName: undefined, expected: "cron:ops:weekday-health", enabled: false },
 ])(
-  "uses saved label $expected (enabled=$enabled) without replacing action or editor identity",
+  "shows $expected on the saved view and keeps a single editable name (enabled=$enabled)",
   async ({ displayName, expected, enabled }) => {
     const onRun = vi.fn();
     const job = createCronViewJob("display-name-job", {
@@ -27,7 +27,7 @@ it.each([
       onRun,
     };
     const editor = await renderCronView(props);
-    expect(text(editor, ".cron-detail-title")).toBe(expected);
+    expect(text(editor, ".cron-detail-title")).toBe("Edit automation");
     expect(inputValue(editor, "#cron-name")).toBe("Unsaved stable name");
     const detail = await renderCronView({ ...props, detailTab: "history" });
     expect(text(detail, ".cron-detail-title")).toBe(expected);

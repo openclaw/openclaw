@@ -47,6 +47,39 @@ function run(ts: number, jobId: string, summary: string) {
 }
 
 suite.define(() => {
+  it("shows the destination session's name without changing the stored target", async () => {
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const key = "agent:main:dashboard:release-planning";
+      const name = "Release readiness planning";
+      const job = cronJob("release-watch", "Release readiness watch", {
+        configRevision: "watch-revision",
+        sessionTarget: `session:${key}`,
+        payload: { kind: "agentTurn", message: "Review the fictional release checklist." },
+      });
+      const gateway = await installCronGateway(page, {
+        "cron.get": job,
+        "cron.update": { ...job, name: "Release handoff" },
+        "sessions.describe": {
+          cases: [{ match: { key }, response: { session: { key, derivedTitle: name } } }],
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}cron?job=${job.id}`);
+      await page.locator('[data-test-id="cron-edit"]').click();
+      const picker = page.getByRole("button", { name: `Runs in: ${name}` });
+      await picker.click();
+      await page.getByRole("option", { name, exact: true }).click();
+      expect(await gateway.waitForRequest("sessions.describe")).toMatchObject({
+        params: { key, includeDerivedTitles: true },
+      });
+      await page.getByRole("textbox", { name: "Name", exact: true }).fill("Release handoff");
+      await page.getByRole("button", { name: "Save changes" }).click();
+      const request = await gateway.waitForRequest("cron.update");
+      expect(request.params).toMatchObject({ id: job.id, patch: { name: "Release handoff" } });
+      const patch = (request.params as { patch: Record<string, unknown> }).patch;
+      expect(patch.sessionTarget ?? job.sessionTarget).toBe(job.sessionTarget);
+    });
+  });
+
   it.each(
     (["saved", "conflict", "error"] as const).flatMap((outcome) => [
       { navigation: "same editor", goBack: false, outcome },
@@ -98,7 +131,6 @@ suite.define(() => {
       const observe = async () => ({
         url: page.url(),
         name: await name.inputValue(),
-        title: (await page.locator(".cron-detail-title").textContent())?.trim(),
         busy: await editor.getAttribute("aria-busy"),
         samePage: await instance.evaluate(
           (element) =>
@@ -156,7 +188,6 @@ suite.define(() => {
           expect(settled).toMatchObject({
             url: goBack ? bUrl : aUrl,
             name: goBack ? b.name : saved.name,
-            title: goBack ? b.name : outcome === "error" ? a.name : saved.name,
             samePage: true,
           });
         }

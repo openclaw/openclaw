@@ -800,9 +800,10 @@
   line-height: 1.4;
 }
 
-/* Advanced: a quiet text disclosure opening one card of grouped settings. */
+/* Advanced and Automation scratch use the same quiet disclosure. */
 
-.cron-advanced {
+.cron-advanced,
+.cron-scratch {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -840,7 +841,7 @@
   transition: transform var(--duration-fast) var(--ease-out);
 }
 
-.cron-advanced[open] > .cron-advanced__summary > svg {
+details[open] > .cron-advanced__summary > svg {
   transform: rotate(180deg);
 }
 
@@ -1558,8 +1559,7 @@
   display: contents;
 }
 
-.cron-sentence__label,
-.cron-scratch-chevron {
+.cron-sentence__label {
   display: none;
 }
 
@@ -1746,8 +1746,7 @@
     flex-basis: 100%;
   }
 
-  .cron-page[data-view="edit"] .cron-advanced__summary,
-  .cron-page[data-view="edit"] openclaw-cron-scratch-editor summary {
+  .cron-page[data-view="edit"] .cron-advanced__summary {
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -1760,19 +1759,5 @@
     letter-spacing: normal;
     text-transform: none;
     list-style: none;
-  }
-
-  .cron-page[data-view="edit"] openclaw-cron-scratch-editor summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .cron-scratch-chevron {
-    display: inline-block;
-    inline-size: 14px;
-    block-size: 14px;
-  }
-
-  details[open] > summary > .cron-scratch-chevron {
-    transform: rotate(180deg);
   }
 }

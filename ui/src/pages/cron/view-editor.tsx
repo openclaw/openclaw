@@ -1,10 +1,14 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Loading, Show } from "solid-js";
+import { resolveCronSessionTargetSessionKey } from "../../../../src/cron/session-target.ts";
 import type { AgentSelectOption } from "../../components/agent-select-types.ts";
 import "../../components/agent-select-registration.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
 import { EnabledSwitch } from "./view-controls.tsx";
@@ -104,8 +108,6 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
   const { payloadLocked, isAgentTurn, supportsAnnounce, selectedDeliveryMode } =
     payloadFacts(props);
   const { blockingFields, blockedByValidation } = createSubmitState(props);
-  const sessionTarget = () => props.form.sessionTarget;
-  const knownSessionTarget = () => sessionTarget() === "main" || sessionTarget() === "isolated";
   const formDisabled = () => props.busy || !props.canManage;
   const editableJob = () =>
     props.mode === "job" && props.phoneLayout && props.canManage ? props.editingJob : undefined;
@@ -136,20 +138,7 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
           </Show>
           <fieldset class="cron-editor-section" disabled={formDisabled()}>
             <AgentRow {...props} disabled={formDisabled()} />
-            <CronSelect
-              {...props}
-              field="sessionTarget"
-              label={t("cron.form.runsIn")}
-              help={t("cron.form.sessionHelp")}
-              quietHelp
-              options={[
-                { value: "main", label: t("cron.form.mainSession") },
-                { value: "isolated", label: t("cron.form.isolatedSession") },
-                ...(knownSessionTarget()
-                  ? []
-                  : [{ value: sessionTarget(), label: sessionTarget() }]),
-              ]}
-            />
+            <RunsIn {...props} disabled={formDisabled()} />
           </fieldset>
         </div>
         <fieldset class="cron-editor-section cron-editor-extra" disabled={formDisabled()}>
@@ -182,14 +171,14 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
             </div>
           ) : undefined}
         </fieldset>
+        {props.editingJob && props.canManage ? (
+          <CronScratchEditor
+            jobId={props.editingJob.id}
+            gateway={props.gateway}
+            getRetired={props.getActionRetired}
+          />
+        ) : undefined}
       </div>
-      {props.editingJob && props.canManage ? (
-        <CronScratchEditor
-          jobId={props.editingJob.id}
-          gateway={props.gateway}
-          getRetired={props.getActionRetired}
-        />
-      ) : undefined}
       {props.mode === "create" && props.canManage ? (
         <EditorActions {...props} onCancel={() => props.onClosePanel()} />
       ) : props.mode === "job" && props.phoneLayout && props.editingJob ? (
@@ -197,6 +186,50 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
       ) : undefined}
     </>
   );
+}
+
+/** Keep the stored target as the option value; only its presentation uses session metadata. */
+function RunsIn(props: CronProps & { disabled: boolean }) {
+  const app = useOptionalApplication();
+  const gateway = app && projectGateway(app.gateway);
+  const target = () => props.form.sessionTarget;
+  const connectionRevision = createMemo(() => gateway?.read().connectionRevision);
+  const name = createMemo(() => {
+    const key = resolveCronSessionTargetSessionKey(target());
+    connectionRevision();
+    if (!key || !app || !props.connected) {
+      return undefined;
+    }
+    return app.sessions.describe({ key, includeDerivedTitles: true }).then(
+      ({ session }) => (session ? resolveSessionDisplayName(session.key, session) : undefined),
+      () => undefined,
+    );
+  });
+  const picker = (label?: string) => (
+    <CronSelect
+      {...props}
+      field="sessionTarget"
+      label={t("cron.form.runsIn")}
+      help={t("cron.form.sessionHelp")}
+      quietHelp
+      options={[
+        { value: "main", label: t("cron.form.mainSession") },
+        { value: "isolated", label: t("cron.form.isolatedSession") },
+        ...(target() === "main" || target() === "isolated"
+          ? []
+          : [
+              {
+                value: target(),
+                label:
+                  target() === "current"
+                    ? t("cron.form.linkedSession")
+                    : (label ?? t("cron.form.existingSession")),
+              },
+            ]),
+      ]}
+    />
+  );
+  return <Loading fallback={picker()}>{picker(name())}</Loading>;
 }
 
 /**
@@ -290,7 +323,7 @@ function PromptBlock(
   return (
     <div class="cron-prompt cron-prompt--editing">
       <div class="cron-prompt__sheet">
-        <Show when={props.mode === "job" || props.cloning}>
+        <Show when={(props.mode === "job" && props.canManage) || props.cloning}>
           <textarea
             id={inputIdForField("name")}
             class="cron-prompt__name"

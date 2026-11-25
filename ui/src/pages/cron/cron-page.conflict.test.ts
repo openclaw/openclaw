@@ -87,7 +87,6 @@ it.each(["save", "toggle"] as const)(
     expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
     expect(page.cron).toMatchObject({ cronJobs: [], cronJobsTotal: 0 });
     expect(dom.inputValue(page, "#cron-name")).toBe(authoritativeJob.name);
-    expect(dom.text(page, ".cron-detail-title")).toContain(authoritativeJob.name);
     // The reloaded definition stays in the settings for review.
     expect(page.querySelector('.cron-page[data-view="edit"]')).not.toBeNull();
     expect(dom.text(page, ".callout.danger")).toContain("review it before retrying");
