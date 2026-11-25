@@ -504,9 +504,25 @@ it("replaces an automation an agent turn created with an administrator's, keepin
   await offline.render();
   await offline.render();
   expect(offline.ui.announce).toHaveBeenCalledWith(
-    "Knowledge Consolidation: the update failed. Error: offline",
+    "Knowledge Consolidation: the update failed. Error: offline If its automation is gone, set it up again from Scribes.",
   );
   expect(offline.calls.filter(([method]) => method === "cron.remove")).toHaveLength(1);
+});
+
+it("leaves a turn-created automation it can't safely replace for Repair", async () => {
+  const custom = {
+    ...reviewJob,
+    sessionKey: "s-review",
+    sessionTarget: "current",
+    scheduledToolPolicy: { mode: "account" },
+    schedule: { kind: "every", everyMs: 3_600_000 },
+    payload: { kind: "agentTurn", message: earlierReview() },
+  };
+  const { render, calls } = fixture({ sessions: reviewSession, jobs: [custom] });
+  await render();
+  expect(
+    calls.some(([method]) => ["cron.add", "cron.update", "cron.remove"].includes(method)),
+  ).toBe(false);
 });
 
 it("updates an administrator's earlier automation in place", async () => {
@@ -627,21 +643,38 @@ it.each([true, false])(
     ui.s.scribe = "claim-consolidation";
     const view = await render();
     buttonNamed(view, "Repair").click();
-    await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("cron.update"));
-    // A deleted conversation is replaced and the automation moves to the new one.
-    expect(create).toHaveBeenCalledTimes(existing ? 0 : 1);
-    expect(calls.at(-1)![1]).toEqual({
-      id: "job-review",
-      patch: {
-        name: "Knowledge scribe · Knowledge Consolidation",
-        sessionKey: existing ? "s-review" : "agent:main:dock:new",
-        sessionTarget: "current",
-        enabled: true,
-        schedule: reviewJob.schedule,
-        payload: { kind: "agentTurn", message: currentReview() },
-      },
-      expectedConfigRevision: "rev-7",
-    });
+    await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe(existing ? "cron.update" : "cron.add"));
+    if (existing) {
+      expect(create).not.toHaveBeenCalled();
+      expect(calls.at(-1)![1]).toEqual({
+        id: "job-review",
+        patch: {
+          name: "Knowledge scribe · Knowledge Consolidation",
+          sessionKey: "s-review",
+          sessionTarget: "current",
+          enabled: true,
+          schedule: reviewJob.schedule,
+          payload: { kind: "agentTurn", message: currentReview() },
+        },
+        expectedConfigRevision: "rev-7",
+      });
+    } else {
+      // A deleted conversation is replaced, and so is the automation: an edit can't move the
+      // conversation it was recorded for.
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(calls.slice(-2)).toEqual([
+        ["cron.remove", { id: "job-review", expectedConfigRevision: "rev-7" }],
+        [
+          "cron.add",
+          expect.objectContaining({
+            sessionKey: "agent:main:dock:new",
+            enabled: true,
+            failureAlert: { after: 2 },
+            payload: { toolsAllow: ["*"], kind: "agentTurn", message: currentReview() },
+          }),
+        ],
+      ]);
+    }
     expect(calls.some(([method]) => method === "chat.send")).toBe(false);
     expect(ui.announce).toHaveBeenCalledWith("Repaired Knowledge Consolidation and turned it on.");
   },

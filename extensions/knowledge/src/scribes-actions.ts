@@ -56,6 +56,14 @@ async function conversation(host: ScribeHost, snapshot: ScribeSnapshot, agentId:
  */
 const isTurnCreated = (job: ScribeJob) => job.scheduledToolPolicy?.mode === "account";
 
+/**
+ * Whether the page replaces a turn-created automation on its own: only the shape setup created,
+ * a plain cron schedule without a trigger, so the replacement passes the same validation. Any
+ * other is left running until the owner chooses Repair, which reports a failed replacement.
+ */
+const replacesOnItsOwn = (job: ScribeJob) =>
+  job.schedule.kind === "cron" && job.trigger === undefined;
+
 /** What an ongoing scribe's automation is declared with. */
 type Declaration = {
   schedule: ScribeJob["schedule"];
@@ -69,12 +77,13 @@ type Declaration = {
 /**
  * Declare the scribe's one automation for this agent, in its conversation, as this page's
  * administrator: runs use the operator's authority, so they can read channel plugins.
- * - An automation the page wrote earlier is kept and updated in place, moved to this conversation.
- * - Automations an agent turn created, and any extra ones, are removed first; their authority
- *   can't be widened in place. Their options are carried over and a pause stays.
+ * - An automation the page wrote earlier for this conversation is kept and updated in place.
+ * - Every other one is removed and replaced: one an agent turn created, whose authority can't be
+ *   widened in place, and one recorded for another conversation, whose recorded parent an edit
+ *   can't move. Its options are carried over and a pause stays.
  * Removal comes before the new automation is added: a same-key automation would take the new
  * declaration with its old authority. If adding then fails, the scribe reads as Available and
- * can be started again.
+ * can be started again; the caller reports the error.
  */
 async function declareScribe(
   host: ScribeHost,
@@ -84,8 +93,9 @@ async function declareScribe(
 ): Promise<ScribeJob | undefined> {
   const { scribe } = snapshot;
   const sessionKey = await conversation(host, snapshot, agentId);
-  const owned = snapshot.jobs.filter((job) => !isTurnCreated(job));
-  const keep = owned.find((job) => jobConversationKey(job) === sessionKey) ?? owned[0];
+  const keep = snapshot.jobs.find(
+    (job) => !isTurnCreated(job) && jobConversationKey(job) === sessionKey,
+  );
   const replaced = snapshot.jobs.filter((job) => job !== keep);
   for (const job of replaced) {
     await turnOffScribe(host, job);
@@ -120,8 +130,10 @@ async function declareScribe(
           message: declaration.runMessage,
         },
       });
-  // SAFETY: cron.add and cron.update answer with the written job.
-  return isRecord(result) && typeof result.id === "string" ? (result as ScribeJob) : undefined;
+  // A declarative cron.add answers `{ created, job }`; cron.update answers the job itself.
+  const job = isRecord(result) && isRecord(result.job) ? result.job : result;
+  // SAFETY: both answer with the written job.
+  return isRecord(job) && typeof job.id === "string" ? (job as ScribeJob) : undefined;
 }
 
 /**
@@ -264,7 +276,8 @@ export const setScribePaused = (host: ScribeHost, job: ScribeJob, paused: boolea
 
 /**
  * Whether this scribe's automation is behind this version of Knowledge:
- * - an agent turn created it, so scheduled runs can't read channel plugins with its authority,
+ * - an agent turn created it, so scheduled runs can't read channel plugins with its authority
+ *   (replaced only in the shape setup created; see `replacesOnItsOwn`),
  * - more than one automation of this agent has its declaration key,
  * - it runs in its conversation's own session instead of a fresh child session per run (only the
  *   shape earlier setups generated, its own creating conversation, counts), or
@@ -277,8 +290,12 @@ export function needsUpdate(snapshot: ScribeSnapshot) {
   if (!job || !snapshot.session || snapshot.status === "missing" || job.state.runningAtMs) {
     return false;
   }
+  const turnCreated = snapshot.jobs.filter(isTurnCreated);
+  if (!turnCreated.every(replacesOnItsOwn)) {
+    return false;
+  }
   return (
-    snapshot.jobs.some(isTurnCreated) ||
+    turnCreated.length > 0 ||
     snapshot.jobs.length > 1 ||
     (Boolean(job.sessionKey) && job.sessionTarget === `session:${job.sessionKey}`) ||
     runMessage?.state === "outdated"

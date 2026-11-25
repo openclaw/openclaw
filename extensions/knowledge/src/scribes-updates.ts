@@ -33,7 +33,9 @@ export async function update(ui: Page, snapshot: ScribeSnapshot, agentId: string
     ui.announce(`${snapshot.scribe.title}: updated for this version of Knowledge.`);
     return true;
   } catch (error) {
-    ui.announce(`${snapshot.scribe.title}: the update failed. ${ui.errorText(error)}`);
+    ui.announce(
+      `${snapshot.scribe.title}: the update failed. ${ui.errorText(error)} If its automation is gone, set it up again from Scribes.`,
+    );
     return false;
   }
 }

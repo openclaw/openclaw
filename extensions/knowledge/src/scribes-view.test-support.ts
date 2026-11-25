@@ -79,9 +79,9 @@ export function fixture(world: {
         return { files: [{ name: "MEMORY.md", missing: false, size: 8192 }] };
       case "cron.run":
         return { ok: true, enqueued: true, runId: "run-1" };
-      // Both answer with the written job.
+      // A declarative add answers `{ created, job }`; an update answers the job.
       case "cron.add":
-        return { id: "job-new", enabled: true, ...params, state: {} };
+        return { created: true, job: { id: "job-new", enabled: true, ...params, state: {} } };
       case "cron.update":
         return { id: params?.id, enabled: true, ...(params?.patch as object), state: {} };
       case "plugins.inspect": {

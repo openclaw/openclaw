@@ -207,9 +207,12 @@ plugins such as Slack on a schedule. When an administrator opens the Scribes
 tab, the page brings each ongoing scribe that is behind up to date:
 
 - An automation an agent turn created is removed and created again as the
-  administrator's, in the same conversation. It gets a new ID, so **Recent
-  runs** starts over; the earlier runs stay on the Automations page until they
-  age out.
+  administrator's, in the same conversation. The new automation has a new ID,
+  so **Recent runs** starts over; the earlier runs stay on the Automations
+  page until they age out. Only an automation with a plain cron schedule and
+  no trigger, as setup created it, is replaced on its own; any other keeps
+  running until you choose **Repair**, which shows an error if the
+  replacement is rejected.
 - More than one automation of this agent with the scribe's declaration key is
   reduced to one.
 - An automation that runs in its conversation's own session moves to the
