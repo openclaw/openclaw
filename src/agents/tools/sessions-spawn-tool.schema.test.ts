@@ -1,5 +1,7 @@
 import { expect, it } from "vitest";
 import { createSessionsSpawnToolSchema } from "./sessions-spawn-tool.schema.js";
+import { validateVisibleSpawnOptions } from "./sessions-spawn-visible.schema.js";
+import { ToolInputError } from "./common.js";
 
 it("distinguishes cwd binding from inherited roots in the advertised spawn contract", () => {
   const schema = createSessionsSpawnToolSchema({
@@ -21,4 +23,13 @@ it("distinguishes cwd binding from inherited roots in the advertised spawn contr
       },
     },
   });
+});
+
+it("rejects host-managed attachments on visible sessions", () => {
+  expect(() =>
+    validateVisibleSpawnOptions(
+      { visible: true, attachmentRefs: [{ id: "image" }] },
+      "subagent",
+    ),
+  ).toThrow(ToolInputError);
 });

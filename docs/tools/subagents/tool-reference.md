@@ -326,7 +326,8 @@ the parent/requester agent.
 ### Host-managed multimodal attachments
 
 `attachmentRefs` is the stable handoff for images produced by a multimodal
-tool. A host/plugin may issue a reference containing `id`, `name`, `mimeType`,
+tool. The admitted turn's staged-media preparation issues the host handle;
+plugins may use that same prepared handle. A reference contains `id`, `name`, `mimeType`,
 `sizeBytes`, and a lowercase SHA-256 digest, then pass that reference to
 `sessions_spawn`. The Gateway resolves it through its authorized host resolver;
 the model never receives the private bytes or a filesystem path.

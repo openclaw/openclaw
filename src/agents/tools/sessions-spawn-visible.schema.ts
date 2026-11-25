@@ -92,6 +92,13 @@ export function validateVisibleSpawnOptions(
       "attachment staging is not wired to the sessions.create path",
     ],
     [
+      "attachmentRefs",
+      Array.isArray(raw.attachmentRefs) && raw.attachmentRefs.length > 0
+        ? raw.attachmentRefs
+        : undefined,
+      "host-managed attachment staging is not wired to the sessions.create path",
+    ],
+    [
       "attachAs",
       isRecord(raw.attachAs) ? readToolStringParam(raw.attachAs, "mountPath") : raw.attachAs,
       "attachment staging is not wired to the sessions.create path",
