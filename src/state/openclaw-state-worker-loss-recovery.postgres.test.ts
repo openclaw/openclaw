@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { createPostgresEngineTestFixture } from "../infra/database-engine/engine-store.test-support.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { stateEngineSchema } from "./openclaw-state-db-engine.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -115,7 +116,9 @@ describe.skipIf(!connection)("PostgreSQL shared-state v42 migration", () => {
           ).toEqual({ absent: 1 });
         }
         fixture.invalidate();
-        expect(() => fixture.open(source)).toThrow(/PostgreSQL state schema 42 is newer/);
+        expect(() => fixture.open(source)).toThrow(
+          new RegExp(`minimum reader ${OPENCLAW_STATE_SCHEMA_VERSION}.*supports 41`, "iu"),
+        );
       });
     },
   );
