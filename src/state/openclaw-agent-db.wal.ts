@@ -1,8 +1,10 @@
+import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { registerSqliteWalWorkerMaintenance } from "../infra/sqlite-wal-write-admission.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
-import { agentDatabaseLifecycle, retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import { agentDatabaseLifecycle } from "./openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 
@@ -11,11 +13,11 @@ export function registerOpenClawAgentWalMaintenance(
   database: OpenClawAgentDatabase,
   env: NodeJS.ProcessEnv,
 ): void {
-  const options = { agentId: database.agentId, path: database.path, env };
-  const identity = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity.identity !== "string") {
+  if (isPostgresSqlConnection(database.db)) {
     return;
   }
+  const options = { agentId: database.agentId, path: database.path, env };
+  const identity = readOpenClawAgentDatabaseIdentity(database);
   const expectedIdentity = {
     kind: "file" as const,
     physicalIdentity: identity.identity,
@@ -59,19 +61,10 @@ export function registerOpenClawAgentWalMaintenance(
           const execution = captureOpenClawAgentDatabaseExecution(options, { expectedIdentity });
           try {
             const result = await execution.runExisting(
-              {
+              createSessionWorkerExecutionSource(
                 assertCurrent,
-                createAdmission: (binding) => () => ({
-                  nativeLocations: binding.nativeLocations,
-                  admission: createSqliteWorkerOperationAdmission((authority, grant) => {
-                    binding.authorize(authority);
-                    assertCurrent();
-                    if (!grant()) {
-                      throw new Error("Agent WAL maintenance authority expired");
-                    }
-                  }, binding.attachment),
-                }),
-              },
+                "Agent WAL maintenance authority expired",
+              ),
               (worker) => worker.execute({ type: "database.walMaintenance", input: request }),
             );
             assertCurrent();

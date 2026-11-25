@@ -1,3 +1,4 @@
+import { groupCaptureEvents } from "./ui-render-capture-events.js";
 import { esc, formatTime } from "./ui-render-utils.js";
 import type { CaptureEventView, UiState } from "./ui-types.js";
 
@@ -126,43 +127,27 @@ export function buildCaptureTimelineModel(params: {
       focusedCount,
     };
   };
-  const unsortedTimelineLanes = Array.from(
-    filteredEvents.reduce((lanes, event) => {
-      const providerLabel = event.provider || "unlabeled";
-      const flowLabel = event.flowId || "(no flow id)";
-      const laneConfig =
-        state.captureTimelineLaneMode === "provider"
-          ? {
-              id: providerLabel,
-              label: providerLabel,
-              meta: [event.host, event.api, event.model].filter(Boolean).join(" · "),
-            }
-          : state.captureTimelineLaneMode === "flow"
-            ? {
-                id: flowLabel,
-                label: flowLabel,
-                meta: [event.provider, event.host, event.path].filter(Boolean).join(" · "),
-              }
-            : {
-                id: event.host || "(no host)",
-                label: event.host || "(no host)",
-                meta: [event.provider, event.model].filter(Boolean).join(", "),
-              };
-      const laneId = laneConfig.id;
-      const existing = lanes.get(laneId);
-      if (existing) {
-        existing.events.push(event);
-        return lanes;
-      }
-      lanes.set(laneId, {
-        id: laneId,
-        label: laneConfig.label,
-        meta: laneConfig.meta,
-        events: [event],
-      });
-      return lanes;
-    }, new Map<string, { id: string; label: string; meta: string; events: CaptureEventView[] }>()),
-  ).map(([, lane]) => Object.assign(lane, summarizeLane(lane.events)));
+  const unsortedTimelineLanes = groupCaptureEvents(filteredEvents, (event) => {
+    const providerLabel = event.provider || "unlabeled";
+    const flowLabel = event.flowId || "(no flow id)";
+    return state.captureTimelineLaneMode === "provider"
+      ? {
+          id: providerLabel,
+          label: providerLabel,
+          meta: [event.host, event.api, event.model].filter(Boolean).join(" · "),
+        }
+      : state.captureTimelineLaneMode === "flow"
+        ? {
+            id: flowLabel,
+            label: flowLabel,
+            meta: [event.provider, event.host, event.path].filter(Boolean).join(" · "),
+          }
+        : {
+            id: event.host || "(no host)",
+            label: event.host || "(no host)",
+            meta: [event.provider, event.model].filter(Boolean).join(", "),
+          };
+  }).map((lane) => Object.assign(lane, summarizeLane(lane.events)));
   const sortTimelineLanes = (
     lanes: typeof unsortedTimelineLanes,
     mode: UiState["captureTimelineLaneSort"],

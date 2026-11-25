@@ -9,115 +9,55 @@ import { completePendingPackageLifecycle } from "../../src/infra/package-lifecyc
 import { collectGitRuntimeErrors } from "../../src/infra/update-git-runtime.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
+const assertionScript = "scripts/e2e/lib/update-channel-switch/assertions.mjs";
 
-it("projects only stored-dev frozen previews onto package reporting", () => {
-  const run = (selection: "stored" | "explicit", updateInstallKind: "git" | "package") =>
-    spawnSync(
-      testNodeExecPath,
-      [
-        "scripts/e2e/lib/update-channel-switch/assertions.mjs",
-        "assert-dry-run",
-        "git",
-        "dev",
-        selection,
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT: "1",
-          UPDATE_JSON: JSON.stringify({
-            dryRun: true,
-            installKind: "package",
-            storedChannel: "dev",
-            effectiveChannel: "dev",
-            updateInstallKind,
-            mode: updateInstallKind === "git" ? "git" : "npm",
-            switchToGit: updateInstallKind === "git",
-            switchToPackage: false,
-          }),
-        },
-      },
-    );
-
-  expect(run("stored", "package").status).toBe(0);
-  expect(run("explicit", "git").status).toBe(0);
-  expect(run("stored", "git").status).toBe(1);
-  expect(run("explicit", "package").status).toBe(1);
-});
-
-it("keeps explicit dev selection for frozen stored-dev package reporters", () => {
-  const script = readFileSync("scripts/e2e/update-channel-switch-docker.sh", "utf8");
-  expect(script).toContain(
-    'if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then\n  dev_channel_args=()',
+it.each([
+  { name: "already-current", version: "2026.11.15-beta.1", status: 0 },
+  { name: "different version", version: "2026.11.10-beta.3", status: 1 },
+])("checks the beta channel switch receipt: $name", ({ version, status }) => {
+  const receipt = {
+    phase: "finished",
+    status: "skipped",
+    reason: "already-current",
+    target: { kind: "package", version },
+    steps: [{ step: "requested", status: "completed" }],
+  };
+  const result = spawnSync(
+    testNodeExecPath,
+    [assertionScript, "assert-update", "beta", "2026.11.15-beta.1"],
+    { encoding: "utf8", env: { ...process.env, UPDATE_JSON: JSON.stringify(receipt) } },
   );
-});
-
-it("preserves a source-derived dry-run mode supplied by the workflow", () => {
-  const script = readFileSync("scripts/e2e/update-channel-switch-docker.sh", "utf8");
-  expect(script).toContain(
-    'OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT:-0}"',
-  );
-  expect(script).toContain("-e OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT \\");
-});
-
-it("admits the frozen structured dirty block without weakening its payload assertion", () => {
-  const script = readFileSync("scripts/e2e/update-channel-switch-docker.sh", "utf8");
-  const assertExit = (status: number, frozenCompat: boolean) =>
-    spawnSync(
-      testNodeExecPath,
-      [
-        "scripts/e2e/lib/update-channel-switch/assertions.mjs",
-        "assert-dirty-exit",
-        String(status),
-        frozenCompat ? "1" : "0",
-      ],
-      { encoding: "utf8" },
-    );
-
-  expect(assertExit(1, false).status).toBe(0);
-  expect(assertExit(0, true).status).toBe(0);
-  expect(assertExit(0, false).status).toBe(1);
-  expect(assertExit(124, true).status).toBe(1);
-  expect(assertExit(2, true).status).toBe(1);
-  expect(script).toContain("-e OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT \\");
-  expect(script).toContain("assert-dirty-exit \\");
-  expect(script).toContain('assert-dirty-update "$git_root" "$fixture_sha"');
+  expect(result.status, result.stderr).toBe(status);
 });
 
 it("preserves the package-derived Git fixture identity through build and lifecycle completion", async () => {
   const root = tempDirs.make("update-channel-git-fixture-");
+  const { file, write, json } = fixtureFiles(root);
   const packageCommit = "a".repeat(40);
   const runtimeEntry = "export {};\n";
-  mkdirSync(join(root, "dist"));
-  writeFileSync(
-    join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.8.1", engines: { node: ">=22.22.3" } }),
-  );
-  writeFileSync(join(root, "dist/entry.js"), runtimeEntry);
-  writeFileSync(
-    join(root, "dist/build-info.json"),
-    JSON.stringify({ commit: packageCommit, version: "2026.8.1" }),
-  );
+  json("package.json", { name: "openclaw", version: "2026.8.1", engines: { node: ">=22.22.3" } });
+  write("dist/entry.js", runtimeEntry);
+  json("dist/build-info.json", { commit: packageCommit, version: "2026.8.1" });
   execFileSync(testNodeExecPath, ["scripts/e2e/lib/package-git-fixture.mjs", "prepare", root]);
-  execFileSync(testNodeExecPath, [
-    "scripts/e2e/lib/update-channel-switch/assertions.mjs",
-    "prepare-git-fixture",
-    root,
-  ]);
-  mkdirSync(join(root, "scripts/lib"), { recursive: true });
-  for (const file of [
+  execFileSync(testNodeExecPath, [assertionScript, "prepare-git-fixture", root]);
+  mkdirSync(file("scripts/lib"), { recursive: true });
+  for (const name of [
     "node-version.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+    "scripts/lib/fs-safe-npm-cli-protocol.mjs",
+    "runtime-process-bootstrap.generated.mjs",
+    "runtime-process-scripts.generated.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/package-lifecycle-marker.mjs",
   ]) {
-    copyFileSync(file, join(root, file));
+    copyFileSync(name, file(name));
   }
   await writePackageDistInventoryForPublish(root);
   const git = (args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
@@ -135,66 +75,62 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
     "fixture",
   ]);
   const sha = git(["rev-parse", "HEAD"]);
-  const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+  const manifest = JSON.parse(readFileSync(file("package.json"), "utf8")) as {
     scripts: { build: string };
   };
   const preflight = tempDirs.make("update-channel-preflight-");
   const home = tempDirs.make("update-channel-lifecycle-home-");
   execFileSync("git", ["clone", "--quiet", root, preflight]);
   for (const checkout of [preflight, root]) {
+    const checked = fixtureFiles(checkout);
+    const gitStatus = () =>
+      execFileSync("git", ["status", "--porcelain"], { cwd: checkout, encoding: "utf8" });
     await withDistArtifactOwnership(checkout, async () => {
-      expect(
-        execFileSync("git", ["status", "--porcelain"], { cwd: checkout, encoding: "utf8" }),
-      ).toBe("");
+      expect(gitStatus()).toBe("");
     });
     expect(await collectGitRuntimeErrors({ root: checkout, sha })).not.toEqual([]);
     execSync(manifest.scripts.build, { cwd: checkout });
     expect(await collectGitRuntimeErrors({ root: checkout, sha })).toEqual([]);
-    writeFileSync(join(checkout, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "pending\n");
-    expect(
-      await completePendingPackageLifecycle({
-        packageRoot: checkout,
-        runScript: ({ relativePath }) => {
-          execFileSync(testNodeExecPath, [join(checkout, relativePath)], {
-            cwd: checkout,
-            env: {
-              ...process.env,
-              HOME: home,
-              OPENCLAW_HOME: home,
-              OPENCLAW_STATE_DIR: join(home, "state"),
-              OPENCLAW_CONFIG_PATH: join(home, "config.json"),
-              STATE_DIRECTORY: undefined,
-              OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: undefined,
-            },
-          });
-        },
-      }),
-    ).toBe(true);
-    expect(await collectGitRuntimeErrors({ root: checkout, sha })).toEqual([]);
-    expect(existsSync(join(checkout, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH))).toBe(false);
-    expect(JSON.parse(readFileSync(join(checkout, "dist/build-info.json"), "utf8"))).toEqual({
-      commit: sha,
-      version: "2026.8.1",
+    checked.write(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH, "pending\n");
+    await completePendingPackageLifecycle({
+      packageRoot: checkout,
+      runScript: ({ relativePath }) => {
+        execFileSync(testNodeExecPath, [join(checkout, relativePath)], {
+          cwd: checkout,
+          env: {
+            ...process.env,
+            HOME: home,
+            OPENCLAW_HOME: home,
+            OPENCLAW_STATE_DIR: join(home, "state"),
+            OPENCLAW_CONFIG_PATH: join(home, "config.json"),
+            STATE_DIRECTORY: undefined,
+            OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: undefined,
+          },
+        });
+      },
     });
-    expect(readFileSync(join(checkout, "dist/entry.js"), "utf8")).toBe(runtimeEntry);
-    expect(
-      execFileSync("git", ["status", "--porcelain"], { cwd: checkout, encoding: "utf8" }),
-    ).toBe("");
+    expect({
+      errors: await collectGitRuntimeErrors({ root: checkout, sha }),
+      pending: existsSync(checked.file(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH)),
+      build: JSON.parse(checked.read("dist/build-info.json")),
+      entry: checked.read("dist/entry.js"),
+      status: gitStatus(),
+    }).toEqual({
+      errors: [],
+      pending: false,
+      build: { commit: sha, version: "2026.8.1" },
+      entry: runtimeEntry,
+      status: "",
+    });
   }
 });
 
 it("rejects retained runtime staging at the channel update success boundary", () => {
   const root = tempDirs.make("update-channel-staging-cleanup-");
   const assertCleanup = () =>
-    spawnSync(
-      testNodeExecPath,
-      [
-        "scripts/e2e/lib/update-channel-switch/assertions.mjs",
-        "assert-runtime-staging-clean",
-        root,
-      ],
-      { encoding: "utf8" },
-    );
+    spawnSync(testNodeExecPath, [assertionScript, "assert-runtime-staging-clean", root], {
+      encoding: "utf8",
+    });
   writeFileSync(join(root, "operator-update-notes.tmp"), "unrelated input");
   expect(assertCleanup().status).toBe(0);
   const staging = join(
@@ -209,4 +145,44 @@ it("rejects retained runtime staging at the channel update success boundary", ()
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("successful update retained runtime staging entries");
   expect(readFileSync(join(staging, "previous"), "utf8")).toBe("recoverable original");
+});
+
+it("checks that a detached release uses the selected commit, not local checkout input", () => {
+  const { file, write } = fixtureFiles(tempDirs.make("update-channel-detached-"));
+  const source = file("source");
+  const release = file("release");
+  mkdirSync(source);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", source, ...args], { encoding: "utf8" }).trim();
+  git("init", "-q");
+  write("source/operator-update-tracked.txt", "committed content\n");
+  git("add", ".");
+  git(
+    "-c",
+    "user.name=F",
+    "-c",
+    "user.email=f@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-qm",
+    "fixture",
+  );
+  const sha = git("rev-parse", "HEAD");
+  git("worktree", "add", "-q", "--detach", release, sha);
+  write("source/operator-update-tracked.txt", "retain tracked edit\n");
+  write("source/operator-update-notes.tmp", "retain user notes\n");
+  const check = () =>
+    spawnSync(testNodeExecPath, [assertionScript, "assert-detached-switch", source, release, sha], {
+      encoding: "utf8",
+    });
+  expect(check().status, check().stderr).toBe(0);
+  write("source/operator-update-notes.tmp", "");
+  expect(check().stderr).toContain("source operator-update-notes.tmp changed");
+  write("source/operator-update-notes.tmp", "retain user notes\n");
+  write("source/operator-update-tracked.txt", "corrupted\n");
+  expect(check().stderr).toContain("source operator-update-tracked.txt changed");
+  write("source/operator-update-tracked.txt", "retain tracked edit\n");
+  write("release/operator-update-tracked.txt", "retain tracked edit\n");
+  expect(check().stderr).toContain("local input leaked into the release");
 });

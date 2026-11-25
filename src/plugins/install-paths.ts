@@ -1,4 +1,3 @@
-// Resolves plugin install paths for local and package sources.
 import { createHash } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";

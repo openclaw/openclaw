@@ -1,4 +1,3 @@
-// Gateway client for OpenAI chat tools E2E scenarios.
 import { readBoundedResponseBytes } from "../../../lib/bounded-response.mjs";
 import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
 

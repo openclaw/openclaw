@@ -1,4 +1,3 @@
-// Normalizes plugin tool contracts from manifest metadata.
 import type { PluginManifestContracts } from "./manifest.js";
 
 export function normalizePluginToolContractNames(
@@ -8,14 +7,7 @@ export function normalizePluginToolContractNames(
 }
 
 export function normalizePluginToolNames(names: readonly string[] | undefined): string[] {
-  const normalized = new Set<string>();
-  for (const name of names ?? []) {
-    const trimmed = name.trim();
-    if (trimmed) {
-      normalized.add(trimmed);
-    }
-  }
-  return [...normalized];
+  return [...new Set(Array.from(names ?? [], (name) => name.trim()).filter(Boolean))];
 }
 
 export function findUndeclaredPluginToolNames(params: {

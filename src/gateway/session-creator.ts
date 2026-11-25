@@ -2,7 +2,7 @@ import {
   sessionCreatorProfileId,
   type SessionActor,
 } from "../config/sessions/session-entry-provenance.js";
-import { readUserProfileAliases } from "../state/user-profile-list.js";
+import { readResidentUserProfileAliases } from "../state/user-profile-list.js";
 
 /** Namespace qualification precedes aliases; responsibility and participation never grant access. */
 export function isSessionCreatorProfile(
@@ -24,7 +24,7 @@ export function prepareSessionCreatorProfile(
       creatorId &&
       profileId &&
       (creatorId === profileId ||
-        (callerAliases ??= readUserProfileAliases(profileId)).has(creatorId)),
+        (callerAliases ??= readResidentUserProfileAliases(profileId)).has(creatorId)),
     );
   };
 }

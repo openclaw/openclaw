@@ -73,7 +73,7 @@ extension OnboardingView {
             aiSetup.onConnected = { [self] in
                 // Activation already persisted the resume marker before its RPC.
                 self.configuredGatewayProbe.cancelPendingActivationRecheck()
-                self.finish()
+                self.advanceAfterInference()
             }
         }
     }
@@ -87,9 +87,7 @@ extension OnboardingView {
         self.prepareSystemAgentHandoff()
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
         aiSetup.resumeConfiguredInference(modelRef: modelRef, modelTarget: modelTarget)
-        if let page = pageOrder.firstIndex(of: aiPageIndex) {
-            currentPage = page
-        }
+        self.selectAISetupPage()
         return Task {
             let outcome = await self.aiSetup.verifyPendingConfiguredInference()
             if case let .freshSetupAllowed(context) = outcome {
@@ -105,15 +103,13 @@ extension OnboardingView {
                   !Task.isCancelled
             else { return }
             self.configuredGatewayProbe.cancelPendingActivationRecheck()
-            self.finish()
+            self.advanceAfterInference()
         }
     }
 
     func waitForPendingInferenceSetup() {
         self.prepareSystemAgentHandoff()
-        if let page = pageOrder.firstIndex(of: aiPageIndex) {
-            currentPage = page
-        }
+        self.selectAISetupPage()
         aiSetup.waitForPendingActivationDeadline()
     }
 
@@ -135,7 +131,7 @@ extension OnboardingView {
             connectionMode: state.connectionMode,
             authIssue: aiSetup.configuredGatewayAuthIssue,
             pageOrder: pageOrder,
-            connectionPageIndex: connectionPageIndex,
+            connectionPageIndex: findPageIndex,
             probeInput: remoteGatewayProbeInput)
         else { return }
         remoteAuthIssue = decision.authIssue
@@ -164,9 +160,13 @@ extension OnboardingView {
 
     func resumePendingInferenceSetup() {
         self.prepareSystemAgentHandoff()
+        self.selectAISetupPage()
+        aiSetup.resumeSetup()
+    }
+
+    private func selectAISetupPage() {
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
         }
-        aiSetup.resumeSetup()
     }
 }

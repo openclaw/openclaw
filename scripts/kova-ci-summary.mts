@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Summarizes Kova CI run metadata for diagnostics.
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "./lib/record-shared.mjs";
@@ -66,6 +65,10 @@ if (args.output) {
   process.stdout.write(markdown);
 }
 
+function markdownRow(cells: string[]): string {
+  return `| ${cells.join(" | ")} |`;
+}
+
 function renderSummary(reportLocal: KovaReport, options: SummaryOptions) {
   const lines = [];
   const statuses = reportLocal.summary?.statuses || {};
@@ -101,17 +104,14 @@ function renderSummary(reportLocal: KovaReport, options: SummaryOptions) {
         continue;
       }
       metricRows.push(
-        [
+        markdownRow([
           value(group.scenario),
           value(group.state),
           value(metric.title || metricId),
           formatMetric(metric.median, metric.unit),
           formatMetric(metric.p95, metric.unit),
           formatMetric(metric.max, metric.unit),
-        ]
-          .join(" | ")
-          .replace(/^/, "| ")
-          .replace(/$/, " |"),
+        ]),
       );
     }
   }
@@ -137,16 +137,13 @@ function renderSummary(reportLocal: KovaReport, options: SummaryOptions) {
     lines.push("| --- | --- | --- | ---: | ---: |");
     for (const item of violations.slice(0, 20)) {
       lines.push(
-        [
+        markdownRow([
           item.scenario,
           item.state,
           item.metric,
           formatMetric(item.actual, item.unit),
           formatMetric(item.threshold, item.unit),
-        ]
-          .join(" | ")
-          .replace(/^/, "| ")
-          .replace(/$/, " |"),
+        ]),
       );
     }
     if (violations.length > 20) {
@@ -164,15 +161,12 @@ function renderSummary(reportLocal: KovaReport, options: SummaryOptions) {
     lines.push("| --- | --- | --- | --- |");
     for (const record of records.slice(0, 30)) {
       lines.push(
-        [
+        markdownRow([
           value(record.scenario),
           value(stateValue(record.state)),
           value(record.status),
           value(record.failureReason || record.error?.message || ""),
-        ]
-          .join(" | ")
-          .replace(/^/, "| ")
-          .replace(/$/, " |"),
+        ]),
       );
     }
     lines.push("");

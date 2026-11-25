@@ -1,3 +1,4 @@
+import { normalizeLineAllowEntry } from "./bot-access.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 type LineCredentialAccount = Partial<
@@ -15,7 +16,7 @@ export function hasLineCredentials(account: LineCredentialAccount): boolean {
 }
 
 export function parseLineAllowFromId(raw: string): string | null {
-  const trimmed = raw.trim().replace(/^line:(?:user:)?/i, "");
+  const trimmed = normalizeLineAllowEntry(raw);
   if (!/^U[a-f0-9]{32}$/i.test(trimmed)) {
     return null;
   }

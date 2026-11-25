@@ -9,7 +9,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
-import androidx.core.net.toUri
 
 /**
  * Full-height terminal surface: embeds the gateway-served terminal-only
@@ -49,14 +48,4 @@ internal fun TerminalSettingsScreen(
 }
 
 /** Builds the terminal focus route without putting gateway credentials in the URL. */
-internal fun terminalUrl(baseUrl: String): String =
-  baseUrl
-    .trimEnd('/')
-    .toUri()
-    .buildUpon()
-    .clearQuery()
-    .fragment(null)
-    .appendPath("focus")
-    .appendPath("terminal")
-    .build()
-    .toString()
+internal fun terminalUrl(baseUrl: String): String = controlUiFocusUrlBuilder(baseUrl, "terminal").build().toString()

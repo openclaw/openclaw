@@ -2,19 +2,32 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
+  UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
+} from "../../commands/doctor/shared/update-phase.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
-  readUpdateStateSchemaVersions,
-  resolveUpdateStateContentVersion,
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import {
+  addAgentInventoryPaths,
+  listIncompleteUpdateMigrations,
+  resolveAgentDirOverrideDatabasePaths,
   updateStateSchemaVersionsMatch,
-} from "../../infra/update-candidate-state.js";
+} from "../../infra/update-candidate-state.versions.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { createUpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
+import { runUtf8CommandBuffersWithTimeout } from "../../process/exec-runner.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -33,25 +46,37 @@ import type {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
-import { releaseLegacySourceLock } from "./update-command-runtime.js";
 import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
-import { recordUpdatePackageCompletion } from "./update-command-terminal.js";
+import {
+  deferMigratedUpdateCommandTerminalResult,
+  recordUpdatePackageCompletion,
+} from "./update-command-terminal.js";
 
-export type { MigratedUpdateFinalizationResult } from "./update-command-migrated-types.js";
-
-/** Inspect private state copies without reopening migrated state through the previous runtime. */
+/**
+ * Inspect private state copies without reopening migrated state through the previous runtime.
+ *
+ * Data at risk needs positive evidence: a changed schema, or an unreadable store after a
+ * candidate Doctor or boot may have written it. Before any candidate opened state, an
+ * unreadable store still holds the previous version's state; that read is a warning.
+ *
+ * A Git release can switch the link while the previous Gateway is serving. The
+ * updater runs no pre-restart Doctor for that path and inspects live stores as it
+ * did for the pre-activation baseline.
+ */
 export async function inspectActivatedUpdateState(
   params: Pick<
     FinishUpdateParams,
-    "result" | "root" | "schemaVersions" | "packageUpdateNodeRunner"
+    "result" | "root" | "schemaVersions" | "packageUpdateNodeRunner" | "gitRelease"
   > & {
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
     candidateSchemaVersions?: OpenClawSchemaVersions;
+    /** Omitted means a candidate may have written state. */
+    candidateOpenedState?: boolean;
     timeoutMs?: number;
   },
 ): Promise<FinishUpdateParams["rollbackBlockedReason"]> {
@@ -59,6 +84,9 @@ export async function inspectActivatedUpdateState(
   if (!schemaVersions) {
     return undefined;
   }
+  const gitRelease = params.gitRelease === true;
+  const agentPaths = new Set(resolveAgentDirOverrideDatabasePaths(env));
+  let blocked: FinishUpdateParams["rollbackBlockedReason"];
   try {
     const current = await readUpdateStateSchemaVersions({
       stateDir: resolveStateDir(env),
@@ -67,14 +95,21 @@ export async function inspectActivatedUpdateState(
       root: result.root ?? null,
       nodeRunner: params.packageUpdateNodeRunner,
       timeoutMs: params.timeoutMs,
+      includeRetainedAgentPaths: true,
+      // Preserved artifacts keep the final Doctor's captured generation valid. A Git
+      // release captures none, and a full copy of a live store never stabilizes.
+      preserveSourceArtifacts: !gitRelease,
+      onInventory: (files) => addAgentInventoryPaths(agentPaths, files),
     });
-    const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
-    const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
-    if (
-      result.status === "ok" &&
-      candidateSchemaVersions &&
-      sharedVersion !== candidateSchemaVersions.state
-    ) {
+    const sharedPath = resolveOpenClawStateSqlitePath(env);
+    const incomplete = candidateSchemaVersions
+      ? listIncompleteUpdateMigrations(current, {
+          sharedPath,
+          agentPaths,
+          candidateSchemaVersions,
+        })
+      : [];
+    if (result.status === "ok" && !gitRelease && incomplete.length > 0) {
       // Doctor can warn without failing. Require applied content so startup
       // cannot migrate late; deferred publication alone is already ready.
       result.status = "error";
@@ -85,16 +120,30 @@ export async function inspectActivatedUpdateState(
         cwd: result.root ?? root,
         durationMs: 0,
         exitCode: 1,
-        stderrTail: `Shared state migration did not finish: expected schema ${candidateSchemaVersions.state}, found ${sharedVersion ?? "missing"}.`,
+        stderrTail: incomplete
+          .map(({ path: file, expected, found }) =>
+            file === sharedPath
+              ? `Shared state migration did not finish: expected schema ${expected}, found ${found ?? "missing"}.`
+              : `Agent database migration did not finish: ${file}; expected schema ${expected}, found ${found}.`,
+          )
+          .join("\n"),
       });
     }
-    return updateStateSchemaVersionsMatch(schemaVersions, current, {
+    blocked = updateStateSchemaVersionsMatch(schemaVersions, current, {
       sharedPath: resolveOpenClawStateSqlitePath(env),
       candidateSchemaVersions,
     })
       ? undefined
       : "state-migrated-no-rollback";
   } catch (error) {
+    // An owner that already recorded data at risk keeps its route.
+    const recordedRisk =
+      result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk;
+    if (params.candidateOpenedState === false && result.root && !recordedRisk) {
+      // No candidate has opened live state, so an unreadable store is no evidence of change.
+      result.steps.push(inconclusiveInspectionStep(result.root, error, result.status === "ok"));
+      return undefined;
+    }
     result.status = "error";
     result.reason = "rollback-state-unverified";
     result.steps.push({
@@ -105,8 +154,33 @@ export async function inspectActivatedUpdateState(
       exitCode: 1,
       stderrTail: formatErrorMessage(error),
     });
-    return "rollback-state-unverified";
+    blocked = "rollback-state-unverified";
   }
+  if (blocked && result.status === "error") {
+    result.recovery = unsafeUpdateRecovery(result.recovery, blocked);
+  }
+  return blocked;
+}
+
+function inconclusiveInspectionStep(
+  cwd: string,
+  cause: unknown,
+  continues: boolean,
+): UpdateStepResult {
+  const state = "No data was changed because no new-version process had opened the state.";
+  const outcome = continues ? " The update continues." : "";
+  return {
+    name: "state-schema-verification",
+    command: "openclaw update",
+    cwd,
+    durationMs: 0,
+    exitCode: 0,
+    advisory: {
+      kind: "recoverable-maintenance",
+      // Warnings render as one line.
+      message: `State schema check was inconclusive (${formatErrorMessage(cause).replace(/\s+/g, " ")}). ${state}${outcome}`,
+    },
+  };
 }
 
 /** After migration, only candidate code may reopen state or finish the run. */
@@ -114,10 +188,10 @@ export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
 ): Promise<
-  Pick<
-    MigratedUpdateFinalizationResult,
-    "result" | "exitCode" | "automaticTriage" | "candidateStartAttempted"
-  > & { databaseRollbackAvailable?: true }
+  Pick<MigratedUpdateFinalizationResult, "result" | "exitCode" | "candidateStartAttempted"> & {
+    databaseRollbackAvailable?: true;
+    preparedFailure?: UpdateCommandFailure;
+  }
 > {
   if (params.opts.recovery) {
     throw new UpdateCommandRecoveryPendingError("Full-state checkpoint recovery is deferred.");
@@ -136,20 +210,35 @@ export async function continueMigratedUpdateInFreshProcess(
     if (!root) {
       throw new Error("The active installation root is unknown; update finalization is unsafe.");
     }
+    const workerRuntime = params.packageUpdateNodeRunner ?? resolveNodeRunner();
     const workerCommand = [
-      params.packageUpdateNodeRunner ?? resolveNodeRunner(),
-      path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
-    ];
-    const workerEnv = {
-      ...stripGatewayServiceMarkerEnv(
-        resolveUpdatedInstallCommandEnv({
-          processEnv: params.ownedManagedUpdateEnv ?? run.env,
-        }),
+      workerRuntime,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl({ ...runtimeProcessEntrypoints.updateMigratedFinalize, root }),
+        workerRuntime,
       ),
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      TMPDIR: scratchDir,
-      TMP: scratchDir,
-      TEMP: scratchDir,
+    ];
+    const workerOptions = {
+      cwd: root,
+      baseEnv: {},
+      env: {
+        ...stripGatewayServiceMarkerEnv(
+          resolveUpdatedInstallCommandEnv({
+            processEnv: params.ownedManagedUpdateEnv ?? run.env,
+          }),
+        ),
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        // This worker finishes the run, including the deferred post-activation inspections.
+        [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]: params.shouldRestart
+          ? UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE
+          : "0",
+        TMPDIR: scratchDir,
+        TMP: scratchDir,
+        TEMP: scratchDir,
+      },
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+      killGraceMs: 500,
     };
     if (run.executorFence || run.completionOwner) {
       assertCurrent();
@@ -159,13 +248,8 @@ export async function continueMigratedUpdateInFreshProcess(
       // Compatibility only, never authority. An older installed worker ignores
       // new JSON fields, so refuse before exposing any continuation input.
       const check = await runUtf8CommandWithTimeout([...workerCommand, "--check"], {
-        cwd: root,
-        baseEnv: {},
-        env: workerEnv,
+        ...workerOptions,
         timeoutMs: params.updateStepTimeoutMs,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        killGraceMs: 500,
         maxOutputBytes: 64 * 1024,
       });
       assertCurrent();
@@ -232,18 +316,14 @@ export async function continueMigratedUpdateInFreshProcess(
     const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.updateStepTimeoutMs);
     assertCurrent();
     const resultPath = path.join(scratchDir, "result.json");
-    const {
-      requesterAuthority,
-      executorFence,
-      sourceArtifactLock: _sourceArtifactLock,
-      ...runIdentity
-    } = run;
+    const { requesterAuthority, executorFence, deadline: _deadline, ...runIdentity } = run;
+    const { onResult: _onResult, ...serializableOptions } = params.opts;
     const input: MigratedUpdateFinalizationInput = {
       ...handoff,
       params: {
         ...serializable,
         opts: {
-          ...params.opts,
+          ...serializableOptions,
           timeout: handoff.timeout.serialized,
           run: {
             ...runIdentity,
@@ -259,38 +339,53 @@ export async function continueMigratedUpdateInFreshProcess(
       ...(windowsRecovery ? { windowsTaskAutoStartSuspended: true } : {}),
       resultPath,
     };
+    let forwardedStderrBytes = 0;
     const runChild = (
       grant?: UpdateCommandChildGrant,
       bindChild?: (pid: number, argv?: readonly string[]) => void,
     ) =>
-      runUtf8CommandWithTimeout(workerCommand, {
-        cwd: root,
-        baseEnv: {},
-        env: workerEnv,
+      runUtf8CommandBuffersWithTimeout(workerCommand, {
+        ...workerOptions,
         input: JSON.stringify({ ...input, ...(grant ? { executor: grant } : {}) }),
         beforeInput: bindChild,
         // Only an operator deadline bounds forward finalization. Probes and
         // cancellation settlement keep their separate finite allowances.
-        timeoutMs: run.activationTimeoutMs,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        killGraceMs: 500,
+        timeoutMs: run.deadline?.remainingMs() ?? run.activationTimeoutMs,
         maxOutputBytes: 1024 * 1024,
+        onOutputChunk(chunk, stream) {
+          if (stream === "stderr") {
+            process.stderr.write(chunk);
+            forwardedStderrBytes += chunk.byteLength;
+          }
+        },
       });
-    await releaseLegacySourceLock(root, run.sourceArtifactLock);
     const child = executorFence
       ? await withUpdateCommandExecutorChild(executorFence, root, runChild)
       : await runChild();
-    if (child.stderr) {
-      process.stderr.write(child.stderr);
+    // Cancellation stops the observer before the runner finishes draining output.
+    // Flush only the retained bytes not already forwarded; stdout stays terminal-owned.
+    const pendingStderr = child.stderr.subarray(
+      Math.max(0, forwardedStderrBytes - (child.stderrTruncatedBytes ?? 0)),
+    );
+    if (pendingStderr.byteLength > 0) {
+      process.stderr.write(pendingStderr);
     }
-    const response = JSON.parse(
-      await fs.readFile(resultPath, "utf8"),
-    ) as MigratedUpdateFinalizationResult; // SAFETY: Only the candidate worker launched above writes this private artifact.
+    const unconfirmed = "Update finalization did not confirm the admitted run's terminal outcome";
+    // A failed worker may never write its result; report its exit, not the missing file.
+    if (child.termination !== "exit" || child.code !== 0 || child.cleanup !== "normal") {
+      throw new Error(
+        `${unconfirmed}: worker termination=${child.termination}, code=${child.code}, signal=${child.signal}, cleanup=${child.cleanup ?? "unknown"}.`,
+      );
+    }
+    let response: MigratedUpdateFinalizationResult;
+    try {
+      response = JSON.parse(
+        await fs.readFile(resultPath, "utf8"),
+      ) as MigratedUpdateFinalizationResult; // SAFETY: Only the candidate worker launched above writes this private artifact.
+    } catch (cause) {
+      throw new Error(`${unconfirmed}: the worker exited without a readable result.`, { cause });
+    }
     if (
-      child.termination !== "exit" ||
-      child.code !== 0 ||
-      child.cleanup !== "normal" ||
       (executorFence && response.executorDelegation !== "pid-start-v1") ||
       (response.terminalRunId !== run.runId &&
         !(
@@ -302,8 +397,13 @@ export async function continueMigratedUpdateInFreshProcess(
       response.result.runId !== run.runId ||
       !Number.isInteger(response.exitCode)
     ) {
-      throw new Error("Update finalization did not confirm the admitted run's terminal outcome.");
+      throw new Error(`${unconfirmed}.`);
     }
+    const finalization = {
+      result: response.result,
+      exitCode: response.exitCode,
+      candidateStartAttempted: response.candidateStartAttempted,
+    };
     const restoreDatabases =
       params.databaseBackup !== undefined &&
       params.packageTransaction !== undefined &&
@@ -314,20 +414,19 @@ export async function continueMigratedUpdateInFreshProcess(
     if (restoreDatabases) {
       // The waiting driver still owns the package transaction and stopped
       // lifecycle. Its database restoration and rollback publish the final result.
-      return {
-        result: response.result,
-        exitCode: response.exitCode,
-        automaticTriage: response.automaticTriage,
-        candidateStartAttempted: false,
-        databaseRollbackAvailable: true,
-      };
+      return { ...finalization, databaseRollbackAvailable: true };
     }
-    if (child.stdout) {
-      process.stdout.write(child.stdout);
-    }
+    const preparedFailure = deferMigratedUpdateCommandTerminalResult(
+      run,
+      response,
+      child.stdout.toString("utf8"),
+    );
     try {
       await windowsRecovery?.complete(
-        response.result.status === "ok" || isUpdateGatewayReadinessPending(response.result),
+        response.result.status === "ok" ||
+          isUpdateGatewayReadinessPending(response.result) ||
+          (response.result.recovery?.serviceRestartSafe === true &&
+            response.result.recovery.service === "healthy"),
       );
     } catch (cause) {
       throw new UpdateCommandFailure(
@@ -345,12 +444,7 @@ export async function continueMigratedUpdateInFreshProcess(
     if (cleanupFailure) {
       throw cleanupFailure;
     }
-    return {
-      result: response.result,
-      exitCode: response.exitCode,
-      automaticTriage: response.automaticTriage,
-      candidateStartAttempted: response.candidateStartAttempted,
-    };
+    return { ...finalization, preparedFailure };
   } catch (error) {
     if (error instanceof UpdateCommandRecoveryPendingError) {
       // A refused compatibility/admission check is not delegated completion and

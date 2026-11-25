@@ -2,20 +2,12 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { isXaiProviderId } from "./provider-id.js";
 
-const XAI_NATIVE_ENDPOINT_HOSTS = new Set(["api.x.ai"]);
-
 function resolveHostname(value: string): string | undefined {
-  try {
-    return new URL(value).hostname.toLowerCase();
-  } catch {
-    return undefined;
-  }
+  return URL.parse(value)?.hostname.toLowerCase();
 }
 
 function isXaiNativeEndpoint(baseUrl: unknown): boolean {
-  return (
-    typeof baseUrl === "string" && XAI_NATIVE_ENDPOINT_HOSTS.has(resolveHostname(baseUrl) ?? "")
-  );
+  return typeof baseUrl === "string" && resolveHostname(baseUrl) === "api.x.ai";
 }
 
 export function supportsXaiPromptCacheKey(params: { api?: unknown; baseUrl?: unknown }): boolean {
@@ -28,25 +20,19 @@ export function supportsXaiPromptCacheKey(params: { api?: unknown; baseUrl?: unk
   );
 }
 
-function shouldUseXaiResponsesTransport(params: {
-  provider: string;
-  api?: unknown;
-  baseUrl?: unknown;
-}): boolean {
-  const hasDefaultXaiRoute =
-    isXaiProviderId(params.provider) && !normalizeOptionalString(params.baseUrl);
-  return params.api === "openai-responses"
-    ? hasDefaultXaiRoute
-    : params.api === "openai-completions" &&
-        (isXaiNativeEndpoint(params.baseUrl) || hasDefaultXaiRoute);
-}
-
 export function resolveXaiTransport(params: {
   provider: string;
   api?: unknown;
   baseUrl?: unknown;
 }): { api: "openai-responses"; baseUrl?: string } | undefined {
-  if (!shouldUseXaiResponsesTransport(params)) {
+  const hasDefaultXaiRoute =
+    isXaiProviderId(params.provider) && !normalizeOptionalString(params.baseUrl);
+  const useResponses =
+    params.api === "openai-responses"
+      ? hasDefaultXaiRoute
+      : params.api === "openai-completions" &&
+        (isXaiNativeEndpoint(params.baseUrl) || hasDefaultXaiRoute);
+  if (!useResponses) {
     return undefined;
   }
   return {

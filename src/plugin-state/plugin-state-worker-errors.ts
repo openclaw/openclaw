@@ -2,6 +2,7 @@ import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
+  type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
 import {
   capturePluginStateErrorCause,
@@ -19,7 +20,7 @@ export type PluginStateWorkerFailure = {
   operation: PluginStateStoreOperation;
   path?: string;
   owner: PluginStateStoreError["owner"];
-  cause?: PluginStateErrorCause;
+  cause?: PluginStateErrorCause<OpenClawStateWorkerErrorPayload>;
 };
 
 const errorConstructors = new Map<string, ErrorConstructor>([
@@ -32,7 +33,9 @@ const errorConstructors = new Map<string, ErrorConstructor>([
   ["EvalError", EvalError],
 ]);
 
-function restoreCause(value: PluginStateErrorCause | undefined): Error | undefined {
+function restoreCause(
+  value: PluginStateErrorCause<OpenClawStateWorkerErrorPayload> | undefined,
+): Error | undefined {
   if (value && "canonical" in value) {
     const retained = new Error("SQLite worker error cause");
     retainOpenClawStateWorkerErrorPayload(retained, value.canonical);

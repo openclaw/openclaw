@@ -1,3 +1,4 @@
+import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 import {
   readGatewayServiceState,
   resolveGatewayService,
@@ -6,63 +7,68 @@ import {
 import { recoverInstalledLaunchAgent } from "../daemon-cli/launchd-recovery.js";
 
 export type PostUpdateLaunchAgentRecoveryResult =
-  | { attempted: false; recovered: false }
-  | { attempted: true; recovered: true; message: string }
-  | { attempted: true; recovered: false; detail: string };
-
-type PostUpdateLaunchAgentRecoveryDeps = {
-  platform?: NodeJS.Platform;
-  readState?: typeof readGatewayServiceState;
-  recover?: typeof recoverInstalledLaunchAgent;
-};
+  | { status: "not-needed" }
+  | { status: "recovered"; message: string }
+  | { status: "failed" | "inspection-failed"; detail: string };
 
 export async function recoverInstalledLaunchAgentAfterUpdate(params: {
   service?: GatewayService;
+  deadline?: GatewayServiceControlArgs["deadline"];
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
   onGatewayStartAttempted?: () => void;
-  deps?: PostUpdateLaunchAgentRecoveryDeps;
 }): Promise<PostUpdateLaunchAgentRecoveryResult> {
   params.assertCurrent?.();
-  const platform = params.deps?.platform ?? process.platform;
-  if (platform !== "darwin") {
-    return { attempted: false, recovered: false };
+  if (process.platform !== "darwin") {
+    return { status: "not-needed" };
   }
 
   const service = params.service ?? resolveGatewayService();
-  const readState = params.deps?.readState ?? readGatewayServiceState;
-  const recover = params.deps?.recover ?? recoverInstalledLaunchAgent;
-  const state = await readState(service, { env: params.env }).catch(() => null);
+  const state = await readGatewayServiceState(service, {
+    env: params.env,
+    timeoutMs: params.deadline?.remainingMs(),
+  }).catch((error: unknown) => ({ error }));
   params.assertCurrent?.();
-  if (!state || state.loadState.status !== "not-loaded" || !state.installed) {
-    return { attempted: false, recovered: false };
+  const inspectionFailed = (error: unknown): PostUpdateLaunchAgentRecoveryResult => ({
+    status: "inspection-failed",
+    detail: `LaunchAgent state could not be inspected: ${error instanceof Error ? error.message : String(error)}`,
+  });
+  if ("error" in state) {
+    return inspectionFailed(state.error);
+  }
+  if (state.loadState.status === "unknown") {
+    return inspectionFailed(state.loadState.detail);
+  }
+  if (state.loadState.status !== "not-loaded" || !state.installed) {
+    return { status: "not-needed" };
   }
 
-  let recovered: Awaited<ReturnType<typeof recover>>;
+  let recovered: Awaited<ReturnType<typeof recoverInstalledLaunchAgent>>;
   try {
     params.onGatewayStartAttempted?.();
-    recovered = await recover({ result: "restarted", env: state.env });
+    recovered = await recoverInstalledLaunchAgent({
+      result: "restarted",
+      env: state.env,
+      deadline: params.deadline,
+    });
     params.assertCurrent?.();
   } catch (error) {
     params.assertCurrent?.();
     return {
-      attempted: true,
-      recovered: false,
+      status: "failed",
       detail: error instanceof Error ? error.message : String(error),
     };
   }
   if (!recovered) {
     return {
-      attempted: true,
-      recovered: false,
+      status: "failed",
       detail:
         "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
     };
   }
 
   return {
-    attempted: true,
-    recovered: true,
+    status: "recovered",
     message: recovered.message,
   };
 }

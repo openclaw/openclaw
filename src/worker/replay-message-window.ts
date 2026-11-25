@@ -1,3 +1,4 @@
+import type { WorkerTranscriptMessage } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
   type WorkerInferenceContext,
@@ -6,7 +7,6 @@ import {
 export type WorkerReplayMessageWindowUnavailable = {
   reason: "provider-replay-message-limit";
   messageCount: number;
-  limitMessages: number;
 };
 
 type WorkerReplayMessageWindow<T> =
@@ -32,7 +32,6 @@ export function windowWorkerReplayMessages<T extends ReplayWindowMessage>(
       details: {
         reason: "provider-replay-message-limit",
         messageCount: messages.length - replayIndex,
-        limitMessages,
       },
     };
   }
@@ -49,7 +48,9 @@ export function windowWorkerReplayMessages<T extends ReplayWindowMessage>(
   return { kind: "complete", messages: messages.slice(start) };
 }
 
-type ReplayImageMessage = WorkerInferenceContext["messages"][number];
+type ReplayImageMessage =
+  | WorkerInferenceContext["messages"][number]
+  | Extract<WorkerTranscriptMessage, { role: "custom" }>;
 const PROCESSED_IMAGE_MARKER = {
   type: "text" as const,
   text: "[image data removed - already processed by model]",

@@ -1,16 +1,27 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionEntryCandidateTarget, type SessionEntry } from "../../config/sessions.js";
+import { resolveSessionEntryCandidateTargetForRuntime } from "../../config/sessions/session-accessor.entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveInternalSessionKey } from "./sessions-helpers.js";
 
-type ResolvedStatusSessionEntry = {
+export type ResolvedStatusSessionEntry = {
   entry: SessionEntry;
   key: string;
   persisted: boolean;
 };
 
-export function resolveSessionStatusEntry(params: {
+function projectStatusEntry(
+  resolved: ReturnType<typeof resolveSessionEntryCandidateTarget>,
+): ResolvedStatusSessionEntry | null {
+  if (!resolved) {
+    return null;
+  }
+  const { entry, sessionKey: key, persisted } = resolved;
+  return { entry, key, persisted };
+}
+
+export async function resolveSessionStatusEntry(params: {
   agentId: string;
   alias: string;
   cfg: OpenClawConfig;
@@ -18,7 +29,7 @@ export function resolveSessionStatusEntry(params: {
   keyRaw: string;
   mainKey: string;
   requesterInternalKey?: string;
-}): ResolvedStatusSessionEntry | null {
+}): Promise<ResolvedStatusSessionEntry | null> {
   const keyRaw = params.keyRaw.trim();
   if (!keyRaw) {
     return null;
@@ -27,7 +38,6 @@ export function resolveSessionStatusEntry(params: {
   const internal = resolveInternalSessionKey({
     key: keyRaw,
     alias: params.alias,
-    mainKey: params.mainKey,
     requesterInternalKey: params.requesterInternalKey,
   });
 
@@ -51,18 +61,12 @@ export function resolveSessionStatusEntry(params: {
     }
   }
 
-  const resolved = resolveSessionEntryCandidateTarget({
+  const resolved = await resolveSessionEntryCandidateTargetForRuntime({
     agentId: params.agentId,
     candidateKeys: candidates,
     cfg: params.cfg,
   });
-  return resolved
-    ? {
-        entry: resolved.entry,
-        key: resolved.sessionKey,
-        persisted: resolved.persisted,
-      }
-    : null;
+  return projectStatusEntry(resolved);
 }
 
 /** Maps requester keys into the currently selected agent store's legacy main key shape. */
@@ -98,13 +102,7 @@ export function resolveImplicitCurrentSessionFallback(params: {
       entry: { sessionId: "", updatedAt: Date.now() },
     },
   });
-  return resolved
-    ? {
-        entry: resolved.entry,
-        key: resolved.sessionKey,
-        persisted: resolved.persisted,
-      }
-    : null;
+  return projectStatusEntry(resolved);
 }
 
 /** Lists policy-key fallbacks for implicit default-account direct status lookups. */

@@ -7,6 +7,7 @@ import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace
 type Awaitable<T> = T | Promise<T>;
 
 export type GatewayPostReadySidecarHandle = {
+  name?: string;
   stop: () => Awaitable<void>;
   preparePluginReload?: (params: {
     previousRegistry: PluginRegistry;
@@ -46,9 +47,9 @@ export function schedulePostReadySidecarTask(params: {
     })().catch((err: unknown) => {
       params.log.warn(`${params.name} failed after gateway ready: ${String(err)}`);
     });
-  });
-  handle.unref?.();
+  }).unref();
   return {
+    name: params.name,
     stop: async () => {
       // Sidecars get both a synchronous stopped predicate and an AbortSignal so
       // lazy imports and long-running watchers can cooperate with shutdown.
@@ -67,11 +68,10 @@ export function scheduleGatewayGenerationTimer(params: {
   onError: (err: unknown) => void;
   shouldRun?: () => boolean;
 }): GatewayPostReadySidecarHandle {
-  const { scheduler } = params;
-  const controller = new AbortController();
-  const signal = AbortSignal.any([controller.signal, scheduler.signal]);
+  const scope = params.scheduler.scope();
+  const { signal } = scope;
   const isStopped = () => signal.aborted || params.shouldRun?.() === false;
-  const job = scheduler.schedule({
+  scope.schedule({
     id: params.origin,
     delayMs: params.delayMs,
     run: () => {
@@ -94,10 +94,5 @@ export function scheduleGatewayGenerationTimer(params: {
       });
     },
   });
-  return {
-    stop: () => {
-      controller.abort();
-      return job.stop();
-    },
-  };
+  return { name: params.origin, stop: scope.stop };
 }

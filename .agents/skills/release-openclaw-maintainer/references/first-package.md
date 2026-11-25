@@ -27,7 +27,7 @@ ClawHub package.
   tooling, parent attempt, and validation tuple. Plugin NPM Release consumes
   that approval and its independently verified immutable tarball through the
   protected `NPM_TOKEN` bootstrap route. Confirm scope/package-creation access
-  first; do not create placeholder versions or a fake beta. Alpha,
+  first; do not create placeholder versions or a fake beta. Retired alpha,
   extended-stable, unselected packages, and direct stable bootstrap without the
   attested parent remain unsupported. Configure the package's GitHub trusted
   publisher for `plugin-npm-release.yml` / `npm-publish` after first publication,

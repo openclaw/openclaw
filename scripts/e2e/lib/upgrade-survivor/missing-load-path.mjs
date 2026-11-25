@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { readJson, writeJson } from "../fixtures/common.mjs";
 
 const runtimeRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
 const artifactRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
@@ -14,15 +15,6 @@ const fixturePath = path.join(evidenceRoot, "fixture.json");
 const registrationPath = path.join(evidenceRoot, "baseline-registration.json");
 const code = "configured-plugin-path-unavailable";
 const message = `Configured plugin load path is unavailable: ${pluginRoot}. Uninspected plugin configuration is preserved. Restore access to the path, then run \`openclaw doctor --fix\`.`;
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
 
 function memberBytes(key, value, indentation) {
   return JSON.stringify({ [key]: value }, null, 2)

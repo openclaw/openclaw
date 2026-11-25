@@ -72,10 +72,9 @@ internal fun parseClawHubSearchResults(
 ): List<GatewayClawHubSkillSummary> {
   val root = json.parseToJsonElement(raw) as? JsonObject ?: return emptyList()
   return (root["results"] as? JsonArray)
-    ?.mapNotNull { item ->
-      val value = item as? JsonObject ?: return@mapNotNull null
-      val slug = value.nonBlankString("slug") ?: return@mapNotNull null
-      val displayName = value.nonBlankString("displayName") ?: return@mapNotNull null
+    .mapObjects { value ->
+      val slug = value.nonBlankString("slug") ?: return@mapObjects null
+      val displayName = value.nonBlankString("displayName") ?: return@mapObjects null
       GatewayClawHubSkillSummary(
         slug = slug,
         installRef = value.nonBlankString("installRef"),
@@ -85,7 +84,7 @@ internal fun parseClawHubSearchResults(
         summary = value.nonBlankString("summary"),
         version = value.nonBlankString("version"),
       )
-    }.orEmpty()
+    }
 }
 
 internal fun parseClawHubInstallReview(
@@ -109,21 +108,10 @@ internal fun parseClawHubInstallReview(
     ) ?: return null
   val author =
     when {
-      ownerDisplayName != null && ownerHandle != null && !ownerDisplayName.equals(ownerHandle, ignoreCase = true) -> {
-        "$ownerDisplayName (@$ownerHandle)"
-      }
-
-      ownerDisplayName != null -> {
-        ownerDisplayName
-      }
-
-      ownerHandle != null -> {
-        "@$ownerHandle"
-      }
-
-      else -> {
-        "Unknown publisher"
-      }
+      ownerDisplayName != null && ownerHandle != null && !ownerDisplayName.equals(ownerHandle, ignoreCase = true) -> "$ownerDisplayName (@$ownerHandle)"
+      ownerDisplayName != null -> ownerDisplayName
+      ownerHandle != null -> "@$ownerHandle"
+      else -> "Unknown publisher"
     }
   return GatewayClawHubInstallReview(
     slug = reviewedSlug,
@@ -182,9 +170,10 @@ internal fun formatClawHubInstallMessage(
 internal fun isClawHubSkillInstalled(
   skills: List<GatewaySkillSummary>,
   slug: String,
+  version: String? = null,
 ): Boolean {
   val reference = parseClawHubSkillReference(slug) ?: return false
-  return skills.any { it.matchesClawHubReference(reference) }
+  return skills.any { it.matchesClawHubReference(reference) && (version == null || it.clawHubInstalledVersion == version) }
 }
 
 internal fun isClawHubSkillInstalled(
@@ -194,9 +183,7 @@ internal fun isClawHubSkillInstalled(
   if (!searchResult.canReadDetails) {
     isClawHubSkillInstalledByReference(skills, searchResult.reference)
   } else {
-    searchResult.version?.let { version ->
-      isClawHubSkillInstalled(skills, searchResult.reference, version)
-    } ?: isClawHubSkillInstalled(skills, searchResult.reference)
+    isClawHubSkillInstalled(skills, searchResult.reference, searchResult.version)
   }
 
 /**
@@ -211,15 +198,6 @@ internal fun isClawHubSkillInstalledByReference(
   if (reference.isEmpty()) return false
   return skills.any { it.clawHubValid && it.clawHubRequestedReference == reference }
 }
-
-internal fun isClawHubSkillInstalled(
-  skills: List<GatewaySkillSummary>,
-  slug: String,
-  version: String,
-): Boolean =
-  parseClawHubSkillReference(slug)?.let { reference ->
-    skills.any { it.matchesClawHubReference(reference) && it.clawHubInstalledVersion == version }
-  } ?: false
 
 internal fun isClawHubSkillOperationActive(
   activeSlugs: Set<String>,

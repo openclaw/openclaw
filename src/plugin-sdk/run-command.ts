@@ -1,4 +1,3 @@
-// Run command helpers execute plugin commands with normalized errors and captured output.
 import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 

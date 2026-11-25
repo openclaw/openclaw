@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   startSecretEgressProxyWorker,
@@ -55,24 +57,30 @@ export async function startGatewaySecretEgressProxy(params: {
         }
       },
       onAudit: (event) => {
+        emitTrustedDiagnosticEvent({
+          type: "secret.egress",
+          outcome: event.kind,
+          substituted: event.substituted,
+        });
         if (event.reason === "certificate-error") {
           log.warn(
             "secret egress TLS certificate unavailable; check OpenSSL and the system clock, then retry",
             event,
           );
         } else {
-          log.info("secret egress request", event);
+          log.debug("secret egress request", event);
         }
       },
     });
     const ownedProxy = proxy;
-    const cleanupOnProcessExit = () => removeProxyDirBestEffort(proxyDir);
-    process.once("exit", cleanupOnProcessExit);
+    const unregisterExitCleanup = registerProcessExitCleanup(() =>
+      removeProxyDirBestEffort(proxyDir),
+    );
     const ownedHandle: SecretEgressProxyWorkerHandle = {
       ...ownedProxy,
       stop: async () => {
         clearSecretEgressProxy(ownedHandle);
-        process.off("exit", cleanupOnProcessExit);
+        unregisterExitCleanup();
         try {
           await ownedProxy.stop();
         } finally {

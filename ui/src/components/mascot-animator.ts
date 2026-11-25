@@ -24,7 +24,6 @@ const NONZERO_SEED = 0x9e37_79b9_7f4a_7c15n;
 const XORSHIFT_MULTIPLIER = 2_685_821_657_736_338_717n;
 const TAU = Math.PI * 2;
 const BLINK_DURATION = 0.16;
-const CATCH_DURATION = 0.8;
 
 function cyclePhase(time: number, period: number): number {
   const normalized = (time / period) % 1;
@@ -88,9 +87,8 @@ class SeededGenerator {
   }
 }
 
-/** Mood loops plus randomized blink, gaze, claw-snap, and mood-beat schedules. */
 export class MascotAnimator {
-  private readonly rng: SeededGenerator;
+  private readonly rng = new SeededGenerator(BigInt(Date.now()));
   private currentMood: MascotMood = "idle";
   private startTime: number | null = null;
   private lastPoseTime = 0;
@@ -109,11 +107,6 @@ export class MascotAnimator {
   private nextMoodBeatAt = 0;
   private teaseActive = false;
   private teaseChangedAt = 0;
-  private catchStartedAt: number | null = null;
-
-  constructor(seed: bigint | number = BigInt(Date.now())) {
-    this.rng = new SeededGenerator(seed);
-  }
 
   setMood(mood: MascotMood, time: number): void {
     if (mood === this.currentMood) {
@@ -136,13 +129,22 @@ export class MascotAnimator {
     this.teaseChangedAt = time;
   }
 
-  playCatch(time: number): void {
-    this.catchStartedAt = time;
-  }
-
   poseAt(time: number): MascotPose {
     if (this.startTime === null) {
-      this.begin(time);
+      this.startTime = time;
+      this.lastPoseTime = time;
+      this.nextBlinkAt = time + this.random(0.8, 2.4);
+      this.nextGlanceAt = time + this.random(1.5, 4);
+      this.nextClawSnapAt = time + this.random(2, 5);
+      this.rescheduleMoodBeat(time);
+      if (
+        this.currentMood === "idle" ||
+        this.currentMood === "curious" ||
+        this.currentMood === "happy"
+      ) {
+        this.pendingGesture = "wave";
+        this.pendingGestureAt = time + 0.9;
+      }
     }
     const dt = clamp(time - this.lastPoseTime, 0, 0.1);
     this.lastPoseTime = time;
@@ -165,37 +167,7 @@ export class MascotAnimator {
       pose.mouthRound = Math.max(pose.mouthRound, 0.5);
       pose.gaze = { x: 0, y: 0.6 };
     }
-    if (this.catchStartedAt !== null) {
-      const progress = (time - this.catchStartedAt) / CATCH_DURATION;
-      if (progress >= 1) {
-        this.catchStartedAt = null;
-      } else if (progress >= 0) {
-        const flash = bell(progress);
-        this.applyGesture("clawSnap", pose, clamp(progress / 0.75));
-        pose.happyEyes = Math.max(pose.happyEyes, 0.9 * flash);
-        pose.mouthCurve = Math.max(pose.mouthCurve, 0.7 * flash);
-        pose.blush = Math.max(pose.blush, 0.65 * flash);
-      }
-    }
-
     return clampMascotPose(pose);
-  }
-
-  private begin(time: number): void {
-    this.startTime = time;
-    this.lastPoseTime = time;
-    this.nextBlinkAt = time + this.random(0.8, 2.4);
-    this.nextGlanceAt = time + this.random(1.5, 4);
-    this.nextClawSnapAt = time + this.random(2, 5);
-    this.rescheduleMoodBeat(time);
-    if (
-      this.currentMood === "idle" ||
-      this.currentMood === "curious" ||
-      this.currentMood === "happy"
-    ) {
-      this.pendingGesture = "wave";
-      this.pendingGestureAt = time + 0.9;
-    }
   }
 
   private advanceSchedules(time: number): void {
@@ -214,7 +186,9 @@ export class MascotAnimator {
     this.blinkStarts = this.blinkStarts.filter((start) => time - start <= BLINK_DURATION);
 
     if (time >= this.nextGlanceAt) {
-      this.gazeTarget = this.randomGlanceTarget();
+      const magnitude = this.random(0.5, 1);
+      const angle = this.random(0, TAU);
+      this.gazeTarget = { x: Math.cos(angle) * magnitude, y: Math.sin(angle) * magnitude * 0.6 };
       this.gazeHoldUntil = time + this.random(0.7, 1.9);
       this.nextGlanceAt = this.gazeHoldUntil + this.glanceInterval();
     } else if (time >= this.gazeHoldUntil) {
@@ -503,12 +477,6 @@ export class MascotAnimator {
       return this.random(1.2, 3);
     }
     return this.random(3, 8);
-  }
-
-  private randomGlanceTarget(): { x: number; y: number } {
-    const magnitude = this.random(0.5, 1);
-    const angle = this.random(0, TAU);
-    return { x: Math.cos(angle) * magnitude, y: Math.sin(angle) * magnitude * 0.6 };
   }
 
   private rescheduleMoodBeat(time: number): void {

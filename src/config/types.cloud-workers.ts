@@ -1,4 +1,3 @@
-// Defines cloud-worker provider profile configuration types from the canonical schema.
 import type { z } from "zod";
 import type { CloudWorkersConfigSchema } from "./zod-schema.cloud-workers.js";
 

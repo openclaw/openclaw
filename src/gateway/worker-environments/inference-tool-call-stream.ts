@@ -16,7 +16,6 @@ export function createWorkerToolCallStream(params: {
   const pendingDeltas = new Map<number, string[]>();
   let pendingDeltaBytes = 0;
   let pendingDeltaCount = 0;
-  const started = new Set<number>();
   const ended = new Set<number>();
   const identities = new Map<number, { id: string; name: string }>();
   const emittedArgumentChunks = new Map<number, Array<{ text: string; bytes: number }>>();
@@ -53,7 +52,7 @@ export function createWorkerToolCallStream(params: {
   };
 
   const start = (contentIndex: number, partial: AssistantMessage): ToolCallEmissionResult => {
-    if (started.has(contentIndex)) {
+    if (identities.has(contentIndex)) {
       return params.isCurrent() ? "ok" : "cancelled";
     }
     const content = partial.content[contentIndex];
@@ -63,7 +62,6 @@ export function createWorkerToolCallStream(params: {
     if (!params.isCurrent()) {
       return "cancelled";
     }
-    started.add(contentIndex);
     identities.set(contentIndex, { id: content.id, name: content.name });
     params.emit({ type: "toolcall_start", contentIndex, id: content.id, toolName: content.name });
     if (!params.isCurrent()) {
@@ -89,7 +87,7 @@ export function createWorkerToolCallStream(params: {
     if (ended.has(contentIndex)) {
       return "invalid";
     }
-    if (started.has(contentIndex)) {
+    if (identities.has(contentIndex)) {
       return emitDelta(contentIndex, value);
     }
     const pending = pendingDeltas.get(contentIndex) ?? [];
@@ -167,8 +165,10 @@ export function createWorkerToolCallStream(params: {
       );
       return (
         pendingDeltas.size === 0 &&
-        terminal.size === started.size &&
-        [...started].every((contentIndex) => terminal.has(contentIndex) && ended.has(contentIndex))
+        terminal.size === identities.size &&
+        [...identities.keys()].every(
+          (contentIndex) => terminal.has(contentIndex) && ended.has(contentIndex),
+        )
       );
     },
     start,

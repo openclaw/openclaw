@@ -1,27 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
+import { configPathAffectsReader, projectConfigReadDependencies } from "./read-dependencies.js";
 import { serializeConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-function projectionConfig({
-  meta: _meta,
-  wizard: _wizard,
-  logging: _logging,
-  diagnostics: _diagnostics,
-  update: _update,
-  telemetry: _telemetry,
-  ui,
-  gateway,
-  ...config
-}: OpenClawConfig) {
-  const { prefs: _prefs, ...uiConfig } = ui ?? {};
-  const { auth, ...gatewayConfig } = gateway ?? {};
-  const { identityScopes: _identityScopes, ...authConfig } = auth ?? {};
-  // Everything else remains significant, including plugin policy, sharing, models,
-  // session policy, roster and physical store selection.
-  return { ...config, ui: uiConfig, gateway: { ...gatewayConfig, auth: authConfig } };
-}
-
-function withoutAgentIdentities(config: ReturnType<typeof projectionConfig>) {
+function withoutAgentIdentities(config: ReturnType<typeof projectConfigReadDependencies>) {
   const agents = config.agents;
   const withoutIdentity = <T extends { identity?: unknown }>({
     identity: _identity,
@@ -36,7 +18,6 @@ function withoutAgentIdentities(config: ReturnType<typeof projectionConfig>) {
         Object.fromEntries(
           Object.entries(agents.entries).map(([id, entry]) => [id, withoutIdentity(entry)]),
         ),
-      list: agents.list?.map(withoutIdentity),
     },
   };
 }
@@ -51,18 +32,47 @@ export function runtimeSessionChangeScope(
     !previous ||
     previous === next ||
     !isDeepStrictEqual(
-      serializeConfigResolutionFacts(previous),
-      serializeConfigResolutionFacts(next),
+      serializeConfigResolutionFacts(previous, (path) => configPathAffectsReader(path, "sessions")),
+      serializeConfigResolutionFacts(next, (path) => configPathAffectsReader(path, "sessions")),
     )
   ) {
     return "config";
   }
-  const before = projectionConfig(previous);
-  const after = projectionConfig(next);
+  const before = projectConfigReadDependencies(previous, "sessions");
+  const after = projectConfigReadDependencies(next, "sessions");
   if (isDeepStrictEqual(before, after)) {
     return "config-presentation";
   }
   return isDeepStrictEqual(withoutAgentIdentities(before), withoutAgentIdentities(after))
     ? "config-profiles"
     : "config";
+}
+
+export function runtimeSessionPublicationChangeScope(params: {
+  previousRuntimeConfig: OpenClawConfig | null;
+  runtimeConfig: OpenClawConfig;
+  previousSourceConfig: OpenClawConfig | null;
+  sourceConfig?: OpenClawConfig;
+  runtimeUnchanged: boolean;
+  sourceUnchanged: boolean;
+  previousEditedInPlace: boolean;
+}): ReturnType<typeof runtimeSessionChangeScope> {
+  if (params.previousEditedInPlace) {
+    return "config";
+  }
+  const runtimeScope = params.runtimeUnchanged
+    ? "config-presentation"
+    : runtimeSessionChangeScope(params.previousRuntimeConfig, params.runtimeConfig);
+  const sourceScope = params.sourceUnchanged
+    ? "config-presentation"
+    : runtimeSessionChangeScope(
+        params.previousSourceConfig ?? params.previousRuntimeConfig,
+        params.sourceConfig ?? params.runtimeConfig,
+      );
+  if (runtimeScope === "config" || sourceScope === "config") {
+    return "config";
+  }
+  return runtimeScope === "config-profiles" || sourceScope === "config-profiles"
+    ? "config-profiles"
+    : "config-presentation";
 }

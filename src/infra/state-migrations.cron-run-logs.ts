@@ -7,6 +7,7 @@ import {
   parseCronRunLogEntryObject,
 } from "../cron/run-history-detail.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "./sqlite-number.js";
+import { hasLegacyCronRunLogs } from "./state-legacy-cron-presence.js";
 
 type CronRunLogEntry = import("../cron/run-log-types.js").CronRunLogEntry;
 type CronDeliveryStatus = import("../cron/types.js").CronDeliveryStatus;
@@ -52,16 +53,6 @@ type CronRunLogTaskImportResult = {
   malformed: number;
   skipped: boolean;
 };
-
-export function hasLegacyCronRunLogs(db: DatabaseSync): boolean {
-  return Boolean(
-    db
-      .prepare(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cron_run_logs' LIMIT 1",
-      )
-      .get(),
-  );
-}
 
 function collectMirroredTasks(db: DatabaseSync): Map<string, MirroredIdentity[]> {
   const rows = db
@@ -135,10 +126,6 @@ function parseLegacyRow(row: LegacyCronRunLogRow): CronRunLogEntry | null {
   };
 }
 
-function ordinalKey(jobId: string, ts: number): string {
-  return `${jobId}\0${ts}`;
-}
-
 /** Runs inside the state schema transaction and removes the retired table after import. */
 export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLogTaskImportResult {
   if (!hasLegacyCronRunLogs(db)) {
@@ -183,7 +170,7 @@ export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLog
         malformed++;
         continue;
       }
-      const key = ordinalKey(entry.jobId, entry.ts);
+      const key = `${entry.jobId}\0${entry.ts}`;
       const ordinal = (ordinals.get(key) ?? 0) + 1;
       ordinals.set(key, ordinal);
       const identities = mirrored.get(entry.jobId) ?? [];

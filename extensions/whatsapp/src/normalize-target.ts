@@ -1,9 +1,6 @@
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
-import {
-  normalizeLowercaseStringOrEmpty,
-  uniqueStrings,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const WHATSAPP_USER_JID_RE = /^(\d+)(?::\d+)?@s\.whatsapp\.net$/i;
 const WHATSAPP_LEGACY_USER_JID_RE = /^(\d+)@c\.us$/i;
@@ -22,23 +19,13 @@ function stripWhatsAppTargetPrefixes(value: string): string {
   }
 }
 
-function normalizeWhatsAppGroupJid(value: string): string | null {
-  const candidate = stripWhatsAppTargetPrefixes(value)
-    .replace(/^group:/i, "")
-    .trim();
-  const lower = normalizeLowercaseStringOrEmpty(candidate);
-  if (!lower.endsWith("@g.us")) {
-    return null;
-  }
-  const localPart = candidate.slice(0, candidate.length - "@g.us".length);
-  if (!localPart || localPart.includes("@")) {
-    return null;
-  }
-  return /^[0-9]+(-[0-9]+)*$/.test(localPart) ? `${localPart}@g.us` : null;
+function normalizeWhatsAppGroupJid(candidate: string): string | null {
+  const match = /^(\d+(?:-\d+)*)@g\.us$/i.exec(candidate.replace(/^group:/i, "").trim());
+  return match ? `${match[1]}@g.us` : null;
 }
 
 export function isWhatsAppGroupJid(value: string): boolean {
-  return normalizeWhatsAppGroupJid(value) !== null;
+  return normalizeWhatsAppGroupJid(stripWhatsAppTargetPrefixes(value)) !== null;
 }
 
 export function isWhatsAppNewsletterJid(value: string): boolean {

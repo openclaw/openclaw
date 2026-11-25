@@ -2,21 +2,18 @@ import { publishSqliteWalCheckpointObservation } from "../../infra/sqlite-wal-ch
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
 import {
   assertExistingDatabaseIdentity,
+  readDatabasePathIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  type OpenClawAgentDatabaseOptions,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseOperations,
-  AgentDatabaseRequestExecutionSource,
 } from "../../state/openclaw-agent-execution-contract.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
+  captureOpenClawAgentDatabaseExecutionAsync,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
@@ -27,17 +24,34 @@ import {
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
-import type {
-  PublishedSessionTranscriptArchive,
-  SessionArchivePruningOperations,
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import {
+  ARCHIVE_RETENTION_BATCH_SIZE,
+  type SessionArchivePruningSnapshot,
+  type SessionArchivePruningOperations,
+  type SessionArchivePruningSource,
 } from "./session-history-archive-pruning.types.js";
+import {
+  sessionStoreLane,
+  prepareSessionStoreCandidatesInWorker,
+} from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 
 export type SqliteSessionPageReclaimer = (maxPages?: number) => Promise<SqliteWalReclamationResult>;
 
 /** Preview reads share the history reader without waiting for archive or writer admission. */
 export async function readSqliteSessionArchivePruning(
   input: OpenClawAgentDatabaseOptions,
-): Promise<PublishedSessionTranscriptArchive | null> {
+): Promise<SessionArchivePruningSnapshot | null> {
+  if (
+    captureSessionActorStorageOwner(
+      { ...input, storePath: input.path },
+      { assertCurrent() {}, authorize() {} },
+    )
+  ) {
+    return null;
+  }
   const options = resolveSessionReclamationDatabaseOptions(input);
   if (!supportsOpenClawAgentDatabaseExecution(options)) {
     const { readSessionArchivePruningInDatabase } =
@@ -46,28 +60,48 @@ export async function readSqliteSessionArchivePruning(
       readSessionArchivePruningInDatabase(database),
     );
   }
-  const physical = readDatabasePathIdentitySync(options.path);
-  if (!physical.key.startsWith("file:")) {
-    return null;
-  }
-  const databaseOptions = { ...options, path: physical.canonicalPath };
-  const expectedIdentity: AgentDatabaseExecutionFileIdentity = {
-    kind: "file",
-    physicalIdentity: physical.key.slice("file:".length),
-    nativeLocation: physical.canonicalPath,
-  };
-  const { withSessionHistoryWorkerDatabase } =
-    await import("./session-transcript-worker-runtime.js");
-  assertExistingDatabaseIdentity(options.path, physical.key);
-  return withSessionHistoryWorkerDatabase(databaseOptions, async (reader) => {
-    assertExistingDatabaseIdentity(options.path, physical.key);
-    const result = await reader.readArchivePruning({
-      env: databaseOptions.env,
-      expectedIdentity,
-    });
-    reader.assertCurrent();
-    assertExistingDatabaseIdentity(options.path, physical.key);
-    return result;
+  return withSqliteMutationWorkerLifetime(options, async (lifetime) => {
+    const physical = await readDatabasePathIdentity(options.path);
+    lifetime.assertCurrent();
+    if (!physical.key.startsWith("file:")) {
+      return null;
+    }
+    const databaseOptions = { ...options, path: physical.canonicalPath };
+    const expectedIdentity: AgentDatabaseExecutionFileIdentity = {
+      kind: "file",
+      physicalIdentity: physical.key.slice("file:".length),
+      nativeLocation: physical.canonicalPath,
+    };
+    return withSessionHistoryWorkerDatabase(
+      {
+        ...databaseOptions,
+        requestedPaths: [options.path],
+        readCustody:
+          options.path === physical.canonicalPath
+            ? undefined
+            : [
+                {
+                  sourcePath: options.path,
+                  candidates: [
+                    {
+                      path: options.path,
+                      physicalPath: physical.canonicalPath,
+                      identity: physical,
+                    },
+                  ],
+                },
+              ],
+      },
+      async (reader) => {
+        const result = await reader.readArchivePruning({
+          env: databaseOptions.env,
+          expectedIdentity,
+        });
+        reader.assertCurrent();
+        lifetime.assertCurrent();
+        return result;
+      },
+    );
   });
 }
 
@@ -80,16 +114,32 @@ export async function withSqliteSessionPageReclamation<T>(
     databaseOptions: ReclamationDatabaseOptions,
     archives: SessionArchivePruningOperations,
   ) => Promise<T>,
+  assertCallerCurrent?: () => void,
+  capturedSource?: SessionArchivePruningSource,
 ): Promise<T> {
+  if (
+    captureSessionActorStorageOwner(
+      { ...input, storePath: input.path },
+      { assertCurrent() {}, authorize() {} },
+    )
+  ) {
+    throw new Error("Incognito sessions have no disk pages or archives to reclaim");
+  }
   const options = resolveSessionReclamationDatabaseOptions(input);
-  const incognito = isIncognitoOpenClawAgentSqlitePath(options.path, options);
   const nativeOwner = !supportsOpenClawAgentDatabaseExecution(options);
-  // Capture the original alias before admission can wait. Workers use only this physical path.
-  const physical = incognito ? undefined : readDatabasePathIdentitySync(options.path);
-  if (physical && !physical.key.startsWith("file:")) {
+  // Explicit native maintenance retains its synchronous capture and effect guards.
+  const nativePhysical = nativeOwner
+    ? (capturedSource?.readIdentity ?? readDatabasePathIdentitySync(options.path))
+    : undefined;
+  if (nativePhysical && !nativePhysical.key.startsWith("file:")) {
     throw new Error("SQLite archive pruning requires its existing database");
   }
-  return withSqliteMutationWorkerLifetime(options, async ({ assertCurrent, signal }) => {
+  return withSqliteMutationWorkerLifetime(options, async (lifetime) => {
+    const { signal } = lifetime;
+    const assertCurrent = () => {
+      lifetime.assertCurrent();
+      assertCallerCurrent?.();
+    };
     const withArchiveWriter = <Value>(
       databaseOptions: ReclamationDatabaseOptions,
       assertWriterCurrent: () => void,
@@ -105,22 +155,21 @@ export async function withSqliteSessionPageReclamation<T>(
           "session.history.archive-prune",
         );
       // Cold restoration takes archive admission before its writer; pruning must keep that order.
-      return physical ? runExclusiveSqliteTranscriptArchiveWorker(write, signal) : write();
+      return runExclusiveSqliteTranscriptArchiveWorker(write, signal);
     };
-    if (nativeOwner) {
-      // Incognito and explicit Doctor/cleanup maintenance retain their existing native owner.
+    if (nativePhysical) {
+      // Explicit Doctor/cleanup maintenance retains its native owner.
       const {
         readSessionArchivePruningInDatabase,
         deletePublishedSessionArchiveInDatabase,
         removeLegacySessionArchiveInDatabase,
+        pruneSessionArchivesByRetentionInDatabase,
       } = await import("./session-history-archive-pruning.worker.js");
-      const databaseOptions = physical ? { ...options, path: physical.canonicalPath } : options;
+      const databaseOptions = { ...options, path: nativePhysical.canonicalPath };
       const assertNativeCurrent = () => {
         assertCurrent();
-        if (physical) {
-          assertExistingDatabaseIdentity(options.path, physical.key);
-          assertExistingDatabaseIdentity(databaseOptions.path, physical.key);
-        }
+        assertExistingDatabaseIdentity(options.path, nativePhysical.key);
+        assertExistingDatabaseIdentity(databaseOptions.path, nativePhysical.key);
       };
       assertNativeCurrent();
       return run(
@@ -145,6 +194,7 @@ export async function withSqliteSessionPageReclamation<T>(
         assertNativeCurrent,
         databaseOptions,
         {
+          revalidateSource: async () => assertNativeCurrent(),
           withWriter: (operation) =>
             withArchiveWriter(databaseOptions, assertNativeCurrent, operation),
           read: async () =>
@@ -152,8 +202,28 @@ export async function withSqliteSessionPageReclamation<T>(
               databaseOptions,
               (database) => {
                 assertNativeCurrent();
-                return readSessionArchivePruningInDatabase(database);
+                return readSessionArchivePruningInDatabase(database).archives[0] ?? null;
               },
+              assertNativeCurrent,
+            ),
+          readRetentionCandidates: async (offset = 0) =>
+            withSqliteSessionDatabase(
+              databaseOptions,
+              (database) =>
+                readSessionArchivePruningInDatabase(database, ARCHIVE_RETENTION_BATCH_SIZE, offset)
+                  .archives,
+              assertNativeCurrent,
+            ),
+          pruneRetention: async (retention) =>
+            withSqliteSessionDatabase(
+              databaseOptions,
+              (database) =>
+                pruneSessionArchivesByRetentionInDatabase(
+                  database,
+                  databaseOptions,
+                  retention,
+                  assertNativeCurrent,
+                ),
               assertNativeCurrent,
             ),
           removeLegacy: async (filePath) =>
@@ -184,73 +254,74 @@ export async function withSqliteSessionPageReclamation<T>(
         },
       );
     }
-    if (!physical) {
-      throw new Error("SQLite archive pruning requires its existing file owner");
-    }
-    const databaseOptions = { ...options, path: physical.canonicalPath };
-    const expectedIdentity: AgentDatabaseExecutionFileIdentity = {
-      kind: "file",
-      physicalIdentity: physical.key.slice("file:".length),
-      nativeLocation: physical.canonicalPath,
-    };
-    const execution = captureOpenClawAgentDatabaseExecution(databaseOptions, { expectedIdentity });
-    const assertPruningCurrent = () => {
-      assertCurrent();
-      execution.assertCurrent();
-      assertExistingDatabaseIdentity(options.path, physical.key);
-      assertExistingDatabaseIdentity(databaseOptions.path, physical.key);
-    };
-    const source: AgentDatabaseRequestExecutionSource = {
-      assertCurrent: assertPruningCurrent,
-      createAdmission(binding) {
-        return () => ({
-          nativeLocations: binding.nativeLocations,
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            binding.authorize(request);
-            assertPruningCurrent();
-            if (!grant()) {
-              throw new Error("SQLite archive pruning authority expired");
-            }
-          }, binding.attachment),
-        });
-      },
-    };
-    const write = async <Value>(
-      operation: (
-        worker: Pick<SqliteWorkerStore<AgentDatabaseOperations>, "execute">,
-      ) => Promise<Value>,
-      label: "session.history.free-pages" | "session.history.archive-prune",
-    ): Promise<Value> => {
-      const result = await runExclusiveSqliteSessionWrite(
-        databaseOptions,
-        async () => {
-          assertPruningCurrent();
-          return execution.runExisting(
-            source,
-            async (worker) => ({ value: await operation(worker) }),
-            {
-              retireNativeOnFailure: true,
-            },
-          );
-        },
-        label,
-        undefined,
-        "worker",
-      );
-      assertPruningCurrent();
-      if (!result) {
-        throw new Error("SQLite archive pruning lost its prepared database");
-      }
-      return result.value;
-    };
+    const execution = await captureOpenClawAgentDatabaseExecutionAsync(
+      options,
+      capturedSource ? toAgentExecutionConstraints(capturedSource.readIdentity) : {},
+    );
     try {
-      const [{ withSessionHistoryWorkerDatabase }, { maintenanceLane }] = await Promise.all([
-        import("./session-transcript-worker-runtime.js"),
-        import("./session-transcript-worker-resources.js"),
-      ]);
+      const physical = capturedSource?.readIdentity ?? execution.capturedIdentity;
+      if (!physical.key.startsWith("file:")) {
+        throw new Error("SQLite archive pruning requires its existing file owner");
+      }
+      const databaseOptions = { ...options, path: physical.canonicalPath };
+      const expectedIdentity: AgentDatabaseExecutionFileIdentity = {
+        kind: "file",
+        physicalIdentity: physical.key.slice("file:".length),
+        birthtime: physical.birthtime,
+        nativeLocation: physical.canonicalPath,
+      };
+      const readCustody =
+        capturedSource?.readCustody ??
+        (options.path === physical.canonicalPath
+          ? undefined
+          : [
+              {
+                sourcePath: options.path,
+                candidates: [
+                  { path: options.path, physicalPath: physical.canonicalPath, identity: physical },
+                ],
+              },
+            ]);
+      const assertPruningCurrent = () => {
+        assertCurrent();
+        execution.assertCurrent();
+      };
+      const source = createSessionWorkerExecutionSource(
+        assertPruningCurrent,
+        "SQLite archive pruning authority expired",
+        readCustody,
+      );
+      const write = async <Value>(
+        operation: (
+          worker: Pick<SqliteWorkerStore<AgentDatabaseOperations>, "execute">,
+        ) => Promise<Value>,
+        label: "session.history.free-pages" | "session.history.archive-prune",
+      ): Promise<Value> => {
+        const result = await runExclusiveSqliteSessionWrite(
+          databaseOptions,
+          async () => {
+            assertPruningCurrent();
+            return execution.runExisting(
+              source,
+              async (worker) => ({ value: await operation(worker) }),
+              {
+                retireNativeOnFailure: true,
+              },
+            );
+          },
+          label,
+          undefined,
+          "worker",
+        );
+        assertPruningCurrent();
+        if (!result) {
+          throw new Error("SQLite archive pruning lost its prepared database");
+        }
+        return result.value;
+      };
       assertPruningCurrent();
       return await withSessionHistoryWorkerDatabase(
-        databaseOptions,
+        { ...databaseOptions, requestedPaths: [options.path], readCustody },
         async (reader) => {
           assertPruningCurrent();
           return run(
@@ -274,6 +345,16 @@ export async function withSqliteSessionPageReclamation<T>(
             assertPruningCurrent,
             databaseOptions,
             {
+              async revalidateSource() {
+                await prepareSessionStoreCandidatesInWorker({
+                  validate: {
+                    readCustody,
+                    candidates: [],
+                    sources: [{ path: databaseOptions.path, identity: physical }],
+                  },
+                });
+                assertPruningCurrent();
+              },
               withWriter: (operation) =>
                 withArchiveWriter(databaseOptions, assertPruningCurrent, operation),
               read: async () => {
@@ -283,8 +364,28 @@ export async function withSqliteSessionPageReclamation<T>(
                   expectedIdentity,
                 });
                 assertPruningCurrent();
-                return result;
+                return result.archives[0] ?? null;
               },
+              readRetentionCandidates: async (offset = 0) => {
+                assertPruningCurrent();
+                const result = await reader.readArchivePruning({
+                  env: databaseOptions.env,
+                  expectedIdentity,
+                  limit: ARCHIVE_RETENTION_BATCH_SIZE,
+                  offset,
+                });
+                assertPruningCurrent();
+                return result.archives;
+              },
+              pruneRetention: (retention) =>
+                write(
+                  (worker) =>
+                    worker.execute({
+                      type: "session.archivePruning.pruneRetention",
+                      input: retention,
+                    }),
+                  "session.history.archive-prune",
+                ),
               removeLegacy: (filePath) =>
                 write(
                   (worker) =>
@@ -306,7 +407,7 @@ export async function withSqliteSessionPageReclamation<T>(
             },
           );
         },
-        maintenanceLane,
+        sessionStoreLane,
       );
     } finally {
       await execution.release();

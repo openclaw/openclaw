@@ -40,15 +40,10 @@ export class AcpSessionNewOrdering {
       return;
     }
 
-    // Any other method — `session/prompt` above all — may name a session that does
-    // not exist. The translator rejects those, so recording them here would let a
-    // peer grow this set for the lifetime of the process.
+    // Other methods can name nonexistent sessions; never retain their unverified IDs.
     if (SESSION_ESTABLISHING_METHODS.has(method)) {
-      // A load or resume is a claim on the session, recognized immediately so its
-      // updates are never delayed, and confirmed or retired by its own response. It
-      // never writes to the confirmed set directly: two overlapping claims on one
-      // session must resolve independently, so that one failing cannot erase what
-      // the other established.
+      // Recognize loads immediately, but let each response confirm or retire its own
+      // claim so one failed load cannot erase another load's established session.
       this.provisionalSessions.set(requestId, sessionId);
       this.provisionalClaims.set(sessionId, (this.provisionalClaims.get(sessionId) ?? 0) + 1);
       return;
@@ -89,23 +84,16 @@ export class AcpSessionNewOrdering {
         if (messageObject?.error === undefined) {
           this.establishedSessionIds.add(claimed);
         }
-        // A rejection retires only this claim. Recognition persists exactly when
-        // the session is confirmed or another claim on it is still outstanding.
       }
     }
     if (responseId !== undefined && this.pendingNewSessionRequestIds.delete(responseId)) {
-      // The response to `session/new` always goes out first; it is what introduces
-      // the session ID to the client. A failed creation carries no ID to establish.
+      // Introduce the new session ID before releasing its updates.
       emit(message);
       const establishedSessionId = readSessionId(messageObject?.result);
       if (establishedSessionId) {
         this.establishedSessionIds.add(establishedSessionId);
-        // Release this session's backlog immediately rather than only the run at the
-        // head of the global queue. Sessions are independent streams, so holding one
-        // behind another buys no ordering the client can observe, while it does delay
-        // this session's updates past frames that never enter the queue at all — a
-        // prompt's completion response, above all, which would then arrive before the
-        // text it completes.
+        // Release independently of other sessions so a prompt response cannot
+        // overtake its text while another session blocks the global queue.
         this.releaseSession(establishedSessionId, emit);
       }
       this.drain(emit);
@@ -130,10 +118,7 @@ export class AcpSessionNewOrdering {
   }
 
   private shouldQueue(sessionId: string): boolean {
-    // A session with updates still queued keeps queuing, recognized or not, so a
-    // newer update can never pass an older one from the same session. The backlog is
-    // released whole when the session is introduced, so this holds only for as long
-    // as the session has genuinely not reached the client.
+    // New updates cannot overtake this session's older queued updates.
     if (this.queuedPerSession.has(sessionId)) {
       return true;
     }
@@ -150,9 +135,7 @@ export class AcpSessionNewOrdering {
   ): boolean {
     const queued = this.queuedPerSession.get(sessionId) ?? 0;
     if (queued >= MAX_QUEUED_UPDATES_PER_SESSION) {
-      // Fail open, but never out of order within the session: release everything
-      // this session has queued, in order, before the caller writes this one through.
-      // Cross-session order degrades here; intra-session order does not.
+      // Overflow releases this session's backlog before the caller emits the new update.
       this.releaseSession(sessionId, emit);
       return false;
     }

@@ -1,41 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
-import { teamsMeetingsConfig } from "./config.js";
-import { teamsMeetingsProbes } from "./runtime-probes.js";
-import type { TeamsMeetingsSession } from "./transports/types.js";
+import { teamsMeetingsPlugin } from "../index.js";
 
 const URL = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_probe%40thread.v2/0";
-type TeamsMeetingsProbeContext = Parameters<typeof teamsMeetingsProbes.testListening>[0];
+type TeamsMeetingsProbeContext = Parameters<typeof teamsMeetingsPlugin.probes.testListening>[0];
 
 describe.each(["chrome", "chrome-node"] as const)(
   "Microsoft Teams %s runtime probes",
   (transport) => {
     it.each([
-      {
-        name: "waits when Chrome launched without a tracked target",
-        chrome: { launched: true },
-        refreshCalls: 1,
-      },
-      {
-        name: "waits for a reused manually opened tab",
-        chrome: {
-          launched: false,
-          browserTab: { targetId: "teams-manual-tab", openedByPlugin: false },
-        },
-        refreshCalls: 1,
-      },
-      {
-        name: "does not wait without a launched browser or tracked tab",
-        chrome: { launched: false },
-        refreshCalls: 0,
-      },
-    ])("$name", async ({ chrome, refreshCalls }) => {
+      ["waits when Chrome launched without a tracked target", true, undefined, 1],
+      ["waits for a reused manually opened tab", false, "teams-manual-tab", 1],
+      ["does not wait without a launched browser or tracked tab", false, undefined, 0],
+    ] as const)("%s", async (_name, launched, targetId, refreshCalls) => {
       const session = {
         agentId: "main",
-        chrome: { health: { inCall: true }, ...chrome },
+        chrome: {
+          health: { inCall: true },
+          launched,
+          ...(targetId ? { browserTab: { targetId, openedByPlugin: false } } : {}),
+        },
         id: "teams-listen",
         mode: "transcribe",
         transport,
-      } as TeamsMeetingsSession;
+      } as ReturnType<TeamsMeetingsProbeContext["list"]>[number];
       const refreshCaptionHealth = vi.fn(async () => {
         session.chrome!.health = {
           ...session.chrome!.health,
@@ -43,7 +30,7 @@ describe.each(["chrome", "chrome-node"] as const)(
         };
       });
       const context = {
-        config: teamsMeetingsConfig.resolveConfig({}),
+        config: teamsMeetingsPlugin.config.resolveConfig({}),
         hasHealthHandle: () => false,
         isReusable: () => false,
         join: vi.fn(async () => ({ session, spoken: false })),
@@ -53,7 +40,7 @@ describe.each(["chrome", "chrome-node"] as const)(
         resolveAgentId: () => "main",
       } satisfies TeamsMeetingsProbeContext;
 
-      const result = await teamsMeetingsProbes.testListening(context, {
+      const result = await teamsMeetingsPlugin.probes.testListening(context, {
         mode: "transcribe",
         timeoutMs: 100,
         url: URL,

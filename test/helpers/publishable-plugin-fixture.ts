@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeJsonFile } from "./temp-repo.js";
 
@@ -60,4 +60,26 @@ export function writePublishablePluginFixture(
   writeFileSync(join(packageDir, "index.ts"), `export const ${exportName} = 1;\n`);
   writeFileSync(join(packageDir, "README.md"), "# Demo plugin\n");
   return { extensionId, packageDir, packageName };
+}
+
+export function writePublicRuntimeSurfacePluginFixture(repoDir: string) {
+  const fixture = writePublishablePluginFixture(repoDir, {
+    extensionId: "public-surfaces",
+    version: "1.0.0",
+    publishTo: "npm",
+  });
+  const { extensionId, packageDir } = fixture;
+  for (const entry of ["api.ts", "runtime-api.ts"]) {
+    writeFileSync(join(packageDir, entry), "export {};\n");
+  }
+  writeJsonFile(join(packageDir, "openclaw.plugin.json"), { id: extensionId });
+  mkdirSync(join(packageDir, "assets"));
+  writeFileSync(join(packageDir, "assets", "icon.png"), "");
+  writeFileSync(
+    join(packageDir, "assets", "activity.svg"),
+    '<svg xmlns="http://www.w3.org/2000/svg"/>\n',
+  );
+  mkdirSync(join(packageDir, "skills"));
+  writeFileSync(join(packageDir, "skills", "SKILL.md"), "# Fixture skill\n");
+  return fixture;
 }

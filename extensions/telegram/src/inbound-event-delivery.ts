@@ -1,30 +1,15 @@
 import { createInboundEventDeliveryCorrelation } from "openclaw/plugin-sdk/inbound-event-delivery";
-import { stripTelegramInternalPrefixes } from "./targets.js";
-
-function normalizeTelegramDeliveryTarget(value: string): string {
-  return stripTelegramInternalPrefixes(value).toLowerCase();
-}
-
-function stripTelegramTopicTarget(value: string): string {
-  return value.replace(/:topic:\d+$/u, "");
-}
-
-function hasTelegramTopicTarget(value: string): boolean {
-  return /:topic:\d+$/u.test(value);
-}
-
-function telegramDeliveryTargetsMatch(expected: string, actual: string): boolean {
-  const expectedTarget = normalizeTelegramDeliveryTarget(expected);
-  const actualTarget = normalizeTelegramDeliveryTarget(actual);
-  if (expectedTarget === actualTarget) {
-    return true;
-  }
-  if (hasTelegramTopicTarget(expectedTarget)) {
-    return false;
-  }
-  return expectedTarget === stripTelegramTopicTarget(actualTarget);
-}
+import { parseTelegramTarget } from "./targets.js";
 
 export const telegramInboundEventDelivery = createInboundEventDeliveryCorrelation({
-  targetsMatch: telegramDeliveryTargetsMatch,
+  targetsMatch(expected, actual) {
+    // A chat-level expectation also accepts deliveries into one of its topics.
+    const want = parseTelegramTarget(expected.toLowerCase());
+    const got = parseTelegramTarget(actual.toLowerCase());
+    return (
+      want.chatId === got.chatId &&
+      want.directMessagesTopicId === got.directMessagesTopicId &&
+      (want.messageThreadId === undefined || want.messageThreadId === got.messageThreadId)
+    );
+  },
 });

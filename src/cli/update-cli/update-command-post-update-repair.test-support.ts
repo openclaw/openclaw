@@ -4,9 +4,10 @@ import { vi } from "vitest";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { resolveProfileStateDir } from "../profile-utils.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 
-export function createPostUpdateRepairFixture(home: string): FinishUpdateParams {
+export function createPostUpdateRepairFixture(home: string, profile?: string): FinishUpdateParams {
   for (const key of [
     "OPENCLAW_HOME",
     "OPENCLAW_SUPERVISOR_MODE",
@@ -16,8 +17,9 @@ export function createPostUpdateRepairFixture(home: string): FinishUpdateParams 
   }
   vi.stubEnv("HOME", home);
   vi.stubEnv("USERPROFILE", home);
+  vi.stubEnv("OPENCLAW_PROFILE", profile);
   vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
-  const stateDir = path.join(home, ".openclaw");
+  const stateDir = resolveProfileStateDir(profile ?? "default", process.env, () => home);
   const configPath = path.join(stateDir, "openclaw.json");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);

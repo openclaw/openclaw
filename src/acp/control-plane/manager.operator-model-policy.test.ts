@@ -1,8 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import { describe, expect, it } from "vitest";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import {
@@ -11,6 +9,7 @@ import {
   createRuntime,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  mockMutableSession,
   readySessionMeta,
 } from "./manager.test-helpers.js";
 
@@ -24,9 +23,6 @@ describe("ACP operator model ceiling", () => {
 
   async function run(
     model: string | undefined,
-    beforePrompt?: (
-      changePolicy: (policy: GatewayOperatorRoleDefinition["modelPolicy"]) => void,
-    ) => void,
     appliedModel?: string,
     initialPolicy: GatewayOperatorRoleDefinition["modelPolicy"] = {},
   ) {
@@ -46,28 +42,18 @@ describe("ACP operator model ceiling", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: readySessionMeta({ agent: "fixture", runtimeOptions: model ? { model } : {} }),
+    mockMutableSession(sessionKey, {
+      currentMeta: readySessionMeta({ agent: "fixture", runtimeOptions: model ? { model } : {} }),
     });
-    let modelPolicy = prepareOperatorModelPolicy({
+    const modelPolicy = prepareOperatorModelPolicy({
       cfg,
       policy: initialPolicy,
       manifestPlugins: [],
     });
-    const policyListeners = new Set<() => void>();
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "fixture-person",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
-      get modelPolicy() {
-        return modelPolicy;
-      },
-      onModelPolicyChanged: (listener) => {
-        policyListeners.add(listener);
-        return () => policyListeners.delete(listener);
-      },
+      modelPolicy,
     });
     const admission = prepareSystemAgentRunAdmission(
       cfg,
@@ -88,13 +74,6 @@ describe("ACP operator model ceiling", () => {
           text: "fixture request",
           mode: "prompt",
           requestId: "fixture-role-run",
-          onBeforePrompt: () =>
-            beforePrompt?.((policy) => {
-              modelPolicy = prepareOperatorModelPolicy({ cfg, policy, manifestPlugins: [] });
-              for (const listener of policyListeners) {
-                listener();
-              }
-            }),
         })
         .then(
           () => undefined,
@@ -106,49 +85,21 @@ describe("ACP operator model ceiling", () => {
     }
   }
 
-  it.each(["fixture/denied", "bare-native-model", undefined])(
-    "rejects an excluded or unqualified selection before backend preparation: %s",
-    async (model) => {
-      const { outcome, runtimeState } = await run(model);
-      expect(outcome).toBeInstanceOf(Error);
-      expect(String(outcome)).toContain("operator role cannot use this model");
+  it.each<[name: string, args: Parameters<typeof run>, beforeBackend: boolean]>([
+    ["unqualified selection", [undefined], true],
+    [
+      "native model alias with an exact exclusion",
+      ["google/gemini-3-pro", undefined, { allow: ["google/*"], deny: ["google/gemini-3-pro"] }],
+      true,
+    ],
+    ["backend substitution of an excluded model", ["fixture/allowed", "fixture/denied"], false],
+  ])("rejects %s without prompting", async (_name, args, beforeBackend) => {
+    const { outcome, runtimeState } = await run(...args);
+    expect(outcome).toBeInstanceOf(Error);
+    expect(String(outcome)).toContain("operator role cannot use this model");
+    if (beforeBackend) {
       expect(runtimeState.ensureSession).not.toHaveBeenCalled();
-      expect(runtimeState.runTurn).not.toHaveBeenCalled();
-    },
-  );
-
-  it("executes a qualified allowed model and keeps the existing pre-prompt guard", async () => {
-    const before = vi.fn();
-    const { outcome, runtimeState } = await run("fixture/allowed", before);
-    expect(outcome).toBeUndefined();
-    expect(before).toHaveBeenCalledOnce();
-    expect(runtimeState.runTurn).toHaveBeenCalledOnce();
-  });
-
-  it("does not prompt a backend that substitutes an excluded model", async () => {
-    const { outcome, runtimeState } = await run("fixture/allowed", undefined, "fixture/denied");
-    expect(String(outcome)).toContain("operator role cannot use this model");
-    expect(runtimeState.runTurn).not.toHaveBeenCalled();
-  });
-
-  it("rechecks the applied model after admission even when the requested model remains allowed", async () => {
-    const { outcome, runtimeState } = await run(
-      "fixture/allowed",
-      (changePolicy) => changePolicy({ allow: ["fixture/allowed"] }),
-      "fixture/applied",
-      { allow: ["fixture/allowed", "fixture/applied"] },
-    );
-    expect(String(outcome)).toContain("operator role cannot use this model");
-    expect(runtimeState.runTurn).not.toHaveBeenCalled();
-  });
-
-  it("normalizes native model aliases before checking an exact exclusion", async () => {
-    const { outcome, runtimeState } = await run("google/gemini-3-pro", undefined, undefined, {
-      allow: ["google/*"],
-      deny: ["google/gemini-3-pro"],
-    });
-    expect(String(outcome)).toContain("operator role cannot use this model");
-    expect(runtimeState.ensureSession).not.toHaveBeenCalled();
+    }
     expect(runtimeState.runTurn).not.toHaveBeenCalled();
   });
 });

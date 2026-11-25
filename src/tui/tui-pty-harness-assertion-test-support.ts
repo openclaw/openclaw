@@ -1,6 +1,9 @@
 // Shared assertions and exercises for the fake-backend TUI PTY harness.
 import { readFile } from "node:fs/promises";
 import { expect } from "vitest";
+import type { FixtureReceiptChannel } from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { sleep } from "../utils/sleep.js";
 import { formatTuiFooter, sanitizeRenderableLine } from "./tui-formatters.js";
 import {
@@ -18,7 +21,7 @@ export {
 } from "./tui-pty-terminal-evidence-test-support.js";
 
 export type FixtureLogEntry = { method: string; payload?: unknown };
-type FixtureLogPredicate = (entry: FixtureLogEntry) => boolean;
+type FixtureLogPredicate = (entry: FixtureLogEntry, index: number) => boolean;
 
 export const COMPACT_TERMINAL_SIZES = [
   [64, 18],
@@ -37,7 +40,7 @@ export async function readFixtureLog(logPath: string): Promise<FixtureLogEntry[]
       .filter(Boolean)
       .map((line) => JSON.parse(line) as FixtureLogEntry);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return [];
     }
     throw error;
@@ -47,24 +50,32 @@ export async function readFixtureLog(logPath: string): Promise<FixtureLogEntry[]
 export async function waitForFixtureLogEntry(
   logPath: string,
   predicate: FixtureLogPredicate,
-  timeoutMs: number,
-  readPtyOutput?: () => string,
+  { receipts, run, signal }: { receipts: FixtureReceiptChannel; run: PtyRun; signal: AbortSignal },
 ) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const entries = await readFixtureLog(logPath);
-    const match = entries.find(predicate);
+  const readMatch = async () => (await readFixtureLog(logPath)).find(predicate);
+  const waiting = async () => {
+    for (;;) {
+      signal.throwIfAborted();
+      const entries = await readFixtureLog(logPath);
+      const match = entries.find(predicate);
+      if (match) {
+        return match;
+      }
+      await withinTest(receipts.waitFor(logPath, "", entries.length + 1), signal);
+    }
+  };
+  // Exit can overtake the receipt socket. The fixture commits its record before replying,
+  // so consult that record before treating an early exit as a missing callback.
+  const exited = run.exited.then(async () => {
+    const match = await readMatch();
     if (match) {
       return match;
     }
-    await sleep(25);
-  }
-  const entries = await readFixtureLog(logPath);
-  // A swallowed command leaves no RPC; its visible rejection survives only in the terminal.
-  const ptyOutput = readPtyOutput?.() ?? "";
-  throw new Error(
-    `timed out waiting for fixture log entry\n${JSON.stringify(entries, null, 2)}\n${ptyOutput}`,
-  );
+    throw new Error(
+      `timed out waiting for fixture log entry\n${JSON.stringify(await readFixtureLog(logPath), null, 2)}\n${run.output()}`,
+    );
+  });
+  return await withinTest(Promise.race([waiting(), exited]), signal);
 }
 
 export function objectFieldEquals(entry: FixtureLogEntry, field: string, value: unknown) {
@@ -78,10 +89,36 @@ export function objectFieldEquals(entry: FixtureLogEntry, field: string, value: 
 type StartedTuiPtyFixture = {
   run: PtyRun;
   logPath: string;
-  waitForLogEntry: (predicate: FixtureLogPredicate, timeoutMs?: number) => Promise<FixtureLogEntry>;
+  waitForLogEntry: (
+    predicate: FixtureLogPredicate,
+    signal: AbortSignal,
+  ) => Promise<FixtureLogEntry>;
   releaseReconnect: () => Promise<void>;
   cleanup: () => Promise<void>;
 };
+export async function selectTuiFixtureSession(
+  fixture: StartedTuiPtyFixture,
+  sessionKey: string,
+  signal: AbortSignal,
+) {
+  const logOffset = (await readFixtureLog(fixture.logPath)).length;
+  await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
+  await fixture.waitForLogEntry(
+    (entry, index) =>
+      index >= logOffset &&
+      entry.method === "loadHistory" &&
+      objectFieldEquals(entry, "sessionKey", sessionKey),
+    signal,
+  );
+  await waitForSynchronizedFrameRows(
+    fixture.run,
+    (rows) =>
+      rows.some((row) => row.trim() === `session ${sessionKey}`) &&
+      rows.some((row) => row.includes("fixture-provider/fixture-model")),
+    2_000,
+  );
+}
+
 type TuiPtyFixtureOptions = { env?: NodeJS.ProcessEnv; holdReconnect?: boolean };
 export type StartTuiPtyFixture = (opts?: TuiPtyFixtureOptions) => Promise<StartedTuiPtyFixture>;
 type TerminalAttackPayload = {
@@ -188,6 +225,7 @@ async function assertTerminalAttackPrefixSanitized(
 async function exerciseSelectorOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
+  signal: AbortSignal,
 ) {
   const modelValue = buildCompactTerminalAttackPayload("t08mv", "\x1b[777;888H");
   const modelName = buildCompactTerminalAttackPayload("t08mn", "\x1b]52;c;t08_model_clipboard\x07");
@@ -218,7 +256,7 @@ async function exerciseSelectorOutputSafety(
   try {
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
     await fixture.run.write("\u000c", { delay: false });
-    await fixture.waitForLogEntry((entry) => entry.method === "listModels");
+    await fixture.waitForLogEntry((entry) => entry.method === "listModels", signal);
     await assertTerminalAttackPrefixSanitized(fixture, modelValue, 5_000);
     await assertTerminalAttackPrefixSanitized(fixture, modelName, 5_000);
 
@@ -227,6 +265,7 @@ async function exerciseSelectorOutputSafety(
     const modelPatch = await fixture.waitForLogEntry(
       (entry) =>
         entry.method === "patchSession" && objectFieldEquals(entry, "model", selectedModel),
+      signal,
     );
     expect(modelPatch.payload).toMatchObject({ model: selectedModel });
     await fixture.run.waitForOutput(
@@ -243,6 +282,7 @@ async function exerciseSelectorOutputSafety(
     await fixture.run.write("\u0010", { delay: false });
     await fixture.waitForLogEntry(
       (entry) => entry.method === "listSessions" && objectFieldEquals(entry, "purpose", "picker"),
+      signal,
     );
     await assertTerminalAttackPrefixSanitized(fixture, sessionTitle, 5_000);
     await assertTerminalAttackPrefixSanitized(fixture, sessionPreview, 5_000);
@@ -253,6 +293,7 @@ async function exerciseSelectorOutputSafety(
       (entry) =>
         entry.method === "loadHistory" &&
         objectFieldEquals(entry, "sessionKey", selectedSessionKey),
+      signal,
     );
     expect(historyLoad.payload).toMatchObject({ sessionKey: selectedSessionKey });
     await assertTerminalAttackSanitized(fixture, sessionKey, 5_000);
@@ -300,10 +341,11 @@ export async function exerciseNarrowTerminalRendering(
   try {
     await fixture.run.waitForOutput("PTY_RESPONSE: terminal rendering proof", startupTimeoutMs);
     await fixture.run.waitForOutput("café 東京 👩🏽‍💻", startupTimeoutMs);
-    const sent = await fixture.waitForLogEntry(
+    // sendChat commits its log entry before emitting the response observed above.
+    const sent = (await readFixtureLog(fixture.logPath)).find(
       (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
     );
-    expect(sent.payload).toMatchObject({ message });
+    expect(sent?.payload).toMatchObject({ message });
     const links = await waitFor({
       timeoutMs: startupTimeoutMs,
       read: () => {
@@ -323,6 +365,7 @@ export async function exerciseNarrowTerminalRendering(
 async function exerciseGatewayOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
+  signal: AbortSignal,
 ) {
   const systemAttacks = [
     "\x1b[?7776h",
@@ -346,7 +389,7 @@ async function exerciseGatewayOutputSafety(
   try {
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
     await fixture.run.write("/gateway-status\r", { delay: false });
-    await fixture.waitForLogEntry((entry) => entry.method === "disconnect");
+    await fixture.waitForLogEntry((entry) => entry.method === "disconnect", signal);
     // Replay omits zero-width bidi isolates but preserves authenticated cells.
     // The complete disconnect row must exist before reconnect replaces it.
     await assertHistoricalTerminalAttackSanitized(
@@ -391,6 +434,7 @@ async function exerciseGatewayOutputSafety(
 async function exerciseMarkdownAndAutocompleteOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
+  signal: AbortSignal,
 ) {
   const inFlight = buildInlineTerminalAttackPayload("T08F", "\x1b]52;c;t08_inflight\x07");
   const command = buildCompactTerminalAttackPayload("T08C", "\u009d0;t08_command\u009c");
@@ -408,7 +452,7 @@ async function exerciseMarkdownAndAutocompleteOutputSafety(
 
   try {
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
-    await fixture.waitForLogEntry((entry) => entry.method === "listCommands");
+    await fixture.waitForLogEntry((entry) => entry.method === "listCommands", signal);
     await fixture.run.write("\x14", { delay: false });
     await assertHistoricalTerminalAttackSanitized(
       fixture,
@@ -442,6 +486,7 @@ async function exerciseMarkdownAndAutocompleteOutputSafety(
 async function exerciseInteractiveOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
+  signal: AbortSignal,
 ) {
   const btwPayload = buildCompactTerminalAttackPayload("T08B", "\u009b776;889H");
   const rawToolPayload = buildCompactTerminalAttackPayload("T08T", "\x1b]0;t08_tool_title\x07");
@@ -463,13 +508,13 @@ async function exerciseInteractiveOutputSafety(
   try {
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
     await fixture.run.write("/btw picker focus proof\r", { delay: false });
-    await fixture.waitForLogEntry((entry) => entry.method === "pickerSideResult");
+    await fixture.waitForLogEntry((entry) => entry.method === "pickerSideResult", signal);
     await assertTerminalAttackSanitized(fixture, btwPayload, startupTimeoutMs);
     await fixture.run.write("\r", { delay: false });
     await sleep(25);
 
     await fixture.run.write("tool chronology proof\r", { delay: false });
-    await fixture.waitForLogEntry((entry) => entry.method === "toolChronologyComplete");
+    await fixture.waitForLogEntry((entry) => entry.method === "toolChronologyComplete", signal);
     await assertTerminalAttackSanitized(fixture, toolPayload, startupTimeoutMs);
     await fixture.run.waitForOutput("PTY_AFTER_TOOL", startupTimeoutMs);
   } finally {
@@ -480,12 +525,13 @@ async function exerciseInteractiveOutputSafety(
 export async function exerciseTerminalOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
+  signal: AbortSignal,
 ) {
   const results = await Promise.allSettled([
-    exerciseGatewayOutputSafety(startFixture, startupTimeoutMs),
-    exerciseInteractiveOutputSafety(startFixture, startupTimeoutMs),
-    exerciseMarkdownAndAutocompleteOutputSafety(startFixture, startupTimeoutMs),
-    exerciseSelectorOutputSafety(startFixture, startupTimeoutMs),
+    exerciseGatewayOutputSafety(startFixture, startupTimeoutMs, signal),
+    exerciseInteractiveOutputSafety(startFixture, startupTimeoutMs, signal),
+    exerciseMarkdownAndAutocompleteOutputSafety(startFixture, startupTimeoutMs, signal),
+    exerciseSelectorOutputSafety(startFixture, startupTimeoutMs, signal),
   ]);
   const failure = results.find((result) => result.status === "rejected");
   if (failure) {
@@ -507,9 +553,11 @@ export async function exerciseFragmentedUnicodePrompt(
     await fixture.run.waitForOutput("local ready", startupTimeoutMs);
     await fixture.run.write(`${message}\r`);
     await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
-    await fixture.waitForLogEntry(
-      (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
-    );
+    // sendChat commits its log entry before emitting the response observed above.
+    expect(await readFixtureLog(fixture.logPath)).toContainEqual({
+      method: "sendChat",
+      payload: expect.objectContaining({ message }),
+    });
   } finally {
     await fixture.cleanup();
   }
@@ -519,12 +567,16 @@ export async function exerciseFragmentedUnicodePrompt(
 export async function approveWorkspaceSkill(
   fixture: {
     run: PtyRun;
-    waitForLogEntry: (predicate: (entry: FixtureLogEntry) => boolean) => Promise<FixtureLogEntry>;
+    waitForLogEntry: (
+      predicate: (entry: FixtureLogEntry) => boolean,
+      signal: AbortSignal,
+    ) => Promise<FixtureLogEntry>;
   },
   message: string,
+  signal: AbortSignal,
 ) {
   await fixture.run.write(`${message}\r`);
-  await fixture.run.waitForOutput("workspace skill approval: Apply workspace skill proposal");
+  await fixture.run.waitForOutput("plugin approval: Apply workspace skill proposal");
   await fixture.run.waitForOutput("Plugin: workspace-skills");
   // A compact PTY wraps the request; exact fragments avoid matching across terminal redraws.
   await fixture.run.waitForOutput("Apply a pending workspace skill proposal");
@@ -537,6 +589,7 @@ export async function approveWorkspaceSkill(
     (entry) =>
       entry.method === "resolvePluginApproval" &&
       objectFieldEquals(entry, "decision", "allow-once"),
+    signal,
   );
   await fixture.run.waitForOutput("PTY_SKILL_APPROVAL_RESOLVED: allow-once");
 }

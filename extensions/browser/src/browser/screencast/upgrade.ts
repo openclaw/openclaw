@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   rejectWebSocketUpgrade,
   startWebSocketKeepalive,
@@ -20,7 +21,14 @@ export async function handleBrowserScreencastUpgrade(
     return false;
   }
   const params = consumeBrowserScreencastToken(url.searchParams.get("token") ?? "");
-  if (!params || params.requesterSignal?.aborted || params.isRequesterCurrent?.() === false) {
+  const ingress = getPluginRuntimeGatewayRequestScope();
+  if (
+    !params ||
+    params.requesterSignal?.aborted ||
+    params.isRequesterCurrent?.() === false ||
+    ingress?.signal?.aborted ||
+    ingress?.hasCurrentClientAuthority?.() === false
+  ) {
     params?.releaseRequester?.();
     rejectWebSocketUpgrade(socket, { status: 401 });
     return true;
@@ -34,7 +42,15 @@ export async function handleBrowserScreencastUpgrade(
         ws.close(1003, "view_only");
       }
     });
-    attachBrowserScreencastViewer(params, ws);
+    attachBrowserScreencastViewer(
+      params,
+      ws,
+      ingress && {
+        signal: ingress.signal,
+        isCurrent: ingress.hasCurrentClientAuthority,
+        trackWork: ingress.trackWork,
+      },
+    );
   });
   return true;
 }

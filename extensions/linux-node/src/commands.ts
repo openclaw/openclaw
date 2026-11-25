@@ -4,19 +4,108 @@ import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeHostCommandAvailabilityContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import {
-  assertToolResult,
-  clamp,
-  isCapabilityEnabledForHost,
-  parseParams,
-  readFiniteNumber,
-  type RunCommand,
-} from "./command-utils.js";
-import type { ResolvedLinuxNodePluginConfig } from "./config.js";
-import { resolveExecutable, type ExecutableResolver } from "./executables.js";
-import { createLinuxLocationCommand } from "./location.js";
+  asFiniteNumber as readFiniteNumber,
+  asNonArrayRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { clamp, safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  resolveLinuxNodePluginConfigFromHost,
+  type ResolvedLinuxNodePluginConfig,
+} from "./config.js";
+import { resolveExecutable } from "./executables.js";
+
+function parseParams(paramsJSON: string | null | undefined): Record<string, unknown> {
+  return asNonArrayRecord(safeParseJson(paramsJSON ?? ""));
+}
+
+function formatToolError(result: SpawnResult): string {
+  const detail = result.stderr.trim() || result.stdout.trim();
+  return detail
+    ? truncateUtf16Safe(detail.replaceAll(/\s+/gu, " "), 300)
+    : `exit ${result.code ?? "unknown"}`;
+}
+
+function assertToolResult(result: SpawnResult, code: string): void {
+  if (result.termination === "timeout" || result.termination === "no-output-timeout") {
+    throw new Error(`${code}: command timed out`);
+  }
+  if (result.code !== 0) {
+    throw new Error(`${code}: ${formatToolError(result)}`);
+  }
+}
+
+function isCapabilityEnabledForHost(
+  context: OpenClawPluginNodeHostCommandAvailabilityContext,
+  capability: keyof ResolvedLinuxNodePluginConfig,
+): boolean {
+  return resolveLinuxNodePluginConfigFromHost(context.config)?.[capability].enabled === true;
+}
+
+const GEOCLUE_DEMO_PATHS = [
+  "/usr/libexec/geoclue-2.0/demos/where-am-i",
+  "/usr/lib/geoclue-2.0/demos/where-am-i",
+];
+const GEOCLUE_TIMESTAMP_RESOLUTION_MS = 1000;
+
+function isLocationDisabledOutput(output: string): boolean {
+  // GeoClue reports both an explicit disable and, on headless hosts without an
+  // authorization agent, an access-denied error; both mean "not permitted here".
+  return /Geolocation disabled|disallowed, no agent|AccessDenied|not authorized/iu.test(output);
+}
+
+function parseLocationOutput(output: string, maxAgeMs?: number) {
+  const blocks = output.split(/\nNew location:\s*\n/gu);
+  for (const block of blocks.toReversed()) {
+    const latitude = /Latitude:\s*([-+\d.]+)/u.exec(block)?.[1];
+    const longitude = /Longitude:\s*([-+\d.]+)/u.exec(block)?.[1];
+    const accuracy = /Accuracy:\s*([-+\d.]+)/u.exec(block)?.[1];
+    if (latitude === undefined || longitude === undefined || accuracy === undefined) {
+      continue;
+    }
+    const lat = Number(latitude);
+    const lon = Number(longitude);
+    const accuracyMeters = Number(accuracy);
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lon) ||
+      !Number.isFinite(accuracyMeters) ||
+      lat < -90 ||
+      lat > 90 ||
+      lon < -180 ||
+      lon > 180 ||
+      accuracyMeters < 0
+    ) {
+      continue;
+    }
+    const epochSeconds = /\((\d+)\s+seconds since the Epoch\)/u.exec(block)?.[1];
+    const altitude = /Altitude:\s*([-+\d.]+)/u.exec(block)?.[1];
+    const speed = /Speed:\s*([-+\d.]+)/u.exec(block)?.[1];
+    const heading = /Heading:\s*([-+\d.]+)/u.exec(block)?.[1];
+    const timestamp = epochSeconds
+      ? new Date(Number(epochSeconds) * 1000).toISOString()
+      : new Date().toISOString();
+    const ageMs = Date.now() - Date.parse(timestamp);
+    if (
+      maxAgeMs !== undefined &&
+      (ageMs < 0 || ageMs >= maxAgeMs + GEOCLUE_TIMESTAMP_RESOLUTION_MS)
+    ) {
+      continue;
+    }
+    return {
+      lat,
+      lon,
+      accuracyMeters,
+      ...(altitude !== undefined ? { altitudeMeters: Number(altitude) } : {}),
+      ...(speed !== undefined ? { speedMps: Number(speed) } : {}),
+      ...(heading !== undefined ? { headingDeg: Number(heading) } : {}),
+      timestamp,
+    };
+  }
+  return null;
+}
 
 const MAX_GATEWAY_PAYLOAD_BYTES = 25 * 1024 * 1024;
 // The base64 field sits inside payloadJSON and the node.invoke response frame.
@@ -31,28 +120,11 @@ type VideoDevice = {
   deviceType: "v4l2";
 };
 
-type LinuxNodeCommandDeps = {
-  config: ResolvedLinuxNodePluginConfig;
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
-  resolveExecutable?: ExecutableResolver;
-  runCommand?: RunCommand;
-  listVideoDevices?: () => Promise<VideoDevice[]>;
-  readFile?: (filePath: string) => Promise<Buffer>;
-  statFile?: (filePath: string) => Promise<{ size: number }>;
-  withTempFile?: <T>(suffix: string, run: (filePath: string) => Promise<T>) => Promise<T>;
-  now?: () => Date;
-};
-
 function encodeMedia(buffer: Buffer): string {
   if (buffer.byteLength > MAX_MEDIA_RAW_BYTES) {
     throw new Error("PAYLOAD_TOO_LARGE: camera payload exceeds the 25 MB base64 limit");
   }
-  const base64 = buffer.toString("base64");
-  if (Buffer.byteLength(base64, "ascii") > MAX_BASE64_BYTES) {
-    throw new Error("PAYLOAD_TOO_LARGE: camera payload exceeds the 25 MB base64 limit");
-  }
-  return base64;
+  return buffer.toString("base64");
 }
 
 function readJpegDimensions(buffer: Buffer): { width: number; height: number } | null {
@@ -96,21 +168,16 @@ function readJpegDimensions(buffer: Buffer): { width: number; height: number } |
   return null;
 }
 
-async function listLinuxVideoDevices(params: {
-  ffmpeg: string;
-  runCommand: RunCommand;
-  listEntries?: () => Promise<string[]>;
-  readDeviceName?: (entry: string) => Promise<string>;
-}): Promise<VideoDevice[]> {
-  const entries = await (params.listEntries ?? (() => fs.readdir("/dev")))().catch(() => []);
+async function listLinuxVideoDevices(ffmpeg: string): Promise<VideoDevice[]> {
+  const entries = await fs.readdir("/dev");
   const deviceNames = entries
     .filter((entry) => /^video\d+$/u.test(entry))
     .toSorted((left, right) => left.localeCompare(right, "en", { numeric: true }));
   const devices: VideoDevice[] = [];
   for (const entry of deviceNames) {
     const id = path.join("/dev", entry);
-    const probe = await params.runCommand(
-      [params.ffmpeg, "-hide_banner", "-f", "v4l2", "-list_formats", "all", "-i", id],
+    const probe = await runCommandWithTimeout(
+      [ffmpeg, "-hide_banner", "-f", "v4l2", "-list_formats", "all", "-i", id],
       {
         timeoutMs: 5000,
         maxOutputBytes: { stdout: 4096, stderr: 64 * 1024 },
@@ -122,11 +189,9 @@ async function listLinuxVideoDevices(params: {
     if (!/\b(?:Raw|Compressed)\s*:/u.test(`${probe.stdout}\n${probe.stderr}`)) {
       continue;
     }
-    const name = await (
-      params.readDeviceName ??
-      (async (deviceEntry) =>
-        await fs.readFile(path.join("/sys/class/video4linux", deviceEntry, "name"), "utf8"))
-    )(entry)
+    // The sysfs label is cosmetic; a successful capture probe already identified the device.
+    const name = await fs
+      .readFile(path.join("/sys/class/video4linux", entry, "name"), "utf8")
       .then((value) => value.trim())
       .catch(() => entry);
     devices.push({ id, name, position: "unknown", deviceType: "v4l2" });
@@ -134,10 +199,7 @@ async function listLinuxVideoDevices(params: {
   return devices;
 }
 
-async function defaultWithTempFile<T>(
-  suffix: string,
-  run: (filePath: string) => Promise<T>,
-): Promise<T> {
+async function withTempFile<T>(suffix: string, run: (filePath: string) => Promise<T>): Promise<T> {
   return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-linux-node-" },
     async ({ dir }) => await run(path.join(dir, `capture${suffix}`)),
@@ -145,36 +207,24 @@ async function defaultWithTempFile<T>(
 }
 
 export function createLinuxNodeCommands(
-  deps: LinuxNodeCommandDeps,
+  config: ResolvedLinuxNodePluginConfig,
 ): OpenClawPluginNodeHostCommand[] {
-  const platform = deps.platform ?? process.platform;
-  const env = deps.env ?? process.env;
-  const findExecutable = deps.resolveExecutable ?? resolveExecutable;
-  const runCommand = deps.runCommand ?? runCommandWithTimeout;
-  const readFile = deps.readFile ?? fs.readFile;
-  const statFile = deps.statFile ?? fs.stat;
-  const withTempFile = deps.withTempFile ?? defaultWithTempFile;
-  const now = deps.now ?? (() => new Date());
+  const platform = process.platform;
+  const env = process.env;
+  const findWhereAmI = (searchEnv = env) =>
+    resolveExecutable("where-am-i", searchEnv, GEOCLUE_DEMO_PATHS);
 
-  const findTool = (name: "ffmpeg" | "notify-send", candidateEnv = env) =>
-    findExecutable(name, candidateEnv);
-  const listVideoDevices =
-    deps.listVideoDevices ??
-    (async () => {
-      const ffmpeg = findTool("ffmpeg");
-      return ffmpeg ? await listLinuxVideoDevices({ ffmpeg, runCommand }) : [];
-    });
   const readMedia = async (filePath: string) => {
-    if ((await statFile(filePath)).size > MAX_MEDIA_RAW_BYTES) {
+    if ((await fs.stat(filePath)).size > MAX_MEDIA_RAW_BYTES) {
       throw new Error("PAYLOAD_TOO_LARGE: camera payload exceeds the 25 MB base64 limit");
     }
-    return await readFile(filePath);
+    return await fs.readFile(filePath);
   };
   const assertLinuxCapability = (capability: keyof ResolvedLinuxNodePluginConfig, code: string) => {
     if (platform !== "linux") {
       throw new Error(`${code}: Linux node host required`);
     }
-    if (!deps.config[capability].enabled) {
+    if (!config[capability].enabled) {
       throw new Error(
         `${code}: enable plugins.entries.linux-node.config.${capability}.enabled and restart the node service`,
       );
@@ -185,7 +235,7 @@ export function createLinuxNodeCommands(
     (context: OpenClawPluginNodeHostCommandAvailabilityContext) =>
       platform === "linux" &&
       isCapabilityEnabledForHost(context, capability) &&
-      findTool(tool, context.env) !== null;
+      resolveExecutable(tool, context.env) !== null;
   const resolveTool = (
     capability: keyof ResolvedLinuxNodePluginConfig,
     tool: "ffmpeg" | "notify-send",
@@ -193,14 +243,14 @@ export function createLinuxNodeCommands(
     unavailableCode: string,
   ) => {
     assertLinuxCapability(capability, disabledCode);
-    const executable = findTool(tool);
+    const executable = resolveExecutable(tool, env);
     if (!executable) {
       throw new Error(`${unavailableCode}: ${tool} not found`);
     }
     return executable;
   };
-  const selectVideoDevice = async (deviceId: unknown) => {
-    const devices = await listVideoDevices();
+  const selectVideoDevice = async (deviceId: unknown, ffmpeg: string) => {
+    const devices = await listLinuxVideoDevices(ffmpeg);
     if (typeof deviceId === "string" && deviceId.trim()) {
       const match = devices.find((device) => device.id === deviceId.trim());
       if (!match) {
@@ -239,9 +289,12 @@ export function createLinuxNodeCommands(
             : params.priority === "timeSensitive"
               ? "critical"
               : "normal";
-        const result = await runCommand([notifySend, "--urgency", urgency, "--", title, body], {
-          timeoutMs: 10_000,
-        });
+        const result = await runCommandWithTimeout(
+          [notifySend, "--urgency", urgency, "--", title, body],
+          {
+            timeoutMs: 10_000,
+          },
+        );
         assertToolResult(result, "NOTIFICATIONS_UNAVAILABLE");
         return JSON.stringify({ ok: true });
       },
@@ -252,8 +305,8 @@ export function createLinuxNodeCommands(
       cap: "camera",
       isAvailable: isAvailable("camera", "ffmpeg"),
       handle: async () => {
-        resolveTool("camera", "ffmpeg", "CAMERA_DISABLED", "CAMERA_UNAVAILABLE");
-        return JSON.stringify({ devices: await listVideoDevices() });
+        const ffmpeg = resolveTool("camera", "ffmpeg", "CAMERA_DISABLED", "CAMERA_UNAVAILABLE");
+        return JSON.stringify({ devices: await listLinuxVideoDevices(ffmpeg) });
       },
     },
     {
@@ -269,7 +322,7 @@ export function createLinuxNodeCommands(
         if (format !== "jpg" && format !== "jpeg") {
           throw new Error(`INVALID_REQUEST: unsupported camera image format: ${format}`);
         }
-        const device = await selectVideoDevice(params.deviceId);
+        const device = await selectVideoDevice(params.deviceId, ffmpeg);
         const maxWidthRaw = readFiniteNumber(params.maxWidth);
         // Honor small downscale requests, but floor to 2 so the proportional `-2`
         // height in the scale filter never rounds to a non-positive dimension.
@@ -279,7 +332,7 @@ export function createLinuxNodeCommands(
         const delayMs = clamp(Math.floor(readFiniteNumber(params.delayMs) ?? 2000), 0, 10_000);
         const ffmpegQuality = Math.round(31 - quality * 29);
         return await withTempFile(".jpg", async (outputPath) => {
-          const result = await runCommand(
+          const result = await runCommandWithTimeout(
             [
               ffmpeg,
               "-hide_banner",
@@ -330,7 +383,7 @@ export function createLinuxNodeCommands(
         if (format !== "mp4") {
           throw new Error(`INVALID_REQUEST: unsupported camera clip format: ${format}`);
         }
-        const device = await selectVideoDevice(params.deviceId);
+        const device = await selectVideoDevice(params.deviceId, ffmpeg);
         const durationMs = clamp(
           Math.floor(readFiniteNumber(params.durationMs) ?? 3000),
           250,
@@ -345,7 +398,7 @@ export function createLinuxNodeCommands(
           const audioArgs = includeAudio
             ? ["-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac", "-b:a", "128k", "-shortest"]
             : ["-an"];
-          const result = await runCommand(
+          const result = await runCommandWithTimeout(
             [
               ffmpeg,
               "-hide_banner",
@@ -379,13 +432,77 @@ export function createLinuxNodeCommands(
         });
       },
     },
-    createLinuxLocationCommand({
-      config: deps.config,
-      platform,
-      env,
-      resolveExecutable: findExecutable,
-      runCommand,
-      now,
-    }),
+    {
+      command: "location.get",
+      hasActiveWork: () => false,
+      cap: "location",
+      isAvailable: (context) =>
+        platform === "linux" &&
+        isCapabilityEnabledForHost(context, "location") &&
+        findWhereAmI(context.env) !== null,
+      handle: async (paramsJSON) => {
+        assertLinuxCapability("location", "LOCATION_DISABLED");
+        const whereAmI = findWhereAmI();
+        if (!whereAmI) {
+          throw new Error("LOCATION_UNAVAILABLE: where-am-i not found");
+        }
+        const params = parseParams(paramsJSON);
+        const timeoutMs = clamp(
+          Math.floor(readFiniteNumber(params.timeoutMs) ?? 10_000),
+          1000,
+          60_000,
+        );
+        const maxAgeMsRaw = readFiniteNumber(params.maxAgeMs);
+        const maxAgeMs = maxAgeMsRaw !== undefined && maxAgeMsRaw >= 0 ? maxAgeMsRaw : undefined;
+        const desiredAccuracy =
+          params.desiredAccuracy === "coarse" ? 4 : params.desiredAccuracy === "precise" ? 8 : 6;
+        let streamedOutput = "";
+        let observedTimestamps = 0;
+        const result = await runCommandWithTimeout(
+          // where-am-i `-t` is "exit after T seconds" (a process timeout), not the
+          // `-i` time-threshold (update throttle, default 0), so no fix is withheld.
+          [whereAmI, "-t", String(Math.ceil(timeoutMs / 1000)), "-a", String(desiredAccuracy)],
+          {
+            timeoutMs: timeoutMs + 3000,
+            maxOutputBytes: { stdout: 64 * 1024, stderr: 16 * 1024 },
+            outputCapture: "tail",
+            env: { LC_ALL: "C", LANG: "C" },
+            onOutputChunk: (chunk, stream) => {
+              if (stream !== "stdout") {
+                return true;
+              }
+              streamedOutput = `${streamedOutput}${chunk.toString("utf8")}`.slice(-64 * 1024);
+              if (isLocationDisabledOutput(streamedOutput)) {
+                return false;
+              }
+              const timestampCount = [
+                ...streamedOutput.matchAll(/Timestamp:\s*.*seconds since the Epoch\)/gu),
+              ].length;
+              if (timestampCount === observedTimestamps) {
+                return true;
+              }
+              observedTimestamps = timestampCount;
+              return parseLocationOutput(streamedOutput, maxAgeMs) === null;
+            },
+          },
+        );
+        const toolOutput = `${result.stdout}\n${result.stderr}\n${streamedOutput}`;
+        if (isLocationDisabledOutput(toolOutput)) {
+          throw new Error("LOCATION_DISABLED: GeoClue location services are disabled");
+        }
+        const location = parseLocationOutput(`${result.stdout}\n${streamedOutput}`, maxAgeMs);
+        if (!location) {
+          if (result.termination === "timeout" || result.code === 0) {
+            throw new Error("LOCATION_TIMEOUT: no fix in time");
+          }
+          throw new Error(`LOCATION_UNAVAILABLE: ${formatToolError(result)}`);
+        }
+        return JSON.stringify({
+          ...location,
+          isPrecise: location.accuracyMeters <= 100,
+          source: "unknown",
+        });
+      },
+    },
   ];
 }

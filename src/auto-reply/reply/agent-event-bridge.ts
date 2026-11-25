@@ -1,12 +1,10 @@
-// Generic agent-event bridge machinery shared by the CLI runner's per-stream
-// delivery bridges (assistant, reasoning, commentary, plan).
 import { type AgentEventPayload, onAgentEventForRun } from "../../infra/agent-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 
 export type AgentEventDeliveryStartOrder = {
   preserveCallbackStartOrder?: boolean;
   schedule: (
-    deliver: () => Promise<unknown>,
+    deliver: () => unknown,
     options?: { waitForEarlierDeliveries?: boolean },
   ) => Promise<void>;
 };
@@ -30,7 +28,7 @@ export function createAgentEventDeliveryStartOrder(options?: {
         if (deliveryOptions?.waitForEarlierDeliveries) {
           await previousSettlement;
         }
-        let delivery: Promise<unknown>;
+        let delivery: unknown;
         try {
           delivery = deliver();
         } finally {
@@ -50,7 +48,7 @@ export type AgentEventBridgeParams<T> = {
   runId: string;
   suppressed?: boolean;
   read: (evt: AgentEventPayload) => T | undefined;
-  deliver?: (payload: T) => Promise<unknown>;
+  deliver?: (payload: T) => unknown;
   startOrder?: AgentEventDeliveryStartOrder;
   waitForEarlierDeliveries?: (payload: T) => boolean;
 };
@@ -63,12 +61,8 @@ export function createAgentEventBridge<T>(params: AgentEventBridgeParams<T>) {
       drain: async (): Promise<void> => undefined,
     };
   }
-  let unsubscribed = false;
   let delivery: Promise<unknown> = Promise.resolve();
-  const rawUnsubscribe = onAgentEventForRun(params.runId, (evt) => {
-    if (evt.runId !== params.runId) {
-      return;
-    }
+  const unsubscribe = onAgentEventForRun(params.runId, (evt) => {
     if (params.suppressed) {
       return;
     }
@@ -94,13 +88,7 @@ export function createAgentEventBridge<T>(params: AgentEventBridgeParams<T>) {
     delivery = Promise.all([delivery, scheduled]).then(() => undefined);
   });
   return {
-    unsubscribe() {
-      if (unsubscribed) {
-        return;
-      }
-      unsubscribed = true;
-      rawUnsubscribe();
-    },
+    unsubscribe,
     async drain(): Promise<void> {
       await delivery;
     },

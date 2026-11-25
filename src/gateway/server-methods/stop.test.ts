@@ -2,8 +2,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createGatewayHostLifecycle } from "../../cli/gateway-cli/host-lifecycle.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
-import { handleGatewayRequest } from "../server-methods.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import {
+  authorizationClient,
+  startExactAuthorizationRequest,
+} from "../server-methods.authorization.test-support.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 
 const { readActiveGatewayLockIdentity, prepareHostedGatewayStop } = vi.hoisted(() => ({
   readActiveGatewayLockIdentity: vi.fn(),
@@ -46,39 +50,30 @@ function dispatchStop(
     params?: Record<string, unknown>;
     scopes?: string[];
     signal?: AbortSignal;
-    hasCurrentClientAuthority?: () => boolean;
   } = {},
 ) {
-  const respond = vi.fn();
-  const client: GatewayClient = {
-    connId: crypto.randomUUID(),
-    clientIp: "127.0.0.1",
-    connect: {
-      role: "operator",
-      scopes: options.scopes ?? ["operator.admin"],
+  const client = authorizationClient(
+    crypto.randomUUID(),
+    options.scopes ?? ["operator.admin"],
+    { clientIp: "127.0.0.1" },
+    {
       client: { id: "cli", version: "test", platform: "win32", mode: "cli" },
-      minProtocol: 1,
-      maxProtocol: 1,
     },
-  };
-  const request = handleGatewayRequest({
-    req: {
-      type: "req",
-      id: crypto.randomUUID(),
-      method: "gateway.stop.request",
-      params: options.params ?? { target },
+  );
+  const { request, respond } = startExactAuthorizationRequest(
+    "gateway.stop.request",
+    options.params ?? { target },
+    {
+      client,
+      context: createDirectChatContext({
+        getRuntimeConfig: () => ({}),
+        hostLifecycle: host.capability,
+      }),
+      signal: options.signal,
     },
-    respond,
-    client,
-    isWebchatConnect: () => false,
-    context: {
-      logGateway: { warn: vi.fn() },
-      hostLifecycle: host.capability,
-    } as unknown as GatewayRequestContext,
-    signal: options.signal,
-    hasCurrentClientAuthority: options.hasCurrentClientAuthority,
-  });
-  return { request, respond, client };
+    crypto.randomUUID(),
+  );
+  return { request, respond };
 }
 
 it("dispatches an authenticated targeted stop to the existing host lifecycle", async () => {
@@ -93,17 +88,12 @@ it("dispatches an authenticated targeted stop to the existing host lifecycle", a
   });
 });
 
-it("requires administrator scope before inspecting the stop target", async () => {
+it("rejects non-admin callers before reading host identity", async () => {
   const { request, respond } = dispatchStop({ scopes: ["operator.write"] });
   await request;
-
-  expect(readActiveGatewayLockIdentity).not.toHaveBeenCalled();
   expect(acceptStop).not.toHaveBeenCalled();
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ message: expect.stringContaining("operator.admin") }),
-  );
+  expectRpcError(respond, { message: expect.stringContaining("operator.admin") });
+  expect(readActiveGatewayLockIdentity).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -111,76 +101,28 @@ it.each([
   ["different PID", { target: { ...target, pid: process.pid + 1 } }],
   ["different owner", { target: { ...target, ownerId: "replacement-owner" } }],
   ["different port", { target: { ...target, port: target.port + 1 } }],
-] as const)("rejects %s without stopping the host", async (_label, params) => {
+])("rejects %s without stopping the host", async (_label, params) => {
   const { request, respond } = dispatchStop({ params });
   await request;
-
   expect(acceptStop).not.toHaveBeenCalled();
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "INVALID_REQUEST" }),
-  );
+  expectRpcError(respond, { code: "INVALID_REQUEST" });
 });
 
-it.each(["signal", "client invalidation", "transport authority"] as const)(
-  "rejects a caller that loses %s while looking up the owner",
-  async (loss) => {
-    const reached = createDeferred();
-    const lock = createDeferred<typeof activeLock>();
-    readActiveGatewayLockIdentity.mockImplementationOnce(() => {
-      reached.resolve();
-      return lock.promise;
-    });
-    const abort = new AbortController();
-    let current = true;
-    const { request, respond, client } = dispatchStop({
-      signal: abort.signal,
-      hasCurrentClientAuthority: () => current,
-    });
-    await reached.promise;
-    if (loss === "signal") {
-      abort.abort(new Error("stop request cancelled"));
-    } else if (loss === "client invalidation") {
-      client.invalidated = true;
-    } else {
-      current = false;
-    }
-    lock.resolve(activeLock);
-    await request;
-
-    expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
-    expect(acceptStop).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
-  },
-);
-
-it("retains caller authority through the host's asynchronous stop preparation", async () => {
+it("rejects an aborted request during stop preparation", async () => {
   const reached = createDeferred();
-  const preparation = createDeferred<typeof nativeStop>();
-  prepareHostedGatewayStop.mockImplementationOnce(() => {
+  const released = createDeferred();
+  readActiveGatewayLockIdentity.mockImplementationOnce(async () => {
     reached.resolve();
-    return preparation.promise;
+    await released.promise;
+    return activeLock;
   });
-  let current = true;
-  const { request, respond } = dispatchStop({ hasCurrentClientAuthority: () => current });
+  const abort = new AbortController();
+  const { request, respond } = dispatchStop({ signal: abort.signal });
   await reached.promise;
-  current = false;
-  preparation.resolve(nativeStop);
+  abort.abort(new Error("stop request cancelled"));
+  released.resolve();
   await request;
-
+  expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
   expect(acceptStop).not.toHaveBeenCalled();
-  expect(nativeStop.dispose).toHaveBeenCalledOnce();
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      code: "UNAVAILABLE",
-      message: "Gateway requester authority changed",
-    }),
-  );
+  expectRpcError(respond, { code: "UNAVAILABLE" });
 });

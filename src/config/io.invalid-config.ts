@@ -3,6 +3,7 @@
  * All terminal-facing text is sanitized here so callers can reuse the same failure surface.
  */
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { DedupeCache } from "../infra/dedupe.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import type { ConfigFileSnapshot, ConfigValidationIssue } from "./types.js";
@@ -61,10 +62,17 @@ export function isDoctorRecoverableInvalidConfigError(err: unknown): boolean {
 }
 
 /** An unavailable read cannot establish invalid authored settings or authorize Doctor repair. */
-export function createConfigReadError(configPath: string, details: string): Error {
-  return Object.assign(new Error(`Config could not be read at ${configPath}:\n${details}`), {
-    code: "CONFIG_READ_FAILED",
-  });
+export function createConfigReadError(
+  snapshot: Pick<ConfigFileSnapshot, "path" | "issues">,
+  details = formatInvalidConfigDetails(snapshot.issues),
+): Error {
+  const issue: (ConfigValidationIssue & ErrorOptions) | undefined = snapshot.issues.find(
+    (candidate) => candidate.errorCode === "CONFIG_READ_FAILED",
+  );
+  return Object.assign(
+    new Error(`Config could not be read at ${snapshot.path}:\n${details}`, { cause: issue?.cause }),
+    { code: "CONFIG_READ_FAILED" },
+  );
 }
 
 /** Logs and throws the standard invalid-config error for a validation result. */
@@ -79,7 +87,7 @@ export function throwInvalidConfig(params: {
   // Dedupe the full diagnostic: a later invalid config at the same path may need a different repair.
   // Record only after logging succeeds so a failed logger cannot silence a subsequent attempt.
   if (!params.loggedConfigPaths.peek(error.message)) {
-    params.logger.error(error.message);
+    params.logger.error(terminalText`Invalid config at ${params.configPath}:\n` + details);
   }
   params.loggedConfigPaths.check(error.message);
   error.diagnosticEmitted = true;

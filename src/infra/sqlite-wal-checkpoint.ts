@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerListener } from "../shared/listeners.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { normalizeSqliteNumber, readFiniteSqliteNumber } from "./sqlite-number.js";
@@ -28,13 +29,18 @@ export type SqliteWalHealth = {
   checkpointedFrames: number | null;
   lastCompletedAtMs: number | null;
   consecutiveBlocked: number;
+  bytePressure: boolean;
   warning: boolean;
   error?: string;
   activeReaders?: SqliteReaderDiagnostic[];
   readerDiagnostics?: Array<Omit<SqliteReaderDiagnostics, "activeReaders">>;
 };
 
-export type SqliteWalCheckpointSnapshot = { health: SqliteWalHealth; observedAtNs: bigint };
+export type SqliteWalCheckpointSnapshot = {
+  health: SqliteWalHealth;
+  observedAtNs: bigint;
+  lastCompletedAtNs?: bigint;
+};
 export type SqliteWalCheckpointObservation = SqliteWalCheckpointSnapshot & { databasePath: string };
 const checkpointListeners = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWalCheckpointListeners"),
@@ -45,10 +51,7 @@ const checkpointListeners = resolveGlobalSingleton(
 export function onSqliteWalCheckpoint(
   listener: (observation: SqliteWalCheckpointObservation) => void,
 ): () => void {
-  checkpointListeners.add(listener);
-  return () => {
-    checkpointListeners.delete(listener);
-  };
+  return registerListener(checkpointListeners, listener);
 }
 
 /** A relayed worker result adds host observations without claiming visibility into other threads. */
@@ -87,6 +90,7 @@ function notifyCheckpoint(databasePath: string, snapshot: SqliteWalCheckpointSna
         databasePath: sqliteReaderDatabasePathKey(databasePath),
         health: structuredClone(snapshot.health),
         observedAtNs: snapshot.observedAtNs,
+        lastCompletedAtNs: snapshot.lastCompletedAtNs,
       });
     } catch {
       // Diagnostic consumers cannot change the native checkpoint's outcome.
@@ -102,6 +106,7 @@ export function publishSqliteWalCheckpointObservation(
   const observed = {
     health: observeSqliteWalCheckpointHealth(databasePath, snapshot.health),
     observedAtNs: snapshot.observedAtNs,
+    lastCompletedAtNs: snapshot.lastCompletedAtNs,
   };
   notifyCheckpoint(databasePath, observed);
   return observed;
@@ -133,6 +138,8 @@ function checkpoint(database: DatabaseSync, mode: SqliteWalCheckpointMode) {
 }
 
 /** Offline maintenance must stop before compaction or recovery if truncation remains busy. */
+export class SqliteWalCheckpointBusyError extends Error {}
+
 export function truncateSqliteWal(database: DatabaseSync, sqlitePath: string): void {
   const row = checkpoint(database, "TRUNCATE");
   const busy = readFiniteSqliteNumber(row?.busy ?? (row ? Object.values(row)[0] : undefined));
@@ -140,7 +147,9 @@ export function truncateSqliteWal(database: DatabaseSync, sqlitePath: string): v
     throw new Error(`SQLite checkpoint returned an invalid result for ${sqlitePath}.`);
   }
   if (busy !== 0) {
-    throw new Error(`SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenClaw and retry.`);
+    throw new SqliteWalCheckpointBusyError(
+      `SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenClaw and retry.`,
+    );
   }
 }
 
@@ -161,6 +170,7 @@ export function createSqliteWalCheckpoint(
     checkpointedFrames: null,
     lastCompletedAtMs: snapshot?.health.lastCompletedAtMs ?? null,
     consecutiveBlocked: 0,
+    bytePressure: false,
     warning: true,
   });
 
@@ -170,11 +180,13 @@ export function createSqliteWalCheckpoint(
       observedAtMs: Date.now(),
       state: "error",
       consecutiveBlocked: 0,
+      bytePressure: false,
       warning: true,
       error: formatErrorMessage(error),
     };
     snapshot = {
       observedAtNs: process.hrtime.bigint(),
+      lastCompletedAtNs: snapshot?.lastCompletedAtNs,
       health: options.databasePath
         ? observeSqliteWalCheckpointHealth(options.databasePath, failed)
         : failed,
@@ -188,6 +200,7 @@ export function createSqliteWalCheckpoint(
   const recordCheckpoint = (
     mode: SqliteWalCheckpointMode,
     row: Record<string, SQLOutputValue> | undefined,
+    quiet: boolean,
   ): boolean => {
     // Worker relays keep this same-process ordering fact even if the wall clock steps backward.
     const observedAtNs = process.hrtime.bigint();
@@ -216,15 +229,18 @@ export function createSqliteWalCheckpoint(
           observation.error = formatErrorMessage(error);
         }
       }
-      // Allow the existing retained-WAL ceiling or two database images before warning early.
-      observation.warning =
+      observation.bytePressure =
         observation.state === "blocked" &&
-        (observation.consecutiveBlocked >= 2 ||
-          (observation.walBytes !== null &&
-            observation.databaseBytes !== null &&
-            observation.walBytes > Math.max(2 * observation.databaseBytes, journalSizeLimitBytes)));
+        observation.walBytes !== null &&
+        observation.databaseBytes !== null &&
+        observation.walBytes > Math.max(2 * observation.databaseBytes, journalSizeLimitBytes);
+      observation.warning =
+        observation.bytePressure ||
+        (observation.state === "blocked" && observation.consecutiveBlocked >= 2);
       snapshot = {
         observedAtNs,
+        lastCompletedAtNs:
+          observation.state === "complete" ? observedAtNs : snapshot?.lastCompletedAtNs,
         health: options.databasePath
           ? observeSqliteWalCheckpointHealth(options.databasePath, observation)
           : observation,
@@ -239,7 +255,10 @@ export function createSqliteWalCheckpoint(
     if (observation.error !== undefined) {
       options.onCheckpointError?.(sizeError);
     }
-    if (busy || observation.warning) {
+    // Frequent checkpoint ticks expect readers to block some passes; only an
+    // observation that reaches the warning policy reports them, while the
+    // health snapshot still records every blocked pass.
+    if (observation.warning && !quiet) {
       const label = options.databaseLabel ?? "sqlite database";
       options.onCheckpointError?.(
         new Error(
@@ -252,18 +271,34 @@ export function createSqliteWalCheckpoint(
 
   return {
     adopt(this: void, received: SqliteWalCheckpointSnapshot): void {
-      if (snapshot && snapshot.observedAtNs >= received.observedAtNs) {
+      if (
+        snapshot &&
+        snapshot.observedAtNs >= received.observedAtNs &&
+        (snapshot.lastCompletedAtNs ?? 0n) >= (received.lastCompletedAtNs ?? 0n)
+      ) {
         return;
       }
-      snapshot = structuredClone(received);
+      const completed =
+        (snapshot?.lastCompletedAtNs ?? 0n) > (received.lastCompletedAtNs ?? 0n)
+          ? snapshot
+          : received;
+      if (!snapshot || received.observedAtNs > snapshot.observedAtNs) {
+        snapshot = structuredClone(received);
+      }
+      snapshot.lastCompletedAtNs = completed?.lastCompletedAtNs;
+      snapshot.health.lastCompletedAtMs = completed?.health.lastCompletedAtMs ?? null;
       if (options.databasePath) {
         snapshot.health = observeSqliteWalCheckpointHealth(options.databasePath, snapshot.health);
         notifyCheckpoint(options.databasePath, snapshot);
       }
     },
-    checkpoint(this: void, mode: SqliteWalCheckpointMode): boolean {
+    checkpoint(
+      this: void,
+      mode: SqliteWalCheckpointMode,
+      checkpointOptions: { quiet?: boolean } = {},
+    ): boolean {
       try {
-        return recordCheckpoint(mode, checkpoint(database, mode));
+        return recordCheckpoint(mode, checkpoint(database, mode), checkpointOptions.quiet === true);
       } catch (error) {
         recordCheckpointError(error);
         return false;
@@ -282,6 +317,9 @@ export function createSqliteWalCheckpoint(
     },
     get health() {
       return snapshot ? structuredClone(snapshot.health) : undefined;
+    },
+    get observedAtNs() {
+      return snapshot?.observedAtNs;
     },
     get snapshot() {
       return snapshot ? structuredClone(snapshot) : undefined;

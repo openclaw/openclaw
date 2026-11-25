@@ -21,10 +21,16 @@ scenario:
       search:
         rememberAcrossConversations: true
     agents:
+      ownership: explicit
       entries:
         peer:
           identity:
             name: QA Peer
+    bindings:
+      - agentId: qa
+        match:
+          channel: qa-channel
+          accountId: default
     plugins:
       entries:
         active-memory:

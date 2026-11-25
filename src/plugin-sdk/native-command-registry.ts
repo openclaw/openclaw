@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for chat/native command definitions and argument helpers.
- */
 export {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -12,8 +9,10 @@ export {
   parseCommandArgs,
   resolveCommandArgChoices,
   resolveCommandArgMenu,
+  resolveCommandArgMenuAsync,
   serializeCommandArgs,
 } from "../auto-reply/commands-registry.js";
+export { loadCommandArgMenuModelCatalog } from "../auto-reply/command-arg-menu-catalog.js";
 export type {
   ChatCommandDefinition,
   CommandArgDefinition,

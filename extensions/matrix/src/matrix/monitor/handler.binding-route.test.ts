@@ -1,4 +1,6 @@
+import { ensureConfiguredAcpBindingReady } from "openclaw/plugin-sdk/acp-binding-runtime";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { withPluginRuntimeRegistryScope } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -25,11 +27,12 @@ import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, expect, it, vi } from "vitest";
 import { matrixPlugin } from "../../channel.js";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
-import { createMatrixMonitorEventsTestHarness } from "./events.test-helpers.js";
+import { MatrixClient, type MatrixRawEvent } from "../sdk.js";
 import {
   createMatrixHandlerTestHarness,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
+import { createMatrixIngressMonitor } from "./ingress.js";
 
 // Provisioning is a separate ACP contract. The real shared dispatch guard and
 // registered terminal hook below exercise the configured route's observation.
@@ -48,19 +51,20 @@ afterEach(async () => {
 });
 
 it.each([
-  "none-to-global",
   "plugin-to-global",
   "configured-stable",
   "configured-to-global",
+  "configured-retry",
 ] as const)(
-  "preserves Matrix's prepared owner through a registered message: %s",
+  "preserves Matrix's prepared owner through the inbound handler: %s",
   async (scenario) => {
     const state = await createOpenClawTestState({ label: "matrix-route-carry" });
     cleanup = () => state.cleanup();
     const roomId = "!route:example.org";
     const senderId = "@sender:example.org";
     const configured = scenario.startsWith("configured");
-    const transition = scenario !== "configured-stable";
+    const transition = scenario === "plugin-to-global" || scenario === "configured-to-global";
+    vi.mocked(ensureConfiguredAcpBindingReady).mockReset().mockResolvedValue({ ok: true });
     const bindings: OpenClawConfig["bindings"] = configured
       ? [
           {
@@ -75,6 +79,7 @@ it.each([
         ]
       : undefined;
     const cfg: OpenClawConfig = {
+      session: { store: state.path("sessions.json") },
       agents: {
         ownership: "explicit",
         entries: {
@@ -160,14 +165,11 @@ it.each([
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     let pause = true;
-    const commit = vi.fn(async () => true);
-    const releaseClaim = vi.fn();
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const { handler } = createMatrixHandlerTestHarness({
       cfg,
       runtime,
       isDirectMessage: false,
-      resolveStorePath: () => state.path("sessions.json"),
       resolveAgentRoute: () => ({
         agentId: "main",
         channel: "matrix",
@@ -176,12 +178,6 @@ it.each([
         mainSessionKey: "agent:main:main",
         matchedBy: "binding.account",
       }),
-      inboundDeduper: {
-        claim: async () => ({
-          kind: "claimed",
-          handle: { keys: [scenario], commit, release: releaseClaim },
-        }),
-      },
       getMemberDisplayName: async (_room, userId) => {
         if (pause && userId === senderId) {
           pause = false;
@@ -213,35 +209,67 @@ it.each([
         }
       },
     });
-    const monitor = createMatrixMonitorEventsTestHarness({
-      cfg,
-      accountId: "ops",
-      onRoomMessage: handler,
-    });
-    const cleanupRegistry = cleanup;
-    cleanup = async () => {
-      release.resolve();
-      try {
-        await monitor.flushTasks();
-      } finally {
-        try {
-          await monitor.dispose();
-        } finally {
-          await cleanupRegistry();
-        }
-      }
-    };
     const event = createMatrixTextMessageEvent({
       eventId: `$matrix-route-${scenario}`,
       sender: senderId,
       body: "@room continue",
       mentions: { room: true },
     });
-    const emit = () => {
-      monitor.roomMessageListener(roomId, event);
-      return monitor.flushTasks();
-    };
-    const first = emit();
+    if (scenario === "configured-retry") {
+      pause = false;
+      vi.mocked(ensureConfiguredAcpBindingReady).mockResolvedValueOnce({
+        ok: false,
+        error: "Synthetic backend initialization failure",
+      });
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const queue = createChannelIngressQueueForTests<{
+        version: 1;
+        roomId: string;
+        event: MatrixRawEvent;
+      }>({ channelId: "matrix", accountId: "ops", stateDir: state.stateDir });
+      const payload = { version: 1 as const, roomId, event };
+      const eventId = "$matrix-route-configured-retry";
+      const createIngress = () =>
+        createMatrixIngressMonitor({
+          accountId: "ops",
+          client: new MatrixClient("https://example.org", "synthetic-token"),
+          startupMs: 0,
+          queue,
+          dispatch: handler,
+        });
+      const firstIngress = createIngress();
+      let retryIngress: ReturnType<typeof createIngress> | undefined;
+      try {
+        await queue.enqueue(eventId, payload, { laneKey: `room:${roomId}` });
+        firstIngress.start();
+        await firstIngress.waitForIdle();
+        expect(terminal).not.toHaveBeenCalled();
+        expect(await queue.listPending()).toMatchObject([{ id: eventId, attempts: 1 }]);
+        await firstIngress.stop();
+
+        clock.mockReturnValue(now + 2_000);
+        retryIngress = createIngress();
+        retryIngress.start();
+        await retryIngress.waitForIdle();
+        expect(terminal).toHaveBeenCalledExactlyOnceWith(
+          "configured",
+          expect.stringContaining("agent:configured:acp:binding:matrix:ops:"),
+        );
+        expect(await queue.listPending()).toEqual([]);
+        expect(await queue.listClaims()).toEqual([]);
+        expect(await queue.enqueue(eventId, payload)).toMatchObject({ kind: "completed" });
+      } finally {
+        await firstIngress.stop();
+        await retryIngress?.stop();
+      }
+      return;
+    }
+    const receive = () => handler(roomId, event);
+    const first = receive();
+    const firstOutcome = transition
+      ? expect(first).rejects.toThrow("Conversation binding changed while preparing the reply")
+      : first;
     await Promise.race([
       entered.promise,
       first.then(() => {
@@ -255,25 +283,21 @@ it.each([
       current = replacement;
     }
     release.resolve();
-    await first;
+    await firstOutcome;
 
     if (transition) {
       expect(terminal).not.toHaveBeenCalled();
-      expect(commit).not.toHaveBeenCalled();
-      expect(releaseClaim).toHaveBeenCalledOnce();
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("Conversation binding changed while preparing the reply"),
       );
-      await emit();
+      await receive();
       expect(terminal).toHaveBeenCalledExactlyOnceWith("work", "global");
     } else {
       expect(runtime.error).not.toHaveBeenCalled();
-      expect(releaseClaim).not.toHaveBeenCalled();
       expect(terminal).toHaveBeenCalledExactlyOnceWith(
         "configured",
         expect.stringContaining("agent:configured:acp:binding:matrix:ops:"),
       );
     }
-    expect(commit).toHaveBeenCalledOnce();
   },
 );

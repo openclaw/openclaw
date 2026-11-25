@@ -1,46 +1,145 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { pathForPluginSettings } from "../../app-route-paths.ts";
+import { isArchiveHeld, undoHeldArchive } from "../../components/session-archive-hold.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
+import { resolveChatModelSelectValues } from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
-import { resolveSessionCreateParams } from "../../lib/sessions/create.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
+import { resolveSessionCreateParams } from "../../lib/sessions/session-create-params.ts";
 import {
-  areUiSessionKeysEquivalent,
   isSubagentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
+import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
-import { clearChatHistory } from "./chat-history-actions.ts";
 import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
+import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
+import { createChatPaneRunRecoveryActions } from "./chat-pane-state.ts";
 import {
-  NEW_SESSION_ACTIVE_RUN_MESSAGE,
-  NEW_SESSION_CREATE_FAILED_MESSAGE,
-  NEW_SESSION_LIST_LOADING_MESSAGE,
-  preparePaneSessionHandoff,
-} from "./chat-pane-shared.ts";
-import { canCreateChatSession } from "./chat-state-route.ts";
-import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
+  canCreateChatSession,
+  resolveChatAgentId,
+  selectedChatSessionRow,
+} from "./chat-state-route.ts";
+
+registerSessionNavigationEnglish();
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
+registerSessionOrganizationSharedEnglish();
+
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
-  protected recoveringSession = false;
-  protected creatingIncognitoSession = false;
+  readonly sessionCreation = { creatingIncognito: false, creatingHarnessUpdate: false };
+
+  private activeCatalogContinuation: symbol | null = null;
+
+  protected async continueCatalogSession(key: CatalogSessionKey) {
+    const scope = this.captureConnectionScope();
+    // Attachments count as composed content: an image-only continuation must
+    // send, not silently no-op while the send button looks live.
+    if (!scope || !this.history.catalogSession?.canContinue) {
+      return;
+    }
+    const { state, client } = scope;
+    const draft = state.chatMessage.trim();
+    const attachments = cloneChatAttachmentsForIndependentOwner(state.chatAttachments);
+    if (!draft && attachments.length === 0) {
+      return;
+    }
+    const sourceSessionKey = state.sessionKey;
+    const sourceAgentId = resolveChatAgentId(state);
+    const sourceCatalogGeneration = this.catalogLoadGeneration;
+    const sourceHomeId = this.history.catalogSession.sourceHomeId;
+    const continuation = Symbol("catalog-continuation");
+    this.activeCatalogContinuation = continuation;
+    const isCurrent = () =>
+      this.activeCatalogContinuation === continuation &&
+      this.isConnectionScopeCurrent(scope) &&
+      this.catalogLoadGeneration === sourceCatalogGeneration &&
+      state.sessionKey === sourceSessionKey &&
+      resolveChatAgentId(state) === sourceAgentId;
+    state.chatSending = true;
+    try {
+      const { continueCapturedCatalogSession } =
+        await import("./chat-pane-catalog-continuation.runtime.ts");
+      await continueCapturedCatalogSession({
+        state,
+        client,
+        context: this.context,
+        paneId: this.paneId,
+        key: { ...key, ...(sourceHomeId ? { sourceHomeId } : {}) },
+        agentId: sourceAgentId,
+        attachments,
+        draft,
+        isCurrent,
+        onSessionChange: (next) => this.onPaneSessionChange?.(this.paneId, next),
+      });
+    } catch (error) {
+      if (isCurrent()) {
+        state.lastError = formatUiError(error);
+      }
+    } finally {
+      // Loading and handoff can yield to a newer continuation or scoped send.
+      // Only the captured token may release its own unscoped sending flag.
+      if (this.activeCatalogContinuation === continuation) {
+        this.activeCatalogContinuation = null;
+        if (state.chatSendingScopeKey == null && state.chatSending) {
+          state.chatSending = false;
+        }
+      }
+    }
+  }
+
+  protected catalogComposerReason(catalogKey: CatalogSessionKey | null) {
+    const { catalogHost, catalogLoading, catalogSession } = this.history;
+    // Avoid flashing view-only while metadata loads; failed lookups still explain the gate.
+    if (!catalogKey || catalogLoading || catalogSession?.canContinue === true) {
+      return null;
+    }
+    if (catalogHost?.kind === "node") {
+      return { text: t("chat.catalog.remoteViewOnly") };
+    }
+    if (catalogSession?.continuationUnavailableReasonCode === "source-handoff-required") {
+      return { text: t("chat.catalog.sourceHandoffRequired") };
+    }
+    if (catalogSession?.continuationUnavailableReason) {
+      return { text: catalogSession.continuationUnavailableReason };
+    }
+    // Archivable local Codex rows withhold continuation only when supervision is off.
+    if (catalogKey.catalogId !== "codex" || catalogSession?.canArchive !== true) {
+      return { text: t("chat.catalog.unsupportedViewOnly") };
+    }
+    const location = pluginDetailLocation(
+      { pathname: pathForPluginSettings("codex", this.context.basePath), search: "" },
+      true,
+    );
+    return {
+      text: t("chat.codexSupervisionDisabled"),
+      action: {
+        label: t("chat.openCodexSettings"),
+        href: `${location.pathname}${location.search}`,
+        onNavigate: () => this.context.navigate("plugin-settings", location),
+      },
+    };
+  }
 
   protected sessionDisabledBanner(params: {
     catalogDisabledReason: string | null | undefined;
     modelSetupRequired: boolean;
-    restartRecoveryTombstoned: boolean;
     selectedSessionArchived: boolean;
     selectedSessionId: string | undefined;
     selectedSession: GatewaySessionRow | undefined;
     sessionKey: string;
     unarchiveAccess: SessionMethodAccess;
+    cached?: boolean;
   }) {
     if (
       params.selectedSession?.classification === "subagent" ||
@@ -53,6 +152,8 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       );
       return {
         kind: "composer-replacement" as const,
+        presentation: this.onBackToSubagents ? ("hidden" as const) : ("compact" as const),
+        icon: "eye" as const,
         title: t("chat.subagentViewOnly"),
         text: t("chat.subagentSessionDisabled", {
           parent: parent?.title ?? t("chat.parentSession"),
@@ -82,15 +183,25 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         text: t("chat.incognitoExpiredBody"),
         tone: "neutral" as const,
         actionLabel: t("chat.newIncognitoSession"),
-        busy: this.creatingIncognitoSession,
+        busy: this.sessionCreation.creatingIncognito,
         disabledReason: access.allowed ? undefined : access.reason,
         onAction: () => {
           void this.createSession();
         },
       };
     }
-    if (params.restartRecoveryTombstoned) {
-      return this.restartRecoveryComposerBanner();
+    if (this.state && this.isCurrentSessionArchivePending(this.state)) {
+      // Inside the Undo window nothing was sent, so Unarchive cancels the held archive
+      // like the notice's Undo. Once the archive is sending, it waits for the outcome.
+      const sessionKey = params.selectedSession?.key ?? params.sessionKey;
+      return {
+        kind: "composer-replacement" as const,
+        text: t("chat.archivedSessionDisabled"),
+        icon: "archive" as const,
+        actionLabel: t("common.unarchive"),
+        busy: !isArchiveHeld(sessionKey),
+        onAction: () => undoHeldArchive(sessionKey),
+      };
     }
     if (params.selectedSessionArchived) {
       return {
@@ -98,8 +209,9 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         text: t("chat.archivedSessionDisabled"),
         icon: "archive" as const,
         actionLabel: t("common.unarchive"),
+        actionPending: params.cached,
         disabledReason: !params.selectedSessionId
-          ? "Session lifecycle action requires a durable session identity."
+          ? t("sessionsView.lifecycleIdentityRequired")
           : params.unarchiveAccess.allowed
             ? undefined
             : params.unarchiveAccess.reason,
@@ -117,103 +229,26 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       : undefined;
   }
 
-  protected restartRecoveryComposerBanner() {
-    const state = this.state;
-    if (!state) {
-      return undefined;
-    }
-    const agentId =
-      scopedAgentParamsForSession(state, state.sessionKey).agentId ??
-      resolveAgentIdFromSessionKey(state.sessionKey);
-    const params = {
-      ...(agentId ? { agentId } : {}),
-      key: state.sessionKey,
-    };
-    const access = readSessionMethodAccess(this.context.gateway.snapshot, {
-      method: "sessions.recover",
-      params,
+  /** Failure recovery for the visible run; "Start a new session" uses this owner's creation path. */
+  protected runRecoveryActions(
+    state: Parameters<typeof createChatPaneRunRecoveryActions>[0],
+    options: Omit<Parameters<typeof createChatPaneRunRecoveryActions>[1], "onStartNewSession">,
+  ) {
+    return createChatPaneRunRecoveryActions(state, {
+      ...options,
+      onStartNewSession: (summary) => this.createSession(summary),
     });
-    return {
-      kind: "composer-replacement" as const,
-      title: t("chat.restartRecoveryTitle"),
-      text: t("chat.restartRecoveryDisabled"),
-      tone: "neutral" as const,
-      icon: "warning" as const,
-      actionLabel: t("chat.resumeInNewSession"),
-      actionStyle: "primary" as const,
-      busy: this.recoveringSession,
-      busyLabel: t("chat.resumingSession"),
-      disabledReason: access.allowed || this.recoveringSession ? undefined : access.reason,
-      onAction: () => {
-        if (access.allowed && !this.recoveringSession) {
-          void this.recoverSession();
-        }
-      },
-    };
   }
 
-  protected readonly recoverSession = async (): Promise<boolean> => {
+  protected readonly createSession = async (harnessUpdateSummary?: string): Promise<boolean> => {
     const state = this.state;
-    if (!state || !state.client || !state.connected || this.recoveringSession) {
-      return false;
-    }
-    const context = this.context;
-    const sessions = context.sessions;
-    const client = state.client;
-    const scope = { context, state, client, generation: this.connectionGeneration };
-    const isCurrent = () =>
-      this.isConnectionScopeCurrent(scope) && this.context.sessions === sessions;
-    const sourceSessionKey = state.sessionKey;
-    const agentId =
-      scopedAgentParamsForSession(state, sourceSessionKey).agentId ??
-      resolveAgentIdFromSessionKey(sourceSessionKey);
-    const params = {
-      ...(agentId ? { agentId } : {}),
-      key: sourceSessionKey,
-    };
-    const access = readSessionMethodAccess(context.gateway.snapshot, {
-      method: "sessions.recover",
-      params,
-    });
-    if (!access.allowed) {
-      setChatError(state, access.reason, true);
-      return false;
-    }
-
-    this.recoveringSession = true;
-    this.requestUpdate();
-    setChatError(state, null);
-    try {
-      const recovery = await sessions.recover(params);
-      if (!isCurrent() || state.sessionKey !== sourceSessionKey) {
-        return false;
-      }
-      if (!recovery) {
-        setChatError(state, state.sessionsError ?? NEW_SESSION_CREATE_FAILED_MESSAGE, true);
-        return false;
-      }
-      if (recovery.continuation.status === "rejected") {
-        setChatError(state, formatUiError(recovery.continuation.error.message), true);
-        return false;
-      }
-      const nextSessionKey = recovery.key;
-      if (this.onPaneSessionChange?.(this.paneId, nextSessionKey) === false) {
-        return false;
-      }
-      preparePaneSessionHandoff(this.context, this.paneId, nextSessionKey, {
-        attachments: [],
-        draft: "",
-      });
-      return true;
-    } finally {
-      this.recoveringSession = false;
-      this.requestUpdate();
-    }
-  };
-
-  protected readonly createSession = async (): Promise<boolean> => {
-    const state = this.state;
-    if (!state || !state.client || !state.connected || this.creatingIncognitoSession) {
+    if (
+      !state ||
+      !state.client ||
+      !state.connected ||
+      this.sessionCreation.creatingIncognito ||
+      this.sessionCreation.creatingHarnessUpdate
+    ) {
       return false;
     }
     const context = this.context;
@@ -221,7 +256,8 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const client = state.client;
     const previousSessionKey = state.sessionKey;
     const expiredIncognito = isExpiredIncognitoSession(state);
-    const preservesBoard = !expiredIncognito && this.resolveBoardView().hasBoard;
+    const preservesBoard =
+      harnessUpdateSummary === undefined && !expiredIncognito && this.resolveBoardView().hasBoard;
     const createParams = {
       ...(expiredIncognito
         ? { incognito: true as const }
@@ -248,84 +284,81 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const isCurrent = () =>
       this.isConnectionScopeCurrent(scope) && this.context.sessions === sessions;
     if (!canCreateChatSession(state)) {
-      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE, true);
+      setChatError(state, t("chat.sendErrors.newSessionBusy"));
       return false;
     }
     if (state.sessionsLoading) {
-      setChatError(state, NEW_SESSION_LIST_LOADING_MESSAGE, true);
+      setChatError(state, t("chat.sendErrors.newSessionLoading"));
       return false;
     }
     const initialAccess = readCreateAccess();
     if (!initialAccess.allowed) {
-      setChatError(state, initialAccess.reason, true);
+      setChatError(state, initialAccess.reason);
       return false;
     }
-    if (
-      (!expiredIncognito && !(await this.confirmConversationReset())) ||
-      !isCurrent() ||
-      !areUiSessionKeysEquivalent(state.sessionKey, previousSessionKey)
-    ) {
-      return false;
-    }
-    if (!canCreateChatSession(state)) {
-      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE, true);
-      return false;
-    }
-    const currentAccess = readCreateAccess();
-    if (!currentAccess.allowed) {
-      setChatError(state, currentAccess.reason, true);
-      return false;
-    }
-
-    setChatError(state, null);
-    if (preservesBoard) {
-      const resetResult = await clearChatHistory(state);
-      return resetResult !== "failed";
-    }
-    this.creatingIncognitoSession = expiredIncognito;
-    if (expiredIncognito) {
-      this.requestUpdate();
-    }
+    this.sessionCreation.creatingIncognito = expiredIncognito;
+    this.sessionCreation.creatingHarnessUpdate = harnessUpdateSummary !== undefined;
+    const signal = this.headerSessionMutationAbortController.signal;
     try {
-      const nextSessionKey = await sessions.create(createParams);
-      if (!isCurrent()) {
-        return false;
-      }
-      if (
-        !nextSessionKey ||
-        state.sessionKey !== previousSessionKey ||
-        !canCreateChatSession(state)
-      ) {
-        if (!nextSessionKey) {
-          setChatError(
-            state,
-            state.sessionsError ??
-              (state.sessionsLoading
-                ? NEW_SESSION_LIST_LOADING_MESSAGE
-                : NEW_SESSION_CREATE_FAILED_MESSAGE),
-            true,
-          );
+      const { createCapturedChatSession, createHarnessUpdateSession } =
+        await import("./chat-pane-session-operations.runtime.ts");
+      if (harnessUpdateSummary !== undefined) {
+        const access = readCreateAccess();
+        if (!access.allowed) {
+          if (isCurrent()) {
+            setChatError(state, access.reason);
+          }
+          return false;
         }
-        return false;
+        // The composer's model, not the roster row: incognito chats are not in the roster.
+        const selection = resolveChatModelSelectValues({
+          activeSession: selectedChatSessionRow(state),
+          agentDefaultModel: state
+            .readChatAgentsList()
+            ?.agents.find((row) => row.id === createParams.agentId)?.model?.primary,
+          modelOverrides: state.sessions.state.modelOverrides,
+          sessionKey: previousSessionKey,
+          sessionsResult: state.sessionsResult ?? null,
+          chatModelCatalog: state.chatModelCatalog,
+          modelSelectionPolicy: state.chatModelSelectionPolicy,
+        });
+        return await createHarnessUpdateSession(
+          {
+            agentId: createParams.agentId,
+            sourceSessionKey: previousSessionKey,
+            model: selection.currentOverride || selection.defaultModel || undefined,
+            create: sessions.createResult,
+            open: (key) => this.onPaneSessionChange?.(this.paneId, key),
+            signal,
+            isCurrent: () =>
+              isCurrent() && state.sessionKey === previousSessionKey && canCreateChatSession(state),
+          },
+          harnessUpdateSummary,
+        );
       }
-      if (this.onPaneSessionChange?.(this.paneId, nextSessionKey) === false) {
-        return false;
-      }
-      preparePaneSessionHandoff(this.context, this.paneId, nextSessionKey, {
-        attachments: cloneChatAttachmentsForIndependentOwner(state.chatAttachments),
-        draft: state.chatMessage,
-        ...(state.chatMentions?.length
-          ? { mentions: state.chatMentions.map((mention) => ({ ...mention })) }
-          : {}),
-        ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
-        ...(state.chatReplyTarget ? { replyTarget: state.chatReplyTarget } : {}),
+      return await createCapturedChatSession({
+        state,
+        context,
+        sessions,
+        previousSessionKey,
+        expiredIncognito,
+        preservesBoard,
+        createParams,
+        readCreateAccess,
+        signal,
+        isCurrent,
+        paneId: this.paneId,
+        confirmReset: () => this.confirmConversationReset(),
+        onSessionChange: (key) => this.onPaneSessionChange?.(this.paneId, key),
       });
-      return true;
-    } finally {
-      this.creatingIncognitoSession = false;
-      if (expiredIncognito && isCurrent()) {
-        this.requestUpdate();
+    } catch (error) {
+      if (isCurrent() && state.sessionKey === previousSessionKey) {
+        setChatError(state, formatUiError(error));
       }
+      return false;
+    } finally {
+      this.sessionCreation.creatingIncognito = false;
+      this.sessionCreation.creatingHarnessUpdate = false;
     }
   };
 }

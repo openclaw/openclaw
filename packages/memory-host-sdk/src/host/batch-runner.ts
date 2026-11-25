@@ -1,9 +1,10 @@
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { formatBatchErrorDetail } from "./batch-error-utils.js";
-import { applyEmbeddingBatchOutputLine, readEmbeddingBatchJsonl } from "./batch-output.js";
+import { readEmbeddingBatchJsonl } from "./batch-output.js";
 import type { EmbeddingBatchStatus, ProviderBatchOutputLine } from "./batch-provider-common.js";
+import { getBatchResponseError } from "./batch-response-error.js";
 import {
-  resolveCompletedBatchResult,
+  resolveBatchCompletionFromStatus,
   throwIfBatchCompletionError,
   type BatchCompletionResult,
 } from "./batch-status.js";
@@ -179,13 +180,28 @@ export async function runEmbeddingBatches<
         status,
         readError: params.readError,
       });
-      const completed = await resolveCompletedBatchResult({
-        provider: params.provider,
-        status,
-        wait: params.wait,
-        waitForBatch: () =>
-          params.waitForBatch({ ...status, id: batchId }, pollIntervalMs, timeoutMs),
-      });
+      let completed: BatchCompletionResult;
+      if (status.status === "completed") {
+        completed = resolveBatchCompletionFromStatus({
+          provider: params.provider,
+          batchId,
+          status,
+        });
+      } else {
+        if (!params.wait) {
+          throw new Error(
+            `${params.provider} batch ${batchId} submitted; enable remote.batch.wait to await completion`,
+          );
+        }
+        completed = await params.waitForBatch(
+          { ...status, id: batchId },
+          pollIntervalMs,
+          timeoutMs,
+        );
+        if (!completed.outputFileId) {
+          throw new Error(`${params.provider} batch ${batchId} completed without output file`);
+        }
+      }
       const errors: string[] = [];
       const remaining = new Set(group.map((request) => request.custom_id));
       await params.readOutput(completed.outputFileId, async (response) => {
@@ -194,9 +210,41 @@ export async function runEmbeddingBatches<
           maxRecords: group.length,
           onRecord: (line) => {
             // Only the first response for a submitted id may mutate results.
-            if (line.custom_id && remaining.has(line.custom_id)) {
-              applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+            const customId = line.custom_id;
+            if (!customId || !remaining.has(customId)) {
+              return errors.length === 0 && remaining.size > 0;
             }
+            remaining.delete(customId);
+
+            const errorMessage = line.error?.message;
+            if (errorMessage) {
+              errors.push(`${customId}: ${errorMessage}`);
+              return false;
+            }
+
+            const batchResponse = line.response;
+            const statusCode = batchResponse?.status_code ?? 0;
+            if (statusCode >= 400) {
+              errors.push(
+                `${customId}: ${getBatchResponseError(batchResponse) || "unknown error"}`,
+              );
+              return false;
+            }
+
+            const data =
+              batchResponse?.body && typeof batchResponse.body === "object"
+                ? (batchResponse.body.data ?? [])
+                : [];
+            const embedding = data[0]?.embedding ?? [];
+            if (
+              !Array.isArray(embedding) ||
+              embedding.length === 0 ||
+              !embedding.every(Number.isFinite)
+            ) {
+              errors.push(`${customId}: ${embedding?.length ? "invalid" : "empty"} embedding`);
+              return false;
+            }
+            byCustomId.set(customId, embedding);
             return errors.length === 0 && remaining.size > 0;
           },
         });

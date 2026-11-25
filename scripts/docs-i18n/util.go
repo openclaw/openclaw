@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -43,7 +42,7 @@ func hashBytes(data []byte) string {
 }
 
 func normalizeText(text string) string {
-	return strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	return strings.Join(strings.Fields(text), " ")
 }
 
 func docsI18nModel() string {
@@ -62,27 +61,9 @@ func segmentID(relPath, textHash string) string {
 }
 
 func splitWhitespace(text string) (string, string, string) {
-	if text == "" {
-		return "", "", ""
-	}
-	start := 0
-	for start < len(text) && isWhitespace(text[start]) {
-		start++
-	}
-	end := len(text)
-	for end > start && isWhitespace(text[end-1]) {
-		end--
-	}
-	return text[:start], text[start:end], text[end:]
-}
-
-func isWhitespace(b byte) bool {
-	switch b {
-	case ' ', '\t', '\n', '\r':
-		return true
-	default:
-		return false
-	}
+	withoutPrefix := strings.TrimLeft(text, " \t\n\r")
+	core := strings.TrimRight(withoutPrefix, " \t\n\r")
+	return text[:len(text)-len(withoutPrefix)], core, withoutPrefix[len(core):]
 }
 
 func validateNoTranslationTranscriptArtifacts(source, translated string) error {
@@ -103,12 +84,4 @@ func validateNoTranslationTranscriptArtifacts(source, translated string) error {
 		return fmt.Errorf("agent transcript artifact leaked into translation: %q", match)
 	}
 	return nil
-}
-
-func fatal(err error) {
-	if err == nil {
-		return
-	}
-	_, _ = io.WriteString(os.Stderr, err.Error()+"\n")
-	os.Exit(1)
 }

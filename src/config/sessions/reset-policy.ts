@@ -1,4 +1,8 @@
 // Session reset policy resolves automatic freshness for direct, group, and thread sessions.
+import {
+  asFiniteNumber,
+  asFiniteNumberInRange,
+} from "@openclaw/normalization-core/number-coercion";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 
 export type SessionResetMode = "none" | "daily" | "idle";
@@ -119,13 +123,7 @@ export function evaluateSessionFreshness(params: {
 }
 
 function resolveTimestamp(value: number | undefined, now?: number): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  if (typeof now === "number" && Number.isFinite(now) && value > now) {
-    return undefined;
-  }
-  return value;
+  return asFiniteNumberInRange(value, { min: 0, max: asFiniteNumber(now) });
 }
 
 function normalizeResetAtHour(value: number | undefined): number {
@@ -133,11 +131,5 @@ function normalizeResetAtHour(value: number | undefined): number {
     return DEFAULT_RESET_AT_HOUR;
   }
   const normalized = Math.floor(value);
-  if (normalized < 0) {
-    return 0;
-  }
-  if (normalized > 23) {
-    return 23;
-  }
-  return normalized;
+  return normalized < 0 ? 0 : Math.min(normalized, 23);
 }

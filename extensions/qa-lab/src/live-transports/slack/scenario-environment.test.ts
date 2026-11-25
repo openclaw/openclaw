@@ -11,7 +11,6 @@ function createEnvironment() {
     driverClient: {} as never,
     getMessageWriteCursor: async () => 0,
     readMessageWrites: async () => [],
-    readNativeWrites: async () => [],
     sutAppToken: "xapp-test",
     sutBotToken: "xoxb-test",
     sutIdentity: { userId: "U987654321" },

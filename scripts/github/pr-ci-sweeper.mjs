@@ -24,6 +24,7 @@ const MAX_REFIRES_PER_SWEEP = 10;
 // newest-close ownership check keeps human closes authoritative regardless.
 const KNOWN_SWEEPER_LOGINS = ["openclaw-barnacle[bot]"];
 const REOPEN_DELAY_MS = 5_000;
+const CI_READ_RETRY_DELAYS_MS = [1_000, 2_000];
 
 const sleep = (ms) =>
   new Promise((resolve) => {
@@ -104,14 +105,26 @@ async function listPullRequestCiRuns({ github, owner, repo, headSha }) {
   // Accepted tradeoff: a SHA shared by two PRs can mask one PR's dropped run
   // behind the other's — a skip-only miss. Matching run.pull_requests instead
   // would misclassify fork PRs, where GitHub leaves that array empty.
-  return await github.paginate(github.rest.actions.listWorkflowRuns, {
-    owner,
-    repo,
-    workflow_id: CI_WORKFLOW_FILE,
-    head_sha: headSha,
-    event: "pull_request",
-    per_page: 100,
-  });
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await github.paginate(github.rest.actions.listWorkflowRuns, {
+        owner,
+        repo,
+        workflow_id: CI_WORKFLOW_FILE,
+        head_sha: headSha,
+        event: "pull_request",
+        per_page: 100,
+      });
+    } catch (error) {
+      const delay = CI_READ_RETRY_DELAYS_MS[attempt];
+      // A transient read failure must not abort the remaining PR scan or look
+      // like missing CI. Retry only this read, never the close/reopen writes.
+      if (!(error?.status >= 500 && error.status < 600) || delay === undefined) {
+        throw error;
+      }
+      await sleep(delay);
+    }
+  }
 }
 
 // Our close call succeeded against a verified-open PR, so the sweeper owns the
@@ -209,17 +222,12 @@ export async function runPrCiSweeper({
     if (now - Date.parse(listed.created_at) > LOOKBACK_MS) {
       break;
     }
-    if (listed.draft) {
-      results.push({
-        number: listed.number,
-        sha: listed.head.sha.slice(0, 12),
-        action: "skip",
-        reason: "draft",
-      });
-      core.info(`pr-ci-sweeper: skip #${listed.number} (draft)`);
-      continue;
-    }
-    const ciRuns = await listPullRequestCiRuns({ github, owner, repo, headSha: listed.head.sha });
+    // Metadata-only exclusions precede CI in the canonical classifier. Preserve
+    // that precedence without querying runs for PRs that cannot be re-fired.
+    const ciRuns =
+      classifyPrForSweep({ pr: listed, ciRuns: [], botCloseCount: 0, now }).action === "refire"
+        ? await listPullRequestCiRuns({ github, owner, repo, headSha: listed.head.sha })
+        : [];
     // Classify on cheap list data first so most PRs (usually ci-attached) skip
     // without the authoritative pulls.get + close-history reads, but still log
     // the decision with the attached run ids as evidence: the silent skip here

@@ -216,9 +216,7 @@ extension OpenClawChatViewModel {
               !modelID.isEmpty
         else { return nil }
         if let separator = modelID.firstIndex(of: "/"), separator != modelID.startIndex {
-            let embeddedProvider = String(modelID[..<separator])
-            let model = String(modelID[modelID.index(after: separator)...])
-            return "\(embeddedProvider)/\(model)"
+            return modelID
         }
         guard let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines),
               !provider.isEmpty
@@ -285,12 +283,44 @@ extension OpenClawChatViewModel {
 
     public var composerInlineModelLabel: String {
         let selectionID = self.canonicalModelSelectionID
-        let label = if selectionID == Self.defaultModelSelectionID {
-            self.defaultModelLabel.replacingOccurrences(of: "Default: ", with: "")
+        let defaults = self.modelPickerDefault
+        let resolvedID: String? = if selectionID == Self.defaultModelSelectionID {
+            self.normalizedModelSelectionID(defaults.model, provider: defaults.provider)
         } else {
-            self.modelChoices.first { $0.selectionID == selectionID }?.displayLabel ?? selectionID
+            selectionID
         }
-        return label.split(separator: "/").last.map(String.init) ?? label
+        guard let resolvedID else { return "Default" }
+        guard let choice = self.modelChoices.first(where: {
+            $0.selectionID == resolvedID || $0.modelID == resolvedID
+        }) else {
+            return resolvedID.split(separator: "/").last.map(String.init) ?? resolvedID
+        }
+        return Self.shortModelLabel(name: choice.name, provider: choice.provider, modelID: choice.modelID)
+    }
+
+    /// Catalog name without a repeated provider, like web `formatModelLabel`
+    /// (ui/src/pages/chat/components/chat-model-picker-options.ts:92-110, provider-icon-data.ts:174-180).
+    /// Catalog rows without a real name fall back to the bare model id.
+    nonisolated static func shortModelLabel(name: String, provider: String, modelID: String) -> String {
+        let bareID = modelID.split(separator: "/").last.map(String.init) ?? modelID
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != modelID, trimmed != bareID, trimmed != "\(provider)/\(bareID)" else {
+            return bareID
+        }
+        let providerLabel = provider
+            .split(whereSeparator: { $0 == "-" || $0 == "_" })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+        guard !providerLabel.isEmpty else { return trimmed }
+        let lowered = trimmed.lowercased()
+        if lowered.hasPrefix(providerLabel.lowercased() + " ") {
+            return String(trimmed.dropFirst(providerLabel.count + 1))
+        }
+        let suffix = " (\(providerLabel.lowercased()))"
+        if lowered.hasSuffix(suffix) {
+            return String(trimmed.dropLast(suffix.count))
+        }
+        return trimmed
     }
 
     public var canonicalModelSelectionID: String {
@@ -382,7 +412,7 @@ extension OpenClawChatViewModel {
         self.updateCurrentSessionVerboseLevel(next, sessionKey: sessionKey)
         self.nextVerboseSelectionRequestID &+= 1
         let verboseRequestID = self.nextVerboseSelectionRequestID
-        let requestedPreference = VerbosePreferenceState(
+        let requestedPreference = PreferenceState(
             level: next ?? self.preferredVerboseLevel,
             isExplicit: !clearsOverride)
         self.verbosePreferenceRequests[verboseRequestID] = .pending(requestedPreference)
@@ -393,9 +423,9 @@ extension OpenClawChatViewModel {
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
                 let result = try await routeLease.patchSessionSettings(
-                    sessionKey: target.canonicalSessionKey,
-                    agentID: target.agentID,
-                    patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some(next)))
+                    target.canonicalSessionKey,
+                    target.agentID,
+                    OpenClawChatSessionSettingsPatch(verboseLevel: .some(next)))
                 let accepted = clearsOverride ? nil : (Self.normalizedVerboseLevel(result?.verboseLevel) ?? next)
                 self.acceptedVerboseLevelsByTarget[target] = accepted.map(VerboseLevelState.value)
                     ?? VerboseLevelState.none
@@ -404,7 +434,7 @@ extension OpenClawChatViewModel {
                     requestID: requestID,
                     target: target,
                     verboseLevelOverride: .some(accepted))
-                self.verbosePreferenceRequests[verboseRequestID] = .succeeded(VerbosePreferenceState(
+                self.verbosePreferenceRequests[verboseRequestID] = .succeeded(PreferenceState(
                     level: accepted ?? requestedPreference.level,
                     isExplicit: !clearsOverride))
                 self.reconcileVerbosePreferenceRequests()
@@ -429,13 +459,9 @@ extension OpenClawChatViewModel {
     }
 
     private func reconcileVerbosePreferenceRequests() {
-        let resolved = self.verbosePreferenceRequests.keys.sorted(by: >).compactMap { requestID
-            -> VerbosePreferenceState? in
-            switch self.verbosePreferenceRequests[requestID] {
-            case let .pending(state), let .succeeded(state): state
-            case .failed, .none: nil
-            }
-        }.first ?? self.confirmedVerbosePreference
+        let resolved = self.verbosePreferenceRequests.keys.sorted(by: >)
+            .compactMap { self.verbosePreferenceRequests[$0]?.state }
+            .first ?? self.confirmedVerbosePreference
         if resolved.level != self.preferredVerboseLevel {
             self.preferredVerboseLevel = resolved.level
             self.onVerboseLevelChanged?(resolved.level)
@@ -485,9 +511,9 @@ extension OpenClawChatViewModel {
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
                 let result = try await routeLease.patchSessionSettings(
-                    sessionKey: target.canonicalSessionKey,
-                    agentID: target.agentID,
-                    patch: OpenClawChatSessionSettingsPatch(fastMode: .some(next)))
+                    target.canonicalSessionKey,
+                    target.agentID,
+                    OpenClawChatSessionSettingsPatch(fastMode: .some(next)))
                 let acceptedOverride = next == nil ? nil : (result?.fastMode ?? next)
                 let acceptedEffective = result?.effectiveFastMode
                     ?? result?.fastMode
@@ -530,20 +556,10 @@ extension OpenClawChatViewModel {
         verboseOverrideCleared: Bool = false)
     {
         let session = self.currentSessionEntry()
-        if fastOverrideCleared {
+        if fastOverrideCleared || result.fastMode != nil || result.effectiveFastMode != nil {
             self.updateCurrentSessionFastMode(
-                nil,
+                fastOverrideCleared ? nil : result.fastMode ?? session?.fastMode,
                 effective: result.effectiveFastMode ?? result.fastMode ?? session?.effectiveFastMode,
-                sessionKey: sessionKey)
-        } else if let fastMode = result.fastMode {
-            self.updateCurrentSessionFastMode(
-                fastMode,
-                effective: result.effectiveFastMode ?? fastMode,
-                sessionKey: sessionKey)
-        } else if let effectiveFastMode = result.effectiveFastMode {
-            self.updateCurrentSessionFastMode(
-                session?.fastMode,
-                effective: effectiveFastMode,
                 sessionKey: sessionKey)
         }
         if verboseOverrideCleared {
@@ -605,10 +621,8 @@ extension OpenClawChatViewModel {
         sessionKey: String,
         exactMatchOnly: Bool = false)
     {
-        let index = exactMatchOnly
-            ? self.sessions.firstIndex(where: { $0.key == sessionKey })
-            : self.sessionIndexForModelState(sessionKey: sessionKey)
-        guard let index else { return }
+        guard let index = self.sessionIndexForModelState(sessionKey: sessionKey, exactMatchOnly: exactMatchOnly)
+        else { return }
         self.sessions[index].verboseLevel = level
     }
 
@@ -618,10 +632,8 @@ extension OpenClawChatViewModel {
         sessionKey: String,
         exactMatchOnly: Bool = false)
     {
-        let index = exactMatchOnly
-            ? self.sessions.firstIndex(where: { $0.key == sessionKey })
-            : self.sessionIndexForModelState(sessionKey: sessionKey)
-        guard let index else { return }
+        guard let index = self.sessionIndexForModelState(sessionKey: sessionKey, exactMatchOnly: exactMatchOnly)
+        else { return }
         self.sessions[index].fastMode = mode
         self.sessions[index].effectiveFastMode = effective
     }

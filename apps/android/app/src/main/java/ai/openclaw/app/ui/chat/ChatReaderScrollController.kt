@@ -81,8 +81,6 @@ internal fun createChatReaderStateSaver(expectedSessionKey: String? = null) =
     },
   )
 
-internal val ChatReaderStateSaver = createChatReaderStateSaver()
-
 internal data class ChatReaderTransition(
   val state: ChatReaderState,
   val scrollIndex: Int? = null,
@@ -411,15 +409,7 @@ internal fun ChatReaderState.onTimelineChanged(
     // A live turn follows the bottom so the reply streams into view (parity with the
     // iOS reader, #108692/#108693). Re-pinning the prompt here would hide the reply
     // below the fold behind a jump pill.
-    return ChatReaderTransition(
-      state =
-        updated.copy(
-          followTarget = ChatScrollFollowTarget.LatestContent,
-          hasNewerContent = false,
-        ),
-      scrollIndex = timeline.latestContentIndex ?: timeline.readAnchorIndex,
-      animated = true,
-    )
+    return updated.jumpToLatest(timeline)
   }
 
   val target = followTarget
@@ -444,7 +434,7 @@ internal fun ChatReaderState.onViewportChanged(
   targetTolerancePx: Int,
 ): ChatReaderState {
   val nextTarget =
-    if (isAtTarget(index, offset, timeline.latestContentIndex, targetTolerancePx)) {
+    if (index == timeline.latestContentIndex && offset <= targetTolerancePx) {
       ChatScrollFollowTarget.LatestContent
     } else {
       null
@@ -469,10 +459,3 @@ private fun ChatTimeline.indexForFollowTarget(target: ChatScrollFollowTarget): I
   }
 
 private fun ChatTimeline.containsMessage(id: String): Boolean = items.any { it is ChatTimelineItem.Message && it.message.id == id }
-
-private fun isAtTarget(
-  index: Int,
-  offset: Int,
-  target: Int?,
-  tolerancePx: Int,
-): Boolean = target != null && index == target && offset <= tolerancePx

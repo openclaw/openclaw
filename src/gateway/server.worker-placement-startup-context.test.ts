@@ -1,7 +1,13 @@
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { startGatewayServerHarness } from "./server.e2e-ws-harness.js";
-import { installGatewayTestHooks, rpcReq } from "./test-helpers.js";
+import {
+  connectOk,
+  createGatewaySuiteHarness,
+  installGatewayTestHooks,
+  rpcReq,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -20,6 +26,7 @@ test(
       try {
         // A Vitest timeout leaves acquisition running; teardown must join and close its late result.
         signal.throwIfAborted();
+        await waitForGatewayStartup(harness.port);
         const { ws } = await harness.openClient();
         const created = await rpcReq<{ key?: string; sessionId?: string }>(ws, "sessions.create", {
           agentId: "main",
@@ -50,3 +57,37 @@ test(
       }
     }),
 );
+
+test("an ordinary token client keeps issuing requests across an unrelated config write", ({
+  signal,
+}) =>
+  fixture.run(async () => {
+    // Config writes must reach the managed reloader, which minimal startup omits.
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
+    const token = "policy-currency-fixture-token";
+    const gateway = await createGatewaySuiteHarness({
+      serverOptions: { bind: "loopback", auth: { mode: "token", token } },
+    });
+    try {
+      signal.throwIfAborted();
+      await gateway.server.startupSettled;
+      await waitForGatewayStartup(gateway.port);
+      const ws = await gateway.openWs();
+      await connectOk(ws, { token, scopes: ["operator.admin"] });
+      expect(await rpcReq(ws, "agents.list", {})).toMatchObject({ ok: true });
+      const configIO = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+      const config = configIO.getRuntimeConfig();
+      await configIO.writeConfigFile({
+        ...config,
+        messages: { ...config.messages, ackReactionScope: "group-all" },
+      });
+      expect(await rpcReq(ws, "config.get", {})).toMatchObject({
+        ok: true,
+        payload: { config: { messages: { ackReactionScope: "group-all" } } },
+      });
+      expect(await rpcReq(ws, "agents.list", {})).toMatchObject({ ok: true });
+      ws.close();
+    } finally {
+      await fixture.verifyCleanup(() => gateway.server.close({ drainTimeoutMs: 0 }));
+    }
+  }));

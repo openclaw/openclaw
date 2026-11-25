@@ -1,8 +1,4 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
-import type {
-  MarkdownGitHubRepository,
-  MarkdownGitHubRepositoryAliases,
-} from "./markdown-github-repositories.ts";
 
 export type MarkdownHumanMentionToken = { marker: string; profileId: string; label: string };
 
@@ -12,27 +8,26 @@ export const MARKDOWN_PARSE_LIMIT = 40_000;
 export type MarkdownRenderOptions = {
   assistantTranscriptRoleHeaders?: boolean;
   codeBlockChrome?: "copy" | "none";
-  codeBlockInteraction?: "interactive" | "static";
+  codeBlockInteraction?: "interactive" | "wrap" | "static";
   fileLinks?: boolean;
-  githubRepo?: MarkdownGitHubRepository | null;
-  githubRepositories?: readonly MarkdownGitHubRepositoryAliases[];
+  /** Selection cues accept query-bearing references without resolving or reading them. */
+  documentFileLinks?: boolean | "select";
   humanMentions?: readonly HumanMention[];
   interactiveImages?: boolean;
   linkFavicons?: boolean;
   progressBars?: boolean;
+  /** Leave relative link labels as text when the reader has no document base. */
+  relativeLinks?: boolean;
   mode?: "document" | "message";
   remoteImages?: boolean;
   sessionLinks?: boolean;
   tableInteractions?: "enabled" | "none";
 };
 
-export type MarkdownGitHubContext = Pick<
-  MarkdownRenderOptions,
-  "githubRepo" | "githubRepositories"
->;
-
 export type MarkdownRenderEnv = Required<MarkdownRenderOptions> & {
   streamingOpenFence?: boolean;
+  /** Completed stream fragments are not the end of the whole message. */
+  streamingPrefix?: boolean;
   humanMentionTokens?: readonly MarkdownHumanMentionToken[];
 };
 
@@ -44,12 +39,12 @@ export function normalizeMarkdownRenderOptions(
     codeBlockChrome: options.codeBlockChrome ?? "copy",
     codeBlockInteraction: options.codeBlockInteraction ?? "static",
     fileLinks: options.fileLinks ?? false,
-    githubRepo: options.githubRepo ?? null,
+    documentFileLinks: options.documentFileLinks ?? false,
     humanMentions: options.humanMentions ?? [],
-    githubRepositories: options.githubRepositories ?? [],
     interactiveImages: options.interactiveImages ?? false,
     linkFavicons: options.linkFavicons ?? false,
     progressBars: options.progressBars ?? false,
+    relativeLinks: options.relativeLinks ?? true,
     mode: options.mode ?? "message",
     remoteImages: options.remoteImages ?? options.mode === "document",
     sessionLinks: options.sessionLinks ?? false,

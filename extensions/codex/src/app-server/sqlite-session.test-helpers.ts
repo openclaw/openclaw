@@ -11,6 +11,7 @@ export async function attachSqliteSessionTarget(
   storePath: string,
   sessionId: string,
 ): Promise<void> {
+  params.agentId = "main";
   params.sessionId = sessionId;
   params.sessionKey = `agent:main:${sessionId}`;
   params.sessionTarget = {

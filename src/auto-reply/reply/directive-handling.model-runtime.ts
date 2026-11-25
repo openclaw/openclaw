@@ -1,4 +1,3 @@
-/** Resolves and applies explicit runtime selections attached to `/model`. */
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
@@ -59,23 +58,21 @@ export function applyModelRuntimeDirective(
   entry: Pick<SessionEntry, "agentRuntimeOverride" | "nativeRuntimeConsent">,
   resolution: ModelRuntimeDirectiveResolution,
 ): { updated: boolean } {
+  if (resolution.kind !== "clear" && resolution.kind !== "set") {
+    return { updated: false };
+  }
+  const runtime = resolution.kind === "set" ? resolution.runtime : undefined;
+  const updated =
+    entry.agentRuntimeOverride !== runtime ||
+    (entry.nativeRuntimeConsent !== undefined && entry.nativeRuntimeConsent !== runtime);
   if (resolution.kind === "clear") {
-    const updated =
-      entry.agentRuntimeOverride !== undefined || entry.nativeRuntimeConsent !== undefined;
     delete entry.agentRuntimeOverride;
+  }
+  if (updated || resolution.kind === "clear") {
     delete entry.nativeRuntimeConsent;
-    return { updated };
   }
   if (resolution.kind === "set") {
-    const updated =
-      entry.agentRuntimeOverride !== resolution.runtime ||
-      (entry.nativeRuntimeConsent !== undefined &&
-        entry.nativeRuntimeConsent !== resolution.runtime);
-    if (updated) {
-      delete entry.nativeRuntimeConsent;
-    }
     entry.agentRuntimeOverride = resolution.runtime;
-    return { updated };
   }
-  return { updated: false };
+  return { updated };
 }

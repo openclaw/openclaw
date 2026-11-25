@@ -3,7 +3,7 @@ import SwiftUI
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct GatewaySettingsSmokeTests {
     @Test func `first Reconnect prefills the Gateway and Add starts a fresh empty editor`() async throws {
@@ -24,14 +24,11 @@ struct GatewaySettingsSmokeTests {
                             [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains(action)
                     })
                     #expect(button.accessibilityPerformPress?() == true)
-                    let deadline = ContinuousClock.now + .seconds(3)
-                    while window.attachedSheet == nil, ContinuousClock.now < deadline {
-                        try await Task.sleep(for: .milliseconds(20))
-                    }
+                    try await TestWait.state("\(action) sheet") { window.attachedSheet != nil }
                     let sheet = try #require(window.attachedSheet?.contentView)
                     var values: [String] = []
                     var connectEnabled: Bool?
-                    repeat {
+                    try await TestWait.state("\(action) sheet fields") {
                         sheet.layoutSubtreeIfNeeded()
                         requestOrdinal += 1
                         let elements = try await AppKitTestSupport.accessibilityElements(
@@ -48,10 +45,9 @@ struct GatewaySettingsSmokeTests {
                                 .contains(submitAction)
                         }?.isAccessibilityEnabled?()
                         let populated = values.contains(profile.name) && values.contains(profile.url.absoluteString)
-                        if values.count >= 2, connectEnabled == reconnecting,
-                           reconnecting ? populated : values.allSatisfy(\.isEmpty) { break }
-                        try await Task.sleep(for: .milliseconds(20))
-                    } while ContinuousClock.now < deadline
+                        return values.count >= 2 && connectEnabled == reconnecting &&
+                            (reconnecting ? populated : values.allSatisfy(\.isEmpty))
+                    }
                     #expect(values.count >= 2)
                     #expect(connectEnabled == reconnecting)
                     if reconnecting {
@@ -69,11 +65,7 @@ struct GatewaySettingsSmokeTests {
                             [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains("Cancel")
                     })
                     #expect(cancel.accessibilityPerformPress?() == true)
-                    let dismissedDeadline = ContinuousClock.now + .seconds(3)
-                    while window.attachedSheet != nil, ContinuousClock.now < dismissedDeadline {
-                        try await Task.sleep(for: .milliseconds(20))
-                    }
-                    try #require(window.attachedSheet == nil)
+                    try await TestWait.state("\(action) sheet dismissal") { window.attachedSheet == nil }
                 }
             }
         }

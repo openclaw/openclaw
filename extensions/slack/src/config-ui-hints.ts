@@ -2,10 +2,10 @@ import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 const observedGroupHistoryHint = {
-  help: "Automatic observed-message context uses a default of 50 and a maximum of 200 messages; 0 disables automatic injection. The JSON integer maximum selects the 50-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
+  help: "Automatic observed-message context uses a default of 50 and a maximum of 200 messages; 0 disables automatic injection. The JSON integer maximum selects the 50-message default. Chat history trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
 };
 const observedDmHistoryHint = {
-  help: "Automatic observed-DM context uses a default of 0 and a maximum of 200 messages; 0 disables that extra context. The JSON integer maximum selects the 0-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
+  help: "Automatic observed-DM context uses a default of 0 and a maximum of 200 messages; 0 disables that extra context. The JSON integer maximum selects the 0-message default. Chat history trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
 };
 const botThreadMentionHint = {
   label: "Require Mention in Bot Threads",
@@ -44,7 +44,7 @@ export const slackChannelConfigUiHints = {
     implicitMentions: true,
     streaming: {
       "": 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress" (default). Legacy boolean/streamMode keys are auto-mapped.',
-      mode: 'Canonical Slack preview mode: "off" | "partial" | "block" | "progress" (default). Default progress outside reply threads uses only a temporary typing reaction. Any explicit streaming.progress setting opts top-level turns into a preview, except nativeTaskCards: true, which only affects threads.',
+      mode: 'Slack preview mode: "off" | "partial" | "block" | "progress" (default). Default progress outside reply threads uses only a temporary typing reaction. Any explicit streaming.progress setting opts top-level turns into a preview, except nativeTaskCards: true, which only affects threads.',
       chunkMode: 'Chunking mode for outbound Slack text delivery: "length" (default) or "newline".',
       "block.enabled":
         'Enable chunked block-style Slack preview delivery when channels.slack.streaming.mode="block".',
@@ -62,6 +62,10 @@ export const slackChannelConfigUiHints = {
     },
     progress: { labels: "openclaw" },
   }),
+  "streaming.progress.toolProgress": {
+    label: "Slack Progress Tool Lines",
+    help: "Show individual tool activity, including intermediate failures, in progress drafts (default: false). Native cards add a task row per tool call. Block Kit cards add tool activity, the plan checklist, and tool/file/time totals while working; finished cards retain only file diff totals. Default Block Kit cards show commentary and text, approval requests, and available session links. Failed turns show a plain Failed line on the Block Kit card, even without an error reply.",
+  },
   joinIntro: {
     label: "Slack Channel Join Introduction",
     help: "Post one brief, room-specific introduction when the bot joins an allowed Slack channel (default: true). Account settings override the channel-wide setting.",
@@ -172,7 +176,7 @@ export const slackChannelConfigUiHints = {
   },
   "thread.inheritParent": {
     label: "Slack Thread Parent Inheritance",
-    help: "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
+    help: "If true, Slack thread sessions inherit the parent channel chat history (default: false).",
   },
   "thread.initialHistoryLimit": {
     label: "Slack Thread Initial History Limit",

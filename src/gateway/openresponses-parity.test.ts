@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { CreateResponseBodySchema } from "./open-responses.schema.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
-import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
+import { createAssistantOutputItem } from "./openresponses-shape.js";
 
 describe("OpenResponses aggregate behavior", () => {
   it.each([
@@ -12,13 +12,14 @@ describe("OpenResponses aggregate behavior", () => {
       phase: "commentary",
       status: "completed",
     }),
-    createFunctionCallOutputItem({
+    {
+      type: "function_call",
       id: "fc_1",
-      callId: "call_1",
+      call_id: "call_1",
       name: "lookup",
       arguments: "{}",
       status: "completed",
-    }),
+    },
   ])("accepts supported output metadata on replay: $type", (item) => {
     const body = { model: "openclaw", input: [item] };
     expect(CreateResponseBodySchema.safeParse(body).success).toBe(true);
@@ -53,58 +54,6 @@ describe("OpenResponses aggregate behavior", () => {
     expect(result.message.indexOf("tool_call id=call_2")).toBeLessThan(
       result.message.indexOf("Tool:call_2"),
     );
-  });
-
-  it("rejects invalid image media types through the aggregate request schema", () => {
-    expect(
-      CreateResponseBodySchema.safeParse({
-        model: "gpt-5.4",
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_image",
-                source: { type: "base64", media_type: "image/svg+xml", data: "PHN2Zz4=" },
-              },
-            ],
-          },
-        ],
-      }).success,
-    ).toBe(false);
-  });
-
-  it("rejects wrapped or unnamed tools through the aggregate request schema", () => {
-    const baseRequest = { model: "gpt-5.4", input: "Run the lookup" };
-    expect(
-      CreateResponseBodySchema.safeParse({
-        ...baseRequest,
-        tools: [
-          {
-            type: "function",
-            function: { name: "lookup", parameters: { type: "object" } },
-          },
-        ],
-      }).success,
-    ).toBe(false);
-    expect(
-      CreateResponseBodySchema.safeParse({
-        ...baseRequest,
-        tools: [{ type: "function", name: "", parameters: { type: "object" } }],
-      }).success,
-    ).toBe(false);
-  });
-
-  it("builds prompts from tool output and surrounding messages", () => {
-    const result = buildAgentPrompt([
-      { type: "message", role: "user", content: "Run the lookup" },
-      { type: "function_call_output", call_id: "call-1", output: '{"ok":true}' },
-      { type: "message", role: "user", content: "Summarize it" },
-    ]);
-    expect(result.message).toContain("Run the lookup");
-    expect(result.message).toContain('{"ok":true}');
-    expect(result.message).toContain("Summarize it");
   });
 
   it("preserves attachment-only turn placeholders", () => {

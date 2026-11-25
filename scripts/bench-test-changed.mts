@@ -228,31 +228,17 @@ function main() {
     ...changedPaths,
   ];
 
-  console.log(`[bench-test-changed] routed: ${routedCommand.map(quoteArg).join(" ")}`);
-  const routed = runBenchCommand({
-    command: routedCommand,
-    cwd: opts.cwd,
-    label: "routed",
-    rss: opts.rss,
-    ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
-  });
-  if (routed.status !== 0) {
-    process.stderr.write(routed.output);
-    process.exit(routed.status);
-  }
-
-  console.log(`[bench-test-changed] root:   ${rootCommand.map(quoteArg).join(" ")}`);
-  const root = runBenchCommand({
-    command: rootCommand,
-    cwd: opts.cwd,
-    label: "root",
-    rss: opts.rss,
-    ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
-  });
-  if (root.status !== 0) {
-    process.stderr.write(root.output);
-    process.exit(root.status);
-  }
+  const run = (label: string, command: BenchCommandParams["command"]) => {
+    console.log(`[bench-test-changed] ${`${label}:`.padEnd(7)} ${command.map(quoteArg).join(" ")}`);
+    const result = runBenchCommand({ ...opts, command, label });
+    if (result.status !== 0) {
+      process.stderr.write(result.output);
+      process.exit(result.status);
+    }
+    return result;
+  };
+  const routed = run("routed", routedCommand);
+  const root = run("root", rootCommand);
 
   printRunSummary("routed", routed);
   printRunSummary("root", root);

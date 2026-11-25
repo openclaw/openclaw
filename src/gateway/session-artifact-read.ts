@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ArtifactSummary,
   ArtifactsListParams,
+  ArtifactsListResult,
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
 import { findMarkdownImageSpans } from "../../packages/markdown-core/src/image-spans.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
@@ -16,7 +16,8 @@ import {
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { hasSqlitePostCommitScope } from "../infra/sqlite-post-commit.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { hasUncommittedSqliteWrites } from "../infra/sqlite-schema-facts.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
@@ -30,29 +31,32 @@ import {
   prepareArtifactDownload,
   prepareArtifactDownloadResponse,
 } from "./artifact-download-projection.js";
-import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
-import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import {
   type ArtifactRecord,
   mediaUrlValue,
   resolveBlockDownload,
   resolveMessageRunId,
   toArtifactSummary,
-} from "./server-methods/artifacts-content.js";
-import type { SessionTranscriptReader } from "./session-transcript-read-kernel.js";
+} from "./artifacts-content.js";
+import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
+import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
+import type {
+  SessionTranscriptPageReader,
+  SessionTranscriptVisitor,
+} from "./session-transcript-read.types.js";
 import {
   parseTranscriptImageArtifactId,
+  projectTranscriptImageArtifacts,
   resolveTranscriptImageArtifactBlock,
 } from "./transcript-image-artifacts.js";
 
 const IMAGE_PAGE_MESSAGES = 32;
-const IMAGE_PAGE_BYTES = 256 * 1024;
+const IMAGE_PAGE_BYTES = 1024 * 1024;
+const IMAGE_INLINE_PREVIEW_MAX_BYTES = 256 * 1024;
 
 type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "messageRole">;
-type ArtifactReaders = Pick<
-  SessionTranscriptReader,
-  "visitSessionMessagesAsync" | "readSessionMessagesPageWithStatsAsync"
->;
+type ArtifactReaders = SessionTranscriptVisitor &
+  Pick<SessionTranscriptPageReader, "readSessionMessagesPageWithStatsAsync">;
 
 export type SessionArtifactReadQuery = SessionArtifactFilters &
   (
@@ -61,6 +65,7 @@ export type SessionArtifactReadQuery = SessionArtifactFilters &
         sessionKey: string;
         includeDownloadData?: boolean;
         downloadArtifactIds?: string[];
+        includeAttachments?: boolean;
       }
     | {
         kind: "image-page";
@@ -90,7 +95,7 @@ export type SessionArtifactReadQuery = SessionArtifactFilters &
   );
 
 export type SessionArtifactReadResult =
-  | { kind: "list"; artifacts: ArtifactRecord[] }
+  | { kind: "list"; artifacts: ArtifactRecord[]; attachments?: ArtifactsListResult["attachments"] }
   | {
       kind: "image-page";
       artifacts: ArtifactSummary[];
@@ -106,19 +111,18 @@ export type SessionArtifactReadResult =
     }
   | { kind: "download-response"; response?: ArtifactDownloadResponse };
 
-function normalizeArtifactType(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "image" || normalized === "input_image" || normalized === "image_url") {
-    return "image";
-  }
-  if (normalized === "audio" || normalized === "input_audio") {
-    return "audio";
-  }
-  if (normalized === "video" || normalized === "input_video") {
-    return "video";
-  }
-  return "file";
-}
+const artifactTypes = new Map([
+  ["image", "image"],
+  ["input_image", "image"],
+  ["image_url", "image"],
+  ["audio", "audio"],
+  ["input_audio", "audio"],
+  ["video", "video"],
+  ["input_video", "video"],
+  ["file", "file"],
+  ["attachment", "file"],
+  ["input_file", "file"],
+]);
 
 /** Generates a stable id from transcript position plus display metadata. */
 function artifactId(parts: {
@@ -145,37 +149,28 @@ function resolveMessageSeq(message: Record<string, unknown>, fallback: number): 
 
 function isArtifactBlock(block: Record<string, unknown>): boolean {
   const type = asNonEmptyString(block.type)?.toLowerCase();
-  if (
-    type === "image" ||
-    type === "audio" ||
-    type === "video" ||
-    type === "file" ||
-    type === "attachment" ||
-    type === "input_image" ||
-    type === "input_audio" ||
-    type === "input_video" ||
-    type === "input_file" ||
-    type === "image_url"
-  ) {
-    return true;
-  }
   return (
+    (type !== undefined && artifactTypes.has(type)) ||
     typeof block.data === "string" ||
     Boolean(block.url || block.openUrl || block.source || block.image_url || block.audio_url)
   );
 }
 
-function collectArtifactsFromMessage(params: {
-  message: unknown;
-  messageFallbackSeq: number;
-  collection: { artifacts: ArtifactRecord[]; count: number };
-  sessionKey: string;
-  runId?: string;
-  messageRole?: ArtifactsListParams["messageRole"];
-  includeDownloadData?: boolean;
-  downloadArtifactIds?: Set<string>;
-  imagesOnly?: boolean;
-}): void {
+function collectArtifactsFromMessage(
+  params: {
+    message: unknown;
+    messageFallbackSeq: number;
+    sessionKey: string;
+    runId?: string;
+    messageRole?: ArtifactsListParams["messageRole"];
+    includeDownloadData?: boolean;
+    downloadArtifactIds?: Set<string>;
+    byBlock?: Map<number, ArtifactRecord>;
+  } & (
+    | { imagesOnly: true; collection: { artifacts: (ArtifactRecord | undefined)[]; count: number } }
+    | { imagesOnly?: false; collection: { artifacts: ArtifactRecord[]; count: number } }
+  ),
+): void {
   const msg = asOptionalRecord(params.message);
   if (!msg) {
     return;
@@ -211,9 +206,8 @@ function collectArtifactsFromMessage(params: {
       }
     }
   }
-  for (let contentIndex = 0; contentIndex < content.length; contentIndex += 1) {
-    const block = asOptionalRecord(content[contentIndex]);
-    if (!block || !isArtifactBlock(block)) {
+  for (const [contentIndex, block] of content.entries()) {
+    if (!isArtifactBlock(block)) {
       continue;
     }
     // Fallback titles participate in existing artifact IDs. Count omitted roles
@@ -226,7 +220,7 @@ function collectArtifactsFromMessage(params: {
     const type =
       params.imagesOnly && attachment?.kind === "image"
         ? "image"
-        : normalizeArtifactType(asNonEmptyString(block.type) ?? "file");
+        : (artifactTypes.get(asNonEmptyString(block.type)?.toLowerCase() ?? "file") ?? "file");
     if (params.imagesOnly && type !== "image") {
       continue;
     }
@@ -239,8 +233,12 @@ function collectArtifactsFromMessage(params: {
       `${type} ${params.collection.count}`;
     const declaredArtifactId =
       asNonEmptyString(block.artifactId) ?? asNonEmptyString(attachment?.artifactId);
+    const transcriptImage =
+      params.imagesOnly && declaredArtifactId
+        ? parseTranscriptImageArtifactId(declaredArtifactId)
+        : undefined;
     const id =
-      declaredArtifactId && parseManagedOutgoingArtifactId(declaredArtifactId)
+      declaredArtifactId && (parseManagedOutgoingArtifactId(declaredArtifactId) || transcriptImage)
         ? declaredArtifactId
         : artifactId({
             sessionKey: params.sessionKey,
@@ -253,11 +251,29 @@ function collectArtifactsFromMessage(params: {
     if (params.downloadArtifactIds && !params.downloadArtifactIds.delete(id)) {
       continue;
     }
-    const includeData = params.includeDownloadData !== false;
-    const download = resolveBlockDownload(attachment ?? block, { includeData });
+    // Size inline payloads before materializing them so discovery never decodes large screenshots.
+    const sized = params.imagesOnly
+      ? resolveBlockDownload(attachment ?? block, { includeData: false })
+      : undefined;
+    const previewable =
+      !sized ||
+      sized.mode !== "bytes" ||
+      (sized.payloadSizeBytes ?? 0) <= IMAGE_INLINE_PREVIEW_MAX_BYTES;
+    if (params.imagesOnly && !previewable && !transcriptImage) {
+      // Preserve omitted slots so notices follow the cursor's actual scan window.
+      params.collection.artifacts.push(undefined);
+      continue;
+    }
+    const download =
+      sized && (!previewable || sized.mode !== "bytes")
+        ? sized
+        : resolveBlockDownload(attachment ?? block, {
+            includeData: params.imagesOnly || params.includeDownloadData !== false,
+          });
     const source = asOptionalRecord(block.source);
-    const previewOnly = params.imagesOnly && !parseManagedOutgoingArtifactId(id);
-    const imageUrl = params.imagesOnly
+    const previewOnly =
+      params.imagesOnly && !transcriptImage && !parseManagedOutgoingArtifactId(id);
+    let imageUrl = params.imagesOnly
       ? download.data !== undefined
         ? `data:${download.mimeType ?? "image/png"};base64,${download.data}`
         : (asNonEmptyString(attachment?.url) ??
@@ -265,6 +281,22 @@ function collectArtifactsFromMessage(params: {
           asNonEmptyString(source?.url) ??
           mediaUrlValue(block.image_url))
       : undefined;
+    if (params.imagesOnly && (transcriptImage ? download.mode !== "bytes" : !imageUrl)) {
+      continue;
+    }
+    if (
+      params.imagesOnly &&
+      imageUrl &&
+      /^data:/i.test(imageUrl) &&
+      Buffer.byteLength(imageUrl) > IMAGE_INLINE_PREVIEW_MAX_BYTES
+    ) {
+      if (transcriptImage) {
+        imageUrl = undefined;
+      } else {
+        params.collection.artifacts.push(undefined);
+        continue;
+      }
+    }
     const summary: ArtifactRecord = {
       id: previewOnly ? `preview_${id}` : id,
       type,
@@ -278,22 +310,38 @@ function collectArtifactsFromMessage(params: {
       download: { mode: previewOnly ? "unsupported" : download.mode },
       ...(imageUrl ? { image: { url: imageUrl } } : {}),
       ...(download.data !== undefined ? { data: download.data } : {}),
-      ...(download.url ? { url: download.url } : {}),
+      ...(download.localPath ? { localPath: download.localPath } : {}),
+      ...(params.includeDownloadData !== false && download.url ? { url: download.url } : {}),
     };
     params.collection.artifacts.push(summary);
+    params.byBlock?.set(contentIndex, summary);
   }
 }
 
-function createArtifactListCollector(query: Extract<SessionArtifactReadQuery, { kind: "list" }>) {
+type AttachmentProjector =
+  typeof import("./session-file-attachment-message.js").sessionFileAttachmentMessage;
+
+function createArtifactListCollector(
+  query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
+  sessionId?: string,
+  projectAttachment?: AttachmentProjector,
+) {
+  const attachments: ArtifactsListResult["attachments"] =
+    query.includeAttachments && sessionId ? { sessionId, messages: [] } : undefined;
+  let metadataBytes = 0;
   const artifacts: ArtifactRecord[] = [];
   const collection = { artifacts, count: 0 };
   const downloadArtifactIds = query.downloadArtifactIds
     ? new Set(query.downloadArtifactIds)
     : undefined;
-  const visit = (message: unknown, seq: number) => {
+  const blockRows = attachments ? new Map<number, ArtifactRecord>() : undefined;
+  const visit = (message: unknown, seq: number, entry?: Parameters<AttachmentProjector>[2]) => {
+    const byBlock = attachments?.truncated ? undefined : blockRows;
+    byBlock?.clear();
     collectArtifactsFromMessage({
       message,
       messageFallbackSeq: seq,
+      byBlock,
       collection,
       sessionKey: query.sessionKey,
       runId: query.runId,
@@ -301,22 +349,35 @@ function createArtifactListCollector(query: Extract<SessionArtifactReadQuery, { 
       includeDownloadData: query.includeDownloadData,
       downloadArtifactIds,
     });
+    const record = asOptionalRecord(message);
+    if (attachments && byBlock && record && projectAttachment) {
+      const projected = projectAttachment(record, byBlock, entry);
+      if (projected) {
+        metadataBytes += Buffer.byteLength(JSON.stringify(projected));
+        if (metadataBytes <= 4 * 1024 * 1024) {
+          attachments.messages.push(projected);
+        } else {
+          attachments.truncated = true;
+        }
+      }
+    }
   };
-  return { artifacts, visit };
+  return { artifacts, attachments, visit };
 }
 
 const summaryLists = new WeakMap<
-  DatabaseSync,
-  Map<string, { revision: string; artifacts: ArtifactRecord[] }>
+  EngineConnection,
+  Map<string, { revision: string; result: Extract<SessionArtifactReadResult, { kind: "list" }> }>
 >();
 
 /** Reuse metadata only after admission and revision selection in the worker's current snapshot. */
 export function readArtifactSummariesFromProjection(
   projection: CurrentTranscriptProjection,
   query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
-): ArtifactRecord[] {
+  projectAttachment?: AttachmentProjector,
+): Extract<SessionArtifactReadResult, { kind: "list" }> {
   const cacheable =
-    !hasSqlitePostCommitScope(projection.database.db) &&
+    !hasUncommittedSqliteWrites(projection.database.db) &&
     !resolveSessionTranscriptReadFence(projection.resolved);
   let cache = summaryLists.get(projection.database.db);
   if (!cache && cacheable) {
@@ -328,6 +389,7 @@ export function readArtifactSummariesFromProjection(
     query.sessionKey,
     query.runId,
     query.messageRole,
+    Boolean(query.includeAttachments),
   ]);
   const revision = JSON.stringify([
     projection.generation,
@@ -337,28 +399,33 @@ export function readArtifactSummariesFromProjection(
   ]);
   const cached = cacheable ? cache?.get(key) : undefined;
   if (cached?.revision === revision) {
-    return cached.artifacts;
+    return cached.result;
   }
-  const { artifacts, visit } = createArtifactListCollector({
-    ...query,
-    includeDownloadData: false,
-  });
+  const { artifacts, attachments, visit } = createArtifactListCollector(
+    {
+      ...query,
+      includeDownloadData: false,
+    },
+    projection.resolved.sessionId,
+    projectAttachment,
+  );
   const visible = resolveVisibleMessagePositions(projection);
   for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
     const message = asOptionalRecord(entry.event)?.message;
     if (message !== undefined) {
-      visit(message, entry.seq);
+      visit(message, entry.seq, entry);
     }
   }
+  const result = { kind: "list" as const, artifacts, ...(attachments ? { attachments } : {}) };
   if (cacheable && cache) {
     cache.delete(key);
     // Bound both metadata bytes and query variants; transcript payloads never enter this cache.
-    if (Buffer.byteLength(JSON.stringify(artifacts)) <= 256 * 1024) {
-      cache.set(key, { revision, artifacts });
+    if (Buffer.byteLength(JSON.stringify(result)) <= 256 * 1024) {
+      cache.set(key, { revision, result });
       pruneMapToMaxSize(cache, 32);
     }
   }
-  return artifacts;
+  return result;
 }
 
 async function readArtifactList(
@@ -423,7 +490,16 @@ export async function selectSessionArtifacts(
     };
   }
   if (query.kind === "list") {
-    return { kind: "list", artifacts: await readArtifactList(scope, query, readers) };
+    const projectAttachment = query.includeAttachments
+      ? (await import("./session-file-attachment-message.js")).sessionFileAttachmentMessage
+      : undefined;
+    const { artifacts, attachments, visit } = createArtifactListCollector(
+      query,
+      scope.sessionId,
+      projectAttachment,
+    );
+    await readers.visitSessionMessagesAsync(scope, visit);
+    return { kind: "list", artifacts, ...(attachments ? { attachments } : {}) };
   }
   if (query.kind === "image-page") {
     const page = await readers.readSessionMessagesPageWithStatsAsync(scope, {
@@ -431,6 +507,7 @@ export async function selectSessionArtifacts(
       beforeSeq: query.beforeSeq,
       maxMessages: IMAGE_PAGE_MESSAGES,
       maxBytes: IMAGE_PAGE_BYTES,
+      allowOversizedFirst: true,
       readOnly: true,
       captureReadWindow: true,
       expectedReadWindow: query.readWindow,
@@ -440,15 +517,16 @@ export async function selectSessionArtifacts(
       throw new SessionTranscriptProjectionUnavailableError(scope.sessionId, "window-changed");
     }
     const artifacts: ArtifactSummary[] = [];
+    let omittedOversized = false;
     let next: { beforeSeq: number; imageOffset: number } | undefined;
     for (const message of page.messages.toReversed()) {
       const seq = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.seq;
       if (typeof seq !== "number") {
         continue;
       }
-      const collected: ArtifactRecord[] = [];
+      const collected: (ArtifactRecord | undefined)[] = [];
       collectArtifactsFromMessage({
-        message,
+        message: projectTranscriptImageArtifacts(message),
         messageFallbackSeq: 1,
         collection: { artifacts: collected, count: 0 },
         sessionKey: query.sessionKey,
@@ -456,16 +534,15 @@ export async function selectSessionArtifacts(
         messageRole: query.messageRole,
         imagesOnly: true,
       });
-      const images = collected
-        .filter((artifact) => artifact.image)
-        .map(toArtifactSummary)
-        .toReversed();
+      const images = collected.toReversed();
       const start = query.beforeSeq === seq + 1 ? (query.imageOffset ?? 0) : 0;
       for (let index = start; index < images.length; index++) {
         const image = images[index];
-        if (image) {
-          artifacts.push(image);
+        if (!image) {
+          omittedOversized = true;
+          continue;
         }
+        artifacts.push(image);
         if (artifacts.length === query.limit) {
           next =
             index + 1 < images.length
@@ -487,10 +564,10 @@ export async function selectSessionArtifacts(
     return {
       kind: "image-page",
       artifacts,
+      ...(omittedOversized ? { omittedOversized: true } : {}),
       ...(next && next.beforeSeq > 1 && page.readWindow
         ? { next: { ...next, readWindow: page.readWindow } }
         : {}),
-      ...(page.omittedOversized ? { omittedOversized: true } : {}),
     };
   }
   const artifact = await readTranscriptImageArtifact(scope, query, readers);
@@ -511,6 +588,7 @@ async function readTranscriptImageArtifact(
     beforeSeq: reference.messageSeq + 1,
     maxMessages: 1,
     maxBytes: MAX_PAYLOAD_BYTES - 4096,
+    allowOversizedFirst: true,
   });
   const message = asOptionalRecord(page.messages[0]);
   const block = resolveTranscriptImageArtifactBlock(message, query.artifactId);

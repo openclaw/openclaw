@@ -4,7 +4,7 @@ import {
   type MeetingRealtimeAudioEngineHandle,
   type MeetingRealtimeAudioTransport,
 } from "openclaw/plugin-sdk/meeting-runtime";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 function createSdkSession() {
@@ -29,12 +29,14 @@ const connections: Connection[] = [];
 let meeting: MeetingRealtimeAudioEngineHandle | undefined;
 const input = Buffer.alloc(960, 1);
 const output = Buffer.alloc(960, 2);
+const healthy = { providerConnected: true, realtimeReady: true, bridgeClosed: false };
+const outputPart = {
+  inlineData: { mimeType: "audio/pcm;rate=24000", data: output.toString("base64") },
+};
 
 function currentConnection() {
   const connection = connections.at(-1);
-  if (!connection) {
-    throw new Error("Expected Google Live connection");
-  }
+  assert(connection, "Expected Google Live connection");
   return connection;
 }
 
@@ -49,18 +51,7 @@ function remoteClose() {
 }
 
 function receiveAudio(connection = currentConnection()) {
-  receive(
-    {
-      serverContent: {
-        modelTurn: {
-          parts: [
-            { inlineData: { mimeType: "audio/pcm;rate=24000", data: output.toString("base64") } },
-          ],
-        },
-      },
-    },
-    connection,
-  );
+  receive({ serverContent: { modelTurn: { parts: [outputPart] } } }, connection);
 }
 
 async function startMeeting() {
@@ -84,11 +75,7 @@ async function startMeeting() {
     },
     fullConfig: {},
     runtime: {} as never,
-    platform: {
-      displayName: "Test Meeting",
-      logScope: "[meeting-test]",
-      sessionIdPrefix: "meeting-test",
-    },
+    platform: { displayName: "Test", logScope: "[test]", sessionIdPrefix: "test" },
     meetingSessionId: "meeting-1",
     providers: [buildGoogleRealtimeVoiceProvider()],
     transport,
@@ -98,14 +85,8 @@ async function startMeeting() {
     tools: [],
   });
   const onInput = transport.startInput.mock.calls[0]?.[0];
-  if (!onInput) {
-    throw new Error("Expected meeting audio capture");
-  }
-  expect(meeting.getHealth()).toMatchObject({
-    providerConnected: true,
-    realtimeReady: true,
-    bridgeClosed: false,
-  });
+  assert(onInput, "Expected meeting audio capture");
+  expect(meeting.getHealth()).toMatchObject(healthy);
   onInput(input);
   expect(currentConnection().session.sendRealtimeInput).toHaveBeenCalledOnce();
   return { handle: meeting, transport, logger, onInput };
@@ -167,11 +148,7 @@ describe("Google Live meeting recovery", () => {
     expect(currentConnection().params.config?.sessionResumption).toEqual(
       resume ? { handle: "resume-1" } : {},
     );
-    expect(handle.getHealth()).toMatchObject({
-      providerConnected: true,
-      realtimeReady: true,
-      bridgeClosed: false,
-    });
+    expect(handle.getHealth()).toMatchObject(healthy);
     onInput(input);
     expect(currentConnection().session.sendRealtimeInput).toHaveBeenCalledTimes(reconnect ? 2 : 3);
     expect(currentConnection().session.sendRealtimeInput).toHaveBeenLastCalledWith({

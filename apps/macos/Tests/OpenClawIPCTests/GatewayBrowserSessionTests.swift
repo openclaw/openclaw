@@ -119,6 +119,7 @@ private final class BrowserSessionWebSocketRecorder: WebSocketSessioning, @unche
     }
 }
 
+@Suite(.testWaitLimit)
 struct GatewayConnectionBrowserSessionTests {
     @Test(arguments: [false, true])
     func `browser credential replacement retires route and preserves subscribed observers`(
@@ -151,15 +152,17 @@ struct GatewayConnectionBrowserSessionTests {
                 browserSession: replacement))
             #expect(await connection.isCurrentServerLease(oldLease) == false)
             _ = try await connection.request(method: "health", params: nil)
-            let successor = try await AsyncTimeout.withTimeout(
-                seconds: 2, onTimeout: { URLError(.timedOut) }, operation: {
-                    for await delivery in subscription {
-                        if case .snapshot = delivery.push, delivery.isCurrent {
-                            return delivery.serverLease
-                        }
-                    }
-                    throw CancellationError()
-                })
+            var successorLease: GatewayConnection.ServerLease?
+            for await delivery in subscription {
+                if case .snapshot = delivery.push, delivery.isCurrent {
+                    successorLease = delivery.serverLease
+                    break
+                }
+            }
+            guard let successor = successorLease, !Task.isCancelled else {
+                Issue.record("Still waiting for replacement browser session")
+                throw CancellationError()
+            }
             #expect(successor != oldLease)
             #expect(successor.route.browserSession == replacement)
             #expect(successor.route.browserSession?.expiresAt == replacement.expiresAt)
@@ -208,13 +211,17 @@ struct GatewayConnectionBrowserSessionTests {
             let lease = try #require(await connection.captureServerLease())
             #expect(await connection.isCurrentServerLease(lease))
             let sentBeforeExpiry = recorder.sentMessageCount.value
-            let retirement = try await AsyncTimeout.withTimeout(
-                seconds: 20, onTimeout: { URLError(.timedOut) }, operation: {
-                    for await delivery in subscription {
-                        if case .disconnected = delivery.event { return delivery }
-                    }
-                    throw CancellationError()
-                })
+            var retiredDelivery: GatewayConnection.PushDelivery?
+            for await delivery in subscription {
+                if case .disconnected = delivery.event {
+                    retiredDelivery = delivery
+                    break
+                }
+            }
+            guard let retirement = retiredDelivery, !Task.isCancelled else {
+                Issue.record("Still waiting for expired browser session retirement")
+                throw CancellationError()
+            }
             #expect(retirement.serverLease == lease)
             guard case let .disconnected(reason) = retirement.event else {
                 throw CancellationError()
@@ -235,7 +242,7 @@ struct GatewayConnectionBrowserSessionTests {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct MacGatewayBrowserSessionStoreTests {
     @Test @MainActor
     func `cancelled admission leaves an existing sign in current`() async throws {
@@ -273,11 +280,13 @@ struct MacGatewayBrowserSessionStoreTests {
             let oldLease = browser.lease(for: original)
             try await oldLease.prepare(for: original.origin, in: WKUserContentController())
             let refreshes = LockIsolated(0)
+            let refreshed = AsyncTestSignal()
             let observation = NotificationCenter.default.addObserver(
                 forName: MacGatewayProfileStore.didChangeNotification, object: nil, queue: .main)
             { notification in
                 if notification.userInfo?[MacGatewayProfileStore.changedProfileIDKey] as? String == profile.id {
                     refreshes.withValue { $0 += 1 }
+                    refreshed.notify()
                 }
             }
             defer { NotificationCenter.default.removeObserver(observation) }
@@ -295,10 +304,7 @@ struct MacGatewayBrowserSessionStoreTests {
                         try await store.saveBrowserSession(name: "Failed", session: replacement, attempt: attempt)
                     }
                 }
-                let deadline = ContinuousClock.now + .seconds(2)
-                while refreshes.value == 0, ContinuousClock.now < deadline {
-                    try await Task.sleep(for: .milliseconds(10))
-                }
+                try await refreshed.wait("surviving browser credentials") { refreshes.value > 0 }
                 #expect(refreshes.value == 1)
                 #expect(oldLease.isCurrent)
                 let surviving = try #require(await store.endpoint(profileID: profile.id).browserSession)

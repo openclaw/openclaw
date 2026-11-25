@@ -75,6 +75,72 @@ struct RealtimeTalkRelaySessionPlaybackTests {
         #expect(request.params?["markName"]?.stringValue == "audio-1")
     }
 
+    @Test func `speaking is reported once per reply, not per audio chunk`() async throws {
+        var speakingReports: [Bool] = []
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+                request: { _, _, _ in Data("{\"ok\":true}".utf8) }),
+            options: .init(sessionKey: "main", provider: "xai", model: nil, voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: StalledPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onIssue: { _ in },
+            onTermination: { _ in },
+            onSpeakingChanged: { speakingReports.append($0) })
+        session._test_setRelaySessionId("relay-1")
+
+        for _ in 0..<20 {
+            await session._test_handleGatewayEvent(
+                outputAudioEvent(turnId: "turn-1", data: Data(repeating: 1, count: 960)))
+        }
+
+        #expect(speakingReports == [true])
+    }
+
+    @Test func `a whole reply delivered in one burst does not overflow playback`() async throws {
+        // xAI delivers a reply faster than realtime; 10 s arriving before playback drains is normal.
+        let barrier = RealtimeRelayStartupBarrier()
+        let player = DrainingPCMStreamingAudioPlayer(drainBarrier: barrier)
+        var terminations: [RealtimeTalkRelayTermination] = []
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+                request: { _, _, _ in Data("{\"ok\":true}".utf8) }),
+            options: .init(sessionKey: "main", provider: "xai", model: nil, voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: player,
+            onStatus: { _ in },
+            onIssue: { _ in },
+            onTermination: { terminations.append($0) },
+            onSpeakingChanged: { _ in })
+        defer { session.stop() }
+        session._test_setRelaySessionId("relay-1")
+        let expectedFrames = (0..<500).map { index in
+            var frame = Data(repeating: 1, count: 960)
+            frame[0] = UInt8(index % 256)
+            frame[1] = UInt8(index / 256)
+            return frame
+        }
+
+        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-1", data: expectedFrames[0]))
+        try await barrier.waitUntilEntered()
+        for frame in expectedFrames.dropFirst() {
+            await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-1", data: frame))
+        }
+
+        #expect(player.frames.isEmpty)
+        #expect(terminations.isEmpty)
+        #expect(player.stopCount == 0)
+        await session._test_handleGatewayEvent(outputAudioDoneEvent(turnId: "turn-1"))
+        await barrier.release()
+        try await player.waitUntilPlaybackFinished()
+
+        #expect(player.frames == expectedFrames)
+        #expect(terminations.isEmpty)
+        #expect(player.stopCount == 0)
+    }
+
     @Test func `output buffer cap plus one terminates visibly and requests recovery`() async throws {
         let requests = RealtimeRelayStartupRequestLog()
         let player = StalledPCMStreamingAudioPlayer()
@@ -100,7 +166,7 @@ struct RealtimeTalkRelaySessionPlaybackTests {
             onSpeakingChanged: { _ in })
         session._test_setRelaySessionId("relay-1")
 
-        for _ in 0...32 {
+        for _ in 0...RealtimeTalkRelaySession.maxBufferedOutputChunks {
             await session._test_handleGatewayEvent(
                 outputAudioEvent(turnId: "turn-1", data: Data(repeating: 1, count: 960)))
         }
@@ -442,7 +508,14 @@ struct RealtimeTalkRelaySessionPlaybackTests {
         #expect(terminations == [.outputPlaybackOverflow])
     }
 
-    @Test func `large provider audio delta is rebuffered into bounded ordered frames`() async throws {
+    @Test(arguments: [
+        (960, [960]),
+        (2400, [960, 960, 480]),
+    ])
+    func `provider audio deltas preserve bounded ordered frames`(
+        byteCount: Int,
+        frameSizes: [Int]) async throws
+    {
         let player = DrainingPCMStreamingAudioPlayer()
         var issues: [RealtimeTalkRelayIssue] = []
         var terminations: [RealtimeTalkRelayTermination] = []
@@ -457,38 +530,15 @@ struct RealtimeTalkRelaySessionPlaybackTests {
             onSpeakingChanged: { _ in })
         defer { session.stop() }
         session._test_setRelaySessionId("relay-1")
-        let audio = Data((0..<(960 * 2 + 480)).map { UInt8($0 % 251) })
+        let audio = Data((0..<byteCount).map { UInt8($0 % 251) })
 
         await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-1", data: audio))
         await session._test_handleGatewayEvent(outputAudioDoneEvent(turnId: "turn-1"))
         try await player.waitUntilPlaybackFinished()
 
-        #expect(player.frames.map(\.count) == [960, 960, 480])
+        #expect(player.frames.map(\.count) == frameSizes)
         #expect(player.frames.reduce(into: Data()) { $0.append($1) } == audio)
         #expect(issues.isEmpty)
         #expect(terminations.isEmpty)
-    }
-
-    @Test func `exact maximum output audio frame is accepted`() async {
-        var issues: [RealtimeTalkRelayIssue] = []
-        var terminations: [RealtimeTalkRelayTermination] = []
-        let session = RealtimeTalkRelaySession(
-            transport: unusedRealtimeRelayTransport(),
-            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
-            audioCapture: TestRealtimeTalkAudioCapture(),
-            pcmPlayer: StalledPCMStreamingAudioPlayer(),
-            onStatus: { _ in },
-            onIssue: { issues.append($0) },
-            onTermination: { terminations.append($0) },
-            onSpeakingChanged: { _ in })
-        session._test_setRelaySessionId("relay-1")
-
-        await session._test_handleGatewayEvent(
-            outputAudioEvent(turnId: "turn-1", data: Data(repeating: 1, count: 960)))
-
-        #expect(issues.isEmpty)
-        #expect(terminations.isEmpty)
-        #expect(session._test_isOutputPlaying())
-        session.stop()
     }
 }

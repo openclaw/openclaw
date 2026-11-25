@@ -256,10 +256,6 @@ export async function runBrowserExtensionSetup(
   if (!profile || profile.driver !== "extension") {
     throw new Error("Chrome setup requires an existing extension browser profile");
   }
-  const relayPort =
-    profile.cdpPort ??
-    resolved.extensionRelayPorts[profileName] ??
-    resolved.extensionRelayDefaultPort;
   const status =
     options.action !== "install" && observed
       ? observed
@@ -299,7 +295,7 @@ export async function runBrowserExtensionSetup(
       platform: status.platform,
       hostname: os.hostname(),
       profile: profileName,
-      relayPort,
+      relayPort: profile.cdpPort,
     },
     phase: "waiting_for_connection",
     reason: "connection_unchecked",

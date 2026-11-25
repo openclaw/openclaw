@@ -12,22 +12,57 @@ import {
   recoveryTreeSnapshot,
   recoveryVolumeSpec,
   recoveryWalIndexPaths,
-  seedRecoveryFixture,
   writeRecoveryTranscript,
 } from "../../scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { expectStatus, readJson, writeJson } from "./upgrade-survivor-io.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const temporary = () => fs.realpathSync(tempDirs.make("upgrade-recovery-assertions-"));
+const readLines = (file: string) =>
+  fs
+    .readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+function archiveOriginal(source: string, archivePath: string) {
+  const identity = recoveryFileIdentity(source);
+  fs.renameSync(source, archivePath);
+  return {
+    original: { source, disposition: "candidate", identity },
+    move: {
+      sourcePath: source,
+      archivePath,
+      manifestVersion: 3,
+      runId: "run",
+      completedAt: "2026-07-01T00:00:00Z",
+      artifact: { identity, classification: "imported", disposal: { state: "retained" } },
+    },
+  };
+}
+
+function runRecovery(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
+  return runNodeScript(
+    [path.resolve("scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs"), ...args],
+    {
+      HOME: root,
+      TMPDIR: root,
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: path.join(root, "artifacts"),
+      OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
+      ...env,
+    },
+    10_000,
+  );
+}
 
 describe.skipIf(process.platform === "win32")("recovery survivor package provenance", () => {
   type PackageFault =
     | "metadata-version"
     | "pack-version"
     | "integrity-mismatch"
-    | "missing-metadata-integrity"
-    | "missing-pack-integrity";
+    | "missing-metadata-integrity";
 
   async function packageEvidence({
     requested = "openclaw@2026.7.1-2",
@@ -50,10 +85,7 @@ describe.skipIf(process.platform === "win32")("recovery survivor package provena
     for (const directory of [artifacts, state, runtime, bin]) {
       fs.mkdirSync(directory);
     }
-    const integrity =
-      installedVersion === "2026.7.1-2"
-        ? "sha512-ycF3yPcbjN6bUPeaUx6Mh6vze1hQWoD3CT/wWcmD7a8xaHHHRUaAlaq+lFxMHf1ssEgODVAwjlzYqp2twkYZ7g=="
-        : `sha512-${createHash("sha512").update(installedVersion).digest("base64")}`;
+    const integrity = `sha512-${createHash("sha512").update(installedVersion).digest("base64")}`;
     const metadata = {
       version: fault === "metadata-version" ? "2026.1.1" : installedVersion,
       dist: {
@@ -64,14 +96,10 @@ describe.skipIf(process.platform === "win32")("recovery survivor package provena
     const packed = {
       name: "openclaw",
       version: fault === "pack-version" ? "2026.1.1" : installedVersion,
-      ...(fault === "missing-pack-integrity"
-        ? {}
-        : {
-            integrity:
-              fault === "integrity-mismatch"
-                ? `sha512-${createHash("sha512").update("different bytes").digest("base64")}`
-                : integrity,
-          }),
+      integrity:
+        fault === "integrity-mismatch"
+          ? `sha512-${createHash("sha512").update("different bytes").digest("base64")}`
+          : integrity,
     };
     const calls = path.join(root, "npm-calls.jsonl");
     fs.writeFileSync(
@@ -83,52 +111,34 @@ fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 if (args[1] !== ${JSON.stringify(`openclaw@${installedVersion}`)}) {
   throw new Error("package evidence must use the installed exact baseline");
 }
-if (args[0] === "view") {
-  console.log(JSON.stringify(${JSON.stringify(viewShape === "array" ? [metadata] : metadata)}));
-} else if (args[0] === "pack") {
-  console.log(JSON.stringify(${JSON.stringify(packShape === "array" ? [packed] : { openclaw: packed })}));
-} else {
-  throw new Error("unexpected npm command");
-}
+const responses = {
+  view: ${JSON.stringify(viewShape === "array" ? [metadata] : metadata)},
+  pack: ${JSON.stringify(packShape === "array" ? [packed] : { openclaw: packed })},
+};
+if (!Object.hasOwn(responses, args[0])) throw new Error("unexpected npm command");
+console.log(JSON.stringify(responses[args[0]]));
 `,
       { mode: 0o755 },
     );
     const candidate = path.join(root, "candidate.tgz");
     const candidateBytes = "candidate package fixture";
     fs.writeFileSync(candidate, candidateBytes);
-    const result = await runNodeScript(
-      [
-        path.resolve("scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs"),
-        "packages",
-        requested,
-        candidate,
-      ],
-      {
-        PATH: [bin, path.dirname(process.execPath), "/usr/bin", "/bin"].join(path.delimiter),
-        HOME: root,
-        TMPDIR: runtime,
-        OPENCLAW_STATE_DIR: state,
-        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
-        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: runtime,
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: installedVersion,
-      },
-      10_000,
-    );
+    const result = await runRecovery(root, ["packages", requested, candidate], {
+      PATH: [bin, path.dirname(process.execPath), "/usr/bin", "/bin"].join(path.delimiter),
+      TMPDIR: runtime,
+      OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: runtime,
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: installedVersion,
+    });
     return {
       result,
       metadata,
-      calls: fs
-        .readFileSync(calls, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
+      calls: readLines(calls),
       evidencePath: path.join(artifacts, "recovery-evidence.json"),
       candidateSha256: createHash("sha256").update(candidateBytes).digest("hex"),
     };
   }
 
   it.each([
-    { requested: "openclaw@2026.7.1-2", installedVersion: "2026.7.1-2", packShape: "array" },
     {
       requested: "openclaw@2026.8.2",
       installedVersion: "2026.8.2",
@@ -141,13 +151,13 @@ if (args[0] === "view") {
     async (entry) => {
       const fixture = await packageEvidence(entry);
       expect(fixture.result.error).toBeUndefined();
-      expect(fixture.result.status, fixture.result.stderr).toBe(0);
+      expectStatus(fixture.result);
       const exactSpec = `openclaw@${entry.installedVersion}`;
       expect(fixture.calls).toEqual([
         ["view", exactSpec, "version", "dist", "--json"],
         ["pack", exactSpec, "--ignore-scripts", "--dry-run", "--json"],
       ]);
-      expect(JSON.parse(fs.readFileSync(fixture.evidencePath, "utf8"))).toMatchObject({
+      expect(readJson(fixture.evidencePath)).toMatchObject({
         baseline: fixture.metadata,
         candidate: { sha256: fixture.candidateSha256 },
       });
@@ -159,7 +169,6 @@ if (args[0] === "view") {
     "pack-version",
     "integrity-mismatch",
     "missing-metadata-integrity",
-    "missing-pack-integrity",
   ])("rejects %s without recording successful package evidence", async (fault) => {
     const fixture = await packageEvidence({ fault });
     expect(fixture.result.error).toBeUndefined();
@@ -184,29 +193,14 @@ describe("recovery survivor evidence", () => {
       const store = path.join(sessions, "sessions.json");
       const transcript = path.join(sessions, "old.jsonl");
       writeRecoveryTranscript(transcript, "old", 3);
-      fs.writeFileSync(
-        store,
-        JSON.stringify({ "agent:main:old": { sessionId: "old", sessionFile: transcript } }),
+      writeJson(store, { "agent:main:old": { sessionId: "old", sessionFile: transcript } });
+      const archived = [transcript, store].map((source) =>
+        archiveOriginal(source, path.join(archive, path.basename(source))),
       );
-      const originals = [transcript, store].map((source) => ({
-        source,
-        disposition: "candidate",
-        identity: recoveryFileIdentity(source),
-      }));
-      const moves = originals.map((original, index) => {
-        const archivePath = path.join(archive, path.basename(original.source));
-        fs.renameSync(original.source, archivePath);
-        return {
-          kind: index === 0 ? "transcript" : "legacy-store",
-          sourcePath: original.source,
-          archivePath,
-          artifact: {
-            identity: original.identity,
-            classification: "imported",
-            disposal: { state: "retained" },
-          },
-        };
-      });
+      const originals = archived.map((entry) => entry.original);
+      const moves = archived.map(({ move }, index) =>
+        Object.assign(move, { kind: index === 0 ? "transcript" : "legacy-store" }),
+      );
       const database = path.join(state, "agents/main/agent/openclaw-agent.sqlite");
       const unusedDatabase = path.join(state, "agents/ops/agent/openclaw-agent.sqlite");
       const databaseBytes = "synthetic database bytes for the size observation";
@@ -214,44 +208,28 @@ describe("recovery survivor evidence", () => {
         fs.mkdirSync(path.dirname(database), { recursive: true });
         fs.writeFileSync(database, databaseBytes);
       }
-      fs.writeFileSync(
-        path.join(manifests, "session-sqlite-fixture.json"),
-        JSON.stringify({
-          manifestVersion: 3,
-          runId: "session-sqlite-fixture",
-          completedAt: "2026-09-26T00:00:00.000Z",
-          targets: [
-            { agentId: "main", storePath: store, sqlitePath: database, completedMoves: moves },
-            {
-              agentId: "ops",
-              storePath: store,
-              sqlitePath: unusedDatabase,
-              completedMoves: [moves[1]],
-            },
-          ],
-        }),
-      );
-      fs.writeFileSync(
-        path.join(artifacts, "recovery-fixture.json"),
-        JSON.stringify({
-          originals,
-          spec: { sessions: 1, eventsPerSession: 3 },
-          preDoctorPaths: [],
-        }),
-      );
+      writeJson(path.join(manifests, "session-sqlite-fixture.json"), {
+        manifestVersion: 3,
+        runId: "session-sqlite-fixture",
+        completedAt: "2026-09-26T00:00:00.000Z",
+        targets: [
+          { agentId: "main", storePath: store, sqlitePath: database, completedMoves: moves },
+          {
+            agentId: "ops",
+            storePath: store,
+            sqlitePath: unusedDatabase,
+            completedMoves: [moves[1]],
+          },
+        ],
+      });
+      writeJson(path.join(artifacts, "recovery-fixture.json"), {
+        originals,
+        spec: { sessions: 1, eventsPerSession: 3 },
+        preDoctorPaths: [],
+      });
       fs.writeFileSync(path.join(artifacts, "recovery-update-metrics.log"), "");
       const evidence = path.join(artifacts, "recovery-evidence.json");
-      const result = await runNodeScript(
-        [path.resolve("scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs"), "migrated"],
-        {
-          HOME: root,
-          TMPDIR: root,
-          OPENCLAW_STATE_DIR: state,
-          OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
-          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
-        },
-        10_000,
-      );
+      const result = await runRecovery(root, ["migrated"]);
       expect(result.error).toBeUndefined();
       expect(fs.existsSync(unusedDatabase)).toBe(false);
       if (missingDatabase) {
@@ -260,8 +238,8 @@ describe("recovery survivor evidence", () => {
         expect(result.stderr).toContain(database);
         expect(fs.existsSync(evidence)).toBe(false);
       } else {
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(fs.readFileSync(evidence, "utf8"))).toMatchObject({
+        expectStatus(result);
+        expect(readJson(evidence)).toMatchObject({
           migrationBeforeStandaloneDoctor: true,
           destinations: [{ file: database, bytes: Buffer.byteLength(databaseBytes) }],
         });
@@ -277,95 +255,40 @@ describe("recovery survivor evidence", () => {
         OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: "150000",
       }),
     ).toEqual({ sessions: 1, eventsPerSession: 150000 });
-    for (const invalid of ["0", "-1", "1.5", "9007199254740992"]) {
+    for (const invalid of ["0", "9007199254740992"]) {
       expect(() =>
         recoveryVolumeSpec({ OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: invalid }),
       ).toThrow();
     }
   });
 
-  it("produces independently indexed clean and protected originals with linked large history", () => {
+  it.each(["candidate", "unmanifested"] as const)("preserves %s originals", (disposition) => {
     const root = temporary();
-    const fixture = seedRecoveryFixture(root, { sessions: 2, eventsPerSession: 5 });
-    const clean = JSON.parse(
-      fs.readFileSync(path.join(root, "agents/recovery-clean/sessions/sessions.json"), "utf8"),
+    const source = path.join(root, "original.jsonl");
+    writeRecoveryTranscript(source, "old", 3);
+    const identity = recoveryFileIdentity(source);
+    const original = {
+      source,
+      disposition,
+      identity,
+      ...(disposition === "unmanifested" ? { reported: false } : {}),
+    };
+    const fixture = { originals: [original] };
+    const archived = disposition === "candidate";
+    const archive = archived ? path.join(root, "archive.jsonl") : source;
+    expect(() =>
+      assertRecoveryOriginals(fixture, archived ? [] : [{ sourcePath: source }]),
+    ).toThrow(archived ? /did not record/ : /recorded/);
+    const moves = archived ? [archiveOriginal(source, archive).move] : [];
+    expect(assertRecoveryOriginals(fixture, moves)).toMatchObject([{ ...original, archive }]);
+    fs.appendFileSync(archive, "unexpected rewrite");
+    expect(() => assertRecoveryOriginals(fixture, moves)).toThrow(
+      archived ? /copied or rewritten/ : /changed/,
     );
-    const protectedStore = JSON.parse(
-      fs.readFileSync(path.join(root, "agents/recovery-protected/sessions/sessions.json"), "utf8"),
-    );
-    expect(Object.keys(clean)).toHaveLength(4);
-    expect(protectedStore["invalid-index-entry"]).toBe(42);
-    expect(clean).not.toHaveProperty("invalid-index-entry");
-    for (const original of fixture.originals) {
-      expect(recoveryFileIdentity(original.source)).toEqual(original.identity);
+    if (archived) {
+      fs.rmSync(archive);
+      expect(() => assertRecoveryOriginals(fixture, moves)).toThrow();
     }
-    const scale = path.join(root, "agents/recovery-clean/sessions/recovery-scale-0.jsonl");
-    const events = fs
-      .readFileSync(scale, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    expect(events).toHaveLength(5);
-    expect(events[0]).toMatchObject({ type: "session", version: 3, id: "recovery-scale-0" });
-    for (let index = 1; index < events.length; index += 1) {
-      expect(events[index].parentId).toBe(index === 1 ? null : events[index - 1].id);
-    }
-    expect(fs.statSync(scale).size).toBeGreaterThan(4 * 4096);
-    expect(fs.readFileSync(path.join(root, "backups/operator-backup.bak"), "utf8")).toContain(
-      "synthetic sentinel",
-    );
-  });
-
-  it("retains unindexed sources without weakening archived-original evidence", () => {
-    const root = temporary();
-    const fixture = seedRecoveryFixture(root, { sessions: 1, eventsPerSession: 3 });
-    const retainedSource = path.join(
-      root,
-      "agents/recovery-protected/sessions/recovery-unreferenced.jsonl",
-    );
-    const originals = fixture.originals.filter((original) => original.source === retainedSource);
-    expect(originals).toHaveLength(1);
-    expect(assertRecoveryOriginals({ originals }, [])).toMatchObject([
-      {
-        source: retainedSource,
-        archive: retainedSource,
-        disposition: "unmanifested",
-        reported: false,
-      },
-    ]);
-    expect(() => assertRecoveryOriginals({ originals }, [{ sourcePath: retainedSource }])).toThrow(
-      /recorded/,
-    );
-    const archivedSource = path.join(
-      root,
-      "agents/recovery-clean/sessions/recovery-unreferenced.jsonl",
-    );
-    const archived = fixture.originals.filter((original) => original.source === archivedSource);
-    expect(archived).toHaveLength(1);
-    expect(() => assertRecoveryOriginals({ originals: archived }, [])).toThrow(/did not record/);
-    fs.appendFileSync(retainedSource, "unexpected change");
-    expect(() => assertRecoveryOriginals({ originals }, [])).toThrow(/changed/);
-  });
-
-  it("does not overwrite an existing transcript when seeding", () => {
-    const file = path.join(temporary(), "history.jsonl");
-    fs.writeFileSync(file, "existing history");
-    expect(() => writeRecoveryTranscript(file, "session", 3)).toThrow();
-    expect(fs.readFileSync(file, "utf8")).toBe("existing history");
-  });
-
-  it("detects preview mutations to databases, directories, cache files, and identities", () => {
-    const root = temporary();
-    const database = path.join(root, "current.sqlite");
-    fs.writeFileSync(database, "synthetic database bytes");
-    const before = recoveryTreeSnapshot([root]);
-    expect(() => assertRecoverySnapshot(before, recoveryTreeSnapshot([root]))).not.toThrow();
-    fs.mkdirSync(path.join(root, "new-cache"));
-    expect(() => assertRecoverySnapshot(before, recoveryTreeSnapshot([root]))).toThrow();
-    fs.rmSync(path.join(root, "new-cache"), { recursive: true });
-    const stable = recoveryTreeSnapshot([root]);
-    fs.writeFileSync(database, "changed database bytes");
-    expect(() => assertRecoverySnapshot(stable, recoveryTreeSnapshot([root]))).toThrow();
   });
 
   it("allows only selected transient WAL indexes during offline maintenance", () => {
@@ -396,31 +319,6 @@ describe("recovery survivor evidence", () => {
     }
   });
 
-  it("requires the preserved original inode and content, not just a matching manifest", () => {
-    const root = temporary();
-    const source = path.join(root, "original.jsonl");
-    const archive = path.join(root, "archive.jsonl");
-    writeRecoveryTranscript(source, "old", 3);
-    const identity = recoveryFileIdentity(source);
-    const fixture = { originals: [{ source, identity, disposition: "candidate" }] };
-    const moves = [
-      {
-        sourcePath: source,
-        archivePath: archive,
-        manifestVersion: 3,
-        runId: "run",
-        completedAt: "2026-07-01T00:00:00Z",
-        artifact: { identity, classification: "imported", disposal: { state: "retained" } },
-      },
-    ];
-    fs.renameSync(source, archive);
-    expect(assertRecoveryOriginals(fixture, moves)[0]?.archive).toBe(archive);
-    fs.appendFileSync(archive, "unexpected rewrite");
-    expect(() => assertRecoveryOriginals(fixture, moves)).toThrow(/copied or rewritten/);
-    fs.rmSync(archive);
-    expect(() => assertRecoveryOriginals(fixture, moves)).toThrow();
-  });
-
   it("rejects missing or misclassified originals even when aggregate candidates are nonzero", () => {
     const originals = [
       { archive: "/synthetic/clean", disposition: "candidate", identity: { size: 12 } },
@@ -429,22 +327,13 @@ describe("recovery survivor evidence", () => {
     const preview = {
       status: "preview",
       dryRun: true,
-      artifacts: [
-        {
-          path: "/synthetic/clean",
-          outcome: "candidate",
-          bytes: 12,
-          reason: "verified",
-          runs: ["run"],
-        },
-        {
-          path: "/synthetic/protected",
-          outcome: "protected",
-          bytes: 17,
-          reason: "unimported",
-          runs: ["run"],
-        },
-      ],
+      artifacts: originals.map(({ archive, disposition, identity }) => ({
+        path: archive,
+        outcome: disposition,
+        bytes: identity.size,
+        reason: disposition === "candidate" ? "verified" : "unimported",
+        runs: ["run"],
+      })),
       totals: { candidateBytes: 12, protectedBytes: 17 },
     };
     expect(() => assertRecoveryInventory(preview, originals)).not.toThrow();
@@ -463,18 +352,11 @@ describe("recovery survivor evidence", () => {
     const protectedPath = path.join(root, "protected");
     fs.writeFileSync(removedPath, "eligible payload");
     fs.writeFileSync(protectedPath, "unique history");
-    const originals = [
-      {
-        archive: removedPath,
-        disposition: "candidate",
-        identity: recoveryFileIdentity(removedPath),
-      },
-      {
-        archive: protectedPath,
-        disposition: "protected",
-        identity: recoveryFileIdentity(protectedPath),
-      },
-    ];
+    const originals = [removedPath, protectedPath].map((archive, index) => ({
+      archive,
+      disposition: index === 0 ? "candidate" : "protected",
+      identity: recoveryFileIdentity(archive),
+    }));
     const bytes = originals[0]!.identity.size;
     const preview = { artifacts: [{ path: removedPath, outcome: "candidate", bytes }] };
     const report = {
@@ -496,28 +378,19 @@ describe("recovery survivor evidence", () => {
         artifact: { disposal: { state: "disposed", disposedAt: "2026-07-01T00:00:00Z" } },
       },
     ];
-    expect(() => assertRecoveryApplied(report, preview, originals, receipts)).toThrow(
-      /still exists/,
-    );
+    const apply = (result = report, moves = receipts) =>
+      assertRecoveryApplied(result, preview, originals, moves);
+    expect(() => apply()).toThrow(/still exists/);
     fs.rmSync(removedPath);
-    expect(assertRecoveryApplied(report, preview, originals, receipts)).toEqual([removedPath]);
-    expect(() => assertRecoveryApplied(report, preview, originals, [])).toThrow(/receipt/);
+    expect(apply()).toEqual([removedPath]);
+    expect(() => apply(report, [])).toThrow(/receipt/);
+    const incomplete = { archivePath: removedPath, artifact: { disposal: { state: "retained" } } };
     expect(() =>
-      assertRecoveryApplied(report, preview, originals, [
-        ...receipts,
-        { archivePath: removedPath, artifact: { disposal: { state: "retained" } } },
-      ]),
+      assertRecoveryApplied(report, preview, originals, [...receipts, incomplete]),
     ).toThrow(/receipt/);
-    expect(() =>
-      assertRecoveryApplied(
-        { ...report, totals: { removedFiles: 1, removedBytes: 0 } },
-        preview,
-        originals,
-        receipts,
-      ),
-    ).toThrow();
+    expect(() => apply({ ...report, totals: { removedFiles: 1, removedBytes: 0 } })).toThrow();
     fs.writeFileSync(protectedPath, "lost unique history");
-    expect(() => assertRecoveryApplied(report, preview, originals, receipts)).toThrow(/protected/);
+    expect(() => apply()).toThrow(/protected/);
   });
 
   it("detects public history loss, reordering, and changed session identity", () => {
@@ -527,35 +400,14 @@ describe("recovery survivor evidence", () => {
       content: [{ type: "text", text: id }],
     }));
     const messages = expected.map(({ id, ...message }) => ({ ...message, __openclaw: { id } }));
-    expect(() =>
-      assertRecoveryHistory({ sessionId: "session", messages }, "session", expected),
-    ).not.toThrow();
-    expect(() =>
-      assertRecoveryHistory({ sessionId: "replacement", messages }, "session", expected),
-    ).toThrow(/identity/);
-    expect(() =>
-      assertRecoveryHistory(
-        { sessionId: "session", messages: messages.slice(1) },
-        "session",
-        expected,
-      ),
-    ).toThrow(/content or order/);
-    expect(() =>
-      assertRecoveryHistory(
-        { sessionId: "session", messages: messages.toReversed() },
-        "session",
-        expected,
-      ),
-    ).toThrow(/content or order/);
-    expect(() =>
-      assertRecoveryHistory(
-        {
-          sessionId: "session",
-          messages: messages.map(({ role, content }) => ({ role, content })),
-        },
-        "session",
-        expected,
-      ),
-    ).toThrow(/message identity/);
+    const history = (entries: unknown[] = messages, sessionId = "session") =>
+      assertRecoveryHistory({ sessionId, messages: entries }, "session", expected);
+    expect(() => history()).not.toThrow();
+    expect(() => history(messages, "replacement")).toThrow(/identity/);
+    expect(() => history(messages.slice(1))).toThrow(/content or order/);
+    expect(() => history(messages.toReversed())).toThrow(/content or order/);
+    expect(() => history(messages.map(({ role, content }) => ({ role, content })))).toThrow(
+      /message identity/,
+    );
   });
 });

@@ -1,4 +1,6 @@
+import { isBuildOnlyNpmPreflight, SEALED_NPM_PREFLIGHT_SCHEMA } from "../npm-prepared-bundle.mjs";
 import {
+  isPluginSdkApiAcknowledgement,
   selectPluginSdkApiReleaseEvidence,
   validatePluginSdkApiReleaseEvidence,
 } from "../plugin-sdk-api-release-evidence.mjs";
@@ -18,6 +20,12 @@ function requireValue(condition, message) {
 
 function selectedPackages(manifest) {
   const source = manifest.sourceAdmission;
+  if (
+    source?.publicationSelection?.npmDistTag === "alpha" ||
+    source?.projection?.packages?.some((pkg) => pkg.version?.includes("-alpha."))
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   requireValue(source?.validationPurpose === "publish", "publish source required");
   requireValue(Array.isArray(source.projection?.packages), "package projection required");
   return source.projection.packages.filter((pkg) => pkg.targets.includes("npm"));
@@ -27,10 +35,24 @@ function selectedPackages(manifest) {
 export function resolveReleasePublishInputs(manifest, overrides = {}) {
   const overrideAcknowledgement = (overrides.pluginSdkApiAcknowledgement ?? "").trim();
   requireValue(
-    overrideAcknowledgement === "" || /^[a-f0-9]{8}$/u.test(overrideAcknowledgement),
+    overrideAcknowledgement === "" || isPluginSdkApiAcknowledgement(overrideAcknowledgement),
     "SDK override",
   );
   const sealed = manifest?.publishInputs;
+  if (
+    overrides.npmDistTag === "alpha" ||
+    sealed?.npmDistTag === "alpha" ||
+    manifest?.sourceAdmission?.publicationSelection?.npmDistTag === "alpha" ||
+    sealed?.npmDecisions?.some(
+      (row) =>
+        row.packageVersion?.includes("-alpha.") ||
+        row.plan?.channel === "alpha" ||
+        row.plan?.publishTag === "alpha" ||
+        row.plan?.mirrorDistTags?.includes("alpha"),
+    )
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (sealed?.stableSoakWaiver || manifest?.validationInputs?.laneWaiver) {
     throw new Error(
       "Release waivers are no longer supported; rerun Full Release Validation without waivers.",
@@ -51,14 +73,21 @@ export function resolveReleasePublishInputs(manifest, overrides = {}) {
   );
   requireValue(
     sealed.npmDistTag === manifest.sourceAdmission?.publicationSelection?.npmDistTag &&
-      ["alpha", "beta", "latest", "extended-stable"].includes(sealed.npmDistTag) &&
+      ["beta", "latest", "extended-stable"].includes(sealed.npmDistTag) &&
       (!overrides.npmDistTag || sealed.npmDistTag === overrides.npmDistTag),
     "npm dist-tag mismatch",
   );
+  const buildOnly =
+    manifest.rerunGroup === "build-only" &&
+    manifest.publicationArtifacts?.npmPreflight?.schema === SEALED_NPM_PREFLIGHT_SCHEMA;
   requireValue(
-    /^[a-f0-9]{64}$/u.test(sealed.pluginSdkApiEvidenceDigest) &&
-      (sealed.pluginSdkApiAcknowledgement === "" ||
-        sealed.pluginSdkApiAcknowledgement === sealed.pluginSdkApiEvidenceDigest.slice(0, 8)),
+    buildOnly
+      ? sealed.pluginSdkApiEvidenceDigest === null &&
+          sealed.pluginSdkApiAcknowledgement === "" &&
+          overrideAcknowledgement === ""
+      : /^[a-f0-9]{64}$/u.test(sealed.pluginSdkApiEvidenceDigest) &&
+          (sealed.pluginSdkApiAcknowledgement === "" ||
+            sealed.pluginSdkApiAcknowledgement === sealed.pluginSdkApiEvidenceDigest.slice(0, 8)),
     "SDK acknowledgement digest mismatch",
   );
   const packages = selectedPackages(manifest);
@@ -75,10 +104,10 @@ export function resolveReleasePublishInputs(manifest, overrides = {}) {
     );
     requireValue(
       isRecord(row.plan) &&
-        ["alpha", "beta", "stable"].includes(row.plan.channel) &&
-        ["alpha", "beta", "latest", "extended-stable"].includes(row.plan.publishTag) &&
+        ["beta", "stable"].includes(row.plan.channel) &&
+        ["beta", "latest", "extended-stable"].includes(row.plan.publishTag) &&
         Array.isArray(row.plan.mirrorDistTags) &&
-        row.plan.mirrorDistTags.every((tag) => ["alpha", "beta", "latest"].includes(tag)) &&
+        row.plan.mirrorDistTags.every((tag) => ["beta", "latest"].includes(tag)) &&
         ["already-published", "superseded", "plan"].includes(row.decision) &&
         [null, "npm-readback", "npm-mirror", "npm-tag-repair"].includes(row.route) &&
         typeof row.bootstrap === "boolean" &&
@@ -91,7 +120,10 @@ export function resolveReleasePublishInputs(manifest, overrides = {}) {
     );
   }
   const acknowledgement = overrideAcknowledgement || sealed.pluginSdkApiAcknowledgement;
-  requireValue(acknowledgement === "" || /^[a-f0-9]{8}$/u.test(acknowledgement), "SDK override");
+  requireValue(
+    acknowledgement === "" || isPluginSdkApiAcknowledgement(acknowledgement),
+    "SDK override",
+  );
   return {
     ...sealed,
     pluginSdkApiAcknowledgement: acknowledgement,
@@ -103,17 +135,30 @@ export async function createReleasePublishInputs({ manifest, npmManifest }) {
   const packages = selectedPackages(manifest);
   const npmDistTag = manifest.sourceAdmission.publicationSelection.npmDistTag;
   requireValue(npmManifest.releaseSha === manifest.targetSha, "npm artifact target mismatch");
-  const selected = selectPluginSdkApiReleaseEvidence({
-    evidence: npmManifest.pluginSdkApi,
-    npmDistTag,
-  });
-  const sdk = validatePluginSdkApiReleaseEvidence({
-    evidence: npmManifest.pluginSdkApi,
-    acknowledgement: selected?.digest?.slice(0, 8),
-    expectedHeadSha: manifest.targetSha,
-    expectedWorkflowSha: manifest.publicationArtifacts.npmPreflight.producer.workflowSha,
-    npmDistTag,
-  });
+  const buildOnly =
+    manifest.rerunGroup === "build-only" &&
+    manifest.publicationArtifacts?.npmPreflight?.schema === SEALED_NPM_PREFLIGHT_SCHEMA &&
+    isBuildOnlyNpmPreflight(npmManifest);
+  requireValue(npmManifest.version !== 4 || buildOnly, "build-only npm artifact binding");
+  requireValue(
+    !buildOnly || npmManifest.npmDistTag === npmDistTag,
+    "build-only npm channel mismatch",
+  );
+  const selected = buildOnly
+    ? undefined
+    : selectPluginSdkApiReleaseEvidence({
+        evidence: npmManifest.pluginSdkApi,
+        npmDistTag,
+      });
+  const sdk = buildOnly
+    ? undefined
+    : validatePluginSdkApiReleaseEvidence({
+        evidence: npmManifest.pluginSdkApi,
+        acknowledgement: selected?.digest?.slice(0, 8),
+        expectedHeadSha: manifest.targetSha,
+        expectedWorkflowSha: manifest.publicationArtifacts.npmPreflight.producer.workflowSha,
+        npmDistTag,
+      });
   const npmDecisions = [];
   // Bound concurrent registry requests independently of the selected plugin count.
   for (let offset = 0; offset < packages.length; offset += 8) {
@@ -127,6 +172,7 @@ export async function createReleasePublishInputs({ manifest, npmManifest }) {
             timeoutMs: 15_000,
             attempts: 2,
             redirect: "manual",
+            exactVersion: pkg.version,
           });
           const bootstrap = registry.status === 404;
           const core =
@@ -181,7 +227,7 @@ export async function createReleasePublishInputs({ manifest, npmManifest }) {
       // The sealed digest is evidence only. SDK API changes still need an
       // operator-supplied acknowledgement at publication.
       pluginSdkApiAcknowledgement: "",
-      pluginSdkApiEvidenceDigest: sdk.digest,
+      pluginSdkApiEvidenceDigest: sdk?.digest ?? null,
       npmDecisions,
     },
   });

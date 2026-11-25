@@ -3,18 +3,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
+import { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { createCronJobNameResolver, prepareCronJobNameResolver } from "../cron/store/job-name.js";
+import type { PendingTurnBoundary } from "../config/sessions/session-history-types.js";
 import {
   isCompletionReportInputProvenance,
+  isCronExecutionInputProvenance,
   isSubagentCoordinationInputProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "../sessions/input-provenance.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { isLegacySessionStateNoticeText } from "../sessions/session-state-notice-text.js";
 import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
@@ -23,6 +25,8 @@ import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-o
 import { extractChatHistoryBlockText } from "./chat-display-projection.canvas.js";
 import {
   asRoleContentMessage,
+  attachProjectedTurnBoundary,
+  projectCompletionReportInput,
   extractProjectedText,
   hasAssistantNonTextContent,
   hasAssistantDisplayableNonTextContent,
@@ -31,16 +35,13 @@ import {
   isProjectedForwardedMessage,
   isForwardedUserMessage,
   isCronRunMessage,
+  userMessageStartsDisplayTurn,
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
+import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 
 type TtsSupplementMarker = { textSha256?: string; spokenText?: string };
-
-export type SubagentCoordinationDisplayResolver = {
-  assertCurrent?: () => void;
-  isSubagentSession: (sessionKey: string) => boolean;
-  isSubagentRunMessage: (runId: string, messageSeq: number | undefined) => boolean;
-};
 
 export function isSubagentCoordinationHistoryInput(
   message: Record<string, unknown>,
@@ -101,9 +102,11 @@ export function createSubagentCoordinationHistoryProjection(
         if (typeof steerTargetRunId === "string") {
           visibleSteerRunIds.add(steerTargetRunId);
         }
-        return message;
+        return projectCompletionReportInput(record, projectedHistoryTurnBoundary(record));
       }
-      if (record.display === false) {
+      // A delivery mirror records a reply the run sent to the human, such as a
+      // message(action=send) from a private coordination turn; it is the outcome.
+      if (record.display === false || isOpenClawDeliveryMirrorAssistantMessage(record)) {
         return message;
       }
       if (
@@ -280,6 +283,19 @@ function readChatHistoryRecordTimestampMs(message: unknown): number | undefined 
   return asFiniteNumber(meta?.recordTimestampMs) ?? asFiniteNumber(readRecord(message)?.timestamp);
 }
 
+export function isPreSessionStartAssistantMessage(
+  message: unknown,
+  sessionStartedAt: number | undefined,
+): boolean {
+  const timestamp = readChatHistoryRecordTimestampMs(message);
+  return (
+    sessionStartedAt !== undefined &&
+    readRecord(message)?.role === "assistant" &&
+    timestamp !== undefined &&
+    timestamp < sessionStartedAt
+  );
+}
+
 export function createPreSessionStartAnnouncePairFilter(sessionStartedAt: number | undefined) {
   let precedingAnnounce = false;
   return (messages: unknown[]): unknown[] => {
@@ -291,11 +307,7 @@ export function createPreSessionStartAnnouncePairFilter(sessionStartedAt: number
     for (const current of messages) {
       if (precedingAnnounce) {
         precedingAnnounce = false;
-        const ts =
-          readRecord(current)?.role === "assistant"
-            ? readChatHistoryRecordTimestampMs(current)
-            : undefined;
-        if (typeof ts === "number" && ts < sessionStartedAt) {
+        if (isPreSessionStartAssistantMessage(current, sessionStartedAt)) {
           changed = true;
           continue;
         }
@@ -326,11 +338,61 @@ export function dropPreSessionStartAnnouncePairs(
   return createPreSessionStartAnnouncePairFilter(sessionStartedAt)(messages);
 }
 
+export function readPluginSteeringId(message: unknown): string | undefined {
+  const record = readRecord(message);
+  if (record?.role !== "user") {
+    return undefined;
+  }
+  const provenance = normalizeInputProvenance(record.provenance);
+  const sourceTool = provenance?.sourceTool;
+  return provenance?.kind === "internal_system" && sourceTool?.startsWith("plugin:")
+    ? sourceTool.slice("plugin:".length).trim() || undefined
+    : undefined;
+}
+
+/** Plugin input stays canonical and hidden; only the Control UI requests this display copy. */
+export function projectPluginSteeringMessage(message: Record<string, unknown>) {
+  const pluginId = readPluginSteeringId(message);
+  if (!pluginId) {
+    return message;
+  }
+  const metadata = readRecord(message["__openclaw"]);
+  const steering = readRecord(metadata?.pluginSteering);
+  const displayText = typeof steering?.displayText === "string" ? steering.displayText : undefined;
+  return {
+    ...message,
+    display: true,
+    ...(displayText === undefined
+      ? {}
+      : { content: [{ type: "text", text: displayText }], text: displayText }),
+    __openclaw: {
+      ...metadata,
+      // The body belongs in capped content, not duplicated in uncapped metadata.
+      pluginSteering: {
+        pluginId,
+        ...(typeof steering?.pluginName === "string" ? { pluginName: steering.pluginName } : {}),
+      },
+    },
+  };
+}
+
 function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): boolean {
   if (message.display === false) {
     return true;
   }
-  return message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE;
+  return isOpenClawRuntimeContextCustomMessage(message);
+}
+
+function isDisplayHeartbeatAcknowledgement(
+  message: RoleContentMessage,
+  allowTruncated = false,
+): boolean {
+  // Model history ignores reasoning when classifying no-op heartbeats. Chat
+  // displays reasoning-only items, so empty answer text cannot hide those rows.
+  return (
+    (!hasAssistantNonTextContent(message) || Boolean(extractAssistantPhaseText(message))) &&
+    isHeartbeatOkResponse(message, undefined, allowTruncated)
+  );
 }
 
 function shouldHideProjectedHistoryMessage(
@@ -346,6 +408,31 @@ function shouldHideProjectedHistoryMessage(
   }
   if (!roleContent) {
     return false;
+  }
+  const provenance = normalizeInputProvenance(message.provenance);
+  if (
+    roleContent.role === "user" &&
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === "session" &&
+    isLegacySessionStateNoticeText(extractProjectedText(message.content ?? message.text))
+  ) {
+    return true;
+  }
+  if (
+    roleContent.role === "user" &&
+    provenance?.kind === "internal_system" &&
+    (provenance.sourceTool === "exec" ||
+      provenance.sourceTool === "restart" ||
+      provenance.sourceTool === "cron_failure_repair" ||
+      provenance.sourceTool === "tool_handoff")
+  ) {
+    // Internal repair instructions and yielded tool results belong to the model transcript,
+    // not the chat feed.
+    // Keep the agent's authored outcome visible, including requests for user help.
+    return true;
+  }
+  if (roleContent.role === "user" && isCronExecutionInputProvenance(provenance)) {
+    return true;
   }
   if (roleContent.role === "user" && isCompletionReportInputProvenance(message.provenance)) {
     return true;
@@ -363,11 +450,11 @@ function shouldHideProjectedHistoryMessage(
   if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {
     return false;
   }
-  return heartbeatUser || isHeartbeatOkResponse(roleContent);
+  return heartbeatUser || isDisplayHeartbeatAcknowledgement(roleContent);
 }
 
 /** Identifies the hidden native input that starts a heartbeat-driven turn. */
-export function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
+function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
   const record = readRecord(message);
   if (!record || isForwardedUserMessage(record)) {
     return false;
@@ -376,18 +463,19 @@ export function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean
   return roleContent?.role === "user" && isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT);
 }
 
-function attachProjectedTurnBoundary(message: Record<string, unknown>): Record<string, unknown> {
-  const metadata = readRecord(message["__openclaw"]);
-  if (metadata?.turnBoundary === true) {
-    return message;
+export function projectedHistoryTurnBoundary(message: unknown): PendingTurnBoundary {
+  if (isHeartbeatHistoryTurnBoundaryMessage(message)) {
+    return true;
   }
-  return {
-    ...message,
-    __openclaw: {
-      ...metadata,
-      turnBoundary: true,
-    },
-  };
+  const record = readRecord(message);
+  if (!record || isForwardedUserMessage(record) || asRoleContentMessage(record)?.role !== "user") {
+    return false;
+  }
+  const { kind, sourceTool } = normalizeInputProvenance(record.provenance) ?? {};
+  if (kind === "internal_system" && (sourceTool === "exec" || sourceTool === "restart")) {
+    return sourceTool;
+  }
+  return kind === "inter_session" && sourceTool === "subagent_settle" ? "subagent" : false;
 }
 
 function canCarryProjectedTurnBoundary(message: RoleContentMessage | null): boolean {
@@ -407,65 +495,46 @@ function displayTextForDuplicateCheck(message: Record<string, unknown>): string 
   return text ? text : undefined;
 }
 
-function isDuplicateAcpGatewayInjectedMessage(
+function isDuplicateAssistantDelivery(
   current: Record<string, unknown>,
   previousVisible: Record<string, unknown> | undefined,
 ): boolean {
   if (!previousVisible) {
     return false;
   }
-  if (
-    openclawAssistantModel(previousVisible) !== "acp-runtime" ||
-    openclawAssistantModel(current) !== "gateway-injected"
-  ) {
-    return false;
-  }
-  if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
-    return false;
-  }
-  const previousText = displayTextForDuplicateCheck(previousVisible);
-  const currentText = displayTextForDuplicateCheck(current);
-  return Boolean(previousText && currentText && previousText === currentText);
-}
-
-function isDuplicateChannelFinalDeliveryMirror(
-  current: Record<string, unknown>,
-  previousVisible: Record<string, unknown> | undefined,
-): boolean {
-  if (!previousVisible || !isOpenClawDeliveryMirrorAssistantMessage(current)) {
-    return false;
-  }
-  const deliveryMirror = readRecord(current.openclawDeliveryMirror);
-  if (deliveryMirror?.kind !== "channel-final") {
-    return false;
-  }
-  if (asRoleContentMessage(previousVisible)?.role !== "assistant") {
-    return false;
-  }
-  if (isOpenClawDeliveryMirrorAssistantMessage(previousVisible)) {
-    return false;
-  }
-  if (isProjectedForwardedMessage(previousVisible)) {
-    return false;
-  }
-  const previousMeta = readRecord(previousVisible["__openclaw"]);
-  if (typeof deliveryMirror.sourceAssistantMessageId === "string") {
+  const acpInjection =
+    openclawAssistantModel(previousVisible) === "acp-runtime" &&
+    openclawAssistantModel(current) === "gateway-injected";
+  if (!acpInjection) {
+    const deliveryMirror = readRecord(current.openclawDeliveryMirror);
     if (
-      !deliveryMirror.sourceAssistantMessageId ||
-      deliveryMirror.sourceAssistantMessageId !== previousMeta?.id ||
-      hasAssistantDisplayableNonTextContent(previousVisible) ||
-      hasAssistantNonTextContent(current) ||
-      hasTranscriptMediaFacts(previousVisible) ||
-      hasTranscriptMediaFacts(current)
+      !isOpenClawDeliveryMirrorAssistantMessage(current) ||
+      deliveryMirror?.kind !== "channel-final" ||
+      asRoleContentMessage(previousVisible)?.role !== "assistant" ||
+      isOpenClawDeliveryMirrorAssistantMessage(previousVisible) ||
+      isProjectedForwardedMessage(previousVisible)
     ) {
       return false;
     }
-    const previousText = extractAssistantPhaseText(previousVisible)?.trim();
-    const currentText = extractAssistantPhaseText(current)?.trim();
-    return Boolean(previousText && currentText && previousText === currentText);
-  }
-  if (typeof previousMeta?.mirrorIdentity !== "string" || !previousMeta.mirrorIdentity.trim()) {
-    return false;
+    const previousMeta = readRecord(previousVisible["__openclaw"]);
+    if (typeof deliveryMirror.sourceAssistantMessageId === "string") {
+      if (
+        !deliveryMirror.sourceAssistantMessageId ||
+        deliveryMirror.sourceAssistantMessageId !== previousMeta?.id ||
+        hasAssistantDisplayableNonTextContent(previousVisible) ||
+        hasAssistantNonTextContent(current) ||
+        hasTranscriptMediaFacts(previousVisible) ||
+        hasTranscriptMediaFacts(current)
+      ) {
+        return false;
+      }
+      const previousText = extractAssistantPhaseText(previousVisible)?.trim();
+      const currentText = extractAssistantPhaseText(current)?.trim();
+      return Boolean(previousText && currentText && previousText === currentText);
+    }
+    if (typeof previousMeta?.mirrorIdentity !== "string" || !previousMeta.mirrorIdentity.trim()) {
+      return false;
+    }
   }
   if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
     return false;
@@ -484,10 +553,10 @@ export function toProjectedMessages(messages: unknown[]): Array<Record<string, u
 
 export function filterVisibleProjectedHistoryMessages(
   messages: Array<Record<string, unknown>>,
-  turnBoundaryPending = false,
+  turnBoundaryPending: PendingTurnBoundary = false,
 ): {
   messages: Array<Record<string, unknown>>;
-  turnBoundaryPending: boolean;
+  turnBoundaryPending: PendingTurnBoundary;
 } {
   if (messages.length === 0) {
     return { messages, turnBoundaryPending };
@@ -495,6 +564,7 @@ export function filterVisibleProjectedHistoryMessages(
   let pendingTurnBoundary = turnBoundaryPending;
   let changed = false;
   const visible: Array<Record<string, unknown>> = [];
+  const assistantSources = new Map<string, Record<string, unknown>>();
   for (let i = 0; i < messages.length; i++) {
     const current = messages[i];
     if (!current) {
@@ -509,7 +579,13 @@ export function filterVisibleProjectedHistoryMessages(
     if (
       next &&
       nextRoleContent &&
-      isHeartbeatOkResponse(nextRoleContent) &&
+      isDisplayHeartbeatAcknowledgement(
+        nextRoleContent,
+        Boolean(
+          currentRoleContent &&
+          isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT, { heartbeatOnly: true }),
+        ),
+      ) &&
       !isProjectedForwardedMessage(next)
     ) {
       changed = true;
@@ -519,22 +595,36 @@ export function filterVisibleProjectedHistoryMessages(
     }
     if (shouldHideProjectedHistoryMessage(current, currentRoleContent, heartbeatUser)) {
       changed = true;
-      pendingTurnBoundary ||= heartbeatUser && !isForwardedUserMessage(current);
+      // The latest wake decides: a heartbeat after a resumed command starts its own turn.
+      pendingTurnBoundary = projectedHistoryTurnBoundary(current) || pendingTurnBoundary;
       continue;
     }
-    if (
-      isDuplicateAcpGatewayInjectedMessage(current, messages[i - 1]) ||
-      isDuplicateChannelFinalDeliveryMirror(current, messages[i - 1])
-    ) {
+    const mirrorSourceId = readRecord(current.openclawDeliveryMirror)?.sourceAssistantMessageId;
+    const source =
+      typeof mirrorSourceId === "string" ? assistantSources.get(mirrorSourceId) : messages[i - 1];
+    if (isDuplicateAssistantDelivery(current, source)) {
       changed = true;
       continue;
     }
-    if (pendingTurnBoundary && canCarryProjectedTurnBoundary(currentRoleContent)) {
-      visible.push(attachProjectedTurnBoundary(current));
+    if (
+      pendingTurnBoundary &&
+      currentRoleContent?.role === "user" &&
+      userMessageStartsDisplayTurn(current)
+    ) {
+      // Plain user text already starts the next turn. Drop the boundary so
+      // this turn's assistant stays with that user.
+      pendingTurnBoundary = false;
+      visible.push(current);
+    } else if (pendingTurnBoundary && canCarryProjectedTurnBoundary(currentRoleContent)) {
+      visible.push(attachProjectedTurnBoundary(current, pendingTurnBoundary));
       pendingTurnBoundary = false;
       changed = true;
     } else {
       visible.push(current);
+    }
+    const sourceId = readRecord(current["__openclaw"])?.id;
+    if (currentRoleContent?.role === "assistant" && typeof sourceId === "string") {
+      assistantSources.set(sourceId, current);
     }
   }
   return {
@@ -586,7 +676,7 @@ function resolveForwardedSenderSession(
     : undefined;
 }
 
-function readForwardedCronJobIds(messages: readonly unknown[]) {
+export function readForwardedCronJobIds(messages: readonly unknown[]) {
   return messages.flatMap((value) => {
     const message = readRecord(value);
     if (!message || (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message))) {
@@ -597,19 +687,15 @@ function readForwardedCronJobIds(messages: readonly unknown[]) {
   });
 }
 
-export async function prepareForwardedMessageCronJobNameResolver(
-  messages: readonly unknown[],
-  storePath?: string,
-) {
-  return await prepareCronJobNameResolver(readForwardedCronJobIds(messages), storePath);
-}
-
 export function projectForwardedMessages(
   messages: Array<Record<string, unknown>>,
   resolveCronJobName?: (jobId: string) => string | undefined,
 ): Array<Record<string, unknown>> {
   const resolve =
-    resolveCronJobName ?? createCronJobNameResolver(readForwardedCronJobIds(messages));
+    resolveCronJobName ??
+    (() => {
+      throw new Error("Cron job names must be prepared before projecting forwarded messages");
+    });
   const names = new Map<string, string | undefined>();
   const resolveName = (jobId: string) => {
     if (!names.has(jobId)) {
@@ -617,8 +703,7 @@ export function projectForwardedMessages(
     }
     return names.get(jobId);
   };
-  let changed = false;
-  const projected = messages.map((message) => {
+  return mapChatDisplayMessages(messages, (message) => {
     if (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message)) {
       return message;
     }
@@ -628,14 +713,12 @@ export function projectForwardedMessages(
       if (previous?.label === senderSession?.label) {
         return message;
       }
-      changed = true;
       return {
         ...message,
         senderSession,
         senderLabel: `Forwarded from ${senderSession?.label ?? senderSession?.agentId}`,
       };
     }
-    changed = true;
     const cronRun = isCronRunMessage(message);
     const prefix = normalizeInputProvenance(message.provenance)?.sourcePromptPrefix;
     const strip = cronRun
@@ -662,5 +745,4 @@ export function projectForwardedMessages(
     }
     return next;
   });
-  return changed ? projected : messages;
 }

@@ -1,293 +1,127 @@
-import { describe, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import * as configBindings from "../config/bindings.js";
+import type { AgentRouteBinding } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentRoute } from "./resolve-route.js";
+import {
+  resolveAgentRoute,
+  type ResolveAgentRouteInput,
+  type ResolvedAgentRoute,
+} from "./resolve-route.js";
 
-describe("resolved route cache keys", () => {
-  test("keeps cached routes independent of returned route mutations", () => {
-    const input: Parameters<typeof resolveAgentRoute>[0] = {
-      cfg: { agents: { entries: { main: {} } } },
-      channel: "discord",
-      peer: { kind: "direct", id: "user-1" },
-    };
-    let route = resolveAgentRoute(input);
-    const expected = { ...route };
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      route.agentId = "caller-owned-agent";
-      route.sessionKey = "caller-owned-session";
-      route = resolveAgentRoute(input);
-      expect(route).toEqual(expected);
+type RouteInput = Omit<ResolveAgentRouteInput, "cfg" | "channel">;
+type RouteCheck = [RouteInput, string, ResolvedAgentRoute["matchedBy"], string?];
+type Binding = [string, Partial<AgentRouteBinding["match"]>];
+const peer = (id: string, kind: "group" | "direct" = "group") => ({ peer: { kind, id } });
+function routeConfig(
+  channel: string,
+  bindings: Binding[],
+  agentIds = bindings.map(([id]) => id),
+): OpenClawConfig {
+  return {
+    agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) },
+    bindings: bindings.map(([agentId, match]) => ({
+      agentId,
+      match: { channel, accountId: "default", ...match },
+    })),
+  };
+}
+function checkRoutes(cfg: OpenClawConfig, channel: string, checks: RouteCheck[]) {
+  for (const [input, agentId, matchedBy, sessionKey] of checks) {
+    const route = resolveAgentRoute({ cfg, channel, accountId: "default", ...input });
+    expect(route).toMatchObject({ agentId, matchedBy });
+    if (sessionKey !== undefined) {
+      expect(route.sessionKey).toBe(sessionKey);
     }
-  });
+  }
+}
+const collisionCases: Array<[string, Binding[], RouteCheck[]]> = [
+  [
+    "peer and guild separators",
+    [
+      ["whole-peer", peer("room\t-\tguild-1")],
+      ["guild-room", { ...peer("room"), guildId: "guild-1" }],
+    ],
+    [
+      [peer("room\t-\tguild-1"), "whole-peer", "binding.peer"],
+      [{ ...peer("room"), guildId: "guild-1" }, "guild-room", "binding.peer"],
+    ],
+  ],
+  [
+    "role separators",
+    [
+      ["comma-role", { guildId: "guild-1", roles: ["a,b"] }],
+      ["suffix-role", { guildId: "guild-1", roles: ["b,c"] }],
+    ],
+    [
+      [{ guildId: "guild-1", memberRoleIds: ["a,b", "c"] }, "comma-role", "binding.guild+roles"],
+      [{ guildId: "guild-1", memberRoleIds: ["a", "b,c"] }, "suffix-role", "binding.guild+roles"],
+    ],
+  ],
+  [
+    "omitted guild versus literal hyphen",
+    [["hyphen-guild", { guildId: "-" }]],
+    [
+      [{ ...peer("room"), defaultAgentId: "main" }, "main", "default"],
+      [{ ...peer("room"), guildId: "-" }, "hyphen-guild", "binding.guild"],
+    ],
+  ],
+];
 
-  test("does not reuse a cached route when peer and guild fields contain cache separators", () => {
-    const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "whole-peer" }, { id: "guild-room" }] },
-      bindings: [
-        {
-          agentId: "whole-peer",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            peer: { kind: "group", id: "room\t-\tguild-1" },
-          },
-        },
-        {
-          agentId: "guild-room",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            peer: { kind: "group", id: "room" },
-            guildId: "guild-1",
-          },
-        },
-      ],
-    };
-
-    expect(
-      resolveAgentRoute({
-        cfg,
-        channel: "discord",
-        accountId: "default",
-        peer: { kind: "group", id: "room\t-\tguild-1" },
-      }),
-    ).toMatchObject({ agentId: "whole-peer", matchedBy: "binding.peer" });
-    expect(
-      resolveAgentRoute({
-        cfg,
-        channel: "discord",
-        accountId: "default",
-        guildId: "guild-1",
-        peer: { kind: "group", id: "room" },
-      }),
-    ).toMatchObject({ agentId: "guild-room", matchedBy: "binding.peer" });
-  });
-
-  test("does not reuse a cached route when role IDs contain cache separators", () => {
-    const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "comma-role" }, { id: "suffix-role" }] },
-      bindings: [
-        {
-          agentId: "comma-role",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            guildId: "guild-1",
-            roles: ["a,b"],
-          },
-        },
-        {
-          agentId: "suffix-role",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            guildId: "guild-1",
-            roles: ["b,c"],
-          },
-        },
-      ],
-    };
-
-    expect(
-      resolveAgentRoute({
-        cfg,
-        channel: "discord",
-        accountId: "default",
-        guildId: "guild-1",
-        memberRoleIds: ["a,b", "c"],
-      }),
-    ).toMatchObject({ agentId: "comma-role", matchedBy: "binding.guild+roles" });
-    expect(
-      resolveAgentRoute({
-        cfg,
-        channel: "discord",
-        accountId: "default",
-        guildId: "guild-1",
-        memberRoleIds: ["a", "b,c"],
-      }),
-    ).toMatchObject({ agentId: "suffix-role", matchedBy: "binding.guild+roles" });
-  });
-
-  test("does not reuse a cached route when guildId is omitted versus the literal hyphen string", () => {
-    const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "hyphen-guild" }] },
-      bindings: [
-        {
-          agentId: "hyphen-guild",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            guildId: "-",
-          },
-        },
-      ],
-    };
-
-    expect(
-      resolveAgentRoute({
-        cfg,
-        channel: "discord",
-        accountId: "default",
-        peer: { kind: "group", id: "room" },
-      }),
-    ).toMatchObject({ agentId: "main", matchedBy: "default" });
-    expect(
-      resolveAgentRoute({
-        cfg,
-        channel: "discord",
-        accountId: "default",
-        peer: { kind: "group", id: "room" },
-        guildId: "-",
-      }),
-    ).toMatchObject({ agentId: "hyphen-guild", matchedBy: "binding.guild" });
-  });
-
-  test("keeps peer presence, kind, and id distinct across cached route tiers", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [
-          { id: "channel-wide" },
-          { id: "account-wide" },
-          { id: "any-direct" },
-          { id: "any-group" },
-          { id: "known-direct" },
-        ],
-      },
-      bindings: [
-        {
-          agentId: "known-direct",
-          match: {
-            channel: "telegram",
-            accountId: "default",
-            peer: { kind: "direct", id: "known" },
-          },
-        },
-        {
-          agentId: "any-direct",
-          match: {
-            channel: "telegram",
-            accountId: "default",
-            peer: { kind: "direct", id: "*" },
-          },
-        },
-        {
-          agentId: "any-group",
-          match: {
-            channel: "telegram",
-            accountId: "default",
-            peer: { kind: "group", id: "*" },
-          },
-        },
-        {
-          agentId: "account-wide",
-          match: { channel: "telegram", accountId: "work" },
-        },
-        {
-          agentId: "channel-wide",
-          match: { channel: "telegram", accountId: "*" },
-        },
-      ],
-    };
-
-    expect(resolveAgentRoute({ cfg, channel: "telegram", accountId: "default" })).toMatchObject({
-      agentId: "channel-wide",
-      matchedBy: "binding.channel",
-    });
-    expect(
-      resolveAgentRoute({
-        cfg,
-        channel: "telegram",
-        accountId: "default",
-        peer: { kind: "direct", id: "" },
-      }),
-    ).toMatchObject({ agentId: "any-direct", matchedBy: "binding.peer.wildcard" });
-    expect(
-      resolveAgentRoute({
-        cfg,
-        channel: "telegram",
-        accountId: "default",
-        peer: { kind: "group", id: "" },
-      }),
-    ).toMatchObject({
-      agentId: "any-group",
-      matchedBy: "binding.peer.wildcard",
-      sessionKey: "agent:any-group:telegram:group:unknown",
-    });
-    expect(
-      resolveAgentRoute({
-        cfg,
-        channel: "telegram",
-        accountId: "default",
-        peer: { kind: "direct", id: "known" },
-      }),
-    ).toMatchObject({ agentId: "known-direct", matchedBy: "binding.peer" });
-    expect(resolveAgentRoute({ cfg, channel: "telegram", accountId: "work" })).toMatchObject({
-      agentId: "account-wide",
-      matchedBy: "binding.account",
-    });
-    expect(resolveAgentRoute({ cfg, channel: "telegram", accountId: "default" })).toMatchObject({
-      agentId: "channel-wide",
-      matchedBy: "binding.channel",
-    });
-    expect(
-      resolveAgentRoute({
-        cfg,
-        channel: "telegram",
-        accountId: "default",
-        peer: { kind: "direct", id: "" },
-      }),
-    ).toMatchObject({ agentId: "any-direct", matchedBy: "binding.peer.wildcard" });
-  });
+test("keeps cached routes independent of returned route mutations", () => {
+  const input: ResolveAgentRouteInput = {
+    cfg: { agents: { entries: { main: {} } } },
+    channel: "discord",
+    peer: { kind: "direct", id: "user-1" },
+  };
+  let route = resolveAgentRoute(input);
+  const expected = { ...route };
+  for (let index = 0; index < 2; index += 1) {
+    route.agentId = "caller-owned-agent";
+    route.sessionKey = "caller-owned-session";
+    route = resolveAgentRoute(input);
+    expect(route).toEqual(expected);
+  }
 });
 
-describe("binding evaluation cache scalability", () => {
-  test("does not rescan full bindings across distinct channel/account cache entries (#36915)", () => {
-    const cacheKeyCount = 64;
-    const cfg: OpenClawConfig = {
-      bindings: [
-        {
-          agentId: "agent-0",
-          match: {
-            channel: "dingtalk",
-            accountId: "acct-0",
-            peer: { kind: "direct", id: "user-0" },
-          },
-        },
-      ],
-    };
-    const listBindingsSpy = vi.spyOn(configBindings, "listRouteBindings");
-    try {
-      const boundRoute = resolveAgentRoute({
-        cfg,
-        channel: "dingtalk",
-        accountId: "acct-0",
-        peer: { kind: "direct", id: "user-0" },
-      });
-      expect(boundRoute.agentId).toBe("agent-0");
-      expect(boundRoute.matchedBy).toBe("binding.peer");
+test.each(collisionCases)("keeps %s distinct in cached routes", (_name, bindings, checks) => {
+  const agents = checks.map(([, id]) => id);
+  checkRoutes(routeConfig("discord", bindings, agents), "discord", checks);
+});
 
-      for (let idx = 1; idx < cacheKeyCount; idx += 1) {
-        const route = resolveAgentRoute({
-          cfg,
-          channel: "dingtalk",
-          accountId: `acct-${idx}`,
-          peer: { kind: "direct", id: `user-${idx}` },
-        });
-        expect(route.agentId).toBe("main");
-        expect(route.matchedBy).toBe("default");
-      }
-
-      const repeated = resolveAgentRoute({
-        cfg,
-        channel: "dingtalk",
-        accountId: "acct-0",
-        peer: { kind: "direct", id: "user-0" },
-      });
-      expect(repeated.agentId).toBe("agent-0");
-      expect(listBindingsSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      listBindingsSpy.mockRestore();
-    }
+test("keeps peer presence, kind, and id distinct across cached route tiers", () => {
+  const cfg = routeConfig("telegram", [
+    ["known-direct", peer("known", "direct")],
+    ["any-direct", peer("*", "direct")],
+    ["any-group", peer("*")],
+    ["account-wide", { accountId: "work" }],
+    ["channel-wide", { accountId: "*" }],
+  ]);
+  const checks: RouteCheck[] = [
+    [{}, "channel-wide", "binding.channel"],
+    [peer("", "direct"), "any-direct", "binding.peer.wildcard"],
+    [peer(""), "any-group", "binding.peer.wildcard", "agent:any-group:telegram:group:unknown"],
+    [peer("known", "direct"), "known-direct", "binding.peer"],
+    [{ accountId: "work" }, "account-wide", "binding.account"],
+  ];
+  checkRoutes(cfg, "telegram", [...checks, ...checks.slice(0, 2)]);
+});
+test("does not rescan full bindings across distinct channel/account cache entries (#36915)", () => {
+  const input = (index: number) => ({
+    channel: "dingtalk",
+    accountId: `acct-${index}`,
+    peer: { kind: "direct" as const, id: `user-${index}` },
   });
+  const cfg: OpenClawConfig = { bindings: [{ agentId: "agent-0", match: input(0) }] };
+  const route = (index: number) => resolveAgentRoute({ cfg, ...input(index) });
+  const listBindingsSpy = vi.spyOn(configBindings, "listRouteBindings");
+  try {
+    expect(route(0)).toMatchObject({ agentId: "agent-0", matchedBy: "binding.peer" });
+    for (let index = 1; index < 64; index += 1) {
+      expect(route(index)).toMatchObject({ agentId: "main", matchedBy: "default" });
+    }
+    expect(route(0).agentId).toBe("agent-0");
+    expect(listBindingsSpy).toHaveBeenCalledTimes(1);
+  } finally {
+    listBindingsSpy.mockRestore();
+  }
 });

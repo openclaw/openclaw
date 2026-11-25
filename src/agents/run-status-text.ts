@@ -1,19 +1,9 @@
-import { truncateUtf16Safe } from "../utils.js";
-// Builds task status summaries and formatted status text for user-facing surfaces.
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
-
-/** Applies a task display limit to text that its caller has already sanitized. */
-function truncateRunStatusText(value: string, maxChars: number): string {
-  const trimmed = value.trim();
-  if (trimmed.length <= maxChars) {
-    return trimmed;
-  }
-  return `${truncateUtf16Safe(trimmed, Math.max(0, maxChars - 1)).trimEnd()}…`;
-}
 
 function stripInlineLeakedInternalContext(value: string): string {
   // Completion text can accidentally include hidden runtime context; strip it before status output.
@@ -81,7 +71,11 @@ export function sanitizeRunStatusText(
     return "";
   }
   if (typeof opts?.maxChars === "number") {
-    return truncateRunStatusText(sanitized, opts.maxChars);
+    return truncateWithMarker(sanitized, opts.maxChars, {
+      marker: "…",
+      reserve: 1,
+      trimEnd: true,
+    });
   }
   return sanitized;
 }

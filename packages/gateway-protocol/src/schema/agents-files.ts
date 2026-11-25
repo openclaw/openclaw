@@ -49,6 +49,7 @@ export const AgentsFilesSetParamsSchema = Object.assign(
     agentId: NonEmptyString,
     name: NonEmptyString,
     content: Type.String(),
+    expectedWorkspace: Type.Optional(NonEmptyString),
     expectedHash: Type.Optional(Sha256String),
     expectedMissing: Type.Optional(Type.Literal(true)),
   }),

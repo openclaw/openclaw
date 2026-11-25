@@ -1,7 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
 import { containerCheck, containerRpcRequest, streamContainerEvents } from "./client-container.js";
-import type { SignalRpcOptions } from "./client.js";
+import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
 import {
   signalCheck as nativeCheck,
   signalRpcRequest as nativeRpcRequest,
@@ -10,10 +10,7 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-export type SignalSseEvent = {
-  event?: string;
-  data?: string;
-};
+export type { SignalSseEvent } from "./client-types.js";
 
 export type SignalTransportKind = SignalTransportConfig["kind"];
 
@@ -21,7 +18,6 @@ export async function signalRpcRequest<T = unknown>(
   method: string,
   params: Record<string, unknown> | undefined,
   opts: SignalRpcOptions & {
-    accountId?: string;
     transportKind?: SignalTransportKind;
     maxAttachmentBytes?: number;
   },
@@ -48,9 +44,9 @@ export async function signalCheck(
 export async function streamSignalEvents(params: {
   baseUrl: string;
   account?: string;
-  accountId?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  lastEventId?: string;
   onEvent: (event: SignalSseEvent) => unknown;
   onStreamOpen?: () => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };

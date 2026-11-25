@@ -74,17 +74,17 @@ describe("insertBlocksInBatches", () => {
     expect(createMock).toHaveBeenCalledTimes(2);
     expect(createCallParams(createMock).data.children_id).toHaveLength(BATCH_SIZE);
     expect(createCallParams(createMock, 1).data.children_id).toHaveLength(200);
-    expect(result.children).toHaveLength(blockCount);
+    expect(result).toHaveLength(blockCount);
   });
 
-  it("keeps nested descendants grouped with their root blocks", async () => {
+  it("keeps nested descendants grouped with their roots without repeating shared or cyclic blocks", async () => {
     const createMock = createSuccessfulDocxDescendantCreateMock();
     const client = createDocxDescendantClient((params) => createMock(params));
     const blocks: FeishuDocxBlock[] = [
       { block_id: "root_a", block_type: 1, children: ["child_a"] },
-      { block_id: "child_a", block_type: 2 },
-      { block_id: "root_b", block_type: 1, children: ["child_b"] },
-      { block_id: "child_b", block_type: 2 },
+      { block_id: "child_a", block_type: 2, children: "root_a" },
+      { block_id: "root_b", block_type: 1, children: ["child_a", "child_b"] },
+      { block_id: "child_b", block_type: 2, children: ["missing"] },
     ];
 
     await insertBlocksInBatches(client, "doc_1", blocks, ["root_a", "root_b"]);

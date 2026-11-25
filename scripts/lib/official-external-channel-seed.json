@@ -1,6 +1,44 @@
 {
   "entries": [
     {
+      "name": "@agentmail/agentmail",
+      "description": "Official AgentMail email channel and CLI-backed skill.",
+      "source": "external",
+      "kind": "channel",
+      "openclaw": {
+        "plugin": { "id": "agentmail", "label": "AgentMail" },
+        "channel": {
+          "id": "agentmail",
+          "label": "AgentMail",
+          "selectionLabel": "AgentMail (Email)",
+          "detailLabel": "AgentMail Email",
+          "docsPath": "https://www.agentmail.to/docs/integrations/openclaw",
+          "docsLabel": "agentmail",
+          "exposure": { "docs": false },
+          "blurb": "Durable, allowlisted, reply-only email conversations through AgentMail.",
+          "order": 89,
+          "quickstartAllowFrom": true,
+          "configuredState": {
+            "env": { "anyOf": ["AGENTMAIL_API_KEY"] }
+          }
+        },
+        "channelConfigs": {
+          "agentmail": {
+            "label": "AgentMail",
+            "description": "AgentMail email channel accounts and sender allowlist.",
+            "schema": { "type": "object", "additionalProperties": true }
+          }
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@agentmail/agentmail@0.2.1",
+          "expectedIntegrity": "sha256:155221cec38673a39bc27629f9f6ec87567ce4e37b7fa619ec4b1f7ca3d28730",
+          "defaultChoice": "clawhub",
+          "minHostVersion": ">=2026.8.1-beta.2",
+          "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
       "name": "@wecom/wecom-openclaw-plugin",
       "description": "OpenClaw WeCom channel plugin by the Tencent WeCom team.",
       "source": "external",

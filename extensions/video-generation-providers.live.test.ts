@@ -3,7 +3,6 @@ import {
   resolveApiKeyForProvider,
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -25,15 +24,13 @@ import {
   DEFAULT_LIVE_VIDEO_MODELS,
   canRunBufferBackedImageToVideoLiveLane,
   canRunBufferBackedVideoToVideoLiveLane,
-  encodePngRgba,
-  fillPixel,
   normalizeVideoGenerationDuration,
   parseCsvFilter,
   parseProviderModelMap,
   parseVideoGenerationModelRef,
   redactLiveApiKey,
-  resolveConfiguredLiveVideoModels,
-  resolveLiveVideoAuthStore,
+  resolveConfiguredLiveProviderModels,
+  resolveLiveAuthStore,
   resolveLiveVideoResolution,
 } from "openclaw/plugin-sdk/test-media-generation";
 import type {
@@ -49,15 +46,22 @@ import byteplusPlugin from "./byteplus/index.js";
 import deepinfraPlugin from "./deepinfra/index.js";
 import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
+import kiePlugin from "./kie/index.js";
 import minimaxPlugin from "./minimax/index.js";
+import novitaPlugin from "./novita/index.js";
 import openrouterPlugin from "./openrouter/index.js";
 import pixversePlugin from "./pixverse/index.js";
 import qwenPlugin from "./qwen/index.js";
 import runwayPlugin from "./runway/index.js";
-import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generation-live-test-helpers.js";
+import {
+  createReferencePng,
+  maybeLoadShellEnvForGenerationProviders,
+  withPluginsEnabled,
+} from "./test-support/generation-live-test-helpers.js";
 import togetherPlugin from "./together/index.js";
 import vydraPlugin from "./vydra/index.js";
 import xaiPlugin from "./xai/index.js";
+import zaiPlugin from "./zai/index.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
@@ -116,12 +120,14 @@ const CASES: LiveProviderCase[] = [
   },
   { plugin: falPlugin, pluginId: "fal", pluginName: "fal Provider", providerId: "fal" },
   { plugin: googlePlugin, pluginId: "google", pluginName: "Google Provider", providerId: "google" },
+  { plugin: kiePlugin, pluginId: "kie", pluginName: "Kie AI Provider", providerId: "kie" },
   {
     plugin: minimaxPlugin,
     pluginId: "minimax",
     pluginName: "MiniMax Provider",
     providerId: "minimax",
   },
+  { plugin: novitaPlugin, pluginId: "novita", pluginName: "NovitaAI", providerId: "novita" },
   {
     plugin: openrouterPlugin,
     pluginId: "openrouter",
@@ -144,6 +150,7 @@ const CASES: LiveProviderCase[] = [
   },
   { plugin: vydraPlugin, pluginId: "vydra", pluginName: "Vydra Provider", providerId: "vydra" },
   { plugin: xaiPlugin, pluginId: "xai", pluginName: "xAI Plugin", providerId: "xai" },
+  { plugin: zaiPlugin, pluginId: "zai", pluginName: "Z.AI Provider", providerId: "zai" },
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))
   .filter((entry) =>
@@ -156,44 +163,13 @@ function readPositiveIntegerEnv(raw: string | undefined, fallback: number): numb
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function withPluginsEnabled(cfg: OpenClawConfig): OpenClawConfig {
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      enabled: true,
-    },
-  };
-}
-
 function createEditReferencePng(): Buffer {
-  const width = 384;
-  const height = 384;
-  const buf = Buffer.alloc(width * height * 4, 255);
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      fillPixel(buf, x, y, width, 238, 247, 255, 255);
+  return createReferencePng(384, 384, (x, y) => {
+    if (x >= 96 && x < 288 && y >= 96 && y < 288) {
+      return [255, 255, 255, 255];
     }
-  }
-
-  const outerInsetX = Math.max(1, Math.floor(width / 8));
-  const outerInsetY = Math.max(1, Math.floor(height / 8));
-  for (let y = outerInsetY; y < height - outerInsetY; y += 1) {
-    for (let x = outerInsetX; x < width - outerInsetX; x += 1) {
-      fillPixel(buf, x, y, width, 76, 154, 255, 255);
-    }
-  }
-
-  const innerInsetX = Math.max(1, Math.floor(width / 4));
-  const innerInsetY = Math.max(1, Math.floor(height / 4));
-  for (let y = innerInsetY; y < height - innerInsetY; y += 1) {
-    for (let x = innerInsetX; x < width - innerInsetX; x += 1) {
-      fillPixel(buf, x, y, width, 255, 255, 255, 255);
-    }
-  }
-
-  return encodePngRgba(buf, width, height);
+    return x >= 48 && x < 336 && y >= 48 && y < 336 ? [76, 154, 255, 255] : [238, 247, 255, 255];
+  });
 }
 
 function resolveProviderModelForLiveTest(providerId: string, modelRef: string): string {
@@ -404,7 +380,9 @@ async function runLiveVideoProviderCase(
   skip: (note: string) => void,
 ): Promise<void> {
   const cfg = withPluginsEnabled(await readLiveTestConfig());
-  const configuredModels = resolveConfiguredLiveVideoModels(cfg);
+  const configuredModels = resolveConfiguredLiveProviderModels(
+    cfg.agents?.defaults?.mediaModels?.video,
+  );
   const agentDir = resolveDefaultAgentDir(cfg as never);
   const attempted: string[] = [];
   const skipped: string[] = [];
@@ -424,7 +402,7 @@ async function runLiveVideoProviderCase(
   }
 
   const hasLiveKeys = collectProviderApiKeys(testCase.providerId).length > 0;
-  const authStore = resolveLiveVideoAuthStore({
+  const authStore = resolveLiveAuthStore({
     requireProfileKeys: REQUIRE_PROFILE_KEYS,
     hasLiveKeys,
   });

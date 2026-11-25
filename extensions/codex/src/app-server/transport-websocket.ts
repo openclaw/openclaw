@@ -1,15 +1,15 @@
-/**
- * Adapts a remote Codex app-server WebSocket endpoint to the shared stdio-like
- * transport interface.
- */
+import { X509Certificate } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { Agent as HttpsAgent } from "node:https";
 import net from "node:net";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
-import { type ClientOptions, type RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { checkServerIdentity } from "node:tls";
+import { type ClientOptions, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { resolveCodexAppServerUserHomeDir, type CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
+import { codexWebSocketDataToBuffer } from "./websocket-data.js";
 
 const WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 10_000;
 const WEBSOCKET_PING_INTERVAL_MS = 20_000;
@@ -54,6 +54,32 @@ export function createWebSocketTransport(
       ? { handshakeTimeout: WEBSOCKET_HANDSHAKE_TIMEOUT_MS }
       : {}),
   };
+  if (options.tlsPeerCertificate !== undefined) {
+    const pem = options.tlsPeerCertificate.trim();
+    if (
+      options.transport !== "websocket" ||
+      new URL(options.url).protocol !== "wss:" ||
+      pem.length > 16384 ||
+      !/^-----BEGIN CERTIFICATE-----[\r\n]+[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----$/u.test(pem)
+    ) {
+      throw new Error("tlsPeerCertificate requires a WSS endpoint and one PEM certificate");
+    }
+    const admitted = new X509Certificate(pem);
+    // Use a fresh TLS connection for every upgrade. Neither ambient roots nor
+    // a resumed session may authorize another listener at the same address.
+    websocketOptions.agent = new HttpsAgent({
+      ca: pem,
+      keepAlive: false,
+      maxCachedSessions: 0,
+      allowPartialTrustChain: true,
+      rejectUnauthorized: true,
+      checkServerIdentity: (host, peer) =>
+        checkServerIdentity(host, peer) ??
+        (admitted.raw.equals(peer.raw)
+          ? undefined
+          : new Error("Codex app-server TLS peer changed")),
+    });
+  }
   const unixSocketPath = resolveCodexAppServerUnixSocketPath(options);
   const socket = unixSocketPath
     ? new WebSocket("ws://localhost/", {
@@ -74,14 +100,10 @@ export function createWebSocketTransport(
   let heartbeatSequence = 0;
 
   const clearConnectionHealthTimers = () => {
-    if (pingTimeout) {
-      clearTimeout(pingTimeout);
-      pingTimeout = undefined;
-    }
-    if (pongTimeout) {
-      clearTimeout(pongTimeout);
-      pongTimeout = undefined;
-    }
+    clearTimeout(pingTimeout);
+    pingTimeout = undefined;
+    clearTimeout(pongTimeout);
+    pongTimeout = undefined;
     expectedPong = undefined;
   };
 
@@ -128,10 +150,8 @@ export function createWebSocketTransport(
 
   const recordConnectionActivity = () => {
     consecutiveMissedPongs = 0;
-    if (pongTimeout) {
-      clearTimeout(pongTimeout);
-      pongTimeout = undefined;
-    }
+    clearTimeout(pongTimeout);
+    pongTimeout = undefined;
     expectedPong = undefined;
     scheduleHeartbeatPing();
   };
@@ -193,7 +213,7 @@ export function createWebSocketTransport(
     if (options.transport === "websocket") {
       recordConnectionActivity();
     }
-    const frame = websocketFrameToBuffer(data);
+    const frame = codexWebSocketDataToBuffer(data);
     const writable = stdout.write(frame);
     const delimited = frame.at(-1) === 10 || stdout.write(Buffer.from("\n"));
     if (!writable || !delimited) {
@@ -218,10 +238,7 @@ export function createWebSocketTransport(
       callback();
     },
     final(callback) {
-      pendingLine += stdinDecoder.end();
-      if (pendingLine) {
-        sendFrame(pendingLine);
-      }
+      sendFrame(pendingLine + stdinDecoder.end());
       pendingLine = "";
       callback();
     },
@@ -266,7 +283,6 @@ function connectCodexAppServerUnixSocket(socketPath: string): net.Socket {
   return net.createConnection(socketPath);
 }
 
-/** Resolves the canonical or explicitly configured Codex control socket. */
 export function resolveCodexAppServerUnixSocketPath(
   options: Pick<CodexAppServerStartOptions, "env" | "transport" | "url">,
 ): string | undefined {
@@ -289,17 +305,4 @@ export function resolveCodexAppServerUnixSocketPath(
       "app-server-control.sock",
     )
   );
-}
-
-function websocketFrameToBuffer(data: RawData): Buffer {
-  if (typeof data === "string") {
-    return Buffer.from(data);
-  }
-  if (Buffer.isBuffer(data)) {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data);
-  }
-  return Buffer.from(data);
 }

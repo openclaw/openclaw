@@ -1,4 +1,3 @@
-// MCP loopback HTTP request helpers.
 // Authenticates local MCP POST requests and extracts scoped Gateway context.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -10,6 +9,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { writeJsonWithoutCharset } from "../infra/http-json.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-header-value.js";
@@ -143,14 +143,14 @@ export function validateMcpLoopbackRequest(params: {
   nonOwnerToken: string;
   onSseResponse?: (res: ServerResponse) => void;
 }): McpLoopbackRequestAuth | null {
-  let url: URL;
-  try {
-    url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
-  } catch {
-    logMcpLoopbackTraffic("reject", { reason: "bad_request_url", method: params.req.method ?? "" });
-    params.res.writeHead(400, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "bad_request" }));
+  const reply = (status: number, body: unknown): null => {
+    writeJsonWithoutCharset(params.res, status, body);
     return null;
+  };
+  const url = URL.parse(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
+  if (!url) {
+    logMcpLoopbackTraffic("reject", { reason: "bad_request_url", method: params.req.method ?? "" });
+    return reply(400, { error: "bad_request" });
   }
 
   if (params.req.method === "GET" && url.pathname.startsWith("/.well-known/")) {
@@ -165,9 +165,7 @@ export function validateMcpLoopbackRequest(params: {
       method: params.req.method ?? "",
       path: url.pathname,
     });
-    params.res.writeHead(404, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "not_found" }));
-    return null;
+    return reply(404, { error: "not_found" });
   }
 
   if (
@@ -194,9 +192,7 @@ export function validateMcpLoopbackRequest(params: {
         origin: getHeader(params.req, "origin") ?? "",
       });
     }
-    params.res.writeHead(403, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "forbidden" }));
-    return null;
+    return reply(403, { error: "forbidden" });
   }
 
   const sender = resolveMcpSender(params);
@@ -208,9 +204,7 @@ export function validateMcpLoopbackRequest(params: {
         hasAuthorization: (getHeader(params.req, "authorization") ?? "").length > 0,
       });
     }
-    params.res.writeHead(401, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "unauthorized" }));
-    return null;
+    return reply(401, { error: "unauthorized" });
   }
 
   if (params.req.method === "GET") {
@@ -218,7 +212,6 @@ export function validateMcpLoopbackRequest(params: {
     params.res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      Connection: "keep-alive",
     });
     params.res.flushHeaders();
     params.res.write(":\n\n");
@@ -233,21 +226,18 @@ export function validateMcpLoopbackRequest(params: {
   if (params.req.method === "DELETE") {
     // This stateless listener owns no session lifecycle; authenticated teardown is a no-op.
     logMcpLoopbackTraffic("session-delete", { method: "DELETE", path: url.pathname });
-    params.res.writeHead(200, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ ok: true }));
-    return null;
+    return reply(200, { ok: true });
   }
 
   const contentType = getHeader(params.req, "content-type") ?? "";
-  if (!contentType.startsWith("application/json")) {
+  // Media types are case-insensitive (RFC 9110 §8.3.1).
+  if (contentType.slice(0, "application/json".length).toLowerCase() !== "application/json") {
     logMcpLoopbackTraffic("reject", {
       reason: "unsupported_media_type",
       method: params.req.method ?? "",
       contentType,
     });
-    params.res.writeHead(415, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "unsupported_media_type" }));
-    return null;
+    return reply(415, { error: "unsupported_media_type" });
   }
 
   return sender;
@@ -283,7 +273,10 @@ export function resolveMcpRequestContext(
     // Gateway-launched CLI clients receive an immutable context grant. The
     // child process can replay the token, but cannot scope-shop by rewriting
     // session, channel, capability, or ownership headers.
-    return structuredClone(auth.boundClientGrant.context);
+    return {
+      ...structuredClone(auth.boundClientGrant.context),
+      currentConversationOrigin: "run-bound-grant",
+    };
   }
   // Grant-authenticated callers get only their server-bound session and optional
   // global-session agent owner; spoofable delivery/action headers stay reserved.
@@ -297,6 +290,7 @@ export function resolveMcpRequestContext(
       currentChannelId: undefined,
       currentThreadTs: undefined,
       currentMessageId: undefined,
+      currentConversationOrigin: "server-session",
       currentInboundAudio: undefined,
       accountId: undefined,
       inboundEventKind: undefined,
@@ -317,6 +311,8 @@ export function resolveMcpRequestContext(
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
+    // Caller-writable generic-token headers are not authority for thread binding.
+    currentConversationOrigin: "caller-token",
     currentInboundAudio: normalizeMcpBooleanHeader(
       getHeader(req, "x-openclaw-current-inbound-audio"),
     ),

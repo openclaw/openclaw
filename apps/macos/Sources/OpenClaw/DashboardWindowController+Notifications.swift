@@ -56,8 +56,6 @@ extension DashboardWindowController {
             "granted"
         case .denied:
             "denied"
-        case .notDetermined:
-            "notDetermined"
         default:
             // .ephemeral is unavailable by name on macOS and cannot occur here;
             // map it and future cases to notDetermined so the UI offers the
@@ -113,13 +111,6 @@ extension DashboardWindowController {
         }
     }
 
-    static func notificationsSnapshot(
-        permission: String,
-        testOutcome: TestNotificationOutcome?) -> DashboardNotificationsSnapshot
-    {
-        DashboardNotificationsSnapshot(permission: permission, test: testOutcome)
-    }
-
     private func refreshNotificationsPermission() async {
         guard PermissionManager.notificationCenterAvailable else { return }
         let settings = await UNUserNotificationCenter.current().notificationSettings()
@@ -130,12 +121,11 @@ extension DashboardWindowController {
     private func publishNotificationsStatus() async {
         // Honest absence beats a fabricated status when the process is unbundled.
         guard PermissionManager.notificationCenterAvailable else { return }
-        let snapshot = Self.notificationsSnapshot(
+        let snapshot = DashboardNotificationsSnapshot(
             permission: self.notificationPermission,
-            testOutcome: self.notificationTestOutcome)
-        guard let data = try? JSONEncoder().encode(snapshot),
-              let json = String(data: data, encoding: .utf8)
-        else { return }
+            test: self.notificationTestOutcome)
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        let json = String(bytes: data, encoding: .utf8)!
         // Keep a global snapshot so late subscribers can read status without a bridge round-trip.
         _ = try? await self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
             """

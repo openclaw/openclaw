@@ -1,9 +1,7 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { constants, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import JSZip from "jszip";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import corePackagePolicy from "../../scripts/lib/npm-core-release-packages.json" with { type: "json" };
 import {
   createPublishPreflightEvidenceClient,
@@ -15,31 +13,32 @@ import {
   type PublishPreflightGh,
 } from "../../scripts/lib/release-publish-preflight-evidence.mts";
 import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
+import * as releaseEvidence from "../../scripts/release-ci-summary.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createNestedGitEnv, writeJsonFile } from "../helpers/temp-repo.js";
+import { writeJsonFile } from "../helpers/temp-repo.js";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
+import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
+import { fixtureGit } from "./release-publish.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sourceTemplates = useAutoCleanupTempDirTracker(afterAll);
+let sourceTemplate: { source: string; targetSha: string } | undefined;
 const version = "2026.9.5";
+const repo = "openclaw/openclaw";
+const api = (endpoint: string) => ["api", `repos/${repo}/${endpoint}`, "--method", "GET"];
 const sha256 = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("protected tooling tag resolution", () => {
-  const repo = "openclaw/openclaw";
   const toolingSha = "a".repeat(40);
   const prefix = "release-publish/aaaaaaaaaaaa-";
-  const compare = [
-    "api",
-    `repos/${repo}/compare/${toolingSha}...main`,
-    "--method",
-    "GET",
-    "--jq",
-    ".status",
-  ];
-  const inventory = ["api", `repos/${repo}/git/matching-refs/tags/${prefix}`, "--method", "GET"];
+  const compare = [...api(`compare/${toolingSha}...main`), "--jq", ".status"];
+  const inventory = api(`git/matching-refs/tags/${prefix}`);
   const ref = (suffix: string, type = "commit", sha = toolingSha) => ({
     ref: `refs/tags/${prefix}${suffix}`,
     object: { type, sha },
@@ -54,8 +53,8 @@ describe("protected tooling tag resolution", () => {
     return runGh;
   };
 
-  it.each(["ahead", "identical"])(
-    "reuses the newest lightweight tag on %s main ancestry",
+  it.each(["ahead", "identical", "behind", "diverged"])(
+    "qualifies %s main ancestry before selecting the newest lightweight tag",
     (ancestry) => {
       const runGh = scriptedGh(
         `${ancestry}\n`,
@@ -70,11 +69,14 @@ describe("protected tooling tag resolution", () => {
           null,
         ]),
       );
-      expect(ensureReleasePublishToolingTag({ runGh, repo, toolingSha })).toEqual({
-        tag: `${prefix}10`,
-        created: false,
-      });
-      expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare, inventory]);
+      const ensure = () => ensureReleasePublishToolingTag({ runGh, repo, toolingSha });
+      if (["behind", "diverged"].includes(ancestry)) {
+        expect(ensure).toThrow(`Tooling SHA ${toolingSha} is not reachable from trusted main.`);
+        expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare]);
+      } else {
+        expect(ensure()).toEqual({ tag: `${prefix}10`, created: false });
+        expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare, inventory]);
+      }
     },
   );
 
@@ -108,19 +110,8 @@ describe("protected tooling tag resolution", () => {
           "-f",
           `sha=${toolingSha}`,
         ],
-        ["api", `repos/${repo}/git/ref/tags/${tag}`, "--method", "GET"],
+        api(`git/ref/tags/${tag}`),
       ]);
-    },
-  );
-
-  it.each(["behind", "diverged"])(
-    "refuses %s ancestry before tag inventory or mutation",
-    (ancestry) => {
-      const runGh = scriptedGh(ancestry);
-      expect(() => ensureReleasePublishToolingTag({ runGh, repo, toolingSha })).toThrow(
-        `Tooling SHA ${toolingSha} is not reachable from trusted main.`,
-      );
-      expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare]);
     },
   );
 
@@ -142,7 +133,10 @@ describe("publish preflight release inventory", () => {
     "refuses absence from an %s inventory",
     (state) => {
       let reads = 0;
-      const runGh = () => {
+      const runGh = (args: string[]) => {
+        if (args[1]?.includes("/releases/tags/")) {
+          throw new Error("HTTP 404: Not Found");
+        }
         reads++;
         if (state === "malformed") {
           return JSON.stringify([{ draft: true }]);
@@ -157,7 +151,7 @@ describe("publish preflight release inventory", () => {
           Array.from({ length: 100 }, (_, index) => ({ tag_name: `other-${reads}-${index}` })),
         );
       };
-      expect(() => readPublishPreflightRelease(runGh, "openclaw/openclaw", `v${version}`)).toThrow(
+      expect(() => readPublishPreflightRelease(runGh, repo, `v${version}`)).toThrow(
         state === "malformed"
           ? "Invalid GitHub release inventory."
           : state === "interrupted"
@@ -167,24 +161,12 @@ describe("publish preflight release inventory", () => {
     },
   );
 
-  it.each([false, true])("retains matching release metadata (draft: %s)", (draft) => {
-    const release = {
-      id: 8,
-      draft,
-      prerelease: false,
-      tag_name: `v${version}`,
-      html_url: `https://github.com/openclaw/openclaw/releases/tag/v${version}`,
-      target_commitish: "a".repeat(40),
-      body: "Published release notes",
-      assets: [{ name: "dependency-evidence.zip" }],
-    };
-    expect(
-      readPublishPreflightRelease(
-        () => JSON.stringify([release]),
-        "openclaw/openclaw",
-        `v${version}`,
-      ),
-    ).toEqual({ state: "found", release });
+  it("does not mask a failed exact-tag read as absence", () => {
+    const runGh = vi.fn(() => {
+      throw new Error("HTTP 502: Bad Gateway");
+    });
+    expect(() => readPublishPreflightRelease(runGh, repo, `v${version}`)).toThrow("HTTP 502");
+    expect(runGh).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -197,62 +179,43 @@ describe("publish preflight optional Telegram evidence", () => {
     status: "completed",
     conclusion: "success",
   };
+  const inspect = (runGh: PublishPreflightGh, runId = "123") =>
+    inspectPublishPreflightTelegramEvidence({ repo, runId, workflowRef, runGh });
 
-  it.each([
-    { head_branch: "main", conclusion: "success", expected: "PASS" },
-    { head_branch: workflowRef, conclusion: "success", expected: "PASS" },
-    { head_branch: "main", conclusion: "failure", expected: "WARN" },
-    { head_branch: workflowRef, conclusion: "cancelled", expected: "WARN" },
-  ])("retains $head_branch/$conclusion evidence as $expected", (entry) => {
-    const runGh = vi.fn(() => JSON.stringify({ ...completedRun, ...entry }));
-    const gate = inspectPublishPreflightTelegramEvidence({
-      repo: "openclaw/openclaw",
-      runId: "123",
-      workflowRef,
-      runGh,
+  it.each<
+    [Partial<Omit<typeof completedRun, "conclusion">> & { conclusion?: string | null }, string]
+  >([
+    [{ head_branch: "main", conclusion: "success" }, "PASS"],
+    [{ head_branch: workflowRef, conclusion: "success" }, "PASS"],
+    [{ head_branch: "main", conclusion: "failure" }, "WARN"],
+    [{ head_branch: workflowRef, conclusion: "cancelled" }, "WARN"],
+    [{ name: "CI" }, "FAIL"],
+    [{ event: "push" }, "FAIL"],
+    [{ head_branch: "release-publish/bbbbbbbbbbbb-123" }, "FAIL"],
+    [{ status: "in_progress", conclusion: null }, "FAIL"],
+  ])("qualifies optional Telegram evidence: %j", (overrides, expected) => {
+    const runGh = vi.fn(() => JSON.stringify({ ...completedRun, ...overrides }));
+    expect(inspect(runGh)).toMatchObject({
+      status: expected,
+      ...(expected === "FAIL"
+        ? { remediation: expect.stringContaining("omit the optional npm_telegram_run_id") }
+        : {}),
     });
-    expect(gate.status).toBe(entry.expected);
-    expect(runGh.mock.calls).toEqual([
-      [["api", "repos/openclaw/openclaw/actions/runs/123", "--method", "GET"]],
-    ]);
-  });
-
-  it.each([
-    { name: "CI" },
-    { event: "push" },
-    { head_branch: "release-publish/bbbbbbbbbbbb-123" },
-    { status: "in_progress", conclusion: null },
-  ])("rejects supplied evidence that the postpublish verifier refuses: %j", (overrides) => {
-    const gate = inspectPublishPreflightTelegramEvidence({
-      repo: "openclaw/openclaw",
-      runId: "123",
-      workflowRef,
-      runGh: () => JSON.stringify({ ...completedRun, ...overrides }),
-    });
-    expect(gate.status).toBe("FAIL");
-    expect(gate.remediation).toContain("omit the optional npm_telegram_run_id");
+    expect(runGh.mock.calls).toEqual([[api("actions/runs/123")]]);
   });
 
   it("does not query an invalid run id and reports an unavailable valid run", () => {
     const runGh = vi.fn(() => {
       throw new Error("HTTP 404: Not Found");
     });
-    const inspect = (runId: string) =>
-      inspectPublishPreflightTelegramEvidence({
-        repo: "openclaw/openclaw",
-        runId,
-        workflowRef,
-        runGh,
-      });
-    expect(inspect("../jobs/123").status).toBe("FAIL");
+    expect(inspect(runGh, "../jobs/123").status).toBe("FAIL");
     expect(runGh).not.toHaveBeenCalled();
-    expect(inspect("123")).toMatchObject({ status: "FAIL", message: "HTTP 404: Not Found" });
+    expect(inspect(runGh)).toMatchObject({ status: "FAIL", message: "HTTP 404: Not Found" });
   });
 });
 
-function coreEvidenceFixture() {
-  const source = tempDirs.make("publish-preflight-source-");
-  const artifacts = tempDirs.make("publish-preflight-artifacts-");
+function buildCoreEvidenceSource() {
+  const source = sourceTemplates.make("publish-preflight-source-");
   writeJsonFile(join(source, "package.json"), {
     name: "openclaw",
     version,
@@ -265,32 +228,47 @@ function coreEvidenceFixture() {
       openclaw: { release: { publishToNpm: true } },
     });
   }
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-C",
-        source,
-        "-c",
-        "user.name=Release fixture",
-        "-c",
-        "user.email=release-fixture@example.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        ...args,
-      ],
-      { env: createNestedGitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
+  const git = fixtureGit(source, "Release fixture", "release-fixture@example.invalid");
   git("init", "--quiet");
   git("add", ".");
-  git("commit", "--quiet", "-m", "release source fixture");
+  git(
+    "-c",
+    "maintenance.auto=false",
+    "-c",
+    "gc.auto=0",
+    "commit",
+    "--quiet",
+    "-m",
+    "release source fixture",
+  );
   const targetSha = git("rev-parse", "HEAD");
+  return { source, targetSha };
+}
+
+function coreEvidenceFixture(sdkEntry?: string) {
+  sourceTemplate ??= buildCoreEvidenceSource();
+  const source = tempDirs.make("publish-preflight-source-");
+  // Mutable Git state belongs to each case; only the pristine source seed is reused.
+  cpSync(sourceTemplate.source, source, {
+    recursive: true,
+    mode: constants.COPYFILE_FICLONE,
+  });
+  const { targetSha } = sourceTemplate;
+  const candidate = candidatePublicationFixture({
+    candidateSha: targetSha,
+    candidateVersion: version,
+  });
+  // Replace external evidence reads, not the admission/authentication owners.
+  vi.spyOn(releaseEvidence, "createReleaseEvidenceClient").mockReturnValue(candidate.client);
+  const artifacts = tempDirs.make("publish-preflight-artifacts-");
+  const writeArtifact = (name: string, bytes: string | Uint8Array) =>
+    writeFileSync(join(artifacts, name), bytes);
   vi.stubEnv("GIT_DIR", join(source, ".git"));
   vi.stubEnv("GIT_WORK_TREE", source);
   const corePackages = corePackagePolicy.map((policy) => {
     const tarballName = `${policy.name.replace(/^@/u, "").replace("/", "-")}-${version}.tgz`;
     const bytes = Buffer.from(`synthetic immutable ${policy.name}`);
-    writeFileSync(join(artifacts, tarballName), bytes);
+    writeArtifact(tarballName, bytes);
     return {
       packageName: policy.name,
       packageVersion: version,
@@ -298,15 +276,15 @@ function coreEvidenceFixture() {
       tarballSha256: sha256(bytes),
     };
   });
-  const rootBytes = Buffer.from("synthetic immutable openclaw");
-  writeFileSync(join(artifacts, "openclaw.tgz"), rootBytes);
-  writeFileSync(
-    join(artifacts, "core-packages-SHA256SUMS"),
+  const rootBytes = Buffer.from(candidate.npmBytes);
+  writeArtifact("openclaw.tgz", rootBytes);
+  writeArtifact(
+    "core-packages-SHA256SUMS",
     corePackages.map((entry) => `${entry.tarballSha256}  ${entry.tarballName}\n`).join(""),
   );
   const payload = { entrypointsAdded: [], entrypointsRemoved: [], exports: [] };
   const manifest = {
-    version: 1,
+    ...candidate.npmManifest,
     releaseTag: `v${version}`,
     releaseSha: targetSha,
     packageVersion: version,
@@ -324,28 +302,80 @@ function coreEvidenceFixture() {
     }),
   };
   const manifestPath = join(artifacts, "preflight-manifest.json");
-  const writeManifest = () => writeJsonFile(manifestPath, manifest);
+  const writeManifest = () => {
+    writeJsonFile(manifestPath, manifest);
+    candidate.npmQualified.manifestSha256 = sha256(readFileSync(manifestPath));
+    const archive = makeStoredZip(
+      Object.fromEntries(
+        readdirSync(artifacts)
+          .filter((name) => name !== "bin")
+          .map((name) => [name, readFileSync(join(artifacts, name))]),
+      ),
+    );
+    candidate.npmArtifact.id = 90;
+    candidate.npmArtifact.digest = `sha256:${sha256(archive)}`;
+    candidate.npmArtifact.size_in_bytes = archive.length;
+    candidate.npmQualified.artifact.id = "90";
+    candidate.npmQualified.artifact.digest = sha256(archive);
+  };
   writeManifest();
+  let downloadedArtifacts: unknown[] = [];
+  if (sdkEntry) {
+    const files = Object.fromEntries(
+      readdirSync(artifacts).map((name) => [name, readFileSync(join(artifacts, name))]),
+    );
+    const archives = [
+      makeStoredZip(files),
+      makeStoredZip({
+        "plugin-sdk-api-release-diff.json": "{}",
+        "plugin-sdk-api-release-evidence.json": JSON.stringify(
+          sdkEntry === "evidence mismatch" ? {} : manifest.pluginSdkApi,
+        ),
+        [sdkEntry.endsWith(".md") ? sdkEntry : "plugin-sdk-api-release-diff.md"]: "# SDK diff",
+      }),
+    ];
+    const bin = join(artifacts, "bin");
+    mkdirSync(bin);
+    downloadedArtifacts = archives.map((bytes, index) => {
+      writeFileSync(join(bin, String(index + 90) + ".zip"), bytes);
+      return {
+        id: index + 90,
+        name:
+          index === 0
+            ? "openclaw-npm-preflight-v" + version
+            : `plugin-sdk-api-release-diff-${candidate.runId}-1`,
+        expired: false,
+        size_in_bytes: bytes.length,
+        digest:
+          "sha256:" +
+          (sdkEntry === "digest mismatch" && index === 1 ? "0".repeat(64) : sha256(bytes)),
+      };
+    });
+    const script = [
+      "#!" + process.execPath,
+      'const fs = require("node:fs");',
+      "const endpoint = process.argv[3];",
+      'const id = endpoint.split("/").at(-2);',
+      'if (!["90", "91"].includes(id) || !endpoint.endsWith("/zip")) throw new Error("Unexpected archive request");',
+      'process.stdout.write(fs.readFileSync(require("node:path").join(__dirname, id + ".zip")));',
+    ].join(String.fromCharCode(10));
+    writeFileSync(join(bin, "gh"), script, { mode: 0o755 });
+    vi.stubEnv("PATH", bin + delimiter + (process.env.PATH ?? ""));
+  }
   const runGh = (args: string[]) => {
-    if (args[1]?.includes("/compare/")) {
-      return JSON.stringify({ status: "identical" });
-    }
-    if (args[1] === "repos/openclaw/openclaw/actions/runs/2") {
+    if (sdkEntry && args[1]?.includes("/artifacts?")) {
       return JSON.stringify({
-        id: 2,
-        path: ".github/workflows/openclaw-npm-release.yml",
-        status: "completed",
-        conclusion: "success",
-        event: "workflow_dispatch",
-        head_branch: "main",
-        head_sha: targetSha,
-        run_attempt: 1,
+        artifacts: downloadedArtifacts,
+        total_count: downloadedArtifacts.length,
       });
     }
-    throw new Error(`Unexpected GitHub request: ${args.join(" ")}`);
+    if (args[1] === "repos/openclaw/openclaw/actions/artifacts/90") {
+      return JSON.stringify(candidate.npmArtifact);
+    }
+    return candidate.runGh(args);
   };
   return {
-    artifacts,
+    writeArtifact,
     corePackages,
     manifest,
     writeManifest,
@@ -355,26 +385,44 @@ function coreEvidenceFixture() {
           repo: "openclaw/openclaw",
           tag: `v${version}`,
           targetSha,
-          toolingSha: targetSha,
-          workflowRef: `release-publish/${targetSha.slice(0, 12)}-123`,
+          toolingSha: candidate.p,
+          workflowRef: candidate.publisherFullRef.replace(/^refs\/(?:heads|tags)\//u, ""),
           npmDistTag: "latest",
-          preflightRunId: "2",
-          fullReleaseValidationRunId: "1",
+          preflightRunId: candidate.runId,
+          fullReleaseValidationRunId: candidate.runId,
+          fullManifest: candidate.manifest,
           fullReleaseValidationRunAttempt: "1",
           pluginSdkApiAcknowledgement: "",
           currentSelectorRef: `v${version}`,
           currentSelectorSha: targetSha,
           runGh,
         },
-        { npmManifest: manifest, npmManifestPath: manifestPath },
+        sdkEntry ? {} : { npmManifest: manifest, npmManifestPath: manifestPath },
       ),
   };
 }
 
 describe("publish preflight immutable npm evidence", () => {
-  it("qualifies the complete prepared core package set against exact source metadata", () => {
+  it.skipIf(process.platform === "win32").each([
+    ["plugin-sdk-api-release-diff.md", undefined],
+    ["unexpected.md", "Unexpected, duplicate, or aliased"],
+    ["nested/plugin-sdk-api-release-diff.md", "Unexpected, duplicate, or aliased"],
+    ["../plugin-sdk-api-release-diff.md", "path"],
+    ["PLUGIN-SDK-API-RELEASE-DIFF.md", "Unexpected, duplicate, or aliased"],
+    ["digest mismatch", "archive size or digest"],
+    ["evidence mismatch", "SDK evidence differs"],
+  ])("validates downloaded SDK archive: %s", async (entry, error) => {
+    const fixture = coreEvidenceFixture(entry);
+    if (error) {
+      await expect(fixture.verify()).rejects.toThrow(error);
+    } else {
+      expect((await fixture.verify()).corePackages).toEqual(fixture.corePackages);
+    }
+  });
+
+  it("qualifies the complete prepared core package set against exact source metadata", async () => {
     const fixture = coreEvidenceFixture();
-    expect(fixture.verify().corePackages).toEqual(fixture.corePackages);
+    expect((await fixture.verify()).corePackages).toEqual(fixture.corePackages);
   });
 
   it.each([
@@ -384,7 +432,7 @@ describe("publish preflight immutable npm evidence", () => {
     ["invalid checksums", "checksum verification failed"],
     ["changed reused manifest", "changed after candidate validation"],
     ["changed reused root bytes", "wrong digest"],
-  ])("rejects %s before publication", (mode, message) => {
+  ])("rejects %s before publication", async (mode, message) => {
     const fixture = coreEvidenceFixture();
     if (mode === "missing required package") {
       fixture.manifest.corePackageTarballs = fixture.corePackages.slice(0, -1);
@@ -394,21 +442,18 @@ describe("publish preflight immutable npm evidence", () => {
     }
     fixture.writeManifest();
     if (mode === "corrupt core bytes") {
-      writeFileSync(
-        join(fixture.artifacts, fixture.corePackages[1]!.tarballName),
-        "changed core bytes",
-      );
+      fixture.writeArtifact(fixture.corePackages[1]!.tarballName, "changed core bytes");
     }
     if (mode === "invalid checksums") {
-      writeFileSync(join(fixture.artifacts, "core-packages-SHA256SUMS"), "broken\n");
+      fixture.writeArtifact("core-packages-SHA256SUMS", "broken\n");
     }
     if (mode === "changed reused manifest") {
       fixture.manifest.tarballName = "changed.tgz";
     }
     if (mode === "changed reused root bytes") {
-      writeFileSync(join(fixture.artifacts, "openclaw.tgz"), "changed root bytes");
+      fixture.writeArtifact("openclaw.tgz", "changed root bytes");
     }
-    expect(() => fixture.verify()).toThrow(message);
+    await expect(fixture.verify()).rejects.toThrow(message);
   });
 
   it.each([
@@ -457,7 +502,7 @@ describe("publish preflight immutable npm evidence", () => {
 
   it.skipIf(process.platform === "win32")(
     "downloads each exact validation attempt once and verifies its artifact digest",
-    async () => {
+    () => {
       const directory = tempDirs.make("publish-preflight-manifest-");
       const bin = join(directory, "bin");
       mkdirSync(bin);
@@ -469,23 +514,21 @@ describe("publish preflight immutable npm evidence", () => {
         runId: "123",
         runAttempt: String(attempt),
       }));
-      const artifacts = await Promise.all(
-        manifests.map(async (manifest, index) => {
-          const archive = await new JSZip()
-            .file("full-release-validation-manifest.json", JSON.stringify(manifest))
-            .generateAsync({ type: "nodebuffer", compression: "STORE", platform: "UNIX" });
-          const id = 90 + index;
-          writeFileSync(join(directory, `${id}.zip`), archive);
-          return {
-            id,
-            name: `full-release-validation-123-${index + 1}`,
-            expired: false,
-            digest: `sha256:${sha256(archive)}`,
-            size_in_bytes: archive.length,
-            workflow_run: { id: 123 },
-          };
-        }),
-      );
+      const artifacts = manifests.map((manifest, index) => {
+        const archive = makeStoredZip({
+          "full-release-validation-manifest.json": JSON.stringify(manifest),
+        });
+        const id = 90 + index;
+        writeFileSync(join(directory, `${id}.zip`), archive);
+        return {
+          id,
+          name: `full-release-validation-123-${index + 1}`,
+          expired: false,
+          digest: `sha256:${sha256(archive)}`,
+          size_in_bytes: archive.length,
+          workflow_run: { id: 123 },
+        };
+      });
       writeFileSync(
         join(bin, "gh"),
         `#!${process.execPath}

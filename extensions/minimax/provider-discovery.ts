@@ -1,29 +1,15 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
+import { buildMinimaxProvider } from "./provider-catalog.js";
 
-const minimaxProviderDiscovery: ProviderPlugin[] = [
-  {
-    id: "minimax",
-    label: "MiniMax",
-    docsPath: "/providers/minimax",
-    auth: [],
-    staticCatalog: {
-      order: "simple",
-      run: async (ctx) => ({ providers: { minimax: buildMinimaxProvider(ctx.env) } }),
-    },
+const minimaxProviderDiscovery: ProviderPlugin[] = ["minimax", "minimax-portal"].map((id) => ({
+  id,
+  label: "MiniMax",
+  docsPath: "/providers/minimax",
+  auth: [],
+  staticCatalog: {
+    order: "simple",
+    run: async (ctx) => ({ providers: { [id]: buildMinimaxProvider(ctx.env) } }),
   },
-  {
-    id: "minimax-portal",
-    label: "MiniMax",
-    docsPath: "/providers/minimax",
-    auth: [],
-    staticCatalog: {
-      order: "simple",
-      run: async (ctx) => ({
-        providers: { "minimax-portal": buildMinimaxPortalProvider(ctx.env) },
-      }),
-    },
-  },
-];
+}));
 
 export default minimaxProviderDiscovery;

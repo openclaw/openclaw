@@ -40,6 +40,8 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   createdAtMs: number;
   expiresAtMs: number;
   // Requester bindings prevent another client from replaying an approval id.
+  /** Host-bound profile of the turn that raised this approval; never request payload data. */
+  requestedByProfileId?: string | null;
   requestedByConnId?: string | null;
   requestedByDeviceId?: string | null;
   requestedByClientId?: string | null;
@@ -99,6 +101,7 @@ export type ExecApprovalManagerOptions<TPayload> = {
   resolveStandingGrantMint?: (request: TPayload) => OperatorStandingGrantMintSpec | null;
   /** Installs a placement grant after the durable approval CAS succeeds. */
   retainPlacementStandingGrant?: PlacementStandingGrantRuntime["retain"];
+  retainPlacementStandingGrantAsync?: PlacementStandingGrantRuntime["retainAsync"];
   resolveStandingGrantExpiresAtMs?: (nowMs: number) => number | null;
   /** Timer, lookup, and replay expiry must all release the same local waiter. */
   onExpired?: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;

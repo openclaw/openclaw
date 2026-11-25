@@ -27,15 +27,16 @@ type FetchOptions = {
   timeoutMs?: number;
 };
 
+type AuthProfiles = {
+  profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
+};
+
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const FETCH_RESPONSE_MAX_BYTES = 256 * 1024;
 
 const mask = (value: string) => {
-  return maskIdentifier(
-    value,
-    value.trim().length >= 12 ? 6 : 4,
-    value.trim().length >= 12 ? 6 : 4,
-  );
+  const visibleChars = value.trim().length >= 12 ? 6 : 4;
+  return maskIdentifier(value, visibleChars, visibleChars);
 };
 
 const parseArgs = (args = process.argv.slice(2)): Args => {
@@ -101,9 +102,7 @@ const loadAuthProfiles = (agentId: string) => {
   if (!fs.existsSync(authPath)) {
     throw new Error(`Missing: ${authPath}`);
   }
-  const store = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
-    profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
-  };
+  const store = JSON.parse(fs.readFileSync(authPath, "utf8")) as AuthProfiles;
   return { authPath, store };
 };
 
@@ -112,22 +111,12 @@ const CLAUDE_COOKIE_HOST_SQL =
 const CLAUDE_FIREFOX_COOKIE_HOST_SQL =
   "(host = 'claude.ai' OR host = '.claude.ai' OR host LIKE '%.claude.ai')";
 
-const pickAnthropicTokens = (store: {
-  profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
-}): Array<{ profileId: string; token: string }> => {
-  const profiles = store.profiles ?? {};
-  const found: Array<{ profileId: string; token: string }> = [];
-  for (const [id, cred] of Object.entries(profiles)) {
-    if (cred?.provider !== "anthropic") {
-      continue;
-    }
-    const token = cred.type === "token" ? cred.token?.trim() : undefined;
-    if (token) {
-      found.push({ profileId: id, token });
-    }
-  }
-  return found;
-};
+const pickAnthropicTokens = (store: AuthProfiles): Array<{ profileId: string; token: string }> =>
+  Object.entries(store.profiles ?? {}).flatMap(([profileId, cred]) => {
+    const token =
+      cred?.provider === "anthropic" && cred.type === "token" ? cred.token?.trim() : undefined;
+    return token ? [{ profileId, token }] : [];
+  });
 
 const resolveFetchTimeoutMs = (raw = process.env.OPENCLAW_DEBUG_CLAUDE_USAGE_FETCH_TIMEOUT_MS) => {
   return parseStrictIntegerOption({
@@ -196,7 +185,6 @@ const fetchAnthropicOAuthUsage = async (token: string, options: FetchOptions = {
 
 const readClaudeCliKeychain = (): {
   accessToken: string;
-  expiresAt?: number;
   scopes?: string[];
 } | null => {
   if (process.platform !== "darwin") {
@@ -217,11 +205,10 @@ const readClaudeCliKeychain = (): {
     if (typeof accessToken !== "string" || !accessToken.trim()) {
       return null;
     }
-    const expiresAt = typeof oauth.expiresAt === "number" ? oauth.expiresAt : undefined;
     const scopes = Array.isArray(oauth.scopes)
       ? oauth.scopes.filter((v): v is string => typeof v === "string")
       : undefined;
-    return { accessToken, expiresAt, scopes };
+    return { accessToken, scopes };
   } catch {
     return null;
   }
@@ -346,8 +333,6 @@ const queryFirefoxCookieDb = (cookieDb: string): string | null => {
   }
 };
 
-const browserRootLabel = (root: string): string => path.basename(root) || "browser";
-
 const findClaudeSessionKey = (): { sessionKey: string; source: string } | null => {
   if (process.platform !== "darwin") {
     return null;
@@ -395,7 +380,10 @@ const findClaudeSessionKey = (): { sessionKey: string; source: string } | null =
       }
       const value = queryChromeCookieDb(db);
       if (value) {
-        return { sessionKey: value, source: `chromium:${browserRootLabel(root)}/${profile}` };
+        return {
+          sessionKey: value,
+          source: `chromium:${path.basename(root) || "browser"}/${profile}`,
+        };
       }
     }
   }
@@ -479,7 +467,7 @@ const main = async (argv = process.argv.slice(2)) => {
   const envSessionKey =
     process.env.CLAUDE_AI_SESSION_KEY?.trim() || process.env.CLAUDE_WEB_SESSION_KEY?.trim();
   const discoveredSession = opts.sessionKey || envSessionKey ? null : findClaudeSessionKey();
-  const sessionKey = opts.sessionKey?.trim() || envSessionKey || discoveredSession?.sessionKey;
+  const sessionKey = opts.sessionKey || envSessionKey || discoveredSession?.sessionKey;
   const source = opts.sessionKey
     ? "--session-key"
     : envSessionKey

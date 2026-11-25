@@ -13,7 +13,6 @@ import type {
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { isGeneratedHashedArgPattern } from "./exec-command-resolution.js";
 
 export function assertCurrentUsageAuthorization(params: {
@@ -124,45 +123,26 @@ export function assertCurrentUsageAuthorization(params: {
   }
 }
 
-export function applyRecordedAllowlistUse(params: {
-  file: ExecApprovalsFile;
-  agentId: string | undefined;
-  matches: readonly ExecAllowlistEntry[];
-  command: string;
-  resolvedPath?: string;
-  authorization?: ExecApprovalUsageAuthorization;
-}): ExecApprovalsFile | null {
-  const keys = new Set(
-    params.matches.filter((entry) => entry.pattern).map(buildAllowlistEntryMatchKey),
-  );
-  if (params.authorization) {
-    assertCurrentUsageAuthorization({
-      file: params.file,
-      agentId: params.agentId,
-      command: params.command,
-      matchKeys: keys,
-      authorization: params.authorization,
-    });
-  }
-  return applyRecordedAllowlistMetadata(params);
-}
-
 function applyRecordedAllowlistMetadata(params: {
   file: ExecApprovalsFile;
   agentId: string | undefined;
-  matches: readonly ExecAllowlistEntry[];
+  keys: ReadonlySet<string>;
   command: string;
   resolvedPath?: string;
+  matches: ExecAuthorizationCommitInput["matches"];
 }): ExecApprovalsFile | null {
-  const keys = new Set(
-    params.matches.filter((entry) => entry.pattern).map(buildAllowlistEntryMatchKey),
-  );
+  const { keys } = params;
   if (keys.size === 0) {
     return null;
   }
   if (!params.agentId) {
     throw new Error("Exec allowlist metadata update requires an explicit agent id.");
   }
+  const matchedPaths = new Map(
+    params.matches
+      .filter((match) => match.resolvedPath !== undefined)
+      .map((match) => [buildAllowlistEntryMatchKey(match), match.resolvedPath]),
+  );
   const target = params.agentId;
   const agents = params.file.agents ?? {};
   let changed = false;
@@ -183,7 +163,8 @@ function applyRecordedAllowlistMetadata(params: {
         id: entry.id ?? crypto.randomUUID(),
         lastUsedAt: Date.now(),
         lastUsedCommand: isGeneratedHashedArgPattern(entry.argPattern) ? undefined : params.command,
-        lastResolvedPath: params.resolvedPath,
+        lastResolvedPath:
+          matchedPaths.get(buildAllowlistEntryMatchKey(entry)) ?? params.resolvedPath,
       });
     });
     if (entryChanged) {
@@ -202,13 +183,6 @@ export function applyExecAuthorizationCommit(
   file: ExecApprovalsFile,
   params: ExecAuthorizationCommitInput,
 ): ExecApprovalsFile | null {
-  if (
-    (params.authorization.source === "explicit-approval" ||
-      params.authorization.source === "auto-review") &&
-    !params.authorization.policySnapshot
-  ) {
-    throw new Error("Delayed exec authorization requires a policy snapshot");
-  }
   if (params.allowAlwaysDecision && params.allowAlwaysDecision.kind !== "one-shot") {
     if (params.authorization.source !== "explicit-approval") {
       throw new Error("Allow-always persistence requires explicit approval");
@@ -226,19 +200,15 @@ export function applyExecAuthorizationCommit(
     authorization: params.authorization,
   });
 
-  let next = file;
-  let changed = false;
-  if (params.allowAlwaysDecision && params.allowAlwaysDecision.kind !== "one-shot") {
-    const granted = applyAllowAlwaysDecision({
-      file: next,
-      agentId: params.agentId,
-      decision: params.allowAlwaysDecision,
-    });
-    if (granted) {
-      next = granted;
-      changed = true;
-    }
-  }
-  const recorded = applyRecordedAllowlistMetadata({ ...params, file: next });
-  return recorded ?? (changed ? next : null);
+  const granted =
+    params.allowAlwaysDecision && params.allowAlwaysDecision.kind !== "one-shot"
+      ? applyAllowAlwaysDecision({
+          file,
+          agentId: params.agentId,
+          decision: params.allowAlwaysDecision,
+        })
+      : null;
+  return (
+    applyRecordedAllowlistMetadata({ ...params, file: granted ?? file, keys: matchKeys }) ?? granted
+  );
 }

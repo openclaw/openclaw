@@ -6,7 +6,7 @@ import { isBuiltin, registerHooks } from "node:module";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { list as listTar, Parser } from "tar";
+import { list as listTar, Parser } from "tar/raw";
 import { toErrorObject } from "./error-format.mts";
 import { hashFile } from "./gateway-bench-installed-package.ts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./package-lifecycle-marker.mjs";
@@ -76,9 +76,7 @@ export async function verifyPackageMember(packageRoot: string, tarball: string, 
   assert.equal(matches, 1, `Expected one package member: ${relative}`);
   assert.ok(sha256, `Expected a regular package member within ${maxBytes} bytes: ${relative}`);
   assert.equal(
-    createHash("sha256")
-      .update(await fs.readFile(file))
-      .digest("hex"),
+    await hashFile(file),
     sha256,
     `Installed module differs from the bound package: ${relative}`,
   );

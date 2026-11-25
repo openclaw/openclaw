@@ -63,7 +63,7 @@ class CameraHandlerTest {
       }
     owner.registry.currentState = Lifecycle.State.CREATED
     val camera = CameraCaptureManager(app).apply { attachLifecycleOwner(owner) }
-    val handler = CameraHandler(app, camera, { true }, ::invokeErrorFromThrowable)
+    val handler = CameraHandler(app, camera, { true })
 
     runBlocking {
       val snap = async(Dispatchers.Unconfined) { handler.handleSnap(null) }
@@ -115,7 +115,6 @@ class CameraHandlerTest {
           appContext = app,
           camera = CameraCaptureManager(app),
           setCameraAudioCaptureActive = { false },
-          invokeErrorFromThrowable = { "UNAVAILABLE" to (it.message ?: "camera failed") },
         )
 
       val result = handler.handleClip("""{"includeAudio":true}""")

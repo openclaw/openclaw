@@ -1,6 +1,19 @@
+import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createGatewayHttpServer } from "../server-http.js";
 import { createNodeWorkspaceTransferHttpCallback } from "./node-workspace-transfer-http.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+
+export function transferOwner(sessionId: string, ownerEpoch = 1, expiresAtMs?: number) {
+  return {
+    credential: { ownerEpoch, sessionId, ...(expiresAtMs === undefined ? {} : { expiresAtMs }) },
+    environment: {
+      ownerEpoch,
+      attachedSessionIds: [sessionId],
+      destroyRequestedAtMs: null,
+      state: "attached",
+    },
+  };
+}
 
 export async function startNodeWorkspaceTransferTestServer(service: NodeWorkspaceTransferService) {
   const server = createGatewayHttpServer({
@@ -14,16 +27,9 @@ export async function startNodeWorkspaceTransferTestServer(service: NodeWorkspac
     getRuntimeConfig: () => ({}),
     handleNodeWorkspaceTransferRequest: createNodeWorkspaceTransferHttpCallback(service),
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("workspace transfer test server did not bind");
-  }
+  const gatewayUrl = await listenLoopback(server, "ws");
   return {
-    gatewayUrl: `ws://127.0.0.1:${address.port}`,
+    gatewayUrl,
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {

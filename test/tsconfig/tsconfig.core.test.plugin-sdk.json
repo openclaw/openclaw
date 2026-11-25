@@ -7,6 +7,7 @@
     "../../src/channels/**/*.test.ts",
     "../../src/channels/**/*.test.tsx",
     "../../src/plugin-sdk/**/*.test.ts",
-    "../../src/plugin-sdk/**/*.test.tsx"
+    "../../src/plugin-sdk/**/*.test.tsx",
+    "../../src/plugins/loader.native-harness-admission.test.ts"
   ]
 }

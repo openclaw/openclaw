@@ -1,8 +1,3 @@
-/**
- * Channel ingress allowlist diagnostics.
- *
- * Merges allowlists, applies identifier authentication policy, and redacts access-graph facts.
- */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   meetsIdentifierAuthentication,
@@ -18,9 +13,6 @@ import type {
   NormalizedIngressAllowlist,
 } from "./types.js";
 
-/**
- * Returns the first access-group related failure reason for an allowlist.
- */
 export function allowlistFailureReason(
   allowlist: NormalizedIngressAllowlist,
 ): IngressReasonCode | null {
@@ -36,9 +28,6 @@ export function allowlistFailureReason(
   return null;
 }
 
-/**
- * Projects an allowlist into redacted diagnostics safe for ingress access graphs.
- */
 export function redactedAllowlistDiagnostics(
   allowlist: NormalizedIngressAllowlist,
   reasonCode: IngressReasonCode,
@@ -77,6 +66,8 @@ function mergeResolvedAllowlists(
     scopedEntries.flatMap((entries) => entries.matchedEntryIds),
   );
   const matchedPairs = scopedEntries.flatMap((entries) => entries.matchedPairs);
+  const mergeAccessGroupField = (key: keyof NormalizedIngressAllowlist["accessGroups"]) =>
+    uniqueStrings(allowlists.flatMap((allowlist) => allowlist.accessGroups[key]));
   return {
     rawEntryCount: allowlists.reduce((sum, allowlist) => sum + allowlist.rawEntryCount, 0),
     normalizedEntries: scopedEntries.flatMap((entries) => entries.normalizedEntries),
@@ -87,15 +78,11 @@ function mergeResolvedAllowlists(
     hasMatchableEntries: allowlists.some((allowlist) => allowlist.hasMatchableEntries),
     hasWildcard: allowlists.some((allowlist) => allowlist.hasWildcard),
     accessGroups: {
-      referenced: uniqueStrings(
-        allowlists.flatMap((allowlist) => allowlist.accessGroups.referenced),
-      ),
-      matched: uniqueStrings(allowlists.flatMap((allowlist) => allowlist.accessGroups.matched)),
-      missing: uniqueStrings(allowlists.flatMap((allowlist) => allowlist.accessGroups.missing)),
-      unsupported: uniqueStrings(
-        allowlists.flatMap((allowlist) => allowlist.accessGroups.unsupported),
-      ),
-      failed: uniqueStrings(allowlists.flatMap((allowlist) => allowlist.accessGroups.failed)),
+      referenced: mergeAccessGroupField("referenced"),
+      matched: mergeAccessGroupField("matched"),
+      missing: mergeAccessGroupField("missing"),
+      unsupported: mergeAccessGroupField("unsupported"),
+      failed: mergeAccessGroupField("failed"),
     },
     match: {
       matched:
@@ -106,9 +93,6 @@ function mergeResolvedAllowlists(
   };
 }
 
-/**
- * Applies identifier authentication to exact matched entry/subject pairs.
- */
 export function applyIdentifierAuthenticationPolicy(
   allowlist: NormalizedIngressAllowlist,
   policy: ChannelIngressPolicyInput,
@@ -176,9 +160,6 @@ export function applyIdentifierAuthenticationPolicy(
   };
 }
 
-/**
- * Resolves the sender allowlist used for group/channel ingress after route overrides.
- */
 export function effectiveGroupSenderAllowlist(params: {
   state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;

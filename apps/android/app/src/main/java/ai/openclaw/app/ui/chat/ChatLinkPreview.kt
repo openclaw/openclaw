@@ -22,7 +22,6 @@ private const val LINK_PREVIEW_CACHE_ENTRIES = 64
 private const val LINK_PREVIEW_ACCEPT = "text/html, application/xhtml+xml;q=0.9"
 
 internal data class LinkPreviewMetadata(
-  val url: String,
   val title: String?,
   val description: String?,
   val imageUrl: String?,
@@ -68,7 +67,7 @@ internal fun parseOpenGraph(
   var ogDescription: String? = null
   var ogImage: String? = null
 
-  for (tag in findTags(html, "meta")) {
+  for (tag in findMetaTags(html)) {
     val attributes = parseTagAttributes(tag)
     val property = (attributes["property"] ?: attributes["name"])?.lowercase(Locale.US)
     val content = attributes["content"] ?: continue
@@ -86,7 +85,6 @@ internal fun parseOpenGraph(
 
   return LinkPreviewResult.Loaded(
     LinkPreviewMetadata(
-      url = baseUrl,
       title = title,
       description = description,
       imageUrl = imageUrl,
@@ -96,8 +94,8 @@ internal fun parseOpenGraph(
 
 internal class LinkPreviewFetcher(
   client: OkHttpClient = safePublicHttpClient,
-  private val timeoutMillis: Long = LINK_PREVIEW_TIMEOUT_MILLIS,
-  private val hostPolicy: (HttpUrl) -> Boolean = ::isPubliclyRoutableHost,
+  timeoutMillis: Long = LINK_PREVIEW_TIMEOUT_MILLIS,
+  hostPolicy: (HttpUrl) -> Boolean = ::isPubliclyRoutableHost,
 ) {
   private val webFetcher = SafeWebFetcher(client, timeoutMillis, hostPolicy)
 
@@ -110,11 +108,7 @@ internal class LinkPreviewFetcher(
         maxBytes = LINK_PREVIEW_BODY_MAX_BYTES,
         rejectOversizedBody = false,
       ) ?: return LinkPreviewResult.Failed
-    val html = response.bytes.toString(response.charset)
-    return when (val parsed = parseOpenGraph(html, response.url.toString())) {
-      is LinkPreviewResult.Loaded -> parsed.copy(metadata = parsed.metadata.copy(url = originalUrl))
-      LinkPreviewResult.Failed -> LinkPreviewResult.Failed
-    }
+    return parseOpenGraph(response.bytes.toString(response.charset), response.url.toString())
   }
 }
 
@@ -135,8 +129,7 @@ internal class LinkPreviewStore(
   }
 }
 
-private val chatLinkPreviewFetcher = LinkPreviewFetcher()
-internal val chatLinkPreviewStore = LinkPreviewStore(fetcher = chatLinkPreviewFetcher::fetch)
+internal val chatLinkPreviewStore = LinkPreviewStore(fetcher = LinkPreviewFetcher()::fetch)
 
 private fun resolveSafeWebUrl(
   baseUrl: String,
@@ -169,21 +162,18 @@ private fun findTitle(html: String): String? =
     ?.groupValues
     ?.getOrNull(1)
 
-private fun findTags(
-  html: String,
-  tagName: String,
-): Sequence<String> =
+private fun findMetaTags(html: String): Sequence<String> =
   sequence {
     var searchFrom = 0
     while (searchFrom < html.length) {
-      val start = html.indexOf("<$tagName", searchFrom, ignoreCase = true)
+      val start = html.indexOf("<meta", searchFrom, ignoreCase = true)
       if (start < 0) break
-      val boundary = html.getOrNull(start + tagName.length + 1)
+      val boundary = html.getOrNull(start + 5)
       if (boundary != null && !boundary.isWhitespace() && boundary != '/' && boundary != '>') {
-        searchFrom = start + tagName.length + 1
+        searchFrom = start + 5
         continue
       }
-      val end = findTagEnd(html, start + tagName.length + 1)
+      val end = findTagEnd(html, start + 5)
       if (end < 0) break
       yield(html.substring(start, end + 1))
       searchFrom = end + 1

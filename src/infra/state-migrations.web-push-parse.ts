@@ -4,7 +4,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  createWebPushVapidKeyPair,
   hashWebPushEndpoint,
   isValidWebPushEndpoint,
   isValidWebPushKey,
@@ -98,5 +97,5 @@ export function parseLegacyVapidKeys(raw: string, env: NodeJS.ProcessEnv): Vapid
   ) {
     throw new Error("legacy Web Push VAPID keys are invalid");
   }
-  return createWebPushVapidKeyPair(parsed.publicKey, parsed.privateKey, subject);
+  return { publicKey: parsed.publicKey, privateKey: parsed.privateKey, subject };
 }

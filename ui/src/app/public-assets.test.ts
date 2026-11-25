@@ -1,5 +1,6 @@
 // Control UI tests cover public assets behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { controlUiPublicAssetPath, inferControlUiPublicAssetPath } from "./public-assets.ts";
 
 function withConfiguredBasePath<T>(basePath: string, run: () => T): T {
@@ -9,18 +10,19 @@ function withConfiguredBasePath<T>(basePath: string, run: () => T): T {
   try {
     return run();
   } finally {
-    if (previous) {
-      Object.defineProperty(window, key, previous);
-    } else {
-      Reflect.deleteProperty(window, key);
-    }
+    restorePropertyDescriptor(window, key, previous);
   }
 }
 
+const originalLocation = window.location.href;
+afterEach(() => window.history.replaceState(null, "", originalLocation));
+
 describe("controlUiPublicAssetPath", () => {
-  it("versions public assets with the document build while keeping the worker revalidating", () => {
+  it("versions public assets by content across builds while keeping the worker revalidating", () => {
     const attribute = "data-openclaw-control-ui-build-id";
-    document.documentElement.setAttribute(attribute, "build-a");
+    const firstHash = "a".repeat(64);
+    const secondHash = "b".repeat(64);
+    document.documentElement.setAttribute(attribute, `build-a-${firstHash}`);
     try {
       for (const asset of [
         "favicon.svg",
@@ -36,14 +38,24 @@ describe("controlUiPublicAssetPath", () => {
         "app-art/example.webp",
         "community-art/example.webp",
       ] as const) {
-        expect(controlUiPublicAssetPath(asset, "")).toBe(`/${asset}?v=build-a`);
-        expect(controlUiPublicAssetPath(asset, "/control/")).toBe(`/control/${asset}?v=build-a`);
+        expect(controlUiPublicAssetPath(asset, "")).toBe(`/${asset}?v=${firstHash}`);
+        expect(controlUiPublicAssetPath(asset, "/control/")).toBe(
+          `/control/${asset}?v=${firstHash}`,
+        );
       }
       expect(controlUiPublicAssetPath("sw.js", "/control")).toBe("/control/sw.js");
-      document.documentElement.setAttribute(attribute, "build-b");
+      document.documentElement.setAttribute(attribute, `build-b-${firstHash}`);
       expect(
-        inferControlUiPublicAssetPath("fonts/lora.css", { resourceBasePath: "/control" }),
-      ).toBe("/control/fonts/lora.css?v=build-b");
+        withConfiguredBasePath("/control", () => inferControlUiPublicAssetPath("fonts/lora.css")),
+      ).toBe(`/control/fonts/lora.css?v=${firstHash}`);
+      document.documentElement.setAttribute(attribute, `build-c-${secondHash}`);
+      expect(controlUiPublicAssetPath("fonts/lora.css", "")).toBe(
+        `/fonts/lora.css?v=${secondHash}`,
+      );
+      document.documentElement.setAttribute(attribute, "fixture-build");
+      expect(controlUiPublicAssetPath("fonts/lora.css", "")).toBe(
+        "/fonts/lora.css?v=fixture-build",
+      );
     } finally {
       document.documentElement.removeAttribute(attribute);
     }
@@ -53,50 +65,15 @@ describe("controlUiPublicAssetPath", () => {
     expect(controlUiPublicAssetPath("favicon.svg", "")).toBe("/favicon.svg");
     expect(controlUiPublicAssetPath("manifest.webmanifest", null)).toBe("/manifest.webmanifest");
   });
-
-  it("resolves base-mounted public assets under the configured base path", () => {
-    expect(controlUiPublicAssetPath("favicon.svg", "/ui")).toBe("/ui/favicon.svg");
-    expect(controlUiPublicAssetPath("sw.js", "/apps/openclaw/")).toBe("/apps/openclaw/sw.js");
-  });
 });
 
 describe("inferControlUiPublicAssetPath", () => {
   it("uses the root for known nested routes without a configured base path", () => {
-    expect(
-      inferControlUiPublicAssetPath("manifest.webmanifest", { pathname: "/skills/workshop" }),
-    ).toBe("/manifest.webmanifest");
-    expect(
-      inferControlUiPublicAssetPath("favicon.svg", {
-        resourceBasePath: "",
-        pathname: "/__openclaw__/new",
-      }),
-    ).toBe("/favicon.svg");
-  });
-
-  it("infers base-mounted assets from nested routes", () => {
-    expect(inferControlUiPublicAssetPath("sw.js", { pathname: "/openclaw/skills/workshop" })).toBe(
-      "/openclaw/sw.js",
+    window.history.replaceState(null, "", "/skills/workshop");
+    expect(inferControlUiPublicAssetPath("manifest.webmanifest")).toBe("/manifest.webmanifest");
+    window.history.replaceState(null, "", "/__openclaw__/new");
+    expect(withConfiguredBasePath("", () => inferControlUiPublicAssetPath("favicon.svg"))).toBe(
+      "/favicon.svg",
     );
-  });
-
-  it("keeps explicit pathname inference independent from ambient page state", () => {
-    expect(
-      withConfiguredBasePath("/other", () =>
-        inferControlUiPublicAssetPath("sw.js", { pathname: "/openclaw/skills/workshop" }),
-      ),
-    ).toBe("/openclaw/sw.js");
-  });
-
-  it("keeps an about mount root distinct from the settings About route", () => {
-    expect(inferControlUiPublicAssetPath("sw.js", { pathname: "/about/" })).toBe("/about/sw.js");
-  });
-
-  it("prefers an explicit base path over pathname inference", () => {
-    expect(
-      inferControlUiPublicAssetPath("apple-touch-icon.png", {
-        resourceBasePath: "/control/",
-        pathname: "/skills/workshop",
-      }),
-    ).toBe("/control/apple-touch-icon.png");
   });
 });

@@ -144,14 +144,13 @@ class ChatWorkingIndicatorTest {
   }
 
   @Test
-  fun ackRekeyKeepsOptimisticClockAndLocalStart() {
+  fun outputTokenUpdatesKeepClockAndLocalStart() {
     val tracker = ChatWorkingRunTracker("agent:main:main")
     val provisional =
       requireNotNull(
         tracker.resolve(
           indicatorVisible = true,
           clockKey = "message-1",
-          authoritativeRunId = "client-run",
           nowElapsedMs = 5_000L,
           outputTokens = null,
         ),
@@ -161,7 +160,6 @@ class ChatWorkingIndicatorTest {
         tracker.resolve(
           indicatorVisible = true,
           clockKey = "message-1",
-          authoritativeRunId = "server-run",
           nowElapsedMs = 8_000L,
           outputTokens = 40L,
         ),
@@ -169,7 +167,6 @@ class ChatWorkingIndicatorTest {
 
     assertEquals(provisional.clockKey, authoritative.clockKey)
     assertEquals(5_000L, authoritative.observedAtElapsedMs)
-    assertEquals("server-run", authoritative.authoritativeRunId)
     assertEquals(40L, authoritative.outputTokens)
   }
 
@@ -178,11 +175,11 @@ class ChatWorkingIndicatorTest {
     val tracker = ChatWorkingRunTracker("agent:main:main")
     val first =
       requireNotNull(
-        tracker.resolve(true, "run-1", "run-1", 7_000L, null),
+        tracker.resolve(true, "run-1", 7_000L, null),
       )
     val replacement =
       requireNotNull(
-        tracker.resolve(true, "run-2", "run-2", 9_000L, null),
+        tracker.resolve(true, "run-2", 9_000L, null),
       )
 
     assertEquals("run-1", first.clockKey)

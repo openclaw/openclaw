@@ -15,13 +15,9 @@ export type InstallSecurityScanResult = {
   };
 };
 
-/** Lazily loads install scanning so normal plugin startup avoids policy/runtime imports. */
-async function loadInstallSecurityScanRuntime() {
-  return await import("./install-security-scan.runtime.js");
-}
-
+// Normal plugin startup must not import the install policy runtime.
 const bindInstallSecurityScanRuntime = createLazyRuntimeMethodBinder(
-  loadInstallSecurityScanRuntime,
+  () => import("./install-security-scan.runtime.js"),
 );
 
 /** Scans an unpacked bundle source before plugin install/update. */
@@ -37,14 +33,6 @@ export const scanPackageInstallSource = bindInstallSecurityScanRuntime(
 /** Scans the installed package dependency tree after npm resolution. */
 export const scanInstalledPackageDependencyTree = bindInstallSecurityScanRuntime(
   (runtime) => runtime.scanInstalledPackageDependencyTreeRuntime,
-);
-
-/**
- * Retained for install.runtime compatibility with pre-v2026.6.5 lazy install chunks.
- * Remove only with the matching runtime-postbuild legacy alias cleanup.
- */
-export const scanFileInstallSource = bindInstallSecurityScanRuntime(
-  (runtime) => runtime.scanFileInstallSourceRuntime,
 );
 
 /** Runs npm install policy checks before package install side effects. */

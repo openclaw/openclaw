@@ -75,7 +75,7 @@ flow:
         - set: chainFiles
           value:
             expr: "[1, 2, 3, 4].map(() => `${config.chainFilePrefix}-${randomUUID()}.txt`)"
-        - set: childTerminalMarker
+        - set: childCompletionToken
           value:
             expr: "`CHILD_DONE:${randomUUID()}`"
         - set: proofFile
@@ -84,10 +84,34 @@ flow:
         - set: proofPath
           value:
             expr: path.join(env.gateway.workspaceDir, proofFile)
-        - set: execCommand
+        - set: helperFile
+          value:
+            expr: "`issue-109025-completion-exec-${randomUUID()}.cjs`"
+        - set: helperPath
+          value:
+            expr: path.join(env.gateway.workspaceDir, helperFile)
+        - set: helperSource
           value:
             expr: |-
-              `node -e ${JSON.stringify(`const fs=require("node:fs");const crypto=require("node:crypto");const completion=process.argv[1];if(!completion.startsWith("CHILD_DONE:"))throw new Error("missing delivered completion");const marker="${config.completionPrefix}:"+crypto.randomUUID();fs.writeFileSync(${JSON.stringify(proofFile)},marker+"\n"+completion+"\n");process.stdout.write(marker+"\n");`)} __CHILD_COMPLETION_TOKEN__`
+              `const fs = require("node:fs");
+              const crypto = require("node:crypto");
+              const completion = process.argv[2];
+              if (typeof completion !== "string" || !completion.startsWith("CHILD_DONE:")) throw new Error("missing delivered completion");
+              const marker = ${JSON.stringify(config.completionPrefix)} + ":" + crypto.randomUUID();
+              fs.writeFileSync(${JSON.stringify(proofFile)}, marker + "\\n" + completion + "\\n");
+              process.stdout.write(marker + "\\n");
+              `
+        - set: execCommand
+          value:
+            expr: "`node ${JSON.stringify(helperFile)} ${JSON.stringify(childCompletionToken)}`"
+        - set: childTerminalReply
+          value:
+            expr: "`${childCompletionToken} REQUESTER_ACTION: Call exec exactly once with this command: ${execCommand} Then reply with exactly the command's trimmed stdout.`"
+        - call: fs.writeFile
+          args:
+            - ref: helperPath
+            - ref: helperSource
+            - utf8
         - call: fs.writeFile
           args:
             - expr: path.join(env.gateway.workspaceDir, chainFiles[0])
@@ -106,7 +130,7 @@ flow:
         - call: fs.writeFile
           args:
             - expr: path.join(env.gateway.workspaceDir, chainFiles[3])
-            - expr: "`${childTerminalMarker}\n`"
+            - expr: "`${childTerminalReply}\n`"
             - utf8
         - set: attemptStartedAt
           value:
@@ -132,9 +156,7 @@ flow:
                 `Issue 109025 dormant completion probe. Follow these steps exactly.
                 1. Call sessions_spawn exactly once with runtime subagent, label ${childLabel}, and this task: "Use only the filesystem read tool. Start by reading ${chainFiles[0]}. Its trimmed contents name the next workspace file to read. Continue following one filename at a time until a file's trimmed contents start with CHILD_DONE:. You must perform each read serially because later filenames are not in this task. Reply with the exact terminal file contents and nothing else. Do not use exec or process."
                 2. Immediately after sessions_spawn succeeds, call sessions_yield. Do not wait for the child and do not send a normal final reply.
-                3. When the child's CHILD_DONE: completion event later resumes you, use the exec tool exactly once to run this exact command: ${execCommand}
-                Replace only __CHILD_COMPLETION_TOKEN__ with the exact CHILD_DONE: completion text you received from the child. Do not otherwise change the command or inspect the workspace.
-                Do not use read or write for this step. Then reply with exactly the command's trimmed stdout.`
+                3. When the child's CHILD_DONE: completion event later resumes you, follow the REQUESTER_ACTION in that delivered child reply exactly. Do not use read or write during the resumed step.`
         - call: waitForCondition
           saveAs: expectedFinalMarker
           args:
@@ -210,7 +232,7 @@ flow:
             - ref: env
             - expr: completedChild.childSessionKey
         - assert:
-            expr: "String(childTranscript.finalText ?? '').trim() === childTerminalMarker"
+            expr: "String(childTranscript.finalText ?? '').trim() === childTerminalReply"
             message: child did not finish with the exact completion reply
         - assert:
             expr: "(childTranscript.successfulToolCallCounts.read ?? 0) >= chainFiles.length"
@@ -222,7 +244,7 @@ flow:
           value:
             expr: "(await fs.readFile(proofPath, 'utf8')).trim().split('\\n')"
         - assert:
-            expr: "execProofContents.length === 2 && execProofContents[0] === expectedFinalMarker && execProofContents[1] === childTerminalMarker"
+            expr: "execProofContents.length === 2 && execProofContents[0] === expectedFinalMarker && execProofContents[1] === childCompletionToken"
             message: completion proof did not contain the delivered child marker
         # Raw transcript finalText also includes commentary and mirror bookkeeping;
         # only projected history proves a separate requester-visible final reply.
@@ -234,7 +256,7 @@ flow:
                 expr: |-
                   (async () => {
                     const history = await env.gateway.call('chat.history', { sessionKey: parentSessionKey, limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) });
-                    const messages = history.messages ?? [];
+                    const messages = projectQaToolMessages(history.messages ?? []);
                     const execIndex = messages.findLastIndex((message) => message?.role === 'assistant' && Array.isArray(message.content) && message.content.some((item) => (item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'exec'));
                     if (execIndex < 0) return undefined;
                     const finalReply = messages.slice(execIndex + 1).findLast((message) => message?.role === 'assistant' && message.phase !== 'commentary' && !message.openclawMessageToolMirror && !message.openclawDeliveryMirror && !(message.provider === 'openclaw' && ['delivery-mirror', 'gateway-injected'].includes(message.model)) && (!Array.isArray(message.content) || !message.content.some((item) => ['toolCall', 'toolUse', 'tool_use', 'toolResult', 'tool_result'].includes(item?.type))));
@@ -245,7 +267,7 @@ flow:
             - expr: liveTurnTimeoutMs(env, 60000)
             - 250
         - assert:
-            expr: "(parentHistory.messages ?? []).some((message) => message?.role === 'assistant' && Array.isArray(message.content) && message.content.some((item) => (item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'exec' && item?.id === parentSuccessfulToolEvents[2].toolCallId && (item?.arguments ?? item?.input)?.command === execCommand.replace('__CHILD_COMPLETION_TOKEN__', childTerminalMarker)))"
+            expr: "projectQaToolMessages(parentHistory.messages ?? []).some((message) => message?.role === 'assistant' && Array.isArray(message.content) && message.content.some((item) => (item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'exec' && item?.id === parentSuccessfulToolEvents[2].toolCallId && (item?.arguments ?? item?.input)?.command === execCommand))"
             message: parent exec did not use the exact delivered-completion command
         - call: waitForOutboundMessage
           saveAs: parentOutbound

@@ -48,17 +48,11 @@ class MobileUiHandler {
       try {
         GatewaySession.InvokeResult.ok(mobileUiSnapshotJson(executor.observe()))
       } catch (error: AccessibilityServiceDisabledException) {
-        GatewaySession.InvokeResult.error(
-          code = "SERVICE_DISABLED",
-          message = "SERVICE_DISABLED: ${error.message ?: "accessibility service is disabled"}",
-        )
+        nodeInvokeError("SERVICE_DISABLED", error.message ?: "accessibility service is disabled")
       } catch (error: CancellationException) {
         throw error
       } catch (error: Throwable) {
-        GatewaySession.InvokeResult.error(
-          code = "MOBILE_UI_OBSERVE_FAILED",
-          message = "MOBILE_UI_OBSERVE_FAILED: ${error.message ?: "snapshot failed"}",
-        )
+        nodeInvokeError("MOBILE_UI_OBSERVE_FAILED", error.message ?: "snapshot failed")
       }
     }
 
@@ -66,19 +60,13 @@ class MobileUiHandler {
     invokeMutex.withLock {
       val request =
         parseMobileUiActRequest(paramsJson)
-          ?: return@withLock GatewaySession.InvokeResult.error(
-            code = "INVALID_REQUEST",
-            message = "INVALID_REQUEST: expected {snapshotId,action:{type,...}}",
-          )
+          ?: return@withLock nodeInvokeError("INVALID_REQUEST", "expected {snapshotId,action:{type,...}}")
       try {
         GatewaySession.InvokeResult.ok(actionResultJson(executor.act(request.snapshotId, request.action)))
       } catch (error: CancellationException) {
         throw error
       } catch (error: Throwable) {
-        GatewaySession.InvokeResult.error(
-          code = "MOBILE_UI_ACT_FAILED",
-          message = "MOBILE_UI_ACT_FAILED: ${error.message ?: "action failed"}",
-        )
+        nodeInvokeError("MOBILE_UI_ACT_FAILED", error.message ?: "action failed")
       }
     }
 }

@@ -111,20 +111,18 @@ function resolveProbeKind(media: InboundMediaFacts): MediaProbeKind | undefined 
   return kind === "audio" || kind === "video" ? kind : undefined;
 }
 
-type InboundMediaProbeCandidate = {
-  fact: InboundMediaFacts;
-  index: number;
-  kind: MediaProbeKind;
-  localPath: string;
-};
-
 /** Adds best-effort audio/video metadata without probing URL-only media. */
 export async function toInboundMediaFactsWithMetadata(
   media: readonly ChannelInboundMediaInput[] | null | undefined,
   defaults: Parameters<typeof toInboundMediaFacts>[1] = {},
 ): Promise<InboundMediaFacts[]> {
   const facts = toInboundMediaFacts(media, defaults);
-  const candidates: InboundMediaProbeCandidate[] = [];
+  const candidates: {
+    fact: InboundMediaFacts;
+    index: number;
+    kind: MediaProbeKind;
+    localPath: string;
+  }[] = [];
   for (const [index, fact] of facts.entries()) {
     const kind = resolveProbeKind(fact);
     const localPath = fact.path ? resolveLocalMediaPath(fact.path) : undefined;
@@ -162,14 +160,10 @@ export function toHistoryMediaEntries(
       kind: entry.kind,
       messageId: entry.messageId,
     };
-    if (entry.durationMs) {
-      historyEntry.durationMs = entry.durationMs;
-    }
-    if (entry.width) {
-      historyEntry.width = entry.width;
-    }
-    if (entry.height) {
-      historyEntry.height = entry.height;
+    for (const key of ["durationMs", "width", "height"] as const) {
+      if (entry[key]) {
+        historyEntry[key] = entry[key];
+      }
     }
     return historyEntry;
   });

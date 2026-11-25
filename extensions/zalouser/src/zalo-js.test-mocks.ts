@@ -16,6 +16,10 @@ type ZaloJsMocks = {
   resolveZaloGroupContextMock: Mock<ZaloJsModule["resolveZaloGroupContext"]>;
   resolveZaloGroupsByEntriesMock: Mock<ZaloJsModule["resolveZaloGroupsByEntries"]>;
   resolveZaloOwnUserIdMock: Mock<ZaloJsModule["resolveZaloOwnUserId"]>;
+  sendZaloDeliveredEventMock: Mock<ZaloJsModule["sendZaloDeliveredEvent"]>;
+  sendZaloSeenEventMock: Mock<ZaloJsModule["sendZaloSeenEvent"]>;
+  sendZaloReactionMock: Mock<ZaloJsModule["sendZaloReaction"]>;
+  sendZaloTypingEventMock: Mock<ZaloJsModule["sendZaloTypingEvent"]>;
   startZaloListenerMock: Mock<ZaloJsModule["startZaloListener"]>;
   startZaloQrLoginMock: Mock<ZaloJsModule["startZaloQrLogin"]>;
   waitForZaloQrLoginMock: Mock<ZaloJsModule["waitForZaloQrLogin"]>;
@@ -52,6 +56,10 @@ const zaloJsMocks = vi.hoisted((): ZaloJsMocks => ({
     entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
   ),
   resolveZaloOwnUserIdMock: vi.fn(async () => "owner-1"),
+  sendZaloDeliveredEventMock: vi.fn(async () => {}),
+  sendZaloSeenEventMock: vi.fn(async () => {}),
+  sendZaloReactionMock: vi.fn(async () => {}),
+  sendZaloTypingEventMock: vi.fn(async () => {}),
   startZaloListenerMock: vi.fn(async () => ({ stop: vi.fn() })),
   startZaloQrLoginMock: vi.fn(async () => ({
     message: "qr pending",
@@ -74,8 +82,13 @@ export const startZaloListenerMock: Mock<ZaloJsModule["startZaloListener"]> =
   zaloJsMocks.startZaloListenerMock;
 export const startZaloQrLoginMock = zaloJsMocks.startZaloQrLoginMock;
 export const waitForZaloQrLoginMock = zaloJsMocks.waitForZaloQrLoginMock;
+export const sendZaloDeliveredEventMock = zaloJsMocks.sendZaloDeliveredEventMock;
+export const sendZaloSeenEventMock = zaloJsMocks.sendZaloSeenEventMock;
+export const sendZaloReactionMock = zaloJsMocks.sendZaloReactionMock;
+export const sendZaloTypingEventMock = zaloJsMocks.sendZaloTypingEventMock;
 
-vi.mock("./zalo-js.js", () => ({
+vi.mock("./zalo-js.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./zalo-js.js")>()),
   checkZaloAuthenticated: zaloJsMocks.checkZaloAuthenticatedMock,
   getZaloUserInfo: zaloJsMocks.getZaloUserInfoMock,
   listZaloFriends: listZaloFriendsMock,
@@ -89,6 +102,10 @@ vi.mock("./zalo-js.js", () => ({
   resolveZaloGroupContext: zaloJsMocks.resolveZaloGroupContextMock,
   resolveZaloGroupsByEntries: zaloJsMocks.resolveZaloGroupsByEntriesMock,
   resolveZaloOwnUserId: zaloJsMocks.resolveZaloOwnUserIdMock,
+  sendZaloDeliveredEvent: sendZaloDeliveredEventMock,
+  sendZaloSeenEvent: sendZaloSeenEventMock,
+  sendZaloReaction: sendZaloReactionMock,
+  sendZaloTypingEvent: sendZaloTypingEventMock,
   startZaloListener: startZaloListenerMock,
   startZaloQrLogin: startZaloQrLoginMock,
   waitForZaloQrLogin: waitForZaloQrLoginMock,

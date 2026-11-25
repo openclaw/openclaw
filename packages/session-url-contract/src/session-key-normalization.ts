@@ -68,12 +68,6 @@ const NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES = 2048;
 const NORMALIZED_SESSION_KEY_CACHE_MAX_LENGTH = 4096;
 const normalizedSessionKeyCache = new Map<string, string>();
 
-function readNormalizedSessionKeyCache(raw: string): string | undefined {
-  return raw.length <= NORMALIZED_SESSION_KEY_CACHE_MAX_LENGTH
-    ? normalizedSessionKeyCache.get(raw)
-    : undefined;
-}
-
 function writeNormalizedSessionKeyCache(raw: string, normalized: string): void {
   if (raw.length > NORMALIZED_SESSION_KEY_CACHE_MAX_LENGTH) {
     return;
@@ -92,9 +86,9 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
   const spans: PreservedSpan[] = [];
   // matchAll clones the global matcher, so separate keys never share a cursor.
   for (const match of raw.matchAll(SIGNAL_GROUP_ID_PATTERN)) {
-    const matched = match[0] ?? "";
+    const matched = match[0];
     const segment = match[2] ?? "";
-    const segStart = (match.index ?? 0) + matched.length - segment.length;
+    const segStart = match.index + matched.length - segment.length;
     // Segment spans match the legacy peerId.trim() behavior exactly.
     spans.push({ start: segStart, end: segStart + segment.length, trim: true });
   }
@@ -127,7 +121,7 @@ export function normalizeSessionKeyPreservingOpaquePeerIds(
   if (!raw) {
     return "";
   }
-  const cached = readNormalizedSessionKeyCache(raw);
+  const cached = normalizedSessionKeyCache.get(raw);
   if (cached !== undefined) {
     return cached;
   }

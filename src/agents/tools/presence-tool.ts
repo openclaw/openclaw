@@ -9,7 +9,10 @@ import { bindAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { capturePresenceToolAuthority } from "./presence-tool-authority.js";
 import { PRESENCE_QUERY_TIMEOUT_MS, PRESENCE_TOOL_DESCRIPTION } from "./presence-tool-contract.js";
 
-export function createPresenceTool(options?: { runId?: string }): AnyAgentTool {
+export function createPresenceTool(options?: {
+  runId?: string;
+  assertSourceCurrent?: () => void;
+}): AnyAgentTool {
   const ownerAuthority = bindActiveOperatorTurnAuthority(options?.runId);
   return {
     name: "presence",
@@ -18,21 +21,20 @@ export function createPresenceTool(options?: { runId?: string }): AnyAgentTool {
     parameters: PresenceQueryParamsSchema,
     outputSchema: PresenceQueryResultSchema,
     execute: async (_toolCallId, params, signal) => {
-      const assertSourceCurrent = capturePresenceToolAuthority({
-        runId: options?.runId,
-        ownerAuthority,
-      });
+      const assertSourceCurrent =
+        options?.assertSourceCurrent ??
+        capturePresenceToolAuthority({ runId: options?.runId, ownerAuthority });
       assertSourceCurrent();
       const request = bindAgentToolGatewayRequest({ hostedOnly: true });
-      return jsonResult(
-        await request<PresenceQueryResult>({
-          method: "presence.query",
-          params,
-          signal,
-          assertDispatchCurrent: assertSourceCurrent,
-          timeoutMs: PRESENCE_QUERY_TIMEOUT_MS,
-        }),
-      );
+      const result = await request<PresenceQueryResult>({
+        method: "presence.query",
+        params,
+        signal,
+        assertDispatchCurrent: assertSourceCurrent,
+        timeoutMs: PRESENCE_QUERY_TIMEOUT_MS,
+      });
+      assertSourceCurrent();
+      return jsonResult(result);
     },
   };
 }

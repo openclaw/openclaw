@@ -138,21 +138,12 @@ describe("retained child evidence ownership", () => {
     expect(child).toEqual(original);
   });
 
-  it("admits a coverage cap once with open completion and rejects later rewrites atomically", () => {
+  it("captures completed child bundles once without admitting later rewrites", () => {
     const parent = owner();
     const shared = owner({ anchors: parent.anchors });
     const id = shared.begin(0);
     parent.importChild(0, shared.snapshot(options));
     parent.select(0, null);
-    const open = parent.snapshot(options);
-    expect(() =>
-      parent.complete(id, {
-        status: "pass",
-        entries: [row("pass")],
-        childCoverage: [],
-      }),
-    ).toThrow(/membership/);
-    expect(parent.snapshot(options)).toEqual(open);
     shared.complete(id, {
       status: "pass",
       entries: [row("pass")],
@@ -167,8 +158,22 @@ describe("retained child evidence ownership", () => {
     expect(completed).toEqual(shared.snapshot(options));
     const changed = structuredClone(completed);
     changed.occurrences.find((item) => item.id === id)!.childCoverage = [];
-    expect(() => parent.importChild(0, changed)).toThrow(/completed or immutable/);
+    parent.select(0, parent.importChild(0, changed));
     expect(parent.snapshot(options)).toEqual(completed);
+
+    const appended = bundle("pass");
+    appended.entries[0]!.coverage = [{ id: "qa.unowned", role: "primary" }];
+    changed.occurrences
+      .find((item) => item.id === id)!
+      .childOccurrenceIds!.push(...appended.occurrences.map((item) => item.id));
+    changed.occurrences.push(...appended.occurrences);
+    changed.entries.push(...appended.entries);
+    parent.select(0, parent.importChild(0, changed));
+    const final = parent.snapshot(options);
+    expect(
+      getEffectiveQaEvidenceEntries(final).flatMap((entry) => entry.coverage),
+    ).not.toContainEqual({ id: "qa.unowned", role: "primary" });
+    expect(final).toEqual(completed);
   });
 
   it.each(["pass", "fail"] as const)(
@@ -257,7 +262,7 @@ describe("retained child evidence ownership", () => {
     expect(parent.snapshot(options)).toEqual(before);
   });
 
-  it("rejects rewritten child-local activity on a later shared snapshot", () => {
+  it("retains captured child-local activity on a later shared snapshot", () => {
     const parent = owner();
     const shared = owner({ anchors: parent.anchors });
     const child = owner();
@@ -273,7 +278,7 @@ describe("retained child evidence ownership", () => {
     const rewritten = structuredClone(before);
     rewritten.entries.find((entry) => entry.binding.occurrenceId === diagnostic)!.effective = false;
     expect(validateQaEvidenceSummaryJson(rewritten)).toEqual(rewritten);
-    expect(() => parent.importChild(0, rewritten)).toThrow(/retained bundle selection/);
+    parent.select(0, parent.importChild(0, rewritten));
     expect(parent.snapshot(options)).toEqual(before);
   });
 
@@ -299,7 +304,7 @@ describe("retained child evidence ownership", () => {
     );
     rewritten.entries.push(...completion.entries);
     expect(validateQaEvidenceSummaryJson(rewritten)).toEqual(rewritten);
-    expect(() => parent.importChild(0, rewritten)).toThrow(/completed or immutable/);
+    parent.select(0, parent.importChild(0, rewritten));
     expect(parent.snapshot(options)).toEqual(before);
     expect(parent.childInput(0).occurrences).toEqual(before.occurrences);
   });

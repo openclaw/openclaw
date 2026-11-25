@@ -1,4 +1,3 @@
-// HTTP endpoint adapter for invoking gateway tools from OpenAI-compatible clients.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -9,14 +8,10 @@ import {
   sendMethodNotAllowed,
   watchClientDisconnect,
 } from "./http-common.js";
-import {
-  assertGatewayHttpRequestCurrent,
-  type GatewayHttpRequestAuthOptions,
-} from "./http-request-authority.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   getHeader,
-  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
@@ -35,10 +30,8 @@ export async function handleToolsInvokeHttpRequest(
     resolveGatewayContext?: GatewayContextResolver;
   },
 ): Promise<boolean> {
-  let url: URL;
-  try {
-    url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-  } catch {
+  const url = URL.parse(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  if (!url) {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "bad_request", message: "Invalid request URL" }));
     return true;
@@ -60,7 +53,6 @@ export async function handleToolsInvokeHttpRequest(
     req,
     res,
     operatorMethod: "agent",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;
@@ -71,9 +63,8 @@ export async function handleToolsInvokeHttpRequest(
   }
   const abortController = new AbortController();
   const operatorAccessAuthority = requestAuth.operatorAccessAuthority;
-  const signal = operatorAccessAuthority
-    ? AbortSignal.any([abortController.signal, operatorAccessAuthority.signal])
-    : abortController.signal;
+  // Admitted once above; operator access revocation applies to the next request.
+  const signal = abortController.signal;
   const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
 
   try {
@@ -85,7 +76,6 @@ export async function handleToolsInvokeHttpRequest(
     if (bodyUnknown === undefined || signal.aborted) {
       return true;
     }
-    await requestAuth.revalidate();
     const body = (bodyUnknown ?? {}) as ToolsInvokeInput;
 
     // Resolve message channel/account hints (optional headers) for policy inheritance.
@@ -99,11 +89,16 @@ export async function handleToolsInvokeHttpRequest(
     const client = createSyntheticPluginRuntimeClient({
       authenticatedUserProfile: requestAuth.authenticatedUserProfile,
       operatorRoleActor: requestAuth.operatorRoleActor,
+      openclawIdPrincipal: requestAuth.openclawIdPrincipal,
       operatorAccessAuthority,
       scopes: operatorScopes,
     });
     const context = opts.resolveGatewayContext?.();
-    if (resolveGatewayOperatorRoleActor(client)?.kind === "operator" && !context) {
+    if (
+      (requestAuth.openclawIdPrincipal !== undefined ||
+        resolveGatewayOperatorRoleActor(client)?.kind === "operator") &&
+      !context
+    ) {
       sendJson(res, 503, {
         error: { message: "Gateway context is unavailable; retry shortly.", type: "unavailable" },
       });
@@ -115,8 +110,9 @@ export async function handleToolsInvokeHttpRequest(
         context,
         resolveGatewayContext: opts.resolveGatewayContext,
         signal,
-        hasCurrentClientAuthority: () => !signal.aborted && requestAuth.hasCurrentClientAuthority(),
+        hasCurrentClientAuthority: () => !signal.aborted,
         isWebchatConnect: () => false,
+        pluginRegistry: context?.getGatewayMethodRegistry?.().pluginRegistry,
       },
       () =>
         invokeGatewayTool({
@@ -128,12 +124,12 @@ export async function handleToolsInvokeHttpRequest(
           agentThreadId,
           authenticatedUserProfile: requestAuth.authenticatedUserProfile,
           operatorRoleActor: requestAuth.operatorRoleActor,
+          openclawIdPrincipal: requestAuth.openclawIdPrincipal,
           operatorScopes,
           senderIsOwner,
           conversationReadOrigin: "direct-operator",
           toolCallIdPrefix: "http",
           signal,
-          assertInvocationCurrent: () => assertGatewayHttpRequestCurrent(requestAuth),
         }),
     );
     if (signal.aborted) {

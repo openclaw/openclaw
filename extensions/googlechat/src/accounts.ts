@@ -39,9 +39,7 @@ export type ResolvedGoogleChatAccount = {
   credentialDiagnostics?: CredentialUnavailableDiagnostic[];
 };
 
-export type GoogleChatConfigAccessorAccount = {
-  config: GoogleChatAccountConfig;
-};
+export type GoogleChatConfigAccessorAccount = Pick<ResolvedGoogleChatAccount, "config">;
 
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
@@ -88,7 +86,7 @@ function mergeGoogleChatAccountConfig(
     ...defaultAccountShared,
     ...base,
     ...(botLoopProtection ? { botLoopProtection } : {}),
-  } as GoogleChatAccountConfig;
+  };
 }
 
 export function resolveGoogleChatConfigAccessorAccount(params: {

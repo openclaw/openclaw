@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
 import { publishedNativeAssignments } from "./native-assignment-summary.mjs";
+import { assertPackageRecoveryEvidence } from "./package-activation-recovery.mjs";
 import { publishedPluginPolicy } from "./plugin-policy-summary.mjs";
 
 // Capture and snapshot validation stay plain Node. The host entrypoint owns
@@ -50,6 +51,10 @@ const nativeAssignmentLogs = [
   "native-assignment-eligibility.json",
   "native-assignment-baseline.json",
   "native-assignment-first-hop.json",
+  "native-assignment-inventory-after-first-hop.json",
+  "native-assignment-inventory-before-recovery.json",
+  "native-assignment-inventory-after-recovery.json",
+  "native-assignment-inventory-live-final.json",
   "native-assignment-proof.json",
   "native-assignment-messages.jsonl",
   "native-assignment-server.log",
@@ -65,6 +70,19 @@ const pluginPolicyLogs = [
   "webhooks-only-policy/baseline-runtime.out",
   "webhooks-only-policy/candidate-runtime.out",
 ];
+const nativePluginUiLogs = ["", "native-ui-opt-out/"]
+  .flatMap((prefix) =>
+    ["baseline", "candidate"].flatMap((stage) => [
+      `${prefix}native-ui-${stage}-proof.json`,
+      `${prefix}native-ui-${stage}-catalog.out`,
+      `${prefix}native-ui-${stage}-catalog.err`,
+    ]),
+  )
+  .concat([
+    "native-ui-opt-out/update.json",
+    "native-ui-opt-out/update.err",
+    "native-ui-opt-out/candidate-gateway.log",
+  ]);
 const logNames = [
   "baseline-install.log",
   "baseline-companion.json",
@@ -80,9 +98,19 @@ const logNames = [
   "repair.err",
   "recovery-update.json",
   "recovery-update.err",
+  "interrupted-update.json",
+  "interrupted-update.err",
+  "next-update.json",
+  "next-update.err",
+  "stranded-update.json",
+  "stranded-update.err",
   "post-update-validate.json",
   "post-update-validate.err",
   "doctor.log",
+  "doctor-lint.json",
+  "doctor-lint.err",
+  "formerly-bundled-doctor.log",
+  "volume-doctor-budget.json",
   "baseline-doctor.log",
   "workshop-doctor-recovery.json",
   "update-report-recovery.json",
@@ -109,6 +137,7 @@ const logNames = [
   "physical-candidate-repair.json",
   "legacy-operator-cron-history-proof.json",
   ...pluginPolicyLogs,
+  ...nativePluginUiLogs,
   ...nativeAssignmentLogs,
   "webhooks-only-policy/update.err",
   "webhooks-only-policy/gateway.log",
@@ -116,6 +145,7 @@ const logNames = [
   "legacy-operator-post-update-cron-history.json",
   "legacy-operator-candidate-cron-history.json",
   "dreaming-cron-proof.json",
+  "cron-owner-proof.json",
   "legacy-operator-baseline-turn.out",
   "legacy-operator-baseline-turn.err",
   "legacy-operator-candidate-turn.out",
@@ -156,6 +186,68 @@ const reasons = [
   "SQLite journal state requires an artifact-preserving reader; omitted before native open",
 ];
 const omissions = {};
+const installedRecoveryLabels = [
+  "installed recovery",
+  "installed recovery install",
+  "installed recovery driver error",
+];
+
+function installedRecoveryProjection(value, sanitize = (text) => text) {
+  if (value?.availability !== "captured") {
+    return { availability: "unavailable" };
+  }
+  if (
+    !/^installed-recovery-[A-Za-z0-9]+$/.test(value.runDirectory) ||
+    !["running", "passed"].includes(value.status)
+  ) {
+    throw new Error();
+  }
+  return {
+    availability: "captured",
+    runDirectory: value.runDirectory,
+    status: value.status,
+    driverError: {
+      availability: value.driverError?.availability === "captured" ? "captured" : "unavailable",
+    },
+    logs: {
+      install: sanitize(value.logs?.install ?? null, "installed recovery install"),
+    },
+  };
+}
+
+function captureInstalledRecovery(artifactRoot, observationRoot) {
+  if (!observationRoot) {
+    return { availability: "unavailable" };
+  }
+  try {
+    const summary = JSON.parse(
+      readOwned(artifactRoot, "installed-recovery.json", "installed recovery"),
+    );
+    if (
+      !/^installed-recovery-[A-Za-z0-9]+$/.test(summary?.runDirectory) ||
+      ownedPath(artifactRoot, summary.runDirectory) !== fs.realpathSync(observationRoot)
+    ) {
+      throw new Error();
+    }
+    return installedRecoveryProjection({
+      availability: "captured",
+      runDirectory: summary.runDirectory,
+      status: summary.status,
+      // Assertion values stay private; publish only the error file's availability.
+      driverError: {
+        availability: readOwned(observationRoot, "driver.err", "installed recovery driver error")
+          ? "captured"
+          : "unavailable",
+      },
+      logs: {
+        install: readOwned(observationRoot, "install.log", "installed recovery install"),
+      },
+    });
+  } catch {
+    omissions["installed recovery"] = reasons[3];
+    return { availability: "unavailable" };
+  }
+}
 
 function ownedPath(root, relative) {
   if (!root || fs.lstatSync(root).isSymbolicLink()) {
@@ -633,6 +725,22 @@ function migrationProjection(section, value, sanitize = (text) => text) {
   throw new Error();
 }
 
+function projectMigrationSections(read, sanitize) {
+  return Object.fromEntries(
+    ["doctor", "sessions", "archives", "sibling"].map((section) => {
+      try {
+        return [
+          section,
+          { availability: "captured", ...migrationProjection(section, read(section), sanitize) },
+        ];
+      } catch {
+        omissions[`migration-${section}`] ??= reasons[3];
+        return [section, { availability: "unavailable" }];
+      }
+    }),
+  );
+}
+
 // A native read-only open can create missing WAL sidecars or require journal recovery.
 // This bootstrap observer never copies operator databases or imports a migrating runtime reader.
 function assertNativeSqliteObservationSafe(handles, label) {
@@ -659,28 +767,45 @@ function assertNativeSqliteObservationSafe(handles, label) {
   }
 }
 
+const sqliteObservationFiles = [
+  "state/openclaw.sqlite",
+  "state/openclaw.sqlite-wal",
+  "state/openclaw.sqlite-shm",
+  "state/openclaw.sqlite-journal",
+];
+
+function openObservationSources(handles, root, files, requireDatabase = false) {
+  for (const relative of files) {
+    try {
+      const handle = openOwned(root, relative);
+      handles.push(handle);
+      if (handle.stat.size > (relative.endsWith(".json") ? indexLimit : 64 * 1024 * 1024)) {
+        throw new Error();
+      }
+    } catch (error) {
+      if ((requireDatabase && relative.endsWith(".sqlite")) || error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+}
+
+function assertObservationSourcesUnchanged(handles) {
+  for (const { fd, stat, file } of handles) {
+    // SQLite readers update SHM read marks. Preserve identity checks without
+    // mistaking those cache timestamps for durable index mutations.
+    const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
+    if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
+      throw new Error();
+    }
+  }
+}
+
 function readMigrationSessions(stateRoot) {
   const handles = [];
   let db;
   try {
-    for (const relative of [
-      "state/openclaw.sqlite",
-      "state/openclaw.sqlite-wal",
-      "state/openclaw.sqlite-shm",
-      "state/openclaw.sqlite-journal",
-    ]) {
-      try {
-        const handle = openOwned(stateRoot, relative);
-        handles.push(handle);
-        if (handle.stat.size > 64 * 1024 * 1024) {
-          throw new Error();
-        }
-      } catch (error) {
-        if (relative.endsWith(".sqlite") || error.code !== "ENOENT") {
-          throw error;
-        }
-      }
-    }
+    openObservationSources(handles, stateRoot, sqliteObservationFiles, true);
     assertNativeSqliteObservationSafe(handles, "migration-sessions");
     db = new DatabaseSync(handles[0].file, { readOnly: true });
     db.exec("BEGIN");
@@ -738,12 +863,7 @@ function readMigrationSessions(stateRoot) {
     db.exec("COMMIT");
     db.close();
     db = undefined;
-    for (const { fd, stat, file } of handles) {
-      const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
-      if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
-        throw new Error();
-      }
-    }
+    assertObservationSourcesUnchanged(handles);
     return { deferred, imports };
   } finally {
     db?.close();
@@ -822,16 +942,7 @@ function captureMigrationEvidence(stateRoot, artifactRoot, observationRoot) {
       };
     },
   };
-  return Object.fromEntries(
-    Object.entries(sources).map(([section, read]) => {
-      try {
-        return [section, { availability: "captured", ...migrationProjection(section, read()) }];
-      } catch {
-        omissions[`migration-${section}`] ??= reasons[3];
-        return [section, { availability: "unavailable" }];
-      }
-    }),
-  );
+  return projectMigrationSections((section) => sources[section]());
 }
 
 function sessionMigrationProjection(raw, kind, runId, sanitize = (text) => text) {
@@ -1111,47 +1222,29 @@ function armPostCoreCapture() {
   }
 }
 
-async function pluginIdentities(stateRoot, artifactRoot) {
-  const unavailable = {
+function unknownPluginIdentity() {
+  return {
     availability: "unknown",
     evidence: "persisted index + current bytes; not observed loaded modules",
     reader: "SQLite or historical fallback; missing/error is not absence",
     plugins: [],
   };
+}
+
+async function pluginIdentities(stateRoot, artifactRoot) {
+  const unavailable = unknownPluginIdentity();
   const handles = [];
   try {
     // The existing reader opens SQLite read-only. Fence every file it may read;
     // disable its config fallback rather than consulting failed-state CLI/config.
-    for (const relative of [
-      "state/openclaw.sqlite",
-      "state/openclaw.sqlite-wal",
-      "state/openclaw.sqlite-shm",
-      "state/openclaw.sqlite-journal",
+    openObservationSources(handles, stateRoot, [
+      ...sqliteObservationFiles,
       "plugins/installs.json",
-    ]) {
-      try {
-        const handle = openOwned(stateRoot, relative);
-        handles.push(handle);
-        if (handle.stat.size > (relative.endsWith(".json") ? indexLimit : 64 * 1024 * 1024)) {
-          throw new Error();
-        }
-      } catch (error) {
-        if (error.code !== "ENOENT") {
-          throw error;
-        }
-      }
-    }
+    ]);
     assertNativeSqliteObservationSafe(handles, "plugin identity");
     const { readPluginInstallIndex } = await import("../plugin-index-sqlite.mjs");
     const index = readPluginInstallIndex({ stateDir: stateRoot, configPath: null });
-    for (const { fd, stat, file } of handles) {
-      // SQLite readers update SHM read marks: its cache timestamps are not
-      // durable index mutations. Keep file identity checks on every source.
-      const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
-      if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
-        throw new Error();
-      }
-    }
+    assertObservationSourcesUnchanged(handles);
     if (Buffer.byteLength(JSON.stringify(index)) > indexLimit || !Array.isArray(index.plugins)) {
       throw new Error();
     }
@@ -1547,6 +1640,7 @@ async function capture(artifactRoot, phase, exitStatus, signal = "", observation
         : readOwned(artifactRoot, name, name);
   }
   const stateRoot = process.env.OPENCLAW_STATE_DIR;
+  report.installedRecovery = captureInstalledRecovery(artifactRoot, observationRoot);
   report.packageIntegrity = capturePackageIntegrity(observationRoot);
   report.pluginIdentity = await pluginIdentities(stateRoot, artifactRoot);
   report.migration = captureMigrationEvidence(stateRoot, artifactRoot, observationRoot);
@@ -1665,17 +1759,214 @@ function publishedPostCore(snapshot, sanitize) {
   };
 }
 
+function publishedNativePluginUi(snapshot, sanitize) {
+  const selected =
+    snapshot.scenario === "legacy-operator-state" &&
+    ["2026.10.5", "2026.10.7", "2026.10.8"].includes(snapshot.baseline?.version) &&
+    snapshot.candidate?.kind === "tarball" &&
+    snapshot.updateRestartMode === "manual" &&
+    snapshot.phases?.some(
+      (event) => event.phase === "prepare-native-plugin-ui-upgrade" && event.status === "passed",
+    );
+  if (!selected && !snapshot.nativePluginUi && !snapshot.nativePluginUiOptOut) {
+    return undefined;
+  }
+  const invalid = () => {
+    throw new Error("Invalid or missing native plugin UI upgrade evidence");
+  };
+  if (!selected) {
+    invalid();
+  }
+  const proofs = [snapshot.nativePluginUi, snapshot.nativePluginUiOptOut];
+  for (const [index, proof] of proofs.entries()) {
+    const policy = index === 0 ? "omitted" : "false";
+    const baseline = proof?.baseline;
+    if (
+      proof?.status !== "passed" ||
+      proof.stage !== "candidate" ||
+      proof.policy !== policy ||
+      proof.servingVersion !== snapshot.candidate?.version ||
+      proof.servingVersion !== snapshot.installedVersion ||
+      proof.eligible !== (index === 0) ||
+      proof.pluginSettingsPreserved !== true ||
+      proof.operatorDataPreserved !== true ||
+      baseline?.status !== "passed" ||
+      baseline.stage !== "baseline" ||
+      baseline.policy !== policy ||
+      baseline.servingVersion !== snapshot.baseline.version ||
+      baseline.eligible !== false ||
+      baseline.pluginSettingsPreserved !== true ||
+      baseline.operatorDataPreserved !== true ||
+      !/^[a-f0-9]{64}$/u.test(proof.installed?.archiveSha256 ?? "") ||
+      !Array.isArray(proof.assets)
+    ) {
+      invalid();
+    }
+    const expected =
+      index === 0
+        ? [
+            [true, 200],
+            [true, 200],
+            [false, 401],
+          ]
+        : [
+            [true, 404],
+            [true, 404],
+          ];
+    if (
+      proof.assets.length !== expected.length ||
+      proof.assets.some(
+        (asset, i) =>
+          asset.authenticated !== expected[i][0] ||
+          asset.status !== expected[i][1] ||
+          (asset.status === 200 && !/^[a-f0-9]{64}$/u.test(asset.sha256 ?? "")),
+      )
+    ) {
+      invalid();
+    }
+  }
+  if (proofs[0].installed.archiveSha256 !== proofs[1].installed.archiveSha256) {
+    invalid();
+  }
+  return {
+    status: "passed",
+    baselineVersion: sanitize(snapshot.baseline.version, "native plugin UI"),
+    candidateVersion: sanitize(snapshot.candidate.version, "native plugin UI"),
+    fixtureArchiveSha256: proofs[0].installed.archiveSha256,
+    omittedBecameEligible: true,
+    explicitFalsePreserved: true,
+    authenticatedAssetsServed: true,
+    unauthenticatedAssetsDenied: true,
+    // Cold-start smoke proof; warm cached-asset policy enforcement has its own Gateway test.
+    optedOutAssetsDenied: true,
+    pluginSettingsPreserved: true,
+    // The fixture retains a state-directory sentinel, not a plugin storage-API round trip.
+    operatorDataPreserved: true,
+  };
+}
+
+function publishedDeferredSchemaDoctor(snapshot, sanitize) {
+  const proof = snapshot.deferredSchemaDoctor;
+  if (proof === null || proof === undefined) {
+    return null;
+  }
+  const schema = (value) =>
+    value &&
+    [value.userVersion, value.metadataVersion, value.contentVersion].every(
+      (version) => Number.isSafeInteger(version) && version >= 0,
+    );
+  if (
+    snapshot.scenario !== "legacy-operator-state" ||
+    snapshot.updateRestartMode !== "manual" ||
+    proof.relativePath !== "state/openclaw.sqlite" ||
+    proof.baselineVersion !== snapshot.baseline.version ||
+    proof.baselineVersion !== "2026.9.2" ||
+    proof.candidateVersion !== snapshot.candidate.version ||
+    !/^[a-f0-9]{64}$/u.test(proof.candidateSha256) ||
+    !/^[a-f0-9]{40}$/u.test(proof.sourceSha) ||
+    !Number.isSafeInteger(proof.expectedContentVersion) ||
+    proof.expectedContentVersion < 0 ||
+    !Number.isSafeInteger(proof.baselinePublishedVersion) ||
+    proof.baselinePublishedVersion < 0 ||
+    !schema(proof.before) ||
+    !["passed", "not-observed"].includes(proof.status)
+  ) {
+    throw new Error("Invalid deferred-schema Doctor proof");
+  }
+  const tuple = (value) => ({
+    userVersion: value.userVersion,
+    metadataVersion: value.metadataVersion,
+    contentVersion: value.contentVersion,
+  });
+  const result = {
+    status: proof.status,
+    relativePath: proof.relativePath,
+    baselineVersion: proof.baselineVersion,
+    candidateVersion: sanitize(proof.candidateVersion, "summary"),
+    candidateSha256: proof.candidateSha256,
+    sourceSha: proof.sourceSha,
+    expectedContentVersion: proof.expectedContentVersion,
+    before: tuple(proof.before),
+    baselinePublishedVersion: proof.baselinePublishedVersion,
+  };
+  if (proof.status === "passed") {
+    if (
+      !schema(proof.after) ||
+      JSON.stringify(tuple(proof.after)) !== JSON.stringify(tuple(proof.before)) ||
+      proof.before.userVersion !== 15 ||
+      proof.before.userVersion !== proof.baselinePublishedVersion ||
+      proof.before.userVersion !== proof.before.metadataVersion ||
+      proof.before.userVersion >= proof.before.contentVersion ||
+      proof.before.contentVersion !== proof.expectedContentVersion ||
+      proof.doctorExitCode !== 1 ||
+      proof.diagnosticVersion !== proof.expectedContentVersion ||
+      proof.pendingMigrations !== 0 ||
+      proof.sameDatabase !== true ||
+      [
+        proof.beforeObserverFamilyUnchanged,
+        proof.cliFamilyUnchanged,
+        proof.afterObserverFamilyUnchanged,
+      ].some((value) => typeof value !== "boolean")
+    ) {
+      throw new Error("Invalid deferred-schema Doctor result");
+    }
+    Object.assign(result, {
+      after: tuple(proof.after),
+      doctorExitCode: 1,
+      diagnosticVersion: proof.diagnosticVersion,
+      pendingMigrations: 0,
+      sameDatabase: true,
+      beforeObserverFamilyUnchanged: proof.beforeObserverFamilyUnchanged,
+      cliFamilyUnchanged: proof.cliFamilyUnchanged,
+      afterObserverFamilyUnchanged: proof.afterObserverFamilyUnchanged,
+    });
+  }
+  return result;
+}
+
 function publishedSuccessSummary(artifactRoot, sanitize) {
   const raw = readOwned(artifactRoot, "summary.json", "summary");
   if (raw === null) {
     throw new Error();
   }
   const snapshot = JSON.parse(raw);
-  if (snapshot.status !== "passed") {
+  if (snapshot.status !== "passed" || !Array.isArray(snapshot.phases)) {
     throw new Error();
   }
   const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
   const nativeAssignments = publishedNativeAssignments(snapshot);
+  const nativePluginUi = publishedNativePluginUi(snapshot, sanitize);
+  const deferredSchemaDoctor = publishedDeferredSchemaDoctor(snapshot, sanitize);
+  let packageActivationRecovery;
+  if (
+    ["package-publication-recovery", "package-verification-recovery"].includes(snapshot.scenario)
+  ) {
+    const proof = snapshot.packageActivationRecovery;
+    assertPackageRecoveryEvidence(proof);
+    packageActivationRecovery = {
+      status: proof.status,
+      cut: proof.interruption.cut,
+      phase: proof.interruption.phase,
+      writerVersion: proof.interruption.writerVersion,
+      candidateVersion: proof.candidate.version,
+      candidateSha256: proof.candidate.tarballSha256,
+      nextVersion: proof.nextUpdate.installed.version,
+      helperPreserved: true,
+      retainedBytesPreserved: true,
+      repeatRepairPassed: true,
+      distinctNextUpdatePassed: true,
+    };
+  } else if (snapshot.scenario === "package-stranded-first-hop") {
+    const proof = snapshot.packageActivationRecovery;
+    assertPackageRecoveryEvidence(proof);
+    packageActivationRecovery = {
+      status: proof.status,
+      writerVersion: "2026.9.7",
+      installedVersion: "2026.9.8",
+      firstHop: proof.firstHop,
+      newerCandidateInvoked: false,
+    };
+  }
   for (const value of [
     snapshot.baseline?.spec,
     snapshot.baseline?.version,
@@ -1696,6 +1987,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     "startupSeconds",
     "updateRestartSeconds",
     "idempotenceSeconds",
+    "idempotenceBudgetSeconds",
     "healthzSeconds",
     "readyzSeconds",
     "statusSeconds",
@@ -1769,8 +2061,13 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     backupRollback: publishedBackupRollback(snapshot, { sanitize, boundedList, textFields }),
     ...(pluginPolicy ? { pluginPolicy } : {}),
     ...(nativeAssignments ? { nativeAssignments } : {}),
+    ...(nativePluginUi ? { nativePluginUi } : {}),
+    ...(deferredSchemaDoctor ? { deferredSchemaDoctor } : {}),
+    ...(packageActivationRecovery ? { packageActivationRecovery } : {}),
     timings,
-    phases: boundedList(snapshot.phases).map((event) => {
+    // Preserve the full start/completion journal within the summary's input/output
+    // byte limits; generic collection counts reject valid long-running proofs.
+    phases: snapshot.phases.map((event) => {
       if (
         !["started", "passed", "failed"].includes(event?.status) ||
         typeof event.phase !== "string" ||
@@ -1818,6 +2115,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
             ]
           : []),
         ...(snapshot.scenario === "dreaming-cron-doctor" ? ["dreaming-cron-proof.json"] : []),
+        ...(snapshot.scenario === "cron-owner-doctor" ? ["cron-owner-proof.json"] : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)
@@ -1843,6 +2141,94 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
   };
 }
 
+function failedUpdateContext(text, label) {
+  if (label !== "update.json" && label !== "recovery-update.json") {
+    return "";
+  }
+  try {
+    // Match the warning-prefixed updater JSON accepted by assertions.readUpdateJson.
+    const result = JSON.parse(text.slice(text.indexOf("{")));
+    if (!["ok", "error"].includes(result?.status) || !Array.isArray(result.steps)) {
+      return "";
+    }
+    const index = result.steps.findIndex(
+      (step) =>
+        step &&
+        typeof step.name === "string" &&
+        !step.advisory &&
+        // Serialized UpdateStepResult follows infra/update-run-step.isFailedUpdateStep:
+        // physical process success does not erase a failed inspection.
+        (step.exitCode !== 0 ||
+          Boolean(step.failureFacts?.length || step.killed || step.outputLimitExceeded) ||
+          (step.termination !== undefined && step.termination !== "exit")),
+    );
+    if (index < 0) {
+      return "";
+    }
+    const step = result.steps[index];
+    return [
+      `Reported failing update step ${index + 1} of ${result.steps.length}: ${JSON.stringify(step.name)}`,
+      JSON.stringify(
+        {
+          exitCode: step.exitCode,
+          signal: step.signal,
+          termination: step.termination,
+          killed: step.killed,
+          outputLimitExceeded: step.outputLimitExceeded,
+          durationMs: step.durationMs,
+          failureFacts: step.failureFacts,
+        },
+        null,
+        2,
+      ),
+      typeof step.stderrTail === "string" ? `stderrTail:\n${step.stderrTail}` : "",
+      typeof step.stdoutTail === "string" ? `stdoutTail:\n${step.stdoutTail}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  } catch {
+    // Incomplete or non-JSON output keeps the existing bounded log representation.
+    return "";
+  }
+}
+
+function diagnosticSanitizer(redactSensitiveText, outcome) {
+  return function sanitize(text, label) {
+    if (text === null || text === undefined) {
+      return null;
+    }
+    if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
+      throw new Error();
+    }
+    let redacted = redactSensitiveText(text, { mode: "tools" });
+    if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
+      const context = failedUpdateContext(text, label);
+      if (context) {
+        // Keep execution order explicit; this is a diagnostic prelude, not reordered steps.
+        redacted = `${redactSensitiveText(context, { mode: "tools" })}\n\nCaptured update output (original order):\n${redacted}`;
+      }
+    }
+    // Keep the latest startup/native events after redacting the whole input.
+    const tail =
+      label === "missing-load-path/baseline-gateway.log" ||
+      label === "native-assignment-messages.jsonl";
+    const lines = redacted.split(/(?<=\n)/u);
+    if (tail) {
+      lines.reverse();
+    }
+    let result = "";
+    for (const line of lines) {
+      const next = tail ? line + result : result + line;
+      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
+        omissions[label] = "redacted output truncated at a complete line (16 KiB)";
+        break;
+      }
+      result = next;
+    }
+    return result;
+  };
+}
+
 export function publishDiagnostics(
   artifactRoot,
   destination,
@@ -1852,6 +2238,7 @@ export function publishDiagnostics(
   for (const label of Object.keys(omissions)) {
     delete omissions[label];
   }
+  const sanitize = diagnosticSanitizer(redactSensitiveText, outcome);
   if (outcome === "passed") {
     writeReport(
       artifactRoot,
@@ -1899,6 +2286,7 @@ export function publishDiagnostics(
     "successful update plugins",
     "plugin identity",
     "package integrity",
+    ...installedRecoveryLabels,
     ...["doctor", "sessions", "archives", "sibling"].map((section) => `migration-${section}`),
     "session migration",
     ...Object.values(migrationLabels),
@@ -1907,35 +2295,14 @@ export function publishDiagnostics(
       omissions[label] = snapshot.omissions[label];
     }
   }
-  function sanitize(text, label) {
-    if (text === null || text === undefined) {
-      return null;
-    }
-    if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
-      throw new Error();
-    }
-    const redacted = redactSensitiveText(text, { mode: "tools" });
-    // Keep the latest startup/native events after redacting the whole input.
-    const tail =
-      label === "missing-load-path/baseline-gateway.log" ||
-      label === "native-assignment-messages.jsonl";
-    const lines = redacted.split(/(?<=\n)/u);
-    if (tail) {
-      lines.reverse();
-    }
-    let result = "";
-    for (const line of lines) {
-      const next = tail ? line + result : result + line;
-      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
-        omissions[label] = "redacted output truncated at a complete line (16 KiB)";
-        break;
-      }
-      result = next;
-    }
-    return result;
-  }
   for (const name of logNames) {
     report.logs[name] = sanitize(snapshot.logs?.[name], name);
+  }
+  report.installedRecovery = { availability: "unavailable" };
+  try {
+    report.installedRecovery = installedRecoveryProjection(snapshot.installedRecovery, sanitize);
+  } catch {
+    omissions["installed recovery"] = reasons[3];
   }
   for (const field of ["ExecStart", "WorkingDirectory", "supervisorWorkingDirectory"]) {
     report.service[field] = sanitize(snapshot.service?.[field], field);
@@ -1980,12 +2347,7 @@ export function publishDiagnostics(
   } catch {
     // Do not promote a partial or unbound receipt into a reported Doctor outcome.
   }
-  report.pluginIdentity = {
-    availability: "unknown",
-    evidence: "persisted index + current bytes; not observed loaded modules",
-    reader: "SQLite or historical fallback; missing/error is not absence",
-    plugins: [],
-  };
+  report.pluginIdentity = unknownPluginIdentity();
   if (snapshot.pluginIdentity?.availability === "observed") {
     try {
       const plugins = boundedList(snapshot.pluginIdentity.plugins).map((entry) => {
@@ -2026,23 +2388,13 @@ export function publishDiagnostics(
       omissions["plugin identity"] = reasons[3];
     }
   }
-  report.migration = Object.fromEntries(
-    ["doctor", "sessions", "archives", "sibling"].map((section) => {
-      try {
-        const value = snapshot.migration?.[section];
-        if (value?.availability !== "captured") {
-          throw new Error();
-        }
-        return [
-          section,
-          { availability: "captured", ...migrationProjection(section, value, sanitize) },
-        ];
-      } catch {
-        omissions[`migration-${section}`] ??= reasons[3];
-        return [section, { availability: "unavailable" }];
-      }
-    }),
-  );
+  report.migration = projectMigrationSections((section) => {
+    const value = snapshot.migration?.[section];
+    if (value?.availability !== "captured") {
+      throw new Error();
+    }
+    return value;
+  }, sanitize);
   writeReport(artifactRoot, destination, "failure.json", report, publicLimit);
   if (Object.keys(omissions).length) {
     process.stderr.write(

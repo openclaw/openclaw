@@ -1,0 +1,2 @@
+# Preserve expanded touch Auto geometry through native drag/resize previews and cancellation; independently protect the Fixed resize bound for PR #196797.
+90

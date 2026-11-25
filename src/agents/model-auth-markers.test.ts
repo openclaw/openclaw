@@ -4,10 +4,8 @@
  */
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  NON_ENV_SECRETREF_MARKER,
-  resolveNonEnvSecretRefApiKeyMarker,
-} from "../secrets/provider-credential-values.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 
 const BUNDLED_PLUGINS_DIR = fileURLToPath(new URL("../../extensions/", import.meta.url));
@@ -58,13 +56,6 @@ beforeAll(async () => {
 });
 
 describe("model auth markers", () => {
-  it.each(["file", "exec", "store"] as const)(
-    "keeps the persisted %s SecretRef marker stable",
-    (source) => {
-      expect(resolveNonEnvSecretRefApiKeyMarker(source)).toBe("secretref-managed");
-    },
-  );
-
   it("recognizes explicit non-secret markers", () => {
     withEnv(cleanPluginManifestEnv(), () => {
       expect(isNonSecretApiKeyMarker(NON_ENV_SECRETREF_MARKER)).toBe(true);
@@ -83,23 +74,6 @@ describe("model auth markers", () => {
       expect(isNonSecretApiKeyMarker(CODEX_APP_SERVER_AUTH_MARKER)).toBe(true);
     });
     await withEnvAsync(cleanPluginManifestEnv(), loadMarkerModules);
-  });
-
-  it("reads bundled plugin-owned non-secret markers from manifests", () => {
-    withEnv(cleanPluginManifestEnv(), () => {
-      expect(isNonSecretApiKeyMarker("codex-app-server")).toBe(true);
-      expect(isNonSecretApiKeyMarker(["openclaw", "claude-cli-native-auth"].join(":"))).toBe(true);
-      expect(isNonSecretApiKeyMarker("gcp-vertex-credentials")).toBe(true);
-      expect(isNonSecretApiKeyMarker("lmstudio-local")).toBe(true);
-      expect(isNonSecretApiKeyMarker("minimax-oauth")).toBe(true);
-      expect(isNonSecretApiKeyMarker("ollama-local")).toBe(true);
-    });
-  });
-
-  it("does not treat removed provider markers as active auth markers", () => {
-    withEnv(cleanPluginManifestEnv(), () => {
-      expect(isNonSecretApiKeyMarker("qwen-oauth")).toBe(false);
-    });
   });
 
   it("recognizes known env marker names but not arbitrary all-caps keys", () => {

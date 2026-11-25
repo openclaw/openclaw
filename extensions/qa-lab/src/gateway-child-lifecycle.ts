@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import type { WriteStream } from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { QaSuiteInfraError } from "./errors.js";
 import {
   cleanupQaGatewayTempRoots,
@@ -105,22 +106,12 @@ export class QaGatewayChildLifecycle {
   }
 
   async waitForClose(owned: OwnedProcess) {
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      await Promise.race([
-        owned.closed,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            const label = owned.kind === "cli" ? "CLI" : "child";
-            reject(
-              new Error(`qa gateway ${label} stdio did not close after process-tree shutdown`),
-            );
-          }, QA_GATEWAY_CHILD_DRAIN_TIMEOUT_MS);
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
+    await withTimeout(owned.closed, QA_GATEWAY_CHILD_DRAIN_TIMEOUT_MS, {
+      createError: () =>
+        new Error(
+          `qa gateway ${owned.kind === "cli" ? "CLI" : "child"} stdio did not close after process-tree shutdown`,
+        ),
+    });
   }
 
   completeCli(owned: OwnedProcess, operation: Promise<string>) {

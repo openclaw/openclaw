@@ -1,7 +1,7 @@
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 
 export const STATE_CONTENTION_SUMMARY =
-  "The turn was interrupted while the server was busy. Check its status before trying again.";
+  "Your request was interrupted while the server was busy. Check its status before trying again.";
 
 export const STATE_CONTENTION_DIAGNOSTIC =
   "SQLite transaction admission remained busy. Execution may have occurred; check the recorded outcome before resending.";

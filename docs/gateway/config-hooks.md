@@ -48,6 +48,24 @@ data and restrict the target agent's tools and workspace separately.
 | `gmail`                     | unset                           | Gmail transport and processing defaults; see [Gmail integration](/gateway/config-hooks#gmail-integration).                                                                                                        |
 | `internal`                  | separate subsystem              | Internal event-hook configuration; see [Hooks](/automation/hooks). It does not enable HTTP ingress.                                                                                                               |
 
+If an enabled hook token contains an unresolved authored environment reference,
+Gateway startup continues with external HTTP hooks disabled and logs a warning.
+Supply the referenced secret to the Gateway process and reload or restart to
+enable the endpoints. An unresolved token in a hot reload is rejected; the
+previous valid hooks configuration remains active. Internal event hooks are a
+separate subsystem. `openclaw doctor` reports unresolved hook credentials in its
+current environment and gives recovery guidance; it does not generate a
+replacement secret or overwrite the configured reference. The CLI and Gateway
+service can have different environments.
+
+When `hooks.token` is a whole `${NAME}` reference, the Gateway keeps `NAME` out
+of the environment that agent `exec` commands, CLI backends and other host exec
+children inherit. The name active at launch is withheld, so an `exec` prepared
+before a reload of `hooks.token` still drops the newly referenced name when it
+starts. A command can still set its own value for that name. Child processes
+started outside host exec, such as plugin daemons, MCP servers and ACP
+harnesses, are not covered by this rule.
+
 `hooks.token` should be distinct from active Gateway shared-secret auth
 (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` /
 `OPENCLAW_GATEWAY_PASSWORD`). Startup logs a non-fatal warning on reuse;
@@ -70,15 +88,23 @@ authentication attempts from that client are throttled with `429` and
 `Retry-After`; valid authentication resets the counter. Loopback is not exempt.
 Configure trusted proxy attribution correctly before exposing a proxy route.
 
-The normal body limit is **256 KiB**, with a **30-second** body-read timeout.
+The normal body limit is **1 MiB**, with a **30-second** body-read timeout.
+A rejected body (`413`, `408` or `400`) logs a `hook request rejected` warning
+with the path and limit.
 Gmail-path mappings receive a larger derived allowance described below. Generic
 hooks parse JSON but do not require the JSON content-type header.
 
-| Endpoint             | Payload and result                                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`), `agentId`, `sessionKey`. Returns `200 { ok: true, mode, eventOutcome }`; `eventOutcome` is `"queued"` when the queue accepts the wake or `"coalesced"` when the same wake is already the queue's most recent pending event. `now` requests a heartbeat in either case; the result does not prove the heartbeat ran. |
-| `POST /hooks/agent`  | [Agent payload](/gateway/config-hooks#hook-agent-payload). By default returns `200 { ok: true, runId }` after session/global placement admission. With `waitForCompletion: true`, waits for the admitted run and adds bounded terminal execution/delivery facts in `completion`.                                                                                                                       |
-| `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/config-hooks#hook-retries-and-fan-out).                                                                                                                                                                                      |
+| Endpoint             | Payload and result                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`; see normalization below), `agentId`, `sessionKey`. Returns `200 { ok: true, mode, eventOutcome }`; `eventOutcome` is `"queued"` when the queue accepts the wake or `"coalesced"` when the same wake is already the queue's most recent pending event. `now` admits an ordinary session event; the result does not prove execution or delivery completed. |
+| `POST /hooks/agent`  | [Agent payload](/gateway/config-hooks#hook-agent-payload). By default returns `200 { ok: true, runId }` after session/global placement admission. With `waitForCompletion: true`, waits for the admitted run and adds bounded terminal execution/delivery facts in `completion`.                                                                                                                                                           |
+| `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/config-hooks#hook-retries-and-fan-out).                                                                                                                                                                                                                          |
+
+For `mode` on `/wake` and `wakeMode` on `/agent`, values are trimmed and
+case-insensitive; `"next_heartbeat"` is also accepted as `"next-heartbeat"`.
+Omitted, `null`, empty, and whitespace-only values default to `"now"`.
+Unrecognized strings and non-string values other than `null` return `400`
+before any wake or agent run is dispatched.
 
 The direct `/wake` and `/agent` endpoints take precedence over mappings with
 those names. `/hooks` itself has no action.
@@ -114,7 +140,7 @@ or channel delivery. See [hook verification](/automation/cron-jobs#verify-and-tr
 | `sessionMode`       | `"isolated"`             | `"isolated"` creates a fresh run session; `"persistent"` reuses the resolved session.                                                                                                                                                                        |
 | `idempotencyKey`    | unset                    | Optional replay key; headers take precedence. See retries below.                                                                                                                                                                                             |
 | `waitForCompletion` | `false`                  | Direct `/agent` only. When `true`, keep the HTTP response open after admission and return `completion` with `status` plus available delivery facts. Mappings and fan-out remain admission-only.                                                              |
-| `wakeMode`          | `"now"`                  | `"now"` or `"next-heartbeat"`; controls waking for completion events, not whether the agent is dispatched immediately.                                                                                                                                       |
+| `wakeMode`          | `"now"`                  | `"now"` or `"next-heartbeat"`, with the [normalization rules above](/gateway/config-hooks#hook-http-contract); controls waking for completion events, not whether the agent is dispatched immediately.                                                       |
 | `deliver`           | `true`                   | Only `false` opts out. With no direct destination, successful output can become a main-session completion event. `false` logs successful completion without an announcement and ignores destination fields. Non-ok execution results produce a status event. |
 | `channel`           | none for direct delivery | Registered concrete channel id; must be paired with `to`. Direct `/agent` cannot use `"last"`.                                                                                                                                                               |
 | `to`                | unset                    | Nonempty recipient for direct announce delivery, paired with `channel`.                                                                                                                                                                                      |
@@ -154,7 +180,7 @@ Without a default, the allowlist must admit generated `hook:` keys.
 A logical hook key is not always the stored session key. Isolated runs use fresh
 automation run sessions even when the hook key is stable. Persistence controls
 conversation reuse, not tool permissions or sandboxing. Requests sharing a
-canonical logical key are serialized through completion, even in isolated mode.
+normalized logical key are serialized through completion, even in isolated mode.
 A fixed `defaultSessionKey` therefore orders those requests but can make a later
 single request hit the admission timeout while an earlier run is still active.
 
@@ -204,7 +230,9 @@ A transform-provided `sessionKey` is externally derived by default. Only trusted
 code producing a fixed key should mark `sessionKeySource: "static"`; never use
 that marker to bypass policy for a payload-derived key. Transforms execute as
 trusted Gateway code, not in the reader agent's sandbox. They are cached until
-hook configuration reload. Keep modules under the hooks transforms root, not
+hook configuration reload. Reloads reuse unchanged transform modules and their
+module-level state; edited transform source loads a new module. Relative imports
+keep Node's normal module caching behavior. Keep modules under the hooks transforms root, not
 workspace skill directories; move invalid modules there or remove an invalid
 `transformsDir` if doctor reports it.
 
@@ -258,7 +286,7 @@ pending items return non-2xx with `ok: false`, an incomplete-batch `error`, admi
 
 Agent fan-out derives replay identity from each rendered action even without an
 explicit idempotency key. Identical retries reconcile pending/admitted items
-within the cache lifetime; keep transforms deterministic for retries. Wake
+within the cache lifetime; keep transform results the same for identical retries. Wake
 actions dispatch immediately and have no replay identity, including mixed
 wake/agent batches. Their response includes `eventOutcome: "queued"` if any wake
 was accepted by its queue, or `"coalesced"` if every wake was coalesced by its queue.
@@ -327,7 +355,7 @@ example and must be available to the reader. Gmail fields:
 | `allowUnsafeExternalContent` | `false`                      | Dangerous: disable email safety wrapping for Gmail agent turns. Leave off for untrusted inboxes.                                                              |
 
 Gmail-path mappings use a request-body allowance of
-`max(256 KiB, min(32 MiB, 100 × (3 × maxBytes + 8192)))`. The multiplier reserves
+`max(1 MiB, min(32 MiB, 100 × (3 × maxBytes + 8192)))`. The multiplier reserves
 space for escaped content and message metadata; it is not a guarantee that every
 upstream backlog fits. The upstream history page size counts history records,
 which can contain multiple messages. Fan-out still processes only the first 200
@@ -339,6 +367,8 @@ When `hooks.enabled: true` and `hooks.gmail.account` is set, the Gateway starts
 are available, and renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
 Do not start a second foreground watcher on the same listener. Setup output can
 contain tokens; see the [CLI reference](/cli/webhooks).
+
+The watcher probes the selected Gog executable. Gog v0.48.0 and supporting builds use `--token-env` and `--hook-token-env` automatically. Older Gog and inconclusive probes keep the existing connection working through legacy arguments, with one warning per watcher lifecycle; these connections remain affected by local process-argument token exposure until Gog is upgraded. Serve retries never downgrade environment transport. Startup does not upgrade packages. Interactive setup/run and explicit `openclaw doctor --repair` can upgrade eligible, unpinned Homebrew installations; custom wrappers and other installations remain operator-managed. After upgrading Gog, restart the watcher or Gateway. See [compatibility and upgrades](/cli/webhooks#webhooks-gmail-run). A started watcher is not readiness or registration proof.
 
 A successful push or hook response is transport/admission evidence, not proof of
 completed email processing or delivery. Verify the restricted reader through

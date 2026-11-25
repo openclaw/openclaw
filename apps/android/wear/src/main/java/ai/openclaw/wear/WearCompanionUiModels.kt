@@ -2,6 +2,7 @@ package ai.openclaw.wear
 
 import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
+import androidx.annotation.StringRes
 
 internal enum class WearGatewayState {
   CONNECTED,
@@ -68,14 +69,17 @@ internal data class WearConversationSnapshot(
   val agentPulseFailure: WearConversationFailure? = null,
 )
 
-internal enum class WearConversationFailure {
-  PHONE_UNAVAILABLE,
-  PHONE_NOT_READY,
-  GATEWAY_OFFLINE,
-  NOT_FOUND,
-  ACTION_REJECTED,
-  INCOMPATIBLE,
-  INTERNAL_ERROR,
+internal enum class WearConversationFailure(
+  @StringRes val title: Int,
+  @StringRes val detail: Int,
+) {
+  PHONE_UNAVAILABLE(R.string.phone_unavailable, R.string.phone_unavailable_detail),
+  PHONE_NOT_READY(R.string.open_phone_app, R.string.phone_not_ready_detail),
+  GATEWAY_OFFLINE(R.string.gateway_offline, R.string.gateway_offline_detail),
+  NOT_FOUND(R.string.selection_not_found, R.string.refresh_and_try_again),
+  ACTION_REJECTED(R.string.message_not_sent, R.string.try_again),
+  INCOMPATIBLE(R.string.update_required, R.string.update_required_detail),
+  INTERNAL_ERROR(R.string.something_went_wrong, R.string.try_again),
 }
 
 internal enum class WearInteractionState {

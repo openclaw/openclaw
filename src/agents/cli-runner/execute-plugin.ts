@@ -2,80 +2,73 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
-import { mergePathPrepend } from "../../infra/path-prepend.js";
 import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
 } from "../../plugin-sdk/windows-spawn.js";
+import type { CliBackendTurnStatus } from "../../plugins/cli-backend-turn-status.types.js";
 import type {
   CliBackendExecute,
+  CliBackendMessageInjection,
   CliBackendToolPermissionRequest,
   CliBackendToolPermissionResult,
+  CliBackendTurnInterrupt,
   CliBackendUserInputRequest,
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
+import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
+import { isHostGeneratedInputProvenance } from "../../sessions/input-provenance.js";
+import type { ReplyBackendTurnStatus } from "../../sessions/session-controller.turn-status.types.js";
+import { assertionSucceeds } from "../../shared/assertion.js";
 import {
   recordAdjustedParamsForToolCall,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
-import { resolveExecDefaults } from "../exec-defaults.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
+import { buildHarnessHostRequester } from "../harness/host-requester.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
-import { resolveExecToolConfig } from "../lazy-exec-tool.js";
-import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
-import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import {
   restartCliLiveSession,
   createCliLiveSessionCapability,
-  getCliLiveSessionApprovalGrants,
+  ensureCliLiveSessionMemory,
 } from "./cli-live-session-registry.js";
-import {
-  requestCliNativeToolApproval,
-  resolveCliNativeToolApprovalPlan,
-} from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
-import { createCliPluginWatchdog, type CliWatchdogClock } from "./execute-plugin-watchdog.js";
-import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
+import { closePluginIterator, waitForIteratorValue } from "./execute-plugin-iterator.js";
+import { bindCliTurnStatus } from "./execute-plugin-status.js";
+import { createCliPluginWatchdog } from "./execute-plugin-watchdog.js";
+import { createSteeredCliMessageInjection } from "./execute-plugin.steered-transcript.js";
+import { attachCliReplyBackend } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
-import { normalizeCliToolName } from "./tool-policy.js";
+import { isCliNativeToolCallable, normalizeCliToolName } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
-
-const PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS = 5_000;
 
 function denyTool(message: string): CliBackendToolPermissionResult {
   return { behavior: "deny", message };
 }
 
+// OpenClaw answers Claude's permission requests, including for third-party MCP tools. It allows a
+// call that is available to this run and passes plugins' before_tool_call policy; exec policy and
+// approvals do not apply.
 function createPluginToolPermissionHandler(params: {
   context: PreparedCliRunContext;
   abortSignal: AbortSignal;
-  onPendingApproval: (delta: 1 | -1) => void;
-  env: NodeJS.ProcessEnv;
 }): (request: CliBackendToolPermissionRequest) => Promise<CliBackendToolPermissionResult> {
   const run = params.context.params;
-  const permission = resolveExecDefaults({
-    cfg: run.config,
-    sessionEntry: run.sessionEntry,
-    execOverrides: run.execOverrides,
-    agentId: run.agentId,
-    sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
-  });
-  const grants = new Set<string>();
 
+  // Native tool requests belong to this already-admitted turn: authority was checked when the
+  // turn started, and a revocation applies to the next turn. Only Stop ends the turn early.
   return async (request) => {
     const signal = request.abortSignal
       ? AbortSignal.any([params.abortSignal, request.abortSignal])
       : params.abortSignal;
-    const assertActive = createCliRunCurrentAssertion(run, signal);
     try {
-      assertActive();
+      signal.throwIfAborted();
     } catch {
       return denyTool("OpenClaw denied native tool use: the admitted run is no longer active.");
     }
@@ -84,12 +77,16 @@ function createPluginToolPermissionHandler(params: {
     if (!toolName) {
       return denyTool("OpenClaw denied an unnamed native tool.");
     }
-    if (run.cliToolAvailability && !run.cliToolAvailability.native.includes(toolName)) {
+    const discoveryOnly = run.cliToolAvailability?.discovery?.includes(toolName) === true;
+    if (!discoveryOnly && !isCliNativeToolCallable(run, toolName, params.context.backendResolved)) {
       return denyTool(`OpenClaw denied native tool ${toolName}: it is unavailable to this run.`);
     }
 
     // Provider schemas are not policy schemas: match canonical names and file operands.
     const canonicalToolName = normalizeCliToolName(toolName);
+    if (params.context.hostOwnedTools?.includes(canonicalToolName)) {
+      return denyTool(`Use OpenClaw ${canonicalToolName}; its native equivalent is unavailable.`);
+    }
     const nativeFileTool =
       ["read", "write", "edit"].includes(canonicalToolName) &&
       Object.hasOwn(request.toolInput, "file_path");
@@ -122,14 +119,7 @@ function createPluginToolPermissionHandler(params: {
       }
     }
 
-    const requester = {
-      ...((run.messageChannel ?? run.messageProvider)
-        ? { channel: run.messageChannel ?? run.messageProvider }
-        : {}),
-      ...(run.agentAccountId ? { accountId: run.agentAccountId } : {}),
-      ...(run.senderId ? { senderId: run.senderId } : {}),
-      ...(run.senderIsOwner !== undefined ? { senderIsOwner: run.senderIsOwner } : {}),
-    };
+    const requester = buildHarnessHostRequester(run);
     const hookResult = await runBeforeToolCallHook({
       toolName: canonicalToolName,
       params: policyInput,
@@ -153,17 +143,8 @@ function createPluginToolPermissionHandler(params: {
         turnSourceTo: run.chatId ?? run.currentChannelId,
         turnSourceAccountId: run.agentAccountId,
         turnSourceThreadId: run.currentThreadTs,
-        loopDetection: resolveToolLoopDetectionConfig({
-          cfg: run.config,
-          agentId: run.agentId,
-        }),
       },
     });
-    try {
-      assertActive();
-    } catch {
-      return denyTool("OpenClaw denied native tool use: the admitted run closed during policy.");
-    }
     if (hookResult.blocked) {
       return denyTool(hookResult.reason);
     }
@@ -203,67 +184,12 @@ function createPluginToolPermissionHandler(params: {
       }
     }
 
-    const plan = resolveCliNativeToolApprovalPlan(permission);
-    if (plan === "deny") {
-      return denyTool(
-        `OpenClaw exec policy denied native tool use (security=${permission.security}, ask=${permission.ask}).`,
-      );
-    }
-    const currentGrants = getCliLiveSessionApprovalGrants(params.context) ?? grants;
-    if (plan === "allow" || (permission.ask !== "always" && currentGrants.has(toolName))) {
-      assertActive();
+    // Schema discovery has no file, shell, or remote execution authority. Tool calls
+    // discovered this way still return through the MCP grant and normal tool policy.
+    if (!discoveryOnly) {
       recordAdjustedParamsForToolCall(request.toolCallId, toolInput, run.runId);
-      return { behavior: "allow", updatedInput: toolInput };
     }
-
-    params.onPendingApproval(1);
-    let outcome: Awaited<ReturnType<typeof requestCliNativeToolApproval>>;
-    try {
-      outcome = await requestCliNativeToolApproval({
-        toolName,
-        toolInput,
-        pluginId: params.context.backendResolved.id,
-        sessionKey: run.sessionKey,
-        agentId: run.agentId,
-        toolCallId: request.toolCallId,
-        cwd: request.cwd,
-        fallbackCwd: params.context.cwd ?? params.context.workspaceDir,
-        bindingEnv: params.env,
-        env: {
-          ...params.env,
-          PATH: mergePathPrepend(
-            params.env.PATH,
-            resolveExecToolConfig({ cfg: run.config, agentId: run.agentId }).pathPrepend ?? [],
-          ),
-        },
-        assertActive,
-        abortSignal: signal,
-        ask: permission.ask,
-      });
-    } finally {
-      params.onPendingApproval(-1);
-    }
-    // Approval itself may outlive, replace, or close the exact admitted turn.
-    // The host rechecks authority immediately before returning any capability.
-    try {
-      assertActive();
-    } catch {
-      return denyTool("OpenClaw denied native tool use: the admitted run closed during approval.");
-    }
-    if (outcome.kind !== "allow") {
-      return denyTool(
-        outcome.message ??
-          (outcome.reason === "user"
-            ? `OpenClaw user denied native tool use (${toolName}).`
-            : `OpenClaw approval was not granted for native tool use (${toolName}).`),
-      );
-    }
-    if (outcome.grantAlways) {
-      currentGrants.add(toolName);
-    }
-    const updatedInput = outcome.updatedInput ?? toolInput;
-    recordAdjustedParamsForToolCall(request.toolCallId, updatedInput, run.runId);
-    return { behavior: "allow", updatedInput };
+    return { behavior: "allow", updatedInput: toolInput };
   };
 }
 
@@ -281,9 +207,8 @@ function createPluginUserInputHandler(params: {
     const signal = request.abortSignal
       ? AbortSignal.any([params.abortSignal, request.abortSignal])
       : params.abortSignal;
-    const assertActive = createCliRunCurrentAssertion(run, signal);
     try {
-      assertActive();
+      signal.throwIfAborted();
     } catch {
       return cancelUserInput(
         "OpenClaw cancelled operator input: the admitted run is no longer active.",
@@ -305,9 +230,11 @@ function createPluginUserInputHandler(params: {
       return cancelUserInput("OpenClaw cancelled an invalid operator input request.");
     }
 
-    const questionAuthority = params.context.bindQuestionAnswerAuthority?.(assertActive);
+    const questionAuthority = params.context.bindQuestionAnswerAuthority?.(
+      signal.throwIfAborted.bind(signal),
+    );
     const assertQuestionActive = () => {
-      assertActive();
+      signal.throwIfAborted();
       questionAuthority?.assertActive();
     };
     params.onPendingInput(1);
@@ -330,14 +257,7 @@ function createPluginUserInputHandler(params: {
             onPartialReply: run.onPartialReply,
           },
           signal,
-          isActive: () => {
-            try {
-              assertQuestionActive();
-              return true;
-            } catch {
-              return false;
-            }
-          },
+          isActive: () => assertionSucceeds(assertQuestionActive),
           questionId: request.toolCallId ? (batch) => `${request.toolCallId}:${batch}` : undefined,
         }),
       );
@@ -364,56 +284,6 @@ function createPluginUserInputHandler(params: {
   };
 }
 
-function waitForIteratorValue<T>(
-  iterator: AsyncIterator<T>,
-  signal: AbortSignal,
-): Promise<IteratorResult<T>> {
-  if (signal.aborted) {
-    return Promise.reject(toErrorObject(signal.reason, "CLI plugin execution was aborted."));
-  }
-  return new Promise((resolve, reject) => {
-    const rejectAborted = () =>
-      reject(toErrorObject(signal.reason, "CLI plugin execution was aborted."));
-    signal.addEventListener("abort", rejectAborted, { once: true });
-    void iterator.next().then(
-      (value) => {
-        signal.removeEventListener("abort", rejectAborted);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", rejectAborted);
-        reject(toErrorObject(error, "CLI plugin execution stream failed."));
-      },
-    );
-  });
-}
-
-async function closePluginIterator(
-  iterator: AsyncIterator<Record<string, unknown>> | undefined,
-): Promise<void> {
-  if (!iterator?.return) {
-    return;
-  }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      iterator.return(),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("CLI plugin runtime did not close after its run ended.")),
-          PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS,
-        );
-        timeout.unref();
-      }),
-    ]);
-  } catch (error) {
-    recordAgentCleanupFailure();
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 /** Runs a prepared plugin transport while keeping cancellation and approvals host-owned. */
 export async function executePluginOwnedProcess(params: {
   context: PreparedCliRunContext;
@@ -428,17 +298,21 @@ export async function executePluginOwnedProcess(params: {
   forceNewSession?: boolean;
   sessionId?: string;
   noOutputTimeoutMs: number;
-  watchdogClock?: CliWatchdogClock;
   consumeStdout: (chunk: string) => void;
   onOutstandingWorkChange?: (active: boolean) => void;
   activeToolCount?: () => number;
+  compactionActive?: () => boolean;
+  setOnCompactionActiveChange?: (listener: (() => void) | undefined) => void;
   getActiveLoopbackAskUserDeadline?: () => number | undefined;
-  onActiveLoopbackAskUserDeadlineChange?: (listener: () => void) => () => void;
+  setOnActiveLoopbackAskUserDeadlineChange?: (listener: (() => void) | undefined) => void;
   onNoOutputTimeout?: (error: FailoverError) => void;
   onInterrupted?: (reason: CliTerminalInterruption["reason"]) => boolean;
   mcpCapture?: {
     captureKey?: string;
     beginCapture: (captureKey: string | undefined, assertCurrent: () => void) => void;
+    registerTurnInterrupt?: (interrupt: CliBackendTurnInterrupt | undefined) => void;
+    waitForTurnInterrupt?: () => Promise<void>;
+    onInputSubmitted?: () => void;
   };
   liveSession?: {
     requiredGeneration?: string;
@@ -472,27 +346,73 @@ export async function executePluginOwnedProcess(params: {
   const signal = run.abortSignal
     ? AbortSignal.any([controller.signal, run.abortSignal])
     : controller.signal;
-  const assertCurrent = createCliRunCurrentAssertion(run, signal);
-  const assertRunCurrent = createCliRunCurrentAssertion(run);
   const termination: { reason: TerminationReason } = { reason: "exit" };
   // Normal cleanup closes native callbacks; MCP results retain their admitted
   // caller through the capture drain. Cancellation and timeouts still close both.
-  const assertCaptureCurrent = () =>
-    (termination.reason === "exit" ? assertRunCurrent : assertCurrent)();
+  const assertCaptureCurrent = () => {
+    run.abortSignal?.throwIfAborted();
+    if (termination.reason !== "exit") {
+      signal.throwIfAborted();
+    }
+  };
   const outstanding = {
     approvals: 0,
     background: 0,
     observed: false,
     replayUnsafe: false,
   };
-  const reportOutstandingWork = () =>
-    params.onOutstandingWorkChange?.(outstanding.approvals > 0 || outstanding.background > 0);
+  const reportOutstandingWork = () => {
+    // Parsed tools are deliberately absent here: diagnostics tracks them itself via
+    // tool.execution.started, which makes activeWorkKind "tool_call" and takes the
+    // blocked-tool branch before the backend deadline is ever consulted. Counting
+    // them again would double-report the same work.
+    const toolWork = outstanding.approvals > 0 || outstanding.background > 0;
+    // Compaction joins the same report tool work already made, so diagnostics recovery
+    // holds a silent compaction open exactly as long as it holds a blocked tool call.
+    params.onOutstandingWorkChange?.(toolWork || (params.compactionActive?.() ?? false));
+  };
   const updatePendingApproval = (delta: number) => {
     outstanding.approvals = Math.max(0, outstanding.approvals + delta);
     reportOutstandingWork();
   };
-  const watchdog = createCliPluginWatchdog(
+  let watchdog: ReturnType<typeof createCliPluginWatchdog> | undefined;
+
+  let messageInjection: CliBackendMessageInjection | undefined;
+  let turnStatus: ReplyBackendTurnStatus | undefined;
+  const detachReplyBackend = attachCliReplyBackend(
+    run,
+    () => {
+      termination.reason = "manual-cancel";
+      controller.abort(createCliAbortError());
+    },
     {
+      get turnStatus() {
+        return turnStatus;
+      },
+      get supportsQueueMessageImages() {
+        // A fresh turn runs the image policy with the incoming sender's context.
+        // Native steering has no equivalent before_agent_run gate.
+        return messageInjection?.acceptsImages === true && !hasGlobalHooks("before_agent_run");
+      },
+      supportsTranscriptCommitWait: true,
+      messageInjectionV2: createSteeredCliMessageInjection({
+        getInjection: () => messageInjection,
+        signal,
+        context: params.context,
+        onInputSubmitted: params.mcpCapture?.onInputSubmitted,
+      }),
+    },
+  );
+
+  let iterator: AsyncIterator<Record<string, unknown>> | undefined;
+  let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
+  let terminalResult: "none" | "success" | "error" = "none";
+  try {
+    const requestToolPermission = createPluginToolPermissionHandler({
+      context: params.context,
+      abortSignal: signal,
+    });
+    watchdog = createCliPluginWatchdog({
       provider: run.provider,
       model: params.context.modelId,
       sessionId: run.sessionId,
@@ -503,6 +423,7 @@ export async function executePluginOwnedProcess(params: {
       getActiveAskUserDeadline: params.getActiveLoopbackAskUserDeadline,
       activeToolCount: () => Math.max(params.activeToolCount?.() ?? 0, outstanding.approvals),
       backgroundTaskCount: () => outstanding.background,
+      compactionActive: () => params.compactionActive?.() ?? false,
       hasObservedActivity: () => outstanding.observed,
       hasReplayUnsafeActivity: () => outstanding.replayUnsafe,
       onNoOutputTimeout: (error) => {
@@ -514,23 +435,10 @@ export async function executePluginOwnedProcess(params: {
         termination.reason = "overall-timeout";
         controller.abort(new Error("CLI plugin runtime exceeded its execution timeout."));
       },
-    },
-    params.watchdogClock,
-  );
-  const stopAskUserDeadlineListener = params.onActiveLoopbackAskUserDeadlineChange?.(() =>
-    watchdog.reset(),
-  );
+    });
+    params.setOnActiveLoopbackAskUserDeadlineChange?.(() => watchdog?.reset());
+    params.setOnCompactionActiveChange?.(() => reportOutstandingWork());
 
-  const detachReplyBackend = attachCliReplyBackend(run, () => {
-    termination.reason = "manual-cancel";
-    controller.abort(createCliAbortError());
-  });
-
-  let iterator: AsyncIterator<Record<string, unknown>> | undefined;
-  let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
-  let terminalResult: "none" | "success" | "error" = "none";
-  try {
-    assertCurrent();
     watchdog.reset();
     if (
       params.liveSession &&
@@ -542,8 +450,8 @@ export async function executePluginOwnedProcess(params: {
       }
       await restartCliLiveSession(params.context, signal);
     }
-    assertCurrent();
     if (params.liveSession) {
+      await ensureCliLiveSessionMemory(params.context, signal);
       liveSession = createCliLiveSessionCapability({
         context: params.context,
         argv: [command, ...executionArgs],
@@ -559,7 +467,9 @@ export async function executePluginOwnedProcess(params: {
     } else {
       params.mcpCapture?.beginCapture(params.mcpCapture.captureKey, assertCaptureCurrent);
     }
-    assertCurrent();
+    const { prepareCredentialUse } = params.context.preparedBackend;
+    // Warm transports retain their first turn's async context. Bind every host
+    // callback here so reused transports enter the current turn's source scope.
     const execution = params.execute({
       command,
       argv0: params.executionArgv0,
@@ -568,35 +478,63 @@ export async function executePluginOwnedProcess(params: {
       env: params.env,
       prompt: params.prompt,
       ...(params.promptContext ? { promptContext: params.promptContext } : {}),
+      ...(isHostGeneratedInputProvenance(params.context.params.inputProvenance)
+        ? { promptOrigin: "host" as const }
+        : {}),
       modelId: params.context.normalizedModel,
       systemPrompt: stripSystemPromptCacheBoundary(params.context.systemPrompt).trim(),
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       useResume: params.useResume,
       abortSignal: signal,
-      assertCurrent,
+      ...(prepareCredentialUse
+        ? { prepareCredentialUse: AsyncLocalStorage.bind(prepareCredentialUse) }
+        : {}),
       timeoutMs: run.timeoutMs,
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
       ...(liveSession ? { liveSession } : {}),
-      // Warm transports retain their first turn's async context across plugin refreshes.
-      requestToolPermission: AsyncLocalStorage.bind(
-        createPluginToolPermissionHandler({
+      registerTurnStatus: AsyncLocalStorage.bind((status: CliBackendTurnStatus) => {
+        const registration: ReplyBackendTurnStatus = bindCliTurnStatus(
+          status,
+          () => turnStatus === registration && !signal.aborted,
+        );
+        turnStatus = registration;
+      }),
+      registerTurnInterrupt: AsyncLocalStorage.bind((interrupt: CliBackendTurnInterrupt) => {
+        params.mcpCapture?.registerTurnInterrupt?.({
+          interrupt: async (reason) => {
+            try {
+              await interrupt.interrupt(reason);
+            } catch (error) {
+              controller.abort(error);
+              throw error;
+            }
+          },
+        });
+      }),
+      ...(detachReplyBackend
+        ? {
+            registerMessageInjection: AsyncLocalStorage.bind(
+              (injection: CliBackendMessageInjection) => {
+                messageInjection = injection;
+              },
+            ),
+          }
+        : {}),
+      requestToolPermission: AsyncLocalStorage.bind(requestToolPermission),
+      requestUserInput: AsyncLocalStorage.bind(
+        createPluginUserInputHandler({
           context: params.context,
           abortSignal: signal,
-          onPendingApproval: updatePendingApproval,
-          env: params.env,
+          onPendingInput: updatePendingApproval,
         }),
       ),
-      requestUserInput: createPluginUserInputHandler({
-        context: params.context,
-        abortSignal: signal,
-        onPendingInput: updatePendingApproval,
-      }),
     });
-    iterator = execution[Symbol.asyncIterator]();
+    const executionIterator = execution[Symbol.asyncIterator]();
+    iterator = executionIterator;
+    let next = await waitForIteratorValue(executionIterator, signal);
 
     for (;;) {
-      const next = await waitForIteratorValue(iterator, signal);
       if (next.done) {
         break;
       }
@@ -629,11 +567,13 @@ export async function executePluginOwnedProcess(params: {
         outstanding.replayUnsafe = true;
       }
       watchdog.noteOutput();
+      next = await waitForIteratorValue(executionIterator, signal);
     }
 
     if (terminalResult === "none") {
       throw new Error("CLI plugin runtime completed without a terminal result.");
     }
+    await params.mcpCapture?.waitForTurnInterrupt?.();
   } catch (error) {
     if (run.abortSignal?.aborted || termination.reason === "manual-cancel") {
       const reason = isSignalTimeoutReason(run.abortSignal?.reason) ? "timeout" : "aborted";
@@ -663,14 +603,15 @@ export async function executePluginOwnedProcess(params: {
       throw error;
     }
   } finally {
-    watchdog.dispose();
-    stopAskUserDeadlineListener?.();
+    turnStatus = undefined;
+    params.mcpCapture?.registerTurnInterrupt?.(undefined);
+    watchdog?.dispose();
+    params.setOnActiveLoopbackAskUserDeadlineChange?.(undefined);
+    params.setOnCompactionActiveChange?.(undefined);
     params.onOutstandingWorkChange?.(false);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.
-    if (!controller.signal.aborted) {
-      controller.abort(new Error("CLI plugin runtime turn is no longer active."));
-    }
+    controller.abort(new Error("CLI plugin runtime turn is no longer active."));
     detachReplyBackend?.();
     await closePluginIterator(iterator);
   }

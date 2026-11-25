@@ -8,10 +8,15 @@ export interface AgentCoreRuntimeDeps {
   completeSimple: CompleteSimpleFn;
   /** Keep host stream ownership through iteration and decorated terminal work. */
   runStream?: <T>(stream: ReturnType<StreamFn>, consume: () => T) => T;
+  /** Local host failures must propagate without synthesizing a provider response. */
+  isLocalError?: (error: unknown) => boolean;
 }
 
 /** Runtime dependency subset required by streaming agent loops. */
-export type AgentCoreStreamRuntimeDeps = Pick<AgentCoreRuntimeDeps, "streamSimple" | "runStream">;
+export type AgentCoreStreamRuntimeDeps = Pick<
+  AgentCoreRuntimeDeps,
+  "streamSimple" | "runStream" | "isLocalError"
+>;
 /** Runtime dependency subset required by summarization helpers. */
 export type AgentCoreCompletionRuntimeDeps = Pick<
   AgentCoreRuntimeDeps,

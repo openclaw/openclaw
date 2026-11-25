@@ -2,171 +2,105 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Message, Usage } from "openclaw/plugin-sdk/llm";
 
-const emptyUsage: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-};
+const zeroCounts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const emptyUsage: Usage = { ...zeroCounts, totalTokens: 0, cost: { ...zeroCounts, total: 0 } };
+const textContent = (text: string): [{ type: "text"; text: string }] => [{ type: "text", text }];
 
-export function userMessage(content: string): Message {
-  return {
-    role: "user",
-    content,
-    timestamp: 1,
-  };
-}
+export const createLargeTrajectoryUsage = () => ({
+  input: 384_954,
+  output: 5_624,
+  cacheRead: 333_824,
+  reasoningTokens: 2_038,
+  total: 724_402,
+});
 
-export function assistantMessage(
+export const userMessage = (content: string): Message => ({ role: "user", content, timestamp: 1 });
+
+export const assistantMessage = (
   content: Extract<Message, { role: "assistant" }>["content"],
-): Message {
-  return {
-    role: "assistant",
-    content,
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-5.4",
-    usage: emptyUsage,
-    stopReason: "stop",
-    timestamp: 2,
-  };
-}
+): Message => ({
+  role: "assistant",
+  content,
+  api: "openai-responses",
+  provider: "openai",
+  model: "gpt-5.4",
+  usage: emptyUsage,
+  stopReason: "stop",
+  timestamp: 2,
+});
 
-function toolResultMessage(content: Extract<Message, { role: "toolResult" }>["content"]): Message {
-  return {
-    role: "toolResult",
-    toolCallId: "call_1",
-    toolName: "read",
-    content,
-    isError: false,
-    timestamp: 3,
-  };
-}
+export const assistantText = (text: string) => assistantMessage(textContent(text));
 
-export function writeSimpleSessionFile(
-  sessionFile: string,
-  params: { userEntryTimestamp?: string | number; userMessage?: Message } = {},
-): void {
-  const header = {
-    type: "session",
-    version: 3,
-    id: "session-1",
-    timestamp: "2026-04-01T05:46:39.000Z",
-    cwd: path.dirname(sessionFile),
-  };
-  const userEntry = {
-    type: "message",
-    id: "entry-user",
-    parentId: null,
-    timestamp: params.userEntryTimestamp ?? "2026-04-01T05:46:40.000Z",
-    message: params.userMessage ?? userMessage("hello"),
-  };
-  const assistantEntry = {
-    type: "message",
-    id: "entry-assistant",
-    parentId: "entry-user",
-    timestamp: "2026-04-01T05:46:41.000Z",
-    message: assistantMessage([{ type: "text", text: "done" }]),
-  };
-  fs.writeFileSync(
-    sessionFile,
-    `${[header, userEntry, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    "utf8",
-  );
-}
+const toolResultMessage = (text: string): Message => ({
+  role: "toolResult",
+  toolCallId: "call_1",
+  toolName: "read",
+  content: textContent(text),
+  isError: false,
+  timestamp: 3,
+});
 
-export function writeToolCallOnlySessionFile(sessionFile: string): void {
-  const header = {
-    type: "session",
-    version: 3,
-    id: "session-1",
-    timestamp: "2026-04-01T05:46:39.000Z",
-    cwd: path.dirname(sessionFile),
-  };
-  const assistantEntry = {
-    type: "message",
-    id: "entry-assistant",
-    parentId: null,
-    timestamp: "2026-04-01T05:46:41.000Z",
-    message: assistantMessage([
-      {
-        type: "toolCall",
-        id: "call_1",
-        name: "read",
-        arguments: { filePath: "README.md" },
-      },
-    ]),
-  };
-  fs.writeFileSync(
-    sessionFile,
-    `${[header, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    "utf8",
-  );
-}
+export const sessionHeader = (workspaceDir: string, id = "session-1") => ({
+  type: "session",
+  version: 3,
+  id,
+  timestamp: "2026-04-01T05:46:39.000Z",
+  cwd: workspaceDir,
+});
 
-export function writeToolCallSessionFile(
-  sessionFile: string,
-  toolResultText = "README contents",
-): void {
-  const header = {
-    type: "session",
-    version: 3,
-    id: "session-1",
-    timestamp: "2026-04-01T05:46:39.000Z",
-    cwd: path.dirname(sessionFile),
-    title: "Trajectory Test",
-  };
-  const entries = [
-    header,
-    {
-      type: "message",
-      id: "entry-user",
-      parentId: null,
-      timestamp: "2026-04-01T05:46:40.000Z",
-      message: userMessage("hello"),
-    },
-    {
-      type: "message",
-      id: "entry-tool-call",
-      parentId: "entry-user",
-      timestamp: "2026-04-01T05:46:41.000Z",
-      message: assistantMessage([
-        {
-          type: "toolCall",
-          id: "call_1",
-          name: "read",
-          arguments: {
-            filePath: path.join(path.dirname(sessionFile), "skills", "weather", "SKILL.md"),
-          },
-        },
-      ]),
-    },
-    {
-      type: "message",
-      id: "entry-tool-result",
-      parentId: "entry-tool-call",
-      timestamp: "2026-04-01T05:46:42.000Z",
-      message: toolResultMessage([{ type: "text", text: toolResultText }]),
-    },
-    {
-      type: "message",
-      id: "entry-assistant",
-      parentId: "entry-tool-result",
-      timestamp: "2026-04-01T05:46:43.000Z",
-      message: assistantMessage([{ type: "text", text: "done" }]),
-    },
-  ];
+export const messageEntry = (
+  id: string,
+  parentId: string | null | undefined,
+  message: Message,
+  second = 41,
+) => ({ type: "message", id, parentId, timestamp: `2026-04-01T05:46:${second}.000Z`, message });
+
+export const writeEntries = (sessionFile: string, entries: readonly unknown[]): void =>
   fs.writeFileSync(
     sessionFile,
     `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
     "utf8",
   );
-}
+
+const readCall = (filePath: string): Message =>
+  assistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: { filePath } }]);
+
+export const simpleSessionEntries = (
+  workspaceDir: string,
+  params: { userEntryTimestamp?: string | number; userMessage?: Message } = {},
+) => [
+  sessionHeader(workspaceDir),
+  {
+    ...messageEntry("entry-user", null, params.userMessage ?? userMessage("hello"), 40),
+    timestamp: params.userEntryTimestamp ?? "2026-04-01T05:46:40.000Z",
+  },
+  messageEntry("entry-assistant", "entry-user", assistantText("done")),
+];
+
+const sessionWriter =
+  <Args extends unknown[]>(build: (directory: string, ...args: Args) => readonly unknown[]) =>
+  (sessionFile: string, ...args: Args): void =>
+    writeEntries(sessionFile, build(path.dirname(sessionFile), ...args));
+
+export const writeSimpleSessionFile = sessionWriter(simpleSessionEntries);
+export const writeToolCallOnlySessionFile = sessionWriter((directory: string) => [
+  sessionHeader(directory),
+  messageEntry("entry-assistant", null, readCall("README.md")),
+]);
+
+export const toolCallSessionEntries = (
+  workspaceDir: string,
+  toolResultText = "README contents",
+) => [
+  { ...sessionHeader(workspaceDir), title: "Trajectory Test" },
+  messageEntry("entry-user", null, userMessage("hello"), 40),
+  messageEntry(
+    "entry-tool-call",
+    "entry-user",
+    readCall(path.join(workspaceDir, "skills", "weather", "SKILL.md")),
+  ),
+  messageEntry("entry-tool-result", "entry-tool-call", toolResultMessage(toolResultText), 42),
+  messageEntry("entry-assistant", "entry-tool-result", assistantText("done"), 43),
+];
+
+export const writeToolCallSessionFile = sessionWriter(toolCallSessionEntries);

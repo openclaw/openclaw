@@ -98,9 +98,7 @@ describe("openExternalUrlSafe", () => {
       .spyOn(window, "open")
       .mockImplementation(() => openedLikeProxy as unknown as Window);
 
-    const opened = openExternalUrlSafe("https://example.com/safe.png", {
-      baseHref: "https://openclaw.ai/chat",
-    });
+    const opened = openExternalUrlSafe("https://example.com/safe.png");
 
     expect(openMock).toHaveBeenCalledWith(
       "https://example.com/safe.png",

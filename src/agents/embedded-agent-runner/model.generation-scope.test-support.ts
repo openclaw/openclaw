@@ -3,16 +3,15 @@ import { vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
-import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { createPluginManifestRecordFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { AuthStorage, ModelRegistry } from "../sessions/index.js";
-
-const GENERATION_MODEL_ID = "generation-model";
-const GENERATION_REQUEST_PROVIDER = "generation-alias";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./model.fixture.test-support.js";
 
 type ImagePolicy = NonNullable<NonNullable<ProviderRuntimeModel["mediaInput"]>["image"]>;
 
@@ -34,24 +33,17 @@ export function createModelGenerationFixture(params: {
   suppression?: Omit<ModelCatalogSuppression, "provider" | "model">;
   withRegistry?: boolean;
 }) {
+  const { agentDir, config, workspaceDir } = params;
   const provider = params.provider ?? `generation-${params.label}`;
-  const requestProvider = params.requestProvider ?? GENERATION_REQUEST_PROVIDER;
-  const modelId = params.modelId ?? GENERATION_MODEL_ID;
+  const requestProvider = params.requestProvider ?? "generation-alias";
+  const modelId = params.modelId ?? "generation-model";
   const staticImagePolicy = params.staticImagePolicy ?? {
     maxSidePx: params.label === "a" ? 1_111 : 2_222,
   };
-  const plugin = {
+  const plugin = createPluginManifestRecordFixture({
     id: `generation-plugin-${params.label}`,
     enabledByDefault: true,
-    channels: [],
     providers: [provider],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
-    rootDir: `/tmp/generation-plugin-${params.label}`,
-    source: `/tmp/generation-plugin-${params.label}/index.js`,
-    manifestPath: `/tmp/generation-plugin-${params.label}/openclaw.plugin.json`,
     modelCatalog: {
       ...(requestProvider === provider ? {} : { aliases: { [requestProvider]: { provider } } }),
       ...(params.runtimeAugment === undefined ? {} : { runtimeAugment: params.runtimeAugment }),
@@ -73,26 +65,25 @@ export function createModelGenerationFixture(params: {
         ? { suppressions: [{ provider, model: modelId, ...params.suppression }] }
         : {}),
     },
-  } satisfies PluginManifestRecord;
+  });
   const metadataSnapshot = createPluginMetadataSnapshot({
-    config: params.config,
+    config,
     manifestRegistry: { plugins: [plugin], diagnostics: [] },
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
   });
   const pluginRegistry = createEmptyPluginRegistry();
-  const resolveDynamicModel = vi.fn(() => ({
-    id: modelId,
-    name: `Runtime ${params.label.toUpperCase()}`,
-    provider,
-    api: params.runtimeApi ?? ("openai-completions" as const),
-    baseUrl: params.runtimeBaseUrl ?? `https://${provider}.example.test/v1`,
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8_192,
-    maxTokens: 2_048,
-    ...(params.runtimeImagePolicy ? { mediaInput: { image: params.runtimeImagePolicy } } : {}),
-  }));
+  const resolveDynamicModel = vi.fn(() =>
+    makeProviderModelFixture({
+      id: modelId,
+      name: `Runtime ${params.label.toUpperCase()}`,
+      provider,
+      api: params.runtimeApi ?? ("openai-completions" as const),
+      baseUrl: params.runtimeBaseUrl ?? `https://${provider}.example.test/v1`,
+      contextWindow: 8_192,
+      maxTokens: 2_048,
+      ...(params.runtimeImagePolicy ? { mediaInput: { image: params.runtimeImagePolicy } } : {}),
+    }),
+  );
   pluginRegistry.providers.push({
     pluginId: plugin.id,
     source: plugin.source,
@@ -104,29 +95,20 @@ export function createModelGenerationFixture(params: {
       resolveDynamicModel,
     },
   });
-  const createStores =
-    params.createStores ??
-    (() => {
-      const authStorage = AuthStorage.inMemory({});
-      return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
-    });
   const preparedModelRuntime = {
-    catalogOwner: undefined,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    activeProjectKeys: [],
-    config: params.config,
-    observationConfig: params.config,
-    isCurrent: () => true,
-    authModes: {},
-    metadataSnapshot,
+    ...createEmptyPreparedModelRuntimeFixture({
+      agentDir,
+      config,
+      metadataSnapshot,
+      createStores:
+        params.createStores ??
+        (() => {
+          const authStorage = AuthStorage.inMemory({});
+          return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
+        }),
+    }),
+    workspaceDir,
     ...(params.withRegistry === false ? {} : { pluginRegistry }),
-    allowGatewaySubagentBinding: false,
-    modelCatalog: { entries: [], routeVariants: [] },
-    configuredRuntimeModels: [],
-    findConfiguredRuntimeModel: () => undefined,
-    inlineProviderModels: [],
-    createStores,
   } satisfies PreparedModelRuntimeSnapshot;
   return {
     metadataSnapshot,
@@ -141,19 +123,14 @@ export function createModelGenerationFixture(params: {
   };
 }
 
-export function publishCurrentModelGeneration(
-  generation: ReturnType<typeof createModelGenerationFixture>,
-): void {
-  setCurrentPluginMetadataSnapshot(generation.metadataSnapshot, {
-    config: generation.preparedModelRuntime.config,
-    workspaceDir: generation.preparedModelRuntime.workspaceDir,
-  });
-  setActivePluginRegistry(
-    generation.pluginRegistry,
-    `generation-${generation.provider}`,
-    "default",
-    generation.preparedModelRuntime.workspaceDir,
-  );
+export function publishCurrentModelGeneration({
+  metadataSnapshot,
+  pluginRegistry,
+  provider,
+  preparedModelRuntime: { config, workspaceDir },
+}: ReturnType<typeof createModelGenerationFixture>): void {
+  setCurrentPluginMetadataSnapshot(metadataSnapshot, { config, workspaceDir });
+  setActivePluginRegistry(pluginRegistry, `generation-${provider}`, "default", workspaceDir);
 }
 
 export function resetModelGenerationFixtureState(): void {

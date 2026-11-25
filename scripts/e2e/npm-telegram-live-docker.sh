@@ -39,40 +39,16 @@ case ",${selected_scenarios//[[:space:]]/,}," in
     ;;
 esac
 
-resolve_credential_source() {
-  if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-}" ]; then
-    printf "%s" "$OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE"
-    return 0
-  fi
-  if [ -n "${OPENCLAW_QA_CREDENTIAL_SOURCE:-}" ]; then
-    printf "%s" "$OPENCLAW_QA_CREDENTIAL_SOURCE"
-    return 0
-  fi
-  if [ -n "${CI:-}" ] && [ -n "${OPENCLAW_QA_CONVEX_SITE_URL:-}" ]; then
-    if [ -n "${OPENCLAW_QA_CONVEX_SECRET_CI:-}" ] || [ -n "${OPENCLAW_QA_CONVEX_SECRET_MAINTAINER:-}" ]; then
-      printf "convex"
-      return 0
-    fi
-  fi
-  printf "convex"
-}
-
-resolve_credential_role() {
-  if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE:-}" ]; then
-    printf "%s" "$OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE"
-    return 0
-  fi
-  if [ -n "${OPENCLAW_QA_CREDENTIAL_ROLE:-}" ]; then
-    printf "%s" "$OPENCLAW_QA_CREDENTIAL_ROLE"
-  fi
-}
-
 validate_openclaw_package_spec() {
   local spec="$1"
-  if [[ "$spec" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
+  if [[ "$spec" == openclaw@alpha ]]; then
+    echo "Alpha releases are retired; use a beta prerelease instead." >&2
+    exit 1
+  fi
+  if [[ "$spec" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
     return 0
   fi
-  echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: $spec" >&2
+  echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: $spec" >&2
   exit 1
 }
 
@@ -101,23 +77,12 @@ resolve_package_tgz() {
 
 resolve_package_dir() {
   local candidate="$1"
+  local env_name="$2"
   if [ -z "$candidate" ]; then
     return 0
   fi
   if [ ! -d "$candidate" ]; then
-    echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR must point to an existing directory; got: $candidate" >&2
-    exit 1
-  fi
-  (cd "$candidate" && pwd)
-}
-
-resolve_prepublish_plugin_registry_dir() {
-  local candidate="$1"
-  if [ -z "$candidate" ]; then
-    return 0
-  fi
-  if [ ! -d "$candidate" ]; then
-    echo "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR must point to an existing directory; got: $candidate" >&2
+    echo "$env_name must point to an existing directory; got: $candidate" >&2
     exit 1
   fi
   (cd "$candidate" && pwd)
@@ -144,9 +109,9 @@ prepublish_registry_mount_args=()
 package_install_source="$PACKAGE_SPEC"
 package_source_kind="npm-package"
 resolved_package_tgz="$(resolve_package_tgz "$PACKAGE_TGZ")"
-resolved_package_dir="$(resolve_package_dir "$PACKAGE_DIR")"
+resolved_package_dir="$(resolve_package_dir "$PACKAGE_DIR" OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR)"
 resolved_prepublish_plugin_registry_dir="$(
-  resolve_prepublish_plugin_registry_dir "$PREPUBLISH_PLUGIN_REGISTRY_DIR"
+  resolve_package_dir "$PREPUBLISH_PLUGIN_REGISTRY_DIR" OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR
 )"
 if [ -n "$resolved_package_dir" ]; then
   if [ -z "$resolved_package_tgz" ]; then
@@ -210,8 +175,8 @@ if [ "$upgrade_selected" = "1" ]; then
   package_install_label="$PACKAGE_SPEC (published upgrade baseline)"
 fi
 
-credential_source="$(resolve_credential_source)"
-credential_role="$(resolve_credential_role)"
+credential_source="$(printf '%s' "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-${OPENCLAW_QA_CREDENTIAL_SOURCE:-convex}}")"
+credential_role="$(printf '%s' "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE:-${OPENCLAW_QA_CREDENTIAL_ROLE:-}}")"
 if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then
   if [ -n "${CI:-}" ]; then
     credential_role="ci"
@@ -261,6 +226,8 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
 mkdir -p "$OUTPUT_DIR_HOST"
 npm_prefix_host="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-prefix.XXXXXX")"
+# The disposable package prefix is shared with the container's non-root appuser.
+chmod a+rwx "$npm_prefix_host"
 harness_root="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-harness.XXXXXX")"
 harness_package_json="$harness_root/package.json"
 cp "$ROOT_DIR/package.json" "$harness_package_json"
@@ -268,6 +235,16 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.m
 cleanup() {
   local rc=$?
   trap - EXIT
+  # The harness has stopped; return its private output to the host uploader
+  # without widening modes or following links outside this run's directory.
+  if ! docker_e2e_docker_with_timeout 30s run --rm --network none --user 0:0 \
+    -v "$OUTPUT_DIR_HOST:/output" "$IMAGE_NAME" \
+    find -P /output -exec chown -h "$(id -u):$(id -g)" '{}' +; then
+    echo "Could not return Telegram artifacts to the host user." >&2
+    if [ "$rc" -eq 0 ]; then
+      rc=1
+    fi
+  fi
   printf 'schema=1\nexit_code=%s\nlive_output=job_log\n' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"
   rm -rf "$npm_prefix_host"
   rm -rf "$harness_root"
@@ -518,7 +495,7 @@ cleanup_recovery() {
 }
 trap cleanup_recovery EXIT
 
-dump_hotpath_logs() {
+dump_debug_logs() {
   local status="$1"
   echo "installed-package onboarding recovery hot path failed with exit code $status" >&2
   for file in \
@@ -534,7 +511,7 @@ dump_hotpath_logs() {
     fi
   done
 }
-trap 'status=$?; dump_hotpath_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 test -x "$sut_command"
 openclaw_e2e_run_command "$sut_command" --version

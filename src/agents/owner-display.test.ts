@@ -1,7 +1,6 @@
-// Verifies bounded owner prompt identities and retired secret-generation behavior.
+// Verifies bounded owner prompt identities.
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureOwnerDisplaySecret, resolveOwnerPromptNumbers } from "./owner-display.js";
+import { resolveOwnerPromptNumbers } from "./owner-display.js";
 
 describe("resolveOwnerPromptNumbers", () => {
   it("preserves small owner lists and omits empty lists", () => {
@@ -56,20 +55,5 @@ describe("resolveOwnerPromptNumbers", () => {
         owners.slice(0, 16),
       );
     }
-  });
-});
-
-describe("ensureOwnerDisplaySecret", () => {
-  it("leaves retired hash configuration untouched without generating a secret", () => {
-    const cfg = {
-      commands: {
-        ownerDisplay: "hash",
-      },
-    } as OpenClawConfig;
-
-    const result = ensureOwnerDisplaySecret(cfg, () => "generated-owner-secret");
-    expect(result.generatedSecret).toBeUndefined();
-    expect(result.config.commands?.ownerDisplaySecret).toBeUndefined();
-    expect(result.config.commands?.ownerDisplay).toBe("hash");
   });
 });

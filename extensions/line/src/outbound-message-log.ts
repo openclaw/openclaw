@@ -1,4 +1,3 @@
-// Line plugin module remembers which inbound quotes point at the bot's own messages.
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 
 // LINE's webhook reports a quoted message's id but never its author, so the only

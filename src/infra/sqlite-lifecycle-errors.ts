@@ -1,5 +1,33 @@
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
+export class SqliteSnapshotCleanupError extends Error {}
+
+/** A removal failure after retirement, never an admission or native-close failure. */
+export class SqliteSnapshotDirectoryBusyError extends SqliteSnapshotCleanupError {
+  override name = "SqliteSnapshotDirectoryBusyError";
+}
+
+/** Call only around final removal after retirement and native close have succeeded. */
+export function classifyRetiredSqliteSnapshotRemovalError(
+  directory: string,
+  error: unknown,
+): unknown {
+  const code = extractErrorCode(error);
+  if (
+    error instanceof Error &&
+    "syscall" in error &&
+    (error.syscall === "rmdir" || error.syscall === "unlink") &&
+    (code === "EBUSY" || code === "ENOTEMPTY")
+  ) {
+    return new SqliteSnapshotDirectoryBusyError(
+      `SQLite retired snapshot directory removal is busy: ${directory}`,
+      { cause: error },
+    );
+  }
+  return error;
+}
 
 export class OpenClawStateOwnershipError extends Error {}
 
@@ -76,15 +104,9 @@ export function runWithSqliteCleanup<T>(
       throw new SqliteCoordinatorError(`${operationLabel} must remain synchronous`);
     }
   } catch (operationError) {
-    let releaseFailed = false;
-    let releaseError: unknown;
     try {
       resource.release();
-    } catch (error) {
-      releaseFailed = true;
-      releaseError = error;
-    }
-    if (releaseFailed) {
+    } catch (releaseError) {
       throw createSqliteLifecycleAggregateError(
         [operationError, releaseError],
         `${operationLabel} and resource release both failed`,

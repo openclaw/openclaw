@@ -3,15 +3,21 @@ import {
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readMcpConnectAction } from "../agents/mcp-connect-action.js";
+import { readAutomationToolCreation } from "../chat/automation-job-result.js";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
 import {
   MAX_TOOL_APPROVAL_REVIEWS,
   normalizeToolApprovalReview,
 } from "../shared/tool-approval-reviews.js";
-import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
+import {
+  isAssistantInternalReasoningContentType,
+  truncateChatHistoryText,
+} from "./chat-display-projection.helpers.js";
+import { projectPluginInlineView } from "./chat-display-projection.inline-view.js";
 
-function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is string {
+function isDisplayRouteIdentifier(value: unknown, maxChars: number): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
@@ -36,20 +42,30 @@ export function isToolResultHistoryBlockType(type: unknown): boolean {
 export function projectToolResultDetails(
   details: unknown,
   maxChars: number,
+  invocation: Record<string, unknown> = {},
 ): { details: Record<string, unknown> | undefined; truncated: boolean } {
   const record = readRecord(details);
   if (!record) {
     return { details: undefined, truncated: false };
   }
   const projected: Record<string, unknown> = {};
+  const name = invocation.toolName ?? invocation.name;
+  const event = invocation.isError === false ? readAutomationToolCreation(name, record) : undefined;
+  if (event) {
+    projected.automationCreation = event;
+  }
+  const inline = projectPluginInlineView(record, invocation);
+  if (inline) {
+    projected.pluginView = inline;
+  }
   const browserTab = readRecord(record.browserTab);
   // A partial or shortened address can select a different browser. Only display
   // text may be truncated; route identifiers must survive projection unchanged.
   if (
-    isBrowserRouteIdentifier(browserTab?.targetId, 128) &&
-    isBrowserRouteIdentifier(browserTab?.profile, 128) &&
+    isDisplayRouteIdentifier(browserTab?.targetId, 128) &&
+    isDisplayRouteIdentifier(browserTab?.profile, 128) &&
     ((browserTab?.target === "host" && browserTab.node === undefined) ||
-      (browserTab?.target === "node" && isBrowserRouteIdentifier(browserTab.node, 256)))
+      (browserTab?.target === "node" && isDisplayRouteIdentifier(browserTab.node, 256)))
   ) {
     projected.browserTab = {
       targetId: browserTab.targetId,
@@ -64,10 +80,23 @@ export function projectToolResultDetails(
         : {}),
     };
   }
-  // The diff is the one display-capped field here; surface the fact so the
-  // message-level marker covers capped tool-result details too.
+  // Surface capped detail fields through the same message-level display marker.
   let truncated = false;
-  for (const key of ["changed", "created"] as const) {
+  for (const key of ["exitCode", "durationMs"] as const) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      projected[key] = value;
+    }
+  }
+  if (typeof record.cwd === "string") {
+    const cwd = truncateChatHistoryText(record.cwd, maxChars);
+    projected.cwd = cwd.text;
+    truncated ||= cwd.truncated;
+  }
+  if (isDisplayRouteIdentifier(record.sessionKey, maxChars)) {
+    projected.sessionKey = record.sessionKey;
+  }
+  for (const key of ["ok", "changed", "created"] as const) {
     if (typeof record[key] === "boolean") {
       projected[key] = record[key];
     }
@@ -75,7 +104,7 @@ export function projectToolResultDetails(
   if (typeof record.diff === "string" && record.diff.trim()) {
     const diff = truncateChatHistoryText(record.diff, maxChars);
     projected.diff = diff.text;
-    truncated = diff.truncated;
+    truncated ||= diff.truncated;
   }
   if (Array.isArray(record.approvalReviews)) {
     const reviews = record.approvalReviews
@@ -84,6 +113,10 @@ export function projectToolResultDetails(
     if (reviews.length > 0) {
       projected.approvalReviews = reviews;
     }
+  }
+  const connect = readMcpConnectAction({ details: record });
+  if (connect) {
+    projected.mcpConnect = connect;
   }
   const reviewOutcome = record.approvalReviewOutcome;
   if (reviewOutcome === "approved" || reviewOutcome === "denied" || reviewOutcome === "reviewing") {
@@ -179,7 +212,8 @@ export type ChatCanvasBlock = ChatCanvasPreview & { type: "canvas" };
 export function extractChatToolResultCanvasPreview(
   message: unknown,
 ): ChatCanvasPreview | undefined {
-  const entry = readRecord(message);
+  // CLI runtimes report a tool result as its raw content-block array.
+  const entry = Array.isArray(message) ? { content: message } : readRecord(message);
   if (!entry) {
     return undefined;
   }
@@ -230,11 +264,7 @@ export function appendChatCanvasBlocksToMessage(
   return { ...message, content: appendChatCanvasBlocks(content, previews) };
 }
 
-function messageContainsToolHistoryContent(message: unknown): boolean {
-  const entry = readObjectRecord(message);
-  if (!entry) {
-    return false;
-  }
+function messageContainsToolHistoryContent(entry: Record<string, unknown>): boolean {
   if (
     typeof entry.toolCallId === "string" ||
     typeof entry.tool_call_id === "string" ||
@@ -257,6 +287,7 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
   let changed = false;
   let lastAssistantIndex = -1;
   let lastRenderableAssistantIndex = -1;
+  let thinkingFallbackIndex = -1;
   const pending: ChatCanvasPreview[] = [];
   for (let index = 0; index < next.length; index++) {
     const entry = readObjectRecord(next[index]);
@@ -266,17 +297,50 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
     const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
     if (role === "assistant") {
       lastAssistantIndex = index;
-      if (!messageContainsToolHistoryContent(entry)) {
+      if (messageContainsToolHistoryContent(entry)) {
+        // Claude CLI history coalesces tool results into the assistant tool-call message.
+        for (const block of Array.isArray(entry.content) ? entry.content : []) {
+          const result = readObjectRecord(block);
+          const preview = isToolResultHistoryBlockType(result?.type)
+            ? extractChatToolResultCanvasPreview(result)
+            : undefined;
+          if (preview) {
+            pending.push(preview);
+          }
+        }
+      } else {
         lastRenderableAssistantIndex = index;
-        if (pending.length > 0) {
+        // Claude CLI history records thinking as its own row before the visible reply.
+        // Only the reply consumes previews; a thinking row stays the fallback for an unanswered turn.
+        const reasoningOnly =
+          Array.isArray(entry.content) &&
+          entry.content.length > 0 &&
+          entry.content.every((block) =>
+            isAssistantInternalReasoningContentType(readObjectRecord(block)?.type),
+          );
+        if (pending.length > 0 && !reasoningOnly) {
           next[index] = appendChatCanvasBlocksToMessage(entry, pending);
           pending.length = 0;
+          thinkingFallbackIndex = -1;
           changed = true;
+        } else if (pending.length > 0 && thinkingFallbackIndex < 0) {
+          thinkingFallbackIndex = index;
         }
       }
       continue;
     }
     if (!messageContainsToolHistoryContent(entry)) {
+      // A turn interrupted before its reply keeps its widgets; the next prompt's answer must not
+      // take them. Tool result rows (parallel calls are not coalesced) still belong to this turn.
+      if (role === "user" && thinkingFallbackIndex >= 0) {
+        next[thinkingFallbackIndex] = appendChatCanvasBlocksToMessage(
+          readRecord(next[thinkingFallbackIndex]),
+          pending,
+        );
+        pending.length = 0;
+        thinkingFallbackIndex = -1;
+        changed = true;
+      }
       continue;
     }
     const preview = extractChatToolResultCanvasPreview(entry);

@@ -88,7 +88,10 @@ const ESCAPED_BUNDLED_PLUGIN_PATH_PREFIX_RE = new RegExp(
   "iu",
 );
 
-function compareEntries(left: BoundaryViolation, right: BoundaryViolation): number {
+export function compareEntries(
+  left: Omit<BoundaryViolation, "resolvedPath">,
+  right: Omit<BoundaryViolation, "resolvedPath">,
+): number {
   return (
     left.file.localeCompare(right.file) ||
     left.line - right.line ||

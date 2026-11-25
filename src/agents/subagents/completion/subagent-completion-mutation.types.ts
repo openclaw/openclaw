@@ -1,31 +1,49 @@
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.codec.js";
+import type { RequesterSettleWakeBatchState } from "../announce/subagent-announce.requester-settle-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
-export type BlockSubagentCompletionRequest = {
-  subagent: SubagentRunRecord;
-  reason: string;
-  enqueuedAt?: number;
-  suspendedReason?: "expiry" | "permanent_failure";
-  storeReplaced?: true;
-  lastDropReason?: NonNullable<SubagentRunRecord["delivery"]>["lastDropReason"];
-  disposition?: NonNullable<SubagentRunRecord["delivery"]>["disposition"];
+export type RequesterWakeMutation =
+  | {
+      kind: "requesterDelivery";
+      fact: NonNullable<NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"]>;
+    }
+  | {
+      kind: "transition";
+      state: RequesterSettleWakeBatchState;
+      requesterDelivery?: NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"];
+    }
+  | { kind: "complete" };
+
+export type RequesterWakeCommittedWrite = {
+  entries: readonly { subagent: SubagentRunRecord }[];
+  result: SubagentCompletionMutationResult;
 };
 
 export type SubagentCompletionMutation =
   | { kind: "settle"; queueId: string; expected: SubagentRunRecord; subagent: SubagentRunRecord }
-  | { kind: "block"; params: BlockSubagentCompletionRequest; now: number }
+  | { kind: "settleInHistory"; subagent: SubagentRunRecord; now: number }
   | { kind: "reconcileCancelled"; expected: SubagentRunRecord; now: number }
   | {
+      kind: "requesterWake";
+      entries: readonly { subagent: SubagentRunRecord }[];
+      operation: RequesterWakeMutation;
+      committed?: RequesterWakeCommittedWrite;
+    }
+  | {
       kind: "requesterBatch";
+      committed?: RequesterWakeCommittedWrite;
       entries: readonly { subagent: SubagentRunRecord }[];
       outcome: SubagentAnnounceDeliveryResult;
       now: number;
     };
 
+export type SubagentCompletionRecord = {
+  subagent: SubagentRunRecord;
+  cleanupHandled?: boolean;
+};
+
 export type SubagentCompletionMutationResult = {
   applied: boolean | null;
-  records: Array<{ row: SubagentRunSqliteRow; cleanupHandled?: boolean }>;
+  records: SubagentCompletionRecord[];
   retiredRunIds: string[];
-  queueIds: string[];
 };

@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import SwiftUI
 import WatchKit
 
@@ -65,11 +66,11 @@ struct WatchInboxView: View {
     }
 
     private var avatarImageSource: String? {
-        WatchAvatarSource.normalized(self.store.appSnapshot?.agentAvatarURL)
+        self.store.appSnapshot?.agentAvatarURL?.trimmedNonEmpty
     }
 
     private var avatarText: String? {
-        WatchAvatarSource.normalized(self.store.appSnapshot?.agentAvatarText)
+        self.store.appSnapshot?.agentAvatarText?.trimmedNonEmpty
     }
 
     private var nowFace: some View {
@@ -228,8 +229,7 @@ struct WatchInboxView: View {
     }
 
     private var promptDetails: String? {
-        let details = self.store.details?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return details.isEmpty ? nil : details
+        self.store.details?.trimmedNonEmpty
     }
 
     private var inboxHasItems: Bool {
@@ -268,7 +268,7 @@ struct WatchInboxView: View {
                     subtitle: .verbatim(self.approvalDecisionSubtitle(record)),
                     accessory: .verbatim(self.approvalAccessory(record)))
 
-                if let warningText = WatchExecApprovalDisplay.warningText(record.approval.warningText) {
+                if let warningText = record.approval.warningText?.trimmedNonEmpty {
                     WatchApprovalWarning(text: warningText)
                 }
 
@@ -417,7 +417,7 @@ struct WatchInboxView: View {
     }
 
     private var approvalCount: Int {
-        max(self.store.sortedExecApprovals.count, self.store.appSnapshot?.pendingApprovalCount ?? 0)
+        max(self.store.execApprovals.count, self.store.appSnapshot?.pendingApprovalCount ?? 0)
     }
 
     private var connectionLine: String {
@@ -589,6 +589,17 @@ enum WatchClawStyle {
         endPoint: .bottomTrailing)
 }
 
+@MainActor
+private func watchPanelBackground(
+    _ shape: some InsettableShape,
+    fill: Color,
+    border: Color = WatchClawStyle.border) -> some View
+{
+    shape.fill(fill).overlay {
+        shape.strokeBorder(border, lineWidth: 1)
+    }
+}
+
 private struct WatchFaceScroll<Content: View>: View {
     @ViewBuilder var content: Content
 
@@ -608,13 +619,8 @@ private struct WatchFaceScroll<Content: View>: View {
 }
 
 private enum WatchAvatarSource {
-    static func normalized(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
     static func dataImage(from source: String?) -> UIImage? {
-        guard let source = normalized(source),
+        guard let source = source?.trimmedNonEmpty,
               source.lowercased().hasPrefix("data:image/"),
               let commaIndex = source.firstIndex(of: ",")
         else {
@@ -628,7 +634,7 @@ private enum WatchAvatarSource {
     }
 
     static func remoteURL(from source: String?) -> URL? {
-        guard let source = normalized(source),
+        guard let source = source?.trimmedNonEmpty,
               let url = URL(string: source),
               let scheme = url.scheme?.lowercased(),
               scheme == "https" || scheme == "http"
@@ -659,7 +665,7 @@ private struct WatchClawAvatar: View {
                 .strokeBorder(WatchClawStyle.accent.opacity(0.32), lineWidth: 1)
         }
         .shadow(color: WatchClawStyle.accent.opacity(0.30), radius: 5, y: 2)
-        .task(id: WatchAvatarSource.normalized(self.imageSource)) {
+        .task(id: self.imageSource?.trimmedNonEmpty) {
             self.dataImage = WatchAvatarSource.dataImage(from: self.imageSource)
         }
     }
@@ -686,7 +692,7 @@ private struct WatchClawAvatar: View {
     }
 
     @ViewBuilder private var fallbackContent: some View {
-        if let text = WatchAvatarSource.normalized(text) {
+        if let text = text?.trimmedNonEmpty {
             Text(String(text.prefix(3)))
                 .font(WatchClawType.avatar(size: self.size * 0.42))
                 .foregroundStyle(.white)
@@ -700,7 +706,7 @@ private struct WatchClawAvatar: View {
     }
 
     private var contentPadding: CGFloat {
-        WatchAvatarSource.normalized(self.imageSource) == nil ? self.size * 0.04 : 0
+        self.imageSource?.trimmedNonEmpty == nil ? self.size * 0.04 : 0
     }
 }
 
@@ -766,12 +772,9 @@ private struct WatchHeroCard: View {
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .fill(WatchClawStyle.raised)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 17, style: .continuous)
-                        .strokeBorder(WatchClawStyle.border, lineWidth: 1)
-                }
+            watchPanelBackground(
+                RoundedRectangle(cornerRadius: 17, style: .continuous),
+                fill: WatchClawStyle.raised)
         }
     }
 }
@@ -863,12 +866,7 @@ private struct WatchSecondaryLabel: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
             .background {
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.08))
-                    .overlay {
-                        Capsule(style: .continuous)
-                            .strokeBorder(WatchClawStyle.border, lineWidth: 1)
-                    }
+                watchPanelBackground(Capsule(style: .continuous), fill: Color.white.opacity(0.08))
             }
     }
 }
@@ -928,12 +926,9 @@ private struct WatchStackCard: View {
         .padding(.vertical, 7)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .fill(self.isProminent ? WatchClawStyle.raised : WatchClawStyle.surface)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 17, style: .continuous)
-                        .strokeBorder(WatchClawStyle.border, lineWidth: 1)
-                }
+            watchPanelBackground(
+                RoundedRectangle(cornerRadius: 17, style: .continuous),
+                fill: self.isProminent ? WatchClawStyle.raised : WatchClawStyle.surface)
         }
     }
 }
@@ -1017,12 +1012,9 @@ private struct WatchApprovalCommandReview: View {
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.055))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(WatchClawStyle.border, lineWidth: 1)
-                }
+            watchPanelBackground(
+                RoundedRectangle(cornerRadius: 14, style: .continuous),
+                fill: Color.white.opacity(0.055))
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Command to review")
@@ -1044,15 +1036,8 @@ private enum WatchExecApprovalDisplay {
         }
     }
 
-    static func warningText(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
     static func statusText(for record: WatchExecApprovalRecord) -> String? {
-        let statusText = record.status?.localizedText()
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !statusText.isEmpty {
+        if let statusText = record.status?.localizedText().trimmedNonEmpty {
             return statusText
         }
         return record.isResolving ? String(localized: "Sending decision...") : nil
@@ -1305,12 +1290,9 @@ private struct WatchChatEmptyState: View {
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .fill(WatchClawStyle.surface)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 17, style: .continuous)
-                        .strokeBorder(WatchClawStyle.border, lineWidth: 1)
-                }
+            watchPanelBackground(
+                RoundedRectangle(cornerRadius: 17, style: .continuous),
+                fill: WatchClawStyle.surface)
         }
     }
 }
@@ -1354,12 +1336,10 @@ private struct WatchChatComposer: View {
                 .padding(.horizontal, 11)
                 .padding(.vertical, 10)
                 .background {
-                    Capsule(style: .continuous)
-                        .fill(Color.white.opacity(0.09))
-                        .overlay {
-                            Capsule(style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
-                        }
+                    watchPanelBackground(
+                        Capsule(style: .continuous),
+                        fill: Color.white.opacity(0.09),
+                        border: Color.white.opacity(0.16))
                 }
             }
             .buttonStyle(.plain)
@@ -1415,7 +1395,7 @@ private struct WatchExecApprovalListView: View {
 
     var body: some View {
         WatchDetailScroll(title: "Approvals") {
-            if self.store.sortedExecApprovals.isEmpty {
+            if self.store.execApprovals.isEmpty {
                 WatchHeroCard(
                     label: .localized("Clear"),
                     title: .localized("No approvals waiting"),
@@ -1490,8 +1470,8 @@ private struct WatchExecApprovalDetailView: View {
 
             WatchApprovalCommandReview(commandText: self.commandText)
 
-            if let warningText = WatchExecApprovalDisplay.warningText(
-                self.currentRecord?.approval.warningText ?? self.record.approval.warningText)
+            if let warningText = (self.currentRecord?.approval.warningText ?? self.record.approval.warningText)?
+                .trimmedNonEmpty
             {
                 WatchApprovalWarning(text: warningText)
             }

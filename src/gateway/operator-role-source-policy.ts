@@ -4,16 +4,29 @@ import type {
   GatewayOperatorRolesConfig,
 } from "../config/types.gateway.js";
 
-/** Model ceilings can narrow a run without retiring its original operator source. */
+/** Persist the existing role-policy shape until saved-source writers are retired. */
 export function sourceRolePolicy(role: GatewayOperatorRoleDefinition | undefined) {
   if (!role) {
     return undefined;
   }
-  const { modelPolicy: _modelPolicy, ...sourcePolicy } = role;
-  return sourcePolicy;
+  // Keep the durable JSON shape while readers derive restrictions from current policy.
+  // Model policies and project grants are read live, so editing them retires no authority.
+  return {
+    sessions: role.sessions,
+    agents: role.agents,
+    scopes: role.scopes,
+    ...(role.workerProfiles !== undefined ? { workerProfiles: role.workerProfiles } : {}),
+    ...(role.accessPrograms
+      ? { accessPrograms: { cyber: [...new Set(role.accessPrograms.cyber)].toSorted() } }
+      : {}),
+    ...(role.sandbox !== undefined ? { sandbox: role.sandbox } : {}),
+    ...(role.accessPolicyPlugin !== undefined
+      ? { accessPolicyPlugin: role.accessPolicyPlugin }
+      : {}),
+  };
 }
 
-export function sourceRolePolicies(roles: GatewayOperatorRolesConfig | undefined) {
+function sourceRolePolicies(roles: GatewayOperatorRolesConfig | undefined) {
   return roles
     ? {
         ...roles,

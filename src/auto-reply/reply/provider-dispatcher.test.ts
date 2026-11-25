@@ -1,10 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DispatchReplyFromConfig } from "./dispatch-from-config.types.js";
-import type {
-  ReplyDispatcherOptions,
-  ReplyDispatcherWithTypingOptions,
-} from "./reply-dispatcher.js";
+import type { ReplyDispatcherOptions } from "./reply-dispatcher.js";
+import type { ReplyDispatcherWithTypingOptions } from "./reply-dispatcher.types.js";
 
 type BufferedDispatchFn =
   typeof import("../dispatch.js").dispatchInboundMessageWithBufferedDispatcher;

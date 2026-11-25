@@ -9,28 +9,21 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
     var body: some View {
         DisclosureGroup(isExpanded: self.$isExpanded) {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(self.work.messages) { message in
+                ForEach(self.work.messages, id: \.presentationID) { message in
                     self.messageContent(message)
                 }
             }
             .padding(.top, 8)
         } label: {
-            Text(self.label)
+            Text(ChatCompletedWorkSummary.label(work: self.work))
                 .font(OpenClawChatTypography.caption)
-                #if os(iOS)
-                .foregroundStyle(Color.secondary)
-                .frame(minHeight: 44)
-                #else
+                .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(.secondary)
-                #endif
         }
+        #if os(iOS)
+        .disclosureGroupStyle(ChatInlineDisclosureStyle(chevron: .secondary))
+        #endif
         .accessibilityIdentifier("chat-completed-work-\(self.work.anchorID)")
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var label: String {
-        guard let milliseconds = self.work.durationMilliseconds else { return String(localized: "Worked") }
-        let duration = ChatWorkingDurationFormatter.compact(milliseconds: milliseconds)
-        return String(format: String(localized: "Worked for %@"), duration)
     }
 }

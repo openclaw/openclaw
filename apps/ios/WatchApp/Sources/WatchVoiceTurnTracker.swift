@@ -19,8 +19,7 @@ struct WatchVoiceTurnTracker: Codable, Equatable {
             return nil
         }
 
-        self.commandId = nil
-        self.isAwaitingReply = false
+        self.cancel()
         return text
     }
 

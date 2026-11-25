@@ -1,3 +1,4 @@
+import { availableWorkerSlots } from "../../../packages/gateway-protocol/src/worker-capacity.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import {
@@ -126,6 +127,7 @@ export async function resolveDevicePlacementEligibility(params: {
     approvedCommands: declaredCommands,
   });
   const requiredNodeCommand = resolveRequiredNodeCommandAuthority({
+    nodeId: deviceId,
     requiredCommands: requirement.requiredNodeCommands,
     declaredCommands: params.currentNode?.declaredCommands ?? declaredCommands,
     effectiveCommands: params.currentNode?.commands ?? declaredCommands,
@@ -133,12 +135,10 @@ export async function resolveDevicePlacementEligibility(params: {
     allowlist,
   });
   if (requiredNodeCommand && requiredNodeCommand.state !== "invocable") {
-    return {
-      ok: false,
-      error: `paired-device command ${requiredNodeCommand.command} is not enabled or approved for ${deviceId}; enable it in gateway.nodes.commands.allow and approve the command on the node`,
-    };
+    return { ok: false, error: requiredNodeCommand.message };
   }
-  if (requirement.consumesWorkerSlot && node.workerHost.capacity.available <= 0) {
+  const availableSlots = availableWorkerSlots(node.workerHost.capacity);
+  if (requirement.consumesWorkerSlot && availableSlots <= 0) {
     return {
       ok: false,
       error: deviceUnavailableText(deviceId, {
@@ -147,5 +147,5 @@ export async function resolveDevicePlacementEligibility(params: {
       }),
     };
   }
-  return { ok: true, availableSlots: node.workerHost.capacity.available, node };
+  return { ok: true, availableSlots, node };
 }

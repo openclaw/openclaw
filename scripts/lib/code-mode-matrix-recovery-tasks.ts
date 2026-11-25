@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { isRecord as isRow } from "@openclaw/normalization-core/record-coerce";
 import { createGatewayMatrixPluginSource } from "./code-mode-matrix-gateway-fixtures.ts";
 import type { MatrixPerformanceFixture } from "./code-mode-matrix-performance-types.ts";
@@ -199,12 +200,9 @@ Write ${REPORT_PATH} with exactly these JSON fields: {batchId,sourceLineCount,se
             .filter(isRow)
             .toSorted((a, b) => String(a.operationId).localeCompare(String(b.operationId)))
         : [];
-      let report: unknown;
-      try {
-        report = JSON.parse(await fs.readFile(path.join(workspace, REPORT_PATH), "utf8"));
-      } catch {
-        report = undefined;
-      }
+      const report = safeParseJson(
+        await fs.readFile(path.join(workspace, REPORT_PATH), "utf8").catch(() => ""),
+      );
       return {
         completeSourceRead: rows.some((row) => row.kind === "call" && row.tool === TOOLS.batch),
         requiredFailuresObserved: allFaultsObserved && uncertain.length === 4,

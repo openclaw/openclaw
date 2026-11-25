@@ -21,7 +21,7 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - ui/src/e2e/debug-diagnostics.e2e.test.ts
-    - ui/src/pages/debug/debug-page.ts
+    - ui/src/pages/debug/debug-page.tsx
     - ui/src/lib/gateway-diagnostics.ts
   execution:
     kind: playwright

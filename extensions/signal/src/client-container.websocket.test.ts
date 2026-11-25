@@ -1,271 +1,156 @@
 import { EventEmitter } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { containerCheck, streamContainerEvents } from "./client-container.js";
 
-const mockFetch = vi.fn();
-const wsMockState = vi.hoisted(() => ({
-  behavior: "close" as
-    | "close"
-    | "open"
-    | "message"
-    | "buffered-message"
-    | "pending"
-    | "unexpected-response",
+const state = vi.hoisted(() => ({
+  receive: vi.fn<(socket: EventEmitter & { close(): void }) => void>(),
+  buffered: false,
   urls: [] as string[],
   options: [] as Array<{ maxPayload?: number; handshakeTimeout?: number } | undefined>,
   terminations: 0,
 }));
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  vi.spyOn(fetchModule, "resolveFetch").mockReturnValue(mockFetch as unknown as typeof fetch);
-  wsMockState.behavior = "close";
-  wsMockState.urls = [];
-  wsMockState.options = [];
-  wsMockState.terminations = 0;
-});
-
-function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: string): void {
-  const messages = mock.mock.calls.map((call) => String(call[0] ?? ""));
-  expect(messages.join("\n")).not.toContain(expected);
-}
-
-// Minimal WebSocket mock for connection-log assertions.
-vi.mock("./ws-runtime.js", () => ({
-  WebSocket: class MockWebSocket extends EventEmitter {
-    private bufferedMessageFlushed = false;
-
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: class extends EventEmitter {
+    private flushed = false;
     constructor(url: string | URL, options?: { maxPayload?: number; handshakeTimeout?: number }) {
       super();
-      wsMockState.urls.push(String(url));
-      wsMockState.options.push(options);
-      setTimeout(() => {
-        if (wsMockState.behavior === "open") {
-          this.emit("open");
-          this.emit("close", 1000, Buffer.from("done"));
-        } else if (wsMockState.behavior === "unexpected-response") {
-          this.emit("unexpected-response", {}, { statusCode: 200, statusMessage: "OK" });
-        } else if (wsMockState.behavior === "message") {
-          this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
-          this.emit("close", 1000, Buffer.from("done"));
-        } else if (wsMockState.behavior === "buffered-message") {
-          this.emit("open");
-          this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
-        } else if (wsMockState.behavior === "pending") {
-          // Keep the opening handshake unresolved until shutdown closes it.
-        } else {
-          this.emit("close", 1000, Buffer.from("done"));
-        }
-      }, 0);
+      state.urls.push(String(url));
+      state.options.push(options);
+      setTimeout(() => state.receive(this), 0);
     }
-
     close() {
-      if (wsMockState.behavior === "buffered-message" && !this.bufferedMessageFlushed) {
-        this.bufferedMessageFlushed = true;
-        // ws flushes already-buffered receiver frames before its final close event.
+      if (state.buffered && !this.flushed) {
+        this.flushed = true;
+        // ws flushes buffered receiver frames before its final close event.
         this.emit("message", Buffer.from('{"envelope":{"timestamp":2}}'));
       }
       this.emit("close", 1000, Buffer.from("done"));
     }
-
     terminate() {
-      wsMockState.terminations += 1;
+      state.terminations++;
     }
   },
 }));
-
-describe("containerCheck", () => {
-  it("validates the receive WebSocket when an account is provided", async () => {
-    wsMockState.behavior = "open";
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
-
-    const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
-
-    expect(result).toEqual({ ok: true, status: 101, error: null });
-    expect(wsMockState.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
-    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
+const baseUrl = "http://localhost:8080";
+const account = "+14259798283";
+function buffered(
+  onEvent: Parameters<typeof streamContainerEvents>[0]["onEvent"],
+  timeoutMs?: number,
+) {
+  state.buffered = true;
+  state.receive.mockImplementation((socket) => {
+    socket.emit("open");
+    socket.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
   });
+  const abort = new AbortController();
+  const log = vi.fn(),
+    error = vi.fn(),
+    opened = vi.fn(),
+    finished = vi.fn();
+  const stream = streamContainerEvents({
+    baseUrl,
+    account,
+    timeoutMs,
+    onEvent,
+    onStreamOpen: opened,
+    abortSignal: abort.signal,
+    logger: { log, error },
+  }).then(finished);
+  return { abort, log, error, opened, finished, stream };
+}
+beforeEach(() => {
+  vi.useFakeTimers();
+  state.receive.mockReset();
+  state.buffered = false;
+  state.urls = [];
+  state.options = [];
+  state.terminations = 0;
+  vi.spyOn(fetchModule, "resolveFetch").mockReturnValue(
+    vi.fn<typeof fetch>().mockResolvedValue(new Response(null)),
+  );
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
-  it("rejects container receive endpoints that do not upgrade to WebSocket", async () => {
-    wsMockState.behavior = "unexpected-response";
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
-
-    const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
-
-    expect(result).toEqual({
+describe("container receive health", () => {
+  it.each([
+    { behavior: "open", ok: true, status: 101, error: null },
+    {
+      behavior: "unexpected-response",
       ok: false,
       status: 200,
       error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
-    });
-  });
-
-  it("rejects container receive endpoints that close before opening", async () => {
-    wsMockState.behavior = "close";
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
-
-    const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
-
-    expect(result).toEqual({
-      ok: false,
-      status: null,
-      error: "Signal container receive WebSocket closed before open (1000: done)",
-    });
+    },
+  ] as const)("reports $behavior", async ({ behavior, ...result }) => {
+    state.receive.mockImplementation((socket) =>
+      socket.emit(behavior, {}, { statusCode: 200, statusMessage: "OK" }),
+    );
+    const check = containerCheck(baseUrl, 1000, account);
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(check).resolves.toEqual(result);
+    expect(state.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
+    expect(state.options).toEqual([{ maxPayload: 1024 * 1024 }]);
   });
 });
 
-describe("streamContainerEvents", () => {
-  it("redacts the account and bounds the opening handshake wait", async () => {
-    const log = vi.fn();
-    const onStreamOpen = vi.fn();
-    wsMockState.behavior = "open";
-
-    await streamContainerEvents({
-      baseUrl: "http://localhost:8080",
-      account: "+14259798283",
-      onEvent: vi.fn(),
-      onStreamOpen,
-      logger: { log },
-    });
-
-    expect(onStreamOpen).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledWith(
-      "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
-    );
-    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
-    expectMockLogNotContains(log, "+14259798283");
-    expectMockLogNotContains(log, "%2B14259798283");
-  });
-
-  it("drains accepted and socket-buffered receive events before resolving shutdown", async () => {
-    wsMockState.behavior = "buffered-message";
-    const abort = new AbortController();
-    const removeEventListener = vi.spyOn(abort.signal, "removeEventListener");
-    const firstDelivery = createDeferred<void>();
-    const firstStarted = createDeferred<void>();
-    const timestamps: number[] = [];
-    const stream = streamContainerEvents({
-      baseUrl: "http://localhost:8080",
-      abortSignal: abort.signal,
-      timeoutMs: 0,
-      onEvent: async (event) => {
-        timestamps.push(event.envelope?.timestamp ?? 0);
-        if (timestamps.length === 1) {
-          firstStarted.resolve();
-          await firstDelivery.promise;
-        }
-      },
-    });
-    let settled = false;
-    void stream.then(() => {
-      settled = true;
-    });
-
-    await firstStarted.promise;
-    abort.abort();
-    const settledBeforeDrain = await Promise.race([
-      stream.then(() => true),
-      new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 10);
-      }),
-    ]);
-    expect(settledBeforeDrain).toBe(false);
-    expect(settled).toBe(false);
-
-    firstDelivery.resolve();
-    await expect(stream).resolves.toBeUndefined();
-    expect(timestamps).toEqual([1, 2]);
-    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
-    expect(wsMockState.terminations).toBe(0);
-  });
-
-  it("propagates a receive-handler failure that settles during shutdown", async () => {
-    wsMockState.behavior = "buffered-message";
-    const abort = new AbortController();
-    const appendError = new Error("durable append failed during shutdown");
+describe("container receive lifecycle", () => {
+  it("drains accepted and socket-buffered events before resolving shutdown", async () => {
     const delivery = createDeferred<void>();
-    const firstStarted = createDeferred<void>();
-    const stream = streamContainerEvents({
-      baseUrl: "http://localhost:8080",
-      abortSignal: abort.signal,
-      onEvent: async () => {
-        firstStarted.resolve();
+    const timestamps: number[] = [];
+    const { abort, log, opened, finished, stream } = buffered(async (event) => {
+      timestamps.push(event.envelope?.timestamp ?? 0);
+      if (timestamps.length === 1) {
         await delivery.promise;
-      },
-    });
-
-    await firstStarted.promise;
+      }
+    }, 0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(timestamps).toEqual([1]);
     abort.abort();
-    delivery.reject(appendError);
-    await expect(stream).rejects.toBe(appendError);
-    expect(wsMockState.terminations).toBe(0);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(finished).not.toHaveBeenCalled();
+    delivery.resolve();
+    await stream;
+    expect(timestamps).toEqual([1, 2]);
+    expect(opened).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalled();
+    const messages = log.mock.calls.flat().join("\n");
+    expect(messages).not.toContain(account);
+    expect(messages).not.toContain("%2B14259798283");
+    expect(state.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
   });
-
-  it("bounds a stalled shutdown drain and records the accepted-message loss risk", async () => {
-    vi.useFakeTimers();
-    try {
-      wsMockState.behavior = "buffered-message";
-      const abort = new AbortController();
-      const error = vi.fn();
-      let settled = false;
-      const stream = streamContainerEvents({
-        baseUrl: "http://localhost:8080",
-        abortSignal: abort.signal,
-        timeoutMs: 0,
-        onEvent: async () => await new Promise<void>(() => {}),
-        logger: { error },
-      }).then(() => {
-        settled = true;
-      });
-
-      await vi.advanceTimersByTimeAsync(0);
-      abort.abort();
-      await vi.advanceTimersByTimeAsync(1_499);
-      expect(settled).toBe(false);
-      expect(error).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(stream).resolves.toBeUndefined();
-      expect(error).toHaveBeenCalledWith(expect.stringMatching(/receive events.*may be lost/i));
-      expect(wsMockState.terminations).toBe(1);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+  it("propagates a handler failure during shutdown", async () => {
+    const delivery = createDeferred<void>();
+    const error = new Error("durable append failed during shutdown");
+    const { abort, stream } = buffered(() => delivery.promise);
+    await vi.advanceTimersByTimeAsync(0);
+    abort.abort();
+    const rejected = expect(stream).rejects.toBe(error);
+    delivery.reject(error);
+    await rejected;
   });
-
-  it("handles an already-aborted signal without leaving its connection pending", async () => {
-    wsMockState.behavior = "pending";
+  it("bounds a stalled drain and reports accepted-message loss risk", async () => {
+    const { abort, error, finished, stream } = buffered(() => new Promise<void>(() => {}), 0);
+    await vi.advanceTimersByTimeAsync(0);
+    abort.abort();
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(finished).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await stream;
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/receive events.*may be lost/i));
+    expect(state.terminations).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("closes an already-aborted connection", async () => {
     const abort = new AbortController();
     abort.abort();
-    const result = await Promise.race([
-      streamContainerEvents({
-        baseUrl: "http://localhost:8080",
-        abortSignal: abort.signal,
-        onEvent: vi.fn(),
-      }).then(() => "closed"),
-      new Promise<string>((resolve) => {
-        setTimeout(() => resolve("still pending"), 25);
-      }),
-    ]);
-
-    expect(result).toBe("closed");
-    expect(wsMockState.terminations).toBe(0);
-  });
-
-  it("propagates receive-handler failures to the stream", async () => {
-    wsMockState.behavior = "message";
-    const appendError = new Error("durable append failed");
-
     await expect(
-      streamContainerEvents({
-        baseUrl: "http://localhost:8080",
-        account: "+14259798283",
-        onEvent: async () => {
-          throw appendError;
-        },
-      }),
-    ).rejects.toBe(appendError);
+      streamContainerEvents({ baseUrl, abortSignal: abort.signal, onEvent: vi.fn() }),
+    ).resolves.toBeUndefined();
   });
 });

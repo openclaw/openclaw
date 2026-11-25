@@ -1,4 +1,3 @@
-// Zalo plugin module implements monitor.webhook behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveClientIp } from "openclaw/plugin-sdk/core";

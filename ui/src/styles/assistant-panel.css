@@ -8,14 +8,13 @@ openclaw-assistant-panel {
 .assistant-panel {
   position: fixed;
   display: flex;
-  min-width: 0;
-  min-height: 0;
   flex-direction: column;
   overflow: hidden;
   background: var(--bg);
 }
 
-.assistant-panel--bottom {
+.assistant-panel--bottom,
+.assistant-panel--right {
   right: calc(
     var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px) +
       var(--oc-link-reader-reserve-right, 0px)
@@ -24,18 +23,23 @@ openclaw-assistant-panel {
     var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px) +
       var(--oc-link-reader-reserve-bottom, 0px)
   );
+}
+
+.assistant-panel--bottom {
   left: var(--shell-nav-width, 0);
 }
 
+/* Linux and Windows desktop shells draw caption buttons over the window's
+   top-right corner; start below that strip so the header keeps its full width.
+   The shell publishes a zero controls width on macOS and in fullscreen, plain
+   browsers publish neither variable, and a mobile topbar already clears it. */
 .assistant-panel--right {
-  top: var(--shell-topbar-height, 0);
-  right: calc(
-    var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px) +
-      var(--oc-link-reader-reserve-right, 0px)
-  );
-  bottom: calc(
-    var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px) +
-      var(--oc-link-reader-reserve-bottom, 0px)
+  top: max(
+    var(--shell-topbar-height, 0px),
+    min(
+      var(--openclaw-native-window-controls-width, 0px),
+      var(--openclaw-native-titlebar-height, 0px)
+    )
   );
 }
 
@@ -74,13 +78,8 @@ openclaw-assistant-panel {
   flex: none;
 }
 
-.assistant-panel-icon {
-  flex: 0 0 auto;
-}
-
 @media (max-width: 640px) {
   .assistant-panel--right {
-    top: var(--shell-topbar-height, 0);
     right: 0;
     bottom: 0;
     left: 0;

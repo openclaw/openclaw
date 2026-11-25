@@ -1,19 +1,15 @@
-/**
- * Runtime access-group resolution for channel ingress.
- *
- * Preserves symbolic access-group entries until dynamic membership facts are available.
- */
 import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { parseAccessGroupAllowFromEntry } from "../allow-from.js";
-import type { ChannelIngressAdapter, ResolveChannelMessageIngressParams } from "./runtime-types.js";
-import type { AccessGroupMembershipFact, ChannelIngressChannelId } from "./types.js";
+import type { ResolveChannelMessageIngressParams } from "./runtime-types.js";
+import type {
+  AccessGroupMembershipFact,
+  ChannelIngressChannelId,
+  InternalChannelIngressAdapter,
+} from "./types.js";
 
-/**
- * Lists every access-group name referenced by grouped allowFrom entry arrays.
- */
 export function allReferencedAccessGroupNames(
   entries: Array<readonly (string | number)[]>,
 ): string[] {
@@ -25,11 +21,8 @@ export function allReferencedAccessGroupNames(
   );
 }
 
-/**
- * Normalizes direct sender entries while preserving access-group references for runtime lookup.
- */
 export async function normalizeEffectiveEntries(params: {
-  adapter: ChannelIngressAdapter;
+  adapter: InternalChannelIngressAdapter;
   accountId: string;
   entries: readonly (string | number)[];
   context: "dm" | "group" | "route" | "command";
@@ -55,9 +48,6 @@ export async function normalizeEffectiveEntries(params: {
   ]);
 }
 
-/**
- * Resolves dynamic access-group membership facts for referenced runtime access groups.
- */
 export async function resolveRuntimeAccessGroupMembershipFacts(params: {
   input: ResolveChannelMessageIngressParams;
   channelId: ChannelIngressChannelId;
@@ -74,6 +64,7 @@ export async function resolveRuntimeAccessGroupMembershipFacts(params: {
     if (!group || group.type === "message.senders") {
       continue;
     }
+    const membership = { groupName: name, source: "dynamic" as const };
     try {
       const matched = await params.input.resolveAccessGroupMembership({
         name,
@@ -86,21 +77,15 @@ export async function resolveRuntimeAccessGroupMembershipFacts(params: {
         matched
           ? {
               kind: "matched",
-              groupName: name,
-              source: "dynamic",
+              ...membership,
               matchedEntryIds: [`access-group:${name}`],
             }
-          : {
-              kind: "not-matched",
-              groupName: name,
-              source: "dynamic",
-            },
+          : { kind: "not-matched", ...membership },
       );
     } catch {
       facts.push({
         kind: "failed",
-        groupName: name,
-        source: "dynamic",
+        ...membership,
         reasonCode: "access_group_failed",
         diagnosticId: `access-group:${name}`,
       });

@@ -41,15 +41,13 @@ export function resolveTaskUser(env: GatewayServiceEnv): string | null {
   if (!username) {
     return null;
   }
-  if (username.includes("\\")) {
-    return username;
-  }
   const domain = env.USERDOMAIN;
-  if (normalizeLowercaseStringOrEmpty(domain) === "workgroup") {
+  if (
+    username.includes("\\") ||
+    !domain ||
+    normalizeLowercaseStringOrEmpty(domain) === "workgroup"
+  ) {
     return username;
   }
-  if (domain) {
-    return `${domain}\\${username}`;
-  }
-  return username;
+  return `${domain}\\${username}`;
 }

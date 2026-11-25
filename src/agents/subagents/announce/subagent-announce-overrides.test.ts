@@ -8,7 +8,8 @@ import {
 } from "./subagent-announce-overrides.test-support.js";
 import type { callSubagentLifecycleGateway } from "./subagent-announce.runtime.js";
 
-vi.mock("./subagent-announce.runtime.js", () => ({
+vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-announce.runtime.js")>()),
   callSubagentLifecycleGateway: async () => ({
     messages: [{ role: "assistant", content: "original runtime" }],
   }),
@@ -16,10 +17,9 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   getRuntimeConfig: () => ({}),
   readSubagentSessionEntry: () => undefined,
   readSessionMessagesAsync: async () => [],
-  resolveAgentIdFromSessionKey: () => "main",
   resolveSessionStorePathCore: () => "/unused",
-  isEmbeddedAgentRunActive: () => false,
-  waitForEmbeddedAgentRunEnd: async () => true,
+  isSessionRunActive: () => false,
+  waitForSessionRunEnd: async () => true,
 }));
 
 afterEach(() => {

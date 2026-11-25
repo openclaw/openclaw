@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { acquireQaLease } from "./qa-credential-lease.mjs";
+import { createTelegramRuntimeEnvironment } from "./telegram-runtime.mjs";
 
 const TELEGRAM_TEST_CREDENTIAL_KIND = "telegram-test-userbot";
 
@@ -144,7 +145,7 @@ function verifyArchiveEntries(archivePath) {
   }
 }
 
-export function restoreTelegramTestCredential(payloadValue, stateRoot) {
+export function restoreTelegramTestCredential(payloadValue, stateRoot, hostEnv = process.env) {
   const payload = parseTelegramTestCredential(payloadValue);
   const root = path.resolve(stateRoot);
   const userDriverDir = path.join(root, "user-driver");
@@ -191,6 +192,7 @@ export function restoreTelegramTestCredential(payloadValue, stateRoot) {
     credentialsPath,
     userDriverDir,
     driverEnv: {
+      ...createTelegramRuntimeEnvironment(root, hostEnv),
       TELEGRAM_E2E_STATE_DIR: root,
       TELEGRAM_USER_DRIVER_STATE_DIR: userDriverDir,
       TELEGRAM_USER_DRIVER_SUT_ID: payload.sutBotId,
@@ -205,7 +207,7 @@ async function cleanupTemporaryCredential(leaseDir, upstreamRelease) {
   fs.rmSync(leaseDir, { recursive: true, force: true });
 }
 
-async function restoreTemporaryCredential(payload, lease) {
+async function restoreTemporaryCredential(payload, lease, hostEnv) {
   const upstreamRelease = lease.release;
   let leaseDir;
   try {
@@ -220,7 +222,7 @@ async function restoreTemporaryCredential(payload, lease) {
     fs.writeFileSync(path.join(leaseDir, "lease.json"), JSON.stringify(lease.recovery), {
       mode: 0o600,
     });
-    const credential = restoreTelegramTestCredential(payload, stateRoot);
+    const credential = restoreTelegramTestCredential(payload, stateRoot, hostEnv);
     let releasing;
     return {
       ...credential,
@@ -242,9 +244,13 @@ async function restoreTemporaryCredential(payload, lease) {
   }
 }
 
-export async function acquireTelegramTestCredential({ env = process.env, signal } = {}) {
+export async function acquireTelegramTestCredential({
+  env = process.env,
+  hostEnv = process.env,
+  signal,
+} = {}) {
   const lease = await acquireQaLease({ kind: TELEGRAM_TEST_CREDENTIAL_KIND, env, signal });
-  const credential = await restoreTemporaryCredential(lease.payload, lease);
+  const credential = await restoreTemporaryCredential(lease.payload, lease, hostEnv);
   return {
     ...credential,
     credentialSource: "convex",

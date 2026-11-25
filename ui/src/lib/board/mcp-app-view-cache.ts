@@ -1,8 +1,6 @@
 import type { BoardWidget, BoardWidgetAppViewResult } from "@openclaw/gateway-protocol";
-import { formatUiError } from "../format-error.ts";
+import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
 import type { BoardWidgetAppViewState } from "./view-types.ts";
-
-type AppViewRequest = () => Promise<BoardWidgetAppViewResult>;
 
 export class BoardMcpAppViewCache {
   private readonly entries = new Map<string, Promise<BoardWidgetAppViewState>>();
@@ -26,25 +24,20 @@ export class BoardMcpAppViewCache {
 
   async resolve(
     widget: BoardWidget,
-    request: AppViewRequest,
+    request: () => Promise<BoardWidgetAppViewResult>,
     force: boolean,
   ): Promise<BoardWidgetAppViewState> {
     const key = this.key(widget);
     if (force) {
       this.entries.delete(key);
     }
-    const cached = this.entries.get(key);
-    if (cached) {
-      return await cached;
-    }
-    const pending = request()
-      .then<BoardWidgetAppViewState>((result) => ({ status: "ready", ...result }))
-      .catch<BoardWidgetAppViewState>((error: unknown) => ({
-        status: "stale",
-        error: formatUiError(error),
-      }));
-    this.entries.set(key, pending);
-    return await pending;
+    return await getOrCreatePromise(this.entries, key, () =>
+      request()
+        .then<BoardWidgetAppViewState>((result) => ({ status: "ready", ...result }))
+        .catch<BoardWidgetAppViewState>(() => ({
+          status: "stale",
+        })),
+    );
   }
 
   private key(widget: BoardWidget): string {

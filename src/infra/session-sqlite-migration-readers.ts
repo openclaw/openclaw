@@ -21,6 +21,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
+  equivalentLegacySessionHeaders,
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
 } from "../config/sessions/session-entry-codec.js";
@@ -33,9 +34,13 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { getDatabaseEngineInput } from "./database-engine/context.js";
+import { executeSqliteQuerySync } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
+import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 
@@ -45,6 +50,7 @@ export type ReadOnlySqliteValidationSnapshot = {
   sessionIdsBySessionKey: ReadonlyMap<string, string>;
   sessionKeysBySessionId: ReadonlyMap<string, string>;
   transcriptEventCountsBySessionId: ReadonlyMap<string, number>;
+  archivedSessionIds: ReadonlySet<string>;
 };
 
 type ReadOnlySqliteResult<T> = { ok: true; value: T } | { error: unknown; ok: false };
@@ -81,18 +87,19 @@ export function readLegacyPrimaryTranscriptIdentity(
   originalPath: string,
   retainedSharedAliasIds?: ReadonlySet<string>,
   registered = false,
-): { sessionId: string; updatedAt: number } | undefined {
+): { sessionId: string; filenameId: string; updatedAt: number } | undefined {
   const filename = path.basename(originalPath);
   const filenameId =
     extractGeneratedTranscriptSessionId(filename) ?? filename.slice(0, -".jsonl".length);
   let sessionId: string | undefined;
+  let header: Record<string, unknown> | undefined;
   let version = 1;
   let messages = 0;
   for (const { event: raw } of iterateTranscriptEvents(filePath, false)) {
     if (!isRecord(raw) || raw.traceSchema !== undefined) {
       return undefined;
     }
-    if (!sessionId) {
+    if (!header) {
       const id = raw.id ?? raw.sessionId;
       if (
         raw.type !== "session" ||
@@ -101,21 +108,22 @@ export function readLegacyPrimaryTranscriptIdentity(
       ) {
         return undefined;
       }
-      if (id !== filenameId) {
-        // Shared aliases retained by an earlier migration are not unregistered primaries.
-        if (retainedSharedAliasIds?.has(id)) {
-          return undefined;
-        }
-        throw new Error("Primary transcript header does not match its original filename");
+      // Shared aliases retained by an earlier migration are not unregistered primaries.
+      if (id !== filenameId && retainedSharedAliasIds?.has(id)) {
+        return undefined;
       }
       version = typeof raw.version === "number" ? raw.version : 1;
       if (!Number.isInteger(version) || version < 1 || version > 3) {
         throw new Error("Unsupported primary transcript version");
       }
       sessionId = id;
+      header = raw;
       continue;
     }
     if (raw.type === "session") {
+      if (equivalentLegacySessionHeaders(header, raw)) {
+        continue;
+      }
       throw new Error("Multiple primary transcript headers");
     }
     const classified = classifySessionFileEntry(raw, version);
@@ -134,7 +142,7 @@ export function readLegacyPrimaryTranscriptIdentity(
     }
   }
   return sessionId && (messages > 0 || registered)
-    ? { sessionId, updatedAt: Math.max(0, Math.floor(fs.statSync(filePath).mtimeMs)) }
+    ? { sessionId, filenameId, updatedAt: Math.max(0, Math.floor(fs.statSync(filePath).mtimeMs)) }
     : undefined;
 }
 
@@ -244,13 +252,10 @@ type TranscriptImportPlan = {
 
 class TranscriptImportLimitError extends Error {}
 
-export type TranscriptFileFingerprint = {
-  ctimeNs: bigint;
-  dev: bigint;
-  ino: bigint;
-  mtimeNs: bigint;
-  size: bigint;
-};
+export type TranscriptFileFingerprint = Pick<
+  fs.BigIntStats,
+  "ctimeNs" | "dev" | "ino" | "mtimeNs" | "size"
+>;
 
 export function readTranscriptFingerprint(transcriptPath: string): TranscriptFileFingerprint {
   const stat = fs.statSync(transcriptPath, { bigint: true });
@@ -351,7 +356,7 @@ function* iterateTranscriptEvents(
 }
 
 export function readSqliteEntryCount(target: SessionStoreTarget): number {
-  const result = readSessionDatabase(target, (database) => {
+  const result = readSessionDatabase(resolveTargetSqlitePath(target), (database) => {
     const projection = resolveSessionIdentityProjection(database);
     const raw = projection
       ? database.prepare(`SELECT count(*) AS count FROM ${projection.source}`).get()
@@ -362,63 +367,110 @@ export function readSqliteEntryCount(target: SessionStoreTarget): number {
   return result.ok ? (result.value ?? 0) : 0;
 }
 
+/** The local PostgreSQL anchor locates the agent store but contains no session rows. */
+export function readSessionImportValidationSnapshot(
+  target: SessionStoreTarget,
+  env: NodeJS.ProcessEnv,
+): ReadOnlySqliteValidationSnapshotResult {
+  if (!getDatabaseEngineInput("agent")) {
+    return readOnlySqliteValidationSnapshot(target, env);
+  }
+  try {
+    const result = withOpenClawAgentDatabaseReadOnly(
+      ({ db }) => readSessionValidationRows(db),
+      resolveTargetSqliteOptions(target, env),
+    );
+    return { ok: true, snapshot: result.found ? result.value : emptySessionValidationSnapshot() };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
 export function readOnlySqliteValidationSnapshot(
   target: SessionStoreTarget,
+  env?: NodeJS.ProcessEnv,
 ): ReadOnlySqliteValidationSnapshotResult {
-  const empty: ReadOnlySqliteValidationSnapshot = {
+  const result = readSessionDatabase(
+    resolveTargetSqlitePath(target, env),
+    readSessionValidationRows,
+  );
+  return result.ok
+    ? { ok: true, snapshot: result.value ?? emptySessionValidationSnapshot() }
+    : result;
+}
+
+function emptySessionValidationSnapshot(): ReadOnlySqliteValidationSnapshot {
+  return {
     sessionIdsBySessionKey: new Map(),
     sessionKeysBySessionId: new Map(),
     transcriptEventCountsBySessionId: new Map(),
+    archivedSessionIds: new Set(),
   };
-  const result = readSessionDatabase(target, (database) => {
-    const projection = resolveSessionIdentityProjection(database);
-    const sessionIdsBySessionKey = new Map<string, string>();
-    if (projection) {
-      const statement = database.prepare(
-        `SELECT session_key, ${projection.sessionIdColumn} AS session_id
-               FROM ${projection.source}
-              ORDER BY session_key`,
-      );
-      // SAFETY: the selected SQLite columns have stable TEXT identities.
-      for (const row of statement.iterate() as Iterable<SessionIdentityRow>) {
-        sessionIdsBySessionKey.set(row.session_key, row.session_id);
+}
+
+function readSessionValidationRows(database: EngineConnection): ReadOnlySqliteValidationSnapshot {
+  const projection = resolveSessionIdentityProjection(database);
+  const sessionIdsBySessionKey = new Map<string, string>();
+  if (projection) {
+    const statement = database.prepare(
+      `SELECT session_key, ${projection.sessionIdColumn} AS session_id
+             FROM ${projection.source}
+            ORDER BY session_key`,
+    );
+    // SAFETY: the selected SQLite columns have stable TEXT identities.
+    for (const row of statement.iterate() as Iterable<SessionIdentityRow>) {
+      sessionIdsBySessionKey.set(row.session_key, row.session_id);
+    }
+  }
+  const sessionKeysBySessionId = new Map<string, string>();
+  if (tableExists(database, "session_windows")) {
+    for (const row of database
+      .prepare("SELECT session_id, session_key FROM session_windows")
+      .iterate()) {
+      if (typeof row.session_id === "string" && typeof row.session_key === "string") {
+        sessionKeysBySessionId.set(row.session_id, row.session_key);
       }
     }
-    const sessionKeysBySessionId = new Map<string, string>();
-    if (tableExists(database, "session_windows")) {
-      for (const row of database
-        .prepare("SELECT session_id, session_key FROM session_windows")
-        .iterate()) {
-        if (typeof row.session_id === "string" && typeof row.session_key === "string") {
-          sessionKeysBySessionId.set(row.session_id, row.session_key);
-        }
+  }
+  const transcriptEventCountsBySessionId = new Map<string, number>();
+  if (tableExists(database, "transcript_events")) {
+    const statement = database.prepare(
+      "SELECT session_id, COUNT(*) AS count FROM transcript_events GROUP BY session_id ORDER BY session_id",
+    );
+    for (const row of statement.iterate()) {
+      if (typeof row.session_id === "string" && typeof row.count === "number") {
+        transcriptEventCountsBySessionId.set(row.session_id, row.count);
       }
     }
-    const transcriptEventCountsBySessionId = new Map<string, number>();
-    if (tableExists(database, "transcript_events")) {
-      const statement = database.prepare(
-        "SELECT session_id, COUNT(*) AS count FROM transcript_events GROUP BY session_id ORDER BY session_id",
-      );
-      for (const row of statement.iterate()) {
-        if (typeof row.session_id === "string" && typeof row.count === "number") {
-          transcriptEventCountsBySessionId.set(row.session_id, row.count);
-        }
+  }
+  const archivedSessionIds = new Set<string>();
+  const query = getSessionKysely(database);
+  for (const table of [
+    "session_transcript_archives",
+    "session_transcript_cold_archives",
+  ] as const) {
+    if (tableExists(database, table)) {
+      for (const row of executeSqliteQuerySync(
+        database,
+        query.selectFrom(table).select("session_id"),
+      ).rows) {
+        archivedSessionIds.add(row.session_id);
       }
     }
-    return {
-      sessionIdsBySessionKey,
-      sessionKeysBySessionId,
-      transcriptEventCountsBySessionId,
-    };
-  });
-  return result.ok ? { ok: true, snapshot: result.value ?? empty } : result;
+  }
+  return {
+    sessionIdsBySessionKey,
+    sessionKeysBySessionId,
+    transcriptEventCountsBySessionId,
+    archivedSessionIds,
+  };
 }
 
 export function scanReadOnlySqliteActiveTranscriptFiles(
   target: SessionStoreTarget,
   visit: (sessionKey: string, sessionId: string, sessionFile?: string) => void,
 ): { ok: true } | { error: unknown; ok: false } {
-  const result = readSessionDatabase(target, (database) => {
+  const result = readSessionDatabase(resolveTargetSqlitePath(target), (database) => {
     const projection = resolveSessionIdentityProjection(database);
     if (!projection) {
       return;
@@ -440,16 +492,15 @@ export function scanReadOnlySqliteActiveTranscriptFiles(
 }
 
 function readSessionDatabase<T>(
-  target: SessionStoreTarget,
+  sqlitePath: string,
   read: (database: DatabaseSync) => T,
 ): ReadOnlySqliteResult<T | undefined> {
-  const sqlitePath = resolveTargetSqlitePath(target);
   if (!fs.existsSync(sqlitePath)) {
     return { ok: true, value: undefined };
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+    database = openSqliteReadOnlyDatabase(sqlitePath, { readOnly: true });
     return { ok: true, value: read(database) };
   } catch (error) {
     return { error, ok: false };
@@ -458,7 +509,7 @@ function readSessionDatabase<T>(
   }
 }
 
-function resolveSessionIdentityProjection(database: DatabaseSync) {
+function resolveSessionIdentityProjection(database: EngineConnection) {
   if (tableExists(database, "session_nodes")) {
     return {
       sessionIdColumn: "current_session_id",
@@ -472,20 +523,7 @@ function resolveSessionIdentityProjection(database: DatabaseSync) {
 
 export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqliteDbStatsResult {
   const sqlitePath = resolveTargetSqlitePath(target);
-  if (!fs.existsSync(sqlitePath)) {
-    return {
-      ok: true,
-      stats: {
-        dbSizeBytes: 0,
-        largestSessions: [],
-        totalTranscriptRowBytes: 0,
-        walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
-      },
-    };
-  }
-  let database: DatabaseSync | undefined;
-  try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+  const result = readSessionDatabase(sqlitePath, (database) => {
     const hasTranscriptEvents = tableExists(database, "transcript_events");
     const integrityRow = database.prepare("PRAGMA quick_check").get();
     let totalRow: { row_bytes?: unknown } | undefined;
@@ -511,32 +549,36 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
         .all();
     }
     return {
-      ok: true,
-      stats: {
-        dbSizeBytes: safeStatSync(sqlitePath)?.size ?? 0,
-        integrityCheck:
-          typeof integrityRow?.quick_check === "string" ? integrityRow.quick_check : undefined,
-        largestSessions: largestRows.flatMap((row) => {
-          if (typeof row.session_id !== "string") {
-            return [];
-          }
-          return [
-            {
-              events: sqliteNumber(row.events),
-              rowBytes: sqliteNumber(row.row_bytes),
-              sessionId: row.session_id,
-            },
-          ];
-        }),
-        totalTranscriptRowBytes: sqliteNumber(totalRow?.row_bytes),
-        walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
-      },
+      dbSizeBytes: safeStatSync(sqlitePath)?.size ?? 0,
+      integrityCheck:
+        typeof integrityRow?.quick_check === "string" ? integrityRow.quick_check : undefined,
+      largestSessions: largestRows.flatMap((row) => {
+        if (typeof row.session_id !== "string") {
+          return [];
+        }
+        return [
+          {
+            events: sqliteNumber(row.events),
+            rowBytes: sqliteNumber(row.row_bytes),
+            sessionId: row.session_id,
+          },
+        ];
+      }),
+      totalTranscriptRowBytes: sqliteNumber(totalRow?.row_bytes),
+      walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
     };
-  } catch (error) {
-    return { error, ok: false };
-  } finally {
-    database?.close();
-  }
+  });
+  return result.ok
+    ? {
+        ok: true,
+        stats: result.value ?? {
+          dbSizeBytes: 0,
+          largestSessions: [],
+          totalTranscriptRowBytes: 0,
+          walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
+        },
+      }
+    : result;
 }
 
 export function resolveTargetSqliteOptions(target: SessionStoreTarget, env?: NodeJS.ProcessEnv) {

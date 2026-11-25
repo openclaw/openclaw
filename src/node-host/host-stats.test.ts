@@ -14,29 +14,45 @@ it("samples the real host into the node host stats wire contract", () => {
   expect(stats).not.toHaveProperty("updatedAtMs");
 });
 
-it("bounds OS readings and reports available space on the home volume", () => {
-  vi.spyOn(os, "cpus").mockReturnValue([]);
-  vi.spyOn(os, "loadavg").mockReturnValue([1.25, -1, 100_001]);
-  vi.spyOn(os, "totalmem").mockReturnValue(100.4);
-  vi.spyOn(os, "freemem").mockReturnValue(200);
-  const disk = vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue({
-    targetPath: os.homedir(),
-    checkedPath: os.homedir(),
-    totalBytes: 500.4,
-    availableBytes: 600,
-  });
+it.each([
+  [40, 40],
+  [200, 100],
+])(
+  "bounds OS readings and reports available space on the home volume (free=%s)",
+  (freeMemory, expectedFreeMemory) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(os, "cpus").mockReturnValue([]);
+    vi.spyOn(os, "loadavg").mockReturnValue([1.25, -1, 100_001]);
+    vi.spyOn(os, "totalmem").mockReturnValue(100.4);
+    vi.spyOn(os, "freemem").mockReturnValue(freeMemory);
+    const disk = vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue({
+      targetPath: os.homedir(),
+      checkedPath: os.homedir(),
+      totalBytes: 500.4,
+      availableBytes: 600,
+    });
 
-  const stats = sampleNodeHostStats();
-  expect(stats).toEqual({
-    cpuCount: 1,
-    loadAverage: [1.25, 0, 100_000],
-    memoryTotalBytes: 100,
-    memoryFreeBytes: 100,
-    diskTotalBytes: 500,
-    diskAvailableBytes: 500,
-  });
-  expect(disk).toHaveBeenCalledWith(os.homedir());
-  expect(validateNodeHostStatsPayload(stats)).toBe(true);
+    const stats = sampleNodeHostStats();
+    expect(stats).toEqual({
+      cpuCount: 1,
+      loadAverage: [1.25, 0, 100_000],
+      memoryTotalBytes: 100,
+      memoryFreeBytes: expectedFreeMemory,
+      diskTotalBytes: 500,
+      diskAvailableBytes: 500,
+    });
+    expect(disk).toHaveBeenCalledWith(os.homedir());
+    expect(validateNodeHostStatsPayload(stats)).toBe(true);
+  },
+);
+
+it.each(["linux", "win32"] as const)("keeps host-wide memory readings on %s", (platform) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(40);
+  vi.spyOn(os, "freemem").mockReturnValue(2048);
+
+  expect(sampleNodeHostStats().memoryFreeBytes).toBe(2048);
+  expect(availableMemory).not.toHaveBeenCalled();
 });
 
 it.each([

@@ -1,6 +1,19 @@
-import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectNestedErrorCandidates,
+  toErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const commandCleanupUncertain = Symbol.for("openclaw.command-cleanup-uncertain");
+const commandCleanupMessage = "Command cleanup could not confirm that owned work stopped";
+
+function isCanonicalCommandProcessCleanupError(candidate: unknown): boolean {
+  try {
+    return Object.getOwnPropertyDescriptor(candidate, commandCleanupUncertain)?.value === true;
+  } catch {
+    return false;
+  }
+}
 
 /** An admitted command may still write; callers must retain its artifacts for recovery. */
 export class CommandProcessCleanupError extends Error {
@@ -8,7 +21,23 @@ export class CommandProcessCleanupError extends Error {
   readonly cleanup = "uncertain";
 
   constructor(options?: ErrorOptions) {
-    super("Command cleanup could not confirm that owned work stopped", options);
+    let message = commandCleanupMessage;
+    // Preserve the first canonical remedy without exposing unrelated cause text.
+    for (const candidate of collectNestedErrorCandidates(options?.cause)) {
+      if (!isCanonicalCommandProcessCleanupError(candidate)) {
+        continue;
+      }
+      try {
+        const detail: unknown = Object.getOwnPropertyDescriptor(candidate, "message")?.value;
+        if (typeof detail === "string" && detail.trim() && detail !== commandCleanupMessage) {
+          message = detail;
+          break;
+        }
+      } catch {
+        // Opaque causes must not prevent cleanup classification.
+      }
+    }
+    super(message, options);
     this.name = "CommandProcessCleanupError";
     Object.defineProperty(this, commandCleanupUncertain, { value: true });
   }
@@ -16,13 +45,15 @@ export class CommandProcessCleanupError extends Error {
 
 /** Preserve canonical cleanup classification across cause chains and module copies. */
 export function hasCommandProcessCleanupError(error: unknown): boolean {
-  return collectNestedErrorCandidates(error).some((candidate) => {
-    try {
-      return Object.getOwnPropertyDescriptor(candidate, commandCleanupUncertain)?.value === true;
-    } catch {
-      return false;
-    }
-  });
+  return collectNestedErrorCandidates(error).some(isCanonicalCommandProcessCleanupError);
+}
+
+/** Best-effort command reads must still propagate uncertain cleanup. */
+export function ignoreNonCleanupCommandError(error: unknown): null {
+  if (hasCommandProcessCleanupError(error)) {
+    throw error;
+  }
+  return null;
 }
 
 export type SpawnResult = {
@@ -46,7 +77,83 @@ export type SpawnResult = {
   outputErrorStream?: "stdout" | "stderr";
 };
 
+type CommandProcessCleanup = Promise<NonNullable<SpawnResult["cleanup"]>>;
+const commandProcessCleanup = Symbol.for("openclaw.command-process-cleanup");
+
+/** Carry the existing cleanup owner without putting a Promise in public result payloads. */
+export function recordCommandProcessCleanup<Result extends object>(
+  result: Result,
+  cleanup: CommandProcessCleanup | undefined,
+): Result {
+  return cleanup
+    ? Object.defineProperty(result, commandProcessCleanup, { value: cleanup })
+    : result;
+}
+
+export function readCommandProcessCleanup(result: object): CommandProcessCleanup | undefined {
+  const descriptor: TypedPropertyDescriptor<CommandProcessCleanup> | undefined =
+    Object.getOwnPropertyDescriptor(result, commandProcessCleanup);
+  return descriptor?.value;
+}
+
+export type CommandProcessOutcome = Pick<
+  SpawnResult,
+  "pid" | "code" | "cleanup" | "termination" | "killIssuedByAbort" | "outputLimitExceeded"
+> & {
+  /** False only while a managed beforeInput callback has withheld every input byte. */
+  inputReleased?: boolean;
+};
+const commandFailureOutcome = Symbol.for("openclaw.command-process-outcome");
+
+/** Lifecycle facts stay private; callers retain the original error and its diagnostics. */
+export function recordCommandProcessFailure(error: unknown, outcome: CommandProcessOutcome): Error {
+  const failure = toErrorObject(error, "Command failed");
+  const target = Object.isExtensible(failure)
+    ? failure
+    : new Error(failure.message, { cause: failure });
+  return Object.defineProperty(target, commandFailureOutcome, {
+    value: Object.freeze({ ...outcome }),
+    configurable: true,
+  });
+}
+
+export function readCommandProcessFailure(error: unknown): CommandProcessOutcome | undefined {
+  for (const cause of collectNestedErrorCandidates(error)) {
+    try {
+      // Only recordCommandProcessFailure publishes this process-local lifecycle fact.
+      const descriptor: TypedPropertyDescriptor<CommandProcessOutcome> | undefined = isRecord(cause)
+        ? Object.getOwnPropertyDescriptor(cause, commandFailureOutcome)
+        : undefined;
+      if (descriptor?.value) {
+        return descriptor.value;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 export const TIMEOUT_EXIT_CODE = 124;
+
+export function createInterruptedCommandOutcome(params: {
+  reason: Exclude<SpawnResult["termination"], "exit"> | "output-limit";
+  pid: number | undefined;
+  killed: boolean;
+}) {
+  const { reason, pid, killed } = params;
+  return {
+    pid,
+    code: reason === "timeout" || reason === "no-output-timeout" ? TIMEOUT_EXIT_CODE : null,
+    signal: null,
+    killed,
+    killIssuedByAbort: reason === "signal" || reason === "output-limit" || undefined,
+    cleanup: "uncertain" as const,
+    termination: reason === "output-limit" ? ("signal" as const) : reason,
+    noOutputTimedOut: reason === "no-output-timeout",
+    outputLimitExceeded: reason === "output-limit" || undefined,
+  };
+}
 
 export function createSanitizedCommandError(result: {
   code?: unknown;
@@ -78,15 +185,9 @@ export function createSanitizedCommandError(result: {
   });
 }
 
-type CommandFailure = {
+type CommandFailure = Omit<Parameters<typeof createSanitizedCommandError>[0], "code"> & {
   failed: boolean;
-  exitCode?: unknown;
-  signal?: unknown;
   cause?: unknown;
-  timedOut?: boolean;
-  isCanceled?: boolean;
-  isMaxBuffer?: boolean;
-  isTerminated?: boolean;
 };
 
 export function isPlainCommandExitFailure(result: CommandFailure): boolean {

@@ -58,7 +58,7 @@ type LaunchAgentInstallOverrides = Omit<
   "env" | "stdout" | "programArguments"
 >;
 
-export function launchAgentFixture(
+function launchAgentFixture(
   env: LaunchAgentInstallFixture["env"],
   programArguments: string[],
   overrides: LaunchAgentInstallOverrides = {},

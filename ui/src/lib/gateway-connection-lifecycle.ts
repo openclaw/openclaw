@@ -8,18 +8,7 @@ export type GatewayConnectionScope = {
   readonly epoch: number;
 };
 
-type GatewayConnectionLifecycle = {
-  readonly epoch: number;
-  capture: () => GatewayConnectionScope | null;
-  isCurrent: (scope: GatewayConnectionScope) => boolean;
-  invalidate: () => void;
-  transition: (snapshot: GatewayConnectionSnapshot) => boolean;
-  dispose: () => void;
-};
-
-export function createGatewayConnectionLifecycle(
-  snapshot: GatewayConnectionSnapshot,
-): GatewayConnectionLifecycle {
+export function createGatewayConnectionLifecycle(snapshot: GatewayConnectionSnapshot) {
   let client = snapshot.client;
   let connected = snapshot.phase === "connected";
   let epoch = 0;
@@ -29,18 +18,18 @@ export function createGatewayConnectionLifecycle(
     get epoch() {
       return epoch;
     },
-    capture() {
+    capture(this: void) {
       return !disposed && connected && client ? { client, epoch } : null;
     },
-    isCurrent(scope) {
+    isCurrent(this: void, scope: GatewayConnectionScope) {
       return !disposed && connected && client === scope.client && epoch === scope.epoch;
     },
-    invalidate() {
+    invalidate(this: void) {
       if (!disposed) {
         epoch += 1;
       }
     },
-    transition(next) {
+    transition(this: void, next: GatewayConnectionSnapshot) {
       if (disposed) {
         return false;
       }
@@ -53,7 +42,7 @@ export function createGatewayConnectionLifecycle(
       connected = nextConnected;
       return changed;
     },
-    dispose() {
+    dispose(this: void) {
       if (!disposed) {
         disposed = true;
         epoch += 1;

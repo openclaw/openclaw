@@ -4,7 +4,6 @@ import {
   buildCapabilityProviderIndex,
   normalizeCapabilityProviderId,
 } from "../plugins/provider-registry-shared.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
 
 type MediaProviderRegistryKey =
   | "imageGenerationProviders"
@@ -12,9 +11,6 @@ type MediaProviderRegistryKey =
   | "musicGenerationProviders"
   | "realtimeTranscriptionProviders"
   | "transcriptSourceProviders";
-
-type MediaProvider<TKey extends MediaProviderRegistryKey> =
-  PluginRegistry[TKey][number]["provider"];
 
 /** Shares normalized provider listing while preserving targeted transcription lookup. */
 export function createMediaProviderRegistry<TKey extends MediaProviderRegistryKey>(
@@ -27,12 +23,11 @@ export function createMediaProviderRegistry<TKey extends MediaProviderRegistryKe
     additionalProviderIds?: readonly string[],
   ) =>
     buildCapabilityProviderIndex(
-      // The capability runtime's private provider type uses this same registry mapping.
       capabilityProviderRuntime.resolvePluginCapabilityProviders({
         key,
         cfg,
         additionalProviderIds,
-      }) as MediaProvider<TKey>[],
+      }),
       mode,
     );
 

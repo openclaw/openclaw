@@ -1,5 +1,5 @@
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
-import type { MeetingObservationProvenance } from "./session-types.js";
+import type { MeetingTranscriptLine } from "./session-types.js";
 
 export type MeetingParticipationAction = { type: string; [key: string]: unknown };
 export type MeetingParticipationRequest = {
@@ -22,16 +22,11 @@ export type MeetingParticipationResult = MeetingParticipationEffectResult & {
   correctionOf?: string;
 };
 /** Provider-observed identity. Never accept this object from model/tool arguments. */
-export type MeetingParticipationSource = {
-  id: string;
-  epoch: string;
-  revision: string;
+export type MeetingParticipationSource = NonNullable<MeetingTranscriptLine["source"]> & {
   kind: "chat" | "caption";
   text: string;
   /** Observation that supplied this source; does not refresh its age, order, or authority. */
-  provenance?: MeetingObservationProvenance;
-  ownEcho?: boolean;
-  finalized: boolean;
+  provenance?: NonNullable<MeetingTranscriptLine["provenance"]>;
 };
 export type MeetingParticipationContext = {
   sessionId: string;
@@ -53,10 +48,6 @@ export type MeetingParticipationAttempt = {
   correctionOf?: string;
   result?: MeetingParticipationResult;
 };
-type MeetingParticipationStore = Pick<
-  PluginStateKeyedStore<MeetingParticipationAttempt>,
-  "lookup" | "registerIfAbsent" | "register" | "entries" | "delete"
->;
 export type MeetingBrowserParticipationAdapter = {
   capabilities: readonly string[];
   validateAction(action: MeetingParticipationAction): string | undefined;
@@ -84,7 +75,10 @@ export type MeetingBrowserParticipationAdapter = {
   ): MeetingParticipationEffectResult;
 };
 export type MeetingParticipationOptions<TSession> = {
-  store: MeetingParticipationStore;
+  store: Pick<
+    PluginStateKeyedStore<MeetingParticipationAttempt>,
+    "lookup" | "registerIfAbsent" | "register" | "entries" | "delete"
+  >;
   capabilities(session: TSession): readonly string[];
   validateAction(action: MeetingParticipationAction): string | undefined;
   execute(

@@ -21,18 +21,7 @@ struct TranscriptTextView: NSViewRepresentable {
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.font = .systemFont(ofSize: 13, weight: .regular)
-        textView.textContainer?.lineBreakMode = .byWordWrapping
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainerInset = NSSize(width: 2, height: 6)
-
-        textView.minSize = .zero
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.autoresizingMask = [.width]
-
-        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        textView.textContainer?.widthTracksTextView = true
+        ComposerTextViewSupport.configureWrapping(textView)
 
         textView.textStorage?.setAttributedString(self.attributed)
         textView.typingAttributes = [
@@ -48,15 +37,7 @@ struct TranscriptTextView: NSViewRepresentable {
         textView.onEscape = self.onEscape
         textView.onEndEditing = self.onEndEditing
 
-        let scroll = NSScrollView()
-        scroll.drawsBackground = false
-        scroll.borderType = .noBorder
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        scroll.scrollerStyle = .overlay
-        scroll.hasHorizontalScroller = false
-        scroll.documentView = textView
-        return scroll
+        return ComposerTextViewSupport.scrollView(for: textView, verticalScroller: true)
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
@@ -188,16 +169,12 @@ private final class TranscriptNSTextView: NSTextView {
             super.keyDown(with: event)
             return
         }
-        if isReturn, event.modifierFlags.contains(.command) {
-            self.onSend?()
-            return
-        }
         if isReturn {
-            if event.modifierFlags.contains(.shift) {
+            if event.modifierFlags.contains(.command) || !event.modifierFlags.contains(.shift) {
+                self.onSend?()
+            } else {
                 super.insertNewline(nil)
-                return
             }
-            self.onSend?()
             return
         }
         super.keyDown(with: event)

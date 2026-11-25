@@ -6,8 +6,8 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  ensureAuthProfileStore,
-  loadAuthProfileStoreForRuntime,
+  ensureAuthProfileStoreAsync,
+  loadAuthProfileStoreForRuntimeAsync,
 } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
@@ -29,43 +29,10 @@ import {
 } from "./execution-auth-binding.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
-type CliAuthEpochDeps = {
-  readCodexCliCredentialsCached: typeof readCodexCliCredentialsCached;
-  readGeminiCliCredentialsCached: typeof readGeminiCliCredentialsCached;
-  ensureAuthProfileStore: typeof ensureAuthProfileStore;
-  loadAuthProfileStoreForRuntime: typeof loadAuthProfileStoreForRuntime;
-};
-
-const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
-  readCodexCliCredentialsCached,
-  readGeminiCliCredentialsCached,
-  ensureAuthProfileStore,
-  loadAuthProfileStoreForRuntime,
-};
-
-const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
-
 /** Version salt for CLI auth epoch encoding semantics. */
 export const CLI_AUTH_EPOCH_VERSION = 7;
 
 const GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
-
-/** Overrides credential readers for auth-epoch unit tests. */
-function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
-  Object.assign(cliAuthEpochDeps, overrides);
-}
-
-/** Restores default credential readers after auth-epoch unit tests. */
-function resetCliAuthEpochTestDeps(): void {
-  Object.assign(cliAuthEpochDeps, defaultCliAuthEpochDeps);
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliAuthEpochTestApi")] = {
-    setCliAuthEpochTestDeps,
-    resetCliAuthEpochTestDeps,
-  };
-}
 
 function hashCliAuthEpochPart(value: string): string {
   // Epoch hashes detect local auth-state changes; they are not password
@@ -163,18 +130,14 @@ function getLocalCliCredential(
 ): CodexCliCredential | GeminiCliCredential | undefined {
   switch (provider) {
     case "codex-cli":
-      return (
-        cliAuthEpochDeps.readCodexCliCredentialsCached({ ttlMs, allowKeychainPrompt: false }) ??
-        undefined
-      );
+      return readCodexCliCredentialsCached({ ttlMs, allowKeychainPrompt: false }) ?? undefined;
     case "google-gemini-cli":
-      return cliAuthEpochDeps.readGeminiCliCredentialsCached({ ttlMs }) ?? undefined;
+      return readGeminiCliCredentialsCached({ ttlMs }) ?? undefined;
     default:
       return undefined;
   }
 }
 
-/** Resolves the stable auth epoch hash for a CLI runtime/provider session. */
 export async function resolveCliAuthEpoch(params: {
   provider: string;
   agentDir?: string;
@@ -193,7 +156,7 @@ export async function resolveCliAuthEpoch(params: {
   }
 
   if (authProfileId) {
-    const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(params.agentDir, {
+    const store = await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
       readOnly: true,
       allowKeychainPrompt: false,
     });
@@ -214,7 +177,7 @@ export async function resolveCliAuthEpoch(params: {
  * reusable-session epoch, identity-less OAuth tokens intentionally invalidate
  * on rotation because accepting an unknown replacement could cross accounts.
  */
-export function resolveCliAuthBindingFingerprint(params: {
+export async function resolveCliAuthBindingFingerprint(params: {
   provider: string;
   config: OpenClawConfig;
   agentDir?: string;
@@ -222,9 +185,17 @@ export function resolveCliAuthBindingFingerprint(params: {
   /** Exact selected profile material actually forwarded to this execution. */
   resolvedAuth?: ResolvedProviderAuth;
   skipLocalCredential?: boolean;
-}): string | undefined {
+}): Promise<string | undefined> {
   const provider = params.provider.trim();
   const authProfileId = normalizeOptionalString(params.authProfileId);
+  const store = authProfileId
+    ? await ensureAuthProfileStoreAsync(params.agentDir, {
+        config: params.config,
+        readOnly: true,
+        allowKeychainPrompt: false,
+        externalCliProviderIds: [provider],
+      })
+    : undefined;
   const parts: string[] = [];
   const localCredential = params.skipLocalCredential ? undefined : getLocalCliCredential(provider);
   if (localCredential) {
@@ -238,13 +209,7 @@ export function resolveCliAuthBindingFingerprint(params: {
     parts.push(`local:${fingerprint}`);
   }
   if (authProfileId) {
-    const store = cliAuthEpochDeps.ensureAuthProfileStore(params.agentDir, {
-      config: params.config,
-      readOnly: true,
-      allowKeychainPrompt: false,
-      externalCliProviderIds: [provider],
-    });
-    const storedCredential = store.profiles[authProfileId];
+    const storedCredential = store?.profiles[authProfileId];
     if (!storedCredential) {
       return undefined;
     }
@@ -270,7 +235,6 @@ type CliRuntimeArtifactFingerprintParams = {
   runtimeArtifactId?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  executableIdentity?: CliExecutableIdentity;
 };
 
 /** Hash the exact executable plus backend-owned package implementation tree. */
@@ -305,17 +269,12 @@ export async function resolveCliRuntimeArtifactFingerprint(
   if (params.runtimeArtifactId && backend.id !== params.runtimeArtifactId) {
     return undefined;
   }
-  if (params.executableIdentity && params.executableIdentity.command !== backend.config.command) {
-    return undefined;
-  }
-  const executableIdentity =
-    params.executableIdentity ??
-    (await resolveCliExecutableIdentity({
-      command: backend.config.command,
-      ...(params.cwd ? { cwd: params.cwd } : {}),
-      ...(params.env ? { env: params.env } : {}),
-      ...(backend.runtimeArtifact ? { runtimeArtifact: backend.runtimeArtifact } : {}),
-    }));
+  const executableIdentity = await resolveCliExecutableIdentity({
+    command: backend.config.command,
+    ...(params.cwd ? { cwd: params.cwd } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    ...(backend.runtimeArtifact ? { runtimeArtifact: backend.runtimeArtifact } : {}),
+  });
   if (!executableIdentity) {
     return undefined;
   }
@@ -341,7 +300,6 @@ export async function resolveCliRuntimeOwnerFingerprint(params: {
   skipLocalCredential?: boolean;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  executableIdentity?: CliExecutableIdentity;
   runtimeArtifactFingerprint?: string;
 }): Promise<string | undefined> {
   const provider = params.provider.trim();
@@ -363,14 +321,13 @@ export async function resolveCliRuntimeOwnerFingerprint(params: {
       runtimeArtifactId: backend.id,
       ...(params.cwd ? { cwd: params.cwd } : {}),
       ...(params.env ? { env: params.env } : {}),
-      ...(params.executableIdentity ? { executableIdentity: params.executableIdentity } : {}),
     }));
   if (!runtimeArtifactFingerprint) {
     return undefined;
   }
   let authProfileOwnerFingerprint: string | undefined;
   if (authProfileId) {
-    const store = cliAuthEpochDeps.ensureAuthProfileStore(params.agentDir, {
+    const store = await ensureAuthProfileStoreAsync(params.agentDir, {
       config: params.config,
       readOnly: true,
       allowKeychainPrompt: false,
@@ -395,6 +352,7 @@ export async function resolveCliRuntimeOwnerFingerprint(params: {
       bundleMcpMode: backend.bundleMcpMode,
       authEpochMode: backend.authEpochMode,
       nativeToolMode: backend.nativeToolMode,
+      hostOwnedTools: backend.hostOwnedTools,
       toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
       sideQuestionToolMode: backend.sideQuestionToolMode,
     },

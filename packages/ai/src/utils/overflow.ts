@@ -1,10 +1,13 @@
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
-import type { AssistantMessage } from "../types.js";
+import type { AssistantHistoryMessage } from "../types.js";
 
 const CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE =
   /prompt has [\d,]+ tokens?, but the configured context size is [\d,]+ tokens?/i;
+const REQUEST_BUDGET_OVERFLOW_RE =
+  /context window exceeded: estimated input \d+ leaves only \d+ output tokens within the \d+-token context\./i;
 
 const ASSISTANT_OVERFLOW_PATTERNS = [
+  REQUEST_BUDGET_OVERFLOW_RE,
   /prompt is too long/i, // Anthropic token overflow
   /request_too_large/i, // Anthropic request byte-size overflow (HTTP 413)
   /input length and `?max_tokens`? exceed context limit: [\d,]+ \+ [\d,]+ > [\d,]+/i, // Anthropic direct API
@@ -19,11 +22,17 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
   /input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i, // Together AI
   /exceeds the limit of \d+/i, // GitHub Copilot
   /(?:exceeds the available context size|context size has been exceeded)/i, // llama.cpp server
-  /greater than the context length/i, // LM Studio
+  /decoder prompt \(length [\d,]+\)(?: plus the number of requested output tokens \(at least 1\))? is longer than the maximum model length of [\d,]+/i, // vLLM input processor
+  /engine prompt length [\d,]+ exceeds the max_model_len [\d,]+/i, // vLLM Responses API
+  /`?inputs`? tokens \+ `?max_new_tokens`? must be <= [\d,]+/i, // Hugging Face TGI
+  /`?inputs`? must have less than [\d,]+ tokens/i, // Hugging Face TGI
+  /greater than the context length|model is loaded with context length of only \d[\d,]* tokens, which is not enough/i, // LM Studio
   /context window exceeds limit/i, // MiniMax
   /exceeded model token limit/i, // Kimi For Coding
   /tokens? in request more than max tokens? allowed/i, // Z.AI / Zhipu GLM error 1210
   /prompt exceeds max(?:imum)? length/i, // Z.AI / Zhipu GLM error 1261
+  /range of input length should be \[1, [\d,]+\]/i, // DashScope (Model Studio) input-length limit
+  /length of prompt_tokens \([\d,]+\) must be less than max_seq_len \([\d,]+\)/i, // SiliconFlow error 20015
   /too large for model with \d+ maximum context length/i, // Mistral
   CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
   /model_context_window_exceeded/i, // z.ai non-standard finish_reason surfaced as error text
@@ -35,6 +44,7 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
 ];
 
 const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
+  REQUEST_BUDGET_OVERFLOW_RE,
   /request_too_large/i, // Anthropic request byte-size overflow
   /context_overflow/i,
   CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
@@ -57,6 +67,8 @@ const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
   /413[\s\S]*too large/i,
   /context_window_exceeded/i,
   /input length [\d,]+\s+tokens? exceeds the model limit/i,
+  /`?inputs`? tokens \+ `?max_new_tokens`? must be <= [\d,]+/i, // Hugging Face TGI
+  /`?inputs`? must have less than [\d,]+ tokens/i, // Hugging Face TGI
   /上下文过长|上下文超出|上下文长度超|超出最大上下文|请压缩上下文/,
 ];
 
@@ -103,7 +115,7 @@ const NON_OVERFLOW_PATTERNS = [
   /too many requests/i, // Generic HTTP 429 style
 ];
 
-function resolveContextInputTokens(message: AssistantMessage): number | undefined {
+function resolveContextInputTokens(message: AssistantHistoryMessage): number | undefined {
   if (message.usage.contextUsage?.state === "available") {
     return message.usage.contextUsage.promptTokens;
   }
@@ -119,7 +131,10 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * A context window enables silent-overflow detection; silent truncation without
  * a length stop remains undetectable because the original token count is unknown.
  */
-export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
+export function isContextOverflow(
+  message: AssistantHistoryMessage,
+  contextWindow?: number,
+): boolean {
   // A refusal explanation can mention overflow without authorizing compact-and-retry.
   if (isProviderRefusalAssistantError(message)) {
     return false;

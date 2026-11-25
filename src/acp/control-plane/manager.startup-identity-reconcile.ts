@@ -1,4 +1,3 @@
-/** Startup scan that resolves pending ACP session identities when backends can report status. */
 import {
   identityHasStableSessionId,
   isSessionIdentityPending,
@@ -6,7 +5,6 @@ import {
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import type {
   AcpSessionManagerDeps,
   AcpStartupIdentityReconcileResult,
@@ -15,9 +13,8 @@ import type {
   ResolveManagerSessionAsync,
   WithManagerSessionActor,
 } from "./manager.types.js";
-import { resolveAcpSessionTarget } from "./manager.utils.js";
+import { assertCurrentAcpActor, resolveAcpSessionTarget } from "./manager.utils.js";
 
-/** Resolves pending ACP session identities opportunistically during manager startup. */
 export async function runManagerStartupIdentityReconcile(params: {
   cfg: OpenClawConfig;
   deps: Pick<AcpSessionManagerDeps, "listAcpSessions">;
@@ -64,9 +61,7 @@ export async function runManagerStartupIdentityReconcile(params: {
       });
       const becameResolved = await params.withSessionActor(target, async (isCurrentActor) => {
         const assertCurrent = () => {
-          if (!isCurrentActor()) {
-            throw createSupersededActorError(target.sessionKey);
-          }
+          assertCurrentAcpActor(isCurrentActor(), target.sessionKey);
         };
         const resolution = await params.resolveSession({
           cfg: params.cfg,

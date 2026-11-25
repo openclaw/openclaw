@@ -7,7 +7,7 @@ title: "Secure file operations"
 
 OpenClaw uses [`@openclaw/fs-safe`](https://github.com/openclaw/fs-safe) for security-sensitive local file operations: root-bounded reads/writes, atomic replacement, archive extraction, temp workspaces, JSON state, and secret-file handling.
 
-It is a **library guardrail** for trusted OpenClaw code that receives untrusted path names, not a sandbox. Host filesystem permissions, OS users, containers, and the agent/tool policy still define the real blast radius.
+It is a **library guardrail** for trusted OpenClaw code that receives untrusted path names, not a sandbox. Host filesystem permissions, OS users, containers, and the agent/tool policy still define the potential damage.
 
 <a id="default-javascript-fallback" />
 
@@ -15,9 +15,9 @@ It is a **library guardrail** for trusted OpenClaw code that receives untrusted 
 
 OpenClaw retains fs-safe's **auto** native mode on macOS, Linux, and Windows. Supported operations use the installed native helper; operations with documented JavaScript fallbacks can use those paths when native support is unavailable.
 
-No-clobber `Root.move()` calls, including the default and `{ overwrite: false }`, require native support for an atomic no-replace rename. With native mode `off`, or a missing or unsupported helper, moving to an absent destination fails with `helper-unavailable` and leaves the source in place. A collision returns `already-exists`, preserving both the source and competing destination. A failed identity check after dispatch can still reject after the move has completed.
+No-clobber `Root.move()` calls, including the default and `{ overwrite: false }`, require an installed native helper. On Linux, fs-safe 0.24 uses guarded fallbacks in `auto` mode when the filesystem rejects no-replace rename: files use identity-checked hardlink publication and unlink, while directories use plain rename. File destinations are never overwritten; the directory fallback can replace a concurrently created empty directory, but rejects nonempty directories and non-directory competitors. These moves do not promise crash durability. Native mode `require` refuses the unsupported primitive. With native mode `off` or a missing helper, moving to an absent destination still fails with `helper-unavailable` and leaves the source in place. A failed identity check after dispatch can reject after publication.
 
-Doctor's legacy migration claims can use verified same-directory hardlink publication when the helper is unavailable, including native loading failures. This preserves the source identity and refuses an existing claim. Native mode `require` and mutation-specific Root policies prevent this fallback. Filesystem permission and I/O failures remain errors and do not trigger the fallback.
+Doctor retains verified same-directory hardlink publication for a missing or disabled helper, including native loading failures. This compatibility path syncs the source and directory, preserves source identity, and refuses an existing claim. Native mode `require` and mutation-specific Root policies prevent this fallback. fs-safe owns unsupported native rename handling; Doctor reports its no-replace capability refusal without retrying publication. Unrelated permission and I/O failures remain errors. Interrupted moves are recovered only from an exact source/claim hardlink pair.
 
 On Windows, secure credential reads need the matching native helper to verify ownership and ACLs on the same open file descriptor that supplies the bytes.
 
@@ -32,7 +32,7 @@ OPENCLAW_FS_SAFE_NATIVE_MODE=off
 # Prefer native primitives when the installed platform helper loads.
 OPENCLAW_FS_SAFE_NATIVE_MODE=auto
 
-# Fail closed when an operation needs native support and the binding is unavailable.
+# Refuse operations that lack the required native capability.
 OPENCLAW_FS_SAFE_NATIVE_MODE=require
 ```
 
@@ -40,9 +40,15 @@ The generic fs-safe environment name also works: `FS_SAFE_NATIVE_MODE`.
 
 [Managed worktree acceleration](/concepts/managed-worktrees#filesystem-acceleration) uses isolated native operations for APFS and Btrfs cloning and metadata reads. Those operations retain automatic native selection without changing the Gateway process's configuration. An explicit native mode applies to the isolated operations too; `off` selects normal Git checkout. Native writes remain owned by a supervised child until it exits, so cancellation cannot release the destination for cleanup while the child is still writing.
 
-fs-safe still maps the retired `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHON_MODE` values to native modes with a deprecation warning. Replace them with `FS_SAFE_NATIVE_MODE` or `OPENCLAW_FS_SAFE_NATIVE_MODE`. Python interpreter path settings are no longer used.
+fs-safe 0.23 removes the Python bridge. OpenClaw keeps `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHON_MODE` as deprecated mode aliases when loading its runtime environment, with a deprecation warning. Explicit native settings and programmatic `configureFsSafeNative()` still take precedence. Replace the old names with `FS_SAFE_NATIVE_MODE` or `OPENCLAW_FS_SAFE_NATIVE_MODE`.
 
-Use `require` when all native-capable operations must fail if the platform binding is unavailable. `auto` allows documented JavaScript fallbacks; no-clobber Root moves and Windows secure credential reads always require their native primitives.
+Python interpreter paths are not used. Remove `FS_SAFE_PYTHON`, `OPENCLAW_FS_SAFE_PYTHON`, `OPENCLAW_PINNED_PYTHON`, and `OPENCLAW_PINNED_WRITE_PYTHON` from deployments. Code that directly uses fs-safe must replace `configureFsSafePython` / `FsSafePythonConfig` with `configureFsSafeNative` / `FsSafeNativeConfig` and omit `pythonPath`.
+
+Use `require` when all native-capable operations must fail if the platform binding is unavailable. `auto` allows documented fallbacks; no-clobber Root moves and Windows secure credential reads still require an installed native helper.
+
+In fs-safe 0.21.2, `require` also refuses removal, recursive removal, directory creation, writable-open creation, and overwrite moves when the platform lacks the required confining primitive. An installed helper alone is not enough: recursive Root removal reports `helper-unavailable` on Linux without `openat2` and on Windows. These strict-mode mutations perform additional identity checks and can be slower. See the upstream [operation/platform matrix](https://github.com/openclaw/fs-safe/blob/v0.21.2/docs/security-model.md#native-root-mutation-capabilities).
+
+Keep `require` if those native guarantees are part of your deployment's security policy, and use a platform that supports the operations you need. Otherwise, the default `auto` mode retains the documented best-effort fallbacks and their existing performance.
 
 The Linux GNU addons in fs-safe 0.20.0 target glibc 2.28 and load on Ubuntu
 20.04's glibc 2.31. Older addons can fail with a missing `GLIBC_2.33` or
@@ -55,6 +61,23 @@ preserves the serving files, rejects an existing destination, and checks the
 source against the admitted inventory. SQLite snapshots keep their separate
 integrity, content, and publication checks. An unavailable addon alone does not
 justify skipping those checks or abandoning a snapshot that can be made safely.
+
+## Windows path boundaries
+
+An explicitly configured UNC root, such as `\\server\share\workspace`, and
+ordinary extended drive paths such as `\\?\C:\workspace` remain supported.
+Existing filesystem and permission requirements for each operation still apply.
+
+A path confined to a workspace, plugin root, or extraction destination must use
+that boundary's own share. A foreign UNC share or device namespace is rejected
+before lookup, even if a filesystem alias could point back inside the boundary.
+Use a relative path or the admitted root's host and share spelling. Host and
+share comparisons ignore ASCII case; Unicode lookalikes do not identify the same
+host. OpenClaw preserves valid local plugin aliases, including short names and
+trusted roots whose resolved filesystem location is a network share.
+
+Do not strip `\\?\` or `\\.\` indiscriminately to work around a rejection.
+Ambiguous namespace spellings can change which host or device Windows reaches.
 
 ## What stays protected without native acceleration
 
@@ -93,6 +116,8 @@ In `require` mode, an unavailable or unloadable helper normally causes `helper-u
 
 - Plugin-facing file access should use `openclaw/plugin-sdk/*` helpers when a path comes from a message, model output, config, or plugin input. Plugins can use reviewed fs-safe primitives directly when they declare their own fs-safe dependency and retain the applicable path policy.
 - Core code should import fs-safe primitives from their focused package entry points. Keep OpenClaw adapters where they own behavior, including secret-directory mode repair, archive durability, producer isolation, and public SDK compatibility. Pure re-exports are unnecessary: fs-safe owns its process defaults.
+- OpenClaw's Plugin SDK retains the deprecated `nonBlockingRead` input hint for existing callers; omit it in new code. Safe reads always use nonblocking admission where supported, including when the old hint is `false`. Direct fs-safe calls no longer accept this option.
+- The SDK's atomic replacement helper also retains the ignored adapter `chmod` member for source compatibility. Direct fs-safe adapters must omit it; permissions use the retained file handle.
 - Archive extraction should use the fs-safe archive helpers with explicit size, entry-count, link, and destination limits.
 - Secrets should use OpenClaw secret helpers or fs-safe secret/private-state helpers. Do not hand-roll mode checks around `fs.writeFile`.
 - For hostile local-user isolation, do not rely on fs-safe alone. Run separate gateways under separate OS users/hosts, or use sandboxing.

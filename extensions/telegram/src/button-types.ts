@@ -1,5 +1,6 @@
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
+  agentControlText,
   legacyInteractiveReplyToPresentation,
   isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,
@@ -32,12 +33,21 @@ import {
 
 export type TelegramButtonStyle = "danger" | "success" | "primary";
 
+export function normalizeTelegramButtonStyle(style: unknown): TelegramButtonStyle | undefined {
+  return style === "danger" || style === "success" || style === "primary" ? style : undefined;
+}
+
 type TelegramInlineButton = {
   text: string;
   callback_data?: string;
   url?: string;
   web_app?: { url: string };
+  disabled?: Record<string, never>;
   style?: TelegramButtonStyle;
+};
+
+export type TelegramCallbackButton = Pick<TelegramInlineButton, "text" | "style"> & {
+  callback_data: string;
 };
 
 export type TelegramInlineButtons = ReadonlyArray<ReadonlyArray<TelegramInlineButton>>;
@@ -46,6 +56,7 @@ export type TelegramDroppedControl = {
   label: string;
   reason:
     | "callback_data_too_long"
+    | "disabled_unsupported"
     | "invalid_action"
     | "question_context_unavailable"
     | "web_app_unavailable";
@@ -54,6 +65,8 @@ export type TelegramDroppedControl = {
 
 export type TelegramButtonBuildOptions = {
   allowWebAppButtons?: boolean;
+  /** Native disabled buttons; older clients show the whole message as unsupported. */
+  supportsDisabled?: boolean;
   onDroppedControl?: (control: TelegramDroppedControl) => void;
   questionOptionIndices?: AskUserQuestionOptionIndices;
 };
@@ -80,12 +93,6 @@ export function appendTelegramDroppedControlFallback(
 
 const TELEGRAM_INTERACTIVE_ROW_SIZE = 3;
 
-function toTelegramButtonStyle(
-  style?: MessagePresentationButton["style"],
-): TelegramInlineButton["style"] {
-  return style === "danger" || style === "success" || style === "primary" ? style : undefined;
-}
-
 function recordDroppedControl(
   button: MessagePresentationButton,
   options: TelegramButtonBuildOptions | undefined,
@@ -108,10 +115,17 @@ function toTelegramInlineButton(
   button: MessagePresentationButton,
   options?: TelegramButtonBuildOptions,
 ): TelegramInlineButton | undefined {
-  const style = toTelegramButtonStyle(button.style);
+  const style = normalizeTelegramButtonStyle(button.style);
   const action = resolveMessagePresentationButtonAction(button);
   if (!action) {
     return recordDroppedControl(button, options, "invalid_action");
+  }
+  // A disabled control never produces a callback or launch: it renders as a native
+  // disabled button where supported, otherwise as fallback label text.
+  if (button.disabled === true) {
+    return options?.supportsDisabled === true
+      ? { text: button.label, disabled: {}, style }
+      : recordDroppedControl(button, options, "disabled_unsupported");
   }
   if (action.type === "url") {
     return { text: button.label, url: action.url, style };
@@ -166,13 +180,15 @@ function toTelegramInlineButton(
       (parseExecApprovalCommandText(command) ? sanitizeTelegramCallbackData(command) : undefined);
     return callbackButton(callbackData, "invalid_action", nativeCandidate);
   }
-  // Reserve the full approval prefix, including malformed values, so legacy
-  // plugin callbacks cannot be consumed by the approval handler.
+  // Agent-authored values carry their own mark and travel raw. Reserve the full
+  // approval prefix, including malformed values, so legacy plugin callbacks
+  // cannot be consumed by the approval handler.
   const normalizedCallbackValue = action.value.trim();
   const needsOpaqueEnvelope =
-    Boolean(button.action) ||
-    hasTelegramApprovalCallbackPrefix(normalizedCallbackValue) ||
-    hasTelegramQuestionCallbackPrefix(normalizedCallbackValue);
+    !agentControlText(normalizedCallbackValue) &&
+    (Boolean(button.action) ||
+      hasTelegramApprovalCallbackPrefix(normalizedCallbackValue) ||
+      hasTelegramQuestionCallbackPrefix(normalizedCallbackValue));
   const callbackDataCandidate = needsOpaqueEnvelope
     ? buildTelegramOpaqueCallbackData(action.value)
     : action.value;
@@ -188,32 +204,24 @@ function chunkInteractiveButtons(
   rows: TelegramInlineButton[][],
   options?: TelegramButtonBuildOptions,
 ) {
-  let row: TelegramInlineButton[] = [];
-  const flush = () => {
-    if (row.length > 0) {
-      rows.push(row);
-      row = [];
-    }
-  };
+  let row: TelegramInlineButton[] | undefined;
   for (const button of buttons) {
     const rendered = toTelegramInlineButton(button, options);
     if (!rendered) {
       continue;
     }
-    if (resolveMessagePresentationButtonAction(button)?.type === "question") {
-      flush();
-      rows.push([rendered]);
-      continue;
+    const singleRow = resolveMessagePresentationButtonAction(button)?.type === "question";
+    if (!row || row.length === TELEGRAM_INTERACTIVE_ROW_SIZE || singleRow) {
+      row = [];
+      rows.push(row);
     }
     row.push(rendered);
-    if (row.length === TELEGRAM_INTERACTIVE_ROW_SIZE) {
-      flush();
+    if (singleRow) {
+      row = undefined;
     }
   }
-  flush();
 }
 
-/** Convert portable presentation controls to Telegram inline keyboard rows. */
 export function buildTelegramPresentationButtons(
   presentation?: MessagePresentation,
   options?: TelegramButtonBuildOptions,
@@ -223,19 +231,15 @@ export function buildTelegramPresentationButtons(
     if (!isMessagePresentationInteractiveBlock(block)) {
       continue;
     }
-    if (block.type === "buttons") {
-      chunkInteractiveButtons(block.buttons, rows, options);
-      continue;
-    }
-    chunkInteractiveButtons(
-      block.options.map((option) => ({
-        label: option.label,
-        action: option.action,
-        value: option.value,
-      })),
-      rows,
-      options,
-    );
+    const buttons =
+      block.type === "buttons"
+        ? block.buttons
+        : block.options.map((option) => ({
+            label: option.label,
+            action: option.action,
+            value: option.value,
+          }));
+    chunkInteractiveButtons(buttons, rows, options);
   }
   return rows.length > 0 ? rows : undefined;
 }
@@ -267,13 +271,7 @@ export function resolveTelegramButtonsFromParams(
   presentation = normalizeMessagePresentation(params.presentation),
   options?: TelegramButtonBuildOptions,
 ) {
-  return resolveTelegramInlineButtons(
-    {
-      presentation,
-      interactive: params.interactive,
-    },
-    options,
-  );
+  return resolveTelegramInlineButtons({ presentation, interactive: params.interactive }, options);
 }
 export function buildTelegramControlDegradation(
   controls: readonly TelegramDroppedControl[],

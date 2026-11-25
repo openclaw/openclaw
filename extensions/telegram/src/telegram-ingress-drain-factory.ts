@@ -1,4 +1,4 @@
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { runWithTelegramUpdateProcessingFrame } from "./bot-processing-outcome.js";
@@ -8,11 +8,13 @@ import {
   resolveTelegramAdoptionStallTimeoutMs,
 } from "./telegram-ingress-drain.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
+import { readTelegramWidgetQueryId, telegramWidgetApi } from "./widgets/widget-bot-api.js";
 
 type TelegramSpooledBot = {
   handleUpdate: (update: never) => Promise<void>;
   api: {
     answerCallbackQuery: (callbackQueryId: string) => Promise<unknown>;
+    raw: object;
   };
 };
 
@@ -50,13 +52,19 @@ export function createTelegramTransportIngressMonitor(
     ...(params.onLog ? { onLog: params.onLog } : {}),
     ...(params.onError ? { onError: params.onError } : {}),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-    // Core runs this after append commit and before claim, so callback acknowledgement
+    // Core runs this after append commit and before dispatch, so callback acknowledgement
     // cannot erase Telegram's redelivery path or wait behind the handler lane.
     onDurableAdmission: (update, context) => {
-      if (!isRecord(update)) {
+      // A widget waits at most 15 seconds for an answer. Acknowledge receipt now; the agent's
+      // result reaches the widget later as a state edit.
+      const widgetQueryId = readTelegramWidgetQueryId(update);
+      if (widgetQueryId && context.isNew) {
+        void telegramWidgetApi(params.bot.api)
+          .answerWidgetQuery({ widget_query_id: widgetQueryId })
+          .catch((error: unknown) => params.onError?.(error));
         return;
       }
-      const callbackQuery = update.callback_query;
+      const callbackQuery = isRecord(update) ? update.callback_query : undefined;
       if (!isRecord(callbackQuery)) {
         return;
       }

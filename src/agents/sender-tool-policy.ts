@@ -1,5 +1,4 @@
 /**
- * Sender-scoped sandbox tool policy resolver.
  * Applies per-agent toolsBySender matches before global sender policy so
  * channel delivery can narrow tool access by sender identity.
  */
@@ -43,16 +42,8 @@ export function resolveSenderToolPolicy(
     params.agentId && params.agentId.trim()
       ? resolveAgentConfig(cfg, params.agentId)?.tools
       : undefined;
-  const agentPolicy = resolveToolsBySender({
-    toolsBySender: agentTools?.toolsBySender,
-    ...sender,
-  });
-  if (agentPolicy) {
-    return pickSandboxToolPolicy(agentPolicy);
-  }
-  const globalPolicy = resolveToolsBySender({
-    toolsBySender: cfg.tools?.toolsBySender,
-    ...sender,
-  });
-  return pickSandboxToolPolicy(globalPolicy);
+  return pickSandboxToolPolicy(
+    resolveToolsBySender({ toolsBySender: agentTools?.toolsBySender, ...sender }) ||
+      resolveToolsBySender({ toolsBySender: cfg.tools?.toolsBySender, ...sender }),
+  );
 }

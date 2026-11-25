@@ -1,6 +1,14 @@
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
+
+type SubagentSettleToolPolicyBatch = {
+  sourceSessionKeys: readonly string[];
+  /** The settle owner retains batch, requester-incarnation, and revocation authority. */
+  isCurrent: () => boolean;
+  receiptAdmission?: GatewayToolCallerReceiptAdmission;
+};
 
 export type TrustedSubagentCompletionHandoff = {
   kind: "subagent-completion";
@@ -10,6 +18,7 @@ export type TrustedSubagentCompletionHandoff = {
   targetSessionId: string;
   provider: string;
   model: string;
+  settleBatch?: SubagentSettleToolPolicyBatch;
 };
 
 export type SubagentCompletionToolHandoffRegistration = {
@@ -18,6 +27,7 @@ export type SubagentCompletionToolHandoffRegistration = {
   targetSessionKey: string;
   targetSessionId: string;
   idempotencyKey: string;
+  settleBatch?: SubagentSettleToolPolicyBatch;
 };
 
 export function resolveExactSubagentCompletionEvent(params: {
@@ -78,14 +88,17 @@ export function isTrustedSubagentCompletionHandoffForRun(params: {
     !handoff ||
     handoff.kind !== "subagent-completion" ||
     params.inputProvenance?.kind !== "inter_session" ||
-    params.inputProvenance.sourceTool !== "subagent_announce" ||
-    (params.internalEvents !== undefined && !completionEvent)
+    (handoff.settleBatch
+      ? params.inputProvenance.sourceTool !== "subagent_settle" || !handoff.settleBatch.isCurrent()
+      : params.inputProvenance.sourceTool !== "subagent_announce" ||
+        (params.internalEvents !== undefined && !completionEvent))
   ) {
     return false;
   }
   return (
     handoff.sourceSessionKey === params.inputProvenance.sourceSessionKey &&
-    (params.internalEvents === undefined ||
+    (handoff.settleBatch !== undefined ||
+      params.internalEvents === undefined ||
       handoff.sourceSessionId === completionEvent?.childSessionId) &&
     handoff.targetSessionKey === params.sessionKey &&
     handoff.targetSessionId === params.sessionId &&

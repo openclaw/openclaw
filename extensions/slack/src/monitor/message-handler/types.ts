@@ -1,5 +1,6 @@
 import type { MessageMetadata } from "@slack/types";
 import type { InboundReplyRecordOptions } from "openclaw/plugin-sdk/channel-inbound";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { FinalizedMsgContext, GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -30,17 +31,14 @@ export type PreparedSlackMessage = {
   replyTarget: string;
   ctxPayload: FinalizedMsgContext;
   turn: {
-    storePath: string;
     record: InboundReplyRecordOptions;
   };
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   forcedReplyThreadTs?: string;
   sessionDisplayName?: string;
   slackMessageMetadata?: MessageMetadata;
-  requireMention: boolean;
   isDirectMessage: boolean;
   isRoomish: boolean;
-  preview: string;
   ackReactionMessageTs?: string;
   ackReactionValue: string;
   ackReactionPromise: Promise<boolean> | null;

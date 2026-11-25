@@ -8,6 +8,8 @@ const skillsSnapshotRuntimeLoader = createLazyImportLoader(
 
 export async function resolveCronSkillsSnapshot(params: {
   workspaceDir: string;
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
   config: OpenClawConfig;
   agentId: string;
   existingSnapshot?: SkillSnapshot;
@@ -21,13 +23,15 @@ export async function resolveCronSkillsSnapshot(params: {
 
   const runtime = await skillsSnapshotRuntimeLoader.load();
   const skillFilter = runtime.resolveEffectiveAgentSkillFilter(params.config, params.agentId);
-  const nodeSkills = runtime.resolveNodeExecEligibility({
+  const nodeSkills = await runtime.resolveNodeExecEligibilityAsync({
     cfg: params.config,
     agentId: params.agentId,
   });
   return (
     await runtime.resolveReusableWorkspaceSkillSnapshot({
       workspaceDir: params.workspaceDir,
+      executionWorkspaceDir: params.executionWorkspaceDir,
+      executionWorkspaceFileHost: params.executionWorkspaceFileHost,
       config: params.config,
       agentId: params.agentId,
       existingSnapshot: params.existingSnapshot,

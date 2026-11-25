@@ -41,7 +41,7 @@ For direct hosted search through Ollama Cloud:
         baseUrl: "https://ollama.com",
         apiKey: "OLLAMA_API_KEY",
         api: "ollama",
-        models: [{ id: "kimi-k2.5:cloud", name: "kimi-k2.5:cloud", input: ["text"] }],
+        models: [{ id: "kimi-k2.6:cloud", name: "kimi-k2.6:cloud", input: ["text"] }],
       },
     },
   },

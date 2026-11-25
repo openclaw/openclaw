@@ -4,7 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
-import { readWindowsProcessSnapshot, terminateGatewayProcessTree } from "./schtasks-process.js";
+import { readWindowsProcessSnapshot } from "./schtasks-process-snapshot.js";
+import { terminateGatewayProcessTree } from "./schtasks-process.js";
 import { launchFallbackTaskScript, resolveFallbackRuntime } from "./schtasks-runtime.js";
 import { resolveDiagnosticReplacements } from "./schtasks.integration-observation.test-support.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
@@ -167,8 +168,9 @@ export async function writeGatewayTaskSupervisorProbe(params: {
       "appendEvent('bounded-environment', { keys: Object.keys(process.env).map((key) => key.toUpperCase()).sort() });",
       "if (process.argv.includes('--task-supervisor')) {",
       "  fs.writeFileSync(supervisorPidPath, String(process.pid));",
-      `  const { runWindowsGatewayTaskSupervisor } = await import(${JSON.stringify(params.moduleUrls.taskSupervisor.href)});`,
-      "  await runWindowsGatewayTaskSupervisor();",
+      `  const { tryRunWindowsGatewayTaskSupervisor } = await import(${JSON.stringify(params.moduleUrls.taskSupervisor.href)});`,
+      "  const gatewayArgs = [...process.argv.slice(0, 5), '--task-supervisor'];",
+      "  if (!(await tryRunWindowsGatewayTaskSupervisor(gatewayArgs))) throw new Error('Gateway task supervisor did not start');",
       "  appendEvent('supervisor-joined', { code: process.exitCode ?? 0 });",
       "} else if (!fs.existsSync(failedAttemptPidPath)) {",
       // Preserve this run's supervisor before a recovery launch overwrites its live PID file.
@@ -374,7 +376,7 @@ export async function proveStartupFallbackGatewayControl(params: {
   expectGatewayTaskSupervisorProcessAlive(processes.supervisorPid, params.probe.probePath);
   const runtime = await resolveFallbackRuntime(params.env, params.command, "control");
   expect(runtime).toMatchObject({ status: "running", pid: run.pid });
-  await terminateGatewayProcessTree(run.pid, 300);
+  await terminateGatewayProcessTree(run.pid);
   await Promise.all([waitForProcessExit(run.pid), waitForGatewayTaskSupervisorExit(processes)]);
   await params.clearActivePid(params.activePidPath, run.pid);
   await params.waitForLoopbackPortRelease(params.gatewayPort);

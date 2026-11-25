@@ -6,6 +6,25 @@ import { buildMicrosoftSpeechProvider } from "./speech-provider.js";
 const describeLive = isLiveTestEnabled() ? describe : describe.skip;
 
 describeLive("microsoft plugin live", () => {
+  it("synthesizes nonempty MP3 audio", async () => {
+    const result = await buildMicrosoftSpeechProvider().synthesize({
+      text: "Hello, this is an OpenClaw speech synthesis test.",
+      cfg: {},
+      providerConfig: {},
+      timeoutMs: 10000,
+      target: "audio-file",
+    });
+
+    expect(result.audioBuffer.length).toBeGreaterThan(0);
+    expect(result.outputFormat).toBe("audio-24khz-48kbitrate-mono-mp3");
+    expect(result.fileExtension).toBe(".mp3");
+    console.info("Microsoft synthesis:", {
+      bytes: result.audioBuffer.length,
+      format: result.outputFormat,
+      extension: result.fileExtension,
+    });
+  }, 30000);
+
   it("lists Edge speech voices", async () => {
     const listVoices = buildMicrosoftSpeechProvider().listVoices;
     if (!listVoices) {

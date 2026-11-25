@@ -1,6 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.tsx";
 import * as catalog from "./catalog-target.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 
@@ -61,6 +61,7 @@ export function restoreDraft(
       mentions: ownedMessage ? ownedMentions : draft.mentions,
       attachments: draft.attachments,
       visibility: draft.newSessionDraft?.incognito ? "incognito" : submission.visibility,
+      permissionMode: draft.newSessionDraft?.permissionMode,
     });
     if (!ownedMessage && draft.newSessionDraft) {
       submission.draftPersistence.adoptHandoff(draft.newSessionDraft);

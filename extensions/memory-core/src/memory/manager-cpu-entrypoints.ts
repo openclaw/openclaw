@@ -1,29 +1,9 @@
+import { createPluginRuntimeProcessEntrypoint } from "openclaw/plugin-sdk/process-runtime";
+
 export const memoryCpuProcessEntrypoints = {
-  search: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "manager-search.worker",
-    distWorkerPath: "extensions/memory-core/memory-search.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/memory/manager-search.worker.js",
-    },
-  },
-  index: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "manager-index.worker",
-    distWorkerPath: "extensions/memory-core/memory-index.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/memory/manager-index.worker.js",
-    },
-  },
-  publication: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "manager-publication.worker",
-    distWorkerPath: "extensions/memory-core/memory-publication.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/memory/manager-publication.worker.js",
-    },
-  },
+  search: createPluginRuntimeProcessEntrypoint("memorySearch", import.meta.url),
+  index: createPluginRuntimeProcessEntrypoint("memoryIndex", import.meta.url),
+  publication: createPluginRuntimeProcessEntrypoint("memoryPublication", import.meta.url),
+  standingIntents: createPluginRuntimeProcessEntrypoint("memoryStandingIntents", import.meta.url),
+  entryOrigins: createPluginRuntimeProcessEntrypoint("memoryEntryOrigins", import.meta.url),
 } as const;
