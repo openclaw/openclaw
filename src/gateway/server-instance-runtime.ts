@@ -188,7 +188,6 @@ export function createGatewayInstanceRuntime(
       const operatorAuthority = dispatchOptions.operatorRunAuthority;
       if (operatorAuthority) {
         assertAdmittedRunOperatorAuthority(operatorAuthority);
-        operatorAuthority.assertCurrent();
       }
       const releaseOperatorAuthority = operatorAuthority?.retain?.();
       let delegatedToolPolicyHandoffId: string | undefined;
@@ -199,7 +198,6 @@ export function createGatewayInstanceRuntime(
         const needsDedicatedPrincipal = Boolean(
           dispatchOptions.allowModelOverride === true ||
           dispatchOptions.allowSyntheticModelOverride === true ||
-          dispatchOptions.allowSyntheticCronRunContinuation === true ||
           dispatchOptions.runtimeContextFragments ||
           dispatchOptions.internalDeliverySuppressErrors === true ||
           delegatedToolPolicyHandoffId ||
@@ -225,7 +223,6 @@ export function createGatewayInstanceRuntime(
                 allowModelOverride:
                   dispatchOptions.allowModelOverride === true ||
                   dispatchOptions.allowSyntheticModelOverride === true,
-                cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
                 runtimeContextFragments: dispatchOptions.runtimeContextFragments,
                 internalDeliverySuppressErrors: dispatchOptions.internalDeliverySuppressErrors,
                 delegatedToolPolicyHandoffId,
@@ -247,7 +244,6 @@ export function createGatewayInstanceRuntime(
             assertContextCurrent();
             dispatchOptions.signal?.throwIfAborted();
             dispatchOptions.assertAdmissionCurrent?.();
-            operatorAuthority?.assertCurrent();
           },
           executionSource: dispatchOptions.executionSource,
           prepareDispatchCurrent: dispatchOptions.prepareDispatchCurrent,

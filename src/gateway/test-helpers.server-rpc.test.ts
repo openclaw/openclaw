@@ -343,11 +343,43 @@ describe("Gateway RPC fixture session writes", () => {
 });
 
 describe("Gateway fixture config publication", () => {
+  async function privateConfigDirectories() {
+    if (process.platform === "win32") {
+      return [];
+    }
+    const directories = new Set([
+      process.env.OPENCLAW_STATE_DIR!,
+      path.dirname(process.env.OPENCLAW_CONFIG_PATH!),
+    ]);
+    return Promise.all(
+      [...directories].map(async (directory) => {
+        // These fixture-owned parents must stay private across atomic publication.
+        await fs.chmod(directory, 0o700);
+        const { dev, ino } = await fs.stat(directory);
+        return { directory, dev, ino };
+      }),
+    );
+  }
+
+  async function expectPrivateConfigDirectories(
+    directories: Awaited<ReturnType<typeof privateConfigDirectories>>,
+  ) {
+    for (const { directory, dev, ino } of directories) {
+      const current = await fs.stat(directory);
+      expect({ dev: current.dev, ino: current.ino, mode: current.mode & 0o777 }).toEqual({
+        dev,
+        ino,
+        mode: 0o700,
+      });
+    }
+  }
+
   test.each(["reply preparation", "RPC session update"] as const)(
     "%s shares the current fixture with real IO across awaited work",
     async (boundary) => {
       const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
       const { getRuntimeConfig } = await import("../config/io.js");
+      const directories = await privateConfigDirectories();
       for (const agentId of ["worker", "reviewer", undefined]) {
         testState.agentsConfig = agentId
           ? { ownership: "explicit", entries: { main: {}, [agentId]: {} } }
@@ -372,6 +404,7 @@ describe("Gateway fixture config publication", () => {
         const response = await listAgents();
         expect(response.ok, JSON.stringify(response)).toBe(true);
         expect(response.payload?.agents.map((agent) => agent.id)).toEqual(expectedAgents);
+        await expectPrivateConfigDirectories(directories);
       }
     },
   );
@@ -380,6 +413,7 @@ describe("Gateway fixture config publication", () => {
     const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
     const { writeConfigFile } = createGatewayConfigOverrides(actual);
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
+    const directories = await privateConfigDirectories();
     const store = path.join(path.dirname(configPath), "agents", "{agentId}", "sessions.json");
     const authoredConfig = {
       agents: {
@@ -390,6 +424,7 @@ describe("Gateway fixture config publication", () => {
       session: { store },
     };
     await writeConfigFile(authoredConfig);
+    await expectPrivateConfigDirectories(directories);
     const workspace = path.join(path.dirname(configPath), "fixture-workspace");
     const secondary = { name: "Fixture secondary", workspace };
     // Publication must not inject main, even after deletion leaves a sole fixture agent.

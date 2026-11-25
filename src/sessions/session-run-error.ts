@@ -14,7 +14,7 @@ import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { isProviderRefusalNoticeText } from "../shared/assistant-error-format.js";
-import { readRunFailureCause } from "../shared/run-failure-notice.js";
+import { HARNESS_UPDATE_REQUIRED_CODE, readRunFailureCause } from "../shared/run-failure-notice.js";
 import { sanitizeSessionRunError, truncateSessionRunError } from "./session-run-error-format.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
@@ -30,7 +30,7 @@ type GatewaySessionRunFailure = {
   notice?: string;
   /** Desktop-only presentation metadata; never replaces shared content. */
   desktopNotice?: string;
-  /** Provider error observation; only its bounded provider and failover reason are kept. */
+  /** Provider error observation; only its bounded provider, failover reason and code are kept. */
   errorObservation?: unknown;
   assertCommitAllowed?: () => void;
   sessionEntryCurrent?: SessionEntryCurrentCheck;
@@ -51,6 +51,8 @@ export async function recordGatewaySessionRunFailure(
         ? STATE_CONTENTION_SUMMARY
         : (params.notice ??
           renderAssistantRequestFailureCopy({ storageFailure }) ??
+          // A host-created update error's message is the instruction the user needs.
+          (cause?.code === HARNESS_UPDATE_REQUIRED_CODE ? sanitized : undefined) ??
           renderCodexAppServerFailureCopy(sanitized) ??
           (isProviderRefusalNoticeText(sanitized)
             ? `Your request couldn't be completed: ${sanitized}`

@@ -56,9 +56,9 @@ export class ProviderAuthError extends Error {
     code: ProviderAuthErrorCode,
     provider: string,
     message: string,
-    options?: { providerGuidance?: boolean },
+    options?: { providerGuidance?: boolean; cause?: unknown },
   ) {
-    super(message);
+    super(message, { cause: options?.cause });
     this.name = "ProviderAuthError";
     this.code = code;
     this.provider = provider;

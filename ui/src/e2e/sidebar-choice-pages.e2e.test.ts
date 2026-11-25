@@ -132,8 +132,8 @@ suite.define(() => {
             },
           });
           await page.goto(suite.server.baseUrl + "new");
+          // The drawer opens on Sessions.
           await navigationDrawerToggle(page).click();
-          await page.locator('[data-navigation-view="sessions"]').click();
           await page.locator("#sidebar-session-owner-title").click();
           await page
             .locator(".sidebar-session-owner-filter")

@@ -9,7 +9,7 @@ read_when:
   - You are looking for the Code Mode page that matches your task
 ---
 
-Code mode is an experimental OpenClaw agent-runtime feature. When
+Code Mode is an OpenClaw agent-runtime feature. When
 enabled, the model no longer sees every enabled tool schema. Instead, it sees
 `exec`, `wait`, and any direct-only tool whose structured result cannot cross
 the JSON-only guest bridge. The model writes a small JavaScript
@@ -21,8 +21,9 @@ plain JavaScript without type annotations.
 When `tools.codeMode` is absent, OpenClaw uses the `"auto"` tier and engages
 Code Mode only for models marked as preferred Code Mode performers. An authored
 object without `enabled` remains off, as do `false` and `{ enabled: false }`.
-Agent and model overrides take precedence. Use **Settings → Agents & Tools →
-Labs → Code Mode** to choose the global setting.
+Agent and model overrides take precedence. Use **Settings → Agents →
+Agent defaults → Tools → Code Mode** to choose Auto or Off globally. This
+does not force Code Mode on for models outside the evaluated Auto tier.
 </Note>
 
 This page documents OpenClaw Code Mode, not Codex Code Mode. The two features
@@ -85,7 +86,9 @@ or apply to Codex-native Code Mode.
   trusted tool provides an output schema. It omits descriptions, full schemas,
   MCP entries, and overflow entries. Callable `catalog.search(...)` results are
   the fallback. Input hints retain integer and numeric bounds as comments, such
-  as `offset?: number /* integer, >= 1 */`. Other validation details remain in
+  as `offset?: number /* integer, >= 1 */`. A hint that overflows its budget
+  shows only required arguments, at every level, and ends each object that
+  dropped optional ones with `...`; required types shorten further if needed. Other validation details remain in
   the full schema available through `describe()`. These hints do not change
   tool validation or output contracts. Core file and shell tool signatures stay
   first in the bounded index, followed by tools with declared output hints, so

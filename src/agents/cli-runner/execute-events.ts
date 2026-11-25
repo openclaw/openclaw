@@ -46,9 +46,6 @@ function withBrowserTabDetails(result: unknown, browserTab: unknown): unknown {
   if (isRecord(result) && Array.isArray(result.content)) {
     return { ...result, details: { ...asOptionalRecord(result.details), browserTab } };
   }
-  if (Array.isArray(result)) {
-    return { content: result, details: { browserTab } };
-  }
   if (typeof result === "string" || typeof result === "number" || typeof result === "boolean") {
     return { content: [{ type: "text", text: String(result) }], details: { browserTab } };
   }
@@ -104,6 +101,7 @@ export function createCliEventHandlers(params: {
     data: Parameters<typeof projectAgentToolActivity>[0] & {
       result?: unknown;
       resultContentSource?: "network";
+      followsAssistantText?: true;
     },
     execution?: { args: unknown; requestedArgs?: unknown },
   ) => {
@@ -177,6 +175,7 @@ export function createCliEventHandlers(params: {
         name: event.name,
         toolCallId: event.toolCallId,
         args: event.args,
+        ...(event.followsAssistantText ? { followsAssistantText: true } : {}),
       });
     }
   };
@@ -186,7 +185,10 @@ export function createCliEventHandlers(params: {
       : undefined;
   const emitToolResult = (event: CliToolResultDelta, tracked: boolean) => {
     observedCliActivity = true;
-    const readResult = prepareToolResult(event.result);
+    // Claude reports content blocks bare; OpenClaw tool results carry them as `content`.
+    const readResult = prepareToolResult(
+      Array.isArray(event.result) ? { content: event.result } : event.result,
+    );
     const summary = recordToolSummary(event, event.isError);
     const firstTerminal = !summary.terminalObserved;
     summary.terminalObserved = true;

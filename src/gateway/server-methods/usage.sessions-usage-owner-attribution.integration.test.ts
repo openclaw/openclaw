@@ -20,14 +20,15 @@ import {
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   historyLane,
-  projectionLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
 import { prepareCronSession } from "../../cron/isolated-agent/session.js";
 import { refreshCostUsageCacheForAgent } from "../../infra/session-cost-usage-aggregation.js";
+import * as usageWorkerRuntime from "../../infra/session-cost-usage-worker-runtime.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import type { SessionUsageTimeSeries } from "../../shared/session-usage-timeseries-types.js";
 import { buildUsageOverview } from "../../shared/usage-overview.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -314,6 +315,50 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
   });
 });
 
+it("filters current-instance turns by displayed day before sampling the timeline", async () => {
+  await withUsageState(async (state) => {
+    const key = "agent:main:midnight-usage";
+    const scope = sessionScope(state, "main", key);
+    const sessionId = "midnight-usage";
+    const midnight = Date.parse("2026-05-13T18:15:00Z"); // Midnight in Kathmandu.
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: midnight });
+    await persistSessionTranscriptTurn(
+      { ...scope, sessionId },
+      {
+        cwd: state.workspaceDir,
+        updateMode: "none",
+        messages: Array.from({ length: 201 }, (_, index) => {
+          const now = midnight + index - 5;
+          const tokens = index === 4 ? 7 : 1 + (index % 2);
+          return { message: usageMessage(tokens, now, tokens / 4), now };
+        }),
+      },
+    );
+    const calendar = {
+      startDate: "2026-05-12",
+      endDate: "2026-05-14",
+      mode: "specific",
+      timeZone: "Asia/Kathmandu",
+    };
+    for (const [selection, tokens, cost] of [
+      [{}, 307, 76.75],
+      [{ ...calendar, selectedDays: ["2026-05-13"] }, 13, 3.25],
+      [{ ...calendar, selectedDays: ["2026-05-12", "2026-05-14"] }, 294, 73.5],
+      [{ ...calendar, mode: "utc", selectedDays: ["2026-05-14"] }, 0, 0],
+    ] as const) {
+      const [ok, payload, error] = await requestUsage(
+        { key, ...selection },
+        "sessions.usage.timeseries",
+      );
+      expect(ok, JSON.stringify(error)).toBe(true);
+      const { points } = payload as SessionUsageTimeSeries;
+      expect(points.length).toBeLessThanOrEqual(200);
+      expect(points.at(-1)?.cumulativeTokens ?? 0).toBe(tokens);
+      expect(points.at(-1)?.cumulativeCost ?? 0).toBe(cost);
+    }
+  });
+});
+
 it("uses committed metadata for selected usage and families with an empty current window", async () => {
   await withUsageState(async (state) => {
     const key = "agent:main:usage-receipts";
@@ -326,6 +371,18 @@ it("uses committed metadata for selected usage and families with an empty curren
     expect((await readUsage(params)).sessions).toMatchObject([
       { key, sessionId: firstId, label: "Before rename", usage: { totalTokens: 17 } },
     ]);
+
+    const before = await readUsage(params);
+    const worker = vi.spyOn(usageWorkerRuntime, "runUsageCostWorker");
+    const now = performance.now.bind(performance);
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now() + 31_000);
+    try {
+      expect(await readUsage(params)).toEqual(before);
+      expect(worker).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+      worker.mockRestore();
+    }
 
     await patchSessionEntryCore(scope, () => ({ label: "After rename" }));
     expect((await readUsage(params)).sessions).toMatchObject([
@@ -356,7 +413,10 @@ it("uses committed metadata for selected usage and families with an empty curren
   });
 });
 
-it("keeps a rewound window in its session's usage family", async () => {
+// A rewind keeps its transcript identity, so there is no retired window to
+// re-attach: the single window keeps the usage it already accrued. Multi-id
+// families still cover real rollovers (/new, compaction branch, cron).
+it("keeps a rewound session's usage on its own window", async () => {
   await withUsageState(async (state) => {
     const key = "agent:main:usage-rewind";
     const scope = sessionScope(state, "main", key);
@@ -392,10 +452,11 @@ it("keeps a rewound window in its session's usage family", async () => {
         {
           key,
           currentSessionId: currentId,
-          includedSessionIds: [currentId, firstId],
+          includedSessionIds: [firstId],
           usage: { totalTokens: 23 },
         },
       ]);
+      expect(currentId).toBe(firstId);
       expect(result.totals.totalTokens).toBe(23);
     }
   });
@@ -463,7 +524,7 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
     for (const [selected, includeContextWeight, filters = {}] of scenarios) {
       let payload: unknown;
       const transferredPrompts = new Set<string>();
-      const transfers = [historyLane, projectionLane, targetDiscoveryLane].map(({ pool }) => {
+      const transfers = [historyLane, sessionStoreLane].map(({ pool }) => {
         const run = pool.run.bind(pool);
         return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
           const reply = await run(...args);

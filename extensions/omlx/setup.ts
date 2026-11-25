@@ -394,7 +394,7 @@ async function listOmlxModels(params: {
       models: existing?.models ?? [],
     };
     // Current oMLX lists model_type (llm/vlm/embedding/audio); the shared owner
-    // retains non-chat rows for pinned sessions, while setup offers chat only.
+    // retains non-chat rows for pinned sessions, while setup offers likely chat only.
     provider.models = buildOpenAICompatibleLiveModels(
       result.rows.map(({ model }) => model),
       provider,
@@ -402,7 +402,9 @@ async function listOmlxModels(params: {
     return {
       provider,
       rows: result.rows,
-      chatModels: provider.models.filter((model) => model.inference?.chat !== false),
+      chatModels: provider.models.filter(
+        (model) => model.inference?.chat !== false && model.inference?.chatEvidence !== "unlikely",
+      ),
     };
   } catch (error) {
     params.signal?.throwIfAborted();

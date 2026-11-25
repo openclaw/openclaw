@@ -198,7 +198,7 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
   });
 
   it.each(["running", "restarting", "stopping", "updating-close", "updating-handoff"] as const)(
-    "records an unhandled rejection stop reason while %s",
+    "settles unhandled rejection without rewriting a retired boot while %s",
     async (phase) => {
       const { exitAfterSignalExitBarriers } = await import("../signal-exit-barrier.js");
       const closeGate = createLifecycleGate();
@@ -240,10 +240,14 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
           closeGate.release();
           handoffFinished.resolve({ respawn: true });
           await expect(exited).resolves.toBe(1);
-          expect(completeBoot).toHaveBeenCalledWith({
-            outcome: "clean_stop",
-            reason: "stop (process exit: unhandled rejection)",
-          });
+          expect(completeBoot).toHaveBeenCalledWith(
+            phase === "updating-handoff"
+              ? expect.objectContaining({ outcome: "planned_restart" })
+              : {
+                  outcome: "clean_stop",
+                  reason: "stop (process exit: unhandled rejection)",
+                },
+          );
         });
       } finally {
         closeGate.release();

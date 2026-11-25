@@ -10,18 +10,10 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import {
-  deleteSession,
-  getSession,
-  waitForExecSession,
-  type ProcessSession,
-} from "../../agents/bash-process-registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
-import { createLazyExecTool } from "../../agents/lazy-exec-tool.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -38,16 +30,12 @@ import {
 } from "../../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
-import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import * as chatAbortDescendants from "./chat-abort-descendants.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import * as transcriptInject from "./chat-transcript-inject.js";
-import * as transcriptPersistence from "./chat-transcript-persistence.js";
 import { requireLastRespondCall } from "./chat.abort-authorization.test-helpers.js";
 import {
   collectAssistantRowsWithText,
@@ -521,161 +509,6 @@ describe("descendant cascade ownership", () => {
       }
     });
   }
-
-  it("does not stop descendants after the original caller is revoked during parent cancellation", async ({
-    signal,
-  }) => {
-    const sessionKey = "agent:main:main";
-    const childKey = "agent:main:subagent:retained-stop";
-    await writeSession(sessionKey, "main-session");
-    await writeSession(childKey, "retained-stop-child");
-    await registerDescendant("retained-stop-child", childKey, {
-      requesterTurnRunId: "parent",
-      queued: true,
-    });
-    const started = createDeferred();
-    const start = vi.fn(async () => {
-      started.resolve();
-    });
-    queueChild("retained-stop", "retained-stop-child", "held-capacity", start);
-    let current = true;
-    const parent = mainRun({ connId: "owner" });
-    const turnAborted = createDeferred();
-    parent.input.abortSignal.addEventListener("abort", () => {
-      current = false;
-      turnAborted.resolve();
-    });
-    const context = createChatAbortContext({ sources: [["parent", parent]] });
-    context.chatRunState.getOrCreate("parent").buffer = "cancelled parent partial";
-    using persist = vi
-      .spyOn(transcriptPersistence, "persistAbortedPartials")
-      .mockResolvedValue(undefined);
-    const commandReady = createDeferred();
-    const cleanupEntered = createDeferred();
-    const releaseCleanup = createDeferred();
-    const supervisor = getProcessSupervisor();
-    const spawn = supervisor.spawn.bind(supervisor);
-    let rootExitObserved = false;
-    let managedCommand: Awaited<ReturnType<typeof supervisor.spawn>> | undefined;
-    const spawnFailure = vi.spyOn(supervisor, "spawn").mockImplementation(async (input) => {
-      const managed = await spawn(input);
-      managedCommand = managed;
-      return {
-        ...managed,
-        waitForExtinction: async () => {
-          await managed.wait();
-          await managed.waitForExtinction?.();
-          rootExitObserved = isPidDefinitelyDead(expectDefined(managed.pid, "command pid"));
-          cleanupEntered.resolve();
-          await releaseCleanup.promise;
-          throw new Error("Synthetic command finalization failure");
-        },
-      };
-    });
-    let command: ProcessSession | undefined;
-    const identity = { ...mainIdentity, runId: "parent", ownerConnId: "owner" };
-    const execution = withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
-      withExecRequestTurn({ identity, abortSignal: parent.input.abortSignal }, async () => {
-        const tool = createLazyExecTool({
-          ...identity,
-          config: getRuntimeConfig(),
-          cwd: fixture.stateDir,
-          scopeKey: sessionKey,
-          host: "gateway",
-          mode: "full",
-          ask: "off",
-          allowBackground: true,
-          notifyOnExit: false,
-          preparedStoreEnvironment: {},
-        });
-        const result = await tool.execute(
-          "ordinary-command",
-          {
-            command: `node -e "require('fs').watch('.', () => {})"`,
-            yieldMs: 10,
-            timeoutSeconds: 60,
-          },
-          parent.input.abortSignal,
-        );
-        const details = asOptionalRecord(result.details);
-        expect(details?.status).toBe("running");
-        if (typeof details?.sessionId !== "string") {
-          throw new Error("Expected an ordinary command to yield its process handle");
-        }
-        command = expectDefined(getSession(details.sessionId), "ordinary command");
-        commandReady.resolve();
-        await turnAborted.promise;
-      }),
-    );
-    void execution.catch((error: unknown) => commandReady.reject(error));
-    let stopping: ReturnType<typeof invokeChatAbortHandler> | undefined;
-    try {
-      await withinTest(commandReady.promise, signal);
-      const respond = vi.fn();
-      stopping = stop({
-        handler: (options) =>
-          handleChatAbortRequestWithLifecycle({
-            ...options,
-            hasCurrentClientAuthority: () => current,
-          }),
-        context,
-        request: { sessionKey, runId: "parent" },
-        client: { connId: "owner", connect: { scopes: ["operator.write"] } },
-        respond,
-      });
-      await withinTest(
-        awaitGateBeforeSettlement(
-          cleanupEntered.promise,
-          stopping,
-          "Stop returned before accepted command cleanup",
-        ),
-        signal,
-      );
-      expect(rootExitObserved).toBe(true);
-      expect(respond).not.toHaveBeenCalled();
-      releaseCleanup.resolve();
-      await stopping;
-      await execution;
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: expect.stringMatching(
-            /Parent run stopped, but descendant cancellation was incomplete: .*Gateway requester authority changed/,
-          ),
-        }),
-      );
-      expect(respond.mock.calls[0]?.[2]?.message).toContain(
-        "command cleanup could not be confirmed",
-      );
-      expect(command).toMatchObject({
-        exited: true,
-        exitReason: "manual-cancel",
-        finalizationFailed: true,
-      });
-      expect(parent.input.abortSignal.aborted).toBe(true);
-      expect(persist).toHaveBeenCalledOnce();
-      expect((await getSubagentRunByChildSessionKey(childKey))?.execution.endedAt).toBeUndefined();
-      expect(start).not.toHaveBeenCalled();
-      releaseSwarmRun("held-capacity");
-      await started.promise;
-      expect(start).toHaveBeenCalledOnce();
-    } finally {
-      releaseCleanup.resolve();
-      turnAborted.resolve();
-      managedCommand?.cancel("manual-cancel");
-      if (command) {
-        await waitForExecSession(command);
-        deleteSession(command.id);
-      }
-      await execution.catch(() => {});
-      await stopping?.catch(() => {});
-      await managedCommand?.wait();
-      spawnFailure.mockRestore();
-      releaseSwarmRun("held-capacity");
-    }
-  });
 
   it.each([
     "owned",

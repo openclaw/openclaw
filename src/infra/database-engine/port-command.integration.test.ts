@@ -9,6 +9,7 @@ import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
+import { loadGatewayConfigRevisionProjector } from "../../gateway/config-revision-token.js";
 import * as pluginMetadata from "../../plugins/plugin-metadata-snapshot.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
@@ -25,6 +26,8 @@ import { acquireGatewayLock } from "../gateway-lock.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
 import * as snapshots from "../sqlite-snapshot.js";
+import { resolveDatabaseEngineSelection } from "./config.js";
+import { withDatabaseEngineSelection } from "./context.js";
 import {
   canonical,
   canonicalPostgres,
@@ -251,6 +254,102 @@ it("captures prefixed destination names and preserves them when rolling back bef
 });
 
 describe.skipIf(!connection)("database port command PostgreSQL conformance", () => {
+  it("ports a fresh PostgreSQL config revision key back to SQLite", async () => {
+    await fixture(
+      async ({ state, source, client }) => {
+        assert(client);
+        const config = {
+          database: { engine: "postgres" as const, postgres: { connection: connection! } },
+          plugins: { entries: { workboard: { enabled: false } } },
+        };
+        await state.writeConfig(config);
+        const projector = await withDatabaseEngineSelection(
+          await resolveDatabaseEngineSelection(config, state.env),
+          async () => {
+            try {
+              return await loadGatewayConfigRevisionProjector({ env: state.env });
+            } finally {
+              await closeOpenClawStateDatabaseAsync();
+            }
+          },
+        );
+        const anchor = readBackupEngine(source);
+        assert(anchor.engine === "postgres");
+        const sequence = await client.query("SELECT pg_get_serial_sequence($1, 'id') AS name", [
+          `"${anchor.namespace}".config_revision_keys`,
+        ]);
+        expect(
+          (await client.query(`SELECT last_value::text, is_called FROM ${sequence.rows[0].name}`))
+            .rows,
+        ).toEqual([{ last_value: "1", is_called: false }]);
+        await expect(doctorDatabasePort({ to: "sqlite", dryRun: true })).resolves.toMatchObject({
+          phase: "preflight",
+          stores: [source],
+        });
+        await doctorDatabasePort({ to: "sqlite" });
+        expect(readBackupEngine(source)).toEqual({ engine: "sqlite" });
+        // The installation key survives: existing revision tokens must not rotate.
+        const restored = await loadGatewayConfigRevisionProjector({ env: state.env });
+        expect(restored.projectRawHash("retained-config")).toBe(
+          projector.projectRawHash("retained-config"),
+        );
+        await closeOpenClawStateDatabaseAsync();
+      },
+      true,
+      { store: "state" },
+    );
+  }, 120_000);
+
+  it.each([0, 7])(
+    "ports an empty audit table with SQLite high-water %i",
+    async (high) => {
+      await fixture(
+        async ({ state, source, client }) => {
+          assert(client);
+          openOpenClawStateDatabase({ env: state.env });
+          await closeOpenClawStateDatabaseAsync();
+          {
+            using db = openNodeSqliteDatabase(source);
+            // Even a no-row INSERT leaves a zero sqlite_sequence watermark.
+            db.exec(`INSERT INTO audit_events
+          (sequence, event_id, source_id, source_sequence, occurred_at, kind, action, status, actor_type, actor_id)
+          SELECT ${high}, 'deleted', 'test', 1, 1, 'test', 'test', 'ok', 'test', 'test'
+          WHERE ${high} > 0;
+          DELETE FROM audit_events;`);
+            expect(
+              db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'audit_events'").get(),
+            ).toEqual({ seq: high });
+          }
+          const before = hash(source);
+          await doctorDatabasePort({ family: "state", to: "postgres", dryRun: true });
+          expect(hash(source)).toBe(before);
+          const ported = await doctorDatabasePort({ family: "state", to: "postgres" });
+          const anchor = readBackupEngine(source);
+          assert(anchor.engine === "postgres");
+          assert("manifest" in ported && typeof ported.manifest === "string");
+          expect(JSON.parse(fs.readFileSync(ported.manifest, "utf8"))).toMatchObject({
+            state: "complete",
+            outcome: "ported",
+          });
+          expect(
+            (await client.query(`SELECT count(*) FROM "${anchor.namespace}".audit_events`)).rows,
+          ).toEqual([{ count: "0" }]);
+          expect(
+            (
+              await client.query(`INSERT INTO "${anchor.namespace}".audit_events
+        (event_id, source_id, source_sequence, occurred_at, kind, action, status, actor_type, actor_id)
+        VALUES ('next', 'test', 2, 1, 'test', 'test', 'ok', 'test', 'test')
+        RETURNING sequence`)
+            ).rows,
+          ).toEqual([{ sequence: String(high + 1) }]);
+        },
+        true,
+        { store: "state" },
+      );
+    },
+    120_000,
+  );
+
   it("privately adds the first-use deletion phase when porting a current-schema journal", async () => {
     await fixture(async ({ state, client }) => {
       assert(client);

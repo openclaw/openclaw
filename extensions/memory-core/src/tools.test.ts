@@ -338,8 +338,8 @@ describe("memory_search corpus labels", () => {
 
     const result = await executeSearch(tool, { corpus: "sessions" });
     expect(result.details).toMatchObject({
-      error: "Session transcript search is not enabled.",
-      warning: "Session transcript search is unavailable for this agent.",
+      error: "Chat history search is not enabled.",
+      warning: "Chat history search is unavailable for this agent.",
       action: expect.stringContaining(
         "If an exact session-history capability is available for this run",
       ),

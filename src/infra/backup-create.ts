@@ -51,6 +51,10 @@ import {
   removePreparedBackupArchive,
   writeArchiveStreamToFile,
 } from "./backup-create-stream.js";
+import {
+  createLegacyAuditStateSnapshotPlan,
+  type BackupStateSnapshotPlan,
+} from "./backup-legacy-audit-snapshot.js";
 import type { ReportBackupProgress } from "./backup-progress.js";
 import {
   createBackupScratchDirectory,
@@ -60,17 +64,16 @@ import {
 import {
   classifyBackupSqliteSource,
   createBackupSqliteSnapshotPlan,
-  createLegacyAuditStateSnapshotPlan,
-  type BackupStateSnapshotPlan,
 } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { walkBackupTar } from "./backup-tar-walk.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import { listDatabaseEngineStores } from "./database-engine/registry.js";
 import { safeStat } from "./path-existence.js";
+import { assertDeferredSqliteContent } from "./sqlite-snapshot-file.js";
 import { isUpdateCapturePath } from "./update-capture-paths.js";
 
-const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
+const loadTarRuntime = createLazyRuntimeModule(() => import("tar/raw"));
 
 export type BackupCreateOptions = {
   /** Internal lifecycle cancellation for backup preparation, not admitted repairs. */
@@ -83,9 +86,15 @@ export type BackupCreateOptions = {
   /** Files and anchors for reconnecting to current PostgreSQL rows, not disaster recovery. */
   localCompanion?: boolean;
   output?: string;
+  /**
+   * Without `output`, write to the home folder unless it lies inside a backed-up source,
+   * then fall back to the usual cwd default. For backups no one started from a shell.
+   */
+  preferHomeOutput?: boolean;
   dryRun?: boolean;
   includeWorkspace?: boolean;
   excludeWorktreeTemplates?: boolean;
+  excludeMigrationBackups?: boolean;
   onlyConfig?: boolean;
   verify?: boolean;
   json?: boolean;
@@ -110,6 +119,7 @@ export type BackupCreateResult = {
   dryRun: boolean;
   includeWorkspace: boolean;
   excludeWorktreeTemplates?: boolean;
+  excludeMigrationBackups?: boolean;
   onlyConfig: boolean;
   localCompanion?: boolean;
   verified: boolean;
@@ -137,16 +147,21 @@ async function resolveOutputPath(params: {
   nowMs: number;
   includedAssets: BackupAsset[];
   stateDir: string;
+  preferHomeOutput?: boolean;
 }): Promise<string> {
   const basename = buildBackupArchiveBasename(params.nowMs);
   const rawOutput = params.output;
   if (!rawOutput?.trim()) {
+    const insideSource = async (dir: string) => {
+      const canonical = await fs.realpath(dir).catch(() => dir);
+      return params.includedAssets.some((asset) => isPathInside(asset.sourcePath, canonical));
+    };
+    const home = resolveHomeDir();
+    if (params.preferHomeOutput && home && !(await insideSource(path.resolve(home)))) {
+      return path.resolve(home, basename);
+    }
     const cwd = path.resolve(process.cwd());
-    const canonicalCwd = await fs.realpath(cwd).catch(() => cwd);
-    const cwdInsideSource = params.includedAssets.some((asset) =>
-      isPathInside(asset.sourcePath, canonicalCwd),
-    );
-    const defaultDir = cwdInsideSource ? (resolveHomeDir() ?? path.dirname(params.stateDir)) : cwd;
+    const defaultDir = (await insideSource(cwd)) ? (home ?? path.dirname(params.stateDir)) : cwd;
     return path.resolve(defaultDir, basename);
   }
 
@@ -267,6 +282,7 @@ async function createConsistentStateSnapshotPlan(params: {
             postgresSnapshots: [],
             postgresAnchors: [],
             discoveredSourcePaths: new Set<string>(),
+            deferredContentChecks: new Map(),
           }
         : await captureSqlite(params.tempDir),
     };
@@ -317,6 +333,7 @@ async function createBackupArchiveInScope(
     (await resolveBackupPlanFromDisk({
       includeWorkspace,
       excludeWorktreeTemplates: opts.excludeWorktreeTemplates,
+      excludeMigrationBackups: opts.excludeMigrationBackups,
       localCompanion: opts.localCompanion,
       onlyConfig,
       nowMs,
@@ -352,6 +369,7 @@ async function createBackupArchiveInScope(
     nowMs,
     includedAssets: plan.included,
     stateDir: plan.stateDir,
+    preferHomeOutput: opts.preferHomeOutput,
   });
 
   if (plan.included.length === 0) {
@@ -386,6 +404,7 @@ async function createBackupArchiveInScope(
     dryRun: Boolean(opts.dryRun),
     includeWorkspace,
     ...(opts.excludeWorktreeTemplates ? { excludeWorktreeTemplates: true } : {}),
+    ...(opts.excludeMigrationBackups ? { excludeMigrationBackups: true } : {}),
     onlyConfig,
     ...(opts.localCompanion ? { localCompanion: true } : {}),
     verified: false,
@@ -480,6 +499,11 @@ async function createBackupArchiveInScope(
     const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
     const skippedEntries = new Map<string, "volatile" | "vanished">();
     const opaqueSqliteSourcePaths = new Map<string, "archived" | "skipped">();
+    const deferredContentChecks = stateSqliteBackup.deferredContentChecks;
+    const archivedContentChecks = new Map(
+      [...deferredContentChecks].map(([source, check]) => [source, check.content]),
+    );
+    const verifiedContentPaths = new Set<string>();
     // Linked state roots can have distinct configured and canonical capture siblings.
     // Otherwise the inventory owns privacy admission, except for config-only exports.
     const checkConfiguredCaptureRoot = onlyConfig || plan.stateDir !== inventory.stateDir;
@@ -550,6 +574,7 @@ async function createBackupArchiveInScope(
         }
         externalSymbolicLinks.length = 0;
         opaqueSqliteSourcePaths.clear();
+        verifiedContentPaths.clear();
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
           onProgress: opts.onProgress,
@@ -577,6 +602,8 @@ async function createBackupArchiveInScope(
                   );
                 },
                 filter: tarFilter,
+                contentChecks: archivedContentChecks,
+                onContentVerified: (source) => verifiedContentPaths.add(source),
                 onVanished: (sourcePath) => {
                   if (requiredSourcePaths.has(sourcePath)) {
                     throw new Error(`Required backup source disappeared: ${sourcePath}`);
@@ -658,6 +685,11 @@ async function createBackupArchiveInScope(
         });
         try {
           await plan.configCapture?.assertRootAlias?.();
+          for (const [sourcePath, check] of deferredContentChecks) {
+            if (!verifiedContentPaths.has(sourcePath)) {
+              await assertDeferredSqliteContent(sourcePath, check);
+            }
+          }
         } catch (error) {
           if (!removePreparedBackupArchive(prepared)) {
             publication.pendingCleanupArchives.push(prepared);

@@ -13,6 +13,9 @@
 // --archived-sessions fixes the archive population; --row-updates-per-list publishes metadata
 // writes per logical second, with --row-update-population and --row-update-field selecting them.
 // --search-discovery measures the real sessions_search inventory sweep, excluding transcript FTS.
+// --search-fts seeds one searchable message per row and uses real transcript FTS.
+// --search-query searchwalkcommon|searchwalkrare|会 compares dense/sparse word and CJK matches;
+// --search-concurrency 4 measures a burst through the same embedded Gateway owner.
 // --active-runs 30 holds synthetic runs active; discovery also reports warm page preparation
 // at offsets 0/3600/7200/12800 after the measured sweep (outside CPU/allocation samples).
 // Reports materializations per sweep and post-GC heap outside the measured interval;
@@ -77,6 +80,9 @@ const { values } = parseArgs({
     "identified-viewer": { type: "boolean", default: false },
     "plain-result": { type: "boolean", default: false },
     "search-discovery": { type: "boolean", default: false },
+    "search-fts": { type: "boolean", default: false },
+    "search-query": { type: "string", default: "searchwalkcommon" },
+    "search-concurrency": { type: "string", default: "1" },
     "active-runs": { type: "string", default: "0" },
   },
 });
@@ -258,6 +264,9 @@ if (values["search-workload"]) {
   main.identity = { name: "Synthetic Explorer" };
   main.model = "openai/gpt-4.1";
 }
+if (values["search-discovery"]) {
+  cfg.tools = { sessions: { visibility: "all" }, agentToAgent: { enabled: true } };
+}
 config.setRuntimeConfigSnapshot(cfg);
 if (siblingSessions && !values["reuse-fixture"]) {
   const { writeSessionEntry } =
@@ -298,6 +307,36 @@ if (archivedSessions !== undefined && !values["reuse-fixture"]) {
     );
   }
   assert.equal(index, sessions, "Archive fixture must include every seeded row");
+}
+if (values["search-fts"] && !values["reuse-fixture"]) {
+  assert(values["search-discovery"], "--search-fts requires --search-discovery");
+  const { readSessionEntryStore } =
+    await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
+  const { appendTranscriptMessage } =
+    await import("../../src/config/sessions/session-accessor.sqlite-transcript-write.js");
+  for (const agentId of ["main", ...siblings]) {
+    const entries = agentDb.runOpenClawAgentWriteTransaction(
+      (database) => Object.entries(readSessionEntryStore(database)),
+      { agentId },
+    );
+    for (const [index, [sessionKey, entry]] of entries.entries()) {
+      await appendTranscriptMessage(
+        { agentId, sessionKey, sessionId: entry.sessionId },
+        {
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `searchwalkcommon synthetic transcript ${index % 1000 === 0 ? "searchwalkrare 明天下午开会讨论" : "ordinary"}`,
+              },
+            ],
+          },
+        },
+      );
+    }
+    console.error(`Seeded FTS for ${agentId}: ${entries.length} transcripts`);
+  }
 }
 plugins.setActivePluginRegistry(pluginRegistry.createEmptyPluginRegistry());
 const releaseForeground = foreground.retainSessionListForegroundWork();
@@ -749,15 +788,45 @@ try {
   const embedded = values["search-discovery"]
     ? await import("../../src/agents/tools/embedded-gateway-stub.js")
     : undefined;
-  const read = async (index: number) => {
+  const searchConcurrency = parseStrictIntegerOption({
+    raw: values["search-concurrency"],
+    label: "--search-concurrency",
+    fallback: 1,
+    min: 1,
+  });
+  const searchPhases: {
+    listMs: number;
+    searchMs: number;
+    chunks: number[];
+    pages: number;
+    candidates: number;
+    resultDigest: string;
+  }[] = [];
+  const workerPhases: Record<string, { count: number; queueMs: number; durationMs: number }> = {};
+  const { onWorkerRequestMetrics } = await import("../../src/infra/worker-request-diagnostics.js");
+  const stopWorkerMetrics = onWorkerRequestMetrics(
+    (kind, requestClass, phase, _depth, queueMs, durationMs) => {
+      const key = `${kind}:${requestClass}`;
+      const metric = (workerPhases[key] ??= { count: 0, queueMs: 0, durationMs: 0 });
+      if (phase === "completed") {
+        metric.count++;
+        metric.durationMs += durationMs ?? 0;
+      } else if (phase === "started") {
+        metric.queueMs += queueMs ?? 0;
+      }
+    },
+  );
+  const releaseEmbedded = embedded?.bindEmbeddedSessionRowProjection(Promise.resolve(projection!));
+  const readOne = async (index: number) => {
     if (!createSessionsSearchTool || !embedded) {
       return readList(cases[index % cases.length]!);
     }
-    const release = embedded.bindEmbeddedSessionRowProjection(Promise.resolve(projection!));
     const gateway = embedded.createEmbeddedCallGateway();
     let last: SessionsListResult | undefined;
     let pages = 0;
     let returned = 0;
+    let listMs = 0;
+    const chunks: number[] = [];
     const keys: string[] = [];
     const dashboards = values.mode === "verify" ? createHash("sha256") : undefined;
     const tool = createSessionsSearchTool({
@@ -769,7 +838,9 @@ try {
       agentSessionKey: "agent:main:main",
       callGateway: async <T>(request: { method: string; params?: unknown }): Promise<T> => {
         if (request.method === "sessions.list") {
+          const started = performance.now();
           last = await gateway<SessionsListResult>(request);
+          listMs += performance.now() - started;
           dashboards?.update(canonicalResult(last));
           pages++;
           returned += last.sessions.length;
@@ -779,17 +850,30 @@ try {
           return gateway<T>(request);
         }
         assert.equal(request.method, "sessions.search");
-        const params = request.params as { sessionKeys: string[] };
-        keys.push(...params.sessionKeys);
-        return { results: [] } as T;
+        const params = request.params as { sessionKeys?: string[] };
+        keys.push(...(params.sessionKeys ?? []));
+        if (!values["search-fts"]) {
+          return { results: [] } as T;
+        }
+        const started = performance.now();
+        try {
+          return await gateway<T>(request);
+        } finally {
+          chunks.push(performance.now() - started);
+        }
       },
     });
-    try {
-      await tool.execute("synthetic-discovery", { query: "synthetic" });
-    } finally {
-      release();
+    const result = await tool.execute("synthetic-discovery", { query: values["search-query"] });
+    if (values["search-fts"]) {
+      searchPhases.push({
+        listMs,
+        searchMs: chunks.reduce((sum, ms) => sum + ms, 0),
+        chunks,
+        pages,
+        candidates: keys.length,
+        resultDigest: createHash("sha256").update(JSON.stringify(result)).digest("hex"),
+      });
     }
-    assert(last);
     discovery = {
       pages,
       rows: returned,
@@ -797,7 +881,23 @@ try {
       digest: createHash("sha256").update(JSON.stringify(keys.toSorted())).digest("hex"),
       dashboardDigest: dashboards?.digest("hex"),
     };
-    return last;
+    return (
+      last ??
+      ({
+        ts: anchor,
+        path: "synthetic-search",
+        count: 0,
+        totalCount: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      } satisfies SessionsListResult)
+    );
+  };
+  const read = async (index: number) => {
+    const results = await Promise.all(
+      Array.from({ length: searchConcurrency }, () => readOne(index)),
+    );
+    return results[0]!;
   };
   const capture = async () => {
     const digest = createHash("sha256");
@@ -1035,8 +1135,23 @@ try {
   observer.observe({ entryTypes: ["gc"] });
   const beforeSelections = workMetrics.getSessionRowSelectionMetrics();
   const materializedBefore = projection.materializedCount;
+  const measuredSearchStart = searchPhases.length;
+  const workersBefore = structuredClone(workerPhases);
+  const processBefore = process.cpuUsage();
   const before = process.threadCpuUsage();
   await run(iterations, true);
+  const processUsed = process.cpuUsage(processBefore);
+  const measuredSearchPhases = searchPhases.slice(measuredSearchStart);
+  const measuredWorkerPhases = Object.fromEntries(
+    Object.entries(workerPhases).map(([key, metric]) => [
+      key,
+      {
+        count: metric.count - (workersBefore[key]?.count ?? 0),
+        queueMs: metric.queueMs - (workersBefore[key]?.queueMs ?? 0),
+        durationMs: metric.durationMs - (workersBefore[key]?.durationMs ?? 0),
+      },
+    ]),
+  );
   const measuredOwnerProjections = ownerProjections;
   const used = process.threadCpuUsage(before);
   const elapsedMs = performance.now() - started;
@@ -1160,6 +1275,13 @@ try {
   durations.sort((a, b) => a - b);
   const result = {
     mode: values.mode,
+    searchQuery: values["search-query"],
+    searchConcurrency,
+    searchPhases,
+    measuredSearchPhases,
+    measuredWorkerPhases,
+    processCpuMs: (processUsed.user + processUsed.system) / 1000,
+    workerPhases,
     presentationSourceHash,
     filterSourceHash,
     discoverySourceHash,
@@ -1238,9 +1360,11 @@ try {
     cases,
     host: { node: process.version, load: loadavg() },
     scope: values["search-discovery"]
-      ? "sessions_search discovery through the embedded Gateway projection owner; transcript FTS excluded. Main-thread CPU and sampled JS allocation per sweep; no transport/model claim."
+      ? `sessions_search discovery through the embedded Gateway projection owner; transcript FTS ${values["search-fts"] ? "included" : "excluded"}. Main-thread CPU and sampled JS allocation per sweep; no transport/model claim.`
       : "Owner-level lists with registry churn; sort-workload uses an identified synthetic operator, limit 200, owner-first, involvement, and recency queries. No transport/model claim. Reconciliation is an explicit incomplete-postimage scenario. Heap family samples overlap and exclude native backing stores.",
   };
+  stopWorkerMetrics();
+  releaseEmbedded?.();
   writeFileSync(path.join(root, "result.json"), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));
 } finally {

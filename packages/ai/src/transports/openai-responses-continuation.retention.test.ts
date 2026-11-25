@@ -8,7 +8,7 @@ import {
   isDeeplyFrozenPlainData,
 } from "../../../../src/shared/immutable-data.js";
 import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
-import { cleanupSessionResources } from "../session-resources.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
   recordResponsesContinuationState,
@@ -31,13 +31,17 @@ it("keeps reusable responses without retaining completed callers or prior baseli
         const sessionId = `retention-${index}`;
         const first = claimOpenAIResponsesHttpContinuation({
           ...identity,
-          sessionId,
+          scope: claimConversationProviderState(sessionId),
           request: previousRequest,
         });
         assert.ok(first);
         first.commit(previousRequest, { id: `previous-${index}`, output: [] });
         const request = { model: "fixture", input: [] };
-        const next = claimOpenAIResponsesHttpContinuation({ ...identity, sessionId, request });
+        const next = claimOpenAIResponsesHttpContinuation({
+          ...identity,
+          scope: claimConversationProviderState(sessionId),
+          request,
+        });
         assert.ok(next);
         expect(next.request.previous_response_id).toBe(`previous-${index}`);
         next.commit(request, { id: `current-${index}`, output: [] }, `previous-${index}`);
@@ -61,7 +65,7 @@ it("keeps reusable responses without retaining completed callers or prior baseli
       for (let index = 0; index < 20; index += 1) {
         const next = claimOpenAIResponsesHttpContinuation({
           ...identity,
-          sessionId: `retention-${index}`,
+          scope: claimConversationProviderState(`retention-${index}`),
           request: { model: "fixture", input: [] },
         });
         assert.ok(next);
@@ -97,7 +101,7 @@ it("reuses retained history byte counts past mutable items without walking their
       apiKey: "test-key",
       baseUrl: "https://example.test/v1",
       headers: {},
-      sessionId: "byte-work",
+      scope: claimConversationProviderState("byte-work"),
       request,
     });
     assert.ok(claim);
@@ -106,7 +110,7 @@ it("reuses retained history byte counts past mutable items without walking their
       apiKey: "test-key",
       baseUrl: "https://example.test/v1",
       headers: {},
-      sessionId: "byte-work",
+      scope: claimConversationProviderState("byte-work"),
       request: { ...request, previous_response_id: "response" },
     });
     assert.ok(next);
@@ -133,6 +137,7 @@ it.each([0, 1])("preserves the exact serialized byte budget (overflow=%s)", (ove
     baseUrl: "https://example.test/v1",
     headers: {},
     sessionId: "exact-bytes",
+    scope: claimConversationProviderState("exact-bytes"),
   };
   const host = createAiTransportHost({
     immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },

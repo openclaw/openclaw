@@ -140,7 +140,9 @@ describe("CommandPalette pending searches", () => {
     expect(results.getAttribute("aria-busy")).toBe("false");
     expect(palette.textContent).not.toContain("Searching sessions");
     const empty = query(".cmd-palette__no-results")!;
-    expect(empty.querySelector("h2")?.textContent).toBe("No results match your search.");
+    expect(empty.querySelector(".empty-state__title")?.textContent).toBe(
+      "No results match your search.",
+    );
     expect(empty.textContent).toContain("to compose a new session.");
     expect(empty.querySelector("button")).toBeNull();
   });
@@ -163,7 +165,7 @@ describe("CommandPalette pending searches", () => {
       expect(findPaletteOption(palette, "Plugins")).toBeDefined();
       expect(query('[aria-busy="true"]')).toBeNull();
       await searchPalette(palette, "zzcatalog");
-      expect(palette.textContent).toContain("Searching commands");
+      expect(palette.textContent.includes("Searching commands")).toBe(source === "plugins");
       expect(palette.textContent).not.toMatch(/Searching sessions|No results/);
       setInputValue(paletteInput(palette), "z");
       await palette.updateComplete;
@@ -181,9 +183,9 @@ describe("CommandPalette pending searches", () => {
       expect(paletteInput(palette).value).toBe("plugins");
       expect(findPaletteOption(palette, "Plugins")).toBeDefined();
       expect(findPaletteOption(palette, "New session", true)).toBeUndefined();
-      expect(palette.textContent).toContain("Searching commands");
+      expect(palette.textContent.includes("Searching commands")).toBe(source === "plugins");
       expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe(
-        "true",
+        source === "plugins" ? "true" : "false",
       );
       setInputValue(paletteInput(palette), "zzcatalog");
       catalog.resolve(loaded);
@@ -203,7 +205,6 @@ describe("CommandPalette pending searches", () => {
     ["partial", {}, "Couldn’t search messages"],
     ["model failure", {}, "Couldn’t search models"],
     ["indexing", { indexing: true }, "Results may be incomplete. Search again shortly."],
-    ["archived", { archivedTranscriptsExcluded: 2 }, "Archived sessions"],
   ] as const)(
     "does not announce empty success for %s transcript results",
     async (name, result, notice) => {
@@ -234,6 +235,28 @@ describe("CommandPalette pending searches", () => {
       expect(query(".cmd-palette__no-results")).toBeNull();
     },
   );
+
+  it("shows the empty state when cold-stored transcripts were skipped", async () => {
+    const roster = createSessionResult("agent:main:fixture", "Unused");
+    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
+      options?.search ? { ...roster, sessions: [] } : roster,
+    );
+    const { palette, query } = await mountSearch(
+      {
+        methods: ["sessions.search"],
+        request: (method) =>
+          method === "sessions.search"
+            ? { results: [], archivedTranscriptsExcluded: 2 }
+            : { models: [] },
+      },
+      list,
+    );
+    await searchPalette(palette, "zzfixtureunique");
+    expect(query(".cmd-palette__no-results")?.textContent).toContain(
+      "No results match your search.",
+    );
+    expect(palette.textContent).not.toContain("Archived sessions");
+  });
 
   it("does not let an old query settle or select rows during a newer debounce", async () => {
     const old = createDeferred<SessionsListResult | null>();

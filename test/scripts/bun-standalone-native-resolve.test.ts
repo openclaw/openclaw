@@ -4,12 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const temporary: string[] = [];
 afterEach(() => {
-  for (const directory of temporary.splice(0)) {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  cleanupTempDirs(temporary);
 });
 
 function probe(poisonChild: boolean) {

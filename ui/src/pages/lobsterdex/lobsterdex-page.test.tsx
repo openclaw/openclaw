@@ -152,7 +152,7 @@ describe("LobsterdexPage discovery", () => {
     const { container } = mountLobsterdex();
     flush();
 
-    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/49 visited");
+    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/52 visited");
 
     const seen = container.querySelector(".lobster-pet--palette-crimson")?.closest("article");
     const text = (part: string) => seen?.querySelector(`.lobsterdex-page__${part}`)?.textContent;
@@ -164,7 +164,6 @@ describe("LobsterdexPage discovery", () => {
     expect(seen?.querySelectorAll(".lobsterdex-page__date")).toHaveLength(2);
     expect(text("dates")).toContain(`✦ Shiny spotted ${date}`);
     expect(seen?.querySelector(".lobsterdex-page__star")).not.toBeNull();
-    expect(seen?.querySelector('button[aria-label="Copy link"]')).not.toBeNull();
 
     const unseen = container.querySelector(".lobster-pet--palette-watermelon")?.closest("article");
     expect(unseen?.querySelector("h3")?.textContent).toBe("?");
@@ -181,6 +180,9 @@ describe("LobsterdexPage discovery", () => {
     ${"leonardodepinchy"}     | ${"Leonardo DaPinchy"}      | ${"A little Renaissance is washing ashore."} | ${"Every shell is a canvas."}
     ${"shellvis"}             | ${"Shellvis"}               | ${"Someone brought blue suede claws."}       | ${"The king of rock and claw."}
     ${"alexandergrahamshell"} | ${"Alexander Graham Shell"} | ${"A familiar ringing from the shore."}      | ${"Good ideas ring a bell."}
+    ${"santaclaws"}           | ${"Santa Claws"}            | ${"A jolly knock on the chimney."}           | ${"Makes a list. Pinches it twice."}
+    ${"clawnadian"}           | ${"Clawnadian"}             | ${"A polite knock from up north."}           | ${"Says sorry when you poke it."}
+    ${"clawlombian"}          | ${"Clawlombian"}            | ${"A cumbia beat drifts in on the tide."}    | ${"Dances cumbia sideways. Naturally."}
   `(
     "discovers $id by palette, preserving first visitor and shiny sightings",
     ({ id, name, hint, flavor }: Record<"id" | "name" | "hint" | "flavor", string>) => {

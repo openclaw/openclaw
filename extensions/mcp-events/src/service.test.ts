@@ -20,6 +20,7 @@ import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-ru
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin, { getMcpEventsDiagnostics } from "../index.js";
 import { createCallbackHandler } from "./http.js";
+import { parseSubscriptionResult } from "./protocol.js";
 import { McpEventsService } from "./service.js";
 import type { QueuedEvent, SubscriptionBinding } from "./state.js";
 import type { EventCron, EventSourceSnapshot, McpEventsDependencies } from "./types.js";
@@ -628,6 +629,8 @@ describe("MCP Events callback and subscription lifecycle", () => {
       [body + " ", 401, "evt-1", signed(secret, body, "evt-1")],
       [body, 400, "different-id"],
       [{ ...event(), name: "other.event" }, 400],
+      [{ ...event(), timestamp: "2026-02-29T12:00:00Z" }, 400],
+      [{ ...event(), timestamp: "2026-04-31T12:00:00+03:00" }, 400],
       [{ ...event(), data: { text: 1 } }, 400],
       [{ type: "terminated", reason: "ignore" }, 400],
       [[event()], 400],
@@ -639,6 +642,16 @@ describe("MCP Events callback and subscription lifecycle", () => {
     }
     expect(await pending()).toHaveLength(0);
   });
+
+  it.each(["2024-02-29T12:00:00Z", "2026-10-01T00:30:00+03:00", "2026-09-30T24:00:00Z"])(
+    "admits a valid calendar timestamp unchanged: %s",
+    async (timestamp) => {
+      await current!.start();
+      const response = await post(JSON.stringify({ ...event(), timestamp }));
+      expect(response.status).toBe(200);
+      expect((await pending())[0]?.payload.payload.event.timestamp).toBe(timestamp);
+    },
+  );
 
   it("revokes before remote cleanup and cannot be resurrected by a late refresh reply", async () => {
     await current!.start();
@@ -686,4 +699,23 @@ it("discovers events under the active tool owner without accepting an argument-s
     "tool owner retired",
   );
   expect(request).toHaveBeenCalledOnce();
+});
+
+it.each([
+  ["2026-02-29T12:00:00Z", false],
+  ["2026-04-31T12:00:00-03:00", false],
+  ["2028-02-29T12:00:00Z", true],
+  ["2026-10-01T00:30:00+03:00", true],
+  ["2026-09-30T24:00:00Z", true],
+])("checks the calendar date of subscription expiry: %s", (refreshBefore, valid) => {
+  const parse = () =>
+    parseSubscriptionResult(
+      { id: "sub-1", refreshBefore, cursor: null, truncated: false },
+      Date.parse("2026-01-01T00:00:00Z"),
+    );
+  if (valid) {
+    expect(parse().refreshBefore).toBe(Date.parse(refreshBefore));
+  } else {
+    expect(parse).toThrow("Invalid MCP subscription response");
+  }
 });

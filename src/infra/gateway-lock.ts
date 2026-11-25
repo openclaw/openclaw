@@ -9,6 +9,7 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { writeConsoleDiagnosticWarning } from "../logging/json-console-line.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPidAlive, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
@@ -17,7 +18,6 @@ import {
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permissions.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
@@ -43,6 +43,7 @@ import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
+import { drainGatewayLockResources } from "./gateway-lock-release.js";
 import {
   acquireGatewayOwnerLease,
   assertGatewayOwnerLeaseStopped,
@@ -52,14 +53,15 @@ import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
 import { createGatewayPostgresCustody } from "./gateway-postgres-custody.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { captureStalledGatewayStartup } from "./gateway-startup-owner.js";
+import { createGatewayStateProjection } from "./gateway-state-owner-lifecycle.js";
 import {
   acquireGatewayStateOwner,
-  createGatewayStateProjection,
   type GatewayStateProjection,
   GatewayStateOwnerContentionError,
   resolveGatewayStateOwnerPath,
   tryBorrowGatewayStateOwner,
 } from "./gateway-state-owner.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 
 export type GatewayLockHandle = {
   previousOwner?: GatewayOwnerLease["previousOwner"];
@@ -71,6 +73,7 @@ export type GatewayLockHandle = {
   release: () => Promise<void>;
   run<T>(operation: () => T): T;
   markListening?: () => void;
+  publishExternalRestartReceipt?: () => Promise<void>;
   /**
    * Takes PostgreSQL custody for an engine selection resolved after this lock, as cold CLI
    * owners do. Its loss retires this owner; release ends it.
@@ -272,10 +275,7 @@ function shouldReclaimGatewayLock(params: {
         lockPath: params.lockPath,
       })
     : "unknown";
-  if (ownerPid) {
-    return ownerStatus === "dead";
-  }
-  return false;
+  return ownerStatus === "dead";
 }
 
 export function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
@@ -493,6 +493,8 @@ export async function acquireGatewayLock(
   }
   let databaseFailure: { error: unknown } | undefined;
   let waited = false;
+  // A waiter does not own the state directory where default file logs are written.
+  const onWait = opts.onWait ?? writeConsoleDiagnosticWarning;
   // Lock file that blocked the failing attempt, named in the timeout error.
   let contendedLockPath: string | undefined;
   let projection: GatewayStateProjection | undefined;
@@ -576,7 +578,7 @@ export async function acquireGatewayLock(
               return false;
             }
             if (!waited) {
-              (opts.onWait ?? log.warn)(
+              onWait(
                 `Waiting up to ${Math.ceil(remaining / 1000)} seconds for the previous Gateway to release state; an unverifiable owner will not be reclaimed automatically. ${error.message}`,
               );
             }
@@ -590,7 +592,7 @@ export async function acquireGatewayLock(
             return false;
           }
           if (!waited && deadlineMs > startedAt && role === "gateway") {
-            log.warn(
+            onWait(
               `waiting for Gateway state ownership held by another OpenClaw process, up to ${Math.ceil((deadlineMs - startedAt) / 1000)} s`,
             );
           }
@@ -716,6 +718,7 @@ export async function acquireGatewayLock(
     stateDir: paths.stateDir,
     assertCurrent: assertStateOwnerCurrent,
     assertDatabaseAccess,
+    publishExternalRestartReceipt: ownerLease?.publishExternalRestartReceipt,
     markListening: () => {
       assertStateOwnerCurrent();
       try {
@@ -741,8 +744,7 @@ export async function acquireGatewayLock(
     },
     release: () =>
       (released ??= (async () => {
-        await ownerLease?.release();
-        await resources?.close();
+        await drainGatewayLockResources(ownerLease, resources, role);
         projection?.release();
         projection = undefined;
         stateOwner.release();

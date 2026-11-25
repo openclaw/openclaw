@@ -1,9 +1,11 @@
-import type { ChatInputRegion } from "../../app/chat-input-owner.ts";
+import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { takeCreatedComposer } from "../new-session/creation-composer-registry.ts";
+import type { CreationComposerTransfer } from "../new-session/creation-composer.ts";
 import {
   releaseChatAttachmentPayloads,
   releaseDisplacedChatAttachmentPayloads,
@@ -19,6 +21,7 @@ import {
   isChatComposerOwnerCurrent,
   type captureChatComposerOwner,
 } from "./composer-persistence-state.ts";
+import { connectCreatedComposerQueue } from "./creation-composer-recovery.ts";
 import { publishQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { visiblePanesOf } from "./split-layout.ts";
@@ -51,6 +54,7 @@ export class ChatPaneComposerHandoff {
   private scope: ComposerOwnerScope | null;
   private ownsComposer = true;
   private custody = Symbol("chat-composer-custody");
+  private createdTransfer: CreationComposerTransfer | undefined;
 
   constructor(
     private readonly context: ApplicationContext,
@@ -103,6 +107,32 @@ export class ChatPaneComposerHandoff {
     // Most recently presented wins when the same Home appeared in multiple splits.
     this.presentations.delete(this);
     this.presentations.add(this);
+  }
+
+  /** Setup drafts enter through the same active presentation custody as ordinary drafts. */
+  adoptCreatedComposer(): (() => void) | undefined {
+    const state = this.host.state();
+    if (
+      !state ||
+      !this.host.presented() ||
+      chatInputOwnerForContext(this.context).current !== this.host.region() ||
+      this.captureOwner()?.resolveOwner() !== state
+    ) {
+      return undefined;
+    }
+    const transfer = takeCreatedComposer(this.context, state.sessionKey, state.client);
+    if (!transfer || this.createdTransfer === transfer) {
+      return undefined;
+    }
+    this.createdTransfer = transfer;
+    if (transfer.claimDraft()) {
+      state.chatMessage = transfer.draft;
+      state.chatMentions = transfer.mentions;
+      state.chatAttachments = transfer.attachments;
+      this.host.adoptAttachmentReads(transfer.reads);
+    }
+    // A remount resumes remaining input without reclaiming its one-shot draft.
+    return connectCreatedComposerQueue(this.context, state, transfer);
   }
 
   captureOwner(): ChatComposerRecoveryOwner | undefined {

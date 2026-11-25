@@ -1,12 +1,12 @@
 import { readFile } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { ignoreMissingPath } from "../../infra/errno.js";
 import {
   enqueueGitRefMutation,
   executeGitCommand,
-  normalizeGitPathForFilesystem,
   requireGitCommandOutput,
 } from "../../infra/git-exec.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -25,7 +25,7 @@ import type { ResolvedWorktreeBase } from "./base-ref.types.js";
 import { estimateWorktreeGitBytes } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
-import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
+import { commandError, listGitWorktrees, requireGit, requireGitPath, runGit } from "./git.js";
 import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import type { CreateManagedWorktreeParams, WorktreeWaitBudget } from "./types.js";
 
@@ -39,6 +39,7 @@ type RemoteDefaultAttempt = {
 };
 type RemoteDefaultPreparation = { borrowers: number; attempt?: RemoteDefaultAttempt };
 export type WorktreeBasePreparation = (options: {
+  idleIoPriority?: boolean;
   signal?: AbortSignal;
   assertCurrent?: () => void;
   localDefault?: "preserve" | "fast-forward";
@@ -118,6 +119,7 @@ export async function resolveWorktreeBase(
   signal?: AbortSignal,
   assertCurrent?: () => void,
   localDefault: "preserve" | "fast-forward" = "preserve",
+  idleIoPriority?: boolean,
 ): Promise<ResolvedWorktreeBase> {
   if (baseRef) {
     const verified = await runGit(
@@ -154,24 +156,26 @@ export async function resolveWorktreeBase(
     return { commit, gitOperand, recordRef: baseRef };
   }
   const options = {
+    idleIoPriority,
     signal,
-    beforeRun: () => {
-      signal?.throwIfAborted();
-      assertCurrent?.();
-    },
+    beforeRun: composeSessionSourceAssertion(
+      assertCurrent ? [assertCurrent] : [],
+      (assertSource) => {
+        signal?.throwIfAborted();
+        assertSource();
+      },
+    ),
     env: { GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
   };
   const commonDir = await fs.realpath(
     path.resolve(
       repoRoot,
-      normalizeGitPathForFilesystem(
-        await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options),
-      ),
+      await requireGitPath(repoRoot, ["rev-parse", "--git-common-dir"], options),
     ),
   );
   const checkout = await fs.realpath(repoRoot);
   return await withWorktreeBasePreparation({ repoRoot: checkout, commonDir }, (resolve) =>
-    resolve({ signal, assertCurrent, localDefault }),
+    resolve({ signal, assertCurrent, localDefault, idleIoPriority }),
   );
 }
 
@@ -202,23 +206,28 @@ export async function withWorktreeBasePreparation<T>(
     assertCurrent,
     localDefault = "preserve",
     waitBudget,
+    idleIoPriority,
   }) => {
     let retirement: { error: unknown } | undefined;
     let waiting: ReturnType<typeof startWorktreeWait> | undefined;
     const options = {
+      idleIoPriority,
       signal,
-      beforeRun: () => {
-        try {
-          if (!active) {
-            throw new Error("Worktree base preparation is closed");
+      beforeRun: composeSessionSourceAssertion(
+        assertCurrent ? [assertCurrent] : [],
+        (assertSource) => {
+          try {
+            if (!active) {
+              throw new Error("Worktree base preparation is closed");
+            }
+            options.signal?.throwIfAborted();
+            assertSource();
+          } catch (error) {
+            retirement = { error };
+            throw error;
           }
-          options.signal?.throwIfAborted();
-          assertCurrent?.();
-        } catch (error) {
-          retirement = { error };
-          throw error;
-        }
-      },
+        },
+      ),
       env: { GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
     };
     const settled = (attempt: RemoteDefaultAttempt, pending: RemoteDefaultAttempt["pending"]) =>
@@ -267,6 +276,7 @@ export async function withWorktreeBasePreparation<T>(
                   signal: options.signal,
                   assertCurrent: options.beforeRun,
                   preparationKey,
+                  idleIoPriority,
                 }),
               );
               base.preparationKey = preparationKey;

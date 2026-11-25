@@ -1,11 +1,15 @@
 import {
+  ProviderAuthFailure,
+  resolveOpenAICodexAccessTokenExpiry,
+} from "openclaw/plugin-sdk/provider-auth";
+import {
   createOAuthRefreshResponseError,
   type OAuthRefreshOutcome,
   resolveOAuthTokenExpiresAt,
-  resolveOAuthTokenLifetimeMs,
   throwIfOAuthLoginAborted,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -14,12 +18,13 @@ import {
   normalizeBoundedOptionalString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import {
   createOpenAIAuthorizationCodeForm,
+  OPENAI_CODEX_CLIENT_ID,
   withOpenAIOAuthResponse,
 } from "./openai-oauth-http.runtime.js";
 
-const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OAUTH_TOKEN_SSRF_POLICY = {
   allowRfc2544BenchmarkRange: true,
@@ -47,6 +52,7 @@ type TokenFailure = {
   errorType?: string;
   reason?: TokenFailureReason;
   status?: number;
+  retryAfterMs?: number;
   oauthRefreshOutcome?: OAuthRefreshOutcome;
 };
 type TokenResult = TokenSuccess | TokenFailure;
@@ -63,26 +69,53 @@ const TOKEN_FAILURE_REASON_BY_CODE: Readonly<Record<string, TokenFailureReason>>
   refresh_token_invalidated: "token_invalidated",
   refresh_token_reused: "refresh_token_reused",
 };
-const TOKEN_FAILURE_CODES = new Set(Object.keys(TOKEN_FAILURE_REASON_BY_CODE));
+const REGION_BLOCKED_CODE = "unsupported_country_region_territory";
+const TOKEN_FAILURE_CODES = new Set([
+  ...Object.keys(TOKEN_FAILURE_REASON_BY_CODE),
+  REGION_BLOCKED_CODE,
+]);
 
-function normalizeTokenErrorSummary(value: unknown): string | undefined {
-  const normalized = normalizeBoundedOptionalString(value, OAUTH_TOKEN_ERROR_SUMMARY_MAX_CHARS * 4)
-    ?.replace(/\s+/gu, " ")
-    .trim();
-  return normalized
+/** The one OpenAI auth error-text sanitizer: single line, no terminal controls, redacted, bounded. */
+export function normalizeTokenErrorSummary(value: unknown): string | undefined {
+  const normalized = normalizeBoundedOptionalString(value, OAUTH_TOKEN_ERROR_SUMMARY_MAX_CHARS * 4);
+  const text = normalized && sanitizeTerminalText(normalized.replace(/\s+/gu, " ")).trim();
+  return text
     ? normalizeBoundedOptionalString(
-        redactSensitiveText(normalized, { mode: "tools" }),
+        redactSensitiveText(text, { mode: "tools" }),
         OAUTH_TOKEN_ERROR_SUMMARY_MAX_CHARS,
       )
     : undefined;
 }
 
-function normalizeTokenErrorFact(
-  value: unknown,
-  allowlist: ReadonlySet<string>,
-): string | undefined {
-  const normalized = normalizeOptionalString(value)?.toLowerCase();
-  return normalized && allowlist.has(normalized) ? normalized : undefined;
+/**
+ * Sign-in failure for an OpenAI auth endpoint answer. `status` is absent when the request
+ * itself failed. Refresh failures keep their own `oauthRefreshFailure` facts instead.
+ */
+export function createOpenAISignInFailure(
+  failure: { status?: number; code?: string; summary?: string; retryAfterMs?: number },
+  rejected: "grant_rejected" | "device_code_denied" = "grant_rejected",
+): ProviderAuthFailure {
+  const cause = failure.summary ? new Error(failure.summary) : undefined;
+  if (!failure.status) {
+    return new ProviderAuthFailure("network", { cause });
+  }
+  if (failure.status === 429) {
+    return new ProviderAuthFailure("rate_limited", { retryAfterMs: failure.retryAfterMs, cause });
+  }
+  if (failure.status >= 500) {
+    return new ProviderAuthFailure("provider_unavailable", { cause });
+  }
+  if (failure.code === REGION_BLOCKED_CODE) {
+    return new ProviderAuthFailure("host_network_blocked", {
+      providerDetail:
+        "OpenAI does not allow sign-in from this computer's country, region, or network route. If you normally use a proxy, make sure the OpenClaw process uses it.",
+      cause,
+    });
+  }
+  return new ProviderAuthFailure(rejected, {
+    ...(rejected === "grant_rejected" ? { providerDetail: failure.summary } : {}),
+    cause,
+  });
 }
 
 function buildTokenResponseFailure(params: {
@@ -97,10 +130,10 @@ function buildTokenResponseFailure(params: {
     // Non-JSON responses use the bounded generic message below.
   }
   const error = asOptionalRecord(body?.error);
-  const code = normalizeTokenErrorFact(
+  const rawCode = normalizeOptionalString(
     error?.code ?? (typeof body?.error === "string" ? body.error : body?.code),
-    TOKEN_FAILURE_CODES,
-  );
+  )?.toLowerCase();
+  const code = rawCode && TOKEN_FAILURE_CODES.has(rawCode) ? rawCode : undefined;
   const rawType = normalizeOptionalString(error?.type ?? body?.type)?.toLowerCase();
   const errorType =
     rawType === "invalid_grant" || rawType === "invalid_request_error" ? rawType : undefined;
@@ -108,11 +141,15 @@ function buildTokenResponseFailure(params: {
   const summary =
     normalizeTokenErrorSummary(error?.message ?? body?.error_description ?? body?.message) ??
     `OpenAI Codex token ${params.operation} failed (HTTP ${params.response.status}).`;
+  const retryAfterSeconds = parseRetryAfterHeaderSeconds(
+    params.response.headers.get("retry-after"),
+  );
   return {
     type: "failed",
     operation: params.operation,
     summary,
     status: params.response.status,
+    ...(retryAfterSeconds === undefined ? {} : { retryAfterMs: retryAfterSeconds * 1000 }),
     ...(params.operation === "refresh"
       ? {
           oauthRefreshOutcome: createOAuthRefreshResponseError(
@@ -126,31 +163,6 @@ function buildTokenResponseFailure(params: {
     ...(errorType ? { errorType } : {}),
     ...(reason ? { reason } : {}),
   };
-}
-
-function formatMissingTokenResponseFields(
-  json: {
-    access_token?: unknown;
-    refresh_token?: unknown;
-    expires_in?: unknown;
-  },
-  existingRefreshToken?: string,
-): string {
-  const missing: string[] = [];
-  if (!normalizeOptionalString(json.access_token)) {
-    missing.push("access_token");
-  }
-  if (
-    !(json.refresh_token === undefined
-      ? existingRefreshToken
-      : normalizeOptionalString(json.refresh_token))
-  ) {
-    missing.push("refresh_token");
-  }
-  if (resolveOAuthTokenLifetimeMs(json.expires_in) === undefined) {
-    missing.push("expires_in");
-  }
-  return missing.join(", ");
 }
 
 function formatTokenRequestError(
@@ -268,17 +280,25 @@ function readOpenAITokenResponse(
   if (json.error !== undefined) {
     return buildTokenResponseFailure({ response, operation, text });
   }
-  const expires = resolveOAuthTokenExpiresAt(json.expires_in);
   const access = normalizeOptionalString(json.access_token);
+  // Sign-in responses may omit expires_in; the access token's own JWT expiry then applies.
+  const expires =
+    resolveOAuthTokenExpiresAt(json.expires_in) ??
+    (operation === "exchange" && access ? resolveOpenAICodexAccessTokenExpiry(access) : undefined);
   const refreshToken =
     json.refresh_token === undefined
       ? existingRefreshToken
       : normalizeOptionalString(json.refresh_token);
   if (!access || !refreshToken || expires === undefined) {
+    const missing = [
+      access ? "" : "access_token",
+      refreshToken ? "" : "refresh_token",
+      expires === undefined ? "expires_in" : "",
+    ];
     return {
       type: "failed",
       operation,
-      summary: `OpenAI Codex token ${operation} response missing fields: ${formatMissingTokenResponseFields(json, existingRefreshToken)}`,
+      summary: `OpenAI Codex token ${operation} response missing fields: ${missing.filter(Boolean).join(", ")}`,
     };
   }
   return {
@@ -296,7 +316,12 @@ export async function exchangeOpenAIAuthorizationCode(
   options: TokenRequestOptions = {},
 ): Promise<TokenResult> {
   return await requestOpenAIToken(
-    createOpenAIAuthorizationCodeForm({ clientId: CLIENT_ID, code, verifier, redirectUri }),
+    createOpenAIAuthorizationCodeForm({
+      clientId: OPENAI_CODEX_CLIENT_ID,
+      code,
+      verifier,
+      redirectUri,
+    }),
     "exchange",
     options,
   );
@@ -310,7 +335,7 @@ export async function refreshOpenAIAccessToken(
     new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: refreshToken,
-      client_id: CLIENT_ID,
+      client_id: OPENAI_CODEX_CLIENT_ID,
     }),
     "refresh",
     options,

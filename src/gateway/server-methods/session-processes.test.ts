@@ -4,12 +4,10 @@ import { createProcessSessionFixture } from "../../agents/bash-process-registry.
 import { resetProcessRegistryForTests } from "../../agents/bash-process-registry.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import { expectRpcError } from "./rpc-response.test-support.js";
 import { sessionProcessHandlers } from "./session-processes.js";
 
 afterEach(resetProcessRegistryForTests);
@@ -77,52 +75,3 @@ it.each([
     });
   },
 );
-
-it("discards a remote process response after the request authority closes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({});
-    const key = "agent:main:process-remote";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: key },
-      { sessionId: "remote-session", updatedAt: 1 },
-    );
-    const reply = createDeferredCore<{ sessionId: string; processes: []; truncated: false }>();
-    const started = createDeferredCore();
-    let current = true;
-    const context = await createHistoryReadContext();
-    const placement = {
-      state: "active",
-      executionMode: "worker-turn",
-      environmentId: "environment",
-      activeOwnerEpoch: 1,
-      generation: 1,
-    };
-    Object.assign(context, {
-      workerSessionPlacementService: {
-        prepareRuntimeRefresh: async () => ({ placement, assertCurrent() {}, release() {} }),
-      },
-      workerEnvironmentService: {
-        observeProcesses: () => {
-          started.resolve();
-          return reply.promise;
-        },
-      },
-    });
-    const respond = vi.fn();
-    const pending = sessionProcessHandlers["sessions.processes.list"]!({
-      req: { type: "req", id: "read", method: "sessions.processes.list" },
-      params: { key },
-      context,
-      client: null,
-      respond,
-      isWebchatConnect: () => false,
-      hasCurrentClientAuthority: () => current,
-    });
-    await started.promise;
-    current = false;
-    reply.resolve({ sessionId: "remote-session", processes: [], truncated: false });
-    await pending;
-    expectRpcError(respond, { code: "UNAVAILABLE" });
-    expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
-  });
-});

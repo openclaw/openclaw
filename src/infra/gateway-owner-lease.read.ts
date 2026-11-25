@@ -107,6 +107,9 @@ export function decodeGatewayOwnerLease(
     mode: payload.mode,
     supervisor,
     ...(typeof payload.listeningAt === "number" ? { listeningAt: payload.listeningAt } : {}),
+    ...(typeof payload.externalRestartReceipt === "string"
+      ? { externalRestartReceipt: payload.externalRestartReceipt }
+      : {}),
     ...(typeof payload.stateDatabaseProvenance === "string"
       ? { stateDatabaseProvenance: payload.stateDatabaseProvenance }
       : {}),

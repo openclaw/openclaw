@@ -249,7 +249,9 @@ it.each(["entry", "target"] as const)(
       recordSessionParticipant(scope, { identity: { type: "agent", id: "first" }, promptedAt: 10 });
       const addSideTables = (member: string) => {
         database.db
-          .prepare("INSERT INTO session_members VALUES (?, ?, 'fixture', 10)")
+          .prepare(
+            "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, 'fixture', 10)",
+          )
           .run(scope.sessionKey, member);
         database.db
           .prepare(

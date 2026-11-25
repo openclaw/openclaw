@@ -1,10 +1,17 @@
 /**
  * Knowledge observe owner benchmark (synthetic SQLite and Markdown only).
  * Run from the repo root:
- * ITERATIONS=2000 node --expose-gc --import ./scripts/tsx.mjs scripts/perf/knowledge-observe.mjs [baseline-storage-base.ts]
+ * ITERATIONS=2000 node --expose-gc --import ./scripts/tsx.mjs scripts/perf/knowledge-observe.mjs [baseline-storage-base.ts baseline-identity-store.ts]
  * Repeat in AB/BA order; SAMPLE=1 measures allocation separately; PROFILE_SQL=1
  * attributes statement time in an instrumented pass. RECORDS defaults to 1000.
  * TOMBSTONES adds unavailable observation rows to exercise depleted stores.
+ * BODY_REPEATS controls record text size (default 150; 650 is about 18 KiB).
+ * REVISIONS controls retained revisions (default 10). Every tenth record ends
+ * with two conversions; the next is operator-authored. Holds time successful
+ * BEGIN through COMMIT, excluding lock acquisition. Each sample reports CPU and
+ * wall time. Acceptance: unchanged results/state, lower hold median and p95,
+ * no >20% regression in owner CPU, elapsed time or sampled JS allocation.
+ * Run serial ABBA arms (>=5 observations each); the repeated arms are A/A controls.
  *
  * Assumed store: 1,000 current 4 KiB records, ten revisions per record and 10,000
  * completed journal plans. These are scale assumptions, not measured Team counts.
@@ -19,6 +26,8 @@
  * Fixture files live under .local and are removed even after an assertion fails.
  */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
@@ -30,21 +39,26 @@ import { pathToFileURL } from "node:url";
 const repo = process.cwd(),
   owner = path.join(repo, "extensions/knowledge/src");
 const source = path.resolve(process.argv[2] || path.join(owner, "storage-base.ts"));
+const identitySource = path.resolve(process.argv[3] || path.join(owner, "identity-store.ts"));
 registerHooks({
   resolve(s, c, next) {
     if (s.startsWith("openclaw/plugin-sdk/")) {
       return next(pathToFileURL(path.join(repo, "src/plugin-sdk", s.slice(20) + ".ts")).href, c);
     }
-    if (c.parentURL === pathToFileURL(source).href && s.startsWith("./")) {
+    if (s === "./identity-store.js" && c.parentURL === pathToFileURL(source).href) {
+      return next(pathToFileURL(identitySource).href, c);
+    }
+    if (
+      [source, identitySource].some((file) => c.parentURL === pathToFileURL(file).href) &&
+      s.startsWith("./")
+    ) {
       return next(pathToFileURL(path.join(owner, s.replace(/\.js$/, ".ts"))).href, c);
     }
     return next(s, c);
   },
 });
 const { StorageBase } = await import(pathToFileURL(source).href);
-const { SqliteIdentityStore } = await import(
-  pathToFileURL(path.join(owner, "identity-store.ts")).href
-);
+const { SqliteIdentityStore } = await import(pathToFileURL(identitySource).href);
 const { EvidenceInspector } = await import(
   pathToFileURL(path.join(owner, "evidence-files.ts")).href
 );
@@ -54,6 +68,7 @@ const dir = fs.mkdtempSync(path.join(repo, ".local/knowledge-observe-"));
 const n = Number(process.env.RECORDS || 1000),
   iterations = Number(process.env.ITERATIONS || 10);
 const tombstones = Number(process.env.TOMBSTONES || 0);
+const revisions = Number(process.env.REVISIONS || 10);
 assert.ok(Number.isSafeInteger(n) && n > 0);
 assert.ok(Number.isSafeInteger(iterations) && iterations > 0);
 assert.ok(Number.isSafeInteger(tombstones) && tombstones >= 0);
@@ -76,7 +91,7 @@ const cfg = {
 const access = { scope: { visibility: "private" }, agentId: "synthetic", assertCurrent() {} };
 const records = Array.from({ length: n }, (_, i) => {
   const id = `record-${String(i).padStart(6, "0")}`,
-    body = "Synthetic observation body.\n".repeat(150);
+    body = "Synthetic observation body.\n".repeat(Number(process.env.BODY_REPEATS || 150));
   const metadata = {
     format: "knowledge-record-v1",
     id,
@@ -108,10 +123,39 @@ const records = Array.from({ length: n }, (_, i) => {
 });
 let tracking = false;
 const timings = new Map();
+const holds = [];
+const samples = [];
+const observedStatements = { inside: 0, outside: 0 };
+let holding = false;
+if (process.env.PROFILE_SQL) {
+  channel("openclaw.database.statement").subscribe(() => {
+    if (tracking) {
+      observedStatements[holding ? "inside" : "outside"]++;
+    }
+  });
+}
 class Store extends SqliteIdentityStore {
   withDatabase(run) {
     return super.withDatabase((db) => {
-      const prepare = db.prepare.bind(db);
+      const prepare = db.prepare.bind(db),
+        exec = db.exec.bind(db);
+      let holdStart;
+      db.exec = (sql) => {
+        const result = exec(sql);
+        if (tracking && /^BEGIN\b/i.test(sql)) {
+          holdStart = performance.now();
+          holding = true;
+        }
+        if (tracking && holdStart !== undefined && /^(COMMIT|ROLLBACK)\b/i.test(sql)) {
+          holds.push(performance.now() - holdStart);
+          holdStart = undefined;
+          holding = false;
+        }
+        return result;
+      };
+      if (!process.env.PROFILE_SQL) {
+        return run(db);
+      }
       db.prepare = (sql) => {
         const s = prepare(sql);
         return new Proxy(s, {
@@ -126,7 +170,10 @@ class Store extends SqliteIdentityStore {
                 return Reflect.apply(v, t, args);
               } finally {
                 if (tracking) {
-                  const entry = timings.get(sql) || { count: 0, ms: 0 };
+                  const entry = timings.get(sql) || { count: 0, insideCount: 0, ms: 0 };
+                  if (holdStart !== undefined) {
+                    entry.insideCount++;
+                  }
                   entry.count++;
                   entry.ms += performance.now() - start;
                   timings.set(sql, entry);
@@ -140,9 +187,7 @@ class Store extends SqliteIdentityStore {
     });
   }
 }
-const store = process.env.PROFILE_SQL
-  ? new Store(cfg.statePath)
-  : new SqliteIdentityStore(cfg.statePath);
+const store = new Store(cfg.statePath);
 try {
   await store.registerIfAbsent(`store:${manifest.vaultId}`, manifest);
   store.withDatabase((db) => {
@@ -152,23 +197,27 @@ try {
     );
     const o = db.prepare("INSERT INTO observations VALUES (?,?,?,?,?,?)");
     const m = db.prepare("INSERT INTO mutations VALUES (?,?,?,?,?,?)");
-    for (let rev = 0; rev < 10; rev++) {
+    for (let rev = 0; rev < revisions; rev++) {
       for (const r of records) {
         h.run(
           "private",
           r.id,
-          "agent",
+          rev >= revisions - 2 && r.id.endsWith("0")
+            ? "conversion"
+            : rev === revisions - 1 && r.id.endsWith("1")
+              ? "operator"
+              : "agent",
           stamp,
           r.path,
           rev + 1,
-          rev === 9 ? r.hash : `old-${rev}`,
+          rev === revisions - 1 ? r.hash : `old-${rev}`,
           r.raw,
           "synthetic",
         );
       }
     }
     for (const r of records) {
-      o.run("private", r.id, r.path, r.hash, 10, r.raw);
+      o.run("private", r.id, r.path, r.hash, revisions, r.raw);
     }
     for (let i = 0; i < 10000; i++) {
       m.run(
@@ -207,20 +256,28 @@ try {
   const observe = Reflect.get(storage, "observe");
   assert.equal(typeof observe, "function");
   const run = () => Reflect.apply(observe, storage, [records, access, evidence]);
+  const recordDigest = (rows) => {
+    const hash = createHash("sha256");
+    for (const row of rows) {
+      hash.update(JSON.stringify(row) + "\n");
+    }
+    return hash.digest("hex");
+  };
   const snapshot = () =>
-    store.withDatabase((db) =>
-      digest(
-        JSON.stringify(
-          [
-            "observations",
-            "history",
-            "mutations",
-            "lifecycle_guards_v1",
-            "keyword_withdrawals_v1",
-          ].map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()),
-        ),
-      ),
-    );
+    store.withDatabase((db) => {
+      const hash = createHash("sha256");
+      for (const table of [
+        "observations",
+        "history",
+        "mutations",
+        "lifecycle_guards_v1",
+        "keyword_withdrawals_v1",
+      ]) {
+        hash.update(table);
+        hash.update(recordDigest(db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).iterate()));
+      }
+      return hash.digest("hex");
+    });
   const before = snapshot();
   run();
   globalThis.gc?.();
@@ -242,7 +299,14 @@ try {
     hostLoad = loadavg();
   tracking = true;
   for (let i = 0; i < iterations; i++) {
+    const cpuBefore = process.cpuUsage(),
+      wallBefore = performance.now();
     run();
+    const cpuAfter = process.cpuUsage(cpuBefore);
+    samples.push({
+      wallMs: performance.now() - wallBefore,
+      cpuMs: (cpuAfter.user + cpuAfter.system) / 1000,
+    });
   }
   tracking = false;
   const used = process.cpuUsage(cpu),
@@ -276,7 +340,7 @@ try {
       fs.writeFileSync(path.join(dir, "private", removed.path), removed.raw);
       const restored = await storage.run(access, (vault) => vault.scan());
       assert.equal(restored.issues.length, 0);
-      mutationDigest = digest(snapshot() + JSON.stringify(restored.records));
+      mutationDigest = digest(snapshot() + recordDigest(restored.records));
     } finally {
       mock.timers.reset();
     }
@@ -286,20 +350,24 @@ try {
       source,
       records: n,
       tombstones,
-      history: n * 10,
+      history: n * revisions,
       mutations: 10000,
       iterations,
       wallMs,
+      holds,
+      samples,
       cpuMs: (used.user + used.system) / 1000,
       sampledBytes: allocation ? sum(allocation.profile.head) : null,
       digest: after,
       mutationDigest,
-      recordDigest: digest(JSON.stringify(records)),
+      recordDigest: recordDigest(records),
+      databaseBytes: fs.statSync(cfg.statePath).size,
       hostLoad,
       memory,
       gcCount: gc.length,
       gcTotalMs: gc.reduce((total, entry) => total + entry.duration, 0),
       gcMaxMs: gc.reduce((max, entry) => Math.max(max, entry.duration), 0),
+      observedStatements,
       sql: [...timings].toSorted((a, b) => b[1].ms - a[1].ms),
     }),
   );

@@ -3,6 +3,7 @@ import type { StartupConfigPreflightOptions } from "../../commands/startup-confi
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
 import { CLI_NAME } from "../cli-name.js";
@@ -42,6 +43,8 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
     const { checkCliGatewayStateDir } = await import("../state-dir-gateway-check.js");
     outcome = await checkCliGatewayStateDir({ command: `openclaw ${commandPath.join(" ")}` });
   } catch (error) {
+    // A cancelled guard read is the CLI stopping, not a guard failure to diagnose.
+    getAsyncWorkSignal()?.throwIfAborted();
     const { formatErrorMessage } = await import("../../infra/errors.js");
     const { logDebug } = await import("../../logger.js");
     logDebug(`state-store guard unavailable: ${formatErrorMessage(error)}`);
@@ -142,16 +145,13 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     let beforeStatePreparation: StartupConfigPreflightOptions["beforeStatePreparation"];
-    const [{ resolvePluginInstallInvalidConfigPolicy }, { resolvePluginInstallPreactionRequest }] =
-      await Promise.all([
-        import("../../plugins/install-config.js"),
-        import("../plugin-install-config-policy.js"),
-      ]);
-    let allowInvalid =
-      commandPath[0] === "update" ||
-      resolvePluginInstallInvalidConfigPolicy(
-        resolvePluginInstallPreactionRequest({ actionCommand, commandPath }),
-      ) === "allow-plugin-recovery";
+    let allowInvalid = primary === "update";
+    if (primary === "plugins" && secondary === "install") {
+      // Only installation can recover an invalid config from the requested plugin's metadata.
+      const { allowsPluginInstallConfigRecovery } =
+        await import("../plugin-install-config-policy.js");
+      allowInvalid = allowsPluginInstallConfigRecovery(actionCommand);
+    }
     const isGatewayRun =
       commandPath[0] === "gateway" &&
       (commandPath.length === 1 || (commandPath.length === 2 && commandPath[1] === "run"));

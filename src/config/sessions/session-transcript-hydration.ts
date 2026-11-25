@@ -1,6 +1,8 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
+  getSqliteDatabaseAdmissionSourceForPath,
+  prepareSqliteDatabaseAdmissionAsync,
   readSqliteDatabaseScopedWriteTokenForPath,
   sqliteSessionIdWriteScope,
 } from "../../infra/sqlite-database-admission.js";
@@ -42,7 +44,7 @@ import {
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import {
   historyLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -353,12 +355,30 @@ export function prepareSessionTranscriptHydration(
         retainRead(prepared, resolved);
         return prepared;
       });
+    const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
+    const admittedSource = getSqliteDatabaseAdmissionSourceForPath(databasePath);
+    const preparedSource = await prepareSqliteDatabaseAdmissionAsync({
+      location: databasePath,
+      identity: admittedSource && {
+        ...admittedSource.identity,
+        canonicalPath: admittedSource.canonicalPath,
+      },
+      expectedIdentity: input.expectedIdentity,
+      assertCurrent: () => {
+        signal?.throwIfAborted();
+        owner.assertCurrent();
+      },
+    });
+    if (!preparedSource?.key.startsWith("file:")) {
+      return load();
+    }
     const revision = readSqliteDatabaseScopedWriteTokenForPath(
-      resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
+      databasePath,
       [
         ...(resolved.sessionKey ? collectSessionEntryLookupKeys(resolved.sessionKey) : []),
         sqliteSessionIdWriteScope(resolved.sessionId),
       ],
+      preparedSource,
     );
     if (!revision) {
       return load();
@@ -417,6 +437,7 @@ export function prepareSessionTranscriptHydration(
               agentId: resolved.databaseAgentId ?? resolved.agentId,
               path: scope.storePath,
               env: scope.env,
+              expectedIdentity,
             };
             // Restoration needs the writer too; leave FIFO before handling a cold miss.
             await readRestoredSessionTranscriptInWorker(
@@ -438,7 +459,7 @@ export function prepareSessionTranscriptHydration(
                         preparedEntry: readOwnedSessionTranscriptEntry(target),
                         caller,
                       },
-                      targetDiscoveryLane,
+                      sessionStoreLane,
                     ),
                   (prepared) => {
                     const consumed = consume(prepared);
@@ -455,7 +476,7 @@ export function prepareSessionTranscriptHydration(
           },
           signal,
           // Keep discovery separate from the bounded history worker.
-          targetDiscoveryLane,
+          sessionStoreLane,
         );
       }
     : undefined;

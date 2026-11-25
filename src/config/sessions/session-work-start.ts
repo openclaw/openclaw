@@ -57,6 +57,24 @@ export class SessionWorkStartError extends Error {
   }
 }
 
+type WorkTargetEntry = Pick<InternalSessionEntry, "sessionId"> | null | undefined;
+
+function matchesWorkTarget(entry: WorkTargetEntry, expectedSessionId: string) {
+  return entry?.sessionId === expectedSessionId;
+}
+
+/** An explicit caller target binds retries, row checks and cancellation to the same session. */
+export function captureSessionWorkTarget({ expectedSessionId }: { expectedSessionId?: string }) {
+  if (expectedSessionId === undefined) {
+    return undefined;
+  }
+  return {
+    requestIdentity: { expectedSessionId },
+    requiredSessionId: expectedSessionId,
+    matches: (entry: WorkTargetEntry) => matchesWorkTarget(entry, expectedSessionId),
+  };
+}
+
 /** One work-start policy gates ordinary new work. */
 export function resolveSessionWorkStartBlock(
   sessionKey: string,
@@ -69,7 +87,7 @@ export function resolveSessionWorkStartBlock(
       `Session "${sessionKey}" was deleted while starting work. Retry.`,
     );
   }
-  if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
+  if (options?.expectedSessionId && !matchesWorkTarget(entry, options.expectedSessionId)) {
     return new SessionWorkStartError(
       "changed",
       `Session "${sessionKey}" changed while starting work. Retry.`,

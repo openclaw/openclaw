@@ -1,8 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  captureModelCostPricing,
-  estimateAggregateUsageCostAsync,
-} from "../../utils/usage-format.js";
+import { captureModelCostPricing } from "../../model-catalog/usage-pricing.js";
+import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
 import type { NormalizedUsage } from "../usage.js";
 import type { EmbeddedAgentMeta } from "./types.js";
 import {

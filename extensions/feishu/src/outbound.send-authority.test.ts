@@ -212,6 +212,28 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
     },
   );
 
+  it("uploads the action filename override instead of the media path basename", async () => {
+    await withFeishuTransport(async (fixture) => {
+      mockAttachmentLoading();
+      await required(feishuPlugin.actions?.handleAction)({
+        channel: "feishu",
+        action: "send",
+        cfg: fixture.cfg,
+        params: {
+          to: TARGET,
+          message: "probe",
+          media: "/tmp/report_en.pdf",
+          filename: "quarterly-report.pdf",
+          forceDocument: true,
+        },
+        mediaLocalRoots: ["/tmp"],
+      });
+      const upload = fixture.requests.find((request) => request.path === FILE_PATH);
+      expect(upload?.body).toContain("quarterly-report.pdf");
+      expect(upload?.body).not.toContain("note.txt");
+    });
+  });
+
   it.each(sendRoutes)(
     "stops %s when the sender retires during token preparation",
     async (route) => {

@@ -77,6 +77,30 @@ function firstDifference(before: unknown, after: unknown, path = "$"): string {
   return `path=${path} leafPrevious=${digest(left)} leafNext=${digest(right)} leafBytes=${left === undefined ? 0 : Buffer.byteLength(left)}:${right === undefined ? 0 : Buffer.byteLength(right)}`;
 }
 
+/**
+ * Responses item envelopes (`id`, `status`) render no model tokens. A warm continuation
+ * inherits stored output items with them, while cold replay omits IDs the store cannot
+ * verify (#200163). Every prefix comparison uses this one projection, so the release gate
+ * and the transport tests cannot disagree about which fields count.
+ */
+export function omitResponsesReplayEnvelopes(input: readonly unknown[]): unknown[] {
+  return input.map((raw) => {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      return raw;
+    }
+    const item = raw as Record<string, unknown>;
+    const envelope =
+      item.type === "function_call" ||
+      item.type === "reasoning" ||
+      (item.type === "message" && item.role === "assistant");
+    if (!envelope) {
+      return item;
+    }
+    const { id: _id, status: _status, ...rest } = item;
+    return rest;
+  });
+}
+
 /** Preserve history order and content bytes; normalize text shorthand and separate cache markers. */
 export function snapshotProviderPrefix(
   api: CacheRequestApi,

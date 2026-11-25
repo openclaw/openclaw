@@ -456,6 +456,82 @@ it.each([true, false])(
   },
 );
 
+it.each(["alternatives", "base-only", "matching-base"] as const)(
+  "projects global Settings harness readiness separately from the credential agent (%s)",
+  async (scenario) => {
+    await withModelsListState(
+      async (state) => {
+        const provider = "openai";
+        const id = "gpt-5.6-sol";
+        const ref = `${provider}/${id}`;
+        const hasAlternatives = scenario === "alternatives";
+        const scopedRuntime = scenario === "matching-base" ? "openclaw" : "codex";
+        const cfg = pickerConfig(
+          state.workspaceDir,
+          ref,
+          "openclaw",
+          hasAlternatives ? ["codex"] : [],
+        );
+        cfg.agents!.entries = {
+          main: {
+            models: {
+              [ref]: { agentRuntime: { id: scopedRuntime }, pickerRuntimes: ["agentsapi"] },
+            },
+          },
+        };
+        const base = modelEntry(provider, { id });
+        const native = nativeModel(base, "codex", "large");
+        const { params } = preparePicker(
+          cfg,
+          { entries: [base], routeVariants: [base, native] },
+          {
+            pluginRegistry: registryFor("codex", {
+              authBootstrap: "harness",
+              loadModelCatalog: async () => [native],
+              readModelCatalogReadiness: () =>
+                hasAlternatives ? { accountType: "chatgpt" } : undefined,
+            }),
+          },
+          provider,
+        );
+        const configured = (await prepareModelsListResult(params)).read();
+        const row = configured.models.find((model) => model.id === id);
+        expect(row).toMatchObject({ agentRuntime: { id: scopedRuntime } });
+        if (scenario === "matching-base") {
+          expect(row).toMatchObject({ available: true });
+          expect(row).not.toHaveProperty("defaultModelRuntimes");
+        } else {
+          expect(row?.defaultModelRuntimes).toMatchObject({
+            base: { agentRuntime: { id: "openclaw" }, available: true },
+            alternatives: hasAlternatives
+              ? [{ agentRuntime: { id: "codex" }, available: true }]
+              : [],
+          });
+        }
+        expect(row?.runtimeChoices?.map(({ agentRuntime }) => agentRuntime.id)).toEqual([
+          "agentsapi",
+        ]);
+        expect(Value.Check(ModelChoiceSchema, row)).toBe(true);
+
+        const ordinary = (
+          await prepareModelsListResult({
+            ...params,
+            params: { ...params.params, includeDefaultModels: false },
+          })
+        ).read();
+        expect(ordinary.models.find((model) => model.id === id)).toMatchObject({
+          agentRuntime: { id: scopedRuntime },
+          runtimeChoices: [{ agentRuntime: { id: "agentsapi" } }],
+        });
+        expect(ordinary.models.find((model) => model.id === id)).not.toHaveProperty(
+          "defaultModelRuntimes",
+        );
+      },
+      { agentEnv: "main" },
+    );
+  },
+);
+
 it.each([
   ["openai", "codex", "codex", "ready"],
   ["openai", "agentsapi", undefined, "ready"],

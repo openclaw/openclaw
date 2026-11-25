@@ -76,7 +76,10 @@ const makePendingOwner = (
   databasePath: scope.storePath,
   workerDatabasePath: scope.storePath,
   assertCurrent() {},
+  assertReadCurrent() {},
   finish() {},
+  release() {},
+  relinquish() {},
 });
 
 async function fixture(patch: Partial<SessionEntry> = {}) {
@@ -298,7 +301,7 @@ describe("memory continuation adapters", () => {
         status: "ok",
       });
     } finally {
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
       await receipt.settled?.();
     }
     expect(await stageSessionPendingInput(target, options)).toMatchObject({

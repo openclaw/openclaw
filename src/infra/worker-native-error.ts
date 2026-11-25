@@ -65,9 +65,16 @@ export function encodeNativeWorkerFailure(value: unknown): NativeWorkerFailure {
       stack: current.stack,
     };
     seen.set(current, node);
-    const code: unknown = Object.getOwnPropertyDescriptor(current, "code")?.value;
-    if (typeof code === "string" || typeof code === "number") {
-      node.code = code;
+    // Bun's native worker errors inherit their code; never invoke user accessors.
+    for (let owner: object | null = current; owner; owner = Object.getPrototypeOf(owner)) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, "code");
+      if (descriptor) {
+        const code: unknown = descriptor.value;
+        if (typeof code === "string" || typeof code === "number") {
+          node.code = code;
+        }
+        break;
+      }
     }
     for (const key of ["errcode", "errno"] as const) {
       const field: unknown = Object.getOwnPropertyDescriptor(current, key)?.value;

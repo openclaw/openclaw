@@ -2,6 +2,7 @@
 import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -222,6 +223,7 @@ describe("buildContextReply", () => {
     "projects session window (resolved=%s authored=%s harness=%s)",
     async (resolved, authored, persistedHarness, expected) => {
       const params = makeParams("/context json", false, { contextTokens: 200_000 });
+      const model = expectDefined(params.model, "context fixture model");
       params.sessionEntry = {
         ...params.sessionEntry,
         sessionId: "local-context",
@@ -232,9 +234,7 @@ describe("buildContextReply", () => {
         contextTokens: 32_768,
         contextTokensSource: "resolved-v1",
       };
-      params.thinkingCatalog = [
-        { provider: params.provider, id: params.model, contextWindow: resolved },
-      ];
+      params.thinkingCatalog = [{ provider: params.provider, id: model, contextWindow: resolved }];
       if (authored !== undefined) {
         params.cfg = {
           models: {
@@ -243,7 +243,7 @@ describe("buildContextReply", () => {
                 baseUrl: "http://127.0.0.1:11434",
                 models: [
                   {
-                    id: params.model,
+                    id: model,
                     name: "Qwen 2.5 7B",
                     reasoning: false,
                     input: ["text"],
@@ -264,10 +264,10 @@ describe("buildContextReply", () => {
     },
   );
 
-  it("describes compactable transcript counts in help output", async () => {
+  it("describes compactable chat history counts in help output", async () => {
     const result = await buildContextReply(makeParams("/context", false));
     expect(result.text).toContain(
-      "/context detail (per-file + per-tool + per-skill + system prompt size + compactable transcript counts)",
+      "/context detail (per-file + per-tool + per-skill + system prompt size + compactable chat history counts)",
     );
   });
 
@@ -368,7 +368,7 @@ describe("buildContextReply", () => {
       async (target) => {
         const { text } = await buildContextReply(detailParams(target));
         expect(text).toContain(
-          `Compactable transcript: ${paged ? 2 : 0} real conversation message(s) / ${paged ? 130 : 2} transcript message(s)`,
+          `Compactable chat history: ${paged ? 2 : 0} real conversation message(s) / ${paged ? 130 : 2} history entries`,
         );
         if (paged) {
           expect(text).not.toContain("Compaction note:");

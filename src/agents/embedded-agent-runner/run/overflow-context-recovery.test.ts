@@ -117,7 +117,6 @@ async function withRecovery(
       prepareCompactedTranscriptRetry: async () => {},
       markOwnedTranscriptRetry: () => {},
       retryTransientCompactionFailure: async () => false,
-      armPostCompactionGuard: () => {},
       usageAccumulator: createUsageAccumulator(),
     };
     await check(input, sessionPromptState);

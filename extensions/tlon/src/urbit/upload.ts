@@ -1,5 +1,10 @@
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
-import { MAX_IMAGE_BYTES, readRemoteMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import {
+  buildOutboundMediaLoadOptions,
+  MAX_IMAGE_BYTES,
+  readRemoteMediaBuffer,
+  type OutboundMediaAccess,
+} from "openclaw/plugin-sdk/media-runtime";
 import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 import { type ClientConfig, uploadFile } from "../tlon-api.js";
 
@@ -11,6 +16,7 @@ export async function uploadImageFromUrl(
   imageUrl: string,
   clientConfig: ClientConfig,
   maxBytes?: number,
+  mediaAccess?: OutboundMediaAccess,
 ): Promise<string> {
   let sourceSizeVerified = false;
   const assertCurrent = clientConfig.assertDirectAdapterHandoff;
@@ -35,7 +41,7 @@ export async function uploadImageFromUrl(
       url: imageUrl,
       maxBytes: Math.min(maxBytes ?? MAX_IMAGE_BYTES, MAX_IMAGE_BYTES),
       ...TLON_MEDIA_FETCH_TIMEOUTS,
-      ssrfPolicy: undefined,
+      ssrfPolicy: buildOutboundMediaLoadOptions({ mediaAccess }).ssrfPolicy,
       beforeRequest,
       requestInit: { method: "GET" },
     });

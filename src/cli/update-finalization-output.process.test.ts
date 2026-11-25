@@ -212,7 +212,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       );
       if (scenario === "json" || scenario === "human") {
         for (const status of ["in_progress", "completed"]) {
-          const phaseRecord = `"step":"finalize:preflight","status":"${status}"`;
+          const phaseRecord = `[update finalize] finalize:preflight: ${status}`;
           check(result.stderr).toContain(phaseRecord);
           check(result.stdout).not.toContain(phaseRecord);
         }
@@ -336,6 +336,8 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           const pid = Number(await fs.readFile(path.join(root, "completion.pid"), "utf8"));
           expect(pid).toBeGreaterThan(0);
           expect(isPidAlive(pid)).toBe(false);
+          // The failed refresh is owed; it is reported without changing the status above.
+          expect(output.owedSteps).toMatchObject([{ id: "shell-completion" }]);
         }
         expect(output.phaseTimings).toContainEqual(
           expect.objectContaining({

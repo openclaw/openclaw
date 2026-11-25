@@ -23,7 +23,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   browserLaunchOptions: { ignoreDefaultArgs: ["--disable-back-forward-cache"] },
   async startServer() {
-    const productionRoot = inject("controlUiE2ePrebuiltAssets")?.root;
+    const productionRoot = inject("controlUiE2eDeploymentAssets")?.root;
     if (productionRoot) {
       // The deployment lane owns immutable production-relative assets.
       currentUiRoot = productionRoot;
@@ -210,7 +210,7 @@ suite.define(() => {
           await (failAssets && (asset || retry) ? route.abort("failed") : route.continue());
         });
         await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-        const title = page.getByRole("heading", { name: "Control UI didn’t start", exact: true });
+        const title = page.getByRole("heading", { name: "OpenClaw didn’t start", exact: true });
         await expect.poll(() => title.isVisible(), { timeout: 15_000 }).toBe(true);
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
           const frame = await takeControlUiScreenshotFrame(

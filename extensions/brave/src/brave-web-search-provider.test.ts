@@ -27,10 +27,15 @@ async function expectCached(run: () => Promise<Result>, result: Result, calls: n
   expect(mockFetch).toHaveBeenCalledTimes(calls);
 }
 
-vi.mock("node:dns/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:dns/promises")>()),
-  lookup,
-}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 // mock-isolation: Capture diagnostics without creating process-global log sinks.
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({

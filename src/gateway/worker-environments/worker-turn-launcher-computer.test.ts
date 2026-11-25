@@ -443,7 +443,7 @@ describe("worker launch capabilities", () => {
                 }),
               ),
             ]) {
-              expect(() => assertCurrent!(changed)).toThrow("no longer current");
+              expect(() => assertCurrent!(changed)).toThrow("placement changed");
             }
             const original = environments.get(fx.ENVIRONMENT_ID)!;
             if (original.state !== "attached") {
@@ -455,7 +455,7 @@ describe("worker launch capabilities", () => {
             ]) {
               vi.mocked(environments.get).mockReturnValueOnce(changed);
               await Promise.resolve();
-              expect(retainedNodeAuthority).toThrow("no longer current");
+              expect(retainedNodeAuthority).toThrow("placement changed");
             }
           }
           if (primaryError) {
@@ -488,7 +488,7 @@ describe("worker launch capabilities", () => {
         if (resourceCleanup) {
           await resourceCleanup.entered.promise;
           expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).not.toBeNull();
-          expect(retainedNodeAuthority).toThrow("no longer current");
+          expect(retainedNodeAuthority).toThrow("placement changed");
           expect(closeComputer).not.toHaveBeenCalled();
           resourceCleanup.release.resolve();
           await expect(operation).rejects.toBe(skillCleanupError);
@@ -619,7 +619,7 @@ describe("worker launch capabilities", () => {
       const placement = fx.placements.get(fx.SESSION_ID);
       expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
       if (retainedNodeAuthority) {
-        expect(retainedNodeAuthority).toThrow("no longer current");
+        expect(retainedNodeAuthority).toThrow("placement changed");
       }
     },
   );

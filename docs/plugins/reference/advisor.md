@@ -72,10 +72,9 @@ Set both triggers to `0` to turn reviews off.
 
 Behavior and limits:
 
-- Only the main agent's user-triggered runs are reviewed. Heartbeat, cron and
-  other automatic runs are not, and neither are subagent sessions: the main
-  agent sees what its subagents report, so Advisor corrects the main agent,
-  which can redirect the subagent.
+- User-triggered runs are reviewed, including subagent runs, each in its own
+  session. Heartbeat and cron runs are not, but subagents they spawn are, like
+  any other subagent.
 - After a correction steers a run, later reviews in that run are told what was
   already said and stay quiet unless they find a different problem.
 - A due review waits until every running tool call has its result, so the fork
@@ -88,6 +87,12 @@ Behavior and limits:
   before acting.
 - Advisor needs conversation access and prompt injection permission through
   `plugins.entries.advisor.hooks`, which trusted plugins have by default.
+- When Codex refuses the tool-free fork, Gateway warning logs record
+  `advisor: review skipped` with `tool_policy` (native tools restricted),
+  `sandbox` (OpenClaw sandboxing active), or `exec_host_node` (execution assigned
+  to a paired node). No review ran. Inspect the session's effective policy;
+  Advisor does not change it or switch runtimes or credentials. These skips are
+  distinct from `fork_failed`, which means an unexpected fork failure.
 - Gateway info logs record review token usage (uncached input, cache reads,
   cache writes and output), whether a correction steered the run, and each
   cancelled review with its reason (`run_end`, `run_aborted`, `new_user_turn`,

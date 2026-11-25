@@ -328,7 +328,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           try {
             // MSP has no history import or system field; transfer the retained branch once as context.
             const contextAgentId = target.agentId ?? sessionAgentId;
-            const limits = resolveAgentHarnessHistoryLimits(params.model.contextWindow);
+            const limits = resolveAgentHarnessHistoryLimits();
             const retained = await SessionManager.openModelContextAsync(
               { ...transcriptTarget, agentId: contextAgentId },
               {

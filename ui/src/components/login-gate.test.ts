@@ -155,7 +155,7 @@ describe("login gate failure recovery", () => {
     expect(failure.dataset.kind).toBe("trusted-proxy");
     expectText(failure, "failure-raw").toBe("unauthorized");
     expect(failure.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
-    expect(steps).toContain("Open the dashboard through the sign-in proxy");
+    expect(steps).toContain("Open OpenClaw through the sign-in proxy");
     expect(part(failure, "failure-docs").getAttribute("href")).toBe(
       "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
     );
@@ -208,7 +208,10 @@ describe("login gate failure recovery", () => {
       "unauthorized: bootstrap token invalid",
       Codes.AUTH_BOOTSTRAP_TOKEN_INVALID,
     );
+    element.props = { ...element.props, gatewayUrl: "wss://home.example.test" };
+    await element.updateComplete;
     const failure = part(element, "failure");
+    expectText(failure, "hero-label", true).toBe("Run on the computer running OpenClaw");
     expectText(failure, "failure-title", true).toBe("Pairing link is no longer valid");
     expectText(failure, "failure-summary").toMatch(/expired|already been used/);
     expectText(failure, "command--hero code", true).toBe("openclaw dashboard");
@@ -308,6 +311,7 @@ describe("login gate failure recovery", () => {
     try {
       part(element, "failure-refresh").click();
       expect(reload).not.toHaveBeenCalled();
+      await vi.dynamicImportSettled();
       await vi.waitFor(() => {
         expectText(element, ".app-toast__description").toContain("Unsaved starts will be lost.");
       });

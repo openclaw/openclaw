@@ -115,7 +115,11 @@ it.each(["disconnected", "owner-rejected"])(
     const client = { request: () => response.promise } as unknown as GatewayBrowserClient;
     const runDetection = createRoot((dispose) => {
       stop = dispose;
-      return createModelSetupDetectRequest({ getHello: () => null, onComplete });
+      return createModelSetupDetectRequest({
+        getHello: () => null,
+        onOptions: () => {},
+        onComplete,
+      });
     });
     const running = runDetection([client, "main", {}]);
     if (reason === "disconnected") {

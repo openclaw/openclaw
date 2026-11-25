@@ -1,5 +1,6 @@
 import type { AgentToolSurfacePresentation } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
 import {
@@ -61,6 +62,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     scheduledToolPolicy?: ScheduledToolPolicyContext;
     sourceReplyDeliveryMode?: string;
   },
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority,
 ) {
   const presentation = input.presentation;
   const params = presentation
@@ -164,6 +166,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     const controls = createControls
       ? createControls({
           ...params,
+          pluginExecutionAuthority,
           runtimeConfig: codeModeControlsEnabled ? params.config : toolSearchRuntimeConfig,
           modelContextWindowTokens: params.contextTokenBudget ?? params.model?.contextWindow,
           catalogRef: toolSearchCatalogRef,
