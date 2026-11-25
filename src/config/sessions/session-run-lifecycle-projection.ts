@@ -13,7 +13,10 @@ import {
 } from "../../routing/session-key.js";
 import type { ProviderReviewTerminalFact } from "../../sessions/provider-review-terminal.js";
 import { buildUpdatedSessionGoalStatus } from "./goals-transitions.js";
-import { createRestartResumeMarker } from "./session-restart-resume-scope.js";
+import {
+  createRestartResumeMarker,
+  resolveRestartResumeScope,
+} from "./session-restart-resume-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionLifecycleProviderReview = Pick<
@@ -30,6 +33,8 @@ export type SessionLifecyclePatchInput = {
   exactCronRun: boolean;
   gatewayShutdown?: true;
   providerReview?: SessionLifecycleProviderReview;
+  /** When the newest visible assistant row in the transcript arrived; drives unread at run end. */
+  visibleActivityAt?: number;
   expectedWriter?: {
     allowUnstartedFailure?: true;
     requireYielded?: true;
@@ -55,7 +60,6 @@ export type SessionLifecyclePatchEffects = {
 export type LifecyclePhase = "start" | "end" | "error";
 
 export type LifecycleEventLike = { ts: number; sessionId?: string } & {
-  controlUiVisible?: boolean;
   contextClaimId?: string;
   runId?: string;
   clientRunId?: string;
@@ -98,21 +102,25 @@ type LifecycleSessionShape = Pick<
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
-  keyof LifecycleSessionShape | "status" | "lifecycleRunId"
+  keyof LifecycleSessionShape | "status" | "lifecycleRunId" | "lifecycleRestartScope"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<
   Pick<SessionEntry, keyof LifecycleSessionShape | "status">
 >;
 
-export function restartResumeSkipReason(sessionKey: string, entry?: SessionEntry) {
+export function restartResumeSkipReason(
+  sessionKey: string,
+  entry?: SessionEntry,
+  directChat = entry?.resumeAfterRestart?.directChat === true,
+) {
   if (isCronSessionKey(sessionKey)) {
     return "cron";
   }
   if (isAcpSessionKey(sessionKey) || entry?.acp || entry?.modelSelectionLocked) {
     return "external-owner";
   }
-  if (isSubagentSessionKey(sessionKey) || entry?.createdVia === "spawn") {
+  if (isSubagentSessionKey(sessionKey) || (entry?.createdVia === "spawn" && !directChat)) {
     return "subagent";
   }
   if (entry?.archivedAt !== undefined) {
@@ -246,12 +254,6 @@ export function deriveSessionLifecycleSnapshot(params: {
     startedAt,
     endedAt,
     runtimeMs: resolveRuntimeMs({ startedAt, endedAt, existingRuntimeMs: existing?.runtimeMs }),
-    ...(terminal &&
-    !stoppedForRestart &&
-    params.event.controlUiVisible === true &&
-    endedAt !== undefined
-      ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
-      : {}),
     abortedLastRun: status === "killed",
   };
 }
@@ -282,7 +284,11 @@ export function derivePersistedSessionLifecyclePatch(params: {
   return {
     ...snapshot,
     ...(phase === "start"
-      ? { lifecycleRunId: runId, lastRunId: undefined }
+      ? {
+          lifecycleRunId: runId,
+          lifecycleRestartScope: resolveRestartResumeScope(),
+          lastRunId: undefined,
+        }
       : snapshot.status && resolveSettledLifecycleTerminalOutcome(params.event)
         ? { lifecycleRunId: undefined, lastRunId: clientRunId }
         : {}),
@@ -437,6 +443,10 @@ export function projectSessionLifecyclePatch(
   }
   const endedAt = patch.endedAt ?? params.event.ts;
   const terminal = resolveSettledLifecycleTerminalOutcome(params.event);
+  if (terminal && (params.visibleActivityAt ?? 0) > (entry.lastActivityAt ?? 0)) {
+    // Unread follows the chat: a run that appended no visible reply leaves activity alone.
+    patch.lastActivityAt = params.visibleActivityAt;
+  }
   if (
     params.gatewayShutdown &&
     patch.status === "killed" &&

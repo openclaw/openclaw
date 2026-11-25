@@ -7,6 +7,8 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
+import { buildOpenAIResponsesParams } from "../../../packages/ai/src/transports/openai-responses-params-internal.js";
+import { createModel } from "../../../packages/ai/src/transports/openai-responses-prompt-observer.test-support.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -29,6 +31,7 @@ import {
   retainEmbeddedSessionPromptState,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
+import { getToolResultTextBudget } from "./tool-result-text-budget.js";
 import {
   toolResultWarningDedupe,
   truncateToolResultMessage,
@@ -334,6 +337,29 @@ describe("truncateOversizedToolResultsInMessages", () => {
     const { messages: result, truncatedCount } = truncate(messages, 200_000);
     expect(truncatedCount).toBe(0);
     expect(result).toEqual(messages);
+  });
+
+  it("keeps whole leading records and a single recovery notice when a page has many blocks", () => {
+    const rows = Array.from({ length: 1_000 }, (_, index) => ({
+      type: "text" as const,
+      text: `record-${index} | ${"payload ".repeat(14)}`,
+    }));
+    const message = { ...toolResult("unused"), content: rows };
+    const projected = truncate([message], 32_768);
+    expect(projected.truncatedCount).toBe(1);
+    const result = projected.messages[0];
+    if (result?.role !== "toolResult") {
+      throw new Error("Expected a projected tool result");
+    }
+    const content = result.content;
+    expect(content.length).toBeGreaterThan(1);
+    expect(content.slice(0, -1)).toEqual(rows.slice(0, content.length - 1));
+    expect(content.at(-1)).toMatchObject({
+      type: "text",
+      text: expect.stringMatching(/truncated; rerun with narrower args/u),
+    });
+    expect(getToolResultTextBudget(result)).toBeLessThanOrEqual(16_000);
+    expect(message.content).toHaveLength(1_000);
   });
 
   it("applies the aggregate cap to CJK-weighted prompt history", () => {
@@ -841,6 +867,53 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(findAssistant("stale checkpoint owner")?.providerReplay).toBeUndefined();
     expect(findAssistant("stale Anthropic checkpoint owner")?.providerReplay).toBeUndefined();
     expect(findAssistant("suppression owner")?.providerReplay).toEqual(suppressionReplay);
+  });
+
+  it("caps only the unsent batch on predicted pressure, but can recover sent history after rejection", async () => {
+    const scope = await createSession("runtime-sqlite-predicted-overflow");
+    const sent = toolResults(["réport 🔧 ".repeat(1_000), "other report ".repeat(1_000)], "sent");
+    const unsent = toolResult("fresh output ".repeat(2_000), "unsent");
+    await append(scope, user("run tools"));
+    for (const message of sent) {
+      await append(scope, message);
+    }
+    await append(scope, assistant("read the reports"));
+    await append(scope, unsent);
+
+    const { state, project } = projection(9_000, 60_000);
+    const previouslySent = project([...sent, assistant("done")]).messages.slice(0, 2);
+    const budget = {
+      maxCharsOverride: 6_000,
+      aggregateMaxCharsOverride: 16_000,
+      projectionState: state,
+    };
+    const results = () => activeMessages(scope).filter((message) => message.role === "toolResult");
+    const model = createModel();
+    const wireToolOutput = (messages: AgentMessage[]) => {
+      const request = buildOpenAIResponsesParams(
+        model,
+        { messages: convertToLlm(messages) },
+        undefined,
+      );
+      return request.input
+        ?.filter((item) => item.type === "function_call_output")
+        .map((item) => JSON.stringify(item));
+    };
+    const before = wireToolOutput(previouslySent);
+    expect(before).toHaveLength(2);
+
+    expect(await recover(scope, { ...budget, preserveSentToolResults: true })).toMatchObject({
+      truncated: true,
+      truncatedCount: 1,
+    });
+    expect(results().slice(0, 2)).toEqual(sent);
+    const after = wireToolOutput(project(results()).messages);
+    expect(after).toHaveLength(3);
+    expect(after?.slice(0, 2)).toEqual(before);
+    expect(toolText(results()[2]!)).toContain("truncated");
+
+    expect(await recover(scope, budget)).toMatchObject({ truncated: true });
+    expect(results().slice(0, 2)).not.toEqual(sent);
   });
 
   it.each([

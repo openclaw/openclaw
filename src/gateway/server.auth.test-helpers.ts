@@ -42,7 +42,7 @@ export function browserProxyAuth(overrides: Partial<GatewayAuthConfig> = {}): Ga
 
 export async function configureBrowserAuth(
   auth = browserProxyAuth(),
-  options: Pick<GatewayConfig, "roles" | "tailscale"> = {},
+  options: Pick<GatewayConfig, "roles" | "tailscale" | "sessionControl"> = {},
 ) {
   const { writeConfigFile } = await import("../config/config.js");
   testState.gatewayAuth = auth;

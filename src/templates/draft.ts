@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { stringify } from "yaml";
 import {
@@ -10,9 +10,17 @@ import {
   type TemplatesDraftsReviewResult,
   validateTemplateDraftDocument,
 } from "../../packages/gateway-protocol/src/index.js";
-import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { isSelfContainedSvg } from "../../packages/gateway-protocol/src/svg-image.js";
+import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import {
+  isImageProcessorUnavailableError,
+  optimizeImageToPng,
+  readImageProbeFromHeader,
+} from "../media/image-ops.js";
+import { PORTABLE_PLUGIN_ICON_PATH } from "../plugins/portable-icon-paths.js";
+import { AVATAR_MAX_BYTES, isSupportedLocalAvatarExtension } from "../shared/avatar-policy.js";
 import { templateDependencyInventory } from "./dependency-inventory.js";
 import { TEMPLATE_BOOTSTRAP_FILE_NAMES } from "./manifest-contract.js";
 import { buildTemplateProject, extractBuiltTemplateArtifact } from "./project-build.js";
@@ -27,6 +35,20 @@ import { parseTemplateManifest, type TemplateManifest } from "./schema.js";
 
 export const MAX_TEMPLATE_DRAFT_BYTES = 1_000_000;
 const DRAFT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+
+/** ClawHub reads a package's listing icon only from `assets/icon.png`, as a PNG of at most 512 KiB. */
+const TEMPLATE_ICON_MAX_BYTES = 512 * 1024;
+const TEMPLATE_ICON_SIDES = [512, 384, 256, 192, 128];
+/** Where Add writes the packaged avatar in the new agent's workspace. */
+const TEMPLATE_AVATAR_WORKSPACE_PATH = "avatars/avatar.png";
+const TEMPLATE_AVATAR_ITEM_ID = `file:${PORTABLE_PLUGIN_ICON_PATH}`;
+const RASTER_AVATAR_FORMATS: Record<string, string> = {
+  ".png": "png",
+  ".jpg": "jpeg",
+  ".jpeg": "jpeg",
+  ".gif": "gif",
+  ".webp": "webp",
+};
 
 export function templateDraftRevision(content: string): string {
   return createHash("sha256").update(content).digest("hex");
@@ -111,7 +133,7 @@ function parseProposal(content: string): TemplateDraftDocument {
   if (!validateTemplateDraftDocument(value) || !isExactSemVer(value.version)) {
     throw new TemplateProjectError(
       "invalid_draft",
-      "The draft must contain a name, semantic version, scope, CLAW.md manifest, and text files.",
+      "The draft must contain a name, semantic version, scope, CLAW.md manifest, and text files. An avatar, when present, must be a workspace-relative image path.",
     );
   }
   if (Object.values(value.scope).some((item) => !item.trim())) {
@@ -121,6 +143,81 @@ function parseProposal(content: string): TemplateDraftDocument {
     );
   }
   return value;
+}
+
+/**
+ * Read the one image a draft may name and re-encode it as the package icon.
+ * Only decoded pixels are published, so the workspace file's metadata stays private.
+ */
+async function readDraftAvatarIcon(workspaceDir: string, path: string): Promise<Buffer> {
+  const invalid = (problem: string) =>
+    new TemplateProjectError(
+      "invalid_draft_avatar",
+      `The draft avatar ${JSON.stringify(path)} ${problem} Point "avatar" at a PNG, JPEG, GIF, WebP, or SVG file in this agent's workspace, or remove the field.`,
+    );
+  const extension = extname(path).toLowerCase();
+  if (
+    !isSafeTemplateRelativePath(path) ||
+    path.includes("\\") ||
+    !isSupportedLocalAvatarExtension(path)
+  ) {
+    throw invalid("is not a workspace-relative image path.");
+  }
+  let source: Buffer;
+  try {
+    const root = await fsSafeRoot(workspaceDir);
+    const read = await root.read(path, {
+      maxBytes: AVATAR_MAX_BYTES,
+      symlinks: "reject",
+      hardlinks: "reject",
+    });
+    source = read.buffer;
+  } catch (error) {
+    throw invalid(
+      error instanceof FsSafeError && error.code === "too-large"
+        ? `is larger than ${AVATAR_MAX_BYTES / (1024 * 1024)} MB.`
+        : "is not a readable regular file in this agent's workspace.",
+    );
+  }
+  let image = source;
+  if (extension === ".svg") {
+    let svg: string;
+    try {
+      svg = new TextDecoder("utf-8", { fatal: true }).decode(source);
+    } catch {
+      throw invalid("is not an SVG image.");
+    }
+    if (!isSelfContainedSvg(svg)) {
+      throw invalid("is not a self-contained SVG image.");
+    }
+    try {
+      // Accepted edge: a pathological SVG rasterizes on the Gateway thread. The file is the
+      // administrator's own bounded workspace avatar, and a slow review is visible and recoverable.
+      const { Resvg } = await import("@resvg/resvg-js");
+      const font = { loadSystemFonts: false };
+      const { width, height } = new Resvg(svg, { font });
+      image = new Resvg(svg, {
+        font,
+        fitTo: { mode: width >= height ? "width" : "height", value: TEMPLATE_ICON_SIDES[0]! },
+      })
+        .render()
+        .asPng();
+    } catch {
+      throw invalid("could not be rendered as an SVG image.");
+    }
+  } else if (readImageProbeFromHeader(source)?.format !== RASTER_AVATAR_FORMATS[extension]) {
+    throw invalid(`does not contain a ${extension.slice(1).toUpperCase()} image.`);
+  }
+  try {
+    return (
+      await optimizeImageToPng(image, TEMPLATE_ICON_MAX_BYTES, { sides: TEMPLATE_ICON_SIDES })
+    ).buffer;
+  } catch (error) {
+    if (isImageProcessorUnavailableError(error)) {
+      throw error;
+    }
+    throw invalid("could not be decoded as an image.");
+  }
 }
 
 function manifestFromDraft(markdown: string) {
@@ -150,7 +247,7 @@ function packageReviewId(kind: "skill" | "plugin", pkg: TemplateManifest["skills
     : `package:${kind}:clawhub:${pkg.ref}`;
 }
 
-/** Build a disposable, immutable publication snapshot from authored text only. */
+/** Build a disposable, immutable publication snapshot from authored text and one optional avatar. */
 export async function prepareTemplateDraft(params: {
   workspaceDir: string;
   draftId: string;
@@ -184,6 +281,21 @@ export async function prepareTemplateDraft(params: {
     if (sourcePaths.has(file.path)) {
       add({ id: `file:${file.path}`, kind: "file", label: file.path, detail: file.content });
     }
+  }
+  if (authored.avatar !== undefined) {
+    // Without this, the manifest's own avatar would be replaced silently.
+    if (draftManifest.agent.identity?.avatar) {
+      throw new TemplateProjectError(
+        "invalid_draft_avatar",
+        "The draft's \"avatar\" field and the manifest's agent.identity.avatar both declare the agent avatar. Remove one of them.",
+      );
+    }
+    add({
+      id: TEMPLATE_AVATAR_ITEM_ID,
+      kind: "file",
+      label: PORTABLE_PLUGIN_ICON_PATH,
+      detail: authored.avatar,
+    });
   }
   for (const pkg of templateDependencyInventory(draftManifest)) {
     add({
@@ -260,6 +372,22 @@ export async function prepareTemplateDraft(params: {
   draftManifest.automations = draftManifest.automations.filter(
     (job) => !excluded.has(`cron:${job.id}`),
   );
+  // One reviewed image is both the ClawHub listing icon and the new agent's avatar, so
+  // excluding it removes the file and both manifest references together.
+  const icon =
+    authored.avatar !== undefined && !excluded.has(TEMPLATE_AVATAR_ITEM_ID)
+      ? await readDraftAvatarIcon(params.workspaceDir, authored.avatar)
+      : undefined;
+  if (icon) {
+    draftManifest.workspace.files.push({
+      source: PORTABLE_PLUGIN_ICON_PATH,
+      path: TEMPLATE_AVATAR_WORKSPACE_PATH,
+    });
+    draftManifest.agent.identity = {
+      ...draftManifest.agent.identity,
+      avatar: TEMPLATE_AVATAR_WORKSPACE_PATH,
+    };
+  }
   const excludedBundles = templateDependencyInventory(
     manifestFromDraft(authored.manifest).manifest,
   ).filter((pkg) => pkg.source === "bundled" && excluded.has(packageReviewId(pkg.kind, pkg)));
@@ -290,17 +418,20 @@ export async function prepareTemplateDraft(params: {
   )
     .map(([key, value]) => `### ${key.charAt(0).toUpperCase()}${key.slice(1)}\n\n${value.trim()}`)
     .join("\n\n")}\n`;
-  const files = [
+  const files: Array<{ path: string; content: string | Buffer }> = [
     {
       path: "package.json",
       content: `${JSON.stringify({ name, version: proposal.version, openclaw: { template: "CLAW.md" } }, null, 2)}\n`,
     },
     { path: "CLAW.md", content: manifest },
     ...proposal.files,
+    ...(icon ? [{ path: PORTABLE_PLUGIN_ICON_PATH, content: icon }] : []),
   ];
   const names = new Set<string>();
   for (const file of files) {
-    assertPortableContent(file.path, file.content);
+    if (typeof file.content === "string") {
+      assertPortableContent(file.path, file.content);
+    }
     const key = portableTemplatePathKey(file.path);
     if (names.has(key)) {
       throw new TemplateProjectError(
@@ -334,6 +465,18 @@ export async function prepareTemplateDraft(params: {
     ];
     const publishedFiles: TemplatesDraftsReviewResult["files"] = [];
     for (const path of built.files) {
+      const workspacePaths = workspaceFiles
+        .filter((file) => file.source === path)
+        .map((file) => file.path);
+      if (path === "BOOTSTRAP.md") {
+        workspacePaths.push(path);
+      }
+      const mapped = workspacePaths.length ? { workspacePaths } : {};
+      // The icon is the archive's only binary file; the review shows it through iconUrl.
+      if (icon && path === PORTABLE_PLUGIN_ICON_PATH) {
+        publishedFiles.push({ path, ...mapped });
+        continue;
+      }
       const read = await archiveRoot.read(path, {
         maxBytes: MAX_TEMPLATE_DRAFT_BYTES,
         symlinks: "reject",
@@ -341,13 +484,7 @@ export async function prepareTemplateDraft(params: {
       });
       const content = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);
       assertPortableContent(path, content);
-      const workspacePaths = workspaceFiles
-        .filter((file) => file.source === path)
-        .map((file) => file.path);
-      if (path === "BOOTSTRAP.md") {
-        workspacePaths.push(path);
-      }
-      publishedFiles.push({ path, content, ...(workspacePaths.length ? { workspacePaths } : {}) });
+      publishedFiles.push({ path, content, ...mapped });
     }
     return {
       name,
@@ -360,6 +497,7 @@ export async function prepareTemplateDraft(params: {
       integrity: built.integrity,
       artifact: built.artifact,
       files: publishedFiles,
+      ...(icon ? { iconUrl: `data:image/png;base64,${icon.toString("base64")}` } : {}),
       [Symbol.asyncDispose]: () => staging[Symbol.asyncDispose](),
     };
   } catch (error) {

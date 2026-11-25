@@ -614,6 +614,7 @@ export async function migrateLegacyExecApprovals(params: {
     retryGuidance: `Stop the Gateway and node hosts holding ${params.stateDir}.`,
     run: async (env) => {
       const stateRoot = await root(params.stateDir, {
+        allowDrvfsRenameRecovery: true,
         hardlinks: "reject",
         maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
         symlinks: "reject",

@@ -1,37 +1,44 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { Diff, LoadState, splitFrontmatter } from "./detail.tsx";
-import { MutationButton, type WorkshopReads, type WorkshopView } from "./view-shared.tsx";
+import { WorkshopDetailShell } from "./detail.tsx";
+import { Diff, LoadState, splitFrontmatter } from "./diff.tsx";
+import {
+  MutationButton,
+  renderUses,
+  type WorkshopPage,
+  type WorkshopReads,
+  type WorkshopView,
+} from "./view-shared.tsx";
 
 /** A waiting draft: why it was proposed, what it would change, and Apply or Discard. */
-export function DraftDetail(props: { view: WorkshopView; reads: WorkshopReads }) {
+export function DraftDetail(props: {
+  view: WorkshopView;
+  reads: WorkshopReads;
+  page: WorkshopPage;
+  errors: JSX.Element;
+}) {
   const target = () => props.view().viewer!.target;
   const snapshot = () => props.view().snapshot!;
   const draft = createMemo(() =>
     snapshot().list.drafts?.find((entry) => entry.id === target().draftId),
   );
-  const live = createMemo(() =>
-    snapshot().list.skills.some((skill) => skill.name === target().name),
+  const liveSkill = createMemo(() =>
+    snapshot().list.skills.find((skill) => skill.name === target().name),
   );
   // The draft's files come with each read of it.
   const files = () => props.view().viewer?.result?.files ?? [];
-  const meta = () => {
-    const current = draft();
-    if (!current) {
-      return "";
+  // The queue reads newest first, like the Drafts list.
+  const queue = createMemo(() => (snapshot().list.drafts ?? []).toReversed());
+  const position = () => queue().findIndex((entry) => entry.id === target().draftId);
+  const step = (offset: number) => {
+    const next = queue()[position() + offset];
+    if (next) {
+      props.view().onSelectDraft(next.id);
     }
-    return [
-      t("skillWorkshop.drafts.proposed", { time: formatRelativeTimestamp(current.createdAtMs) }),
-      t(live() ? "skillWorkshop.drafts.updatesSkill" : "skillWorkshop.drafts.createsSkill"),
-      files().length > 1
-        ? t("skillWorkshop.drafts.files", { count: String(files().length) })
-        : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
   };
   const mutation = (method: "skills.workshop.applyDraft" | "skills.workshop.discardDraft") => ({
     method,
@@ -41,79 +48,131 @@ export function DraftDetail(props: { view: WorkshopView; reads: WorkshopReads })
   return (
     <Show when={draft()}>
       {(current) => (
-        <>
-          <header class="sw-detail__head">
-            <div class="sw-detail__identity">
-              <h2 class="sw-detail__title">{target().name}</h2>
-              {current().summary && <p class="sw-detail__desc">{current().summary}</p>}
-              <p class="sw-detail__meta">{meta()}</p>
-            </div>
-            <div class="sw-detail__actions">
+        <WorkshopDetailShell
+          kind="draft"
+          view={props.view}
+          page={props.page}
+          name={target().name}
+          summary={current().summary}
+          byline={t(
+            liveSkill() ? "skillWorkshop.drafts.updatesSkill" : "skillWorkshop.drafts.createsSkill",
+          )}
+          actions={
+            <>
               <MutationButton
                 view={props.view}
                 label={t("skillWorkshop.drafts.discard")}
                 title={t("skillWorkshop.drafts.discardTitle")}
                 mutation={mutation("skills.workshop.discardDraft")}
                 actionKey={`discard:${current().id}`}
-                icon="x"
               />
               <MutationButton
                 view={props.view}
                 label={t("skillWorkshop.drafts.apply")}
                 title={t(
-                  live()
+                  liveSkill()
                     ? "skillWorkshop.drafts.applyUpdateTitle"
                     : "skillWorkshop.drafts.applyNewTitle",
                 )}
                 mutation={mutation("skills.workshop.applyDraft")}
                 actionKey={`apply:${current().id}`}
                 variant="primary"
-                icon="check"
               />
-            </div>
-          </header>
-          <div class="sw-notice">
-            {t("skillWorkshop.drafts.chatHint", { skill: target().name })}
-          </div>
-          <div class="sw-detail__body">
-            <Show when={files().length > 1} fallback={<DraftContent reads={props.reads} />}>
-              {/* The same two-column file view as a live skill's Files tab. */}
-              <div class="sw-files">
-                <ul class="sw-files__list" aria-label={t("skillWorkshop.drafts.filesLabel")}>
-                  <For each={files()} keyed>
-                    {(file) => (
-                      <li>
+            </>
+          }
+          panel={
+            <>
+              {props.errors}
+              <div class="sw-notice">
+                {t("skillWorkshop.drafts.chatHint", { skill: target().name })}
+              </div>
+              <div class="sw-section">
+                <Show when={files().length > 1}>
+                  <div
+                    class="sw-file-chips"
+                    role="group"
+                    aria-label={t("skillWorkshop.drafts.filesLabel")}
+                  >
+                    <For each={files()} keyed>
+                      {(file) => (
                         <button
                           type="button"
                           class={[
-                            "sw-files__item",
-                            { "sw-files__item--active": file === target().filePath },
+                            "sw-file-chip",
+                            { "sw-file-chip--active": file === target().filePath },
                           ]}
                           aria-current={file === target().filePath ? "true" : undefined}
                           onClick={() => props.view().onOpen({ ...target(), filePath: file })}
                         >
-                          <span aria-hidden="true">
-                            <Icon name="fileText" />
-                          </span>
-                          <span>{file}</span>
+                          {file}
                         </button>
-                      </li>
-                    )}
-                  </For>
-                </ul>
-                <div class="sw-files__content">
-                  <DraftContent reads={props.reads} />
-                </div>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+                <DraftContent reads={props.reads} />
+                <Show when={queue().length > 1 && position() >= 0}>
+                  <nav class="sw-pager" aria-label={t("skillWorkshop.skills.drafts")}>
+                    <button
+                      type="button"
+                      class="btn btn--sm btn--icon oc-action"
+                      aria-label={t("common.previous")}
+                      title={t("common.previous")}
+                      disabled={position() <= 0}
+                      onClick={() => step(-1)}
+                    >
+                      <Icon name="chevronLeft" />
+                    </button>
+                    <span class="sw-pager__count">
+                      {t("skillWorkshop.drafts.position", {
+                        current: String(position() + 1),
+                        total: String(queue().length),
+                      })}
+                    </span>
+                    <button
+                      type="button"
+                      class="btn btn--sm btn--icon oc-action"
+                      aria-label={t("common.next")}
+                      title={t("common.next")}
+                      disabled={position() >= queue().length - 1}
+                      onClick={() => step(1)}
+                    >
+                      <Icon name="chevronRight" />
+                    </button>
+                  </nav>
+                </Show>
               </div>
-            </Show>
-          </div>
-        </>
+            </>
+          }
+          facts={
+            <>
+              <div>
+                <dt>{t("skillWorkshop.drafts.proposedLabel")}</dt>
+                <dd>{formatRelativeTimestamp(current().createdAtMs)}</dd>
+              </div>
+              <Show when={liveSkill()}>
+                {(skill) => (
+                  <div>
+                    <dt>{t("skillWorkshop.drafts.diffLive")}</dt>
+                    <dd>{renderUses(skill().useCount)}</dd>
+                  </div>
+                )}
+              </Show>
+              <Show when={files().length > 0}>
+                <div>
+                  <dt>{t("skillWorkshop.drafts.filesLabel")}</dt>
+                  <dd>{String(files().length)}</dd>
+                </div>
+              </Show>
+            </>
+          }
+        />
       )}
     </Show>
   );
 }
 
-function DraftContent(props: { reads: WorkshopReads }) {
+export function DraftContent(props: { reads: WorkshopReads }) {
   return (
     <Loading on={props.reads.viewerRequest()} fallback={<LoadState />}>
       <Errored fallback={(error) => <LoadState error={error()} />}>
@@ -130,11 +189,13 @@ function DraftContent(props: { reads: WorkshopReads }) {
                   fallbackSide="after"
                 />
               ) : viewer().target.filePath.endsWith(".md") ? (
-                <MarkdownHtml
-                  class="sw-markdown chat-text"
-                  markdown={splitFrontmatter(viewer().result.content).body}
-                  options={{ mode: "document" }}
-                />
+                <div class="sw-well">
+                  <MarkdownHtml
+                    class="sw-markdown chat-text"
+                    markdown={splitFrontmatter(viewer().result.content).body}
+                    options={{ mode: "document" }}
+                  />
+                </div>
               ) : (
                 <pre class="sw-file">{viewer().result.content}</pre>
               )}

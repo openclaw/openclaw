@@ -934,6 +934,14 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     });
     const shell = testShell(harness.context);
 
+    shell.handleGatewayEvent({
+      event: "config.changed",
+      payload: { changedPaths: ["browser.profiles.temporary", "meta.lastTouchedVersion"] },
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.refreshConfig).toHaveBeenCalledOnce();
+    expect(harness.refreshList).not.toHaveBeenCalled();
+
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });

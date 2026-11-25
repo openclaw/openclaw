@@ -48,7 +48,7 @@ it(
     const root = tempDirs.make("openclaw-message-buffer-");
     const state = path.join(root, "state");
     const workspace = path.join(root, "workspace");
-    await Promise.all([state, workspace].map((directory) => fs.mkdir(directory)));
+    await Promise.all([state, workspace].map((directory) => fs.mkdir(directory, { mode: 0o700 })));
     const explicitBytes = Buffer.from("explicit source wins");
     const explicitMedia = path.join(workspace, "explicit.txt");
     const deniedMedia = path.join(root, "private.txt");

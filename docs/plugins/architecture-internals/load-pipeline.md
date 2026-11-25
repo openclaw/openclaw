@@ -149,6 +149,13 @@ runs reuse that prepared config and its normalized plugin policy. Replacing the
 config, metadata snapshot, or managed environment selects new facts; retained runs
 keep their own generation. Mutable setup inputs retain only same-turn deduplication.
 
+Fallback health reads retain normalized model transports in the selected registry
+load context for each captured config. Repeated fallback runs reuse the provider,
+model ID, endpoint, and headers without activating providers again. Config
+publication or registry replacement selects new routes; account eligibility and
+rate-limit state remain live reads. Scoped inspections using another metadata
+snapshot keep normal resolution.
+
 Gateway model admission uses the configured agent's workspace and plugin inventory,
 including its published discovery catalog. A session opened in another folder keeps
 that folder as its execution cwd without losing discovered models. Read-only lookups

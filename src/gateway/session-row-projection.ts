@@ -23,10 +23,7 @@ import { createSessionRowProjectionBackfill } from "./session-row-projection-bac
 import { createSessionRowProjectionCatalog } from "./session-row-projection-catalog.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
 import { createSessionRowGenerationMutations } from "./session-row-projection-generation.js";
-import {
-  createSessionRowCreatorIndex,
-  indexSessionRow,
-} from "./session-row-projection-identities.js";
+import * as rowIdentities from "./session-row-projection-identities.js";
 import * as rowReads from "./session-row-projection-materialize.js";
 import {
   createSessionRowPublication,
@@ -58,7 +55,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     referenced: (ref) => referenced(ref),
     readChildLinks: (row) => readChildLinks(row, true),
   });
-  const creators = createSessionRowCreatorIndex();
+  const creators = rowIdentities.createSessionRowCreatorIndex();
   const membership = createSessionMembershipProjection();
   const { invalidateRowMembership, readSessionRowEntry, createStoreRead } =
     rowMembership.createSessionRowEntryReadAccess(membership);
@@ -68,7 +65,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const byParent = new Map<string, Set<string>>(),
     byKey = new Map<string, Set<string>>();
   const indexes = { byStore, byAgent, byParent, byKey };
-  const referenced = (ref: string) => records.firstReferenced(ref, rows, byKey, stores.keys());
+  const referenced = (ref: string) =>
+    rowIdentities.firstReferenced(ref, rows, byKey, stores.keys());
   const dirty = new Set<string>();
   const recents = createSessionRowRecents({
     rows,
@@ -79,10 +77,12 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const rowFacts = rowMembership.createSessionRowFactsReadiness(rows, () => projection);
   let topologyDirty = true,
     disposed = false;
+  const isReady = () => !disposed && !topologyDirty;
+  const restoredRuns = rowIdentities.createRestoredCompletionIndex(isReady);
   const registryRead = rowScope.createSessionRowRegistryRead({
     env,
     stores: () => stores,
-    isActive: () => !disposed && !topologyDirty,
+    isActive: isReady,
     runAsOwner: inOwnerContext,
   });
   const prepareRegistryFacts = () => inOwnerContext(metadata.prepareRuntimeFacts);
@@ -141,6 +141,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   });
   const archive = createSessionRowProjectionArchive({
     rows,
+    indexes,
     dirty,
     put,
     config: () => cfg,
@@ -158,8 +159,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       recents.track(row);
     },
   });
-  const markRelated = (row: records.Row, includeChildren = true) =>
-    archive.markRelated(row, indexes, includeChildren);
+  const { markRelated } = archive;
   function remove(id: string) {
     archive.forget(id);
     transcriptUpdates.remove(id);
@@ -172,7 +172,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       invalidateRowMembership(row);
       markRelated(row);
       creators.update(row);
-      indexSessionRow(row, indexes, true);
+      rowIdentities.indexSessionRow(row, indexes, true);
+      restoredRuns.update(row.storedEntry);
       rows.delete(id);
       revisions.publishFacts(row);
       revisions.publishSelection(row, true);
@@ -187,17 +188,16 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   }
   function put(row: records.Row) {
     const previous = rows.get(records.identity(row));
+    restoredRuns.update(previous?.storedEntry, row.storedEntry);
     childRows.replace(row);
     creators.update(previous, row);
-    if (previous) {
-      if (previous.generation !== row.generation) {
-        transcriptUpdates.remove(records.identity(row));
-      }
+    if (previous && previous.generation !== row.generation) {
+      transcriptUpdates.remove(records.identity(row));
     }
     rows.set(records.identity(row), row);
     recents.update(row);
     rowFacts.track(row, row.unresolvedDatabaseFacts);
-    indexSessionRow(row, indexes, false, previous);
+    rowIdentities.indexSessionRow(row, indexes, false, previous);
     placementFacts.update(row, previous, (sessionId) =>
       [...(byKey.get(`id:${sessionId}`) ?? [])].flatMap((id) => rows.get(id) ?? []),
     );
@@ -243,7 +243,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     runAsOwner: inOwnerContext,
     registryFactsReady: () => Boolean(inOwnerContext(subagents.snapshotIdentity)),
     acquireEntry,
-    markRelated,
     placement: placementFacts,
     invalidateFacts: (row, domain) => {
       const categoryOnly = rowFacts.invalidate(row, domain);
@@ -273,7 +272,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     put,
     acquire(row, entry) {
       enqueue(acquireEntry(row, entry));
-      markRelated(row);
     },
     setConfig(next) {
       cfg = next;
@@ -378,7 +376,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     rowRelations.createSessionRowRelationReads({
       env,
       inOwnerContext,
-      isReady: () => !disposed && !topologyDirty,
+      isReady,
       assertCurrent: assertActive,
       preparedContext: () => metadata.readPrepared(epoch),
       lookup,
@@ -510,6 +508,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   });
   const stop = subscribeSessionRowPublications({
     rows,
+    byKey,
     dirty,
     revisions,
     advanceRevision: () => epoch++,
@@ -610,6 +609,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       prepareRowFacts: rowFacts.prepare,
     });
   const projection = {
+    readRestoredCompletion: restoredRuns.restore(rows.values()),
     ...childRows.readers,
     ...rowReads.createSessionRowLookup({
       assertCurrent: assertActive,

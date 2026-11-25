@@ -28,6 +28,7 @@ export function projectAgentToolsExecPolicy(params: {
     base: params.execConfig,
     overrides: options?.exec,
     permissionPolicy: options?.sessionPermissionPolicy,
+    participationCeiling: options?.pluginExecutionAuthority?.participationCeiling,
     scheduledExecTarget: options?.scheduledToolPolicy?.execTarget,
     modelExecCeilings: resolveModelExecCeilings({
       cfg: options?.config,

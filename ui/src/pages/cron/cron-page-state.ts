@@ -5,13 +5,15 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
-import { watchAgentScope, watchSelectedAgent } from "../../lib/agents/index.ts";
+import { watchAgentScope } from "../../lib/agents/index.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
+import { currentDisplayConfig } from "../../lib/config/config-state-model.ts";
 import {
   hasCronFormErrors,
   normalizeCronFormState,
   validateCronForm,
 } from "../../lib/cron/form.ts";
+import { canManageCronJob } from "../../lib/cron/human-owner.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -26,10 +28,7 @@ import {
   startCronEdit,
   toggleCronJob,
 } from "../../lib/cron/index.ts";
-import {
-  hasCronInventoryEvents,
-  isCronInventoryInvalidation,
-} from "../../lib/cron/inventory-connection.ts";
+import { isCronInventoryInvalidation } from "../../lib/cron/inventory-connection.ts";
 import { loadCronRuns, selectCronRunsForJob, updateCronRunsFilter } from "../../lib/cron/runs.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -39,7 +38,7 @@ import { profileDirectory } from "../../lib/profile-directory.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
-import { createCronPresentation } from "./cron-page-presentation.ts";
+import { createCronPresentation, resolveCronModelAgentId } from "./cron-page-presentation.ts";
 import {
   createDeliveryConversations,
   invalidateStaleDeliveryRoute,
@@ -47,7 +46,6 @@ import {
 } from "./delivery-conversations.ts";
 import { createCronEventEditor } from "./event-editor.ts";
 import { resolveCronEventPatch, validateCronEventSelection } from "./event-source.ts";
-import { canManageCronJob } from "./human-owner.ts";
 import * as cronRoute from "./route-model.ts";
 
 registerEnglishCatalog(registerCronEnglish);
@@ -58,6 +56,7 @@ type CronDetailTab = "settings" | "history";
 export function createCronPage(context: () => ApplicationContext, host: () => HTMLElement) {
   let routeSearch = "";
   let cron = createInitialCronState();
+  let editorChannelState: CronState | undefined;
   // `?activity` shows every automation's runs in place of the overview.
   const [activityOpen, setActivityOpen] = createSignal(false);
   const [detailTab, setDetailTab] = createSignal<CronDetailTab>("history");
@@ -73,6 +72,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     connection: gateway,
     context,
     active: () => active,
+    modelAgentId: resolveModelAgentId,
     publish: publishCronState,
   });
   const agents = projectOwner(context().agents, (source) => source.state);
@@ -195,19 +195,13 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     applySnapshot();
     cleanups.push(
       observeAgentScope(currentContext.agentSelection),
-      watchSelectedAgent(currentContext.agentSelection, (agentId) => {
-        if (presentation.modelRequest?.agentId !== agentId) {
-          presentation.resetModels();
-          publish();
-        }
-      }),
+      currentContext.agents.subscribe(() => ensureEditorCatalog()),
+      currentContext.runtimeConfig.subscribe(() => ensureEditorCatalog()),
       currentContext.gateway.subscribeEvents((event) => {
         if (
           active &&
           context() === currentContext &&
-          (event.event === "cron" ||
-            (hasCronInventoryEvents(currentContext.gateway.snapshot) &&
-              isCronInventoryInvalidation(event, currentContext.gateway.snapshot)))
+          (event.event === "cron" || isCronInventoryInvalidation(event))
         ) {
           void refreshCron({
             coalesce: true,
@@ -303,31 +297,48 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         }
       });
     if (!context().agents.state.agentsList && !context().agents.state.agentsLoading) {
-      void context().agents.ensureList();
+      void context()
+        .agents.ensureList()
+        .then(() => ensureEditorSources());
     }
     if (forceRefresh || (!cron.cronStatus && !cron.cronLoading)) {
-      void refreshCron({ coalesce: true });
+      void refreshCron({ coalesce: true, refresh: forceRefresh });
     }
     onSettled(() => ensureEditorSources(forceRefresh));
   }
 
+  function resolveModelAgentId(state: CronState) {
+    return resolveCronModelAgentId(
+      state.cronForm,
+      currentDisplayConfig(runtimeConfig.read()),
+      agents.read().agentsList,
+    );
+  }
+
+  // The settled tab is authoritative; setters may still expose the previous tab.
+  const isEditorOpen = () =>
+    cron.cronCreateOpen || (Boolean(cron.cronEditingJob) && detailTab() !== "history");
+  const canReadEditorSources = () =>
+    isEditorOpen() && canRefreshCron() && cron.connected && Boolean(cron.client);
+
   function ensureEditorSources(forceRefresh = false) {
-    if (!active) {
-      return;
-    }
-    // The settled tab is authoritative; setters may still expose the previous tab.
-    if (!cron.cronCreateOpen && (!cron.cronEditingJob || detailTab() === "history")) {
+    if (active && !isEditorOpen()) {
+      editorChannelState = undefined;
       presentation.resetModels();
+    }
+    if (!canReadEditorSources()) {
       return;
     }
-    const agentId = context().agentSelection.state.selectedId;
-    if (!canRefreshCron() || !cron.connected || !cron.client || !agentId) {
-      return;
-    }
-    const request = presentation.modelRequest;
-    if (forceRefresh || request?.state !== cron || request.agentId !== agentId) {
-      void presentation.loadModels(cron);
+    if (editorChannelState !== cron || forceRefresh) {
+      editorChannelState = cron;
       void context().acquireChannels(createChannelCapability).refresh(false);
+    }
+    presentation.ensureModels(cron, forceRefresh);
+  }
+
+  function ensureEditorCatalog() {
+    if (canReadEditorSources()) {
+      presentation.ensureModels(cron, false);
     }
   }
 
@@ -368,7 +379,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (panelKey !== lastPanelKey) {
       presentation.retire();
       lastPanelKey = panelKey;
-      setDetailTab(cronRoute.resolveCronDetailTab(cron.cronEditingJob));
+      setDetailTab(cronRoute.resolveCronDetailTab(cron.cronEditingJob, routeSelection.target));
       const scroller = host().closest(".content");
       if (scroller instanceof HTMLElement && typeof scroller.scrollTo === "function") {
         scroller.scrollTo({ top: 0 });
@@ -390,7 +401,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
             cron === current &&
             connectionScope !== null &&
             gateway.isCurrent(connectionScope),
-          (job, runId) => selectJob(job, runId),
+          (job, runId) => selectJob(job, runId, routeData.settings),
         ),
       );
     }
@@ -469,12 +480,19 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       void deliveryDirectory.load();
     }
     publishCronState();
+    if (
+      current.agentId !== next.agentId ||
+      current.clearAgent !== next.clearAgent ||
+      current.sessionKey !== next.sessionKey
+    ) {
+      ensureEditorCatalog();
+    }
   }
 
-  function selectJob(job: CronJob, runId: string | null = null) {
-    routeSelection.select(job.id, runId);
+  function selectJob(job: CronJob, runId: string | null = null, settings?: true) {
+    routeSelection.select(job.id, runId, settings);
     pendingRunScroll = Boolean(runId);
-    setDetailTab(cronRoute.resolveCronDetailTab(job));
+    setDetailTab(cronRoute.resolveCronDetailTab(job, routeSelection.target));
     cron.cronCreateOpen = false;
     // Inspecting another run of the current saved job must not discard its draft.
     if (cron.cronEditingJob !== job) {
@@ -703,7 +721,8 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     canManageCron,
     canManageJob,
     canCreateCron,
-    cronModelSuggestions: presentation.modelSuggestions,
+    cronModelCatalog: presentation.modelCatalog,
+    resolveModelAgentId,
     activityOpen,
     detailTab,
     actions,

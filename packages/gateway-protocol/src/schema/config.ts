@@ -257,6 +257,13 @@ export const UpdateHoldResultSchema = closedObject({
 
 /** Request payload for running an update/restart flow with optional channel delivery context. */
 export const UpdateRunParamsSchema = closedObject({
+  acceptCapabilities: Type.Optional(Type.Boolean()),
+  checkout: Type.Optional(
+    Type.Union([
+      closedObject({ gitCommonDir: Type.String({ minLength: 1 }) }),
+      closedObject({ packageRoot: Type.String({ minLength: 1 }) }),
+    ]),
+  ),
   requester: Type.Optional(
     closedObject({
       channel: Type.Optional(Type.String()),

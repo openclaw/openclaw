@@ -193,7 +193,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
       );
 
       it.each(["new", "pending", "committed"] as const)(
-        "reads a %s source with bounded SQL and observes session replacement",
+        "reads stored pre-steering %s input with bounded SQL and observes session replacement",
         async (source) => {
           const database = admit(() => openAgent({ agentId: "main" }));
           const input = {
@@ -202,6 +202,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
             sessionId: `source-session-${source}`,
             idempotencyKey: "new-input:user",
             pendingOnly: false,
+            includeCompletion: false,
           };
           admit(() => {
             ensureSessionPendingInputsSchema(database.db);
@@ -220,6 +221,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
               ? undefined
               : await stageInput(scope, {
                   runId: "new-input",
+                  trackCompletion: true,
                   message: {
                     role: "user",
                     content: "Synthetic retained input",
@@ -232,6 +234,15 @@ for (const engine of ["sqlite", "postgres"] as const) {
             expect(receipt).toBeDefined();
             await receipt!.run(() => appendMessage(scope, { message: receipt!.message }));
           }
+          const outcome = {
+            status: "ok",
+            reason: "completed",
+            activeSteer: { runId: "native-run", status: "accepted" },
+          } as const;
+          if (receipt) {
+            expect(receipt.message["__openclaw"]).toBeUndefined();
+            await receipt.completeAsync?.(outcome);
+          }
           const read = () => {
             let statements = 0;
             const observation = channel("openclaw.database.statement");
@@ -243,7 +254,10 @@ for (const engine of ["sqlite", "postgres"] as const) {
               const result = admit(() => readSource(database, input));
               const expected =
                 source === "new" || input.pendingOnly ? 1 : source === "pending" ? 6 : 9;
-              expect(statements).toBe(expected);
+              expect(statements).toBe(
+                expected +
+                  (input.includeCompletion && source !== "new" && !input.pendingOnly ? 1 : 0),
+              );
               return result;
             } finally {
               observation.unsubscribe(observer);
@@ -252,6 +266,12 @@ for (const engine of ["sqlite", "postgres"] as const) {
           try {
             const result = read();
             expect(result.current).toBe(true);
+            expect(result.completion).toBeUndefined();
+            if (receipt) {
+              input.includeCompletion = true;
+              expect(read().completion).toEqual(outcome);
+              input.includeCompletion = false;
+            }
             if (source === "pending") {
               expect(result.pending?.message_json).toBe(JSON.stringify(receipt!.message));
             } else if (source === "committed") {

@@ -74,6 +74,11 @@ export type SkillsDiscoverySourceSelection =
       plan: { input: SkillsSourcePlanInput };
     };
 
+export type SkillsFilesystemMutation =
+  | { kind: "sandbox-mounts"; input: SandboxMountPlanInput }
+  | { kind: "sandbox-mount-sources"; input: SandboxMountPlanInput }
+  | { kind: "sync-filesystem"; operation: SkillsSyncFilesystemOperation };
+
 export type SkillsDiscoveryInput =
   | {
       kind: "companion";
@@ -93,20 +98,12 @@ export type SkillsDiscoveryInput =
       nativeMode: FsSafeNativeMode;
       input: Parameters<typeof resolveSandboxFsPathWithMounts>[0];
     }
-  | (({ kind: "sandbox-mounts" } | { kind: "sandbox-mount-sources" }) & {
+  | (SkillsFilesystemMutation & {
       stateOwnerPath?: SandboxStateOwnerPath;
-      input: SandboxMountPlanInput;
       nativeMode: FsSafeNativeMode;
       authority?: SharedArrayBuffer;
     })
   | { kind: "library"; input: SkillLibraryFilesystemInput; nativeMode: FsSafeNativeMode }
-  | {
-      kind: "sync-filesystem";
-      stateOwnerPath?: SandboxStateOwnerPath;
-      nativeMode: FsSafeNativeMode;
-      operation: SkillsSyncFilesystemOperation;
-      authority?: SharedArrayBuffer;
-    }
   | { kind: "plan"; input: SkillsSourcePlanInput }
   | {
       kind: "scan";
@@ -143,12 +140,11 @@ export type SkillsDiscoveryOutput =
   | { kind: "sandbox-projection"; preparation: SandboxFsPreparation }
   | { kind: "sandbox-path"; path: ReturnType<typeof resolveSandboxFsPathWithMounts> }
   | { kind: "sandbox-mounts"; plan: SandboxMountPlan }
-  | { kind: "sandbox-mount-sources"; created: boolean }
-  | { kind: "sandbox-mounts-error"; error: NativeWorkerFailure }
+  | { kind: "sandbox-mount-sources"; created: string[] }
   | { kind: "library"; result: SkillLibraryFilesystemOutput }
   | { kind: "sync-filesystem"; prepared: SkillsSyncFilesystemPrepared | undefined }
   | {
-      kind: "sync-filesystem-error";
+      kind: "filesystem-mutation-error";
       error: NativeWorkerFailure;
       code?: FsSafeErrorCode;
       details?: FsSafeErrorDetails;

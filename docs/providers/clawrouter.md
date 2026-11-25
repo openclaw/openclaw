@@ -71,6 +71,27 @@ you only need an issued ClawRouter key.
   </Step>
 </Steps>
 
+## Bedrock Converse
+
+The exact `aws-bedrock/amazon.nova-lite-v1:0` row can use the native Bedrock
+ConverseStream SDK when a current proxy-key catalog grants `llm.chat` and the
+`aws_bedrock.converse_stream` → `aws_bedrock.converse_eventstream` operation.
+This requires qualified router runtime support and an explicit model declaration;
+client support alone does not activate an offer or prove live AWS entitlement.
+Claude models, regional aliases and inference profiles do not inherit this qualification.
+
+Native transport uses `/v1/native/aws-bedrock/model/<encoded-model>/converse-stream`.
+Manifest transport uses its declared `/v1/proxy/aws-bedrock/<endpoint>` and wraps
+the **final AWS-serialized JSON** in `{ method, pathParams: { model }, query, body }`.
+The selected model owns the path. The SDK retains native message, tool and image
+serialization and EventStream decoding. The client accepts a complete bounded
+response; this is not an incremental-delivery guarantee.
+
+Both transports use only the selected ClawRouter key, recheck its fresh catalog,
+honor caller cancellation and disable SDK retries. AWS environment credentials,
+profiles and `AWS_BEDROCK_SKIP_AUTH` cannot change proxy authentication or destination.
+Direct Amazon Bedrock configuration keeps its existing behavior.
+
 ## Vercel native Messages
 
 The frozen `vercel-ai-gateway/anthropic/claude-sonnet-4.6` row uses OpenClaw's

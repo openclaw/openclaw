@@ -241,9 +241,7 @@ function buildMSTeamsPollVoteBucketKey(pollId: string, bucket: string): string {
   return `${pollDigest}:${bucket}`;
 }
 
-export function createMSTeamsPollStoreState(params?: {
-  accountId?: string | null;
-}): MSTeamsPollStore {
+export function createMSTeamsPollStoreState(params?: { accountId?: string | null }) {
   const namespace = resolveMSTeamsAccountStateNamespace(MSTEAMS_POLLS_NAMESPACE, params?.accountId);
   const pollStore = getMSTeamsRuntime().state.openKeyedStore<StoredMSTeamsPoll>({
     namespace,
@@ -299,11 +297,33 @@ export function createMSTeamsPollStoreState(params?: {
     }
   };
 
-  const createPoll = async (poll: StoredMSTeamsPoll) => {
+  const createPoll = async (poll: StoredMSTeamsPoll, options?: { pendingPublication: boolean }) => {
     await withMSTeamsSqliteMutationLock(namespace, async () => {
       await pollStore.register(buildMSTeamsPollStateKey(poll.id), toPluginJsonValue(poll));
-      await deletePollVotes(poll.id);
+      // A fresh card has no votes. Defer pruning until its publication succeeds.
+      if (!options?.pendingPublication) {
+        await deletePollVotes(poll.id);
+        await prunePollStoreToLimit();
+      }
+    });
+  };
+
+  const setPollMessageId = async (pollId: string, messageId: string) => {
+    await withMSTeamsSqliteMutationLock(namespace, async () => {
+      const key = buildMSTeamsPollStateKey(pollId);
+      const poll = await pollStore.lookup(key);
+      if (!poll) {
+        throw new Error("Published Teams poll is no longer in the poll store");
+      }
+      await pollStore.register(key, { ...poll, messageId });
       await prunePollStoreToLimit();
+    });
+  };
+
+  const discardPoll = async (pollId: string) => {
+    await withMSTeamsSqliteMutationLock(namespace, async () => {
+      await pollStore.delete(buildMSTeamsPollStateKey(pollId));
+      await deletePollVotes(pollId);
     });
   };
 
@@ -350,5 +370,5 @@ export function createMSTeamsPollStoreState(params?: {
     });
   };
 
-  return { createPoll, getPoll, recordVote };
+  return { createPoll, getPoll, recordVote, setPollMessageId, discardPoll };
 }

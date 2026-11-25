@@ -21,6 +21,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { listProfiles } from "../state/user-profile-reads.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -190,6 +191,7 @@ export async function createGitHubPublicationRequesterFixture(params: {
       client.internal.operatorRoleActor = { kind: "system" };
     }
   }
+  onTestFinished((await prepareUserProfileCatalog()).release);
   prepareGatewayConnectOperatorAccess(client);
   const context = {
     getRuntimeConfig: currentGitHubPublicationConfig,

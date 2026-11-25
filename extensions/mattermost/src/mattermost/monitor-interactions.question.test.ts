@@ -20,6 +20,19 @@ vi.mock("./interactions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./interactions.js")>()),
   createMattermostInteractionHandler: createInteractionHandlerMock,
 }));
+const dispatchReplyMock = vi.hoisted(() => vi.fn());
+vi.mock("./monitor-event-plan.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor-event-plan.js")>()),
+  buildMattermostEventPlan: async () => ({
+    channelDisplay: "town-square",
+    kind: "channel",
+    finalizeContext: (ctx: Record<string, unknown>) => ctx,
+  }),
+}));
+vi.mock("./monitor-interaction-dispatch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor-interaction-dispatch.js")>()),
+  dispatchMattermostInteractionReply: dispatchReplyMock,
+}));
 vi.mock("./runtime-api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./runtime-api.js")>()),
   registerPluginHttpRoute: vi.fn(() => () => {}),
@@ -51,10 +64,18 @@ function captureHandlers() {
     handleModelPickerInteraction: picker,
   } as never);
   const options = createInteractionHandlerMock.mock.calls[0]?.[0];
-  if (!options?.handleInteraction || !options.authorizeButtonClick) {
+  if (
+    !options?.handleInteraction ||
+    !options.authorizeButtonClick ||
+    !options.dispatchButtonClick
+  ) {
     throw new Error("registration did not supply interaction handlers");
   }
-  return { dispatch: options.handleInteraction, authorize: options.authorizeButtonClick };
+  return {
+    dispatch: options.handleInteraction,
+    authorize: options.authorizeButtonClick,
+    click: options.dispatchButtonClick,
+  };
 }
 let handlers: ReturnType<typeof captureHandlers>;
 function expectPrompt(response: Awaited<ReturnType<typeof handlers.dispatch>>, text: string) {
@@ -162,4 +183,20 @@ it("still hands every other click to the model picker", async () => {
   expect(resolveOptionMock).not.toHaveBeenCalled();
   expect(picker).toHaveBeenCalledTimes(1);
   expect(response?.ephemeral_text).toBe("picker");
+});
+
+it("gives the agent the value behind an agent button, without the mark", async () => {
+  await handlers.click({
+    channelId: "chan-1",
+    userId: "user-1",
+    userName: "ada",
+    actionId: "pickb",
+    actionName: "Beta",
+    callbackData: "::/pick b",
+    postId: "post-1",
+    post: { id: "post-1" },
+  } as never);
+  expect(dispatchReplyMock.mock.calls[0]?.[2]?.ctxPayload).toMatchObject({
+    BodyForAgent: "callback_data: /pick b",
+  });
 });

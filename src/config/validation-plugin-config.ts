@@ -303,13 +303,30 @@ export function validateExplicitPluginConfig(params: {
         slot: memorySlot,
         selectedId: selectedMemoryPluginId,
       });
-      if (!memoryDecision.enabled) {
+      // A passive backend still loads, so its config validates like any enabled plugin.
+      if (
+        !memoryDecision.enabled &&
+        !(entry?.memoryBackend === true && typeof memorySlot === "string")
+      ) {
         enabled = false;
         reason = memoryDecision.reason;
       }
       if (memoryDecision.selected && hasKind(record.kind, "memory")) {
         selectedMemoryPluginId = pluginId;
       }
+    }
+    if (
+      entry?.memoryBackend === true &&
+      (!hasKind(record.kind, "memory") || typeof memorySlot !== "string" || memorySlot === pluginId)
+    ) {
+      warnings.push({
+        path: `plugins.entries.${entryId}.memoryBackend`,
+        message: !hasKind(record.kind, "memory")
+          ? `memoryBackend has no effect: ${pluginId} is not a memory plugin`
+          : memorySlot === pluginId
+            ? `memoryBackend has no effect: ${pluginId} owns plugins.slots.memory`
+            : 'memoryBackend has no effect while plugins.slots.memory is "none"',
+      });
     }
     if (enabled || entryHasConfig) {
       if (record.configSchema) {

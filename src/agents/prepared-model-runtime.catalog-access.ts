@@ -5,7 +5,7 @@ import {
   augmentPreparedModelCatalogWithAgentHarness,
   isPreparedNativeModelCatalogReady,
 } from "./harness/model-catalog.js";
-import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
+import type { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
@@ -20,7 +20,6 @@ import {
   createNativeLoginRecheck,
   createPreparedAccountCatalogAccess,
   loadScopedModelCatalogAuth,
-  prepareInitialModelCatalogAuth,
   replacePreparedModelCatalogAuth,
 } from "./prepared-model-runtime.catalog-auth.js";
 import type {
@@ -66,29 +65,13 @@ import type {
 export const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
 
-export async function createFullModelCatalogAccess(
+// Persistent callbacks must not retain the build guard's batch and retired sibling owners.
+export function createPersistentModelCatalogAccess(
   params: PreparedModelRuntimeCatalogAccessParams,
-  assertBuildCurrent: () => void,
-): Promise<PreparedModelRuntimeCatalogAccess> {
-  assertBuildCurrent();
-  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
-    params.pluginGeneration.pluginMetadataSnapshot,
-    params.agentFacts.input.config,
-    params.agentFacts.env,
-  );
-  const eligibleProviders = [
-    ...new Set(
-      [...params.agentFacts.providerIds, ...Object.keys(params.agentFacts.credentials)].map(
-        normalizeProvider,
-      ),
-    ),
-  ].toSorted();
-  const currentAuth = await prepareInitialModelCatalogAuth(
-    params,
-    eligibleProviders,
-    assertBuildCurrent,
-  );
-  assertBuildCurrent();
+  normalizeProvider: ReturnType<typeof createPreparedModelCatalogProviderNormalizer>,
+  eligibleProviders: readonly string[],
+  currentAuth: PreparedModelCatalogAuth,
+): PreparedModelRuntimeCatalogAccess {
   const accountCatalog = createPreparedAccountCatalogAccess(
     params.isCurrent,
     params.retirementSignal,

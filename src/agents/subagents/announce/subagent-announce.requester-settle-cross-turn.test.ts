@@ -93,7 +93,8 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
         params.rootRunIds,
       ).countActiveDescendantRuns(params.requesterSessionKey),
     }));
-    const early = scenario === "older batch";
+    // A sibling paused on its own yield holds a continuation, not a result.
+    const early = scenario === "older batch" || scenario === "paused member";
     expect(
       await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short })),
     ).toBe(early);

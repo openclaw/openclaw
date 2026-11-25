@@ -2,8 +2,10 @@
  * launchd runs this standalone CommonJS program as each durable job. launchd keeps a job's
  * last exit status, but only `launchctl print` (documented as "NOT API") exposes the whole
  * outcome, so the wrapper records its own: the process group at start, then the command's
- * exit after that group is empty. It also owns the timeout because launchd has no lifetime
- * bound. Signal names, not numbers, are recorded; Node reports exits that way.
+ * exit the moment the command itself exits. Processes the command left running keep
+ * running; launchd does not stop a group it did not start, even at bootout. The wrapper
+ * also owns the timeout because launchd has no lifetime bound. Signal names, not numbers,
+ * are recorded; Node reports exits that way.
  *
  * The spec file carries argv and environment values (credentials included); the wrapper
  * removes it before starting the command. Keep this dependency-free: it runs from a
@@ -21,11 +23,11 @@ const save = (value) => {
   fs.writeFileSync(temp, JSON.stringify(value), { mode: 0o600 });
   fs.renameSync(temp, spec.statusPath);
 };
-let pgid, exit, timedOut = false, finished = false, killTimer;
+let pgid, timedOut = false, finished = false, killTimer;
 const finish = (result) => {
   if (finished) return;
   finished = true;
-  save({ phase: "exited", ...result, durationMs: Date.now() - startedAt });
+  save({ phase: "exited", ...result, pgid, startedAt, durationMs: Date.now() - startedAt });
   process.exit(0);
 };
 // EPERM proves a process still holds the group; only ESRCH proves it empty.
@@ -42,23 +44,13 @@ const signalGroup = (signal) => {
     process.kill(-pgid, signal);
   } catch {}
 };
+// Stop and timeout end the whole group, as process kill does for any exec.
 const stop = () => {
   if (pgid === undefined) return;
   signalGroup("SIGTERM");
   killTimer ??= setTimeout(() => signalGroup("SIGKILL"), spec.killGraceMs);
 };
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, stop);
-const drain = () => {
-  if (groupAlive()) {
-    setTimeout(drain, 200);
-    return;
-  }
-  finish({
-    exitCode: exit.code,
-    exitSignal: exit.signal,
-    reason: timedOut ? "overall-timeout" : exit.signal ? "signal" : "exit",
-  });
-};
 const failStart = (error) => {
   try {
     fs.appendFileSync(spec.logPath, "Durable process failed to start: " + error.message + "\n");
@@ -90,8 +82,15 @@ if (child.pid !== undefined) {
   // runs on unsupervised; the Gateway reports its outcome as unknown.
   save({ phase: "running", pgid, startedAt });
   child.once("exit", (code, signal) => {
-    exit = { code, signal };
-    drain();
+    const result = {
+      exitCode: code,
+      exitSignal: signal,
+      reason: timedOut ? "overall-timeout" : signal ? "signal" : "exit",
+    };
+    // The command's own exit is its outcome; what it left running keeps running. A stop
+    // confirms the whole group ended (SIGKILL after the grace) before it records.
+    const settle = () => (killTimer && groupAlive() ? setTimeout(settle, 200) : finish(result));
+    settle();
   });
   if (spec.timeoutMs > 0) {
     setTimeout(() => {

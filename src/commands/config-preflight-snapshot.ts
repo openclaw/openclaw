@@ -1,6 +1,6 @@
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { createConfigIO } from "../config/io.factory.js";
+import { createConfigIO, readConfigSnapshotBeforeEngineSelection } from "../config/io.factory.js";
 import { createConfigReadError, isConfigReadFailure } from "../config/io.invalid-config.js";
 import {
   readConfigFileSnapshot,
@@ -9,7 +9,6 @@ import {
   type ConfigSnapshotReadOptions,
 } from "../config/io.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
-import { resolveConfigPath } from "../config/paths.js";
 import { isExistingLegacySessionStore } from "../config/sessions/legacy-store-source.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -177,26 +176,6 @@ async function readConfigPreflightSnapshot(
   });
 }
 
-/** Resolve the final config target without observing or opening its storage. */
-export async function readConfigSnapshotBeforeEngineSelection(
-  env: NodeJS.ProcessEnv = process.env,
-  options: Pick<ConfigSnapshotReadOptions, "isolateEnv" | "onSourceEnvApplied"> = {},
-): Promise<ConfigFileSnapshot> {
-  const readEnv = options.isolateEnv === false ? env : cloneEnvWithPlatformSemantics(env);
-  const read = () =>
-    createConfigIO({
-      env: readEnv,
-      observe: false,
-      pluginValidation: "core-only",
-    }).readConfigFileSnapshot({ onSourceEnvApplied: options.onSourceEnvApplied });
-  let snapshot = await read();
-  // One-shot config env may select another target before storage becomes process-stable.
-  while (snapshot.path !== resolveConfigPath(readEnv)) {
-    snapshot = await read();
-  }
-  return snapshot;
-}
-
 /** Select storage and retain its routed environment for subsequent config and state reads. */
 export async function readConfigSnapshotForEngineSelection(
   env: NodeJS.ProcessEnv = process.env,
@@ -303,8 +282,9 @@ export async function readAdmittedConfigSnapshot(params: {
                   measureDoctorConfigPreflightStep(
                     "admission.plugin-config",
                     async () => {
-                      const read = await params.readSnapshot(
-                        coreRecovery ? { isolateEnv: true } : undefined,
+                      const read = await withLiveStateReads(
+                        () => params.readSnapshot(coreRecovery ? { isolateEnv: true } : undefined),
+                        { startupConfig: true },
                       );
                       metadataMetrics = read.pluginMetadataSnapshot?.metrics ?? {};
                       return read;

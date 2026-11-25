@@ -1,3 +1,4 @@
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { parseMattermostQuestionContext } from "../normalize.js";
 import {
@@ -136,19 +137,6 @@ export function registerMattermostInteractions(params: {
           },
         };
       },
-      resolveSessionKey: async ({ channelId, userId, post }) => {
-        const eventPlan = await buildMattermostEventPlan(monitor, {
-          channelId,
-          senderId: userId,
-          postId: post.id,
-          threadRootId: post.root_id,
-          dropLabel: "interaction session event",
-        });
-        if (!eventPlan) {
-          throw new Error("Mattermost channel type could not be resolved");
-        }
-        return eventPlan.thread.sessionKey;
-      },
       dispatchButtonClick: async (button) => {
         const sourcePostId = button.post.id || button.postId;
         const interactionMessageSid = buildMattermostButtonInteractionMessageSid({
@@ -166,7 +154,9 @@ export function registerMattermostInteractions(params: {
           return;
         }
         const { channelDisplay, kind } = eventPlan;
-        const bodyText = `[Button click: user @${button.userName} selected "${button.actionName}"]`;
+        const bodyText =
+          agentControlText(button.callbackData) ??
+          `[Button click: user @${button.userName} selected "${button.actionName}"]`;
         const ctxPayload = eventPlan.finalizeContext({
           Body: bodyText,
           BodyForAgent: bodyText,

@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
@@ -45,7 +44,7 @@ import {
 } from "./package-update-verification-step.js";
 import { realpathOrResolve } from "./path-existence.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
-import { readBuiltGatewayBuildId, type GitRuntimeIdentity } from "./update-git-runtime.js";
+import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import {
   collectInstalledGlobalPackageErrors,
@@ -102,8 +101,6 @@ export async function runGlobalPackageUpdateSteps(params: {
   reserveInstallSlot?: (root: string) => void;
   onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   getActivation?: () => PackageActivationOptions | undefined;
-  expectedGitCheckout?: GitRuntimeIdentity;
-  activateGitRoot?: string;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
   /** Install into `releases/` and switch the package link on OpenClaw-owned prefixes. */
   releaseLayout?: boolean;
@@ -496,7 +493,6 @@ export async function runGlobalPackageUpdateSteps(params: {
     let verificationErrors = await collectInstalledGlobalPackageErrors({
       packageRoot: verificationPackageRoot,
       expectedVersion,
-      expectedGitCheckout: params.expectedGitCheckout,
     });
     // Registry versions identify published releases. Explicit artifacts can
     // be rebuilt at the same version, so compare known build identities before
@@ -511,10 +507,8 @@ export async function runGlobalPackageUpdateSteps(params: {
       sameArtifact = Boolean(candidateBuild && candidateBuild === installedBuild);
     }
     // Verify the requested candidate before admitting a no-op.
-    // Source exposure follows the Git SHA contract instead.
     if (
       verificationErrors.length === 0 &&
-      !params.expectedGitCheckout &&
       !params.requirePackageReplacement &&
       (registryTarget || sameArtifact) &&
       candidateVersion &&
@@ -553,7 +547,6 @@ export async function runGlobalPackageUpdateSteps(params: {
           verificationErrors = await collectInstalledGlobalPackageErrors({
             packageRoot: verificationPackageRoot,
             expectedVersion,
-            expectedGitCheckout: params.expectedGitCheckout,
           });
         },
       });
@@ -567,7 +560,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
     }
     const verificationWarnings: string[] = [];
-    if (!params.expectedGitCheckout && verificationErrors.length === 0) {
+    if (verificationErrors.length === 0) {
       verificationErrors.push(
         ...(await collectPackageDistContentInventoryErrors(
           verificationPackageRoot,
@@ -601,25 +594,6 @@ export async function runGlobalPackageUpdateSteps(params: {
       if (rejectedCandidate) {
         return await packageUpdateFailure(rejectedCandidate, steps);
       }
-      if (params.activateGitRoot) {
-        if (
-          stagedInstall.native ||
-          !params.expectedGitCheckout ||
-          !(await fs.lstat(stagedInstall.packageRoot)).isSymbolicLink()
-        ) {
-          throw new Error(
-            "Prepared source checkout exposure requires an npm package symlink; the current installation has not been changed.",
-          );
-        }
-        // The source owner publishes this exact root inside beforeActivate. Rebind only
-        // after validating the temporary candidate, so its cleanup cannot break exposure.
-        await fs.unlink(stagedInstall.packageRoot);
-        await fs.symlink(
-          path.resolve(params.activateGitRoot),
-          stagedInstall.packageRoot,
-          process.platform === "win32" ? "junction" : undefined,
-        );
-      }
       const swap = await swapStagedPackageInstall({
         timeoutMs: params.timeoutMs,
         stage: stagedInstall,
@@ -635,7 +609,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         onTransaction: params.onTransaction,
         activation: params.getActivation?.(),
         onPackageRelease: params.onPackageRelease,
-        localOverrides: params.expectedGitCheckout ? undefined : params.localOverrides,
+        localOverrides: params.localOverrides,
         onLocalOverrides: (result) => {
           localOverrides = result;
           if (result.status === "none") {

@@ -739,16 +739,16 @@ ambiguous directories remain preserved; recovery never deletes their seed branch
 ## Captured baseline evidence hashes
 
 Baseline evidence hashes and reconstructed blobs pass the already-captured bytes
-to the selected Git executable through a complete, private temporary file. The
-writer closes before a fresh read-only descriptor is opened at offset zero; on
-the supported POSIX host the pathname and directory are removed before Git starts.
-Reconstructed blobs still use Git's `-w` object write; signatures, authority checks,
-and operation supervision are unchanged.
-
-Temporary storage must accommodate the largest individual captured file. Ordinary
-write, spawn, and Git failures fail closed and clean up owned resources. Unlinking
-is not secure erasure, and abrupt termination before unlink can retain a private
-snapshot under `TMPDIR`; no automatic sweep of another operation's files occurs.
+through a pipe to the selected Git executable's `hash-object --no-filters --stdin`.
+Git never reopens the authority pathname, and hashing does not spool captured bytes
+to temporary storage. Reconstructed blobs still use Git's `-w` object write;
+signatures, authority checks, and operation supervision are unchanged. Pipe, spawn,
+and Git failures fail closed.
+Within one invocation, repeated non-writing hashes reuse a successful native Git
+result only after the captured bytes compare equal. Reuse retains at most 1,024
+payloads and 8 MiB; larger or excess payloads still use Git. Every authority file
+is reread and every signature and tree check still runs. Object writes always
+invoke Git, including after a read hash of identical bytes.
 
 ## Rerun failed CI tests
 

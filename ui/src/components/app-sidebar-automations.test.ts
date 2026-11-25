@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { sectionListsItems } from "../lib/section-navigation.ts";
 import "../test-helpers/app-sidebar-suite.ts";
@@ -37,6 +37,10 @@ vi.mock("../lib/cron/inventory.ts", async (importOriginal) => ({
   readCronInventory: inventory.read,
 }));
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 it("lists every automation, past the first page of the inventory", async () => {
   const gateway = createGatewayHarness({} as GatewayBrowserClient);
   gateway.publish({ hello: gatewayHelloForMethods(["cron.list"]) });
@@ -68,4 +72,40 @@ it("keeps a failed compact inventory reachable and retries its own read", async 
   );
   expect(inventory.read.mock.calls.length).toBeGreaterThan(reads);
   expect(sidebar.textContent).not.toContain("Compact inventory unavailable");
+});
+
+it("keeps its rows while the tab is hidden and reads again when it returns", async () => {
+  let visibility: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  const setVisibility = (next: DocumentVisibilityState) => {
+    visibility = next;
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+  const gateway = createGatewayHarness({} as GatewayBrowserClient);
+  gateway.publish({ hello: gatewayHelloForMethods(["cron.list"]) });
+  const context = createContext(gateway.gateway, createSessionsHarness("main", []).sessions);
+  const { sidebar } = await mountSidebarContext(context);
+  Object.assign(sidebar, { connected: true, navigationView: "automations" });
+  await sidebar.updateComplete;
+  const rows = () => sidebar.querySelectorAll(".sidebar-automations a[href*='?job=']");
+  await waitForSolid(() => expect(rows()).toHaveLength(250));
+
+  // A read in flight when the tab hides is abandoned by the inventory, as it does in production.
+  const abandoned = Promise.withResolvers<never>();
+  inventory.read.mockImplementationOnce(() => abandoned.promise);
+  const reads = inventory.read.mock.calls.length;
+  gateway.publishEvent("cron", {});
+  await waitForSolid(() => expect(inventory.read).toHaveBeenCalledTimes(reads + 1));
+  setVisibility("hidden");
+  abandoned.reject(new DOMException("Cron inventory is no longer presented", "AbortError"));
+  // Events while hidden do not read; the shown rows stay without an error.
+  gateway.publishEvent("cron", {});
+  await waitForSolid(() => expect(rows()).toHaveLength(250));
+  expect(inventory.read).toHaveBeenCalledTimes(reads + 1);
+  expect(sidebar.textContent).not.toContain("no longer presented");
+
+  setVisibility("visible");
+  await waitForSolid(() => expect(inventory.read.mock.calls.length).toBeGreaterThan(reads + 1));
+  await waitForSolid(() => expect(rows()).toHaveLength(250));
+  expect(sidebar.textContent).not.toContain("no longer presented");
 });

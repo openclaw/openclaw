@@ -93,7 +93,7 @@ export function refreshOpenClawAgentDatabaseSchema(
     }
     return refreshed;
   } catch (error) {
-    invalidateOpenClawAgentDatabaseValidation(pathname);
+    invalidateOpenClawAgentDatabaseValidation(pathname, "a failed schema refresh");
     throw error;
   }
 }

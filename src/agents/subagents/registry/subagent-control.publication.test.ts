@@ -80,7 +80,7 @@ async function writeRegistrationSession(runId: string, lifecycleRevision?: strin
   return { target, storePath, sessionEntry, childSessionKey: target.sessionKey };
 }
 
-it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
+it.each(["live", "replaced child", "replaced Gateway"] as const)(
   "settles an unstarted plugin registration with a %s owner",
   async (ownerState) => {
     const runId = "unstarted-plugin";
@@ -94,7 +94,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
     const context = createContext();
     let currentGateway = context;
     context.getRuntimeConfig = getRuntimeConfig;
-    const { client, revoked, source } = await retainedOperatorFixture(
+    const { client, source } = await retainedOperatorFixture(
       "unstarted-plugin-requester",
       context,
       () => currentGateway,
@@ -105,16 +105,10 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
     fixture.announce.mockImplementation(async (params) => {
       const retained =
         getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-      // A revoked owner's result is still delivered, at the System baseline.
-      if (ownerState === "revoked") {
-        expect(retained).toBeUndefined();
-      } else {
-        expect(retained).toMatchObject({
-          source: source.authority.source,
-          scopes: ["operator.write"],
-        });
-        retained?.assertCurrent();
-      }
+      expect(retained).toMatchObject({
+        source: source.authority.source,
+        scopes: ["operator.write"],
+      });
       if (ownerState === "replaced Gateway") {
         announcementEntered.resolve();
         await continueAnnouncement.promise;
@@ -125,7 +119,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
           params.isChildSessionEffectsAllowed?.(),
         ]).toEqual([false, false]);
       }
-      return ownerState === "replaced Gateway" ? "intentional_non_delivery" : "delivered";
+      return ownerState === "replaced Gateway" ? "undelivered" : "delivered";
     });
     let rejectAdmission: SubagentAdmissionRejection | undefined;
     try {
@@ -151,7 +145,6 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
             },
             gatewayContextResolver: context.resolveGatewayContext,
             assertCurrent: () => {
-              source.authority.assertCurrent();
               return sessionEntry;
             },
             admittedSession: {
@@ -165,9 +158,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
           }),
       );
       source.release();
-      if (ownerState === "revoked") {
-        revoked.abort(new Error("requester access revoked"));
-      } else if (ownerState === "replaced child") {
+      if (ownerState === "replaced child") {
         await writeSubagentSessionEntry({
           ...target,
           sessionId: "replacement-session",

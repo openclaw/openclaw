@@ -292,18 +292,16 @@ export function createAgentDatabaseExecution(
         } catch (cleanupError) {
           reportCleanupFailure(cleanupError);
           const primary = error instanceof Error ? error : new Error(String(error));
-          const failure = Object.assign(
-            new Error(primary.message, {
-              cause: new AggregateError(
-                [error, cleanupError],
-                "Agent operation and cleanup failed",
-                {
-                  cause: error,
-                },
-              ),
-            }),
-            { name: primary.name },
+          const cause = new AggregateError(
+            [error, cleanupError],
+            "Agent operation and cleanup failed",
+            {
+              cause: error,
+            },
           );
+          const failure = Object.assign(new Error(primary.message, { cause }), {
+            name: primary.name,
+          });
           // Cleanup failures preserve the primary presentation without granting a retry.
           throw isSqliteWorkerError(error, "outcome-unknown")
             ? retainSqliteWorkerErrorCode(failure, error)
@@ -343,6 +341,75 @@ export function createAgentDatabaseExecution(
       throw error;
     }
   }
+  // Captures retain logical custody while asynchronously observing physical identity.
+  const releaseBorrower = async (creatingTarget?: DatabasePathIdentity) => {
+    if (
+      creatingTarget &&
+      --creationBorrowers === 0 &&
+      !fileIdentity &&
+      !nativeClosing &&
+      !cleanupFailure
+    ) {
+      // Source refusal can leave an unaccepted generation allocated before native open.
+      await closeNative(generation).catch(reportCleanupFailure);
+      if (!creationBorrowers && !generation && !nativeClosing && !cleanupFailure) {
+        creationIdentity = undefined;
+      }
+    }
+
+    borrowers -= 1;
+    if (borrowers !== 0 || !lifetime.open || cleanupFailure || cleanupOwner) {
+      return;
+    }
+    const cleanupSignal = getGatewayShutdownCleanupSignal();
+    // An absent read has no admitted file to keep warm and must release creation.
+    const canRetain = () => generation && fileIdentity && !nativeClosing && !cleanupSignal.aborted;
+    try {
+      for (const idle of executionState.idle) {
+        if (!canRetain() || executionState.idle.size < MAX_IDLE_EXECUTORS) {
+          break;
+        }
+        if (borrowers !== 0 || !lifetime.open || executionState.idle.has(owner)) {
+          return;
+        }
+        await idle.closeIdle();
+      }
+    } catch (error) {
+      reportCleanupFailure(error);
+    }
+    if (borrowers !== 0 || !lifetime.open || executionState.idle.has(owner)) {
+      return;
+    }
+    if (canRetain() && executionState.idle.size < MAX_IDLE_EXECUTORS) {
+      executionState.idle.add(owner);
+      const timer = runInDetachedAsyncContext(() =>
+        setTimeout(() => {
+          if (idleTimer !== timer || !executionState.idle.has(owner)) {
+            return;
+          }
+          void owner.closeIdle().catch(reportCleanupFailure);
+        }, resolveAgentDatabaseIdleHandleTtlMs()),
+      );
+      idleTimer = timer;
+      timer.unref();
+      return;
+    }
+    // The completed command stays acknowledged; the resource owner retains cleanup.
+    await owner.closeIdle().catch(reportCleanupFailure);
+  };
+  const retainBorrower = (creatingTarget?: DatabasePathIdentity) => {
+    assertCurrent();
+    borrowers += 1;
+    clearIdleTimer();
+    if (!nativeClosing && !cleanupFailure) {
+      executionState.idle.delete(owner);
+    }
+    if (creatingTarget) {
+      creationIdentity ??= creatingTarget;
+      creationBorrowers += 1;
+    }
+    return () => releaseBorrower(creatingTarget);
+  };
   const owner: AgentDatabaseFileExecutionOwner = {
     kind: "file",
     agentId,
@@ -357,6 +424,7 @@ export function createAgentDatabaseExecution(
       return creationIdentity;
     },
     getPendingPreparation: () => generation?.getPendingPreparation(),
+    retain: () => retainBorrower(creationIdentity),
     getOpeningIdentity() {
       return generation?.getPendingNativeOpen() &&
         identity.key.startsWith("file:") &&
@@ -389,15 +457,7 @@ export function createAgentDatabaseExecution(
         retainAlias(path.resolve(requestedPath));
       }
       observeOpenClawDatabaseMaintenanceResource(aliases.get(pathname));
-      borrowers += 1;
-      clearIdleTimer();
-      if (!nativeClosing && !cleanupFailure) {
-        executionState.idle.delete(owner);
-      }
-      if (creatingTarget) {
-        creationIdentity ??= creatingTarget;
-        creationBorrowers += 1;
-      }
+      const releaseReference = retainBorrower(creatingTarget);
       const assertCreationReference = (create: boolean) => {
         if (creatingTarget && !fileIdentity && !create) {
           throw new Error("Originally observed agent target requires creating admission first");
@@ -557,64 +617,7 @@ export function createAgentDatabaseExecution(
         release() {
           borrowerLifetime.retire();
           acceptedWork.cancelReadAdmissions(borrower);
-          return (release ??= (async () => {
-            await acceptedWork.settleBorrower(borrower);
-            if (
-              creatingTarget &&
-              --creationBorrowers === 0 &&
-              !fileIdentity &&
-              !nativeClosing &&
-              !cleanupFailure
-            ) {
-              if (generation) {
-                // Source refusal can leave an unaccepted generation allocated before native open.
-                await closeNative(generation).catch(reportCleanupFailure);
-              }
-              if (!creationBorrowers && !generation && !nativeClosing && !cleanupFailure) {
-                creationIdentity = undefined;
-              }
-            }
-            borrowers -= 1;
-            if (borrowers !== 0 || !lifetime.open || cleanupFailure || cleanupOwner) {
-              return;
-            }
-            const cleanupSignal = getGatewayShutdownCleanupSignal();
-            // An absent read has no admitted file to keep warm and must release creation.
-            const canRetain = () =>
-              generation && fileIdentity && !nativeClosing && !cleanupSignal.aborted;
-            try {
-              for (const idle of executionState.idle) {
-                if (!canRetain() || executionState.idle.size < MAX_IDLE_EXECUTORS) {
-                  break;
-                }
-                if (borrowers !== 0 || !lifetime.open || executionState.idle.has(owner)) {
-                  return;
-                }
-                await idle.closeIdle();
-              }
-            } catch (error) {
-              reportCleanupFailure(error);
-            }
-            if (borrowers !== 0 || !lifetime.open || executionState.idle.has(owner)) {
-              return;
-            }
-            if (canRetain() && executionState.idle.size < MAX_IDLE_EXECUTORS) {
-              executionState.idle.add(owner);
-              const timer = runInDetachedAsyncContext(() =>
-                setTimeout(() => {
-                  if (idleTimer !== timer || !executionState.idle.has(owner)) {
-                    return;
-                  }
-                  void owner.closeIdle().catch(reportCleanupFailure);
-                }, resolveAgentDatabaseIdleHandleTtlMs()),
-              );
-              idleTimer = timer;
-              timer.unref();
-              return;
-            }
-            // The completed command stays acknowledged; the resource owner retains cleanup.
-            await owner.closeIdle().catch(reportCleanupFailure);
-          })());
+          return (release ??= acceptedWork.settleBorrower(borrower).then(releaseReference));
         },
       };
       cleanup?.registerClose(() => borrowed.release());

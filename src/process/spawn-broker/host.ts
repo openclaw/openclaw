@@ -150,7 +150,8 @@ class BrokerHost implements SpawnBrokerHost {
     return this.resourceClaims?.hasOpenClaims ?? false;
   }
   get nativeResourceAdmissionClosed(): boolean {
-    return this.resourceClaims?.admissionClosed ?? false;
+    // Native IPC state can change before the disconnect callback is delivered.
+    return (this.resourceClaims?.admissionClosed ?? false) || this.process?.connected === false;
   }
   ready(): Promise<void> {
     return this.closing
@@ -213,7 +214,7 @@ class BrokerHost implements SpawnBrokerHost {
     if (!this.resourceClaims || !this.process) {
       return;
     }
-    if (this.closing || this.resourceClaims.hasOpenClaims || this.requests.size > 0) {
+    if (this.closing || this.resourceClaims.hasReferencedClaims || this.requests.size > 0) {
       this.process.ref();
       process.ref(this.process.stderr);
       // Newer Bun releases, like Node, reference IPC independently of the child.

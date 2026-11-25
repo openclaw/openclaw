@@ -1,6 +1,7 @@
 import { expressionBuilder, sql, type Compilable, type InferResult } from "kysely";
 import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
 import { DatabaseSearchCapabilityUnavailableError } from "../../infra/database-engine/capability-unavailable.js";
+import { engineUnboundedRowLimit } from "../../infra/database-engine/row-limit.js";
 import { engineStringPosition } from "../../infra/database-engine/scalar.js";
 import { hasFullTextWordTokens } from "../../infra/database-engine/text-tokens.worker.js";
 import {
@@ -282,21 +283,34 @@ function* readSessionTranscriptSearch(
       .select([
         "window.session_key",
         fullText.identity(textIndex).as("fts_rowid"),
-        useFts ? ranking.value.as("rank") : expression.val(0).as("rank"),
+        // A numeric literal keeps PostgreSQL's fallback score numeric; an untyped bind returns text.
+        useFts ? ranking.value.as("rank") : sql.lit(0).as("rank"),
       ]);
-    const stream = candidates
+    const ordered = candidates
       .select([
         "session_transcript_fts.session_id",
         "session_transcript_fts.message_id",
         "session_transcript_fts.role",
         "session_transcript_fts.timestamp",
-        substringTerms.length
-          ? expression.ref("text").as("snippet")
-          : fullText.snippet(textIndex, "text", 48, literalQuery).as("snippet"),
       ])
       .$if(useFts || postgres, (builder) =>
         builder.orderBy(order).orderBy(fullText.identity(textIndex)),
       );
+    const snippet = substringTerms.length
+      ? expression.ref("text").as("snippet")
+      : fullText.snippet(textIndex, "text", 48, literalQuery).as("snippet");
+    const stream =
+      filtered && !postgres && useFts && substringTerms.length === 0
+        ? db
+            // OFFSET prevents flattening: SQLite sorts metadata in a coroutine,
+            // then computes snippets only as the visibility cursor consumes hits.
+            .selectFrom(ordered.limit(engineUnboundedRowLimit(database.db)).offset(0).as("ordered"))
+            .crossJoin("session_transcript_fts")
+            .where((eb) => eb(fullText.identity(textIndex), "=", eb.ref("ordered.fts_rowid")))
+            .where(match)
+            .selectAll("ordered")
+            .select(snippet)
+        : ordered.select(snippet);
     const decode = (
       row: Omit<InferResult<typeof stream>[number], "fts_rowid">,
     ): SessionTranscriptSearchResult["hits"][number] | undefined => {

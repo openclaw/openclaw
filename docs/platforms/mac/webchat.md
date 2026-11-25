@@ -32,7 +32,7 @@ page. A native-auth document replaced during a Gateway switch is also unloaded;
 the new Gateway still receives a separate document and its own authorization.
 
 If the Dashboard cannot load, it shows a recovery page with **Reload** and
-**Connection Settings…**. Choose **Navigate → Reload** or press **Cmd-R** while a
+**Connection Settings…**. Choose **Navigate → Reload** or press **Shift-Cmd-R** while a
 Dashboard window is active to reload its current page. Gateway HTTP errors with
 plain-text or JSON bodies use the recovery page; HTML sign-in pages from an
 authenticated proxy remain available in the window.

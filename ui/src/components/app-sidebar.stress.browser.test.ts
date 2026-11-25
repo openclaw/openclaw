@@ -9,6 +9,8 @@ import {
   setSessionsShowPreview,
   setSessionsStatusFilter,
 } from "./session-organizer-menu.runtime.ts";
+// Load the lazy Show more module up front so paging loops see its buttons.
+import "./app-sidebar-session-pagination.tsx";
 setupSidebarTest();
 afterEach(async () => {
   document.documentElement.removeAttribute("data-theme-mode");

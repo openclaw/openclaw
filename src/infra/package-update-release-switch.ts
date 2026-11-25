@@ -15,10 +15,8 @@ import {
   switchPackageReleaseLink,
   type PackageReleaseIdentity,
 } from "./package-release-slot.js";
-import {
-  removePackageUpdatePath,
-  resolvePackageUpdateLauncherNames,
-} from "./package-update-filesystem.js";
+import { removePackageUpdatePath } from "./package-update-filesystem.js";
+import { resolvePackageUpdateLauncherNames } from "./package-update-launcher-names.js";
 import { preparePackageSwapLocalOverrides } from "./package-update-local-overrides.js";
 import {
   PackageUpdateActivationError,

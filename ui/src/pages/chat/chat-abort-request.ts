@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { invitedSessionAccess } from "../../app/operator-access.ts";
 import {
   scopedAgentParamsForSession,
   type SessionScopeHost,
@@ -38,6 +39,8 @@ export type PendingChatAbort = ChatAbortIntentBase & {
   runId: string;
   /** True when the exact run is embedded-owned and must go through sessions.abort. */
   sessionAbortable?: boolean;
+  /** Keeps replay pending for a missing row, never substitutes for its current invitation. */
+  invitedSend?: true;
 };
 
 export type ChatAbortIntent =
@@ -135,10 +138,16 @@ export function currentChatAbortIntent(
     conversation: resolveUiConversationIdentity(state, state.sessionKey),
     ...scopedAgentParamsForSession(state, state.sessionKey),
   };
-  const sessionId = chatAbortTargetSession(state, target)?.sessionId;
+  const session = chatAbortTargetSession(state, target);
+  const sessionId = session?.sessionId;
   const base = { ...target, ...(sessionId ? { sessionId } : {}) };
   return runId
-    ? { ...base, runId, ...(sessionAbortable ? { sessionAbortable: true } : {}) }
+    ? {
+        ...base,
+        runId,
+        ...(sessionAbortable ? { sessionAbortable: true } : {}),
+        ...(invitedSessionAccess(session) === "send" ? { invitedSend: true } : {}),
+      }
     : {
         ...base,
         runId: null,

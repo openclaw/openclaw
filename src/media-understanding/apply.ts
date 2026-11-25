@@ -2,8 +2,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import pMap from "p-map";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import {
+  applyAttachmentMarkerBudget,
+  type AttachmentContextBlock,
   formatAudioTranscripts,
   formatMediaUnderstandingBody,
+  renderMediaAttachmentDisposition,
 } from "../../packages/media-understanding-common/src/format.js";
 import type {
   MediaUnderstandingCapability,
@@ -21,11 +24,6 @@ import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-trans
 import type { ExtractedFileImage } from "./extracted-file-images.js";
 import { extractFileContext } from "./file-context.js";
 import { resolveFileExtractionLimits } from "./file-extraction-limits.js";
-import {
-  applyAttachmentMarkerBudget,
-  type AttachmentContextBlock,
-  renderMediaAttachmentDisposition,
-} from "./media-attachment-outcomes.js";
 import { assertMediaExecutionCurrent, type MediaExecutionContext } from "./provider-execution.js";
 import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { resolveConcurrency } from "./resolve.js";

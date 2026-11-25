@@ -35,6 +35,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "./prepared-model-runtime-auth.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquirePublishedPreparedModelRuntime,
@@ -295,14 +296,16 @@ it("retains a replaced RUN generation without letting its release retire the rep
       force: true,
     });
     const second = await acquire();
-    expect(first.snapshot === second.snapshot).toBe(false);
+    expect(first.snapshot.catalogOwner).not.toBe(second.snapshot.catalogOwner);
     const replacement = registration(registrations, providerId, old);
     expectRetained(old);
     await first[Symbol.asyncDispose]();
     await expect.poll(() => old.disposals).toBe(1);
     expect(readAnswer(replacement)).toBe(42);
     const third = await acquire();
-    expect(third.snapshot === second.snapshot).toBe(true);
+    expect(third.snapshot.catalogOwner).toBe(second.snapshot.catalogOwner);
+    expect(getPreparedModelRuntimePolicyConfigReader(third.snapshot)?.()).toBe(input.config);
+    expect(getPreparedModelRuntimePolicyConfigReader(second.snapshot)?.()).toBe(input.config);
     await second[Symbol.asyncDispose]();
     expectRetained(replacement);
     await third[Symbol.asyncDispose]();

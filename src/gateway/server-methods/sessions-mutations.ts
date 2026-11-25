@@ -23,7 +23,8 @@ import {
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
@@ -73,7 +74,7 @@ function createSessionPatchHandler(
     const requestAuthority = readGatewayRequestMutationAuthority(options);
     const diagnostics = startSessionPatchDiagnostics(method);
     let archivedSessionsCommitted = false;
-    let preparingOperator: ReturnType<typeof captureGatewayOperatorRunAuthority> | undefined;
+    let preparingOperator: ReturnType<typeof prepareGatewayOperatorRunAuthority> | undefined;
     try {
       let request:
         | { many: true; params: SessionsPatchManyParams }
@@ -131,7 +132,7 @@ function createSessionPatchHandler(
         patch.agentRuntime !== undefined ||
         patch.cyberAccessProgram !== undefined
       ) {
-        preparingOperator = captureGatewayOperatorRunAuthority({
+        preparingOperator = prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority,
@@ -144,8 +145,10 @@ function createSessionPatchHandler(
         context,
         signal,
         diagnostics,
+        participationOnly: sessionMutationAuthorization?.participationCeiling !== undefined,
         operatorAuthority: preparingOperator,
         followSharingRegistration: sessionMutationAuthorization?.followRegistration,
+        readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
         onCreatedSessionCommitted: request.many
           ? undefined
           : sessionMutationAuthorization?.recordCreatedSession,
@@ -611,7 +614,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
 
     const reason = p.reason === "new" ? "new" : "reset";
     const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
-    const captured = await captureGatewayOperatorRunAuthority({
+    const captured = await prepareGatewayOperatorRunAuthority({
       client,
       context,
       hasCurrentClientAuthority,
@@ -623,6 +626,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     try {
       const result = await performGatewaySessionReset({
         operatorAuthority: captured?.authority,
+        readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
+        getCurrentSessionAccessCap: () => operatorSessionCap(client, context.getRuntimeConfig()),
         key,
         ...(p.agentId ? { agentId: p.agentId } : {}),
         reason,

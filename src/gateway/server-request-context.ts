@@ -10,11 +10,19 @@ import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
+import { participationExecApprovalRecipient } from "./exec-approval-delivery.js";
+import type { ExecApprovalRecord } from "./exec-approval-manager.js";
+import { canResolveParticipationExecApproval } from "./exec-approval-participation.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { currentOwnerDevicePrincipal } from "./openclaw-id/tunnel-principal.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import {
+  canAccessInvitedApprovalSession,
+  readApprovalRequestSource,
+  prepareProjectedApprovalSessionAccess,
+} from "./server-methods/approval-record-lookup.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import {
   disconnectStaleSharedGatewayAuthClients,
@@ -190,13 +198,17 @@ const EXEC_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([
 function canDeliverApprovals(
   gatewayClient: GatewayClient,
   approvalKind: "exec" | "plugin" | "system-agent",
+  record?: Pick<ExecApprovalRecord, "participation">,
 ): boolean {
   if (gatewayClient.invalidated) {
     return false;
   }
   const scopes = gatewayClient.connect.scopes ?? [];
   const hasApprovalScope =
-    scopes.includes("operator.admin") || scopes.includes("operator.approvals");
+    (approvalKind === "exec"
+      ? canResolveParticipationExecApproval(record, gatewayClient)
+      : undefined) ??
+    (scopes.includes("operator.admin") || scopes.includes("operator.approvals"));
   if (!hasApprovalScope) {
     return false;
   }
@@ -353,7 +365,25 @@ export function createGatewayRequestContext(
     broadcast,
     publishPresence: runtime.publishPresence,
     getPresenceSnapshot: () => snapshotClientPresence(clients),
-    broadcastToConnIds: runtime.broadcastToConnIds,
+    broadcastToConnIds: (event, payload, connIds, opts) => {
+      const id =
+        (event === "exec.approval.requested" || event === "exec.approval.resolved") &&
+        payload &&
+        typeof payload === "object" &&
+        "id" in payload &&
+        typeof payload.id === "string"
+          ? payload.id
+          : undefined;
+      const participationApprovalRecipient = id
+        ? participationExecApprovalRecipient(runtime.execApprovalManager, id)
+        : undefined;
+      runtime.broadcastToConnIds(
+        event,
+        payload,
+        connIds,
+        participationApprovalRecipient ? { ...opts, participationApprovalRecipient } : opts,
+      );
+    },
     nodeSendToSession: runtime.nodeSendToSession,
     nodeSendToAllSubscribed: runtime.nodeSendToAllSubscribed,
     nodeSubscribe: runtime.nodeSubscribe,
@@ -381,7 +411,23 @@ export function createGatewayRequestContext(
       getClientConnIds(
         (gatewayClient) =>
           (!opts.excludeConnId || gatewayClient.connId !== opts.excludeConnId) &&
-          canDeliverApprovals(gatewayClient, opts.approvalKind ?? "exec") &&
+          (!opts.record?.participation ||
+            runtime.execApprovalManager?.getLiveSnapshot(opts.record.id) === opts.record) &&
+          canDeliverApprovals(gatewayClient, opts.approvalKind ?? "exec", opts.record) &&
+          (!opts.record ||
+            (((opts.approvalKind ?? "exec") === "exec"
+              ? canResolveParticipationExecApproval(opts.record, gatewayClient)
+              : undefined) ??
+              canAccessInvitedApprovalSession({
+                ...readApprovalRequestSource(opts.record),
+                client: gatewayClient,
+                cfg: getRuntimeConfig(),
+                prepared: prepareProjectedApprovalSessionAccess({
+                  cfg: getRuntimeConfig(),
+                  client: gatewayClient,
+                  projection: runtime.getSessionRowProjection(),
+                }),
+              }))) &&
           (!opts.filter || opts.filter(gatewayClient, opts.record)),
       ),
     getClientConnIds,

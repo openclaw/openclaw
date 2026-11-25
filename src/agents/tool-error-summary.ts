@@ -19,7 +19,11 @@ export type ProcessTerminalDiagnostic = {
 
 export type ToolErrorSummary = {
   toolName: string;
+  /** The catalog tool a Tool Search dispatcher called; warnings name it instead of the dispatcher. */
+  dispatchedToolName?: string;
   executionStarted?: boolean;
+  /** The call named no tool this run has, so no later call can share its tool identity. */
+  unknownTool?: true;
   meta?: string;
   errorCode?: string;
   error?: string;

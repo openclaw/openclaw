@@ -24,7 +24,7 @@ export type DiscordAudioError = {
   daveRecoveryFailed?: boolean;
 };
 export type DiscordAudioFrame = {
-  pcm: Uint8Array;
+  pcm: Uint8Array<ArrayBuffer>;
   packet: Uint8Array;
   receivedAt: number;
   recordingEpoch: bigint;

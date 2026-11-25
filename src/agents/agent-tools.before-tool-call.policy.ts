@@ -7,6 +7,7 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import { freezeDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import { buildAgentHookContextExecRequestFields } from "../plugins/hook-agent-context.js";
 import { cloneHookIsolationValue } from "../plugins/hook-isolation.js";
 import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -124,6 +125,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
       ...(args.ctx?.requester ? { requester: args.ctx.requester } : {}),
       ...(args.ctx?.trigger && { trigger: args.ctx.trigger }),
+      ...buildAgentHookContextExecRequestFields(),
     });
     const toolContext = buildToolContext(toolIdentity);
     // Policies form a mutation chain. Reconcile each decision against the prior

@@ -11,6 +11,7 @@ import {
   reconnectMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI inline command trail" });
@@ -332,6 +333,7 @@ suite.define(() => {
             ].flatMap(({ id, shellCommand, text, isError }, index) => [
               {
                 role: "assistant",
+                ...openAiAuthor,
                 content: [
                   { type: "toolCall", id, name: "exec", arguments: { command: shellCommand } },
                 ],
@@ -362,6 +364,7 @@ suite.define(() => {
             ]),
             {
               role: "assistant",
+              ...openAiAuthor,
               content: textContent("The evidence commands finished."),
               timestamp: now + 50,
               __openclaw: { id: "saved-answer", runId },
@@ -590,7 +593,7 @@ suite.define(() => {
         expect(abort.params).toEqual({ sessionKey, runId, userInitiated: true });
         await stop.waitFor({ state: "detached" });
         expect(await pane.locator(".chat-tool-row--running").count()).toBe(0);
-        await running.getByText("Outcome unknown", { exact: true }).waitFor();
+        await running.getByText("interrupted", { exact: true }).waitFor();
         expect(await running.getByText("Completed", { exact: true }).count()).toBe(0);
         expect(await running.getByText(newestOutput, { exact: true }).count()).toBe(0);
         // A native result owns retained output. This interrupted call has no

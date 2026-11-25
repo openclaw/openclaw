@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   withOpenClawTestState,
@@ -204,4 +205,58 @@ it("rechecks scopes and the original session incarnation after file I/O", async 
       );
     }
   });
+});
+
+it("never lends Full owner host-file authority to an invited participant", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: true },
+    async (state) => {
+      const cfg = rolePolicyConfig();
+      const role = cfg.gateway!.roles!.definitions.invited!;
+      role.scopes = ["operator.sessions.read"];
+      role.sessions.maxInvitedAccess = "send";
+      role.sandbox = "required";
+      setRuntimeConfigSnapshot(cfg);
+      const { sessionRoot, filePath } = await hostFile(state);
+      const client = roleClient("invited", "bounded-file-participant");
+      client.connect.scopes = role.scopes;
+      client.internal = { authenticatedOperator: true };
+      const connection = new AbortController();
+      client.connectionSignal = connection.signal;
+      client.connId = "bounded-file-participant";
+      await seedSession(target, {
+        spawnedCwd: sessionRoot,
+        permissionMode: "full",
+        createdActor: { type: "human", source: "profile", id: "original-owner" },
+      });
+      addSessionMember(target, {
+        identityId: client.authenticatedUserProfile!.profileId,
+        addedBy: "original-owner",
+        access: "send",
+      });
+      await fs.writeFile(`${sessionRoot}/inside.txt`, fileContent);
+      using rpc = await fileGateway(cfg);
+      try {
+        expect((await rpc.read(client, target.sessionKey, "inside.txt")).mock.calls[0]?.[0]).toBe(
+          true,
+        );
+        for (const invitedPermission of ["read-only", "workspace", "full"] as const) {
+          role.sessions.invitedPermission = invitedPermission;
+          for (const method of ["sessions.files.get", "sessions.files.download"]) {
+            const respond = await dispatchAuthorizationRequest(
+              method,
+              { sessionKey: target.sessionKey, path: filePath },
+              { client, context: rpc.context, extraHandlers: sessionsFilesHandlers },
+              "participant-file-read",
+            );
+            expect(respond.mock.calls[0]?.[2], `${method}/${invitedPermission}`).toMatchObject({
+              details: { reason: "outside_session_boundary" },
+            });
+          }
+        }
+      } finally {
+        connection.abort();
+      }
+    },
+  );
 });

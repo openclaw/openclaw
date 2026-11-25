@@ -20,18 +20,19 @@ import { orderSessionPullRequests } from "../../lib/session-pull-request-present
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import { listSubagents, projectProgressCardRuntime } from "./chat-subagent-wait.ts";
-import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
+import { createChatViewFrame, type ChatProps } from "./chat-view-frame.ts";
 import {
   renderChatComposerNotices as ChatComposerNoticesView,
   renderChatTopbarNotices as ChatTopbarNotices,
 } from "./chat-view-notices.tsx";
+import { ChatTranscript, type ChatTranscriptInput } from "./chat-view-transcript.tsx";
 import type { ChatActivityPillsProps } from "./components/chat-activity-pills-types.ts";
 import { publicationOutsidePills } from "./components/chat-activity-pills-visibility.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
+import { ChatComposerPluginContributions } from "./components/chat-composer-plugin-contributions.tsx";
 import {
   ComposerQuestionDock,
   createComposerQuestionPanel,
@@ -46,12 +47,11 @@ import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-ima
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
 import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
+import "../../components/resizable-divider.ts";
 import {
   getTranscriptState,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
-import "../../components/resizable-divider.ts";
-import { ChatThread } from "./components/chat-thread-view.tsx";
 import { TranscriptSearch } from "./components/chat-transcript-search.tsx";
 import { TemplateSetupComposer } from "./template-setup-composer.tsx";
 
@@ -72,74 +72,20 @@ const ChatTaskSuggestionTray = lazy(() => import("./components/chat-task-suggest
   export: "ChatTaskSuggestionTray",
 });
 
-type ChatViewInput = {
+type ChatViewInput = ChatTranscriptInput & {
   questions: ComposerQuestions;
-  props: ChatProps;
-  frame: ChatViewFrame;
+  showComposerSessionCards: boolean;
   presented: boolean;
   application?: ApplicationContext;
-  bindTranscriptViewport: (element: HTMLDivElement) => () => void;
   getTranscriptElement: () => HTMLDivElement | null;
   getScrollToLatestElement: () => HTMLButtonElement | null;
 };
-
-// Must match the fixed height of .chat-pending-inputs--history.
-const SAVED_INPUT_HISTORY_HEIGHT_PX = 44;
-
-function ChatTranscript(input: ChatViewInput) {
-  const savedInputNavigation = <ChatSavedInputNavigation {...input} />;
-  const hasSavedInputNavigation = () =>
-    input.frame.pendingInputs &&
-    (input.frame.pendingInputs.page.nextBefore !== undefined ||
-      input.frame.pendingInputs.before !== undefined);
-  return (
-    <ChatThread
-      props={input.frame.threadProps}
-      transcript={input.props.transcript}
-      bindViewport={input.bindTranscriptViewport}
-      historySupplement={
-        hasSavedInputNavigation()
-          ? {
-              content: savedInputNavigation,
-              height: SAVED_INPUT_HISTORY_HEIGHT_PX,
-            }
-          : undefined
-      }
-    />
-  );
-}
-
-function ChatSavedInputNavigation(input: ChatViewInput) {
-  const pendingInputs = () => input.frame.pendingInputs;
-  const pendingButton = (page: "earlier" | "latest") => (
-    <button
-      class="btn btn--sm"
-      type="button"
-      disabled={pendingInputs()?.loading}
-      onClick={() => {
-        if (input.props.historyState) {
-          void loadChatPendingInputs(
-            input.props.historyState,
-            page === "earlier" ? pendingInputs()?.page.nextBefore : undefined,
-          );
-        }
-      }}
-    >
-      {t(`chat.pendingInputs.${page}`)}
-    </button>
-  );
-  return (
-    <div class="chat-pending-inputs chat-pending-inputs--history">
-      <Show when={pendingInputs()?.page.nextBefore !== undefined}>{pendingButton("earlier")}</Show>
-      <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
-    </div>
-  );
-}
 
 function ChatFooterContent(
   input: ChatViewInput & {
     mobileComposition?: boolean;
     activities?: ChatActivityPillsProps;
+    toolbar?: boolean;
   },
 ) {
   const pendingInputs = () => input.frame.pendingInputs;
@@ -177,7 +123,7 @@ function ChatFooterContent(
           </ChatLazyBoundary>
         </div>
       </Show>
-      <Show when={!input.props.detailsEnabled}>
+      <Show when={input.showComposerSessionCards}>
         <ChatPullRequests
           pullRequests={input.activities?.pullRequests ? [] : (input.props.pullRequests ?? [])}
           gateway={input.props.pullRequestsGateway}
@@ -201,24 +147,22 @@ function ChatFooterContent(
           <ChatSessionSuggestions
             suggestions={input.props.sessionSuggestions ?? []}
             role={input.props.sessionSuggestionRole}
+            onClose={input.props.onCloseSessionSuggestion}
+            liveResolutions={input.props.sessionSuggestionLiveResolutions}
+            messages={input.props.messages}
             busyIds={input.props.sessionSuggestionBusyIds ?? new Set()}
             archived={input.props.sessionSuggestionsArchived === true}
             canResolve={input.props.canResolveSessionSuggestions === true}
-            onResolve={(suggestion, resolution) =>
-              input.props.onResolveSessionSuggestion?.(suggestion, resolution)
-            }
+            onResolve={input.props.onResolveSessionSuggestion}
           />
         </ChatLazyBoundary>
       </Show>
-      <Show when={input.application}>
-        <openclaw-plugin-contributions
-          prop:kind="composer"
-          prop:sessionKey={input.props.sessionKey}
-          prop:agentId={input.props.currentAgentId}
-          prop:presented={input.presented}
-          prop:composer={input.props}
-        />
-      </Show>
+      <ChatComposerPluginContributions
+        kind="composer"
+        composer={input.props}
+        presented={input.presented}
+        toolbar={input.toolbar}
+      />
     </>
   );
 }
@@ -273,20 +217,15 @@ function ChatComposerView(input: ChatViewInput) {
           : undefined,
     };
   });
+  const showProgress = () => input.showComposerSessionCards && !activities()?.progress;
   return (
     <ChatComposer
       {...input.props}
       questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
       getScrollToLatestElement={input.getScrollToLatestElement}
-      progressCard={
-        input.props.detailsEnabled || activities()?.progress ? null : input.props.progressCard
-      }
-      progressCardInitialLoading={
-        input.props.detailsEnabled || activities()?.progress
-          ? false
-          : input.props.progressCardInitialLoading
-      }
+      progressCard={showProgress() ? input.props.progressCard : null}
+      progressCardInitialLoading={showProgress() && input.props.progressCardInitialLoading}
       displayQueue={input.frame.displayQueue}
       footerContent={
         <ChatFooterContent
@@ -295,6 +234,7 @@ function ChatComposerView(input: ChatViewInput) {
           activities={activities()}
         />
       }
+      pluginActionsPresented={input.presented}
       mobileActivityPills={activities()}
       mobileApprovalContent={
         <Show
@@ -345,7 +285,7 @@ function ChatComposerCompanion(input: ChatViewInput) {
   );
   return (
     <div class="chat-footer__context">
-      <ChatFooterContent {...input} />
+      <ChatFooterContent {...input} toolbar={false} />
       <div class="agent-chat__composer-notices">
         <ChatComposerNoticesView {...input.props} presented={input.presented} />
       </div>
@@ -493,6 +433,8 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
     questions: input.questions,
     props: input.props,
     frame: frame(),
+    // Full chat owns these in Details; the assistant dock has no fallback cards.
+    showComposerSessionCards: !input.props.detailsEnabled && !input.props.hideComposerSessionCards,
     presented: presented(),
     application,
     bindTranscriptViewport,
@@ -581,7 +523,7 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
           paneId={input.props.paneId}
           onFocusComposer={frame().threadProps.onFocusComposer}
           visiblePin={(id) => getTranscriptState(input.props.paneId).commentPins?.visiblePin(id)}
-          resolveSourceRange={frame().resolveCommentSource}
+          sourceBubbles={frame().commentSourceBubbles}
           props={input.props}
           disabled={!input.props.canSend}
           sessionKey={input.props.sessionKey}

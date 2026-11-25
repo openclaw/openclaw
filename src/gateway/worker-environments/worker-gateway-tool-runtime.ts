@@ -9,6 +9,7 @@ import {
   type WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { formatToolArgumentErrors } from "../../../packages/llm-core/src/validation.js";
 import { getAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../agents/harness/tool-surface-bridge.js";
@@ -199,7 +200,11 @@ export function createWorkerGatewayToolRuntime(params: {
         throw new Error("Worker tool handle is unavailable");
       }
       if (!Value.Check(tool.parameters, request.arguments)) {
-        throw new Error("Worker tool arguments are invalid");
+        const errors = formatToolArgumentErrors(
+          Value.Errors(tool.parameters, request.arguments),
+          request.arguments,
+        );
+        throw new Error(`Worker tool arguments are invalid:\n${errors}`);
       }
       const digest = JSON.stringify([request.toolId, request.arguments]);
       const prior = calls.get(request.toolCallId);

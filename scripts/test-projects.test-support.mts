@@ -180,7 +180,12 @@ type ChangedTestTargetOptions = {
   broad?: boolean;
   combineSiblingWithImportGraph?: boolean;
   boundedOwners?: boolean;
-  aggressive?: { maxDirectImporters: number; maxDirectoryTests: number };
+  aggressive?: {
+    maxDirectImporters: number;
+    maxDirectoryTests: number;
+    /** Owners whose behavior tests sit many imports away also select importers in their directory. */
+    transitiveOwners?: RegExp;
+  };
   adaptiveMarkdown?: { isIndependentCompanion: (file: string) => boolean };
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
   forceFullImportGraph?: boolean;
@@ -766,11 +771,7 @@ const TEST_HELPER_NORMALIZE_TEXT_TARGETS = [
 ];
 const HAPPY_PATH_PROMPT_SNAPSHOT_HELPER_TEST_TARGETS = ["test/scripts/prompt-snapshots.test.ts"];
 const APPCAST_TEST_TARGETS = ["test/appcast.test.ts", "test/scripts/make-appcast.test.ts"];
-const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
-  "extensions/codex/src/manifest.test.ts",
-  "extensions/openai/openai-provider.test.ts",
-  "test/scripts/codex-client-version-contract.test.ts",
-];
+const CODEX_VERSION_CONTRACT_TEST_TARGETS = ["extensions/codex/src/manifest.test.ts"];
 // The iframe script and native document load as assets outside the import graph.
 const MERMAID_RENDERER_TEST_TARGETS = [
   "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
@@ -4412,9 +4413,10 @@ function resolveToolingTestTargets(
     semanticTargets.length ||
     conventionalTargets?.length,
   );
+  // A conventional filename is an owner hint, not an exhaustive consumer list.
   const importGraphResult =
     !options.boundedOwners &&
-    !hasDirectOwner &&
+    (!hasDirectOwner || conventionalTargets?.length) &&
     (options.forceFullImportGraph ||
       TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => implementationPath.endsWith(ext)))
       ? options.forceFullImportGraph
@@ -4861,12 +4863,26 @@ function resolveBoundedChangedTestTargetPlan(
       graph ??= getImportGraph(cwd, graphOptions, changedPaths);
       directImporters = new Set(walkAffectedTestsFromImportGraph([changedPath], graph, 1));
       const directCount = new Set(graph.reverseImports.get(changedPath)).size;
-      const depth = options.aggressive
-        ? directCount < options.aggressive.maxDirectImporters
+      const depth = !options.aggressive
+        ? undefined
+        : directCount < options.aggressive.maxDirectImporters
           ? 2
-          : 1
-        : undefined;
+          : 1;
       affectedTests = walkAffectedTestsFromImportGraph([changedPath], graph, depth);
+      if (options.aggressive?.transitiveOwners?.test(changedPath)) {
+        // Every transitive importer in the owner's own directory; a package root reaches its
+        // whole package, so it relies on the declared behavior set instead.
+        const directory = path.posix.dirname(changedPath);
+        const packageRoot = /^(?:src|packages|extensions)\/[^/]+(?:\/src)?$/u.test(directory);
+        if (!packageRoot) {
+          affectedTests = uniqueOrdered([
+            ...affectedTests,
+            ...walkAffectedTestsFromImportGraph([changedPath], graph).filter((file) =>
+              file.startsWith(`${directory}/`),
+            ),
+          ]);
+        }
+      }
     }
     if (graph) {
       const changedExports =

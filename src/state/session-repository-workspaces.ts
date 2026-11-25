@@ -270,7 +270,7 @@ export function createSessionRepositoryWorkspaceStore(
           ? withArtifactPreservingStateReads(async () => {
               const reply = await executeExistingOpenClawStateRead(
                 { path: databasePath, env },
-                { type: "sessionRepositoryWorkspaces.find", owners: [read.owner] },
+                { type: "sessionRepositoryWorkspaces.find", owners: [{ ...read.owner }] },
                 { current: true, context: captured, preferIndependentWarmRead: true },
               );
               return reply?.workspaces.find((workspace) => workspace.workspaceId === workspaceId);

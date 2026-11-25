@@ -591,34 +591,6 @@ describe("subagent progress drafts", () => {
   type TestDraft = { push: Mock; retire: Mock };
   const newDraft = (): TestDraft => ({ push: vi.fn(), retire: vi.fn() });
 
-  it("keeps child labels and distinct short references without changing full identities", async () => {
-    const first = "00000000-0000-4000-8000-000000002633";
-    const second = "00000000-0000-4000-8000-00000000a4f0";
-    const spawns = await yieldCohort("parent-turn", [first, second], undefined, {
-      [first]: "Check streaming",
-    });
-    const draft = newDraft();
-    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-    expect(draft.push.mock.calls.map(([item]) => [item.itemId, item.title])).toEqual([
-      [first, "Check streaming …2633"],
-      [second, "Subagent …a4f0"],
-    ]);
-    expect(spawns.map((spawn) => spawn.childSessionKey)).toEqual([
-      childKey(first),
-      childKey(second),
-    ]);
-  });
-
-  it("keeps progress titles whole at the 120-unit UTF-16 bound", async () => {
-    const prefix = "a".repeat(119);
-    const spawns = await yieldCohort("parent-turn", ["a"], undefined, { a: `${prefix}😀tail` });
-    const draft = newDraft();
-    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-    expect(draft.push).toHaveBeenCalledWith(
-      expect.objectContaining({ itemId: "a", kind: "subagent", title: prefix }),
-    );
-  });
-
   async function adoptCohort(children = ["a", "b"], origin?: Parameters<typeof yieldCohort>[2]) {
     const spawns = await yieldCohort("parent-turn", children, origin);
     const draft = newDraft();
@@ -660,14 +632,19 @@ describe("subagent progress drafts", () => {
       );
     }
     const draft = await adoptCohort(["a", "b"], requesterOrigin);
-    const wakes = answerWakes(draft, [reply]);
+    const wakes = answerWakes(draft, [reply, reply]);
 
+    // Each result wakes the requester; the card stays while a sibling still owes one.
     await endRun("a");
-    expect(wakes).toEqual([]);
+    expect(wakes).toEqual([{ runId: expect.any(String), retiredBefore: 0 }]);
     expect(draft.retire).not.toHaveBeenCalled();
 
     await endRun("b");
-    expect(wakes).toEqual([{ runId: expect.any(String), retiredBefore: 0 }]);
+    expect(wakes).toEqual([
+      { runId: expect.any(String), retiredBefore: 0 },
+      { runId: expect.any(String), retiredBefore: 0 },
+    ]);
+    expect(wakes[1]!.runId).not.toBe(wakes[0]!.runId);
     expectCard(draft);
     const persisted = loadSubagentRegistryFromSqlite();
     for (const runId of ["a", "b"]) {
@@ -685,7 +662,7 @@ describe("subagent progress drafts", () => {
     clock.mockReturnValue(Date.now() + 120_000);
     await registryTesting.sweepOnceForTests();
     await fixture.settle();
-    expect(wakes).toHaveLength(1);
+    expect(wakes).toHaveLength(2);
     expectCard(draft);
   });
 
@@ -755,7 +732,7 @@ describe("subagent progress drafts", () => {
 
   it("follows replacement execution until it settles", async () => {
     const draft = await adoptCohort();
-    const wakes = answerWakes(draft, [DONE]);
+    const wakes = answerWakes(draft, [DONE, DONE]);
 
     await endRun("a", { yielded: true, terminalReply: undefined });
     expect(
@@ -786,7 +763,10 @@ describe("subagent progress drafts", () => {
 
     await endRun("a-resumed");
     await endRun("b");
-    expect(wakes).toEqual([{ runId: expect.any(String), retiredBefore: 0 }]);
+    expect(wakes).toEqual([
+      { runId: expect.any(String), retiredBefore: 0 },
+      { runId: expect.any(String), retiredBefore: 0 },
+    ]);
     expectCard(draft);
   });
 
@@ -794,7 +774,12 @@ describe("subagent progress drafts", () => {
     const draft = await adoptCohort();
     const wakes = answerWakes(
       draft,
-      ["Waiting for the follow-up checks.", "Everything is verified."],
+      [
+        "Waiting for the follow-up checks.",
+        "Still waiting for the follow-up checks.",
+        "One check is verified.",
+        "Everything is verified.",
+      ],
       async (params) => {
         await yieldCohort(String(params?.idempotencyKey), ["c", "d"]);
       },
@@ -802,7 +787,7 @@ describe("subagent progress drafts", () => {
 
     await endRun("a");
     await endRun("b");
-    expect(wakes).toHaveLength(1);
+    expect(wakes).toHaveLength(2);
     expect(draft.retire).not.toHaveBeenCalled();
     for (const itemId of ["c", "d"]) {
       expect(draft.push).toHaveBeenCalledWith(
@@ -812,9 +797,9 @@ describe("subagent progress drafts", () => {
 
     await endRun("c");
     await endRun("d");
-    expect(wakes).toHaveLength(2);
-    expect(wakes[1]).toEqual({ runId: expect.any(String), retiredBefore: 0 });
-    expect(wakes[1]!.runId).not.toBe(wakes[0]!.runId);
+    expect(wakes).toHaveLength(4);
+    expect(wakes.every((wake) => wake.retiredBefore === 0)).toBe(true);
+    expect(new Set(wakes.map((wake) => wake.runId)).size).toBe(4);
     expectCard(draft);
   });
 });

@@ -8,6 +8,7 @@ import {
   throwSettledAggregate,
 } from "../infra/error-graph-internal.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { createPluginCaptureOwner } from "./plugin-capture-native-resource.client.js";
 import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
@@ -20,7 +21,6 @@ import {
   markPluginSourcePreparationOperation,
   PluginSourceRecoveryUnavailableError,
 } from "./plugin-instance-error.js";
-import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import {
   createPluginDependencyResolver,
@@ -322,10 +322,10 @@ async function copyRecoverySourceAsync(input: RecoveryInput): Promise<PluginReco
   let owner: Awaited<ReturnType<typeof createPluginCaptureOwner>> | undefined;
   let recovery: ReturnType<typeof createPluginSourceCapture> | undefined;
   try {
-    // Recovery outlives the preparation generation that produced the serving artifact.
-    const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
-    // The independent host outlives this invocation; its transport must not retain the old owner.
-    owner = await pluginInstanceInvocation.exit(() => createPluginCaptureOwner(source));
+    // Recovery ports and their descriptor outlive the caller, so neither may capture its context.
+    owner = await runInDetachedAsyncContext(() =>
+      createPluginCaptureOwner(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined })),
+    );
     const metrics = getPluginGenerationMetrics();
     const { root, copiedBytes } = await owner.copyRecovery(1, {
       rootDir: input.rootDir,

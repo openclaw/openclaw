@@ -1,15 +1,20 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { mergeAcceptedSessionSpawnsForRun } from "../../accepted-session-spawn.js";
+import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import {
   finalizeRequesterFinalAttachment,
   registerRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   adoptSubagentRunForRequesterTurnInRuns,
   listUnsettledRequesterChildrenInRuns,
@@ -21,6 +26,7 @@ import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
+import { retainedOperatorFixture } from "./subagent-registry.completed-followup-authority.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
@@ -382,6 +388,86 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
 });
 
 describe("settleRequesterTurnAfterSessionSpawns", () => {
+  it.each(["discarded", "delivered"] as const)(
+    "transfers a reused-session cohort after committed %s children are cleaned",
+    async (status) => {
+      const delivered = makeRun("already-delivered");
+      const running = {
+        ...makeRun("still-running"),
+        childSessionKey: delivered.childSessionKey,
+        execution: { status: "running" as const, startedAt: 3_000 },
+        delivery: { status: "pending" as const },
+      };
+      const removed = ["cleaned-a", "cleaned-b"].map((runId) => {
+        const entry = makeRun(runId);
+        entry.delivery = {
+          status,
+          ...(status === "discarded" ? { discardReason: "expired" as const } : {}),
+        };
+        entry.cleanupCompletedAt = 2_500;
+        return entry;
+      });
+      const entries = [delivered, ...removed, running];
+      const instance = createOperationalRunInstanceRef(REQUESTER_TURN);
+      const source = await retainedOperatorFixture("yield-cleanup-receipts");
+      mergeAcceptedSessionSpawnsForRun(instance, entries.map(accepted));
+      try {
+        for (const entry of entries) {
+          subagentRuns.set(entry.runId, entry);
+          const custody = await withPluginRuntimeGatewayRequestScope(
+            { ...source, isWebchatConnect: () => false },
+            () => captureOperatorToolGatewayContinuationContext(),
+          );
+          if (!custody) {
+            throw new Error("Missing completion custody");
+          }
+          subagentRuns.bindCompletionAuthority(entry, custody, instance);
+        }
+        saveSubagentRegistryChangesToSqlite(
+          subagentRuns,
+          entries.map((entry) => entry.runId),
+        );
+        await mutateSubagentRuns(
+          removed.map((entry) => entry.runId),
+          () => ({
+            value: undefined,
+            postimages: new Map(removed.map((entry) => [entry.runId, null])),
+            removalReason: "retention",
+          }),
+          { runs: subagentRuns },
+        );
+        const schedule = vi.fn();
+        expect(
+          await settleRuns(entries, {
+            runs: subagentRuns,
+            acceptedSessionSpawns: mergeAcceptedSessionSpawnsForRun(
+              instance,
+              entries.map(accepted),
+            ),
+            schedule,
+          }),
+        ).toBe(true);
+        for (const entry of [delivered, running]) {
+          expect(
+            loadSubagentRegistryFromSqlite().get(entry.runId)?.requesterSettleWake,
+          ).toMatchObject({
+            status: "pending",
+            requesterYieldBatch: true,
+            batchRunIds: [delivered.runId, running.runId],
+          });
+        }
+        expect(schedule).toHaveBeenCalledExactlyOnceWith(
+          delivered.runId,
+          subagentRuns.get(delivered.runId),
+          "settle",
+        );
+      } finally {
+        subagentRuns.clear();
+        source.source.release();
+      }
+    },
+  );
+
   it("accounts for a superseded retired receipt without transferring its obligation", async () => {
     const retired = {
       ...makeRun("run-retired"),
@@ -750,9 +836,6 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           "settle",
         );
         expect(calls).toEqual(["persist", "schedule"]);
-      }
-      if (kind === "in_progress") {
-        expect(runs.get(second.runId)!.delivery?.disposition).toBe("intentional_non_delivery");
       }
     },
   );

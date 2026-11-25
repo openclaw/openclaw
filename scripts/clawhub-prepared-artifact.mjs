@@ -537,6 +537,7 @@ async function checkOriginalAbsent(source, fetchImpl) {
       true,
     );
   }
+  await source.revalidateAuthority();
 }
 export async function checkOriginalPackedClawHubAbsent(options) {
   const source = await originalPackedSource(options);
@@ -668,7 +669,6 @@ export async function restorePreparedClawHubPackage(options) {
         fetchImpl,
         archivePath: options.archivePath,
         maxArchiveBytes: MAX_PACKAGE_ZIP_BYTES,
-        retryAttempts: 1,
       })
     : await downloadBoundArtifact({
         descriptor: source,
@@ -693,6 +693,9 @@ export async function restorePreparedClawHubPackage(options) {
   const tarballName = original ? files.keys().next().value : entry.tarballName;
   // Publish only after a complete, checked transfer. A failed download never
   // leaves a tarball in the directory consumed by the upload/publication step.
+  if (original) {
+    await checkOriginalAbsent(originalSource, fetchImpl ?? fetch);
+  }
   const existing = lstatSync(outputDir, { throwIfNoEntry: false });
   if (existing) {
     if (!existing.isDirectory() || existing.isSymbolicLink()) {

@@ -28,6 +28,7 @@ import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.test-support.js";
+import * as retiredCleanup from "./removal-git.js";
 import { IDLE_GC_MS } from "./retention.js";
 import { managedWorktreeGcEntrypoint } from "./service-gc-runtime.test-support.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
@@ -226,7 +227,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     await fs.mkdir(orphan, { recursive: true });
     await fs.mkdir(sibling);
     const permissionError = Object.assign(new Error("fixture access denied"), { code: "EACCES" });
-    const remove = fs.rm;
+    const remove = retiredCleanup.deleteRetiredCheckout;
     let attempts = 0;
     let blocked = true;
     const rename = fs.rename;
@@ -236,15 +237,17 @@ describe("ManagedWorktreeService garbage collection", () => {
         orphan = String(target);
       }
     });
-    const removal = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-      if (target === orphan) {
-        attempts += 1;
-        if (blocked) {
-          throw permissionError;
+    const removal = vi
+      .spyOn(retiredCleanup, "deleteRetiredCheckout")
+      .mockImplementation(async (target) => {
+        if (target === orphan) {
+          attempts += 1;
+          if (blocked) {
+            throw permissionError;
+          }
         }
-      }
-      return await remove(target, options);
-    });
+        return await remove(target);
+      });
     let warnings = createWarnLogCapture("openclaw-orphan-first-failure");
     try {
       expect(await service.gc()).toMatchObject({ orphansDeleted: 1, failedCount: 1 });
@@ -289,17 +292,19 @@ describe("ManagedWorktreeService garbage collection", () => {
     let orphan = path.join(stateDir, "worktrees", "fingerprint", "replaced");
     const retained = path.join(root, "retained-original");
     await fs.mkdir(orphan, { recursive: true });
-    const remove = fs.rm;
-    const removal = vi.spyOn(fs, "rm").mockImplementationOnce(async (target, options) => {
-      if (!String(target).startsWith(path.dirname(orphan))) {
-        return await remove(target, options);
-      }
-      orphan = String(target);
-      await fs.rename(orphan, retained);
-      await fs.mkdir(orphan);
-      await fs.writeFile(path.join(orphan, "replacement.txt"), "new incarnation\n");
-      throw Object.assign(new Error("fixture replaced during removal"), { code: "EACCES" });
-    });
+    const remove = retiredCleanup.deleteRetiredCheckout;
+    const removal = vi
+      .spyOn(retiredCleanup, "deleteRetiredCheckout")
+      .mockImplementationOnce(async (target) => {
+        if (!target.startsWith(path.dirname(orphan))) {
+          return await remove(target);
+        }
+        orphan = target;
+        await fs.rename(orphan, retained);
+        await fs.mkdir(orphan);
+        await fs.writeFile(path.join(orphan, "replacement.txt"), "new incarnation\n");
+        throw Object.assign(new Error("fixture replaced during removal"), { code: "EACCES" });
+      });
     try {
       expect(await service.gc()).toMatchObject({ orphansDeleted: 0, failedCount: 1 });
       expect(await fs.readFile(path.join(orphan, "replacement.txt"), "utf8")).toBe(
@@ -787,7 +792,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     const snapshot = await service.remove({ id: removed.id, reason: "test-retention" });
     const snapshotCommit = await git(repo, "rev-parse", snapshot.snapshotRef!);
     const live = await materializeRunOwnedFixture("live-owner", "session", "agent:main:live");
-    const readOwnerState = vi.fn(() => "idle" as const);
+    const readOwnerState = vi.fn(() => "active" as const);
 
     const result = await service.gc({ readOwnerState });
 
