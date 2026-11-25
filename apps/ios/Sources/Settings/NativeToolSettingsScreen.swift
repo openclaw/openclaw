@@ -200,9 +200,8 @@ struct NativeToolSettingsScreen: View {
             guard await gateway.supportsServerMethod(self.kind.readMethod, ifCurrentRoute: currentRoute) == true else {
                 guard self.inventory.loadID == loadID, !Task.isCancelled else { return }
                 self.inventory.canEdit = false
-                self.inventory
-                    .failure =
-                    String(localized: "This version of OpenClaw doesn’t support these settings. Update it and try again.")
+                self.inventory.failure = String(
+                    localized: "This version of OpenClaw doesn’t support these settings. Update it and try again.")
                 return
             }
             let params: [String: AnyCodable] = self.kind == .skills ? ["agentId": AnyCodable(self.agentID)] : [:]

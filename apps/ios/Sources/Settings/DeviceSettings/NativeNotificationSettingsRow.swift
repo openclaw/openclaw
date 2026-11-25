@@ -31,19 +31,19 @@ struct NativeNotificationSettingsRow: View {
         self.authorization == .denied || self.registrationComplete
     }
 
-    private var actionTitle: LocalizedStringKey {
-        if self.hasSystemDestination { return "iOS Settings" }
-        guard let authorization,
-              SettingsNotificationStatus(authorization).allowsNotifications,
-              self.enrollmentEnabled
-        else { return "Set up" }
-        return "Retry"
+    /// The value is the state, never the action: Off until iOS allows it and the app is set up,
+    /// Not ready while registration is pending, and nothing once it works. The row is the control.
+    private var stateTitle: LocalizedStringKey? {
+        guard let authorization, !self.registrationComplete else { return nil }
+        guard SettingsNotificationStatus(authorization).allowsNotifications, self.enrollmentEnabled else {
+            return "Off"
+        }
+        return "Not ready"
     }
 
     private var statusText: String? {
         if let errorText { return errorText }
         guard let authorization else { return nil }
-        if authorization == .denied { return String(localized: "Off in iOS") }
         guard SettingsNotificationStatus(authorization).allowsNotifications, self.enrollmentEnabled else {
             return nil
         }
@@ -73,11 +73,10 @@ struct NativeNotificationSettingsRow: View {
         } else {
             // Same value style as every other row; the arrow says the row leaves the app.
             HStack(spacing: 6) {
-                SettingsValueText(.localized(self.actionTitle))
-                Image(systemName: self.hasSystemDestination ? "arrow.up.right" : "chevron.right")
-                    .font(OpenClawType.footnoteSemiBold)
-                    .foregroundStyle(.tertiary)
-                    .accessibilityHidden(true)
+                if let stateTitle = self.stateTitle {
+                    SettingsValueText(.localized(stateTitle))
+                }
+                SettingsRowAccessory(opensSystemSettings: self.hasSystemDestination)
             }
         }
     }

@@ -47,7 +47,10 @@ struct WatchMessageJournalView: View {
             }
             Section {
                 Text(
-                    "Dismiss hides finished messages; receipts expire after 48 hours. Messages marked “Needs review” stay until you discard them.")
+                    """
+                    Dismiss hides finished messages; receipts expire after 48 hours. \
+                    Messages marked “Needs review” stay until you discard them.
+                    """)
                     .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
             }

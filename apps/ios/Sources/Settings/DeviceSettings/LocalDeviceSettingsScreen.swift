@@ -153,8 +153,9 @@ struct LocalDeviceSettingsScreen: View {
         .disabled(!snapshot.voice.supported)
     }
 
-    /// Each permission is a short row: its iOS status as the value, or Request in the value's
-    /// place while iOS has not asked yet. Opening iOS Settings is the page's action row.
+    /// Each permission is a short row with its iOS state as the value. A permission iOS has not
+    /// asked for is a row that asks; a limited or denied one opens the app's page in iOS Settings,
+    /// the only place it can change (asking again shows nothing).
     @ViewBuilder
     private func permissionsSection(_ snapshot: DeviceSettingsSnapshot) -> some View {
         Section {
@@ -169,25 +170,24 @@ struct LocalDeviceSettingsScreen: View {
                 Text("Location access").font(SettingsType.label)
             }
             .settingsMenuPicker()
-            SettingsDetailRow(
-                "Precise Location",
-                value: .verbatim(snapshot.permissions.location
-                    .precise ? String(localized: "On") : String(localized: "Off")))
+            // iOS reports full accuracy before Location is ever granted; show it only once it is.
+            if snapshot.permissions.entries.contains(where: { $0.id == .location && $0.status == .granted }) {
+                SettingsDetailRow(
+                    "Precise Location",
+                    value: .verbatim(snapshot.permissions.location
+                        .precise ? String(localized: "On") : String(localized: "Off")))
+            }
             ForEach(snapshot.permissions.entries.filter {
                 self.layout == .device || $0.id != .notifications
             }, id: \.id) { entry in
-                if entry.status == .notDetermined || entry.status == .limited {
-                    LabeledContent {
-                        Button {
-                            self.perform(.requestPermission(entry.id))
-                        } label: {
-                            Text("Request").font(SettingsType.value)
-                        }
-                        .buttonStyle(.borderless)
-                        .tint(.primary)
-                        .accessibilityLabel(String(localized: "Request") + " " + Self.permissionTitle(entry.id))
-                    } label: {
-                        Text(Self.permissionTitle(entry.id)).font(SettingsType.label)
+                if [.notDetermined, .limited, .denied].contains(entry.status) {
+                    let asks = entry.status == .notDetermined
+                    SettingsStateRow(
+                        label: .verbatim(Self.permissionTitle(entry.id)),
+                        value: .verbatim(Self.statusTitle(entry.status)),
+                        opensSystemSettings: !asks)
+                    {
+                        self.perform(asks ? .requestPermission(entry.id) : .openSystemSettings(entry.id))
                     }
                 } else {
                     SettingsDetailRow(
@@ -297,8 +297,8 @@ struct LocalDeviceSettingsScreen: View {
 
     private static func statusTitle(_ status: DeviceSettingsPermissionStatus) -> String {
         switch status {
-        case .granted: String(localized: "Allowed")
-        case .denied: String(localized: "Denied")
+        case .granted: String(localized: "On")
+        case .denied: String(localized: "Off")
         case .notDetermined: String(localized: "Not requested")
         case .unavailable: String(localized: "Unavailable")
         case .limited: String(localized: "Limited")

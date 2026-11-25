@@ -284,6 +284,62 @@ struct SettingsDetailRow: View {
     }
 }
 
+/// Trailing mark of a row that is itself the control: a chevron when it acts in the app, an
+/// arrow when it opens iOS Settings.
+struct SettingsRowAccessory: View {
+    let opensSystemSettings: Bool
+
+    var body: some View {
+        Image(systemName: self.opensSystemSettings ? "arrow.up.right" : "chevron.right")
+            .font(OpenClawType.footnoteSemiBold)
+            .foregroundStyle(.tertiary)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A short row whose value is a state (never an action word) and whose whole row is the control.
+struct SettingsStateRow: View {
+    let label: OpenClawTextValue
+    let value: OpenClawTextValue
+    let opensSystemSettings: Bool
+    let action: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        Button(action: self.action) {
+            Group {
+                if self.dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 2) {
+                        self.label.text.font(SettingsType.label)
+                        self.trailing
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    HStack(spacing: 12) {
+                        self.label.text
+                            .font(SettingsType.label)
+                            .fixedSize(horizontal: true, vertical: false)
+                        Spacer(minLength: 0)
+                        self.trailing
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var trailing: some View {
+        HStack(spacing: 6) {
+            self.value.text
+                .font(SettingsType.value)
+                .foregroundStyle(SettingsInk.secondary)
+                .lineLimit(1)
+            SettingsRowAccessory(opensSystemSettings: self.opensSystemSettings)
+        }
+    }
+}
+
 struct SettingsBuildMetadataStrip: View {
     let metadata: ArtifactBuildInfo
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize

@@ -189,8 +189,10 @@ extension SettingsProTab {
                 SettingsDescriptionRow(
                     "Apple Watch",
                     description: .verbatim(watchStatus.appInstalled
-                        ? String(
-                            localized: "iPhone relay still works. Direct mode connects your watch straight to OpenClaw.")
+                        ? String(localized: """
+                        iPhone relay still works. \
+                        Direct mode connects your watch straight to OpenClaw.
+                        """)
                         : String(
                             localized: "Install the OpenClaw watch app before enabling direct mode.")),
                     value: .verbatim(
@@ -389,7 +391,8 @@ extension SettingsProTab {
                     Task { await self.runDiagnostics() }
                 }
             } footer: {
-                SettingsFootnote("Checks connection, discovery, Talk, and notifications without changing your settings.")
+                SettingsFootnote(
+                    "Checks connection, discovery, Talk, and notifications without changing your settings.")
             }
 
             Section {
@@ -875,12 +878,11 @@ extension SettingsProTab {
             self.settingsToggle("Debug logs", isOn: self.$discoveryDebugLogsEnabled) { enabled in
                 self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
             }
+            // The discovery status is the Discovery check's description above; this row only opens the log.
             NavigationLink {
                 GatewayDiscoveryDebugLogView()
             } label: {
-                SettingsDetailRow(
-                    "Logs",
-                    value: .verbatim(self.gatewayController.discoveryStatusText))
+                Text("Logs").font(SettingsType.label)
             }
         } header: {
             SettingsSectionTitle("Discovery")
