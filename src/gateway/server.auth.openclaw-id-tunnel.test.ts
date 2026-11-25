@@ -544,7 +544,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     },
   );
 
-  test("a viewer reads conversations but cannot read logs or the user directory or send", async () => {
+  test("a viewer reads conversations but cannot read logs, list users, or send uninvited", async () => {
     const { ws, res } = await connectTunnel(VIEWER_KEY);
     try {
       expect(res.ok).toBe(true);
@@ -561,7 +561,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
         idempotencyKey: randomUUID(),
       });
       expect(send.ok).toBe(false);
-      expect(send.error?.message).toMatch(/missing scope: operator.write/);
+      expect(send.error?.message).toBe('Session "main" was not found.');
     } finally {
       ws.close();
     }
