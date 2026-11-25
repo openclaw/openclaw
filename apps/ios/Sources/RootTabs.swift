@@ -1086,6 +1086,8 @@ extension RootTabs {
     }
 
     private func maybeShowQuickSetup() {
+        // A device joined to an OpenClaw ID claw already has its Gateway.
+        guard !(IOSOpenClawIDFeature.isEnabled && IOSOpenClawIDFeature.records.load() != nil) else { return }
         let shouldPresent = Self.shouldPresentQuickSetup(
             quickSetupDismissed: self.quickSetupDismissed,
             showOnboarding: self.showOnboarding,
