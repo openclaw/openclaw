@@ -53,7 +53,7 @@ function parseArgs(argv: string[]) {
   };
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const mode = values.get("mode");
-  if (mode === "node-cache-disabled-control") {
+  if (mode === "node-cache-disabled-control" || mode === "node-cache-workload-qualification") {
     for (const name of values.keys()) {
       if (
         ![
@@ -68,7 +68,7 @@ function parseArgs(argv: string[]) {
           "run-attempt",
         ].includes(name)
       ) {
-        throw new Error(`--${name} is not supported in node-cache-disabled-control mode`);
+        throw new Error(`--${name} is not supported in ${mode} mode`);
       }
     }
     return {
@@ -85,7 +85,7 @@ function parseArgs(argv: string[]) {
   }
   for (const name of ["definition", "harness-sha", "timeout-ms"]) {
     if (values.has(name)) {
-      throw new Error(`--${name} requires node-cache-disabled-control mode`);
+      throw new Error(`--${name} requires a node-cache control mode`);
     }
   }
   if (mode === "node-cache-diagnostics") {
@@ -135,10 +135,16 @@ function parseArgs(argv: string[]) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-if (options.mode === "node-cache-disabled-control") {
+if (
+  options.mode === "node-cache-disabled-control" ||
+  options.mode === "node-cache-workload-qualification"
+) {
   assertSingleWorkflowAttempt(options.runAttempt);
-  const { qualifyNodeCacheDisabledControl } = await import("./lib/node-cache-disabled-control.mts");
-  await qualifyNodeCacheDisabledControl(options);
+  const { qualifyNodeCacheDisabledControl, qualifyNodeCacheWorkload } =
+    await import("./lib/node-cache-disabled-control.mts");
+  await (options.mode === "node-cache-disabled-control"
+    ? qualifyNodeCacheDisabledControl(options)
+    : qualifyNodeCacheWorkload(options));
 } else if (options.mode === "node-cache-diagnostics") {
   assertSingleWorkflowAttempt(options.runAttempt);
   const { qualifyNodeCacheDiagnostics } = await import("./lib/node-compile-cache-diagnostics.mts");
@@ -149,7 +155,7 @@ if (options.mode === "node-cache-disabled-control") {
     ...options,
     manifest: validateNodeCacheManifest(JSON.parse(readFileSync(options.manifestPath, "utf8"))),
   });
-} else {
+} else if (options.mode === "source-pair") {
   await withTerminalManifest(options.outputDir, async () => {
     assertSingleWorkflowAttempt(options.runAttempt);
     await runVitestPairBenchmark({
@@ -163,4 +169,6 @@ if (options.mode === "node-cache-disabled-control") {
       scratchDir: options.scratchDir,
     });
   });
+} else {
+  throw new Error("Unhandled benchmark mode");
 }
