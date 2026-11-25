@@ -207,7 +207,9 @@ struct ChatProTab: View {
                 .environment(
                     \.openClawChatDraftIdentity,
                     viewModel.isNewChatDraft ? AnyView(self.newChatIdentity(viewModel: viewModel)) : nil)
-                .environment(\.openClawChatFloatingHeader, self.usesSideToolbar ? nil : AnyView(self.chatHeader))
+                .environment(
+                    \.openClawChatFloatingHeader,
+                    self.usesSideToolbar ? nil : AnyView(self.chatHeader.toastTopBar()))
                 .environment(
                     \.openClawChatComposerAccessory,
                     viewModel.isNewChatDraft ? nil : AnyView(
@@ -233,7 +235,7 @@ struct ChatProTab: View {
         } else {
             OpenClawProBackground()
                 .safeAreaBar(edge: .top, spacing: 0) {
-                    if !self.usesSideToolbar { self.chatHeader }
+                    if !self.usesSideToolbar { self.chatHeader.toastTopBar() }
                 }
         }
     }

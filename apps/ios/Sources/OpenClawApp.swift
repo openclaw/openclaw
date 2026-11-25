@@ -639,6 +639,7 @@ struct OpenClawApp: App {
     var body: some Scene {
         WindowGroup {
             RootTabs()
+                .openClawToasts(self.appModel.toasts)
                 .menuStyle(PrimaryInkMenuStyle())
                 .tint(OpenClawBrand.accent)
                 .font(OpenClawType.body)

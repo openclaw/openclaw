@@ -47,7 +47,7 @@ enum ToastMotion {
 /// so it shows over sheets; `onInteractiveFrameChange` tells that window where touches belong.
 struct ToastLayer: View {
     let presenter: OpenClawToastPresenter
-    let topInset: CGFloat
+    let placement: ToastPlacement
     let onInteractiveFrameChange: (CGRect) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -65,7 +65,7 @@ struct ToastLayer: View {
         }
         // The capsule hugs its words; this only caps how wide a long message can grow.
         .frame(maxWidth: 370)
-        .padding(.top, self.topInset)
+        .padding(.top, self.placement.capsuleTop)
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: self.presenter.current?.id, initial: true) {

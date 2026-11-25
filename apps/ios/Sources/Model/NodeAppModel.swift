@@ -502,6 +502,10 @@ final class NodeAppModel {
     var gatewayAccentColorHex: String?
     private var focusedChatSessionKey: String?
     var selectedAgentId: String?
+    /// The app's one toast. Views post through the environment; model code posts here.
+    let toasts = OpenClawToastPresenter(assistiveTechnologyRunning: {
+        UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning
+    })
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
     var openChatRequestID: Int = 0
