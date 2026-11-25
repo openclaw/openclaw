@@ -1670,6 +1670,25 @@ var isCodexDynamicToolCallParams = (() => {
             (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
               value.version >= 0) &&
             value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "action" in value &&
+            typeof value.action == "string" &&
+            (value.blockType === void 0 ||
+              !("blockType" in value) ||
+              typeof value.blockType == "string" ||
+              value.blockType === null) &&
+            (value.checkTrustedContacts === void 0 ||
+              !("checkTrustedContacts" in value) ||
+              typeof value.checkTrustedContacts == "boolean" ||
+              value.checkTrustedContacts === null) &&
+            (value.cyberTrustedAccess === void 0 ||
+              !("cyberTrustedAccess" in value) ||
+              typeof value.cyberTrustedAccess == "boolean" ||
+              value.cyberTrustedAccess === null) &&
+            (value.mode === void 0 || !("mode" in value) || !1) &&
+            (value.version === void 0 || !("version" in value) || !1),
         ].reduce((result, unique_11, _) => (unique_11 === !0 ? result + 1 : result), 0) === 1,
       check_27 = (value) =>
         [
@@ -3835,6 +3854,25 @@ var isCodexDynamicToolCallParams = (() => {
             (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
               value.version >= 0) &&
             value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "action" in value &&
+            typeof value.action == "string" &&
+            (value.blockType === void 0 ||
+              !("blockType" in value) ||
+              typeof value.blockType == "string" ||
+              value.blockType === null) &&
+            (value.checkTrustedContacts === void 0 ||
+              !("checkTrustedContacts" in value) ||
+              typeof value.checkTrustedContacts == "boolean" ||
+              value.checkTrustedContacts === null) &&
+            (value.cyberTrustedAccess === void 0 ||
+              !("cyberTrustedAccess" in value) ||
+              typeof value.cyberTrustedAccess == "boolean" ||
+              value.cyberTrustedAccess === null) &&
+            (value.mode === void 0 || !("mode" in value) || !1) &&
+            (value.version === void 0 || !("version" in value) || !1),
         ].reduce((result, unique_23, _) => (unique_23 === !0 ? result + 1 : result), 0) === 1,
       check_41 = (value) =>
         [
@@ -5269,6 +5307,25 @@ var isCodexDynamicToolCallParams = (() => {
             (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
               value.version >= 0) &&
             value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "action" in value &&
+            typeof value.action == "string" &&
+            (value.blockType === void 0 ||
+              !("blockType" in value) ||
+              typeof value.blockType == "string" ||
+              value.blockType === null) &&
+            (value.checkTrustedContacts === void 0 ||
+              !("checkTrustedContacts" in value) ||
+              typeof value.checkTrustedContacts == "boolean" ||
+              value.checkTrustedContacts === null) &&
+            (value.cyberTrustedAccess === void 0 ||
+              !("cyberTrustedAccess" in value) ||
+              typeof value.cyberTrustedAccess == "boolean" ||
+              value.cyberTrustedAccess === null) &&
+            (value.mode === void 0 || !("mode" in value) || !1) &&
+            (value.version === void 0 || !("version" in value) || !1),
         ].reduce((result, unique_8, _) => (unique_8 === !0 ? result + 1 : result), 0) === 1,
       check_18 = (value) =>
         [
@@ -6706,6 +6763,25 @@ var isCodexDynamicToolCallParams = (() => {
             (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
               value.version >= 0) &&
             value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "action" in value &&
+            typeof value.action == "string" &&
+            (value.blockType === void 0 ||
+              !("blockType" in value) ||
+              typeof value.blockType == "string" ||
+              value.blockType === null) &&
+            (value.checkTrustedContacts === void 0 ||
+              !("checkTrustedContacts" in value) ||
+              typeof value.checkTrustedContacts == "boolean" ||
+              value.checkTrustedContacts === null) &&
+            (value.cyberTrustedAccess === void 0 ||
+              !("cyberTrustedAccess" in value) ||
+              typeof value.cyberTrustedAccess == "boolean" ||
+              value.cyberTrustedAccess === null) &&
+            (value.mode === void 0 || !("mode" in value) || !1) &&
+            (value.version === void 0 || !("version" in value) || !1),
         ].reduce((result, unique_8, _) => (unique_8 === !0 ? result + 1 : result), 0) === 1,
       check_18 = (value) =>
         [

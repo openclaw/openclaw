@@ -125,6 +125,18 @@
               },
               "required": ["mode", "reason", "version"],
               "type": "object"
+            },
+            {
+              "type": "object",
+              "required": ["action"],
+              "properties": {
+                "action": { "type": "string" },
+                "blockType": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                "checkTrustedContacts": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] },
+                "cyberTrustedAccess": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] },
+                "mode": false,
+                "version": false
+              }
             }
           ]
         },
