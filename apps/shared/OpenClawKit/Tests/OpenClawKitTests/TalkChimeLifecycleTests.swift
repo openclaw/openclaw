@@ -91,5 +91,32 @@ struct TalkChimePreferenceUpgradeTests {
         #expect(!TalkChimePlayer.isEnabled(TalkChimePlayer.endPreferenceKey, in: defaults))
         #expect(TalkChimePlayer.isEnabled(TalkChimePlayer.replyPreferenceKey, in: defaults))
     }
+
+    @Test func `an explicit legacy opt-out carries over only to cue keys that were never stored`() throws {
+        let (defaults, name) = try self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let legacy = "openclaw.talkPhaseSoundsEnabled"
+        defaults.set(false, forKey: legacy)
+        defaults.set(true, forKey: TalkChimePlayer.replyPreferenceKey)
+
+        #expect(!TalkChimePlayer.isEnabled(
+            TalkChimePlayer.startPreferenceKey, in: defaults, inheritingOptOutFrom: legacy))
+        #expect(!TalkChimePlayer.isEnabled(
+            TalkChimePlayer.endPreferenceKey, in: defaults, inheritingOptOutFrom: legacy))
+        // An explicit stored cue choice wins over the legacy opt-out.
+        #expect(TalkChimePlayer.isEnabled(
+            TalkChimePlayer.replyPreferenceKey, in: defaults, inheritingOptOutFrom: legacy))
+        // Reading never writes.
+        #expect(defaults.object(forKey: TalkChimePlayer.startPreferenceKey) == nil)
+        #expect(defaults.object(forKey: TalkChimePlayer.endPreferenceKey) == nil)
+
+        // Legacy setting on, or never stored: the cues keep their default of on.
+        defaults.set(true, forKey: legacy)
+        #expect(TalkChimePlayer.isEnabled(
+            TalkChimePlayer.startPreferenceKey, in: defaults, inheritingOptOutFrom: legacy))
+        defaults.removeObject(forKey: legacy)
+        #expect(TalkChimePlayer.isEnabled(
+            TalkChimePlayer.endPreferenceKey, in: defaults, inheritingOptOutFrom: legacy))
+    }
 }
 #endif

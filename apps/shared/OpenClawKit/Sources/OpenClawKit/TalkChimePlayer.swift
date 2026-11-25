@@ -9,9 +9,17 @@ public final class TalkChimePlayer {
     public static let replyPreferenceKey = "talk.chimes.reply"
 
     /// Cue preferences are opt-out: a device that never stored a key (every install from before
-    /// the chimes shipped) reads on, and an explicit stored choice always wins.
-    public nonisolated static func isEnabled(_ key: String, in defaults: UserDefaults = .standard) -> Bool {
-        defaults.object(forKey: key) as? Bool ?? true
+    /// the chimes shipped) reads on, and an explicit stored choice always wins. A device that
+    /// explicitly turned off `inheritingOptOutFrom` (macOS "Phase sounds") and never stored the
+    /// key reads off. Reading never writes.
+    public nonisolated static func isEnabled(
+        _ key: String,
+        in defaults: UserDefaults = .standard,
+        inheritingOptOutFrom legacyKey: String? = nil) -> Bool
+    {
+        if let stored = defaults.object(forKey: key) as? Bool { return stored }
+        if let legacyKey, defaults.object(forKey: legacyKey) as? Bool == false { return false }
+        return true
     }
 
     private var player: AVAudioPlayer?

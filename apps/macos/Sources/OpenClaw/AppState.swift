@@ -520,13 +520,16 @@ final class AppState {
         self.talkEnabled = AppDefaults.standard.bool(forKey: talkEnabledKey)
         self.talkStartChimeEnabled = TalkChimePlayer.isEnabled(
             TalkChimePlayer.startPreferenceKey,
-            in: AppDefaults.standard)
+            in: AppDefaults.standard,
+            inheritingOptOutFrom: talkPhaseSoundsEnabledKey)
         self.talkEndChimeEnabled = TalkChimePlayer.isEnabled(
             TalkChimePlayer.endPreferenceKey,
-            in: AppDefaults.standard)
+            in: AppDefaults.standard,
+            inheritingOptOutFrom: talkPhaseSoundsEnabledKey)
         self.talkReplyChimeEnabled = TalkChimePlayer.isEnabled(
             TalkChimePlayer.replyPreferenceKey,
-            in: AppDefaults.standard)
+            in: AppDefaults.standard,
+            inheritingOptOutFrom: talkPhaseSoundsEnabledKey)
         self.talkPhaseSoundsEnabled = Self.loadEnabledPreference(key: talkPhaseSoundsEnabledKey)
         self.talkShiftToStopEnabled = Self.loadEnabledPreference(key: talkShiftToStopEnabledKey)
         self.heartbeatsEnabled = Self.loadEnabledPreference(key: heartbeatsEnabledKey)

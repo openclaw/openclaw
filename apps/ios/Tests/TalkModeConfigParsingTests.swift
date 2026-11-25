@@ -409,9 +409,14 @@ struct TalkModeManagerTests {
     @Test(.testWaitLimit)
     func `native call cues readiness, a completed reply and a clean end in order and recovers the microphone`() async {
         var trace: [String] = []
+        var timed: [[String: Any]] = []
+        let origin = ProcessInfo.processInfo.systemUptime
         let manager = TalkModeManager(
             allowSimulatorCapture: true,
-            chimePlaybackOverride: { cue in trace.append("cue \(cue)") })
+            chimePlaybackOverride: { cue in
+                trace.append("cue \(cue)")
+                timed.append(["cue": "\(cue)", "hostSeconds": ProcessInfo.processInfo.systemUptime - origin])
+            })
         manager.updateGatewayConnected(true)
         manager.gatewayTalkConfigLoaded = true
         manager.isEnabled = true
@@ -426,6 +431,12 @@ struct TalkModeManagerTests {
         for _ in 0..<200 where trace.last != "cue bye" { await Task.yield() }
 
         print("TALK_CUE_TRACE " + trace.joined(separator: " | "))
+        if let dir = ProcessInfo.processInfo.environment["TALK_CHIME_PROOF_DIR"],
+           let data = try? JSONSerialization.data(withJSONObject: ["trace": trace, "events": timed], options: [.prettyPrinted, .sortedKeys])
+        {
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try? data.write(to: URL(fileURLWithPath: dir).appendingPathComponent("ios-cue-events.json"))
+        }
         #expect(trace == [
             "cue wake",
             "listening=true",
