@@ -5,6 +5,9 @@ const enChatToolOperations = {
   chat: {
     toolCards: {
       noResultRecorded: "No result recorded",
+      operationUnknown: "{action} · outcome unknown",
+      operationPendingPublication: "{action} · pending publication",
+      operationNotApplied: "{action} · not applied",
       namedOperation: "{action} · {name}",
       listingChats: "Listing chats",
       listedChats: "Listed chats",
@@ -24,6 +27,379 @@ const enChatToolOperations = {
         timeout: "Sent · reply timed out",
       },
       operationLabels: {
+        memory_search: {
+          default: {
+            action: "Search memory",
+            running: "Searching memory",
+            done: "Searched memory",
+            actionWithQuery: "Search memory for “{query}”",
+            runningWithQuery: "Searching memory for “{query}”",
+            doneWithQuery: "Searched memory for “{query}”",
+          },
+        },
+        memory_get: {
+          default: { action: "Read memory", running: "Reading memory", done: "Read memory" },
+        },
+        personal_instructions: {
+          get: {
+            action: "Read personal instructions",
+            running: "Reading personal instructions",
+            done: "Read personal instructions",
+          },
+          set: {
+            action: "Update personal instructions",
+            running: "Updating personal instructions",
+            done: "Updated personal instructions",
+          },
+        },
+        knowledge_annotate: {
+          default: {
+            action: "Annotate knowledge context",
+            running: "Annotating knowledge context",
+            done: "Annotated knowledge context",
+          },
+        },
+        knowledge_attach: {
+          default: {
+            action: "Upload knowledge source data",
+            running: "Uploading knowledge source data",
+            done: "Uploaded knowledge source data",
+          },
+          final: {
+            action: "Finish uploading knowledge source file",
+            running: "Finishing knowledge source file upload",
+            done: "Finished uploading knowledge source file",
+          },
+        },
+        knowledge_attach_file: {
+          default: {
+            action: "Attach workspace source file",
+            running: "Attaching workspace source file",
+            done: "Attached workspace source file",
+          },
+        },
+        knowledge_attachment: {
+          default: {
+            action: "Read knowledge source file",
+            running: "Reading knowledge source file",
+            done: "Read knowledge source file",
+          },
+        },
+        knowledge_chronicle_day: {
+          default: {
+            action: "Read knowledge for a day",
+            running: "Reading knowledge for a day",
+            done: "Read knowledge for a day",
+          },
+        },
+        knowledge_chronicle_last_seen: {
+          default: {
+            action: "Read latest dated context",
+            running: "Reading latest dated context",
+            done: "Read latest dated context",
+          },
+        },
+        knowledge_chronicle_since: {
+          default: {
+            action: "Read recent knowledge",
+            running: "Reading recent knowledge",
+            done: "Read recent knowledge",
+          },
+        },
+        knowledge_connections: {
+          default: {
+            action: "Inspect knowledge connections",
+            running: "Inspecting knowledge connections",
+            done: "Inspected knowledge connections",
+          },
+        },
+        knowledge_correct: {
+          default: {
+            action: "Correct knowledge",
+            running: "Correcting knowledge",
+            done: "Corrected knowledge",
+          },
+        },
+        knowledge_create_claim: {
+          default: {
+            action: "Create knowledge claim",
+            running: "Creating knowledge claim",
+            done: "Created knowledge claim",
+          },
+        },
+        knowledge_create_relationship: {
+          default: {
+            action: "Create knowledge relationship",
+            running: "Creating knowledge relationship",
+            done: "Created knowledge relationship",
+          },
+        },
+        knowledge_diagnostics: {
+          default: {
+            action: "Check knowledge vault",
+            running: "Checking knowledge vault",
+            done: "Checked knowledge vault",
+          },
+        },
+        knowledge_edit_body: {
+          default: {
+            action: "Edit knowledge body",
+            running: "Editing knowledge body",
+            done: "Edited knowledge body",
+          },
+        },
+        knowledge_evidence_read: {
+          default: {
+            action: "Read source passage",
+            running: "Reading source passage",
+            done: "Read source passage",
+          },
+        },
+        knowledge_extract_section: {
+          default: {
+            action: "Extract knowledge section",
+            running: "Extracting knowledge section",
+            done: "Extracted knowledge section",
+          },
+        },
+        knowledge_grep: {
+          default: {
+            action: "Search knowledge",
+            running: "Searching knowledge",
+            done: "Searched knowledge",
+          },
+        },
+        knowledge_history: {
+          default: {
+            action: "Read knowledge history",
+            running: "Reading knowledge history",
+            done: "Read knowledge history",
+          },
+        },
+        knowledge_lookup: {
+          default: {
+            action: "Resolve knowledge identity",
+            running: "Resolving knowledge identity",
+            done: "Resolved knowledge identity",
+          },
+        },
+        knowledge_merge: {
+          default: {
+            action: "Merge duplicate pages",
+            running: "Merging duplicate pages",
+            done: "Merged duplicate pages",
+          },
+        },
+        knowledge_mutation: {
+          default: {
+            action: "Inspect knowledge publication",
+            running: "Inspecting knowledge publication",
+            done: "Inspected knowledge publication",
+          },
+        },
+        knowledge_ontology: {
+          default: {
+            action: "Inspect ontology",
+            running: "Inspecting ontology",
+            done: "Inspected ontology",
+          },
+        },
+        knowledge_publish_batch: {
+          default: {
+            action: "Publish knowledge batch",
+            running: "Publishing knowledge batch",
+            done: "Published knowledge batch",
+          },
+        },
+        knowledge_recall: {
+          default: {
+            action: "Curate automatic recall",
+            running: "Curating automatic recall",
+            done: "Curated automatic recall",
+          },
+        },
+        knowledge_reconcile_evidence: {
+          default: {
+            action: "Reconcile knowledge evidence",
+            running: "Reconciling knowledge evidence",
+            done: "Reconciled knowledge evidence",
+          },
+          preview: {
+            action: "Preview knowledge evidence changes",
+            running: "Previewing knowledge evidence changes",
+            done: "Previewed knowledge evidence changes",
+          },
+        },
+        knowledge_record: {
+          default: {
+            action: "Inspect knowledge",
+            running: "Inspecting knowledge",
+            done: "Inspected knowledge",
+          },
+        },
+        knowledge_records: {
+          default: {
+            action: "Browse knowledge",
+            running: "Browsing knowledge",
+            done: "Browsed knowledge",
+          },
+        },
+        knowledge_relink: {
+          default: {
+            action: "Relink remembered claims",
+            running: "Relinking remembered claims",
+            done: "Checked remembered claims for missing links",
+            linked: "Relinked remembered claims",
+          },
+          preview: {
+            action: "Preview links for remembered claims",
+            running: "Previewing links for remembered claims",
+            done: "Previewed links for remembered claims",
+          },
+        },
+        knowledge_remember: {
+          default: {
+            action: "Remember knowledge",
+            running: "Remembering knowledge",
+            done: "Remembered knowledge",
+          },
+        },
+        knowledge_resume: {
+          default: {
+            action: "Resume knowledge publication",
+            running: "Resuming knowledge publication",
+            done: "Resumed knowledge publication",
+          },
+        },
+        knowledge_revision: {
+          default: {
+            action: "Inspect knowledge revision",
+            running: "Inspecting knowledge revision",
+            done: "Inspected knowledge revision",
+          },
+        },
+        knowledge_save_page: {
+          default: {
+            action: "Save knowledge page",
+            running: "Saving knowledge page",
+            done: "Saved knowledge page",
+          },
+        },
+        knowledge_source_check: {
+          default: {
+            action: "Check ingested source",
+            running: "Checking ingested source",
+            done: "Checked ingested source",
+          },
+        },
+        knowledge_status: {
+          default: {
+            action: "Check knowledge status",
+            running: "Checking knowledge status",
+            done: "Checked knowledge status",
+          },
+        },
+        knowledge_supersede: {
+          default: {
+            action: "Supersede claims",
+            running: "Superseding claims",
+            done: "Superseded claims",
+          },
+          restore: {
+            action: "Restore superseded claims",
+            running: "Restoring superseded claims",
+            done: "Restored superseded claims",
+          },
+        },
+        knowledge_timeline: {
+          default: {
+            action: "Read knowledge timeline",
+            running: "Reading knowledge timeline",
+            done: "Read knowledge timeline",
+          },
+        },
+        knowledge_unmerge: {
+          default: {
+            action: "Undo a page merge",
+            running: "Undoing a page merge",
+            done: "Undid a page merge",
+          },
+        },
+        knowledge_verify: {
+          default: {
+            action: "Verify knowledge publication",
+            running: "Verifying knowledge publication",
+            done: "Verified knowledge publication",
+            checked: "Checked knowledge publication",
+          },
+        },
+        knowledge_withdraw: {
+          default: {
+            action: "Withdraw knowledge",
+            running: "Withdrawing knowledge",
+            done: "Withdrew knowledge",
+          },
+        },
+        intent: {
+          create: {
+            action: "Create standing instruction",
+            running: "Creating standing instruction",
+            done: "Created standing instruction",
+          },
+          list: {
+            action: "List standing instructions",
+            running: "Listing standing instructions",
+            done: "Listed standing instructions",
+          },
+          cancel: {
+            action: "Cancel standing instruction",
+            running: "Canceling standing instruction",
+            done: "Canceled standing instruction",
+          },
+        },
+        memory_forget: {
+          default: { action: "Forget memory", running: "Forgetting memory", done: "Forgot memory" },
+        },
+        memory_recall: {
+          default: {
+            action: "Search saved memories",
+            running: "Searching saved memories",
+            done: "Searched saved memories",
+          },
+        },
+        memory_store: {
+          default: { action: "Save memory", running: "Saving memory", done: "Saved memory" },
+        },
+        wiki_apply: {
+          default: {
+            action: "Apply wiki changes",
+            running: "Applying wiki changes",
+            done: "Applied wiki changes",
+          },
+        },
+        wiki_get: {
+          default: {
+            action: "Read wiki page",
+            running: "Reading wiki page",
+            done: "Read wiki page",
+            actionWithQuery: "Read wiki page “{query}”",
+            runningWithQuery: "Reading wiki page “{query}”",
+            doneWithQuery: "Read wiki page “{query}”",
+          },
+        },
+        wiki_lint: {
+          default: { action: "Check wiki", running: "Checking wiki", done: "Checked wiki" },
+        },
+        wiki_search: {
+          default: { action: "Search wiki", running: "Searching wiki", done: "Searched wiki" },
+        },
+        wiki_status: {
+          default: {
+            action: "Check wiki status",
+            running: "Checking wiki status",
+            done: "Checked wiki status",
+          },
+        },
         image_generate: {
           generate: {
             action: "Generate image",
