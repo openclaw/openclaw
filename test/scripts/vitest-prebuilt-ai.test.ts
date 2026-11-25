@@ -13,6 +13,17 @@ const config = "test/vitest/vitest.e2e.config.ts";
 const file = "packages/ai/src/package.e2e.test.ts";
 const env = { OPENCLAW_E2E_USE_PREBUILT_DIST: "1", OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" };
 const packageRoot = path.resolve("packages/ai");
+const manifestPath = path.join(packageRoot, "package.json");
+const readFileSync = fs.readFileSync;
+const existsSync = fs.existsSync;
+
+function isPackageDeclaration(entry: fs.PathLike): boolean {
+  return (
+    typeof entry === "string" &&
+    entry.startsWith(path.join(packageRoot, "dist") + path.sep) &&
+    entry.endsWith(".d.mts")
+  );
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -29,18 +40,23 @@ describe("CI prebuilt AI package preparation", () => {
     async ({ partial, code }) => {
       const selections = resolveVitestRuntimeCliSelections(config, ["run", file], env);
       if (code === 0) {
-        vi.spyOn(fs, "readFileSync").mockReturnValue(
-          JSON.stringify({
-            types: "./dist/index.d.mts",
-            exports: {
-              ".": { types: "./dist/index.d.mts" },
-              "./nested": { types: "./dist/nested.d.mts" },
-            },
-          }),
+        // Native selectors load dependencies lazily; only replace this package's manifest.
+        vi.spyOn(fs, "readFileSync").mockImplementation((entry, ...args) =>
+          entry === manifestPath
+            ? JSON.stringify({
+                types: "./dist/index.d.mts",
+                exports: {
+                  ".": { types: "./dist/index.d.mts" },
+                  "./nested": { types: "./dist/nested.d.mts" },
+                },
+              })
+            : readFileSync(entry, ...args),
         );
       }
-      vi.spyOn(fs, "existsSync").mockImplementation(
-        (entry) => partial && entry === path.join(packageRoot, "dist/index.d.mts"),
+      vi.spyOn(fs, "existsSync").mockImplementation((entry) =>
+        isPackageDeclaration(entry)
+          ? partial && entry === path.join(packageRoot, "dist/index.d.mts")
+          : existsSync(entry),
       );
       vi.mocked(runManagedCommand).mockResolvedValue(code);
 
@@ -56,7 +72,9 @@ describe("CI prebuilt AI package preparation", () => {
 
   it("reuses a package with all declared entries", async () => {
     const selections = resolveVitestRuntimeCliSelections(config, ["run", file], env);
-    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    vi.spyOn(fs, "existsSync").mockImplementation(
+      (entry) => isPackageDeclaration(entry) || existsSync(entry),
+    );
     expect(await preparePrebuiltAiPackage(selections, env)).toBe(0);
     expect(runManagedCommand).not.toHaveBeenCalled();
   });
@@ -70,7 +88,7 @@ describe("CI prebuilt AI package preparation", () => {
     const selections = resolveVitestRuntimeCliSelections(config, args, commandEnv);
     const read = vi.spyOn(fs, "readFileSync");
     expect(await preparePrebuiltAiPackage(selections, commandEnv)).toBe(0);
-    expect(read).not.toHaveBeenCalled();
+    expect(read.mock.calls.some(([entry]) => entry === manifestPath)).toBe(false);
     expect(runManagedCommand).not.toHaveBeenCalled();
   });
 });

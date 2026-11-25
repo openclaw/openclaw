@@ -1,0 +1,4 @@
+# Test-line allowance for the native pattern config follow-up.
+# Base: f4a2445e3bf95fb4ae31dfd43c5907e7d6508aa6.
+# Incremental selector regressions and package fixture isolation.
+58
