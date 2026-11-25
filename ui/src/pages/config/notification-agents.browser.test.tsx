@@ -50,7 +50,8 @@ it.each([390, 1440])(
     expect(bounds.right).toBeLessThanOrEqual(available.right + 0.5);
     expect(
       Math.abs(
-        label.getBoundingClientRect().height - parseFloat(getComputedStyle(label).lineHeight),
+        label.getBoundingClientRect().height -
+          Number.parseFloat(getComputedStyle(label).lineHeight),
       ),
     ).toBeLessThan(1);
     expect(getComputedStyle(label).textOverflow).toBe("ellipsis");

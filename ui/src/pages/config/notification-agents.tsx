@@ -54,10 +54,10 @@ export function NotificationAgentsRow(props: AgentRowProps) {
       selected.length > 1
         ? t("configView.notifications.agentsSelected", { count: String(selected.length) })
         : (selected[0]?.name ?? full);
-    const scoped = (agents: string) =>
+    const scoped = (names: string) =>
       props.agentIds === undefined
-        ? t("configView.notifications.inheritAgents", { agents })
-        : agents;
+        ? t("configView.notifications.inheritAgents", { agents: names })
+        : names;
     return { full: scoped(full), compact: scoped(compact) };
   });
   return (
