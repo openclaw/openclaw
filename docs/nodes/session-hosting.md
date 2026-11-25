@@ -187,6 +187,20 @@ Hosted turns honor global and agent-specific `tools.fs.workspaceOnly`,
 same session permission-mode precedence as local turns. Workspace containment
 uses the assigned node workspace. Model read budgets and image sanitization also
 come from the Gateway; the worker does not reconstruct them from an empty config.
+The Gateway also sends the Agent's configured exec timeout, background delay,
+and cleanup interval to workers that support these settings.
+
+A dedicated, ephemeral node launcher can set `OPENCLAW_NODE_WORKER_EXECUTION`
+before starting the node. This JSON object applies to process workers on that
+node. Its optional `pathPrepend` lists absolute tool directories the node
+admits for the Agent's configured search path. Its optional `gitConfigFile`
+selects a node-owned, read-only Git system configuration file. Its optional
+`toolData` contains named public strings for installed tools. Local exec receives
+them as JSON in `OPENCLAW_WORKER_TOOL_DATA`. Every command admitted to local
+exec can read those strings. Keep issuer tokens and other secrets in their
+credential provider. Use this setting only on nodes dedicated to workloads
+that share the selected tool configuration.
+
 The Gateway includes this tool catalog and policy in each turn's worker admission
 response, including when a warm worker process is reused. A retained process receives
 the current turn's catalog and generation, so a turn does not need a separate

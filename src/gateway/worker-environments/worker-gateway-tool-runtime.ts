@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import {
   isWorkerGatewayToolFrameWithinBudget,
+  WORKER_EXEC_DEFAULTS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
   WorkerToolSurfaceSchema,
   type WorkerGatewayToolInvokeResult,
@@ -148,6 +149,12 @@ export function createWorkerGatewayToolRuntime(params: {
           return catalog;
         }));
       assertCurrent();
+      if (
+        surface.policy.execDefaults &&
+        !identity.protocolFeatures.includes(WORKER_EXEC_DEFAULTS_PROTOCOL_FEATURE)
+      ) {
+        throw new Error("Configured exec defaults require an updated worker");
+      }
       return surface;
     },
     async getPromptProjection(identity) {

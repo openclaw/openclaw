@@ -250,7 +250,9 @@ describe("node worker supervisor", () => {
       NODE_USE_SYSTEM_CA: "1",
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",
     };
+    const nodeExecution = { toolData: { catalog: "node-selected" } };
     const suppliedEnv: NodeJS.ProcessEnv = {
+      OPENCLAW_NODE_WORKER_EXECUTION: JSON.stringify({ toolData: { catalog: "ambient" } }),
       ...env,
       ...allowedEnv,
       NODE_COMPILE_CACHE: path.join(root, "host-compile-cache"),
@@ -275,10 +277,15 @@ describe("node worker supervisor", () => {
       async () => {
         const expectedWorkerEnv: NodeJS.ProcessEnv = {
           ...allowedEnv,
+          OPENCLAW_NODE_WORKER_EXECUTION: JSON.stringify(nodeExecution),
           NODE_COMPILE_CACHE: expect.stringContaining("node-worker-compile-cache"),
           OPENCLAW_NO_RESPAWN: "1",
         };
-        const supervisor = createNodeWorkerSupervisor({ bundleRoot, env: suppliedEnv });
+        const supervisor = createNodeWorkerSupervisor({
+          bundleRoot,
+          env: suppliedEnv,
+          executionContext: nodeExecution,
+        });
         suppliedEnv.HOME = path.join(root, "mutated-home");
         suppliedEnv.LANG = "mutated-locale";
         const input = launchInput(workspaceDir, "env-launch", "env");

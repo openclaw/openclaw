@@ -1,6 +1,10 @@
 import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import {
+  NODE_WORKER_EXECUTION_ENV,
+  type NodeExecutionContext,
+} from "../worker/node-execution-context.js";
 import type {
   NodeWorkerEnvironmentStopInput,
   NodeWorkerLaunchInput,
@@ -250,6 +254,8 @@ export type NodeWorkerSupervisorOptions = {
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
   /** Captured by the dedicated ephemeral node owner, never a launch descriptor. */
   managedIdentityTransport?: NodeWorkerManagedIdentityTransport;
+  /** Platform-selected local tool settings, excluded from workspace preparation. */
+  executionContext?: NodeExecutionContext;
   /** Platform trust captured by that same dedicated node owner. */
   platformTrust?: NodeWorkerPlatformTrust;
 };
@@ -264,20 +270,26 @@ export function prepareNodeWorkerSupervisorEnvironment(
     : options.managedIdentityTransport;
   const platformTrust = options.containerEngine ? undefined : options.platformTrust;
   const workerEnv = snapshotNodeWorkerExecutionEnv(env, managedIdentityTransport, platformTrust);
+  const execution =
+    !options.containerEngine && options.executionContext
+      ? JSON.stringify(options.executionContext)
+      : undefined;
   return {
     nativeInferenceSnapshot: options.nativeInferenceSnapshot,
     workerEnv,
     managedIdentityTransport,
     engineEnv: { ...process.env, ...env },
-    projectWorkerEnv: (homeDir?: string) =>
-      homeDir
+    projectWorkerEnv: (homeDir?: string) => ({
+      ...(homeDir
         ? snapshotNodeWorkerExecutionEnv(
             workerEnv,
             managedIdentityTransport,
             platformTrust,
             homeDir,
           )
-        : workerEnv,
+        : workerEnv),
+      ...(execution === undefined ? {} : { [NODE_WORKER_EXECUTION_ENV]: execution }),
+    }),
   };
 }
 

@@ -19,6 +19,7 @@ import {
 } from "../../agents/tool-surface-plan.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { loadExecApprovalsReadOnlyAsync } from "../../infra/exec-approvals-store.js";
+import { normalizePathPrepend } from "../../infra/path-prepend.js";
 import { logWarn } from "../../logger.js";
 import type { WorkerToolAuthority } from "../../worker/launch-descriptor.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
@@ -108,10 +109,18 @@ export async function resolveWorkerToolAuthority(params: {
         turn.scheduledToolPolicy?.execTarget !== undefined && defaults.effectiveHost !== "gateway";
       const { effectiveHost: host, security, node: configuredNode } = defaults;
       const node = configuredNode?.trim();
-      const strictInlineEval = resolveExecToolConfig({
-        cfg: turn.config,
-        agentId: params.placement.agentId,
-      }).strictInlineEval;
+      const { strictInlineEval, backgroundMs, timeoutSec, cleanupMs, configuredPathPrepend } =
+        resolveExecToolConfig({
+          cfg: turn.config,
+          agentId: params.placement.agentId,
+        });
+      const pathPrepend = normalizePathPrepend(configuredPathPrepend);
+      const execDefaults = {
+        ...(backgroundMs !== undefined ? { backgroundMs } : {}),
+        ...(timeoutSec !== undefined ? { timeoutSec } : {}),
+        ...(cleanupMs !== undefined ? { cleanupMs } : {}),
+        ...(pathPrepend.length ? { pathPrepend } : {}),
+      };
       const exec: NonNullable<WorkerToolAuthority["exec"]> = {
         ...(policy.mode !== undefined ? { mode: policy.mode } : {}),
         ...(strictInlineEval !== undefined ? { strictInlineEval } : {}),
@@ -149,7 +158,7 @@ export async function resolveWorkerToolAuthority(params: {
       }));
       return {
         capabilityProfile,
-        policy: corePolicy,
+        policy: Object.keys(execDefaults).length ? { ...corePolicy, execDefaults } : corePolicy,
         exec,
         execUnavailable,
         presentation,

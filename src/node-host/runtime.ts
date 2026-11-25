@@ -16,6 +16,10 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import {
+  NODE_WORKER_EXECUTION_ENV,
+  parseNodeExecutionContext,
+} from "../worker/node-execution-context.js";
 import type { NodeWorkerProcessesChanged } from "../worker/worker-process-observation.js";
 import { createNodeInvokeResponder, type NodeHostClient } from "./client.js";
 import { resolveNodeDesktopHostConfig } from "./desktop-stream-command.js";
@@ -182,6 +186,9 @@ export async function prepareNodeHostRuntime(params?: {
     ? captureNodeWorkerManagedIdentityTransport(env)
     : undefined;
   const platformTrust = dedicatedNodeExecution ? captureNodeWorkerPlatformTrust(env) : undefined;
+  const executionContext = dedicatedNodeExecution
+    ? parseNodeExecutionContext(env[NODE_WORKER_EXECUTION_ENV])
+    : undefined;
   const workspaceOptions = {
     env,
     ephemeral: params?.ephemeral,
@@ -331,6 +338,7 @@ export async function prepareNodeHostRuntime(params?: {
               env,
               capacity: config.nodeHost?.workerRuns?.capacity,
               nativeInferenceSnapshot,
+              executionContext,
               managedIdentityTransport,
               platformTrust,
               onCapacityChanged: onRunnerCapacityChanged,

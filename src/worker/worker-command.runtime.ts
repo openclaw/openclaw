@@ -20,6 +20,11 @@ import {
   takeNativeInferenceStartup,
   type NativeInferenceStartup,
 } from "./native-inference-startup.js";
+import {
+  NODE_WORKER_EXECUTION_ENV,
+  parseNodeExecutionContext,
+  type NodeExecutionContext,
+} from "./node-execution-context.js";
 import { createWorkerLocalMcpClient } from "./worker-local-mcp.js";
 import {
   parseWorkerProcessRequest,
@@ -35,6 +40,7 @@ type RunWorkerCommandOptions = {
   browserRuntime?: WorkerBrowserRuntime;
   managed?: boolean;
   nativeInference?: NativeInferenceStartup;
+  nodeExecution?: NodeExecutionContext;
 };
 
 export type WorkerCommandLifetime = {
@@ -255,6 +261,7 @@ async function runManagedWorkerCommand(
               localMcp: current.mcp.call,
               ...(assertWorkspaceCurrent ? { assertWorkspaceCurrent } : {}),
               nativeInference: options.nativeInference,
+              nodeExecution: options.nodeExecution,
               signal: current.controller.signal,
               ...(options.lifetime
                 ? { onConnectionFailure: options.lifetime.reportConnectionFailure }
@@ -397,7 +404,9 @@ async function readLaunchDescriptor(input: Readable): Promise<WorkerLaunchDescri
 /** Process shell for `openclaw worker`: stdin descriptor in, JSON result out, signals abort the run. */
 export async function runWorkerCommand(input: RunWorkerCommandOptions): Promise<void> {
   const startup = takeNativeInferenceStartup();
-  const options = { ...input, nativeInference: input.nativeInference ?? startup };
+  const nodeExecution = parseNodeExecutionContext(process.env[NODE_WORKER_EXECUTION_ENV]);
+  delete process.env[NODE_WORKER_EXECUTION_ENV];
+  const options = { ...input, nodeExecution, nativeInference: input.nativeInference ?? startup };
   const abortController = new AbortController();
   const stop = () => abortController.abort(new Error("worker interrupted"));
   let lifetimeEnded = false;
@@ -431,6 +440,7 @@ export async function runWorkerCommand(input: RunWorkerCommandOptions): Promise<
     }
     const result = await runWorkerDescriptor(descriptor, {
       nativeInference: options.nativeInference,
+      nodeExecution: options.nodeExecution,
       signal: abortController.signal,
       ...(options.lifetime
         ? { onConnectionFailure: options.lifetime.reportConnectionFailure }

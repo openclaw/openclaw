@@ -40,6 +40,8 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   config?: OpenClawConfig;
   /** Host-prepared non-secret environment and store projection exclusions. */
   preparedRunEnvironment?: PreparedGitHubToolEnvironment;
+  /** Public tool inputs prepared by the owner of this execution host. */
+  preparedLocalToolEnv?: Readonly<Record<string, string>>;
   /** An explicit snapshot, including an empty one, replaces local store access. */
   preparedStoreEnvironment?: Readonly<SecretStoreExecEnvironment>;
   /** Host-prepared routing hint; remote workers have no Gateway session database. */

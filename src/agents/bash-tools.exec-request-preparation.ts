@@ -228,6 +228,7 @@ export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
         agentId: defaults?.executionAgentId ?? defaults?.agentId ?? "main",
       })),
     localProcessEnv: installationTargetEnv(getInstallationTarget()),
+    localToolEnv: defaults?.preparedLocalToolEnv,
   };
 }
 
@@ -436,6 +437,7 @@ export function resolvePreparedExecEnvironment(params: {
   localGitConfigParameters?: string;
   managedLocalIdentity?: boolean;
   localProcessEnv?: Readonly<Record<string, string>>;
+  localToolEnv?: Readonly<Record<string, string>>;
   scratchEnv?: Record<string, string>;
   warnings: string[];
 }): {
@@ -608,8 +610,15 @@ export function resolvePreparedExecEnvironment(params: {
             .join(" "),
         }
       : undefined;
-  // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
-  const executionEnv = mergeProcessEnv([env, preparedEnv, routingEnv, gitPolicyEnv]);
+  // Node-owned tool settings stay on this host. Approval and remote requests carry only
+  // the caller's requested environment and their existing routing/identity fields.
+  const executionEnv = mergeProcessEnv([
+    env,
+    params.host === "gateway" ? params.localToolEnv : undefined,
+    preparedEnv,
+    routingEnv,
+    gitPolicyEnv,
+  ]);
   const forwardedEnv =
     params.host === "node" || !routingEnv ? requestedEnv : { ...requestedEnv, ...routingEnv };
 
