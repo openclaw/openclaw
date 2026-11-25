@@ -230,6 +230,34 @@ it("preserves label identity across property order, label shapes, and separator 
   );
 });
 
+it("exports a new plugin counter label set at 0 and leaves existing series untouched", () => {
+  const store = createPrometheusMetricStore();
+  const jobs = {
+    name: "openclaw_plugin_demo_jobs_total",
+    type: "counter",
+    help: "Jobs.",
+    labels: ["outcome"],
+  } as const;
+  store.plugin(jobs, { outcome: "ok" }, 2);
+  store.plugin(jobs, { outcome: "error" }, 0);
+  for (const invalid of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    store.plugin(jobs, { outcome: "invalid" }, invalid);
+  }
+  // Core counters still skip 0, so an unknown model cost never renders as a measured $0.
+  store.counter(runs, "Runs.", {}, 0);
+  const first = store.render().toString();
+  expect(samples(first, "openclaw_")).toEqual([
+    `${jobs.name}{outcome="error"} 0`,
+    `${jobs.name}{outcome="ok"} 2`,
+  ]);
+
+  const format = vi.spyOn(prometheusFormat, "formatPrometheusNumber");
+  store.plugin(jobs, { outcome: "ok" }, 0);
+  store.plugin(jobs, { outcome: "error" }, 0);
+  expect(store.render().toString()).toBe(first);
+  expect(format).not.toHaveBeenCalled();
+});
+
 it("enforces family and total ceilings, releasing cleared gauges and retired plugin entries", () => {
   const store = createPrometheusMetricStore();
   const families = Object.keys(PROMETHEUS_FAMILY_LIMITS) as PrometheusMetricName[];
