@@ -29,6 +29,7 @@ struct ChatImageViewerItem: Equatable {
             if sentPhotos, artifactId.isEmpty { artifactId = ChatUserImageSource.pageID(content) ?? "" }
             #endif
             guard !artifactId.isEmpty else { return nil }
+            let isSentPhoto = artifactId != managedID
             let alt = Self.nonEmpty(content.alt)
             let fileName = Self.nonEmpty(content.fileName)
             let pixelSize: CGSize? = if let width = content.width, let height = content.height,
@@ -40,7 +41,8 @@ struct ChatImageViewerItem: Equatable {
             }
             return ChatImageViewerItem(
                 artifactId: artifactId,
-                label: alt ?? fileName ?? String(localized: "Attachment"),
+                // A sent photo's name is the picker's ("photo-1A2B.jpg"), not something to read aloud.
+                label: alt ?? (isSentPhoto ? String(localized: "Photo") : fileName ?? String(localized: "Attachment")),
                 // Agent replies carry the file name as alt text ("chart.png"); a description is not a name.
                 title: fileName ?? alt.flatMap { Self.looksLikeFileName($0) ? $0 : nil },
                 pixelSize: pixelSize)

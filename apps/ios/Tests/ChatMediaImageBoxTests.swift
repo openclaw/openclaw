@@ -50,6 +50,24 @@ struct ChatMediaImageBoxTests {
             + "&sessionKey=agent%3Amain%3Aios-1&agentId=main&variant=thumbnail&width=960&v=4")
     }
 
+    @Test func `a user's sent photos page together in the viewer and read as Photo`() {
+        let photos = (1...3).map { index in
+            OpenClawChatMessageContent(
+                type: "image",
+                mimeType: "image/jpeg",
+                fileName: "photo-\(index).jpg",
+                url: "media://inbound/photo-\(index)---a1.jpg")
+        }
+        let file = OpenClawChatMessageContent(type: "file", mimeType: "application/pdf", fileName: "notes.pdf")
+        let gallery = ChatImageViewerItem.gallery(in: photos + [file], sentPhotos: true)
+        #expect(gallery.map(\.artifactId) == photos.compactMap(\.url))
+        #expect(gallery.allSatisfy { $0.label == "Photo" })
+        #expect(ChatImageViewerItem.viewerItems(gallery, opening: "media://inbound/photo-2---a1.jpg", label: "x")
+            .count == 3)
+        // An agent's message keeps the managed-artifact rule.
+        #expect(ChatImageViewerItem.gallery(in: photos).isEmpty)
+    }
+
     @Test func `arriving bytes keep the row height and a second appearance does not load again`() async throws {
         let artifactId = "artifact_managed_image_\(UUID().uuidString.lowercased())"
         let release = AsyncStream<Void>.makeStream()

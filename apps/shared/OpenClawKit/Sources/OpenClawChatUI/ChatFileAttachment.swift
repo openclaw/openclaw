@@ -54,6 +54,7 @@ struct ChatFileAttachment: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "doc")
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.label)
                         .font(OpenClawChatTypography.footnote)
@@ -67,6 +68,7 @@ struct ChatFileAttachment: View {
                     ProgressView()
                 } else {
                     Image(systemName: "arrow.down.circle")
+                        .accessibilityHidden(true)
                 }
             }
             .padding(10)

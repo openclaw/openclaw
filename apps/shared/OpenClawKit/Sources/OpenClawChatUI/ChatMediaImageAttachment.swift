@@ -178,6 +178,8 @@ struct ChatMediaImageAttachment: View {
     let gatewaySize: CGSize?
     /// Set for a square gallery tile; the image fills it.
     let tileSide: CGFloat?
+    /// What VoiceOver reads while the bytes load, when the label alone would not say so.
+    let loadingLabel: String?
     /// A size remembered from an earlier load, read once when the row appears: adopting it later
     /// would reshape a box that is already on screen.
     @State private var rememberedSize: CGSize?
@@ -197,6 +199,7 @@ struct ChatMediaImageAttachment: View {
         height: Int?,
         tileSide: CGFloat? = nil,
         memoryAlias: String? = nil,
+        loadingLabel: String? = nil,
         resolverReady: Bool,
         gallery: [ChatImageViewerItem] = [],
         load: @escaping @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?)
@@ -208,6 +211,7 @@ struct ChatMediaImageAttachment: View {
         self.load = load
         #if os(iOS)
         self.tileSide = tileSide
+        self.loadingLabel = loadingLabel
         if let width, let height, width > 0, height > 0 {
             self.gatewaySize = CGSize(width: width, height: height)
         } else {
@@ -308,7 +312,15 @@ struct ChatMediaImageAttachment: View {
         .accessibilityElement(children: .contain)
         // The loaded image's button carries the name itself; the placeholder and the failed box
         // keep it on the box.
-        .accessibilityLabel(self.isLoaded ? Text(verbatim: "") : Text(self.label))
+        .accessibilityLabel(self.boxAccessibilityLabel)
+    }
+
+    private var boxAccessibilityLabel: Text {
+        switch self.state {
+        case .loaded: Text(verbatim: "")
+        case .loading: Text(self.loadingLabel ?? self.label)
+        case .unavailable: Text(self.label)
+        }
     }
 
     private var isLoaded: Bool {

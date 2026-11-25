@@ -1028,11 +1028,13 @@ private struct AttachmentRow: View {
         if self.isUser, let image = ChatUserImageSource(self.att) {
             ChatMediaImageAttachment(
                 artifactId: image.loadID,
-                label: self.attachmentLabel,
+                // A sent photo's name is the picker's ("photo-1A2B.jpg"), not something to read aloud.
+                label: self.nonEmptyAlt ?? String(localized: "Photo"),
                 width: self.att.width,
                 height: self.att.height,
                 tileSide: self.imageTileSide,
                 memoryAlias: image.memoryAlias,
+                loadingLabel: String(localized: "Loading photo"),
                 resolverReady: image.local != nil || self.gateway?.isResolverReady() == true,
                 gallery: self.imageGallery,
                 load: { [messageAttachments] id in
@@ -1112,6 +1114,7 @@ private struct AttachmentRow: View {
             Image(systemName: OpenClawChatPickerAttachmentMetadata.fileIcon(
                 mimeType: self.att.mimeType ?? "",
                 fileName: self.att.fileName ?? ""))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.isAudio && self.att.durationSeconds != nil && self.att.url == nil
                     ? String(localized: "Voice note") : self.attachmentLabel)
@@ -1135,6 +1138,8 @@ private struct AttachmentRow: View {
         .padding(10)
         .background(self.fallbackRowSurface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        // Name and size read as one card.
+        .accessibilityElement(children: .combine)
     }
 
     private var fallbackRowSurface: Color {
@@ -1155,6 +1160,11 @@ private struct AttachmentRow: View {
         guard let kind = att.mediaKind else { return nil }
         let value = att.artifactId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return !value.isEmpty && kind.acceptsManagedArtifactID(value) ? value : nil
+    }
+
+    private var nonEmptyAlt: String? {
+        let alt = self.att.alt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return alt.isEmpty ? nil : alt
     }
 
     private var attachmentLabel: String {
