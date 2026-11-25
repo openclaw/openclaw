@@ -46,6 +46,16 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
   private catalogReadPending = false;
   private catalogReadRefreshPending = false;
 
+  private clearCatalogPreviewImage(): void {
+    const preview = this.history.catalogPreviewImage;
+    this.history.catalogPreviewImage = undefined;
+    // The viewer can outlive its tile when catalog access or the published image changes.
+    const state = this.state;
+    if (preview && state?.imageLightbox?.src === `data:image/png;base64,${preview.data}`) {
+      state.handleCloseImage();
+    }
+  }
+
   protected retireCatalogRead(resume = false): void {
     const read = this.catalogRead;
     if (!read) {
@@ -84,7 +94,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
         this.retireCatalogRead();
         this.catalogAccess.route = undefined;
         this.history.catalogMessages = [];
-        this.history.catalogPreviewImage = undefined;
+        this.clearCatalogPreviewImage();
         this.history.catalogHost = null;
         this.history.catalogSession = null;
         this.history.catalogCursor = undefined;
@@ -113,7 +123,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
     this.catalogLoadGeneration += 1;
     this.catalogRequestedSessionKey = this.sessionKey;
     this.history.catalogMessages = [];
-    this.history.catalogPreviewImage = undefined;
+    this.clearCatalogPreviewImage();
     this.history.catalogCursor = undefined;
     this.history.catalogSession = null;
     this.history.catalogHost = null;
@@ -251,7 +261,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
         this.catalogAccess.route = undefined;
         this.history.catalogSession = null;
         this.history.catalogMessages = [];
-        this.history.catalogPreviewImage = undefined;
+        this.clearCatalogPreviewImage();
         state.lastError = t("chat.sessionRoute.catalogShareUnavailable");
         return false;
       }
@@ -277,12 +287,12 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
           (!lookup.session || !lookup.host?.connected || lookup.host.error)
         ) {
           this.history.catalogSession = null;
-          this.history.catalogPreviewImage = undefined;
+          this.clearCatalogPreviewImage();
           state.lastError = t("chat.sessionRoute.catalogShareUnavailable");
           return false;
         }
         if (lookup.session?.previewImageDigest !== this.history.catalogPreviewImage?.digest) {
-          this.history.catalogPreviewImage = undefined;
+          this.clearCatalogPreviewImage();
         }
         if (metadataOnly) {
           return true;
@@ -376,7 +386,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
         if (older) {
           this.history.olderError = formatUiError(error);
         } else {
-          this.history.catalogPreviewImage = undefined;
+          this.clearCatalogPreviewImage();
           state.lastError = formatUiError(error);
         }
       }

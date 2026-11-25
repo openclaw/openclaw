@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import {
   readSkillUsageInDatabase as readUsage,
   recordSkillUsageInDatabase as recordUsage,
 } from "../skills/runtime/skill-usage.kernel.js";
+import { stateV24Schema } from "./openclaw-historical-imports.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync as closeState,
@@ -25,10 +26,7 @@ import { withStateMigrationBackupForTest as withBackup } from "./openclaw-state-
 import { assertSqliteMigrationScopePreserved as assertScope } from "./sqlite-migration-scope.test-support.js";
 
 // v25 changed metadata; v26 changed only this table's physical layout.
-const legacySchema = readFileSync(
-  new URL("../../test/fixtures/sqlite/openclaw-state-schema-v24.sql", import.meta.url),
-  "utf8",
-).replace(
+const legacySchema = stateV24Schema().replace(
   /(CREATE TABLE IF NOT EXISTS session_state_heads \([\s\S]*?\n\) STRICT);/u,
   "$1, WITHOUT ROWID;",
 );

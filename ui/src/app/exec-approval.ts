@@ -10,6 +10,8 @@ import type { ExecApprovalCommandSpan } from "../../../src/infra/exec-approvals-
 
 export type ExecApprovalRequestPayload = {
   command: string;
+  /** Gateway-supplied turn attribution for display, never approval authority. */
+  turnActor?: ApprovalTurnActor;
   warningText?: string | null;
   streamProposal?: StreamApprovalProposal;
   scope?: ApprovalScope | null;
@@ -28,9 +30,22 @@ export type ExecApprovalRequestPayload = {
 
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
+export type ApprovalTurnActor = { id: string; label: string };
+
+function parseApprovalTurnActor(value: unknown): ApprovalTurnActor | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = normalizeOptionalString(value.id);
+  const label = normalizeOptionalString(value.label);
+  return id && label ? { id, label } : undefined;
+}
+
 export type ExecApprovalRequest = {
   id: string;
   kind: "exec" | "plugin" | "system-agent";
+  /** Exact recipient eligibility projected by the Gateway; never derived from turnActor. */
+  canDecide?: boolean;
   request: ExecApprovalRequestPayload;
   pluginTitle?: string;
   pluginDescription?: string | null;
@@ -44,6 +59,11 @@ export type ExecApprovalRequest = {
   createdAtMs: number;
   expiresAtMs: number;
 };
+
+/** Presentation only: resolve always rechecks the Gateway's exact approval binding. */
+export function canDecideApproval(approval: ExecApprovalRequest, canGrantApprovals: boolean) {
+  return approval.canDecide ?? canGrantApprovals;
+}
 
 export type ExecApprovalPromptState = {
   client: {
@@ -165,10 +185,18 @@ function parseApprovalRequested(
   if (!id || !createdAtMs || !expiresAtMs) {
     return null;
   }
-  const base = { id, kind, createdAtMs, expiresAtMs };
+  const base = {
+    id,
+    kind,
+    createdAtMs,
+    expiresAtMs,
+    ...(typeof payload.canDecide === "boolean" ? { canDecide: payload.canDecide } : {}),
+  };
+  const turnActor = parseApprovalTurnActor(request.turnActor);
   const source = {
     agentId: readStringValue(request.agentId) ?? null,
     sessionKey: readStringValue(request.sessionKey) ?? null,
+    ...(turnActor ? { turnActor } : {}),
   };
   if (kind === "exec") {
     const command = readNonBlankString(request.command);

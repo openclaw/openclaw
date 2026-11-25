@@ -30,6 +30,7 @@ import {
 } from "./github-publication-requester.js";
 import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type Inspection = SessionGitHubPullRequestInspectResult;
@@ -156,9 +157,7 @@ export async function inspectOwnGitHubPullRequest(params: {
   assertRequester();
   const actor = params.requester.snapshot.actor;
   if (!authority.operatorWrite && actor.kind !== "operator") {
-    throw new Error(
-      "This channel cannot confirm who you are, so it cannot inspect PRs; use Control UI, Discord or Telegram for this. If you are not the Gateway owner, ask an admin to link your channel account to your Gateway profile first.",
-    );
+    throw new OperatorRefusalError("channel-unverified", { action: "inspect this PR" });
   }
   // Updating an imported PR must not create guest author eligibility.
   const published = await readSharedGitHubPublication(params.session, {

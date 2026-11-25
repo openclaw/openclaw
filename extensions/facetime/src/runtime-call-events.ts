@@ -8,8 +8,8 @@ import {
   isUnknownCallStatus,
   isVerifiedFaceTimeTransport,
   normalizeFaceTimeHandle,
-  resolveAuthorizedFaceTimeOwner,
-  type AuthenticatedFaceTimeOwner,
+  resolveAuthorizedFaceTimeCaller,
+  type AuthenticatedFaceTimeCaller,
   type FaceTimeCallStatusEvent,
 } from "./call-events.js";
 import type { FaceTimeConfig } from "./config.js";
@@ -67,7 +67,7 @@ export function createFaceTimeCallEventHandler(params: {
   const authorizePendingDial = async (
     event: FaceTimeCallStatusEvent,
     pending: PendingFaceTimeDial,
-  ): Promise<AuthenticatedFaceTimeOwner | undefined> => {
+  ): Promise<AuthenticatedFaceTimeCaller | undefined> => {
     retainFaceTimeDialCallUUID(pending, event.data.call_uuid);
     await params.persistPendingDial();
     if (params.isStopping() || params.getPendingDial() !== pending) {
@@ -76,7 +76,7 @@ export function createFaceTimeCallEventHandler(params: {
     const owner =
       pending.delivery === "cancelling"
         ? undefined
-        : resolveAuthorizedFaceTimeOwner({
+        : resolveAuthorizedFaceTimeCaller({
             event,
             ownerHandles: params.config.ownerHandles,
           });
@@ -126,7 +126,7 @@ export function createFaceTimeCallEventHandler(params: {
   };
   const answerIncoming = async (
     event: FaceTimeCallStatusEvent,
-    owner: AuthenticatedFaceTimeOwner,
+    owner: AuthenticatedFaceTimeCaller,
     peer?: FaceTimeHelperPeer,
   ) => {
     const callUUID = event.data.call_uuid;
@@ -186,7 +186,7 @@ export function createFaceTimeCallEventHandler(params: {
   };
   const activate = async (
     event: FaceTimeCallStatusEvent,
-    owner?: AuthenticatedFaceTimeOwner,
+    owner?: AuthenticatedFaceTimeCaller,
     peer?: FaceTimeHelperPeer,
     pending?: PendingFaceTimeDial,
   ) => {
@@ -269,7 +269,7 @@ export function createFaceTimeCallEventHandler(params: {
       return;
     }
     if (isIncomingRingingCall(event)) {
-      const owner = resolveAuthorizedFaceTimeOwner({
+      const owner = resolveAuthorizedFaceTimeCaller({
         event,
         ownerHandles: params.config.ownerHandles,
       });
@@ -335,7 +335,7 @@ export function createFaceTimeCallEventHandler(params: {
         ? await authorizePendingDial(event, authorizedPending)
         : event.data.is_outgoing === true
           ? undefined
-          : resolveAuthorizedFaceTimeOwner({
+          : resolveAuthorizedFaceTimeCaller({
               event,
               ownerHandles: params.config.ownerHandles,
             });

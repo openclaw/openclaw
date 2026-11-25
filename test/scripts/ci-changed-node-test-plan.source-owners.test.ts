@@ -201,6 +201,20 @@ describe("CI changed Node test plan", () => {
   it.each([
     ["extensions/ollama/openclaw.plugin.json", "src/config/defaults.ollama-output-cap.test.ts"],
     ["test/fixtures/hooks-install/tar-evil-id.tar", "src/hooks/install.test.ts"],
+    [
+      "test/fixtures/sqlite/openclaw-agent-schema-v21.sql",
+      "src/state/openclaw-agent-db.storage-migration.test.ts",
+    ],
+    [
+      "test/fixtures/sqlite/openclaw-agent-schema-v26.sql",
+      "src/commands/doctor-historical-imports.process.test.ts",
+    ],
+    ...["src/state/sqlite-copy-swap.test.ts", "test/state-upgrade.e2e.test.ts"].flatMap((reader) =>
+      ["2026.7.1", "2026.9.37"].map((release) => [
+        `test/fixtures/state-corpus-populated/${release}/manifest.json`,
+        reader,
+      ]),
+    ),
   ])("keeps the declared file reader when %s changes", (input, reader) => {
     const cwd = createSourceFixture("changed-declared-input-", {
       [input]: "{}\n",

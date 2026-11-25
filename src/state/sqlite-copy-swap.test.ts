@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fileTransfer from "../infra/file-descriptor.js";
 import * as sqliteFilesystem from "../infra/sqlite-wal-filesystem.js";
 import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
+import { readHistoricalStateCorpusManifest } from "./openclaw-historical-imports.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { buildStateDatabaseByCopy } from "./openclaw-state-db-swap.js";
@@ -73,7 +74,7 @@ describe.each(releases)("generic rebuild of %s", (release) => {
   const stateDir = path.join(corpusDir, release, "state");
   const manifest: {
     verification: Record<string, Array<{ value: string; found_in?: string[] }>>;
-  } = JSON.parse(fs.readFileSync(path.join(corpusDir, release, "manifest.json"), "utf8"));
+  } = JSON.parse(readHistoricalStateCorpusManifest(release));
   const verification = Object.values(manifest.verification).flat();
   const databases = [
     { file: path.join(stateDir, "state", "openclaw.sqlite"), agentId: undefined },

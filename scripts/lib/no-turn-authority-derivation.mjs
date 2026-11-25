@@ -27,7 +27,6 @@ export const TURN_FLAG_FILES = new Set([
   "src/auto-reply/reply/session-event-target.ts",
   "src/auto-reply/reply/session.ts",
   "src/commands/doctor/cron/execution-context-check.ts",
-  "src/cron/execution-context-admission.ts",
   "src/gateway/agent-turn/agent-run-user-turn.ts",
   "src/gateway/approval-channel-custody.ts",
   "src/gateway/operator-admission.ts",
@@ -48,11 +47,7 @@ const OWNER_FIELDS = new Set(["senderIsOwner", "requesterOwner"]);
 export const OWNER_PRODUCER_FILES = new Set([
   // Principals admission does not see yet: they match their own credential or owner config.
   "extensions/discord/src/monitor/native-command-auth.ts", // native slash command, no turn yet
-  "extensions/discord/src/voice/speaker-context.ts", // voice speaker, `ownerAllowFrom`
-  "extensions/facetime/src/call-events.ts", // allowlisted caller claim, host trust-gated
-  "extensions/facetime/src/talk-consult-controller.ts", // same caller claim
-  "src/plugins/registry-runtime.ts", // host trust gate for a plugin's ingress owner claim
-  "src/worker/embedded-agent.runtime.ts", // remote worker: its run's grant is not on the protocol
+  "extensions/discord/src/voice/speaker-context.ts", // realtime voice speaker, `ownerAllowFrom`
   // Channel command owner: the `commands.ownerAllowFrom` config match. Asserted-identity owners
   // and pre-turn senders have no grant yet, so this fact still sets the bit.
   "src/auto-reply/command-auth.ts",
@@ -63,12 +58,8 @@ export const OWNER_PRODUCER_FILES = new Set([
   "src/agents/openclaw-plugin-tools.ts",
   "src/agents/openclaw-tools.ts",
   "src/agents/scheduled-message-invocation.ts",
-  "src/auto-reply/reply/session-event-context.ts",
-  "src/auto-reply/reply/session-event-target.ts",
   "src/channels/plugins/message-action-dispatch.ts", // scheduled write: the job's operator
-  "src/cron/execution-context-admission.ts",
   "src/cron/execution-context-registry.ts",
-  "src/gateway/cron-job-turn-target.ts",
   "src/plugins/tool-factory-context.ts",
   // Recorded data read back, never decided: protocol field, transcript and lineage receipts.
   "packages/gateway-protocol/src/schema/agent.ts",

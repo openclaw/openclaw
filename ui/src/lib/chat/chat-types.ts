@@ -162,7 +162,11 @@ export type ChatGuardianNotice = {
 
 export type { ToolApprovalReview } from "../../../../src/shared/tool-approval-reviews.js";
 
-export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true; removing?: boolean };
+export type ChatQueueDisplayItem = ChatQueueItem & {
+  serverQueued?: true;
+  removing?: boolean;
+  cancelled?: true;
+};
 
 export type ChatQueueItem = {
   id: string;

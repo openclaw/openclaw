@@ -958,6 +958,7 @@ src/gateway/openclaw-id/access-plugin.ts
 src/gateway/openclaw-id/member-role-presets.ts
 src/gateway/openclaw-id/tunnel-principal-schema.ts
 src/gateway/openclaw-id/tunnel-principal.ts
+src/gateway/operator-refusal.ts
 src/gateway/operator-run-recovery-source.codec.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts

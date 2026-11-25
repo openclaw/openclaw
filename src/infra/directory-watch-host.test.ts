@@ -9,6 +9,7 @@ import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { execNodeEvalSync } from "../test-utils/node-process.js";
 import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
 import { createDirectoryWatchChannel, watchDirectory } from "./directory-watch-host.js";
 import { observeOwnedDirectory } from "./owned-directory-observation.js";
@@ -23,6 +24,29 @@ afterEach(() => {
 });
 
 describe("directory watch host", () => {
+  it("loads runtime resolvers only when the host starts a parent monitor thread", () => {
+    const loaded = execNodeEvalSync(
+      `import { writeSync } from "node:fs";
+      import { registerHooks } from "node:module";
+      const resolvers = new Set();
+      registerHooks({ load(url, context, nextLoad) {
+        const name = new URL(url).pathname.split("/").at(-1);
+        if (name === "runtime-process-url.ts" || name === "runtime-worker-url.ts") {
+          resolvers.add(name);
+        }
+        return nextLoad(url, context);
+      }});
+      process.argv[2] = String(process.ppid);
+      await import(${JSON.stringify(new URL("./directory-watch-host.worker.ts", import.meta.url).href)});
+      writeSync(1, JSON.stringify([...resolvers].sort()));
+      process.exit(0);`,
+      { imports: [new URL("../../scripts/tsx.mjs", import.meta.url).href] },
+    );
+    expect(JSON.parse(loaded)).toEqual(
+      process.platform === "linux" ? [] : ["runtime-process-url.ts", "runtime-worker-url.ts"],
+    );
+  });
+
   it("forwards a stream burst in one worker message without losing ordered events or errors", async () => {
     const requests: Array<{ id: number; path?: string }> = [];
     const registered = Promise.withResolvers<void>();
