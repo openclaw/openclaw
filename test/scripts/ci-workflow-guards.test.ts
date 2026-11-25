@@ -4431,6 +4431,7 @@ setImmediate(() => {
       const expression = jobs[jobName]?.["runs-on"];
       for (const [label, overrides, expectedRunner] of [
         ["github backend", { runnerBackend: "github" }, hostedRunner],
+        ["legacy Boat fallback", { runnerBackend: "boat", runnerProfile: "github" }, hostedRunner],
         [
           "hybrid first attempt",
           { runnerBackend: "hybrid" },

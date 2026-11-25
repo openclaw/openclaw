@@ -97,7 +97,7 @@ export function evaluateWorkflowExpression(
     validationTier?: "full" | "main";
     repository: string;
     runCheck?: boolean;
-    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
+    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson" | "boat";
     requestedRunnerBackend?: "default" | "hybrid" | "runson";
     ciShape?: "default" | "main";
     ciOnPush?: string;

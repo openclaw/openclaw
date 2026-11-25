@@ -219,6 +219,8 @@ The `macos-swift` lane builds Swift tests once and runs each test once per job. 
 
 The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend for `ci.yml`:
 
+On `extended-stable/2026.9.33`, the newer repository value `boat` selects the existing complete `github` fallback because this branch has no Boat adapter. This applies before physical runner admission, to planning, caches, and retries; it does not enable Blacksmith or add a Boat backend. Maintainer-admitted qualification overrides retain their existing policy and precedence.
+
 | Value                 | Light lanes                                                                 | Heavy lanes                                                                      | Rerun behavior                                                                        |
 | --------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | unset or `blacksmith` | Blacksmith-first, with the existing manual-dispatch and fork fallbacks      | Blacksmith-first, with the existing manual-dispatch and fork fallbacks           | Existing behavior is unchanged                                                        |

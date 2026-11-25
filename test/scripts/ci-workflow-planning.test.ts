@@ -4677,6 +4677,11 @@ describe("ci workflow guards", () => {
       },
       {
         expected: "github",
+        name: "legacy workflow falls back to hosted for unsupported Boat",
+        options: { configuredProfile: "boat", eventName: "push", targetSupportsContract: true },
+      },
+      {
+        expected: "github",
         name: "canonical trusted push keeps configured GitHub",
         options: {
           configuredProfile: "github",
@@ -4934,7 +4939,7 @@ describe("ci workflow guards", () => {
 
   it("resolves admitted main qualification profiles without changing ordinary main routing", () => {
     for (const [configuredProfile, backend] of (
-      ["", "github", "blacksmith", "hybrid"] as const
+      ["", "github", "blacksmith", "hybrid", "boat"] as const
     ).flatMap((configured) =>
       (["hybrid", "runson"] as const).map((requested) => [configured, requested] as const),
     )) {
