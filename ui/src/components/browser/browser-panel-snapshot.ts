@@ -133,11 +133,11 @@ export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost)
     ) {
       return;
     }
-    if (
-      controller.clearUnavailableView() ||
-      controller.screenshotUnavailable ||
-      controller.stream.ownsView(targetId)
-    ) {
+    if (controller.clearUnavailableView() || controller.stream.ownsView(targetId)) {
+      return;
+    }
+    if (controller.screenshotUnavailable) {
+      controller.syncUrlDraft(controller.tabs.find((tab) => tab.id === targetId)?.url ?? "");
       return;
     }
     const current = controller.operations.beginCapture(
@@ -224,6 +224,7 @@ export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost)
         // describes the destination and must keep the valid source screenshot.
         if (isBrowserCapabilityUnsupportedError(error)) {
           controller.setState("screenshotUnavailable", true);
+          controller.syncUrlDraft(controller.tabs.find((tab) => tab.id === targetId)?.url ?? "");
         } else if (isBrowserNavigationBlockedError(error)) {
           controller.setState(
             "tabs",

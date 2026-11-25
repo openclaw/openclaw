@@ -524,9 +524,6 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
           return;
         }
         await panel.refreshView(selectedTargetId, epoch);
-        if (operations.isLive(epoch, actionClient) && panel.screenshotUnavailable) {
-          panel.syncUrlDraft(panel.tabs.find((tab) => tab.id === selectedTargetId)?.url ?? "");
-        }
         if (
           operations.isLive(epoch, actionClient) &&
           panel.activeTargetId === selectedTargetId &&

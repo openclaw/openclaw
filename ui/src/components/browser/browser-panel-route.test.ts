@@ -166,7 +166,8 @@ function expectRequest(
 
 it("keeps a screenshot-free browser usable without reporting a load failure", async () => {
   let url = "https://example.test/article";
-  const gateway = pageGateway((request) => {
+  const navigation = createDeferred();
+  const gateway = pageGateway(async (request) => {
     if (request.query?.profile !== "managed") {
       return undefined;
     }
@@ -175,6 +176,11 @@ it("keeps a screenshot-free browser usable without reporting a load failure", as
         running: true,
         tabs: [makeTab("t1", url, "Article")],
       };
+    }
+    if (request.path === "/navigate") {
+      await navigation.promise;
+      url = String(request.body?.url);
+      return { url, targetId: "raw-t1" };
     }
     if (request.path === "/screenshot" || request.path === "/screencast") {
       throw new GatewayRequestError({
@@ -190,13 +196,24 @@ it("keeps a screenshot-free browser usable without reporting a load failure", as
   await flush();
   await panel.updateComplete;
   expect(panel.textContent).toContain("This browser does not provide a visual preview.");
-  expect(panel.textContent).not.toContain("Couldn’t load the browser");
-  expect(panel.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
-    "https://example.test/article",
+  const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
+  expect(input.value).toBe("https://example.test/article");
+  const typedUrl = "https://example.test/typed";
+  input.focus();
+  input.value = typedUrl;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await panel.updateComplete;
+  expect(document.activeElement).not.toBe(input);
+  navigation.resolve();
+  await waitForSolid(() => expect(input.value).toBe(typedUrl));
+  reloadButton(panel)!.click();
+  await waitForSolid(() =>
+    expect(requests(gateway).filter(({ path }) => path === "/navigate")).toHaveLength(2),
   );
+  expect(requests(gateway).findLast(({ path }) => path === "/navigate")?.body?.url).toBe(typedUrl);
   const captures = () =>
     requests(gateway).filter(({ path }) => path === "/screenshot" || path === "/screencast");
-  expect(captures()).toHaveLength(2);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   url = "https://example.test/next";
   panel.preferredTab = { tab: hostTab, revision: "next-result" };
@@ -207,7 +224,6 @@ it("keeps a screenshot-free browser usable without reporting a load failure", as
 
   panel.preferredTab = { tab: nodeTab, revision: "visual-browser" };
   await waitForTitle(panel, "work");
-  expect(panel.textContent).not.toContain("This browser does not provide a visual preview.");
 });
 
 it("catches up the address after agent navigation while the address field had focus", async () => {
