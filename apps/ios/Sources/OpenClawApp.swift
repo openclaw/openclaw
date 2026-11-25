@@ -661,6 +661,16 @@ struct OpenClawApp: App {
                     if Self.liveActivityVoicePreviewEnabled {
                         LiveActivityManager.shared.startVoicePreview()
                     }
+                    if let command = Self.voiceWakeFixtureCommand {
+                        // UI tests: hear `command` every few seconds, as if spoken, with no microphone
+                        // and no send. Only the toast reacts to it.
+                        while !Task.isCancelled {
+                            try? await Task.sleep(for: .seconds(4))
+                            self.appModel.voiceWake.lastTriggeredCommand = nil
+                            try? await Task.sleep(for: .milliseconds(100))
+                            self.appModel.voiceWake.lastTriggeredCommand = command
+                        }
+                    }
                     #endif
                 }
                 .onReceive(
@@ -693,6 +703,18 @@ struct OpenClawApp: App {
         ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-notification-guidance")
         #else
         false
+        #endif
+    }
+
+    private static var voiceWakeFixtureCommand: String? {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-voice-wake-fixture"),
+              arguments.indices.contains(index + 1)
+        else { return nil }
+        return arguments[index + 1]
+        #else
+        nil
         #endif
     }
 

@@ -519,8 +519,14 @@ struct ChatProTab: View {
         let filename = ChatTranscriptExporter.filename(
             sessionTitle: title,
             sessionKey: viewModel.sessionKey)
-        let directory = FileManager.default.temporaryDirectory
+        var directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenClawTranscripts", isDirectory: true)
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-export-failure-fixture") {
+            // UI tests: a folder that can't be created, so the write fails as a full disk would.
+            directory = URL(fileURLWithPath: "/dev/null/OpenClawTranscripts", isDirectory: true)
+        }
+        #endif
         let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
 
         do {
