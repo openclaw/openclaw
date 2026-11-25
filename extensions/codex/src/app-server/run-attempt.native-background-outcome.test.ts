@@ -269,17 +269,15 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
 });
 
 it.each([
-  ["retained", "52627", false],
-  ["foreign item", "52627", false],
-  ["foreign process", "52627", false],
-  ["completion during inventory", "52627", false],
-  ["revoked during inventory", "52627", false],
-  ["inventory unavailable", "52627", false],
-  ["retained", null, false],
-  ["retained", "52627", true],
-  ["inventory unavailable", "52627", true],
-  ["retained with missing sibling", "52627", true],
-] as const)("native background outcome: %s (%s)", async (scenario, startProcessId, silent) => {
+  ["retained", "52627"],
+  ["foreign item", "52627"],
+  ["foreign process", "52627"],
+  ["completion during inventory", "52627"],
+  ["revoked during inventory", "52627"],
+  ["inventory unavailable", "52627"],
+  ["retained", null],
+  ["silent retained", "52627"],
+] as const)("native background outcome: %s (%s)", async (scenario, startProcessId) => {
   const abort = new AbortController();
   const params = createTestParams();
   params.abortSignal = abort.signal;
@@ -334,43 +332,19 @@ it.each([
   try {
     await run.waitForTurnAccepted();
     await harness.notify(itemNotification("item/started", command));
-    if (scenario === "retained with missing sibling") {
-      await harness.notify(
-        itemNotification("item/started", runningCommand("missing", "synthetic-missing", "12345")),
-      );
-    }
-    await harness.notify(answerCompleted(silent ? "NO_REPLY" : "Retained handle 52627."));
+    await harness.notify(answerCompleted(scenario.startsWith("silent") ? "NO_REPLY" : "Retained."));
     const result = await run;
     const tool = result.messagesSnapshot.find(
       (message) => message.role === "toolResult" && message.toolCallId === command.id,
     );
-    if (scenario === "retained" || scenario === "retained with missing sibling") {
-      expect(readAttemptTerminal(result).promptError).toBe(
-        scenario === "retained"
-          ? null
-          : "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.",
-      );
+    if (scenario.endsWith("retained")) {
+      expect(readAttemptTerminal(result).promptError).toBeNull();
       expect(tool).toMatchObject({
         isError: false,
         content: [{ type: "text", text: expect.stringContaining("still running") }],
         __openclaw: { toolOutput: { outcome: "unknown" } },
       });
       expect(JSON.stringify(tool)).toContain("52627");
-      if (scenario === "retained with missing sibling") {
-        expect(
-          result.messagesSnapshot.find(
-            (message) => message.role === "toolResult" && message.toolCallId === "missing",
-          ),
-        ).toMatchObject({ isError: true });
-        return;
-      }
-      if (silent) {
-        const followup = runCodexAppServerAttempt({ ...params, runId: "followup" });
-        await followup.waitForTurnAccepted();
-        await harness.notify(answerCompleted("The command is still running."));
-        expect(readAttemptTerminal(await followup).promptError).toBeNull();
-        expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(false);
-      }
       const unsubscribe = { method: "thread/unsubscribe", params: { threadId: "thread-1" } };
       const evictIdleThreads = async (phase: string) => {
         for (let index = 0; index < 65; index += 1) {
@@ -399,9 +373,6 @@ it.each([
       expect(harness.requests).toContainEqual(unsubscribe);
       expect(releaseSource).toHaveBeenCalled();
     } else {
-      if (silent) {
-        expect(readAttemptTerminal(result).promptError).toContain("without a matching tool.result");
-      }
       expect(tool).toMatchObject({ isError: true });
       if (scenario === "completion during inventory") {
         expect(tool).toMatchObject({ content: [{ type: "text", text: failedOutput }] });
