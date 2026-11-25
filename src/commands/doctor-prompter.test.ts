@@ -6,11 +6,13 @@ import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const confirmMock = vi.fn();
 const selectMock = vi.fn();
+const textMock = vi.fn();
 
 vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
   confirm: (options: unknown) => confirmMock(options),
   select: (options: unknown) => selectMock(options),
+  text: (options: unknown) => textMock(options),
 }));
 
 const ttyMock = createCliTtyMock([process.stdin]);
@@ -109,6 +111,22 @@ it("requires an explicit interactive choice for an ambiguous repair under --fix"
   }
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
   await expect(choose({ repair: true })).resolves.toBeUndefined();
+});
+
+it("collects a typed identity only from an interactive repair", async () => {
+  textMock.mockResolvedValueOnce("123");
+  await expect(makePrompter({ repair: true }).requestRepairText("Server ID")).resolves.toBe("123");
+  for (const options of [{ yes: true }, { repair: true, nonInteractive: true }]) {
+    await expect(makePrompter(options).requestRepairText("Server ID")).resolves.toBeUndefined();
+  }
+  await expect(
+    makePrompter({ repair: true }, false).requestRepairText("Server ID"),
+  ).resolves.toBeUndefined();
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+  await expect(
+    makePrompter({ repair: true }).requestRepairText("Server ID"),
+  ).resolves.toBeUndefined();
+  expect(textMock).toHaveBeenCalledTimes(1);
 });
 
 it.each([false, true])("honors interactive consent with force alone: %s", async (approved) => {

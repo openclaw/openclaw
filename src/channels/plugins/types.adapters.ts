@@ -441,6 +441,8 @@ export type ChannelDoctorAdapter = {
     cfg: OpenClawConfig;
   }) => string[] | Promise<string[]>;
   repairConfig?: (params: {
+    /** Collect an operator-entered value during interactive repair only. */
+    requestText?: (message: string) => Promise<string | undefined>;
     cfg: OpenClawConfig;
     doctorFixCommand: string;
     env?: NodeJS.ProcessEnv;
@@ -449,6 +451,8 @@ export type ChannelDoctorAdapter = {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
     shouldRepair: boolean;
+    /** Source revision for narrowly scoped unattended state repair without --fix. */
+    unattendedSourceHash?: string;
   }) => ChannelDoctorSequenceResult | Promise<ChannelDoctorSequenceResult>;
   cleanStaleConfig?: (params: {
     cfg: OpenClawConfig;

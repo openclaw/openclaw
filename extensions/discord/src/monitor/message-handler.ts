@@ -10,7 +10,7 @@ type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
 };
 
 export function createDiscordMessageHandler(
-  params: DiscordMessageHandlerParams & { client: Client },
+  params: DiscordMessageHandlerParams & { client: Client; isGuildPaused?: (id: string) => boolean },
 ): DiscordMessageHandlerWithLifecycle {
   const dispatcher = createDiscordMessageDispatcher(params);
   const ingress = createDiscordIngressMonitor({

@@ -48,6 +48,7 @@ type DiscordListenerConfig = {
 };
 
 export async function createDiscordMonitorClient(params: {
+  isGuildPaused?: (id: string) => boolean;
   scheduler: PluginServiceSchedulerV1;
   accountId: string;
   applicationId: string;

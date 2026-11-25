@@ -383,6 +383,16 @@ export class GatewayPlugin implements GatewayPluginContract {
         adapter?.onVoiceStateUpdate(payload.d);
       }
     }
+    const dataRecord = asOptionalRecord(payload.d);
+    const guildId =
+      payload.t === GatewayDispatchEvents.GuildCreate ||
+      payload.t === GatewayDispatchEvents.GuildUpdate ||
+      payload.t === GatewayDispatchEvents.GuildDelete
+        ? dataRecord?.id
+        : dataRecord?.guild_id;
+    if (typeof guildId === "string" && this.options.isGuildPaused?.(guildId)) {
+      return;
+    }
     // MESSAGE_CREATE is the durable-ingress raw-envelope boundary. Its listener
     // maps structures only after the queue claim; other events retain eager mapping.
     const data =

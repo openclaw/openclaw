@@ -10,6 +10,12 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { resolveDefaultDiscordAccountId } from "./accounts.js";
 import { normalizeCompatibilityConfig as normalizeDiscordCompatibilityConfig } from "./doctor-contract.js";
+import {
+  applyDiscordGuildPauses,
+  findDiscordGuildPauses,
+  guildIdGuidance,
+  namedGuildRules,
+} from "./doctor-guilds.js";
 import { isDiscordMutableAllowEntry } from "./security-doctor.js";
 import { discordVoiceTranscriptsSourceProvider } from "./voice/transcripts-source.js";
 
@@ -266,6 +272,7 @@ export const discordDoctor: ChannelDoctorAdapter = {
   warnOnEmptyGroupSenderAllowlist: false,
   normalizeCompatibilityConfig: normalizeDiscordCompatibilityConfig,
   collectPreviewWarnings: ({ cfg, doctorFixCommand, env }) => [
+    ...Array.from(namedGuildRules(cfg), ({ path }) => guildIdGuidance(path, doctorFixCommand)),
     ...collectDiscordMissingEnvTokenWarnings({ cfg, env }),
     ...collectDiscordNumericIdWarnings({
       hits: scanDiscordNumericIdEntries(cfg),
@@ -274,5 +281,65 @@ export const discordDoctor: ChannelDoctorAdapter = {
     ...collectDiscordTranscriptsAutoStartWarnings(cfg),
   ],
   collectMutableAllowlistWarnings: ({ cfg }) => collectDiscordMutableAllowlistWarnings(cfg),
-  repairConfig: ({ cfg, doctorFixCommand }) => maybeRepairDiscordNumericIds(cfg, doctorFixCommand),
+  runConfigSequence: async ({ cfg, env, unattendedSourceHash }) => {
+    if (!unattendedSourceHash) {
+      return { changeNotes: [], warningNotes: [] };
+    }
+    const { changes, warnings } = await findDiscordGuildPauses(cfg, env);
+    if (!changes.length) {
+      return { changeNotes: [], warningNotes: warnings };
+    }
+    const { mutateConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
+    try {
+      const committed = await mutateConfigFile({
+        baseHash: unattendedSourceHash,
+        base: "source",
+        mutate: (draft) => applyDiscordGuildPauses(draft, changes),
+      });
+      return { changeNotes: committed.result ?? [], warningNotes: warnings };
+    } catch {
+      // Directory lookup can outlive the config revision. Never retry against a different rule.
+      for (const { rule, accountId, ids } of changes) {
+        warnings.push(
+          `- Discord account ${accountId}: could not confirm a saved pause for servers ${ids.join(", ")} at ${rule.path}. Check the current config and rerun Doctor, or resolve the name in the deployment source.`,
+        );
+      }
+      return { changeNotes: [], warningNotes: warnings };
+    }
+  },
+  repairConfig: async ({ cfg, doctorFixCommand, requestText, env = process.env }) => {
+    const result = maybeRepairDiscordNumericIds(cfg, doctorFixCommand);
+    if (namedGuildRules(result.config).length === 0) {
+      return result;
+    }
+    const next = structuredClone(result.config);
+    const warnings = result.warnings ?? [];
+    if (!requestText) {
+      const pauses = await findDiscordGuildPauses(next, env);
+      result.changes.push(...applyDiscordGuildPauses(next, pauses.changes));
+      warnings.push(...pauses.warnings);
+    }
+    for (const { guilds, name, entry, path } of namedGuildRules(next)) {
+      const id = (
+        await requestText?.(
+          `Enter the intended numeric Discord server ID for ${path} (leave blank to skip)`,
+        )
+      )?.trim();
+      if (!id || !/^\d+$/.test(id)) {
+        warnings.push(guildIdGuidance(path, doctorFixCommand));
+        continue;
+      }
+      if (Object.hasOwn(guilds, id)) {
+        warnings.push(
+          `- ${path}: server ID ${id} already has a rule in this scope. Both rules were retained. Resolve the conflict in your config.`,
+        );
+        continue;
+      }
+      delete entry.doctorPausedGuildIds;
+      guilds[id] = entry;
+      delete guilds[name];
+      result.changes.push(`Moved the Discord rule at ${path} to server ID ${id}.`);
+    }
+    return { config: result.changes.length ? next : cfg, changes: result.changes, warnings };
+  },
 };

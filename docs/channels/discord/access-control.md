@@ -135,6 +135,31 @@ Who may reach the bot, which guild channels it answers in, and which Discord act
     - if a guild has `channels` configured, non-listed channels are denied
     - if a guild has no `channels` block, all channels in that allowlisted guild are allowed
 
+    To replace a server-name key, copy the intended server's numeric ID from Discord
+    and run `openclaw doctor --fix` in a terminal. Enter the ID when Doctor shows
+    the rule's config path. Doctor moves the entire rule, including channel, role,
+    user, and tool restrictions. If the ID already has a rule in that scope,
+    review both entries and resolve the conflict in your config.
+
+    Unattended Doctor checks each configured bot's server directory. If several
+    servers match a name rule, Doctor records their IDs on that rule and pauses
+    incoming events from those servers for that bot, including after restart.
+    Other servers continue working. To resume, run interactive repair or rename
+    the rule to the intended server ID in your config. These steps apply to both
+    `channels.discord.guilds` and `channels.discord.accounts.<account>.guilds`.
+
+    The pause takes effect when Doctor saves the server IDs. If Nix or another
+    deployment manager makes the config read-only, Doctor reports the matching
+    IDs and config path and continues diagnosis. Incoming activity follows the
+    existing rules. Rename the rule to the intended numeric ID in your
+    deployment source and redeploy. If another process edited a writable config
+    during the lookup, review that edit and rerun Doctor.
+
+    Before manually downgrading to a release that predates this check, resolve
+    each paused rule with interactive Doctor. If you rekey it by hand, also
+    remove `doctorPausedGuildIds` from the rekeyed rule so the older release can
+    read it.
+
     Example:
 
 ```json5

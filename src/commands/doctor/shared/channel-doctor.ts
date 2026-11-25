@@ -293,6 +293,7 @@ export async function collectChannelDoctorRepairMutations(
   return collectChannelDoctorMutations(params, (doctor, nextCfg) =>
     doctor.repairConfig?.({
       cfg: nextCfg,
+      ...(params.requestText && { requestText: params.requestText }),
       doctorFixCommand: params.doctorFixCommand,
       ...(params.env ? { env: params.env } : {}),
     }),

@@ -73,6 +73,7 @@ import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
 export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
+  requestText?: (message: string) => Promise<string | undefined>;
   modelReplacements?: readonly import("./shared/model-replacement.js").DoctorModelReplacement[];
   installedPluginIdRecovery?: InstalledPluginIdRecovery;
   env?: NodeJS.ProcessEnv;
@@ -176,6 +177,7 @@ export async function runDoctorRepairSequence(params: {
   const collectCurrentChannelRepairs = () =>
     runWithCurrentPluginMetadata(() =>
       collectChannelDoctorRepairMutations({
+        ...(params.requestText && { requestText: params.requestText }),
         cfg: state.candidate,
         doctorFixCommand: params.doctorFixCommand,
         env,

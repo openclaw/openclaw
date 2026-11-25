@@ -18,6 +18,7 @@ export type UpdatePresenceData = Omit<GatewayPresenceUpdateData, "status"> & {
 };
 
 export type GatewayPluginOptions = {
+  isGuildPaused?: (id: string) => boolean;
   intents?: number;
   url?: string;
 };

@@ -182,6 +182,29 @@ describe("GatewayPlugin", () => {
     await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledWith(error));
   });
 
+  it("drops paused guild events before dispatch and keeps other guilds and DMs active", async () => {
+    const gateway = new TestGatewayPlugin({ isGuildPaused: (id) => id === "100" });
+    const handle = vi.fn();
+    const client = new Client(
+      { clientId: "application-id", token: "test-token" },
+      { listeners: [{ type: GatewayDispatchEvents.MessageCreate, handle }] },
+      [gateway],
+    );
+    const socket = gateway.openSocket();
+    for (const [id, guild_id] of [
+      ["m1", "100"],
+      ["m2", "200"],
+      ["m3", undefined],
+    ]) {
+      socket.dispatch(GatewayDispatchEvents.MessageCreate, { id, guild_id, channel_id: "c1" });
+    }
+    await vi.waitFor(() => expect(handle).toHaveBeenCalledTimes(2));
+    expect(handle.mock.calls).toEqual([
+      [expect.objectContaining({ id: "m2" }), client],
+      [expect.objectContaining({ id: "m3" }), client],
+    ]);
+  });
+
   it("reconnects when the socket closes while waiting for identify concurrency", async () => {
     const gateway = timedGateway();
     await sharedGatewayIdentifyLimiter.schedule(() => true);

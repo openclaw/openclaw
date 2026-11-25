@@ -105,6 +105,27 @@ function createMonitor(...args: Parameters<typeof createPausedMonitor>) {
 }
 
 describe("Discord durable ingress", () => {
+  it("settles a queued message from a paused guild while delivering the next guild's message", async () => {
+    const paused = { ...createRawMessage("101"), guild_id: "11" };
+    const active = { ...createRawMessage("102"), guild_id: "22" };
+    const dispatch = vi.fn();
+    const monitor = createDiscordIngressMonitor({
+      accountId: "default",
+      client: {} as never,
+      runtime: { error: vi.fn(), log: vi.fn() },
+      queue,
+      dispatch,
+      isGuildPaused: (id) => id === paused.guild_id,
+    });
+    monitors.add(monitor);
+    await monitor.accept(paused);
+    await monitor.accept(active);
+    monitor.start();
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    expect(dispatch.mock.calls[0]?.[0].id).toBe(active.id);
+    expect(await queue.enqueue(paused.id, payloadFor(paused))).toMatchObject({ kind: "completed" });
+  });
+
   it.each(["queue-cap-old", "queue-cap-new"] as const)(
     "does not post a repeated-failure notice for %s",
     async (reason) => {

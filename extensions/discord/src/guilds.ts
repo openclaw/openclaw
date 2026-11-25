@@ -45,17 +45,29 @@ export function searchDiscordGuildMembers(
 export async function listGuilds(
   token: string,
   fetcher: typeof fetch,
-  options?: { timeoutMs?: number },
+  options?: { timeoutMs?: number; allPages?: boolean },
 ): Promise<DiscordGuildSummary[]> {
-  const raw = await fetchDiscord<Array<{ id?: string; name?: string }>>(
-    "/users/@me/guilds",
-    token,
-    fetcher,
-    options,
-  );
-  return raw.flatMap((guild) =>
-    typeof guild.id === "string" && typeof guild.name === "string"
-      ? [{ id: guild.id, name: guild.name, slug: normalizeDiscordSlug(guild.name) }]
-      : [],
-  );
+  const guilds: DiscordGuildSummary[] = [];
+  let after: string | undefined;
+  for (;;) {
+    const page = await fetchDiscord<Array<{ id?: string; name?: string }>>(
+      after ? `/users/@me/guilds?after=${encodeURIComponent(after)}` : "/users/@me/guilds",
+      token,
+      fetcher,
+      options,
+    );
+    for (const guild of page) {
+      if (typeof guild.id === "string" && typeof guild.name === "string") {
+        guilds.push({ id: guild.id, name: guild.name, slug: normalizeDiscordSlug(guild.name) });
+      }
+    }
+    if (!options?.allPages || page.length < 200) {
+      return guilds;
+    }
+    const cursor = page.at(-1)?.id;
+    if (!cursor || cursor === after) {
+      throw new Error("Discord returned an incomplete server directory.");
+    }
+    after = cursor;
+  }
 }
