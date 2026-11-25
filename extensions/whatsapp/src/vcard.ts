@@ -4,7 +4,7 @@ export function parseVcard(vcard?: string) {
   if (!vcard) {
     return { phones: [] };
   }
-  const lines = vcard.split(/\r?\n/);
+  const lines = vcard.replace(/\r?\n[ \t]/g, "").split(/\r?\n/);
   let nameFromN: string | undefined;
   let nameFromFn: string | undefined;
   const phones: string[] = [];

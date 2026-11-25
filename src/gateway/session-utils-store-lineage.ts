@@ -15,6 +15,7 @@ import {
   resolveStoredSessionKeyForAgentStore,
   selectStoredSessionLineage,
 } from "./session-store-key.js";
+import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
 
@@ -113,4 +114,30 @@ export async function prepareGatewaySessionEntryReader(params: {
     }
   }
   return (key) => params.store[key] ?? prepared.get(key);
+}
+
+/**
+ * The model a turn admitted for this session starts on: the session's own pick, else its
+ * parent's, else the configured default. Native harness ownership is applied by the run.
+ */
+export async function resolveGatewaySessionTurnModelRef(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string;
+  entry?: SessionEntry;
+}): Promise<{ provider: string; model: string } | undefined> {
+  const { cfg, agentId, sessionKey, entry } = params;
+  const selected = resolveSessionSelectedModelRef({
+    cfg,
+    agentId,
+    sessionKey,
+    source: {
+      entry,
+      readSourceEntry: sessionKey
+        ? await prepareGatewaySessionEntryReader({ cfg, agentId, sessionKey, entry, store: {} })
+        : () => undefined,
+    },
+    preparedRuntimeOwnership: null,
+  });
+  return selected && { provider: selected.provider, model: selected.model };
 }

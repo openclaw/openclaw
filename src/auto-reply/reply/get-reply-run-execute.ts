@@ -402,10 +402,7 @@ export async function executePreparedReplyRun(
     InputProvenance: inputProvenance,
   });
   const channelOwnerAuthority = getCommandOwnerAuthority(ctx);
-  const senderIsOwner =
-    providedReplyOperation && channelOwnerAuthority
-      ? channelOwnerAuthority.isCurrent()
-      : command.senderIsOwner;
+  const { senderIsOwner } = command;
   const authorityRunId =
     freshChannelCronAuthorityTurn && command.senderIsOwner
       ? (opts?.runId ?? crypto.randomUUID())

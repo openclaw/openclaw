@@ -17,6 +17,7 @@ const catalog: Readonly<Record<string, object>> =
   registerChatToolOperationsEnglish.catalog.chat.toolCards.operationLabels;
 
 const operationIcons = new Map<string, IconName>([
+  ["local_image", "image"],
   ["discussion", "messageSquare"],
   ["facetime_call", "audioLines"],
   ["feishu_app_scopes", "fileText"],
@@ -127,6 +128,36 @@ function describedNodeName(selector: unknown, details: unknown): string | undefi
   return node === described?.displayName && node !== described.nodeId ? node : undefined;
 }
 
+function completedMediaGenerationPhase(card: ToolCard, kind: string) {
+  const details = asNullableRecord(card.details);
+  const receipt = asNullableRecord(asNullableRecord(details?.result)?.details) ?? details;
+  if (receipt?.action === "status" || receipt?.duplicateGuard === true) {
+    return "action";
+  }
+  if (receipt?.async === true && typeof receipt.status === "string") {
+    return receipt.status === "started" ? "requested" : "action";
+  }
+  if (Array.isArray(receipt?.attachments)) {
+    return receipt.async !== true && receipt.attachments.length > 0 ? "done" : "action";
+  }
+  // History may keep only the producer's opening sentence (after an optional review notice).
+  const output = unwrapToolResultTextForDisplay(card.outputText ?? "");
+  const startedKind =
+    /^(?:Review-before-delivery is enabled\.[^\n]*\n)?Background task started for (image|music|video) generation \([^\s()]+\)\./u.exec(
+      output,
+    )?.[1];
+  if (startedKind === kind) {
+    return "requested";
+  }
+  const generatedUnit =
+    /^Generated [1-9]\d* (image|track|video)s? with [^/\n]+\/[^\n]+\.(?:\r?\n|$)/u.exec(
+      output,
+    )?.[1];
+  return receipt?.async !== true && generatedUnit === (kind === "music" ? "track" : kind)
+    ? "done"
+    : "action";
+}
+
 export function catalogToolOperation(
   card: ToolCard,
   outcome: ToolCardOutcome,
@@ -135,6 +166,8 @@ export function catalogToolOperation(
   const call = unwrapToolCallForDisplay(card);
   const name = call.name.trim().toLowerCase();
   const args = asNullableRecord(call.args);
+  const mediaGenerator =
+    name === "image_generate" || name === "music_generate" || name === "video_generate";
   if (name === "toolsearch" || name === "tool_search") {
     const selecting =
       name === "toolsearch" &&
@@ -210,7 +243,11 @@ export function catalogToolOperation(
       ? `status_${args.status}`
       : name === "browser" && action === "act"
         ? browserOperation(args, labels)
-        : action?.replaceAll(".", "_");
+        : name === "local_image" && args?.task === "ocr"
+          ? "task_ocr"
+          : mediaGenerator && args
+            ? action?.trim().toLowerCase() || "generate"
+            : action?.replaceAll(".", "_");
   const operation = key && Object.hasOwn(labels, key) ? key : "default";
   if (!Object.hasOwn(labels, operation)) {
     return undefined;
@@ -221,6 +258,9 @@ export function catalogToolOperation(
       : outcome === "succeeded" && !(name === "message" && args?.dryRun === true)
         ? "done"
         : "action";
+  if (mediaGenerator && operation === "generate" && phase === "done") {
+    phase = completedMediaGenerationPhase(card, name.slice(0, -"_generate".length));
+  }
   if (name === "message" && operation === "reply" && phase === "done") {
     const receipt = readMessageReceipt(card);
     const messageId = normalizeOptionalString(receipt?.messageId);
