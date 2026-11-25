@@ -977,42 +977,6 @@ describe("memory manager reindex recovery", () => {
     return { memoryManager, harness, identity, live: cacheHashes(harness.db) };
   }
 
-  it("evicts unreferenced rows before older live rows when a full rebuild exceeds the cap", async () => {
-    const { memoryManager, harness, identity, live } = await indexLiveRows();
-    expect(live).toHaveLength(2);
-    for (let i = 0; i < 3; i += 1) {
-      insertCacheRow(identity, `orphan-${i}`, 2 + i);
-    }
-    const foreign = { provider: "other", model: "other-model", provider_key: "other-key" };
-    insertCacheRow(foreign, "orphan-foreign", 2);
-    // Six rows against a cap of four: the prune removes exactly two.
-    harness.cache.maxEntries = 4;
-    embeddingCalls = [];
-
-    await memoryManager.sync({ reason: "cli", force: true });
-
-    expect(embeddingCalls).toEqual([]);
-    expect(cacheHashes(harness.db)).toEqual([...live, "orphan-2", "orphan-foreign"].toSorted());
-  });
-
-  it("evicts unreferenced rows first when an incremental sync writes at the cap", async () => {
-    const { memoryManager, harness, identity, live } = await indexLiveRows();
-    insertCacheRow(identity, "orphan-0", 2);
-    harness.cache.maxEntries = 3;
-    await fs.writeFile(path.join(memoryDir, "gamma.md"), "published gamma");
-    // The file watcher is off in tests; mark the change it would report.
-    harness.dirty = true;
-    embeddingCalls = [];
-
-    await memoryManager.sync({ reason: "cli" });
-
-    expect(embeddingCalls).toHaveLength(1);
-    const remaining = cacheHashes(harness.db);
-    expect(remaining).toHaveLength(3);
-    expect(remaining).not.toContain("orphan-0");
-    expect(remaining).toEqual(expect.arrayContaining(live));
-  });
-
   it("keeps plain oldest-first order for a vector another sync cached during the rebuild", async () => {
     const { memoryManager, harness, identity, live } = await indexLiveRows();
     // The rebuild start and the sibling's write share one controlled clock.

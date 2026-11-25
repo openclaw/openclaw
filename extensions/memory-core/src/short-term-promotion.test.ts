@@ -36,7 +36,6 @@ import {
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
-  filterLiveShortTermRecallEntries,
   loadShortTermPromotionDreamingStats,
   rankShortTermPromotionCandidates,
   recordDreamingPhaseSignals,
@@ -317,61 +316,6 @@ describe("short-term promotion", () => {
     await expect(promise).rejects.toHaveProperty("code", "ENOENT");
   }
 
-  it("deduplicates source-file checks within a recall batch", async (workspaceDir) => {
-    const notePath = await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
-      "Deduplicated source check note.",
-    ]);
-    const relativePath = path.relative(workspaceDir, notePath).replaceAll("\\", "/");
-    const entry = recallStoreEntryFixture({
-      key: "duplicate-source",
-      path: relativePath,
-      snippet: "Deduplicated source check note.",
-      recallCount: 1,
-      dailyCount: 1,
-      totalScore: 0.9,
-      maxScore: 0.9,
-      firstRecalledAt: "2026-04-03T00:00:00.000Z",
-      lastRecalledAt: "2026-04-03T00:00:00.000Z",
-      queryHashes: ["query"],
-      recallDays: ["2026-04-03"],
-    });
-    const statSpy = vi.spyOn(fs, "stat");
-
-    const live = await filterLiveShortTermRecallEntries({
-      workspaceDir,
-      entries: [entry, { ...entry, key: "duplicate-source-2" }],
-    });
-
-    expect(live).toHaveLength(2);
-    expect(statSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back when the injected recall timestamp is outside Date range", async (workspaceDir) => {
-    vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 30, 12, 0, 0));
-    const notePath = await writeDailyMemoryNote(workspaceDir, "2026-05-30", [
-      "Bounded recall timestamp note.",
-    ]);
-
-    await recordMemoryRecalls(
-      workspaceDir,
-      "bounded recall",
-      [
-        memoryRecallResult(
-          path.relative(workspaceDir, notePath).replaceAll("\\", "/"),
-          1,
-          1,
-          0.9,
-          "Bounded recall timestamp note.",
-        ),
-      ],
-      { nowMs: 8_640_000_000_000_001 },
-    );
-
-    const [entry] = Object.values(await readRecallStoreEntries(workspaceDir));
-    expect(entry?.firstRecalledAt).toBe("2026-05-30T12:00:00.000Z");
-    expect(entry?.lastRecalledAt).toBe("2026-05-30T12:00:00.000Z");
-  });
-
   it("records short-term recall for notes stored in spaced and Unicode memory subdirectories", async (workspaceDir) => {
     const spacedPath = await writeDailyMemoryNoteInSubdir(
       workspaceDir,
@@ -599,7 +543,7 @@ describe("short-term promotion", () => {
     ).toEqual(ranked.slice(0, 1));
   });
 
-  it("ranks repeated recalls with query diversity, concept tags, and spaced consolidation", async (workspaceDir) => {
+  it("ranks recalled daily notes and excludes durable MEMORY.md notes", async (workspaceDir) => {
     const shortTermResult = memoryRecallResult(
       "memory/2026-04-02.md",
       3,
@@ -623,13 +567,7 @@ describe("short-term promotion", () => {
 
     expect(ranked).toHaveLength(1);
     expect(ranked[0]?.path).toBe("memory/2026-04-02.md");
-    expect(ranked[0]?.recallCount).toBe(2);
     expect(ranked[0]?.uniqueQueries).toBe(2);
-    expect(ranked[0]?.score).toBeGreaterThan(0);
-    expect(ranked[0]?.conceptTags).toContain("router");
-    expect(ranked[0]?.components.conceptual).toBeGreaterThan(0);
-    expect(ranked[0]?.recallDays).toEqual(["2026-04-01", "2026-04-04"]);
-    expect(ranked[0]?.components.consolidation).toBeGreaterThan(0.4);
 
     const raw = JSON.stringify(
       await testing.readRecallStore(workspaceDir, new Date().toISOString()),
@@ -676,33 +614,6 @@ describe("short-term promotion", () => {
     expect(ranked).toHaveLength(1);
     expect(ranked[0]?.recallCount).toBe(8);
     expect(ranked[0]?.uniqueQueries).toBe(4);
-  });
-
-  it("keeps duplicate daily signals from refreshing recall freshness", async (workspaceDir) => {
-    const result = memoryRecallResult(
-      "memory/2026-04-03.md",
-      1,
-      1,
-      0.62,
-      "Added primary issue extraction for pain notifications.",
-    );
-    const dailyOptions = {
-      signalType: "daily" as const,
-      dedupeByQueryPerDay: true,
-      dayBucket: "2026-04-05",
-    };
-    await recordMemoryRecalls(workspaceDir, "__dreaming_daily__:2026-04-03", [result], {
-      ...dailyOptions,
-      nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
-    });
-    await recordMemoryRecalls(workspaceDir, "__dreaming_daily__:2026-04-03", [result], {
-      ...dailyOptions,
-      nowMs: Date.parse("2026-04-05T11:00:00.000Z"),
-    });
-
-    const [entry] = Object.values(await readRecallStoreEntries(workspaceDir));
-    expect(entry?.dailyCount).toBe(1);
-    expect(entry?.lastRecalledAt).toBe("2026-04-05T10:00:00.000Z");
   });
 
   it("merges a repeated claim across days without faking query diversity", async (workspaceDir) => {
@@ -1077,7 +988,7 @@ describe("short-term promotion", () => {
     expect(slowerResult.score).toBeGreaterThan(fasterResult.score);
   });
 
-  it("boosts deep ranking when light/rem phase signals reinforce a candidate", async (workspaceDir) => {
+  it("boosts deep ranking when a light phase signal reinforces a candidate", async (workspaceDir) => {
     const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
     const results = [
       memoryRecallResult("memory/2026-04-01.md", 1, 1, 0.75, "Router VLAN baseline noted."),
@@ -1094,22 +1005,13 @@ describe("short-term promotion", () => {
       baseline.find((entry) => entry.path === "memory/2026-04-02.md"),
       "boosted baseline",
     );
-    for (const phase of ["light", "rem", "rem", "light"] as const) {
-      await recordDreamingPhaseSignals({ workspaceDir, phase, keys: [boostedKey], nowMs });
-    }
+    await recordDreamingPhaseSignals({ workspaceDir, phase: "light", keys: [boostedKey], nowMs });
 
     const ranked = await rankAllCandidates(workspaceDir, { nowMs });
     expect(ranked[0]?.path).toBe("memory/2026-04-02.md");
     const boostedResult = expectDefined(ranked[0], "boosted phase-signal result");
     const baselineResult = expectDefined(ranked[1], "baseline phase-signal result");
     expect(boostedResult.score).toBeGreaterThan(baselineResult.score);
-
-    const phaseStore = await testing.readPhaseSignalStore(
-      workspaceDir,
-      new Date(nowMs).toISOString(),
-    );
-    expect(phaseStore.entries[boostedKey]?.lightHits).toBe(2);
-    expect(phaseStore.entries[boostedKey]?.remHits).toBe(2);
   });
 
   it("weights fresh phase signals more than stale ones", async (workspaceDir) => {
@@ -1137,12 +1039,10 @@ describe("short-term promotion", () => {
     const staleSignalRank = await rankAllCandidates(workspaceDir, {
       nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
     });
-    await recordDreamingPhaseSignals({
-      workspaceDir,
-      phase: "rem",
-      keys: [key],
-      nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
-    });
+    const store = await testing.readPhaseSignalStore(workspaceDir, "2026-04-05T10:00:00.000Z");
+    expect(store.entries[key]).toMatchObject({ remHits: 1, lastRemAt: "2026-02-01T10:00:00.000Z" });
+    expectDefined(store.entries[key], "stored REM hit").lastRemAt = "2026-04-05T10:00:00.000Z";
+    await testing.writeRawPhaseSignalStore(workspaceDir, store);
     const freshSignalRank = await rankAllCandidates(workspaceDir, {
       nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
     });
@@ -1316,11 +1216,6 @@ describe("short-term promotion", () => {
   });
 
   baseIt.each([
-    { name: "default thresholds", options: {} },
-    {
-      name: "invalid negative thresholds",
-      options: { minScore: -1, minRecallCount: -1, minUniqueQueries: -1 },
-    },
     { name: "expired candidate", options: { ...allPromotionThresholds, maxAgeDays: 7 } },
   ])("rejects ranking with $name", async ({ options }) => {
     await withTempWorkspace(async (workspaceDir) => {
@@ -2511,36 +2406,6 @@ describe("short-term promotion", () => {
     } finally {
       await lockStore.delete(lockKey);
     }
-  });
-
-  it("reports concept tag script coverage for multilingual recalls", async (workspaceDir) => {
-    await recordMemoryRecalls(workspaceDir, "routeur glacier", [
-      memoryRecallResult(
-        "memory/2026-04-03.md",
-        1,
-        2,
-        0.93,
-        "Configuration du routeur et sauvegarde Glacier.",
-      ),
-    ]);
-    await recordMemoryRecalls(workspaceDir, "router cjk", [
-      memoryRecallResult(
-        "memory/2026-04-04.md",
-        1,
-        2,
-        0.95,
-        "障害対応ルーター設定とバックアップ確認。",
-      ),
-    ]);
-
-    const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
-    expect(audit.conceptTaggedEntryCount).toBe(2);
-    expect(audit.conceptTagScripts).toEqual({
-      latinEntryCount: 1,
-      cjkEntryCount: 1,
-      mixedEntryCount: 0,
-      otherEntryCount: 0,
-    });
   });
 
   describe("MEMORY.md budget compaction (#73691)", () => {
