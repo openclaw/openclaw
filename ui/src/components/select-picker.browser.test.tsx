@@ -585,7 +585,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       let trigger = role("button", "Decision model: Alpha decision model");
       await trigger.click();
       await expect.element(role("combobox", "Search")).toHaveFocus();
-      const alpha = role("button", "Alpha 1");
+      const alpha = role("button", "alpha 1");
       await userEvent.keyboard("{Tab}");
       await expect.element(alpha).toHaveFocus();
       const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
@@ -599,7 +599,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       await picker.updateComplete;
       trigger = role("button", "Decision model: Beta decision model");
       expect(document.activeElement).toBe(
-        picker.querySelector('[role="group"][aria-label="Beta"] button'),
+        picker.querySelector('[role="group"][aria-label="beta"] button'),
       );
       await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
       expect(onChange).not.toHaveBeenCalled();
