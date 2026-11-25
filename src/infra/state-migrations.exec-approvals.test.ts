@@ -640,3 +640,10 @@ it.skipIf(process.platform !== "darwin")(
     }
   },
 );
+
+it("rejects a regular file selected as the state directory", async () => {
+  const invalidState = path.join(stateDir, "not-a-directory");
+  await fsp.writeFile(invalidState, "synthetic invalid state root");
+  await expect(inspectLegacyExecApprovals({ stateDir: invalidState, env })).rejects.toThrow();
+  expect(await fsp.readFile(invalidState, "utf8")).toBe("synthetic invalid state root");
+});

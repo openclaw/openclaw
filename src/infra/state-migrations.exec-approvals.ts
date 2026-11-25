@@ -1,5 +1,6 @@
 // Doctor-only import for the retired exec approvals JSON store.
 import { createHash, randomUUID } from "node:crypto";
+import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
 import { getFsSafeNativeStatus } from "@openclaw/fs-safe/config";
@@ -15,6 +16,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { openClientCredentialCustodyAsync } from "./client-credential-store.js";
+import { isErrno } from "./errno.js";
 import {
   normalizeExecApprovalsInternal,
   parseLegacyExecApprovals,
@@ -266,8 +268,13 @@ export async function readRetainedLegacyExecApprovals(params: {
 }) {
   const sourcePath = resolveExecApprovalsPath(params.env);
   const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-  if (!pathMayExistSync(sourcePath) && !pathMayExistSync(claimPath)) {
-    return undefined;
+  try {
+    await lstat(params.stateDir);
+  } catch (error) {
+    if (isErrno(error) && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
   }
   const stateRoot = await root(params.stateDir, {
     hardlinks: "reject",
@@ -584,7 +591,7 @@ async function migrateWithExclusiveStateOwnership(params: {
         ) {
           const status = await getFsSafeNativeStatus();
           throw new Error(
-            `Private legacy approvals archives require native macOS ACL inspection. ${status.guidance ?? "Restore the matching optional fs-safe native package with ACL inspection support."} Start a fresh process and retry the same Doctor or approvals reconciliation command; preserve the retained source.`,
+            `Private legacy approvals archives require native macOS ACL inspection. ${error.message} ${status.guidance ?? ""} Start a fresh process and retry the same Doctor or approvals reconciliation command; preserve the retained source.`,
             { cause: error },
           );
         }
