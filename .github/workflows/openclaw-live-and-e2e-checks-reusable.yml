@@ -2102,6 +2102,7 @@ jobs:
     timeout-minutes: 90
     outputs:
       groups_json: ${{ steps.groups.outputs.groups_json }}
+      max_parallel: ${{ steps.groups.outputs.max_parallel }}
     steps:
       - name: Checkout trusted release harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -2123,6 +2124,8 @@ jobs:
         env:
           LANES: ${{ inputs.docker_lanes }}
           GROUP_SIZE: ${{ inputs.targeted_docker_lane_group_size }}
+          # Share the existing capacity decision with ordering and matrix admission.
+          MAX_PARALLEL: ${{ inputs.use_github_hosted_runners && inputs.runner_group == '' && needs.validate_selected_ref.outputs.package_artifact_present == 'true' && contains(inputs.docker_lanes, 'published-upgrade-survivor') && !contains(inputs.docker_lanes, 'update-migration') && inputs.published_upgrade_survivor_scenarios != '' && 64 || 32 }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ needs.validate_selected_ref.outputs.upgrade_baseline }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: ${{ needs.validate_selected_ref.outputs.upgrade_baseline_scope }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
@@ -2132,6 +2135,7 @@ jobs:
           echo "artifact_name=upgrade-baseline-checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(node -p 'crypto.randomUUID()')" >> "$GITHUB_OUTPUT"
           groups_json="$(node scripts/plan-targeted-docker-lane-groups.mjs --check-baselines .artifacts/upgrade-baseline-checks)"
           echo "groups_json=${groups_json}" >> "$GITHUB_OUTPUT"
+          echo "max_parallel=${MAX_PARALLEL}" >> "$GITHUB_OUTPUT"
 
       - name: Summarize published baseline checks
         if: always()
@@ -2153,8 +2157,7 @@ jobs:
     timeout-minutes: ${{ matrix.group.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      # Raise only the hosted expanded package-survivor matrix; retain other runner budgets.
-      max-parallel: ${{ inputs.use_github_hosted_runners && inputs.runner_group == '' && needs.validate_selected_ref.outputs.package_artifact_present == 'true' && contains(inputs.docker_lanes, 'published-upgrade-survivor') && !contains(inputs.docker_lanes, 'update-migration') && inputs.published_upgrade_survivor_scenarios != '' && 64 || 32 }}
+      max-parallel: ${{ fromJSON(needs.plan_docker_lane_groups.outputs.max_parallel) }}
       matrix:
         group: ${{ fromJson(needs.plan_docker_lane_groups.outputs.groups_json) }}
     env:

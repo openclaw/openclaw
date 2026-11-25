@@ -38,8 +38,8 @@ afterEach(() => {
 it.for([
   { kind: "requesterBatch", visibleFinal: false },
   { kind: "requesterBatch", visibleFinal: true },
-  { kind: "block", visibleFinal: false },
-  { kind: "block", visibleFinal: true },
+  { kind: "settleInHistory", visibleFinal: false },
+  { kind: "settleInHistory", visibleFinal: true },
 ] as const)(
   "retains committed consumption when a continuation is cancelled (%j)",
   async ({ kind, visibleFinal }) => {
@@ -86,7 +86,6 @@ it.for([
                 delivered: false,
                 path: "direct",
                 reason: "delivery_suppressed",
-                disposition: "intentional_non_delivery",
               },
             })
           : {
@@ -94,12 +93,7 @@ it.for([
                 (subagent) =>
                   mutateSubagentCompletionInDatabase(database, {
                     kind,
-                    params: {
-                      subagent,
-                      operatorAuthorityUnavailable: true,
-                      reason: "private requester continuation was cancelled",
-                      disposition: "intentional_non_delivery",
-                    },
+                    subagent,
                     now: 100,
                   }).records,
               ),
@@ -109,7 +103,7 @@ it.for([
     expect(result.records).toHaveLength(2);
     for (const { subagent } of result.records) {
       expect(subagent.delivery).toMatchObject({
-        status: visibleFinal ? "failed" : "delivered",
+        status: "delivered",
         requesterDelivery: { state: "consumed", runId },
       });
       if (kind === "requesterBatch") {
@@ -118,80 +112,3 @@ it.for([
     }
   },
 );
-
-it.for([
-  { name: "turn failed before answering", outcome: { error: "provider 529" }, status: "delivered" },
-  {
-    name: "answer missed its channel",
-    outcome: { error: "send failed", finalAssistantVisibleText: "" },
-    status: "failed",
-  },
-  {
-    name: "recorded reason",
-    outcome: { reason: "message_tool_delivery_missing", disposition: "permanent_failure" },
-    status: "failed",
-  },
-  {
-    name: "yielded private final failed before answering",
-    yieldedFinal: true,
-    outcome: { error: "provider 529" },
-    status: "delivered",
-  },
-  {
-    name: "yielded private final missed its channel",
-    yieldedFinal: true,
-    outcome: { error: "send failed", finalAssistantVisibleText: "" },
-    status: "failed",
-  },
-  {
-    name: "private result with an unidentified send",
-    privateResult: true,
-    outcome: { error: "send returned no identity", disposition: "ambiguous" },
-    status: "failed",
-  },
-] as const)("settles a committed result by what its turn did: $name", async (testCase) => {
-  const { outcome, status } = testCase;
-  const yieldedFinal = "yieldedFinal" in testCase;
-  const batch = [raw(), { ...raw(), runId: "second-result" }].map((entry) =>
-    Object.assign(entry, {
-      completionTarget:
-        yieldedFinal || "privateResult" in testCase ? ("parent" as const) : undefined,
-      requesterSettleWake: {
-        status: "dispatching" as const,
-        attemptCount: 1,
-        batchRunIds: [raw().runId, "second-result"],
-        ...(yieldedFinal
-          ? { requesterYieldBatch: true, yieldedFinalDeliverable: true as const }
-          : {}),
-      },
-    }),
-  );
-  saveSubagentRegistryToSqlite(new Map(batch.map((entry) => [entry.runId, entry])));
-  const database = openOpenClawStateDatabase();
-  runOpenClawStateWriteTransaction(
-    () =>
-      mutateSubagentCompletionInDatabase(database, {
-        kind: "requesterWake",
-        entries: batch.map((subagent) => ({ subagent })),
-        operation: { kind: "requesterDelivery", fact: { state: "consumed", runId, at: 50 } },
-      }),
-    { database },
-  );
-  const result = runOpenClawStateWriteTransaction(
-    () =>
-      mutateSubagentCompletionInDatabase(database, {
-        kind: "requesterBatch",
-        entries: batch.map((entry) => ({ subagent: readSubagentRun(database, entry.runId)! })),
-        now: 100,
-        outcome: { delivered: false, path: "direct", ...outcome },
-      }),
-    { database },
-  );
-  for (const { subagent } of result.records) {
-    expect(subagent.delivery).toMatchObject({
-      status,
-      requesterDelivery: { state: "consumed", runId },
-      ...("disposition" in outcome && { disposition: outcome.disposition }),
-    });
-  }
-});

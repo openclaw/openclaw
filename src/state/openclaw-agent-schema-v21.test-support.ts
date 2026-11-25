@@ -65,6 +65,7 @@ export function restoreEmptyV21StorageForHistoricalFixture(database: DatabaseSyn
     database.exec(`
       ALTER TABLE session_nodes DROP COLUMN session_started_at;
       ALTER TABLE session_nodes DROP COLUMN has_optional_references;
+      ALTER TABLE session_members DROP COLUMN access;
     `);
     database.exec("DROP INDEX idx_agent_session_windows_conversation");
     database.exec(OPENCLAW_AGENT_SCHEMA_V21_SQL);

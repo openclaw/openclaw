@@ -24,11 +24,11 @@ import { minimatch } from "minimatch";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { isAlias, isScalar, parse, parseDocument, visit } from "yaml";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import { SOURCE_CHANNEL_TEST_POLICY } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
-  SOURCE_CHANNEL_TEST_POLICY,
   createUiRealGatewayTestShards,
   createUiTestShardGroups,
-} from "../../scripts/lib/ci-node-test-plan.mts";
+} from "../../scripts/lib/ci-ui-test-plan.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
@@ -1883,31 +1883,7 @@ AFTER_CD
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(5);
     expect(workflow.jobs["checks-ui-e2e-real-gateway"].strategy["max-parallel"]).toBe(2);
-    for (const [context, expected] of [
-      [{ eventName: "push" }, 4],
-      [{ eventName: "pull_request", runnerBackend: "blacksmith" }, 4],
-      [{ eventName: "pull_request", runnerBackend: "hybrid" }, 4],
-      [{ eventName: "pull_request", authorAssociation: "NONE" }, 4],
-      [{ eventName: "push", runnerBackend: "github" }, 2],
-      [{ eventName: "push", runnerBackend: "blacksmith", runAttempt: 2 }, 2],
-      [{ eventName: "workflow_dispatch", runnerBackend: "blacksmith" }, 2],
-      [{ eventName: "pull_request", headRepository: "contributor/openclaw" }, 4],
-      [{ eventName: "schedule", runnerBackend: "blacksmith" }, 2],
-      [
-        {
-          eventName: "workflow_dispatch",
-          runnerBackend: "hybrid",
-          preflightOutputs: { ci_qualification: "true", qualification_runner_backend: "hybrid" },
-        },
-        2,
-      ],
-      [{ eventName: "push", repository: "contributor/openclaw" }, 2],
-    ] as const) {
-      expect(
-        evaluateWorkflowExpression(workflow.jobs.android.strategy["max-parallel"], { ...context }),
-        JSON.stringify(context),
-      ).toBe(expected);
-    }
+    expect(workflow.jobs.android.strategy["max-parallel"]).toBe(4);
     for (const runnerBackend of ["", "blacksmith", "hybrid", "runson", "github"] as const) {
       for (const runAttempt of [1, 2]) {
         const context = {
@@ -1919,15 +1895,10 @@ AFTER_CD
           runAttempt,
         };
         const runner = evaluateWorkflowExpression(workflow.jobs.android["runs-on"], context);
-        const parallel = evaluateWorkflowExpression(
-          workflow.jobs.android.strategy["max-parallel"],
-          context,
-        );
         const hosted = runnerBackend === "github" || runAttempt > 1;
         expect(runner, JSON.stringify(context)).toBe(
           hosted ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404",
         );
-        expect(parallel, JSON.stringify(context)).toBe(hosted ? 2 : 4);
       }
     }
   });
@@ -2042,12 +2013,28 @@ AFTER_CD
       FROZEN_TARGET: "${{ needs.preflight.outputs.frozen_target }}",
     });
     expect(job.steps.indexOf(baseline)).toBeLessThan(job.steps.indexOf(run));
+    const previousReader = requiredWorkflowStep(job.steps, "Pin previous schema reader source");
+    expect(previousReader.if).toBe(
+      "github.event_name == 'pull_request' && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor ')",
+    );
+    expect(previousReader.env).toEqual({
+      GH_TOKEN: "${{ github.token }}",
+      PR_BASE: "${{ github.event.pull_request.base.sha }}",
+      PR_HEAD: "${{ github.event.pull_request.head.sha }}",
+    });
+    expect(previousReader.run).toContain("--jq .merge_base_commit.sha");
+    expect(previousReader.run).toContain(
+      'git -c credential.helper= fetch --no-tags --depth=1 origin "$fork"',
+    );
+    expect(previousReader.run).toContain("OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA=%s");
+    expect(job.steps.indexOf(previousReader)).toBeLessThan(job.steps.indexOf(prepare));
+    expect(run.env).not.toHaveProperty("GH_TOKEN");
     const survivorProof = requiredWorkflowStep(
       job.steps,
       "Upload sanitized upgrade survivor proof",
     );
     expect(survivorProof).toMatchObject({
-      if: `always() && ${baseline.if}`,
+      if: `always() && (${baseline.if} || contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor '))`,
       uses: UPLOAD_ARTIFACT_V7,
       with: { "include-hidden-files": true, "if-no-files-found": "warn" },
     });
@@ -2058,12 +2045,27 @@ AFTER_CD
       ".artifacts/docker-tests/20260920T000000Z/failures.json",
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/failure.json",
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/downgrade/downgrade-source.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.log",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/trial.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/rows-after.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/update-runs.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/gateway-launcher.log",
     ]) {
       expect(uploaded(file), file).toBe(true);
     }
     for (const file of [
       ".artifacts/upgrade-survivor/baseline/legacy-operator-baseline-turn.err",
       ".artifacts/upgrade-survivor/baseline/diagnostics/raw.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/cli-env.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read/config.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read-env.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade-baseline/state/openclaw.sqlite",
+      ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade-post-candidate/state/openclaw.sqlite",
       ".artifacts/docker-tests/run/published-upgrade-survivor.log",
       ".artifacts/docker-tests/20260920T000000Z/baseline-cache/package/summary.json",
       ".artifacts/docker-tests/20260920T000000Z/baseline-cache/package/failures.json",
@@ -2292,7 +2294,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       expect(runInNewContext(String(reserve.if), { runner: { os, environment } })).toBe(expected);
     }
     expect(reserve.run?.match(/^\s*sudo .*$/gm)).toEqual(["sudo rm -rf -- /usr/share/dotnet"]);
-    for (const name of ["Setup Java", "Setup Gradle cache", "Restore Android SDK cache"]) {
+    for (const name of ["Setup Java", "Setup Gradle", "Restore Android SDK cache"]) {
       expect(steps.indexOf(reserve)).toBeLessThan(steps.indexOf(requiredWorkflowStep(steps, name)));
     }
   });
@@ -2320,7 +2322,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
 
     const sdkRestoreStep = requiredWorkflowStep(action.runs.steps, "Restore Android SDK cache");
     const sdkSaveStep = requiredWorkflowStep(action.runs.steps, "Save Android SDK cache");
-    const gradleCacheStep = requiredWorkflowStep(action.runs.steps, "Setup Gradle cache");
+    const gradleStep = requiredWorkflowStep(action.runs.steps, "Setup Gradle");
+    const gradleCacheStep = requiredWorkflowStep(
+      action.runs.steps,
+      "Restore and save Gradle dependency cache",
+    );
     const javaStep = requiredWorkflowStep(action.runs.steps, "Setup Java");
     const installStep = requiredWorkflowStep(action.runs.steps, "Install Android SDK packages");
 
@@ -2354,13 +2360,18 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     ]);
     expect(sdkSaveStep.uses).toBe(CACHE_SAVE_V5);
     expect(sdkSaveStep.with?.key).toBe("${{ steps.android-sdk-cache.outputs.cache-primary-key }}");
-    expect(gradleCacheStep).toMatchObject({
+    expect(gradleStep).toMatchObject({
       uses: SETUP_GRADLE_V6,
-      with: {
-        "add-job-summary": "never",
-        "cache-provider": "basic",
-      },
+      with: { "add-job-summary": "never", "cache-disabled": true },
     });
+    // setup-gradle's basic key matched root-relative patterns and missed the Android version
+    // catalog, so a Kotlin bump restored an entry without the new compose plugin forever.
+    expectIncludes(gradleCacheStep.with?.key, [
+      "inputs.gradle-cache-key",
+      "'apps/android/gradle/libs.versions.toml'",
+      "'apps/android/gradle/wrapper/gradle-wrapper.properties'",
+      "'apps/android/**/*.gradle.kts'",
+    ]);
     expect(installStep.run).toContain(`"${packageId}"`);
     expect(installStep.run).toContain(
       'yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || [[ "${PIPESTATUS[1]}" -eq 0 ]]',
@@ -2388,25 +2399,27 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
 
   it("restores release Gradle inputs without SDK caches or cache writes", () => {
     const steps = readAndroidToolchainAction().runs.steps;
-    const gradle = requiredWorkflowStep(steps, "Setup Gradle cache");
+    const save = requiredWorkflowStep(steps, "Restore and save Gradle dependency cache");
+    const restore = requiredWorkflowStep(steps, "Restore Gradle dependency cache");
     const sdk = requiredWorkflowStep(steps, "Restore Android SDK cache");
     const release = requiredWorkflowStep(
       readWorkflow(".github/workflows/android-store-release.yml").jobs.release.steps,
       "Setup Android toolchain",
     );
     expect(release.with).toMatchObject({ "cache-mode": "off", "gradle-cache-mode": "restore" });
-    for (const [inputs, restoreGradle, restoreSdk, readOnly] of [
-      [release.with, true, false, true],
-      [{ "cache-mode": "off" }, false, false, true],
-      [{ "cache-mode": "restore" }, true, true, true],
-      [{ "cache-mode": "read-write" }, true, true, false],
-      [{ "cache-mode": "read-write", "gradle-cache-mode": "off" }, false, true, true],
+    expect(save.uses).toBe(CACHE_V5.replace("actions/cache/restore@", "actions/cache@"));
+    expect(restore.uses).toBe(CACHE_V5);
+    expect(restore.with).toEqual(save.with);
+    for (const [inputs, restoreGradle, saveGradle, restoreSdk] of [
+      [release.with, true, false, false],
+      [{ "cache-mode": "off" }, false, false, false],
+      [{ "cache-mode": "restore" }, true, false, true],
+      [{ "cache-mode": "read-write" }, false, true, true],
+      [{ "cache-mode": "read-write", "gradle-cache-mode": "off" }, false, false, true],
     ] as const) {
-      expect(evaluateWorkflowExpression(`\${{ ${gradle.if} }}`, { inputs })).toBe(restoreGradle);
+      expect(evaluateWorkflowExpression(`\${{ ${restore.if} }}`, { inputs })).toBe(restoreGradle);
+      expect(evaluateWorkflowExpression(`\${{ ${save.if} }}`, { inputs })).toBe(saveGradle);
       expect(evaluateWorkflowExpression(`\${{ ${sdk.if} }}`, { inputs })).toBe(restoreSdk);
-      expect(evaluateWorkflowExpression(gradle.with?.["cache-read-only"], { inputs })).toBe(
-        readOnly,
-      );
     }
   });
 
@@ -5708,72 +5721,88 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow).not.toContain('"testbox_id": "${testbox_id}"');
   });
 
-  it.each([false, true])("loads the Node shard planner from its owner (frozen=%s)", (frozen) => {
-    const workflow = readCiWorkflow();
-    const targetResolver = expectDefined(
-      manifestSource.match(/const fromTarget = [^;]*;/u)?.[0],
-      "target import resolver",
-    );
-    const selection = expectDefined(
-      manifestSource.match(/const nodeTestPlanPath =[\s\S]*?(?=const importTargetPlan)/u)?.[0],
-      "Node planner selection",
-    );
-    const root = tempDirs.make("ci-planner-owner-");
-    writeFileSync(path.join(root, "candidate.txt"), "candidate-source");
-    for (const [directory, owner] of [
-      ["scripts/lib", "candidate"],
-      [".ci-harness/scripts/lib", "workflow"],
-    ] as const) {
-      mkdirSync(path.join(root, directory), { recursive: true });
-      writeFileSync(
-        path.join(root, directory, "ci-node-test-plan.mts"),
-        `import { readFileSync } from "node:fs";
+  it.each([false, true])(
+    "loads the Node and UI shard planners from their owners (frozen=%s)",
+    (frozen) => {
+      const workflow = readCiWorkflow();
+      const targetResolver = expectDefined(
+        manifestSource.match(/const fromTarget = [^;]*;/u)?.[0],
+        "target import resolver",
+      );
+      const selection = expectDefined(
+        manifestSource.match(/const nodeTestPlanPath =[\s\S]*?(?=const importTargetPlan)/u)?.[0],
+        "Node and UI planner selection",
+      );
+      const root = tempDirs.make("ci-planner-owner-");
+      writeFileSync(path.join(root, "candidate.txt"), "candidate-source");
+      for (const [directory, owner] of [
+        ["scripts/lib", "candidate"],
+        [".ci-harness/scripts/lib", "workflow"],
+      ] as const) {
+        mkdirSync(path.join(root, directory), { recursive: true });
+        writeFileSync(
+          path.join(root, directory, "ci-node-test-plan.mts"),
+          `import { readFileSync } from "node:fs";
          export const SOURCE_CHANNEL_TEST_POLICY = ${JSON.stringify(SOURCE_CHANNEL_TEST_POLICY)};
          export const createNodeTestShardBundles = () =>
            [${JSON.stringify(owner)}, readFileSync("candidate.txt", "utf8")];`,
-      );
-    }
-    const entrypoint = path.join(root, ".ci-harness/scripts/ci-build-manifest.mjs");
-    writeFileSync(
-      entrypoint,
-      `import { existsSync } from "node:fs";
+        );
+        writeFileSync(
+          path.join(root, directory, "ci-ui-test-plan.mts"),
+          `import { readFileSync } from "node:fs";
+         export const createUiTestShardGroups = () =>
+           [${JSON.stringify(`${owner}-ui`)}, readFileSync("candidate.txt", "utf8")];`,
+        );
+      }
+      const entrypoint = path.join(root, ".ci-harness/scripts/ci-build-manifest.mjs");
+      writeFileSync(
+        entrypoint,
+        `import { existsSync } from "node:fs";
         import path from "node:path";
         import { pathToFileURL } from "node:url";
         ${targetResolver}
         const frozenTarget = ${frozen};
         const compatibilityTarget = true;
         ${selection}
-        console.log(JSON.stringify(createNodeTestPlan()));`,
-    );
-    const run = spawnSync(testNodeExecPath, [entrypoint], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    expect(run.status, run.stderr).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual([frozen ? "workflow" : "candidate", "candidate-source"]);
-    if (frozen) {
-      const checkout = workflow.jobs.preflight.steps.find(
-        (entry: WorkflowStep) => entry.name === "Checkout trusted CI harness",
+        console.log(JSON.stringify({
+          node: createNodeTestPlan(),
+          ui: uiTestPlan.createUiTestShardGroups(),
+        }));`,
       );
-      expect(checkout.with.ref).toBe("${{ github.workflow_sha }}");
-      expect(checkout.with["sparse-checkout"]).toContain("/scripts/");
-      expect(checkout.with["sparse-checkout"]).toContain("/test/vitest/");
-      expect(checkout.with["sparse-checkout"]).toContain("/config/ci-test-timings.json");
-      const sparseRoot = tempDirs.make("ci-planner-sparse-");
-      for (const entry of String(checkout.with["sparse-checkout"]).trim().split("\n")) {
-        const relative = entry.replace(/^\//u, "");
-        const destination = path.join(sparseRoot, ".ci-harness", relative);
-        mkdirSync(path.dirname(destination), { recursive: true });
-        cpSync(relative, destination, { recursive: true });
-      }
-      const importResult = spawnSync(testNodeExecPath, ["--input-type=module"], {
-        cwd: sparseRoot,
-        input: 'await import("./.ci-harness/scripts/lib/ci-node-test-plan.mts");',
+      const run = spawnSync(testNodeExecPath, [entrypoint], {
+        cwd: root,
         encoding: "utf8",
       });
-      expect(importResult.status, importResult.stderr).toBe(0);
-    }
-  });
+      expect(run.status, run.stderr).toBe(0);
+      expect(JSON.parse(run.stdout)).toEqual({
+        node: [frozen ? "workflow" : "candidate", "candidate-source"],
+        ui: [frozen ? "workflow-ui" : "candidate-ui", "candidate-source"],
+      });
+      if (frozen) {
+        const checkout = workflow.jobs.preflight.steps.find(
+          (entry: WorkflowStep) => entry.name === "Checkout trusted CI harness",
+        );
+        expect(checkout.with.ref).toBe("${{ github.workflow_sha }}");
+        expect(checkout.with["sparse-checkout"]).toContain("/scripts/");
+        expect(checkout.with["sparse-checkout"]).toContain("/test/vitest/");
+        expect(checkout.with["sparse-checkout"]).toContain("/config/ci-test-timings.json");
+        const sparseRoot = tempDirs.make("ci-planner-sparse-");
+        for (const entry of String(checkout.with["sparse-checkout"]).trim().split("\n")) {
+          const relative = entry.replace(/^\//u, "");
+          const destination = path.join(sparseRoot, ".ci-harness", relative);
+          mkdirSync(path.dirname(destination), { recursive: true });
+          cpSync(relative, destination, { recursive: true });
+        }
+        const importResult = spawnSync(testNodeExecPath, ["--input-type=module"], {
+          cwd: sparseRoot,
+          input: `await import("./.ci-harness/scripts/lib/ci-node-test-plan.mts");
+          await import("./.ci-harness/scripts/lib/ci-ui-test-plan.mts");`,
+          encoding: "utf8",
+        });
+        expect(importResult.status, importResult.stderr).toBe(0);
+      }
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "runs the dependency-free preflight manifest from the owner-exported harness",

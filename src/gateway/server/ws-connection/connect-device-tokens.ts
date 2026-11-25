@@ -141,7 +141,6 @@ export function createGatewayConnectDeviceTokenPreparation(
   context: DeviceTokenContext,
   state: DeviceTokenInputs,
   hasServerApprovedDeviceTokenBaseline: boolean,
-  isConnectAuthorizationCurrent: () => boolean,
 ) {
   const { role, authResult, scopes, handoffBootstrapProfile } = state;
   const { configSnapshot } = context;
@@ -163,7 +162,7 @@ export function createGatewayConnectDeviceTokenPreparation(
             issueToTrustedProxyCliUi:
               configSnapshot.gateway?.auth?.trustedProxy?.narrowToDeviceGrant === true &&
               !context.hasBrowserOriginHeader,
-            isIssuanceCurrent: () => isConnectAuthorizationCurrent() && isSubjectCurrent(),
+            isIssuanceCurrent: isSubjectCurrent,
           });
 
     // A token issued over the OpenClaw ID tunnel belongs to the device key that obtained it.
@@ -215,13 +214,11 @@ export async function completeGatewayConnectDeviceTokens(
   delete state.prepareDeviceTokens;
   const subject = operatorRoleSubject(profile);
   const isSubjectCurrent = () =>
-    state.authResult.openclawId?.kind === "owner" ||
-    (profile?.isCurrent() !== false &&
-      operatorRoleSubject(profile).openclawIdMember === subject.openclawIdMember);
+    state.authResult.openclawId?.kind === "owner" || profile?.isCurrent() !== false;
   state.isDeviceTokenSubjectCurrent = isSubjectCurrent;
   const tokens = await prepare(subject, isSubjectCurrent);
   if (!isSubjectCurrent()) {
-    throw new Error("Profile membership changed during device token issuance");
+    throw new Error("Device token issuance ended. Reconnect to retry.");
   }
   Object.assign(state, tokens);
 }

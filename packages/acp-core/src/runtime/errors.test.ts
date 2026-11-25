@@ -9,9 +9,11 @@ import {
 } from "./errors.js";
 
 const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+const basicCredential = "dXNlcjpwYXNzd29yZGFiY2RlZg==";
+const privateKeyBody = "abcdefghijklmnopqrstuvwxyz";
 const credentials = [
-  "Authorization: Basic dXNlcjpwYXNzd29yZGFiY2RlZg==",
-  "-----BEGIN PRIVATE KEY-----\nabcdefghijklmnopqrstuvwxyz\n-----END PRIVATE KEY-----",
+  `Authorization: Basic ${basicCredential}`,
+  `-----BEGIN PRIVATE KEY-----\n${privateKeyBody}\n-----END PRIVATE KEY-----`,
 ];
 const rejection = `upstream rejected token=${token}`;
 const fallback = { fallbackCode: "ACP_TURN_FAILED", fallbackMessage: "fallback" } as const;
@@ -91,7 +93,7 @@ describe("ACP runtime errors", () => {
   ])("redacts credentials while preserving diagnostics: %s", (source, diagnostic) => {
     const out = formatAcpErrorChain(source);
     expect(out).toMatch(diagnostic);
-    for (const secret of [token, ...credentials]) {
+    for (const secret of [token, basicCredential, privateKeyBody]) {
       expect(out).not.toContain(secret);
     }
   });

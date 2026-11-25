@@ -4,7 +4,10 @@
  */
 import { isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
 import { requiresReasoningContentReplay } from "@openclaw/ai/internal/openai-completions-compat";
-import { supportsNativeOpenAIResponsesEndpoint } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import {
+  isOpenAIResponsesApi,
+  supportsNativeOpenAIResponsesEndpoint,
+} from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -39,14 +42,6 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   allowSyntheticToolResults: false,
 };
 
-function isOpenAiResponsesCompatibleApi(modelApi?: string | null): boolean {
-  return (
-    modelApi === "openai-responses" ||
-    modelApi === "openai-chatgpt-responses" ||
-    modelApi === "azure-openai-responses"
-  );
-}
-
 function modelDisablesReasoningEffort(model?: ProviderRuntimeModel): boolean {
   const compat = model?.compat as { supportsReasoningEffort?: boolean } | undefined;
   return compat?.supportsReasoningEffort === false;
@@ -77,7 +72,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
     };
   }
   const isStrictOpenAiCompatible = params.modelApi === "openai-completions";
-  const isOpenAiResponses = isOpenAiResponsesCompatibleApi(params.modelApi);
+  const isOpenAiResponses = isOpenAIResponsesApi(params.modelApi);
   const requiresOpenAiCompatibleToolIdSanitization = isStrictOpenAiCompatible || isOpenAiResponses;
 
   if (!isGoogle && !requiresOpenAiCompatibleToolIdSanitization) {

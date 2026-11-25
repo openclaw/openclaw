@@ -32,6 +32,8 @@ type PendingChatCreate = Readonly<{
   canDisplay: () => boolean;
   composer?: CreationComposer;
   displayName?: string;
+  /** Inline image shown as the new agent's avatar until its own identity is saved. */
+  avatarUrl?: string;
   /** Custom group requested by the create; its admitted row lands in that section. */
   category?: string;
   /** A background start the Gateway refused; its route offers Try again. */

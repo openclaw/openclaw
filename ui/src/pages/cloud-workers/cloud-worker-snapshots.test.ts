@@ -44,8 +44,8 @@ function localSnapshot() {
 }
 
 describe("Cloud environments", () => {
-  it.each(["rejection", "reconnect"])(
-    "retains pool drafts across %s and retires stale feedback",
+  it.each(["rejection", "reconnect", "access loss"])(
+    "handles a pending pool save across %s without stale feedback",
     async (mode) => {
       const pending = createDeferred<unknown>();
       let hold = true;
@@ -58,8 +58,14 @@ describe("Cloud environments", () => {
       await configPatch(request);
       await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(true));
       expect(input(page, "Pool limit").value).toBe("6");
-      if (mode === "reconnect") {
-        harness.publish(false, client, null);
+      if (mode !== "rejection") {
+        if (mode === "access loss") {
+          harness.publish(true, client, gatewayHelloForMethods(methods, ["operator.read"]));
+          flush();
+          expect(input(page, "Pool limit").value).not.toBe("6");
+        } else {
+          harness.publish(false, client, null);
+        }
         harness.publish(true, client, gatewayHelloForMethods(methods));
         await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
         pending.reject(new Error("Synthetic save failure"));

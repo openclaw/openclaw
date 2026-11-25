@@ -9,7 +9,6 @@ import { bindSharedGatewayOwnerRunAuthority } from "../agents/harness/host-priva
 import {
   prepareOperatorModelPolicy,
   readOperatorModelPolicyMembership,
-  type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOperatorAuthorityInactiveError } from "../infra/operator-authority-error.js";
@@ -20,10 +19,12 @@ import {
   roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
-import type { UserChannelAuthorizationReference } from "../state/user-profiles.types.js";
+import type {
+  UserChannelAuthorizationReference,
+  UserChannelIdentity,
+} from "../state/user-profiles.types.js";
 import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-channel.js";
 import {
-  bindGatewayDeviceRevocation,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
   readGatewayDeviceReconnectSourceIdentity,
@@ -34,6 +35,7 @@ import {
   openclawIdSubjectRolePolicy,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { decideTurnGrant } from "./operator-admission.js";
 import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import {
   resolveGatewayOperatorRoleActor,
@@ -128,38 +130,22 @@ function prepareRunRolePolicy(
     : undefined;
 }
 
-export function intersectOperatorRunModelPolicy(
-  original: PreparedOperatorModelPolicy | undefined,
-  current: PreparedOperatorModelPolicy | undefined,
-): PreparedOperatorModelPolicy | undefined {
-  return original &&
-    current &&
-    readOperatorModelPolicyMembership(original) !== readOperatorModelPolicyMembership(current)
-    ? Object.freeze({
-        models: Object.freeze(current.models.filter(original.allows)),
-        allows: (ref: Parameters<typeof original.allows>[0]) =>
-          original.allows(ref) && current.allows(ref),
-      })
-    : (current ?? original);
-}
-
-/** Admits a linked channel requester once while retaining explicit lifecycle cancellation. */
+/** Admits a channel sender once while retaining explicit lifecycle cancellation. */
 export function captureChannelOperatorRunAuthority(input: {
   profileId: string;
   canonicalIdentity: AdmittedRunOperatorAuthority["canonicalIdentity"];
   openclawIdAccountIds?: readonly string[];
   recoveryReference?: UserChannelAuthorizationReference;
+  channelOwner?: UserChannelIdentity;
   openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
   assignedRole: string | null;
   githubLogin?: string | null;
   scopes: readonly string[];
   gatewayAccessGrant: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
   getRuntimeConfig: () => OpenClawConfig;
-  assertCurrent: () => void;
   signal?: AbortSignal;
 }): AdmittedRunOperatorAuthority {
   const params = { ...input };
-  params.assertCurrent();
   const initialConfig = params.getRuntimeConfig();
   const metadata = getProcessGatewayPluginMetadataSnapshot();
   const role = structuredClone(
@@ -185,10 +171,11 @@ export function captureChannelOperatorRunAuthority(input: {
     channelRecoverySource: params.recoveryReference
       ? { reference: params.recoveryReference, modelPolicy }
       : undefined,
+    channelOwner: params.channelOwner,
     scopes: params.scopes,
+    grant: decideTurnGrant(params.scopes),
     rolePolicy: prepareRunRolePolicy(sourceRolePolicy(role)),
     gatewayAccessGrant: params.gatewayAccessGrant,
-    assertCurrent: () => params.signal?.throwIfAborted(),
     signal: params.signal,
     readCurrentRoleFacts: () => ({
       assignedRole: params.assignedRole,
@@ -236,7 +223,7 @@ export async function prepareGatewayOperatorRunAuthority(
   const inherited = params.client?.internal?.operatorRunAuthority;
   if (inherited !== undefined) {
     assertAdmittedRunOperatorAuthority(inherited);
-    inherited.assertCurrent();
+    inherited.signal?.throwIfAborted();
     const scopes = intersectOperatorScopes(inherited.scopes, params.client?.connect.scopes ?? []);
     const authority = roleScopesAllow({
       role: "operator",
@@ -247,11 +234,11 @@ export async function prepareGatewayOperatorRunAuthority(
       : createAdmittedRunOperatorAuthority({
           ...inherited,
           scopes,
+          grant: decideTurnGrant(scopes),
           get modelPolicy() {
             return inherited.modelPolicy;
           },
         });
-    bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
     return { authority, release: inherited.retain?.() ?? (() => {}) };
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
@@ -425,7 +412,7 @@ export async function prepareGatewayOperatorRunAuthority(
         allowedScopes: client.connect.scopes ?? [],
       })
     ) {
-      throw new Error("Gateway caller authority is no longer active.");
+      throw new Error("Gateway request could not start. Reconnect and try again.");
     }
   };
   try {
@@ -473,7 +460,6 @@ export async function prepareGatewayOperatorRunAuthority(
       openclawIdPrincipal,
       scopes,
       gatewayAccessGrant: grant ? Object.freeze({ ...grant }) : grant,
-      assertCurrent,
     };
     const {
       snapshot: recoverySnapshot,
@@ -492,6 +478,7 @@ export async function prepareGatewayOperatorRunAuthority(
     assertAdmissionCurrent();
     const authority = createAdmittedRunOperatorAuthority({
       ...admission,
+      grant: decideTurnGrant(scopes),
       canonicalIdentity: { profileId: capturedProfile.profileId },
       clientId: client.internal?.syntheticClient ? undefined : client.connect.client.id,
       recoverySnapshot,
@@ -524,7 +511,6 @@ export async function prepareGatewayOperatorRunAuthority(
       },
       modelPolicy,
     });
-    bindGatewayDeviceRevocation(authority.assertCurrent, params.hasCurrentClientAuthority);
     if (
       authenticatedOwner &&
       client.usesSharedGatewayAuth === true &&

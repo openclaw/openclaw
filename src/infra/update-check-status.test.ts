@@ -162,6 +162,11 @@ it("reports verified Git artifacts independently of target freshness", async ({ 
     expect((await readStatus()).git?.artifacts).toEqual({ ready: false });
   }
   await fs.writeFile(path.join(dist, "build-info.json"), files["build-info.json"]);
+  for (const stamp of [".buildstamp", ".runtime-postbuildstamp"] as const) {
+    await writeJson(path.join(dist, stamp), { head: "stale" });
+    expect((await readStatus()).git?.artifacts, stamp).toEqual({ ready: false });
+    await fs.writeFile(path.join(dist, stamp), files[stamp]);
+  }
   await runGit(root, "remote", "add", "origin", path.join(root, "missing-upstream"));
   await runGit(root, "config", "branch.main.remote", "origin");
   await runGit(root, "config", "branch.main.merge", "refs/heads/main");

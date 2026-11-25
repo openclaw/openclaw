@@ -88,7 +88,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
   let disposeSandbox: (() => void) | undefined;
   const unavailable = () =>
     new Error(
-      "Sandbox stream authority changed; recreate this automation from the current session.",
+      "Sandbox stream session or resource changed; recreate this automation from the current session.",
     );
   const revoke = (error: unknown) => revoked.abort(error);
   const dropReference = () => {
@@ -359,7 +359,6 @@ export async function prepareCronStreamSandboxAuthority(params: {
     const authority = requester
       ? createAdmittedRunOperatorAuthority({
           ...requester.authority,
-          assertCurrent: assertAuthorityCurrent,
           signal: revoked.signal,
           retain: () => {
             assertAuthorityCurrent();

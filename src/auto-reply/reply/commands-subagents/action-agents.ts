@@ -29,7 +29,6 @@ export async function handleSubagentsAgentsAction(
     requesterKey,
     ...latest.map((entry) => entry.childSessionKey),
   ]);
-  params.command.assertOwnerCurrent?.();
   const resolveSessionBindings = (sessionKey: string) =>
     (bindingsBySession.get(sessionKey) ?? []).filter(
       (entry) =>

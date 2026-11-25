@@ -90,7 +90,7 @@ for (const source of ["receipt", "watchdog"] as const) {
   );
   const retained = completed[0]!.retainedAssertion;
   if (source === "receipt") {
-    assert.throws(() => retained(), /no longer active/, "Retained authority must remain closed");
+    assert.throws(() => retained(), /The agent run ended/, "Retained authority must remain closed");
   } else {
     assert.equal(retained(), false, "Retained authority must remain closed");
   }

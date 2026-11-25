@@ -669,7 +669,6 @@ export async function restorePreparedClawHubPackage(options) {
         fetchImpl,
         archivePath: options.archivePath,
         maxArchiveBytes: MAX_PACKAGE_ZIP_BYTES,
-        retryAttempts: 1,
       })
     : await downloadBoundArtifact({
         descriptor: source,

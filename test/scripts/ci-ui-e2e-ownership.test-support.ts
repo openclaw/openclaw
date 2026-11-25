@@ -7,7 +7,7 @@ import { expect } from "vitest";
 import {
   createUiRealGatewayTestShards,
   createUiTestShardGroups,
-} from "../../scripts/lib/ci-node-test-plan.mts";
+} from "../../scripts/lib/ci-ui-test-plan.mts";
 import type { NativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { sharedVitestConfig } from "../vitest/vitest.shared.config.ts";
 import { createPrebuiltUiE2eVitestConfig } from "../vitest/vitest.ui-e2e-prebuilt.config.ts";

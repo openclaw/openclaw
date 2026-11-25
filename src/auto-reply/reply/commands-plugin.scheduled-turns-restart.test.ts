@@ -192,7 +192,7 @@ describe("requester-admitted scheduled commands across a Gateway restart", () =>
       // The claim re-armed it; the occurrence's own requester restoration refused it.
       expect(fixture.scheduledResults[1]).toMatchObject({
         status: "error",
-        error: expect.stringMatching(/operator authority/i),
+        error: expect.stringMatching(/could not admit this input/i),
         executionStarted: false,
       });
       expect((await fixture.readJobs())[0]?.state.pluginCommandBinding?.hostProcessId).toBe(

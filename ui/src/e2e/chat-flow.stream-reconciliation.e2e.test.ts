@@ -111,6 +111,69 @@ async function openRun(runId: string, options: Parameters<typeof installMockGate
 }
 
 suite.define(() => {
+  it("does not replay imported Claude tool updates in the active reply", async () => {
+    const runId = "claude-tool-turn";
+    const first = "I will check the two review points.";
+    const second = "The type check passed.";
+    const startedAt = Date.now() - 75_000;
+    const imported = (id: string, content: unknown[], offset: number) => ({
+      role: "assistant",
+      provider: "claude-cli",
+      api: "anthropic-messages",
+      timestamp: startedAt + offset,
+      __openclaw: { id, importedFrom: "claude-cli", cliSessionId: "native-turn", externalId: id },
+      content,
+    });
+    const call = (id: string) => [{ type: "toolcall", id, name: "exec", arguments: {} }];
+    const buffer = first + "\n\n" + second;
+    const { page, events } = await openRun(runId, {
+      historyMessages: [
+        savedUser(runId, "Check the review."),
+        imported("first", textContent(first), 1_010),
+        imported("check", call("check"), 1_020),
+        imported("second", textContent(second), 1_030),
+        imported("test", call("test"), 1_040),
+      ],
+      inFlightRun: {
+        ...activeRun(runId, buffer, startedAt),
+        events: ["check", "test"].flatMap((toolCallId, index) => {
+          const seq = index * 2 + 1;
+          const ts = startedAt + (index ? 1_040 : 1_020);
+          const result = toolResult(runId, toolCallId, "exec", "Passed.", seq + 1);
+          return [
+            {
+              ...result,
+              seq,
+              ts,
+              data: {
+                phase: "start",
+                name: "exec",
+                toolCallId,
+                bufferEnd: index ? buffer.length : first.length,
+              },
+            },
+            { ...result, ts: ts + 1 },
+          ];
+        }),
+      },
+    });
+    const thread = page.locator(".chat-thread");
+    const visibleSteps = () =>
+      thread
+        .locator(
+          ".chat-group.assistant .chat-text p:visible, .chat-tool-msg-summary:visible, .chat-activity-group__summary:visible",
+        )
+        .evaluateAll((rows) =>
+          rows.map((row) => (row.matches("p") ? row.textContent?.trim() : "tool")),
+        );
+    const savedSteps = [first, "tool", second, "tool"];
+    await expect.poll(visibleSteps).toEqual(savedSteps);
+    // Identical words in a later delta are a new occurrence, not part of the saved prefix.
+    const deltaText = "\n\n" + first;
+    await events.chat("delta", chatMessage("assistant", buffer + deltaText), { seq: 5, deltaText });
+    await expect.poll(visibleSteps).toEqual([...savedSteps, first]);
+  });
+
   it("recovers a retired final when its session message was missed", async () => {
     const runId = "missed-terminal-publication";
     const answer = "Review complete. The verified fix is ready.";
