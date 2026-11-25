@@ -341,8 +341,11 @@ timeout still applies.
 Choose **Existing llama-server** when another terminal, container, service
 manager, or machine owns the process.
 
-Setup and guided detection look for a server at `http://127.0.0.1:9931`,
-llama-server's default port.
+Setup and guided detection look for a server at `http://127.0.0.1:9931`.
+Native llama.cpp builds use port 9931 by default starting with `b11521`.
+The official Docker image still listens on port 8080 inside the container.
+When OpenClaw runs on the Docker host, publish `-p 127.0.0.1:9931:8080` for
+automatic detection, or enter `localhost:8080` if you already publish host port 8080.
 
 <Steps>
   <Step title="Start llama-server">
@@ -364,9 +367,8 @@ llama-server's default port.
 
     The URL prompt accepts HTTP or HTTPS endpoints and host shorthand such as
     `localhost:9931`. Invalid URLs and embedded credentials are rejected inline
-    so you can correct the endpoint without restarting setup. llama.cpp builds
-    before `b11521` listen on port 8080 by default; enter `localhost:8080` for
-    those.
+    so you can correct the endpoint without restarting setup. For a native build
+    before `b11521`, enter `localhost:8080` if it uses its default port.
 
   </Step>
   <Step title="Select the model">
