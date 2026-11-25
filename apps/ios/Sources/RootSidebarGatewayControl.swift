@@ -7,18 +7,22 @@ struct SidebarGatewayPresentation {
     let entries: [GatewaySettingsStore.GatewayRegistryEntry]
     let focusedID: String?
     let state: GatewayDisplayState
+    /// The status owner's plain-words reason, read out when the state is an error.
+    let problemText: String?
 
     init(
         registry: GatewaySettingsStore.GatewayRegistry,
         connectionID: String?,
         connectedID: String?,
-        state: GatewayDisplayState)
+        state: GatewayDisplayState,
+        problemText: String? = nil)
     {
         self.entries = registry.entries
         // A saved selection can precede TLS review. Keep the current route's
         // identity until the connection owner actually hands off to the target.
         self.focusedID = connectionID ?? connectedID ?? registry.activeStableID
         self.state = state
+        self.problemText = problemText
     }
 
     var showsPicker: Bool {
@@ -35,6 +39,18 @@ struct SidebarGatewayPresentation {
         case .connecting: String(localized: "Connecting")
         case .error: String(localized: "Needs attention")
         case .disconnected: String(localized: "Offline")
+        }
+    }
+
+    /// The control's spoken state. Online is the normal state, so it says nothing, as it shows nothing.
+    func accessibilityStatus(isSwitching: Bool) -> String {
+        if self.entries.isEmpty { return "" }
+        if isSwitching { return String(localized: "Connecting") }
+        switch self.state {
+        case .connected: return ""
+        case .connecting: return String(localized: "Connecting")
+        case .disconnected: return String(localized: "Offline")
+        case .error: return self.problemText ?? String(localized: "Needs attention")
         }
     }
 
@@ -103,7 +119,7 @@ struct SidebarGatewayPicker: View {
         .buttonStyle(.plain)
         .foregroundStyle(OpenClawSidebarPalette.text)
         .accessibilityLabel(self.controlName)
-        .accessibilityValue(self.presentation.entries.isEmpty ? "" : self.presentation.statusTitle)
+        .accessibilityValue(self.presentation.accessibilityStatus(isSwitching: self.isSwitching))
         .accessibilityHint(self.presentation.showsPicker
             ? String(localized: "Switch gateway or manage saved gateways")
             : String(localized: "Open gateway setup and connection settings"))
@@ -114,38 +130,42 @@ struct SidebarGatewayPicker: View {
         return self.presentation.focusedEntry?.name ?? self.fallbackName
     }
 
+    @ViewBuilder
     private var controlLabel: some View {
+        // Online shows the antenna alone; only an exception carries a mark, told apart by shape:
+        // a spinner while connecting, a slashed antenna when offline, a warning badge on an error.
+        let state = self.presentation.entries.isEmpty ? GatewayDisplayState.connected : self.presentation.state
         ZStack {
-            if self.isSwitching {
+            if self.isSwitching || state == .connecting {
                 ProgressView()
                     .controlSize(.small)
-                    .accessibilityLabel("Switching Gateway")
+                    .tint(OpenClawSidebarPalette.muted)
             } else {
-                Image(systemName: "antenna.radiowaves.left.and.right")
+                Image(systemName: state == .disconnected
+                    ? "antenna.radiowaves.left.and.right.slash"
+                    : "antenna.radiowaves.left.and.right")
                     .font(.system(size: 17, weight: .regular))
                     .environment(\.symbolVariants, .none)
+                    .foregroundStyle(state == .disconnected
+                        ? OpenClawSidebarPalette.muted
+                        : OpenClawSidebarPalette.text)
                     .frame(width: 22, height: 22)
                     .overlay(alignment: .topTrailing) {
-                        Circle()
-                            .fill(self.statusColor)
-                            .frame(width: 8, height: 8)
-                            .overlay(Circle().stroke(OpenClawSidebarPalette.background, lineWidth: 1.5))
-                            .offset(x: 3, y: -2)
+                        if state == .error {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.system(size: 11, weight: .bold))
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(OpenClawSidebarPalette.background, OpenClawBrand.warn)
+                                .background(Circle().fill(OpenClawSidebarPalette.background).padding(-1.5))
+                                .offset(x: 5, y: -3)
+                        }
                     }
-                    .accessibilityHidden(true)
             }
         }
+        .accessibilityHidden(true)
         .frame(width: 44, height: 44)
         .contentShape(Circle())
         .glassEffect(.regular.interactive(), in: Circle())
-    }
-
-    private var statusColor: Color {
-        switch self.presentation.state {
-        case .connected: OpenClawBrand.ok
-        case .connecting, .error: OpenClawBrand.warn
-        case .disconnected: OpenClawSidebarPalette.muted
-        }
     }
 }
 
@@ -160,12 +180,14 @@ struct RootSidebarGatewayControl: View {
     /// Always the connection control: it shows the connection and switches it. The person's identity
     /// belongs to Settings, not to this bar.
     var body: some View {
+        let status = GatewayStatusBuilder.source(for: self.appModel.connection.node, appModel: self.appModel)
         SidebarGatewayPicker(
             presentation: SidebarGatewayPresentation(
                 registry: self.registry,
                 connectionID: self.appModel.activeGatewayConnectConfig?.effectiveStableID,
                 connectedID: self.appModel.connectedGatewayID,
-                state: GatewayStatusBuilder.build(appModel: self.appModel)),
+                state: status.displayState,
+                problemText: status.displayState == .error ? status.statusText : nil),
             fallbackName: self.fallbackName,
             isSwitching: self.appModel.isGatewayPickerRequestInFlight ||
                 self.gatewayController.hasPendingConnectionHandoff,

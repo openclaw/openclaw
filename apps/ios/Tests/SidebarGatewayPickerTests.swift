@@ -76,6 +76,27 @@ struct SidebarGatewayPickerTests {
         #expect(presentation.rowTitle(Self.entry("current")) == "current — Needs attention")
     }
 
+    @Test func `the control speaks its state only when it is not online`() {
+        func status(_ state: GatewayDisplayState, problem: String? = nil, switching: Bool = false) -> String {
+            SidebarGatewayPresentation(
+                registry: .init(activeStableID: "a", entries: [Self.entry("a")]),
+                connectionID: nil,
+                connectedID: nil,
+                state: state,
+                problemText: problem).accessibilityStatus(isSwitching: switching)
+        }
+
+        #expect(status(.connected).isEmpty)
+        #expect(status(.connected, switching: true) == "Connecting")
+        #expect(status(.connecting) == "Connecting")
+        #expect(status(.disconnected) == "Offline")
+        #expect(status(.error, problem: "Connection refused") == "Connection refused")
+        #expect(status(.error) == "Needs attention")
+        let unsaved = SidebarGatewayPresentation(
+            registry: .empty, connectionID: nil, connectedID: nil, state: .disconnected)
+        #expect(unsaved.accessibilityStatus(isSwitching: false).isEmpty)
+    }
+
     @Test func `an unknown route does not select another saved gateway`() {
         let presentation = SidebarGatewayPresentation(
             registry: .init(activeStableID: "saved", entries: [Self.entry("saved"), Self.entry("other")]),
