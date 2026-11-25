@@ -17,16 +17,29 @@ type AutomationsRunScope = Readonly<{
   denied: boolean;
 }>;
 
-/** Resolves the automations scope for one tool construction from its admitted context. */
+/** Resolves the automations scope for one tool construction. */
 export function resolveAutomationsRunScope(
-  options: Readonly<{ operationalRunInstance?: OperationalRunInstanceRef }> | undefined,
+  options:
+    | Readonly<{
+        trigger?: string;
+        jobId?: string;
+        operationalRunInstance?: OperationalRunInstanceRef;
+      }>
+    | undefined,
 ): AutomationsRunScope {
+  // Admission owns job identity even when a session continuation omits its
+  // diagnostic jobId or trigger projection.
   const scope =
     readScheduledOccurrenceAutomationsScope(options) ??
     readScheduledIngressAutomationsScope(options);
-  if (!scope) {
+  if (scope) {
+    const selfJobId = readScheduledAutomationsSelfJobId(scope);
+    return selfJobId ? { selfJobId, denied: false } : { denied: true };
+  }
+  const jobId = options?.jobId?.trim();
+  if (!jobId || (options?.trigger !== "event" && options?.trigger !== "cron")) {
     return { denied: false };
   }
-  const selfJobId = readScheduledAutomationsSelfJobId(scope);
-  return selfJobId ? { selfJobId, denied: false } : { denied: true };
+  // Without admission, cron stays restricted and ingress gets no tool.
+  return options.trigger === "cron" ? { selfJobId: jobId, denied: false } : { denied: true };
 }
