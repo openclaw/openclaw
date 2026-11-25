@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { validateConfigObject } from "../../../config/validation-core.js";
 import type { RealtimeVoiceProviderResolveConfigContext } from "../../../talk/provider-contexts.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "../../session-sharing.test-utils.js";
@@ -86,6 +87,19 @@ describe("talk.catalog handler", () => {
     mocks.listSpeechProviders.mockReturnValue([]);
     mocks.listRealtimeTranscriptionProviders.mockReturnValue([]);
     mocks.listRealtimeVoiceProviders.mockReturnValue([]);
+  });
+
+  it("reports an explicit media path as unavailable without a configured audio model", async () => {
+    const prepared = validateConfigObject({
+      talk: { agentId: "main", transcription: { provider: "media-understanding" } },
+    });
+    if (!prepared.ok) {
+      throw new Error("Talk fixture did not validate");
+    }
+    const respond = await invokeTalkHandler("talk.catalog", { config: prepared.config });
+    expectRespondOk(respond, {
+      transcription: { source: "media-understanding", ready: false, providers: [] },
+    });
   });
 
   it("reads independent provider sections while speech availability is pending", async () => {
@@ -360,6 +374,7 @@ describe("talk.catalog handler", () => {
   );
 
   it("emits realtime models and voices and mirrors create-time configured inputs", async () => {
+    const resolveBrowserSessionAuthRoute = vi.fn(async () => "api-key");
     const provider = {
       id: "openai",
       label: "OpenAI Realtime",
@@ -379,11 +394,15 @@ describe("talk.catalog handler", () => {
       isConfigured: vi.fn(() => false),
       createBridge: vi.fn(),
       createBrowserSession: vi.fn(),
+      [Symbol.for("openclaw.internal.realtime-voice-provider.v1")]: {
+        isBrowserSessionConfigured: vi.fn(() => true),
+        resolveBrowserSessionAuthRoute,
+      },
     };
     mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
     mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
       provider: { id: "openai" },
-      providerConfig: { model: "gpt-live-test-canary" },
+      providerConfig: { model: "gpt-live-test-canary", apiKey: "synthetic-not-public" },
       capabilities: {
         transports: ["gateway-relay"],
         inputAudioFormats: [],
@@ -424,7 +443,15 @@ describe("talk.catalog handler", () => {
     const catalog = expectRespondOk(respond) as {
       realtime: { providers: Array<Record<string, unknown>> };
     };
+    expect(resolveBrowserSessionAuthRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "voice",
+        providerConfig: { model: "gpt-live-test-canary", apiKey: "synthetic-not-public" },
+      }),
+    );
+    expect(JSON.stringify(catalog)).not.toContain("synthetic-not-public");
     expect(catalog.realtime.providers[0]).toMatchObject({
+      authRoute: "api-key",
       defaultModel: "scoped-browser-default",
       models: ["gpt-realtime-2.1"],
       voices: ["alloy", "marin"],

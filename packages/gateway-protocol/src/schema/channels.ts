@@ -294,6 +294,8 @@ const TalkCatalogProviderSchema = closedObject({
   configured: Type.Boolean(),
   // Unconfigured because the saved sign-in doesn't cover voice; an API key would.
   apiKeyRequired: Type.Optional(Type.Literal(true)),
+  // Read-only auth route for ordinary browser Talk with this provider's effective model.
+  authRoute: Type.Optional(stringLiteralUnion(["api-key", "chatgpt-sign-in"])),
   aliases: Type.Optional(Type.Array(NonEmptyString)),
   models: Type.Optional(Type.Array(Type.String())),
   voices: Type.Optional(Type.Array(Type.String())),

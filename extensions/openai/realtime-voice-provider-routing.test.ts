@@ -148,6 +148,32 @@ async function authFixture(profiles: AuthProfileStore["profiles"], order: string
   };
 }
 describe("OpenAI realtime voice provider routing", () => {
+  it.each([
+    ["gpt-live-1", true, "oauth", "api-key"],
+    ["gpt-live-1", false, "oauth", undefined],
+    [SUBSCRIPTION_MODEL, true, "oauth", "chatgpt-sign-in"],
+    [SUBSCRIPTION_MODEL, false, "oauth", "chatgpt-sign-in"],
+    [SUBSCRIPTION_MODEL, true, "token", undefined],
+    [SUBSCRIPTION_MODEL, true, undefined, "api-key"],
+    [GA_MODEL, true, "oauth", "api-key"],
+    [GA_MODEL, false, "oauth", "chatgpt-sign-in"],
+  ] as const)(
+    "projects %s with key=%s and profile=%s without resolving credentials",
+    async (model, hasKey, profileType, expected) => {
+      vi.stubEnv("OPENAI_API_KEY", "");
+      mockAuthTypes(profileType ?? "none");
+      const { internalApi } = browserFixture();
+      await expect(
+        internalApi.resolveBrowserSessionAuthRoute?.({
+          agentId: "main",
+          providerConfig: { model, ...(hasKey ? { apiKey: PLATFORM_KEY } : {}) },
+        }),
+      ).resolves.toBe(expected);
+      expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
+
   beforeEach(resetTestState);
   afterEach(() => {
     try {

@@ -49,6 +49,7 @@ import {
   normalizeProviderConfig,
   requireOpenAIRealtimePlatformAuth,
   resolveOpenAIRealtimePlatformAuth,
+  resolveOpenAIBrowserAuthOrder,
   resolveOpenAIQuicksilverBridgeAuth,
   type OpenAIRealtimeVoiceProviderConfig,
 } from "./realtime-voice-session-policy.js";
@@ -145,6 +146,7 @@ export function buildOpenAIRealtimeVoiceProvider(
     }
     return {
       authParams: { configuredApiKey: config.apiKey, cfg, agentId },
+      authOrder: resolveOpenAIBrowserAuthOrder(model),
       allowsSubscription: hasBroker && (!isGptLive || isOpenAIGptLiveSubscriptionModel(model)),
     };
   };
@@ -399,7 +401,10 @@ export function buildOpenAIRealtimeVoiceProvider(
       }
       const auth = await resolveOpenAIRealtimePlatformAuth(authParams, context);
       if (!auth) {
-        if (await hasOpenAIRealtimePlatformAuthInputAsync(authParams, context)) {
+        if (
+          resolveOpenAIBrowserAuthOrder(model).at(1) !== "chatgpt-sign-in" ||
+          (await hasOpenAIRealtimePlatformAuthInputAsync(authParams, context))
+        ) {
           throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
         }
         const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
@@ -489,6 +494,39 @@ export function buildOpenAIRealtimeVoiceProvider(
       );
     },
     isBrowserSessionConfiguredAsync,
+    resolveBrowserSessionAuthRoute: async ({ cfg, providerConfig, agentId }) => {
+      const prepared = prepareBrowserSessionAuth({ cfg, providerConfig, agentId });
+      if (!prepared) {
+        return undefined;
+      }
+      for (const route of prepared.authOrder) {
+        if (route === "api-key") {
+          if (await hasOpenAIRealtimePlatformAuthInputAsync(prepared.authParams, context)) {
+            return route;
+          }
+        } else if (prepared.allowsSubscription) {
+          if (
+            await hasOpenAIChatGptSubscriptionAuthInputAsync(
+              { cfg, agentId, profileTypes: ["oauth"] },
+              context,
+            )
+          ) {
+            return route;
+          }
+          // A pasted bearer can fall through to API-key auth. A presence probe
+          // cannot establish its identity, so omit the route rather than guess.
+          if (
+            await hasOpenAIChatGptSubscriptionAuthInputAsync(
+              { cfg, agentId, profileTypes: ["token"] },
+              context,
+            )
+          ) {
+            return undefined;
+          }
+        }
+      }
+      return undefined;
+    },
     resolveBrowserSessionCapabilities: ({ cfg, providerConfig, agentId, model, clientControl }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.baseUrl) {

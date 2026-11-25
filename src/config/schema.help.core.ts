@@ -346,6 +346,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Talk reasoning strategy: agent-consult for Gateway-mediated agent help, direct-tools for local tool calls, or none.",
   "talk.realtime.consultRouting":
     "Gateway relay fallback for final user transcripts when the realtime provider skips openclaw_agent_consult. provider-direct preserves provider replies; force-agent-consult routes through OpenClaw.",
+  "talk.transcription.provider":
+    'Talk speech-to-text provider. Set to "media-understanding" to use configured audio models instead of streaming. Leave unset to keep automatic selection.',
   "talk.consultThinkingLevel":
     "Use this to override the thinking level for the regular agent run behind Talk realtime consults.",
   "talk.consultFastMode":

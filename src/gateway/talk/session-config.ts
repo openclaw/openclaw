@@ -192,7 +192,19 @@ export async function buildTalkTranscriptionConfig(
   fileTranscription?: ReturnType<typeof resolveTalkFileTranscriptionConfig>,
 ) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
-  const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
+  const requestProvider = normalizeOptionalString(requestedProvider);
+  const talkProvider = normalizeOptionalString(config.talk?.transcription?.provider);
+  if (!requestProvider && talkProvider === "media-understanding") {
+    // An explicit media selection must not fall back to streaming when unavailable.
+    return {
+      provider: undefined,
+      providers: {},
+      model: undefined,
+      file: await (fileTranscription ?? resolveTalkFileTranscriptionConfig(config, agentId)),
+      source: "media-understanding" as const,
+    };
+  }
+  const provider = requestProvider ?? talkProvider ?? streamingConfig.provider;
   const providerConfigs = streamingConfig.providers ?? {};
   const configuredProviderIds = [provider, ...Object.keys(providerConfigs)];
   const voiceModelDefault = await resolveConfiguredVoiceModelDefaultRef({

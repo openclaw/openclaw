@@ -610,6 +610,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.speechLocale": "Talk Speech Locale",
   "talk.interruptOnSpeech": "Talk Interrupt on Speech",
   "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
+  "talk.transcription.provider": "Talk Transcription Provider",
   "talk.consultThinkingLevel": "Talk Consult Thinking Level",
   "talk.consultFastMode": "Talk Consult Fast Mode",
   ...MESSAGE_FIELD_LABELS,

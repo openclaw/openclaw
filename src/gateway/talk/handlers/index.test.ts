@@ -10,6 +10,7 @@ import {
   normalizeResolvedSecretInputString,
   type SecretInput,
 } from "../../../config/types.secrets.js";
+import { validateConfigObject } from "../../../config/validation-core.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../../../secrets/runtime-degraded-state.js";
@@ -1631,6 +1632,31 @@ describe("talk.session unified handlers", () => {
       });
     },
   );
+
+  it("does not start Voice Call streaming when the selected Talk media path is unavailable", async () => {
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+      { id: "xai", label: "xAI Realtime Transcription", isConfigured: () => true },
+    ] as never);
+
+    const prepared = validateConfigObject({
+      ...voiceCallConfig({ streaming: { provider: "xai" } }),
+      talk: { agentId: "main", transcription: { provider: "media-understanding" } },
+    });
+    if (!prepared.ok) {
+      throw new Error("Talk fixture did not validate");
+    }
+    const respond = await invokeTalkHandler("talk.session.create", {
+      params: { mode: "transcription", transport: "gateway-relay", brain: "none" },
+      config: prepared.config,
+    });
+
+    expectRespondError(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message:
+        "Error: No configured audio transcription provider is available; check tools.media.models",
+    });
+    expect(mocks.createTalkTranscriptionRelaySession).not.toHaveBeenCalled();
+  });
 
   it("creates transcription sessions with an aliased provider missing from the active registry", async () => {
     const openai = {

@@ -50,8 +50,12 @@ export async function buildTalkTranscriptionCatalog(
     buildTalkTranscriptionConfig(config, undefined, undefined, agentId, fileTranscription),
     fileTranscription,
   ]);
-  const transcriptionSelection = transcriptionConfig.file
-    ? { ready: transcriptionConfig.file.ready, activeProvider: transcriptionConfig.file.provider }
+  const useMedia = transcriptionConfig.source === "media-understanding";
+  const transcriptionSelection = useMedia
+    ? {
+        ready: transcriptionConfig.file?.ready ?? false,
+        activeProvider: transcriptionConfig.file?.provider,
+      }
     : await resolveCatalogProviderSelection(
         canonicalizeRealtimeTranscriptionProviderId(transcriptionConfig.provider, config),
         () =>
@@ -67,7 +71,7 @@ export async function buildTalkTranscriptionCatalog(
   // so report their readiness for the picked model's warning.
   return {
     source: transcriptionConfig.source,
-    ...(!transcriptionConfig.file && mediaConfig
+    ...(!useMedia && mediaConfig
       ? {
           mediaProviders: mediaConfig.providers.map(({ id, models, configured }) => ({
             id,
@@ -82,10 +86,12 @@ export async function buildTalkTranscriptionCatalog(
       : {}),
     ready: transcriptionSelection.ready,
     ...(activeTranscriptionProvider ? { activeProvider: activeTranscriptionProvider } : {}),
-    providers: transcriptionConfig.file
-      ? transcriptionConfig.file.providers.map((provider) => ({
-          ...provider,
-          label: provider.id,
+    providers: useMedia
+      ? (transcriptionConfig.file?.providers ?? []).map(({ id, models, configured }) => ({
+          id,
+          models,
+          configured,
+          label: id,
           modes: ["transcription"],
           transports: ["gateway-relay"],
           brains: ["none"],

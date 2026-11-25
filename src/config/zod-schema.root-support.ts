@@ -262,6 +262,7 @@ export const TalkSchema = z
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     realtime: TalkRealtimeSchema.optional(),
+    transcription: z.strictObject({ provider: z.string().trim().min(1).optional() }).optional(),
     consultThinkingLevel: z.enum(ALL_THINKING_LEVELS).optional(),
     consultFastMode: z.boolean().optional(),
     speechLocale: z.string().optional(),
