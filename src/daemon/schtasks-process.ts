@@ -251,7 +251,7 @@ async function resolveLegacyScheduledTaskOwnedGatewayPids(
       const children = snapshot
         .filter((entry) => getSnapshotProcessId(entry) !== gatewayPid)
         .flatMap((row) => findInstalledGatewayChildPid([row], port, installedArguments) ?? []);
-      return [gatewayPid, ...children];
+      return [];
     }
     const supervisorPid = findInstalledProcessPid(
       snapshot,
