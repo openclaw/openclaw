@@ -504,7 +504,13 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     }
     const spec = releaseChildSpec(role);
     const source = client.getWorkflowSource(qualificationSha, ".github/workflows/" + spec.workflow);
-    const inputs = qualificationChildDispatchInputs(role, admission, binding, source);
+    const inputs = qualificationChildDispatchInputs(
+      role,
+      admission,
+      binding,
+      source,
+      role === "normalCi" ? client.getWorkflowSource(qualificationSha) : undefined,
+    );
     const verified = await client.validateChildReuse(
       selection,
       {
