@@ -1,7 +1,11 @@
 import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { codexNativeSubagentRunId } from "./native-subagent-assignment.js";
+import {
+  codexNativeSubagentRunId,
+  readCodexNativeSubagentRunId,
+} from "./native-subagent-assignment.js";
 import { assertHistoryOwnerMatchesRegistration } from "./native-subagent-history-owner.js";
+import type { CodexNativeSubagentHistoryRecovery } from "./native-subagent-history-recovery.js";
 import type {
   ChildState,
   ParentOwner,
@@ -13,6 +17,7 @@ import {
   type CodexNativeSubagentPendingAssignment,
 } from "./native-subagent-pending-assignments.js";
 import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
+import type { CodexTurn } from "./protocol.js";
 
 /** Pending locators live with the existing binding, not in a parallel task ledger. */
 export class CodexNativeSubagentAssignmentInventory {
@@ -24,10 +29,10 @@ export class CodexNativeSubagentAssignmentInventory {
     private readonly dependencies: {
       assertCurrent: (state: ParentState) => void;
       isCurrent: (state: ParentState) => boolean;
-      isNativeChildThread: (threadId: string) => Promise<boolean>;
-      readHistory: (
-        assignment: CodexNativeSubagentPendingAssignment,
-      ) => Promise<ThreadRecovery | undefined>;
+      history: Pick<
+        CodexNativeSubagentHistoryRecovery,
+        "isNativeChildThread" | "readLatestTurn" | "read"
+      >;
       restore: (
         state: ParentState,
         assignment: CodexNativeSubagentPendingAssignment,
@@ -177,7 +182,7 @@ export class CodexNativeSubagentAssignmentInventory {
     if (
       !owner ||
       owner.parentThreadId === child.nativeParentThreadId ||
-      !(await this.dependencies.isNativeChildThread(child.nativeParentThreadId))
+      !(await this.dependencies.history.isNativeChildThread(child.nativeParentThreadId))
     ) {
       return false;
     }
@@ -227,11 +232,38 @@ export class CodexNativeSubagentAssignmentInventory {
       if (!this.dependencies.isCurrent(state) || !custody.isCurrent()) {
         return;
       }
+      let latest: Promise<CodexTurn | undefined> | undefined;
+      const canReadParent = () =>
+        this.dependencies.isCurrent(state) &&
+        state.assignmentStore === store &&
+        custody.isCurrent() &&
+        !owner.descendantsCancelled &&
+        [...state.owners.values()].includes(owner);
+      const readParentTurn = async () => {
+        if (!canReadParent()) {
+          return undefined;
+        }
+        store.assertCurrent();
+        return (latest ??= this.dependencies.history.readLatestTurn(state.parentThreadId));
+      };
       for (const assignment of assignments) {
         if (!matchesNativeAssignmentLifecycle(assignment.owner, current)) {
           continue;
         }
-        const recovery = await this.dependencies.readHistory(assignment);
+        const initial =
+          assignment.runId === codexNativeSubagentRunId(assignment.childThreadId) &&
+          assignment.nativeParentThreadId === state.parentThreadId &&
+          assignment.owner.parentThreadId === state.parentThreadId;
+        const recovery = await this.dependencies.history.read(
+          { ...assignment, nativeTurnId: assignment.nativeTurnId },
+          {
+            resumeInterrupted: assignment.recordedCompletion === undefined,
+            predecessorNativeTurnId: assignment.submission?.predecessorNativeTurnId,
+            recordedCompletion: assignment.recordedCompletion,
+            initialAssignment: !readCodexNativeSubagentRunId(assignment.runId)?.turnId,
+            readParentTurn: initial ? readParentTurn : undefined,
+          },
+        );
         const pending = await store.read();
         if (!this.dependencies.isCurrent(state) || !custody.isCurrent()) {
           return;
@@ -251,6 +283,18 @@ export class CodexNativeSubagentAssignmentInventory {
                 (assignment.nativeTurnId === undefined || entry.runId === assignment.runId))),
         );
         if (surviving) {
+          if (
+            recovery.waitReceipt &&
+            (!canReadParent() ||
+              surviving.runId !== assignment.runId ||
+              surviving.owner.parentThreadId !== state.parentThreadId ||
+              surviving.recordedCompletion ||
+              pending.some(
+                (other) => other !== surviving && other.childThreadId === assignment.childThreadId,
+              ))
+          ) {
+            recovery.waitReceipt = undefined;
+          }
           await this.dependencies.restore(state, surviving, recovery, custody);
           // Restoring one child can queue binding writes needed by the next read's authority.
           await this.drain(state);

@@ -14,7 +14,10 @@ import type { CodexInferenceThreadQualification } from "./inference-qualificatio
 import type { NativeSubagentAssignment } from "./native-subagent-assignment.js";
 import type { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
-import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
+import type {
+  CodexNativeSubagentCompletion,
+  CodexNativeSubagentNotification,
+} from "./native-subagent-notification.js";
 import type { CodexNativeSubagentAssignmentStore } from "./native-subagent-pending-assignments.js";
 import type {
   CodexNativeSubagentSubmission,
@@ -285,6 +288,7 @@ export type RecoveredCompletion = CodexNativeSubagentCompletion & {
 };
 
 export type ThreadRecovery = {
+  waitReceipt?: CodexNativeSubagentNotification["receipts"][number];
   parentThreadId?: string;
   agentPath?: string;
   nativeTurnId?: string;

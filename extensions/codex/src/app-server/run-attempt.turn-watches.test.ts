@@ -16,6 +16,7 @@ import {
   TURN_FINALIZE_DRAIN_ABORT_GRACE_MS,
   TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
 } from "./attempt-timeouts.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
@@ -29,6 +30,7 @@ import {
   tempDir,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import * as transcriptMirror from "./transcript-mirror.js";
 
 setupRunAttemptTestHooks();
 
@@ -550,6 +552,110 @@ it("settles a client-close route after the host trajectory capability closes (fi
   await expect(run).resolves.toMatchObject({
     codexAppServerFailure: { kind: "client_closed_before_turn_completed" },
   });
+});
+
+const websocket = {
+  pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:8123" } },
+} as const;
+
+it("forbids replay after a WebSocket disconnect while binding the accepted prompt", async () => {
+  const harness = createStartedThreadHarness();
+  const mirror = createDeferred<void>();
+  const pending = vi
+    .spyOn(transcriptMirror, "mirrorPromptAtTurnStartBestEffort")
+    .mockReturnValueOnce(mirror.promise);
+  const open = vi.fn(() => harness.client);
+  harness.client.getDisconnectedPeer = () => open;
+  try {
+    const run = runCodexAppServerAttempt(makeTestParams(), websocket);
+    await run.waitForTurnAccepted();
+    harness.close();
+    const result = await run;
+    expect(result.codexAppServerFailure).toMatchObject({
+      kind: "client_closed_before_turn_completed",
+      transport: "websocket",
+      turnId: "turn-1",
+      replaySafe: false,
+    });
+    expect(result.assistantTexts).toEqual([]);
+    expect(open).not.toHaveBeenCalled();
+  } finally {
+    mirror.resolve();
+    pending.mockRestore();
+  }
+});
+
+it.each([
+  "completed",
+  "wrong turn",
+  "implicit completion",
+  "commentary",
+  "new ID",
+  "contradiction",
+  "two live finals",
+])("recovers only a proven final after a WebSocket disconnect (%s)", async (scenario) => {
+  const harness = createStartedThreadHarness();
+  const completed = ["new ID", "contradiction", "two live finals"].includes(scenario);
+  const answer = { type: "agentMessage", phase: "final_answer", text: "Verified final." };
+  const peer = createFakeCodexAppServerClient(() => ({
+    data: [
+      {
+        id: scenario === "wrong turn" ? "other" : "turn-1",
+        status: "completed",
+        completedAt: scenario === "implicit completion" ? null : 2,
+        itemsView: "full",
+        items: [
+          {
+            ...answer,
+            id: completed ? "item-2" : "msg-partial-1",
+            text: scenario === "contradiction" ? "Different final." : answer.text,
+            phase: completed ? answer.phase : scenario === "commentary" ? "commentary" : null,
+          },
+        ],
+      },
+    ],
+  }));
+  peer.client.initialize = async () => {};
+  peer.client.close = vi.fn();
+  harness.client.getDisconnectedPeer = () => () => peer.client;
+  const run = runCodexAppServerAttempt(makeTestParams(), websocket);
+  await run.waitForTurnAccepted();
+  if (scenario === "two live finals") {
+    await harness.notify(
+      itemNotification("item/completed", { ...answer, id: "first", text: "First." }),
+    );
+  }
+  await harness.notify(
+    itemNotification("item/started", {
+      ...answer,
+      id: completed ? "live" : "msg-partial-1",
+      phase: completed ? answer.phase : null,
+      text: "",
+    }),
+  );
+  await harness.notify(
+    completed
+      ? itemNotification("item/completed", { ...answer, id: "live" })
+      : makeAgentMessageDelta("Verified"),
+  );
+  harness.close(new Error("abnormal WebSocket disconnect"));
+  const result = await run;
+  if (scenario === "completed" || scenario === "new ID") {
+    expectSuccessfulAttempt(result);
+    expect(result.assistantTexts).toEqual(["Verified final."]);
+  } else {
+    expect(result.codexAppServerFailure).toMatchObject({
+      kind: "client_closed_before_turn_completed",
+      replaySafe: false,
+    });
+    expect(result.assistantTexts).toEqual(
+      scenario === "two live finals"
+        ? ["First.", answer.text]
+        : [completed ? answer.text : "Verified"],
+    );
+  }
+  expect(peer.request.mock.calls.map(([method]) => method)).toEqual(["thread/turns/list"]);
+  expect(peer.client.close).toHaveBeenCalledOnce();
 });
 
 it("keeps a later partial assistant output as a client-close failure after an earlier completed message", async () => {

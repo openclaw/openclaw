@@ -168,6 +168,30 @@ export function shouldAdvancePersistableAssistantBarrier(item: CodexThreadItem):
   );
 }
 
+export function selectCodexTerminalItem(
+  turnItems: CodexThreadItem[],
+  suppressItem: (id: string) => boolean,
+) {
+  const authoritativeIndex = turnItems.findLastIndex((item) => {
+    if (
+      item.type !== "agentMessage" ||
+      suppressItem(item.id) ||
+      typeof item.text !== "string" ||
+      item.text.trim().length === 0
+    ) {
+      return false;
+    }
+    const phase = readItemString(item, "phase");
+    const delivery = readItemString(item, "delivery");
+    return delivery !== "async" && (phase === "final_answer" || phase === undefined);
+  });
+  const item = authoritativeIndex >= 0 ? turnItems[authoritativeIndex] : undefined;
+  const clearedByTool = turnItems
+    .slice(authoritativeIndex + 1)
+    .some(shouldClearTerminalPresentationForNativeItem);
+  return { item, clearedByTool };
+}
+
 // A terminal snapshot can replay an earlier input's suppressed coda after a
 // steer reopens projection. Suppression follows item identity, never its text.
 export function createAssistantItemSuppression(hasDeliveredFinal: () => boolean | undefined) {

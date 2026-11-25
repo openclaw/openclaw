@@ -17,7 +17,7 @@ import {
   createAssistantItemSuppression,
   type AssistantCompletion,
   shouldAdvancePersistableAssistantBarrier,
-  shouldClearTerminalPresentationForNativeItem,
+  selectCodexTerminalItem,
 } from "./event-projector-items.js";
 import { CodexSteeringAssistantSegments } from "./event-projector-steering.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
@@ -415,6 +415,25 @@ export class CodexAssistantProjection {
     this.persistedAssistantBoundary = true;
   }
 
+  reconcileHistoryAnswer(answer: CodexThreadItem): CodexThreadItem | undefined {
+    const [id, other] = this.assistantItemOrder.filter(
+      (key) => !this.isNonTerminalAssistantItem(key),
+    );
+    const superseded = this.latestTerminalAssistantCandidateSuperseded;
+    if (other || superseded || this.isNonTerminalAssistantItem(answer.id)) {
+      return;
+    }
+    const phase = id && this.assistantPhaseByItem.get(id);
+    if (!id || !this.steeringSegments.isCompleted(id)) {
+      return phase === "partial_answer" ? undefined : answer;
+    }
+    // Legacy history assigns fresh IDs. Reuse a completed live ID only for
+    // the sole terminal candidate, with identical phase and verbatim text.
+    return phase === (answer.phase ?? undefined) && this.assistantTextByItem.get(id) === answer.text
+      ? { ...answer, id }
+      : undefined;
+  }
+
   finalizeAnswerCandidate(turn: { status?: string; items?: CodexThreadItem[] }): void {
     if (turn.status !== "completed" || this.hasDeliveredFinal?.()) {
       this.supersedeVisibleAnswerCandidate();
@@ -436,33 +455,16 @@ export class CodexAssistantProjection {
         this.assistantTextByItem.delete(itemId);
       }
     }
-    const turnItems = turn.items ?? [];
-    const authoritativeIndex = turnItems.findLastIndex((item) => {
-      if (
-        item.type !== "agentMessage" ||
-        this.suppressItem(item.id) ||
-        typeof item.text !== "string" ||
-        item.text.trim().length === 0
-      ) {
-        return false;
-      }
-      const phase = readString(item, "phase");
-      const delivery = readString(item, "delivery");
-      return delivery !== "async" && (phase === "final_answer" || phase === undefined);
-    });
-    const authoritative = authoritativeIndex >= 0 ? turnItems[authoritativeIndex] : undefined;
-    const invalidatedByLaterTool = turnItems
-      .slice(authoritativeIndex + 1)
-      .some(shouldClearTerminalPresentationForNativeItem);
+    const { item, clearedByTool } = selectCodexTerminalItem(turn.items ?? [], this.suppressItem);
     if (
-      invalidatedByLaterTool ||
-      (authoritative?.id === this.latestTerminalAssistantCandidateItemId &&
+      clearedByTool ||
+      (item?.id === this.latestTerminalAssistantCandidateItemId &&
         this.latestTerminalAssistantCandidateSuperseded)
     ) {
       this.supersedeVisibleAnswerCandidate();
       return;
     }
-    const itemId = authoritative?.id ?? this.visibleAnswerCandidateItemId;
+    const itemId = item?.id ?? this.visibleAnswerCandidateItemId;
     if (!itemId) {
       return;
     }

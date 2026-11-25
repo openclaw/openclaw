@@ -51,7 +51,7 @@ export type CodexThreadRouteReservation = {
     options?: { completed?: boolean; beforeNotifications?: Promise<void> },
   ) => Promise<void>;
   cancelTurn: () => Promise<void>;
-  drain: () => Promise<void>;
+  drain: (options?: { afterClose?: boolean }) => Promise<void>;
   release: () => void;
 };
 
@@ -210,7 +210,8 @@ class ClientTurnRouter {
       armTurn: () => this.armTurn(route),
       bindTurn: (turnId, bindingOptions) => this.bindTurn(route, turnId, bindingOptions),
       cancelTurn: () => this.cancelTurn(route),
-      drain: () => this.waitForNotifications(route),
+      drain: (drainOptions) =>
+        drainOptions?.afterClose ? route.notificationTail : this.waitForNotifications(route),
       release: () => this.release(route),
     };
   }

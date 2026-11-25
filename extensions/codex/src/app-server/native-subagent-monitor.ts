@@ -314,17 +314,7 @@ class Monitor {
         // The mutation owner compares its binding row; retain only parent custody here.
       },
       isCurrent: (state) => this.isCurrentParent(state),
-      isNativeChildThread: (threadId) => this.historyRecovery.isNativeChildThread(threadId),
-      readHistory: (assignment) =>
-        this.historyRecovery.read(
-          { ...assignment, nativeTurnId: assignment.nativeTurnId },
-          {
-            resumeInterrupted: assignment.recordedCompletion === undefined,
-            predecessorNativeTurnId: assignment.submission?.predecessorNativeTurnId,
-            recordedCompletion: assignment.recordedCompletion,
-            initialAssignment: !readCodexNativeSubagentRunId(assignment.runId)?.turnId,
-          },
-        ),
+      history: this.historyRecovery,
       restore: async (state, assignment, recovery, custody) => {
         const existing =
           this.childStates.get(assignment.runId) ??
@@ -352,6 +342,9 @@ class Monitor {
           }
           return;
         }
+        const waitReceipt = this.knownChildren.has(assignment.childThreadId)
+          ? undefined
+          : recovery.waitReceipt;
         const child = this.registerChildThread(
           state,
           {
@@ -374,6 +367,12 @@ class Monitor {
           ? true
           : undefined;
         this.recordRecoveredChildTurn(state, child, recovery);
+        if (waitReceipt) {
+          this.completionDelivery.applyReceipts(
+            state,
+            child.deliveryReceipts.observe([waitReceipt]),
+          );
+        }
         if (recovery.resumable) {
           this.settleResumableChild(child);
         } else if (recovery.threadState === "active") {

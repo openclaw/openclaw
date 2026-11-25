@@ -1,5 +1,6 @@
 import {
   asFiniteNumber,
+  asOptionalRecord,
   normalizeOptionalString,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,6 +20,7 @@ import type {
   RecoveredCompletion,
   ThreadRecovery,
 } from "./native-subagent-monitor-types.js";
+import { readCodexNativeSubagentNotification } from "./native-subagent-notification.js";
 import type { CodexTurn, JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
@@ -53,6 +55,17 @@ export class CodexNativeSubagentHistoryRecovery {
     return response.thread.id === threadId && Boolean(readThreadParentThreadId(response.thread));
   }
 
+  async readLatestTurn(threadId: string): Promise<CodexTurn | undefined> {
+    const page = await this.client
+      .request(
+        "thread/turns/list",
+        { threadId, limit: 1, sortDirection: "desc", itemsView: "full" },
+        { timeoutMs: THREAD_READ_TIMEOUT_MS },
+      )
+      .catch(() => undefined);
+    return page?.data?.length === 1 ? page.data[0] : undefined;
+  }
+
   async read(
     assignment: NativeSubagentAssignment,
     options: {
@@ -60,6 +73,7 @@ export class CodexNativeSubagentHistoryRecovery {
       predecessorNativeTurnId?: string;
       initialAssignment?: boolean;
       recordedCompletion?: RecoveredCompletion;
+      readParentTurn?: () => Promise<CodexTurn | undefined>;
     },
   ): Promise<ThreadRecovery> {
     const { childThreadId } = assignment;
@@ -166,16 +180,8 @@ export class CodexNativeSubagentHistoryRecovery {
     ) {
       // The pinned protocol's paged history distinguishes the failed current
       // turn from earlier persisted results.
-      const turnsResponse = await this.client
-        .request(
-          "thread/turns/list",
-          { threadId: childThreadId, limit: 1, sortDirection: "desc", itemsView: "full" },
-          { timeoutMs: THREAD_READ_TIMEOUT_MS },
-        )
-        .catch(() => undefined);
-      const data =
-        isJsonObject(turnsResponse) && Array.isArray(turnsResponse.data) ? turnsResponse.data : [];
-      const latestTurn = isJsonObject(data[0]) ? data[0] : undefined;
+      const latest = await this.readLatestTurn(childThreadId);
+      const latestTurn = isJsonObject(latest) ? latest : undefined;
       const latestTurnId = readString(latestTurn, "id");
       if (latestTurnId && pendingTurnIds.has(latestTurnId)) {
         observedPendingTurns.push({ turnId: latestTurnId, state: readNativeTurnState(latestTurn) });
@@ -221,8 +227,36 @@ export class CodexNativeSubagentHistoryRecovery {
       recovery.resumable = false;
       threadState = "other";
     }
+    const parentThreadId = readThreadParentThreadId(thread);
+    const child = rawTurns.length === 1 ? rawTurns[0] : undefined;
+    let waitReceipt: ThreadRecovery["waitReceipt"];
+    if (
+      options.readParentTurn &&
+      parentThreadId &&
+      !recordedCompletion &&
+      !this.knownChildren.has(childThreadId) &&
+      !thread.forkedFromId &&
+      (threadStatus === "idle" || threadStatus === "notloaded") &&
+      recovery.nativeTurnId &&
+      child?.status === "completed" &&
+      !child.error &&
+      (!child.threadId || child.threadId === childThreadId) &&
+      typeof child.startedAt === "number" &&
+      typeof child.completedAt === "number" &&
+      child.completedAt >= child.startedAt &&
+      recovery.completion?.statusLabel === "task_complete"
+    ) {
+      waitReceipt = initialWaitReceipt(
+        await options.readParentTurn(),
+        parentThreadId,
+        recovery.completion,
+        child.startedAt,
+        child.completedAt,
+      );
+    }
     return {
-      parentThreadId: readThreadParentThreadId(thread),
+      parentThreadId,
+      waitReceipt,
       agentPath: normalizeOptionalString(readString(readThreadSpawnSource(thread), "agent_path")),
       nativeTurnId: recovery.nativeTurnId,
       nativeTurnState: recovery.nativeTurnState,
@@ -233,6 +267,62 @@ export class CodexNativeSubagentHistoryRecovery {
       threadState,
     };
   }
+}
+
+// V1 records the returned states but no child turn ID. A new spawn followed by
+// its wait in the same turn can only name the sole, non-forked child result.
+function initialWaitReceipt(
+  parent: CodexTurn | undefined,
+  threadId: string,
+  { childThreadId, result }: RecoveredCompletion,
+  startedAt: number,
+  completedAt: number,
+): ThreadRecovery["waitReceipt"] {
+  if (
+    !parent?.id ||
+    parent.status !== "completed" ||
+    parent.error ||
+    typeof parent.startedAt !== "number" ||
+    typeof parent.completedAt !== "number" ||
+    parent.startedAt > startedAt ||
+    parent.completedAt < completedAt ||
+    (parent.threadId && parent.threadId !== threadId) ||
+    !Array.isArray(parent.items)
+  ) {
+    return;
+  }
+  const calls = parent.items.filter(
+    (item) =>
+      item?.type === "collabAgentToolCall" &&
+      Array.isArray(item.receiverThreadIds) &&
+      item.receiverThreadIds.includes(childThreadId),
+  );
+  const [spawn, wait] = calls;
+  if (
+    calls.length !== 2 ||
+    spawn?.tool !== "spawnAgent" ||
+    wait?.tool !== "wait" ||
+    !spawn.id ||
+    !wait.id ||
+    spawn.id === wait.id ||
+    calls.some(
+      (call) =>
+        call.senderThreadId !== threadId ||
+        call.status !== "completed" ||
+        !Array.isArray(call.receiverThreadIds) ||
+        call.receiverThreadIds.length !== 1,
+    ) ||
+    !isJsonObject(wait) ||
+    !isJsonObject(wait.agentsStates) ||
+    asOptionalRecord(wait.agentsStates[childThreadId])?.status !== "completed" ||
+    !readLastAgentMessage(parent, parent.items.indexOf(wait))
+  ) {
+    return;
+  }
+  return readCodexNativeSubagentNotification({
+    method: "item/completed",
+    params: { threadId, item: wait },
+  }).receipts.find((receipt) => receipt.agentPath === childThreadId && receipt.result === result);
 }
 
 function readTurnRecovery(
@@ -328,10 +418,10 @@ export function readTurnCompletion(
   return undefined;
 }
 
-function readLastAgentMessage(turn: JsonObject): string | undefined {
+function readLastAgentMessage(turn: JsonObject | CodexTurn, after = -1): string | undefined {
   const items = Array.isArray(turn.items) ? turn.items : [];
   let legacyResult: string | undefined;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
+  for (let index = items.length - 1; index > after; index -= 1) {
     const item = items[index];
     if (!isJsonObject(item)) {
       continue;

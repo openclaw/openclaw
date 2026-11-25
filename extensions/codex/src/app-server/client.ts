@@ -172,6 +172,7 @@ export class CodexAppServerClient {
   private transportExited = false;
   private nativeExecutionObserved = false;
   private closeError: Error | undefined;
+  private reopenWebSocket?: () => CodexAppServerClient;
   private runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
   private stderrTail = "";
   private readonly privateTransportSecrets = new Set<string>();
@@ -228,7 +229,16 @@ export class CodexAppServerClient {
     }
     if (startOptions.transport === "websocket" || startOptions.transport === "unix") {
       await assertCurrent?.();
-      return new CodexAppServerClient(createWebSocketTransport(startOptions));
+      const socketOptions = { ...startOptions, headers: { ...startOptions.headers } };
+      const open = () => new CodexAppServerClient(createWebSocketTransport(socketOptions));
+      const client = open();
+      if (
+        socketOptions.transport === "websocket" &&
+        (socketOptions.authToken || socketOptions.url?.startsWith("wss://"))
+      ) {
+        client.reopenWebSocket = open;
+      }
+      return client;
     }
     // The spawn callback runs synchronously before registration; initialization
     // stays blocked until registration finishes, without losing startup errors.
@@ -309,6 +319,11 @@ export class CodexAppServerClient {
   /** Returns the terminal transport error that closed this physical client. */
   getCloseError(): Error | undefined {
     return this.closeError;
+  }
+
+  /** Only abnormal peer loss permits history readback with this socket's original settings. */
+  getDisconnectedPeer() {
+    return this.transportExited && this.child.exitCode === 1006 ? this.reopenWebSocket : undefined;
   }
 
   /** Stable generation id for this exact physical client instance. */

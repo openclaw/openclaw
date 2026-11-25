@@ -19,6 +19,7 @@ import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexAsyncDeliveryProjection } from "./event-projector-async-delivery.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection, emitCodexAgentEvent } from "./event-projector-events.js";
+import { matchesCodexSnapshotTurn } from "./event-projector-items.js";
 import { CodexGeneratedMediaProjection } from "./event-projector-media.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import type { CodexAppServerEventProjectorOptions } from "./event-projector-options.js";
@@ -29,7 +30,7 @@ import { CodexToolSearchEvidenceProjection } from "./event-projector-tool-search
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import { CodexUsageProjection } from "./event-projector-usage.js";
 import { readCodexProviderRefusal, type CodexProviderRefusal } from "./event-projector-values.js";
-import type { CodexTurn, JsonValue } from "./protocol.js";
+import type { CodexThreadItem, CodexTurn, JsonValue } from "./protocol.js";
 import { CodexTranscriptCheckpoint } from "./transcript-checkpoint.js";
 import { attachCodexAssistantItemIds } from "./upstream-prompt-provenance.js";
 import { resolveCodexPromptError } from "./usage-limit-error.js";
@@ -248,6 +249,28 @@ export abstract class CodexTurnProjection {
 
   protected get projectionClosed(): boolean {
     return this.projectionController.signal.aborted;
+  }
+
+  resolveHistoryAnswer(turn: CodexTurn): CodexThreadItem | undefined {
+    const answer = turn.items.at(-1);
+    if (
+      answer?.type !== "agentMessage" ||
+      !answer.id?.trim() ||
+      !answer.text?.trim() ||
+      !matchesCodexSnapshotTurn(answer, this.turnId) ||
+      (answer.threadId !== undefined && answer.threadId !== this.threadId) ||
+      (answer.status != null && answer.status !== "completed") ||
+      answer.delivery != null ||
+      (answer.phase != null && answer.phase !== "final_answer") ||
+      turn.items.some(
+        (item) =>
+          item !== answer &&
+          (item.id === answer.id || (item.type === "agentMessage" && item.phase !== "commentary")),
+      )
+    ) {
+      return;
+    }
+    return this.assistantProjection.reconcileHistoryAnswer(answer);
   }
 
   buildResult(
