@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { executeMcpAppOperation } from "../gateway/mcp-app-operations.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
-import { catalogTool } from "./agent-bundle-mcp-fixture.test-support.js";
+import { catalogTool, fixtureCatalog } from "./agent-bundle-mcp-fixture.test-support.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
@@ -443,8 +443,51 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     await result.dispose();
   });
 
-  it.each([false, true])(
-    "reports actual heartbeat omissions, not warnings (deny: %s)",
+  it.each(["allow", "deny"] as const)(
+    "does not report intentional configured MCP exclusions from tools.%s as a failure",
+    async (policy) => {
+      const sessionId = "configured-mcp-exclusions";
+      const runtime = makeStaticRuntime(sessionId);
+      const selected = ["inbox", "folders"];
+      const utilities = ["prompts_get", "prompts_list", "resources_list", "resources_read"];
+      const catalog = fixtureCatalog(
+        "user-mail",
+        selected.map((toolName) => ({ toolName })),
+      );
+      catalog.servers["user-mail"]!.prompts = {};
+      catalog.servers["user-mail"]!.resources = {};
+      setCatalog(runtime, catalog);
+      const names = (tools: string[]) => tools.map((name) => `user-mail__${name}`);
+      const cfg = {
+        tools: policy === "allow" ? { allow: names(selected) } : { deny: names(utilities) },
+      };
+      const result = await staticTools(sessionId, {
+        cfg,
+        policyContext: {
+          config: cfg,
+          agentId: "main",
+          senderIsOwner: true,
+          chatType: "direct",
+        },
+        requestInteractiveCodexApproval: approvalGate(),
+      });
+      try {
+        expect(new Set(toolNames(result.tools))).toEqual(new Set(names(selected)));
+        for (const toolName of selected) {
+          const tool = result.tools.find(({ name }) => name === `user-mail__${toolName}`)!;
+          await expect(tool.execute(`call-${toolName}`, {})).resolves.toMatchObject({
+            content: [{ type: "text", text: `live:${toolName}:unused` }],
+          });
+        }
+        expect(result.diagnosticNotice).toBeUndefined();
+      } finally {
+        await result.dispose();
+      }
+    },
+  );
+
+  it.each(["none", "config", "session"] as const)(
+    "reports only unexpected heartbeat omissions (deny: %s)",
     async (deny) => {
       makeStaticRuntime("scheduled-group");
       const warnings: string[] = [];
@@ -455,16 +498,17 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
           ...heartbeatPolicy,
           config: {
             ...heartbeatPolicy.config,
-            ...(deny ? { tools: { deny: ["user-mail__inbox"] } } : {}),
+            ...(deny === "config" ? { tools: { deny: ["user-mail__inbox"] } } : {}),
           },
+          ...(deny === "session" ? { conversationToolPolicy: { deny: ["user-mail__inbox"] } } : {}),
         },
         warn: (message) => warnings.push(message),
       });
-      expect(toolNames(result.tools)).toEqual(deny ? [] : ["user-mail__inbox"]);
+      expect(toolNames(result.tools)).toEqual(deny === "none" ? ["user-mail__inbox"] : []);
       expect(warnings).toContain(
         "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
       );
-      if (deny) {
+      if (deny === "session") {
         expect(result.diagnosticNotice).toContain(
           "Configured MCP is incomplete for this scheduled run",
         );

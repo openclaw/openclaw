@@ -302,14 +302,15 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
   });
   try {
-    // Policy warnings describe inputs; only actual omissions make configured MCP incomplete.
+    // Explicit configured tool exclusions define the expected catalog. Only unexpected
+    // omissions make that catalog incomplete.
     const omissions: string[] = [];
     const policyParams = {
       ...params,
       conversationCapabilityProfile,
       onFilter: (event: ToolPolicyFilterEvent) => {
         const omittedCount = event.before.length - event.after.length;
-        if (omittedCount > 0) {
+        if (omittedCount > 0 && event.step.source?.kind !== "config") {
           omissions.push(
             `${event.step.label}: ${omittedCount} configured MCP tool(s) omitted by policy`,
           );
