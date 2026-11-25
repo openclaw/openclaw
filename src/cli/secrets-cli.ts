@@ -295,6 +295,9 @@ export function registerSecretsCli(program: Command): void {
                 allowExec: Boolean(opts.allowExec),
               });
               if (!opts.json) {
+                for (const warning of result.warnings) {
+                  defaultRuntime.log(terminalText`- warning: ${warning}`);
+                }
                 defaultRuntime.log(
                   result.changed
                     ? `Secrets applied. Updated ${result.changedFiles.length} file(s).`
@@ -355,6 +358,9 @@ export function registerSecretsCli(program: Command): void {
         );
         if (opts.json) {
           return;
+        }
+        for (const warning of result.warnings) {
+          defaultRuntime.log(terminalText`- warning: ${warning}`);
         }
         if (opts.dryRun) {
           defaultRuntime.log(
