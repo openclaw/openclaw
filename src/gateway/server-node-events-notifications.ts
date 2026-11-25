@@ -37,10 +37,12 @@ const latestNotificationOccurrences = new Map<string, string | undefined>();
 
 // Android notification keys are unique per device only, so the node is part of the identity:
 // one phone's update never replaces another phone's pending event. Removals keep their own
-// context, so a newer posted update never drops a removal the agent has not seen yet.
+// context, so a newer posted update never drops a removal the agent has not seen yet. The queue
+// lowercases context keys, and Android keys are case-sensitive, so both parts are hex-encoded.
 function notificationContextKey(nodeId: string, key: string, change: "posted" | "removed") {
   const scope = change === "removed" ? "notification-removed" : "notification";
-  return `${scope}:${encodeURIComponent(nodeId)}:${key}`;
+  const hex = (value: string) => Buffer.from(value, "utf8").toString("hex");
+  return `${scope}:${hex(nodeId)}:${hex(key)}`;
 }
 
 export async function handleNodeNotificationEvent(

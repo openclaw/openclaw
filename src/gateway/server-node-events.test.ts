@@ -623,7 +623,7 @@ describe("notifications changed events", () => {
 
       const routing = {
         sessionKey,
-        contextKey: `${change === "removed" ? "notification-removed" : "notification"}:node:notif`,
+        contextKey: `${change === "removed" ? "notification-removed" : "notification"}:6e6f6465:6e6f746966`,
       };
       expect(enqueue).toHaveBeenCalledWith(
         `Notification ${change} (node=node key=notif${packageName ? ` package=${packageName}` : ""})`,

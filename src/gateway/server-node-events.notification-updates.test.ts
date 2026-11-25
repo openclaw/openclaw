@@ -76,6 +76,21 @@ describe("notification updates of one key", () => {
     ]);
   });
 
+  it("keep keys that differ only by case apart", async () => {
+    const { notify } = phone("phone-a");
+    const upper = "0|com.example.app|7|Alert|10001";
+    const lower = "0|com.example.app|7|alert|10001";
+    await notify({ key: upper, text: "Upper 1" });
+    await notify({ key: lower, text: "Lower 1" });
+    await notify({ key: upper, text: "Upper 2" });
+    await notify({ key: lower, text: "Lower 2" });
+
+    expect(peekSystemEvents(sessionKey)).toEqual([
+      `Notification posted (node=phone-a key=${upper}): Upper 2`,
+      `Notification posted (node=phone-a key=${lower}): Lower 2`,
+    ]);
+  });
+
   it("keep a pending removal when a newer update of the key arrives", async () => {
     const { notify } = phone("phone-a");
     await notify({ text: "Received 13 KB" });
