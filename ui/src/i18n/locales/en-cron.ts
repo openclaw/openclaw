@@ -17,6 +17,10 @@ const enCron = {
       "This automation changed on the Gateway. The latest definition is loaded; review it before retrying.",
     changedOnGatewayLoadFailed:
       "This automation changed on the Gateway, but the latest definition could not be loaded. Refresh before retrying.",
+    saveConflictReloaded:
+      "This automation changed before your edits could be saved. Review the latest settings shown here, then reapply your edits.",
+    saveConflictReloadFailed:
+      "This automation changed before your edits could be saved. Copy your edits before reloading the page, then review the latest settings in Edit before reapplying them.",
     runQueued: "Run queued. Run ID: {runId}",
     adminRequired: "Only the owner with automation access or an admin can change this automation.",
     runNotStarted: {
