@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { handleToolsCommand } from "../../auto-reply/reply/commands-info.js";
+import { buildCommandTestParams } from "../../auto-reply/reply/commands.test-harness.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   getCronManagementAuthority,
@@ -200,6 +202,20 @@ it("limits management authority to its admitted actions", async () => {
     },
     undefined,
   );
+});
+
+it("does not advertise creation through command discovery in a management-only turn", async () => {
+  await withCronManagementCaller("inventory-command-run", async () => {
+    const params = buildCommandTestParams(
+      "/tools verbose",
+      { tools: { allow: ["automations"] }, plugins: { enabled: false } },
+      { Provider: "webchat", Surface: "webchat" },
+    );
+    params.provider = "";
+    const result = await handleToolsCommand(params, true);
+    expect(result?.reply?.text).toContain("Automations - Manage any existing automation");
+    expect(result?.reply?.text).not.toMatch(/\b(?:add (?:each )?job|plan names)\b/);
+  });
 });
 
 it("visibly refuses unsupported next_check", async () => {
