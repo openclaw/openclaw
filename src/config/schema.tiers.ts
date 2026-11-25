@@ -175,6 +175,7 @@ wizard.accessMode wizard.appRecommendations
 const ADVANCED_TUNING_PATHS = new Set([
   "agents.entries.*.tools.github.allowInSandbox",
   "agents.entries.*.tools.github.app",
+  "messages.agentCoordination",
   "session.maintenance.preserveRecent",
   "tools.github.app",
   "tools.sessions.allowThreadTargets",

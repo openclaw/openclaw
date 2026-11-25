@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { MessageInjectionAcceptedUnconfirmedError } from "../auto-reply/reply/message-injection-authority.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
@@ -104,6 +105,62 @@ afterEach(() => {
   embeddedRunsTesting.resetActiveEmbeddedRuns();
 });
 
+it.each(["queue", "explicit followup", "idle", "unavailable", "unconfirmed"] as const)(
+  "keeps peer coordination delivery custody with %s",
+  async (scenario) => {
+    const targetKey = "agent:leasing-ops:dashboard:active-target";
+    const { scope, testConfig } = await steeringFixture(targetKey);
+    await upsertSessionEntryCore(
+      { agentId: "re-portal", sessionKey: requesterKey, storePath: scope.storePath },
+      { sessionId: "requester-session", updatedAt: 1 },
+    );
+    const cfg: OpenClawConfig = {
+      ...testConfig,
+      messages: { agentCoordination: scenario === "queue" ? "queue" : "steer" },
+    };
+    const queue =
+      scenario === "idle"
+        ? undefined
+        : await activeRun(targetKey, {
+            config: cfg,
+            requesterSessionKey: requesterKey,
+            streaming: scenario !== "unavailable",
+          });
+    if (scenario === "unconfirmed") {
+      queue?.mockImplementationOnce(async (_text, options) => {
+        options?.onQueueAccepted?.(true);
+        throw new MessageInjectionAcceptedUnconfirmedError();
+      });
+    }
+    callGatewayMock.mockImplementation(async ({ method }: { method?: string }) =>
+      method === "agent" ? { status: "accepted", runId: "queued-peer-run" } : {},
+    );
+    const result = await withGatewayToolCallerIdentity(
+      createSessionsSendTestCaller(requesterKey),
+      () =>
+        sendTool(cfg).execute("peer-custody", {
+          sessionKey: targetKey,
+          message: "agent coordination update",
+          timeoutSeconds: 0,
+          ...(scenario === "explicit followup" ? { mode: "followup" } : {}),
+        }),
+    );
+    const newTurns = callGatewayMock.mock.calls.filter(([request]) => request.method === "agent");
+    if (scenario === "unconfirmed") {
+      expect(result.details).toMatchObject({ status: "error", sentBeforeError: true });
+      expect(queue).toHaveBeenCalledOnce();
+      expect(newTurns).toHaveLength(0);
+    } else {
+      expect(result.details).toMatchObject({ status: "accepted", targetDisposition: "queued" });
+      if (queue) {
+        expect(queue).not.toHaveBeenCalled();
+      }
+      expect(newTurns).toHaveLength(1);
+      expect(newTurns[0]?.[0].params).toMatchObject({ sessionKey: targetKey });
+    }
+  },
+);
+
 it.each(["missing", "different", "different account"] as const)(
   "explicit sessions_send steering refuses %s requester identity without starting other work",
   async (identity) => {
@@ -152,23 +209,35 @@ it.each(["missing", "different", "different account"] as const)(
 );
 
 it.each([
-  [undefined, false, false, false, false, false],
-  ["steer", true, false, true, false, false],
-  ["steer", false, true, false, false, false],
-  [undefined, false, false, false, true, false],
+  [undefined, false, false, false, false, false, false],
+  ["steer", true, false, true, false, false, false],
+  ["steer", false, true, false, false, false, false],
+  [undefined, false, false, false, true, false, false],
   // A parent's ordinary reply-waiting send must still reach its busy child's current run.
-  [undefined, false, false, false, true, true],
+  [undefined, false, false, false, true, true, false],
+  [undefined, false, false, false, false, true, true],
 ] as const)(
-  "persists steering provenance: mode=%s alternateStore=%s hiddenRun=%s refreshedDisplay=%s ownChild=%s defaultTimeout=%s",
-  async (mode, alternateStore, hiddenRun, refreshedDisplay, ownChild, defaultTimeout) => {
+  "persists steering provenance: mode=%s alternateStore=%s hiddenRun=%s refreshedDisplay=%s ownChild=%s defaultTimeout=%s agentSteer=%s",
+  async (
+    mode,
+    alternateStore,
+    hiddenRun,
+    refreshedDisplay,
+    ownChild,
+    defaultTimeout,
+    agentSteer,
+  ) => {
     const runId = "hidden-sessions-send-steering-run";
     const sessionKey = ownChild
       ? "agent:leasing-ops:subagent:active-child"
-      : mode === "steer"
+      : mode === "steer" || agentSteer
         ? "agent:leasing-ops:dashboard:active-target"
         : "agent:leasing-ops:cron:monthly-utility:run:run-fast";
     const callerKey = ownChild ? "agent:leasing-ops:main" : requesterKey;
     const { dir, scope, testConfig } = await steeringFixture(sessionKey, alternateStore);
+    const sendConfig: OpenClawConfig = agentSteer
+      ? { ...testConfig, messages: { agentCoordination: "steer" } }
+      : testConfig;
     if (ownChild) {
       await upsertSessionEntryCore(
         { ...scope, sessionKey: callerKey },
@@ -203,11 +272,22 @@ it.each([
       await Promise.race([initialResponseStarted.promise, prompt]);
       expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
       const queueMessage = vi.fn(
-        (text: string, options?: EmbeddedAgentQueueMessageOptions, assertCurrent?: () => void) =>
-          steerActiveSessionWithOptionalDeliveryWait(session, text, options, sessionKey, () => {
-            assertCurrent?.();
-            return true;
-          }),
+        (text: string, options?: EmbeddedAgentQueueMessageOptions, assertCurrent?: () => void) => {
+          // The production run adapter configures the drain before calling this helper.
+          if (options?.steeringMode) {
+            session.agent.steeringMode = options.steeringMode;
+          }
+          return steerActiveSessionWithOptionalDeliveryWait(
+            session,
+            text,
+            options,
+            sessionKey,
+            () => {
+              assertCurrent?.();
+              return true;
+            },
+          );
+        },
       );
       await setSessionsSendTestActiveRun(
         "caller-active-session",
@@ -223,7 +303,7 @@ it.each([
         },
         sessionKey,
         callerKey,
-        testConfig,
+        sendConfig,
         scope.storePath,
       );
       if (hiddenRun) {
@@ -239,7 +319,7 @@ it.each([
         return {};
       });
 
-      const tool = sendTool(testConfig, callerKey);
+      const tool = sendTool(sendConfig, callerKey);
 
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const caller = createSessionsSendTestCaller(callerKey);
@@ -250,37 +330,59 @@ it.each([
           senderUsername: "updated-requester",
         };
       }
-      const send = withGatewayToolCallerIdentity(caller, () =>
-        tool.execute("call-run-scoped-caller", {
-          mode,
-          sessionKey,
-          message: "[TASK-COMPLETE] re-portal occupancy ready",
-          ...(defaultTimeout ? {} : { timeoutSeconds: 0 }),
-        }),
-      );
-      pending.push(send);
+      const messages = agentSteer
+        ? ["Use revision one", "Revision two is ready", "Use revision three instead"]
+        : ["[TASK-COMPLETE] re-portal occupancy ready"];
+      const results = [];
       // The receipt returns at acceptance, with no time passing, while the
       // receiver still holds the input for its next model boundary.
-      const result = await send;
-      expect(session.pendingMessageCount).toBe(1);
+      for (const [index, message] of messages.entries()) {
+        const send = withGatewayToolCallerIdentity(caller, () =>
+          tool.execute(`call-run-scoped-caller-${index}`, {
+            mode,
+            sessionKey,
+            message,
+            ...(defaultTimeout ? {} : { timeoutSeconds: 0 }),
+          }),
+        );
+        pending.push(send);
+        results.push(await send);
+      }
+      expect(results.map((result) => result.details)).toEqual(
+        messages.map(() =>
+          expect.objectContaining({
+            status: "accepted",
+            targetDisposition: "steered",
+            sessionKey,
+            delivery: { status: "skipped" },
+          }),
+        ),
+      );
+      expect(session.pendingMessageCount).toBe(messages.length);
       expect(userEntries(scope, dir)).toHaveLength(1);
       vi.useRealTimers();
       held.release();
       await prompt;
 
-      expect(result.details).toMatchObject({
-        status: "accepted",
-        targetDisposition: "steered",
-        sessionKey,
-        delivery: { status: "skipped" },
-      });
-      expect(queueMessage).toHaveBeenCalledOnce();
+      if (agentSteer) {
+        expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
+        const messagesAtNextBoundary = streamMocks.streamSimple.mock.calls[1]?.[1].messages
+          .filter((entry) => entry.role === "user")
+          .slice(-messages.length);
+        expect(messagesAtNextBoundary?.map((entry) => JSON.stringify(entry.content))).toEqual(
+          messages.map((message) => expect.stringContaining(message)),
+        );
+      }
+      expect(queueMessage).toHaveBeenCalledTimes(messages.length);
+      expect(queueMessage.mock.calls.map(([text]) => text)).toEqual(
+        messages.map((message) => expect.stringContaining(message)),
+      );
       expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(false);
       expect(queueMessage.mock.calls[0]?.[1]?.deliveryTimeoutMs).toBeUndefined();
       expect(queueMessage.mock.calls[0]?.[1]).not.toHaveProperty("sourceReplyDeliveryMode");
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();
       const entries = userEntries(scope, dir);
-      expect(entries).toHaveLength(2);
+      expect(entries).toHaveLength(1 + messages.length);
       expect(session.pendingMessageCount).toBe(0);
       expect(entries).toContainEqual(
         expect.objectContaining({
@@ -303,7 +405,7 @@ it.each([
         expect(participants).toEqual([
           expect.objectContaining({
             identity: { type: "agent", id: "re-portal" },
-            contributionCount: 1,
+            contributionCount: messages.length,
           }),
         ]);
       }
