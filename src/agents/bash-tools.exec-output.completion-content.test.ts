@@ -19,7 +19,9 @@ describe("selectExecCompletionContent", () => {
   });
 
   it("uses the summary after an ERR: marker as the content", () => {
-    expect(selectExecCompletionContent("work...\nERR: failed with code 3")).toBe("failed with code 3");
+    expect(selectExecCompletionContent("work...\nERR: failed with code 3")).toBe(
+      "failed with code 3",
+    );
   });
 
   it("keeps a marker line whose summary is empty", () => {

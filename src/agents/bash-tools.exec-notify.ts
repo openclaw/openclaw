@@ -230,9 +230,8 @@ function prepareExecExitWake(
   // the wake names the outcome, not a mid-line fragment. A structured tail (e.g. a JSON blob)
   // keeps the whole tail.
   const tail = session.tail;
-  const output = session.totalOutputChars > tail.length
-    ? selectExecCompletionContent(tail.trim())
-    : tail.trim();
+  const output =
+    session.totalOutputChars > tail.length ? selectExecCompletionContent(tail.trim()) : tail.trim();
   if (
     status === "completed" &&
     session.exitCode === 0 &&
