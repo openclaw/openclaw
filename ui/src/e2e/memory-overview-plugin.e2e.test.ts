@@ -84,7 +84,7 @@ suite.define(() => {
         // The space above the active panel should be smaller than the gap between unrelated sections.
         const sectionGap = await page
           .locator(".memory-memories")
-          .evaluate((el) => parseFloat(getComputedStyle(el).rowGap));
+          .evaluate((el) => Number.parseFloat(getComputedStyle(el).rowGap));
         expect(memories).toBeLessThan(sectionGap);
         await page.locator("#memory-search-input").fill("handoff");
         await page.locator("#memory-search-input").press("Enter");
