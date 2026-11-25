@@ -590,8 +590,8 @@ if [ "$SCENARIO" = "release-update" ]; then
     "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE" "${OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA:-}"
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
   case "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" in
-    "") release_cases=(healthy) ;;
-    healthy|downgrade) release_cases=("$OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE") ;;
+    "") release_cases=(healthy crash) ;;
+    healthy|crash|downgrade) release_cases=("$OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE") ;;
     *) echo "Unknown release survivor case" >&2; exit 1 ;;
   esac
   downgrade_selected="$(node -p "require(process.argv[1]).selected" "$UPGRADE_SCENARIO_STAGE/downgrade-source.json")"
@@ -608,6 +608,7 @@ if [ "$SCENARIO" = "release-update" ]; then
     docker_e2e_run_with_harness \
       --init \
       --user root \
+      -e OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE="$release_case" \
       -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
       -v "$ARTIFACT_DIR/$release_case:/tmp/openclaw-upgrade-survivor-artifacts" \
       -v "$UPGRADE_SCENARIO_STAGE:/tmp/openclaw-release-fixtures:ro" \
@@ -926,6 +927,22 @@ if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"
   pre_update_service_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE")"
   pre_update_systemctl_lines="$(wc -l <"$SYSTEMCTL_SHIM_LOG")"
+else
+  # This inline lane installs the candidate first and seeds deliberately retired
+  # config. Repair it before update: the installed preflight refuses invalid
+  # config, rather than starting a release trial to migrate it.
+  echo "Running non-interactive doctor repair for dirty-state config..."
+  CURRENT_PHASE="doctor"
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
+    echo "openclaw doctor failed" >&2
+    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
+    exit 1
+  fi
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate >>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
+    echo "post-doctor config validation failed" >&2
+    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
+    exit 1
+  fi
 fi
 
 echo "Running package update against the mounted tarball..."
@@ -952,19 +969,6 @@ if [ "$update_status" -ne 0 ]; then
 fi
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   echo "Skipping doctor repair until after restart proof."
-else
-  echo "Running non-interactive doctor repair..."
-  CURRENT_PHASE="doctor"
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
-    echo "openclaw doctor failed" >&2
-    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
-    exit 1
-  fi
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate >>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
-    echo "post-doctor config validation failed" >&2
-    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
-    exit 1
-  fi
 fi
 
 echo "Verifying config and state survived update..."

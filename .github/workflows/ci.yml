@@ -4839,9 +4839,10 @@ jobs:
     timeout-minutes: ${{ matrix.shard == 'pg16-smoke' && 15 || 30 }}
     strategy:
       fail-fast: false
-      max-parallel: 4
+      # Let every PR row, including the separate PG16 smoke, start in the same wave.
+      max-parallel: 7
       matrix:
-        shard: [1/4, 2/4, 3/4, 4/4, pg16-smoke]
+        shard: [1/6, 2/6, 3/6, 4/6, 5/6, 6/6, pg16-smoke]
         exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[]' || '[{"shard":"pg16-smoke"}]') }}
     steps:
       - *linux_node_checkout_step
@@ -6405,7 +6406,7 @@ jobs:
     timeout-minutes: ${{ matrix.task == 'build-play' && ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1) || github.repository != 'openclaw/openclaw') && 35 || 20 }}
     strategy:
       fail-fast: false
-      max-parallel: ${{ (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) != 'github' && github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && github.repository == 'openclaw/openclaw' && github.run_attempt == 1 && 4 || 2 }}
+      max-parallel: 4
       matrix: ${{ fromJson(needs.preflight.outputs.android_matrix) }}
     steps:
       - &android_checkout_step
@@ -6965,6 +6966,13 @@ jobs:
             .artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read.json
             .artifacts/upgrade-survivor/release-update-survivor/healthy/update-runs.json
             .artifacts/upgrade-survivor/release-update-survivor/healthy/gateway-launcher.log
+            .artifacts/upgrade-survivor/release-update-survivor/crash/summary.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/trial.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/rows-before.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/rows-after.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/crash-after-migration.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/update-runs.json
+            .artifacts/upgrade-survivor/release-update-survivor/crash/gateway-launcher.log
             .artifacts/upgrade-survivor/release-update-survivor/downgrade/downgrade-source.json
             .artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.json
             .artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.log

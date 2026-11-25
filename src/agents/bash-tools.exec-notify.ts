@@ -5,12 +5,9 @@ import type {
   SessionEventOutcome,
 } from "../auto-reply/reply/session-event-contract.js";
 import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
-import {
-  readSessionEventTargetCommandOwner,
-  readSessionEventTargetOperatorAuthority,
-  readSessionEventTargetRequesterOwner,
-} from "../auto-reply/reply/session-event-target.js";
+import { readSessionEventTargetOperatorAuthority } from "../auto-reply/reply/session-event-target.js";
 import { runWithoutSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { captureQueuedOperatorRecoverySource } from "../gateway/operator-run-recovery-source.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
@@ -354,19 +351,19 @@ async function notifyOnExit(
       return;
     }
     try {
-      const commandOwner = readSessionEventTargetCommandOwner(target)?.requester;
-      const operatorProfileId = readSessionEventTargetOperatorAuthority(target)?.profileId;
+      const operatorSource = captureQueuedOperatorRecoverySource(
+        readSessionEventTargetOperatorAuthority(target),
+      );
       // The result is stored before any delivery: a Goal check or restart sees it from here on.
       const owed: Owed = {
         id: `exec:${processSessionInstanceId(session)}`,
         to: chatRef({ agentId, storePath: target.storePath, sessionKey: eventSessionKey }),
         kind: "exec",
         text: eventText,
-        originFacts: {
-          requester: readSessionEventTargetRequesterOwner(target)?.requester,
-          ...(commandOwner ? { commandOwner } : {}),
-          ...(operatorProfileId ? { operatorProfileId } : {}),
-        },
+        // Restart recovery replays the requester through admission, not the session principal.
+        ...(operatorSource && operatorSource.kind !== "unavailable"
+          ? { originFacts: { operatorSource } }
+          : {}),
       };
       // The completion outlives the turn that started the command, so it stores and wakes under
       // its own session actor and work scope: an incognito turn's actor and signal end with it.

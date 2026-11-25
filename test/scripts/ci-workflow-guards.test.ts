@@ -1883,31 +1883,7 @@ AFTER_CD
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(5);
     expect(workflow.jobs["checks-ui-e2e-real-gateway"].strategy["max-parallel"]).toBe(2);
-    for (const [context, expected] of [
-      [{ eventName: "push" }, 4],
-      [{ eventName: "pull_request", runnerBackend: "blacksmith" }, 4],
-      [{ eventName: "pull_request", runnerBackend: "hybrid" }, 4],
-      [{ eventName: "pull_request", authorAssociation: "NONE" }, 4],
-      [{ eventName: "push", runnerBackend: "github" }, 2],
-      [{ eventName: "push", runnerBackend: "blacksmith", runAttempt: 2 }, 2],
-      [{ eventName: "workflow_dispatch", runnerBackend: "blacksmith" }, 2],
-      [{ eventName: "pull_request", headRepository: "contributor/openclaw" }, 4],
-      [{ eventName: "schedule", runnerBackend: "blacksmith" }, 2],
-      [
-        {
-          eventName: "workflow_dispatch",
-          runnerBackend: "hybrid",
-          preflightOutputs: { ci_qualification: "true", qualification_runner_backend: "hybrid" },
-        },
-        2,
-      ],
-      [{ eventName: "push", repository: "contributor/openclaw" }, 2],
-    ] as const) {
-      expect(
-        evaluateWorkflowExpression(workflow.jobs.android.strategy["max-parallel"], { ...context }),
-        JSON.stringify(context),
-      ).toBe(expected);
-    }
+    expect(workflow.jobs.android.strategy["max-parallel"]).toBe(4);
     for (const runnerBackend of ["", "blacksmith", "hybrid", "runson", "github"] as const) {
       for (const runAttempt of [1, 2]) {
         const context = {
@@ -1919,15 +1895,10 @@ AFTER_CD
           runAttempt,
         };
         const runner = evaluateWorkflowExpression(workflow.jobs.android["runs-on"], context);
-        const parallel = evaluateWorkflowExpression(
-          workflow.jobs.android.strategy["max-parallel"],
-          context,
-        );
         const hosted = runnerBackend === "github" || runAttempt > 1;
         expect(runner, JSON.stringify(context)).toBe(
           hosted ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404",
         );
-        expect(parallel, JSON.stringify(context)).toBe(hosted ? 2 : 4);
       }
     }
   });
@@ -2075,14 +2046,15 @@ AFTER_CD
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/failure.json",
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/summary.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/crash-after-migration.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read.json",
       ".artifacts/upgrade-survivor/release-update-survivor/downgrade/downgrade-source.json",
       ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.json",
       ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.log",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/trial.json",
-      ".artifacts/upgrade-survivor/release-update-survivor/healthy/rows-after.json",
-      ".artifacts/upgrade-survivor/release-update-survivor/healthy/update-runs.json",
-      ".artifacts/upgrade-survivor/release-update-survivor/healthy/gateway-launcher.log",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/rows-after.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/update-runs.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/gateway-launcher.log",
     ]) {
       expect(uploaded(file), file).toBe(true);
     }
@@ -2090,7 +2062,7 @@ AFTER_CD
       ".artifacts/upgrade-survivor/baseline/legacy-operator-baseline-turn.err",
       ".artifacts/upgrade-survivor/baseline/diagnostics/raw.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/cli-env.json",
-      ".artifacts/upgrade-survivor/release-update-survivor/crash/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/gateway-env.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read/config.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read-env.json",
       ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade-baseline/state/openclaw.sqlite",

@@ -37,7 +37,6 @@ export const TURN_FLAG_FILES = new Set([
   "src/gateway/server-methods/restart.ts",
   "src/gateway/server-methods/update-run.ts",
   "src/gateway/server-methods/update.ts",
-  "src/gateway/session-sharing-authorization-async.ts",
   "src/gateway/update-run-notice-target.ts",
   "src/infra/outbound/delivery-queue-recovery-params.ts",
   "src/infra/update-requester-authority.ts",

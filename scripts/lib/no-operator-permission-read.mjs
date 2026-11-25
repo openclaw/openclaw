@@ -19,8 +19,6 @@ const READERS = new Set([
 // Owners and work starts that may read live permissions. Shrink only: a new file takes its
 // scopes, role and policy from the admitted operator authority instead of joining this list.
 export const ADMISSION_FILES = new Set([
-  "src/agents/tools/sessions-control-authority.ts",
-  "src/agents/tools/sessions-send-followup-custody.ts",
   "src/commands/doctor/cron/execution-context-check.ts",
   "src/cron/execution-context-admission.ts",
   "src/flows/doctor-member-roles.store.ts",
@@ -74,7 +72,6 @@ export const ADMISSION_FILES = new Set([
   "src/gateway/session-communication-approval.ts",
   "src/gateway/session-companion-rpc.ts",
   "src/gateway/session-permission-authorization.ts",
-  "src/gateway/session-sharing-authorization-async.ts",
   "src/gateway/session-sharing-policy.ts",
   "src/gateway/session-sharing-read.ts",
   "src/gateway/tools-invoke-shared.ts",

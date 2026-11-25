@@ -58,6 +58,13 @@ instead of provider-native button, component, block, or card fields.
 See [Message Presentation](/plugins/message-presentation) for the contract,
 fallback rules, provider mapping, and plugin author checklist.
 
+Core's shared message-tool fields stay channel-neutral. A parameter only one
+channel reads, such as a Discord guild id or a Feishu open id, belongs in that
+channel's fragment with the `actions` that read it. Core omits a fragment when
+none of its declared actions is advertised for the turn, and
+`visibility: "all-configured"` keeps it for that channel's actions advertised in
+bound-channel, WebChat, or scheduled turns.
+
 Provider-native schema extensions require explicit maintainer approval,
 channel-owned parsing, documented cross-channel behavior, and capabilities that
 `MessagePresentation` cannot express. Discord `components` is the approved
