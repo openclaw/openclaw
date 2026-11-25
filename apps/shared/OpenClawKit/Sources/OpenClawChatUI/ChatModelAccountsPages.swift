@@ -408,8 +408,10 @@ private struct ChatModelSignInStepSection: View {
             ChatModelSignInButtonRow(
                 title: ChatModelAccountsCopy.continueTitle,
                 isBusy: self.model.busy,
-                // While the server waits on the provider, Continue's box says so; it never grows for it.
-                busyTitle: answers ? nil : ChatModelAccountsCopy.waiting(self.providerName),
+                // While the server waits on the provider, Continue's box says so unless the step already
+                // does; it never grows for it.
+                busyTitle: answers || self.step.message?.trimmedNonEmpty != nil
+                    ? nil : ChatModelAccountsCopy.waiting(self.providerName),
                 id: "model-auth-continue")
             {
                 await self.model.answer()
