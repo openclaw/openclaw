@@ -32,9 +32,11 @@ import { authorizeGatewayMethod } from "./server-methods/method-authorization.js
 import { resolveInProcessGatewayDispatch } from "./server-plugin-in-process-authority.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { prepareSessionDelegatedOperatorAuthority } from "./session-delegated-operator-source.js";
-import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
+import {
+  prepareSessionSystemTurnAuthority,
+  resolveSessionMutationAuthorizationAsync,
+} from "./session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 function snapshotFor(entry: Awaited<ReturnType<typeof readSessionEntryReadOnlyInWorker>>) {
   const source = entry?.delegatedOperatorSource;
