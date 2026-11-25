@@ -3,8 +3,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyMediaAttachment } from "../shared/reply-payload.types.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import type { SubagentAttachmentReference } from "./subagents/spawn/subagent-spawn-contract.js";
 
-export type AgentGeneratedAttachment = Omit<ReplyMediaAttachment, "trustedLocalMedia">;
+export type AgentGeneratedAttachment = Omit<ReplyMediaAttachment, "trustedLocalMedia"> & {
+  attachmentRef?: SubagentAttachmentReference;
+};
 
 function generatedAttachmentReference(attachment: AgentGeneratedAttachment): string | undefined {
   return normalizeOptionalString(
@@ -92,6 +95,11 @@ export function formatGeneratedAttachmentLines(
       parts.push(`path=${quoteGeneratedAttachmentDisplay(path)}`);
     } else if (url) {
       parts.push(`mediaUrl=${quoteGeneratedAttachmentDisplay(url)}`);
+    }
+    if (attachment.attachmentRef) {
+      parts.push(
+        `attachmentRef=${quoteGeneratedAttachmentDisplay(JSON.stringify(attachment.attachmentRef))}`,
+      );
     }
     lines.push(parts.join(" "));
   }
