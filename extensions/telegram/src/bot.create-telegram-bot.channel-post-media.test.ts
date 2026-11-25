@@ -693,6 +693,12 @@ describe("createTelegramBot channel_post media", () => {
       const handler = getOnHandler("channel_post") as (
         ctx: Record<string, unknown>,
       ) => Promise<void>;
+      // Initialize the channel's dispatch path before starting the album-only flush check.
+      await handler(
+        createChannelPostContext({ messageId: 500, date: 1736380799, text: "fixture warmup" }),
+      );
+      expect(replySpy).toHaveBeenCalledOnce();
+      replySpy.mockClear();
       await queueChannelPostAlbum(handler, {
         caption: "fatal album",
         mediaGroupId: "fatal-album-1",
