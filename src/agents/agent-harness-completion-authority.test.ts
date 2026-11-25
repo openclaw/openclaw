@@ -1,10 +1,20 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createTestFollowupRun } from "../auto-reply/reply/agent-runner.test-fixtures.js";
+import {
+  readGoalContinuationContext,
+  prepareGoalContinuationContext,
+  recordGoalContinuationSettlement,
+} from "../auto-reply/reply/goal-continuation-return.js";
+import { enqueueGoalContinuation } from "../auto-reply/reply/goal-continuation.js";
+import * as queue from "../auto-reply/reply/queue/enqueue.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { createSessionGoal } from "../config/sessions/goals.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { prepareGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
+import { createChatSendLateFollowupDisposition } from "../gateway/server-methods/chat-send-late-followup.js";
 import {
   createContext,
   createOperatorClient,
@@ -26,6 +36,12 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  claimSessionControllerTask,
+  releaseSessionControllerClaim,
+} from "../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as profileReader from "../state/user-profile-list.js";
@@ -33,10 +49,16 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import {
+  createTestAdmittedRunContext,
+  createTestOperatorAuthority,
+} from "./admitted-run-context.test-support.js";
 import { runWithAgentHarnessCompletionCustody as runWithCustody } from "./agent-harness-completion-custody.js";
 import { createAgentHarnessCompletionScope as makeScope } from "./agent-harness-completion-scope.js";
 import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
+import { createLifecycleHarness } from "./harness/lifecycle.test-support.js";
+import * as registry from "./harness/registry.js";
+import * as announcement from "./subagents/announce/subagent-announce-delivery.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 afterEach(() => resetGatewayWorkAdmission());
@@ -337,3 +359,152 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
       }
     }),
 );
+
+it("resumes only the Goal nudge displaced by an acknowledged native result", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sessionKey = requesterSessionKey;
+    const sessionId = "parent-session";
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const { scope, capture, context } = operatorFixture("native-goal");
+    const target = { storePath, agentId: "main", sessionKey };
+    await replaceSessionEntry(target, {
+      sessionId,
+      updatedAt: Date.now(),
+      agentHarnessId: "codex",
+    });
+    const goalId = (await createSessionGoal({ ...target, objective: "Verify both changes" })).id;
+    const sessionEntry = (await announcement.loadRequesterSessionEntry(sessionKey, "main")).entry!;
+    const custody = (await capture())!;
+    const registered = vi
+      .spyOn(registry, "getRegisteredAgentHarness")
+      .mockReturnValue({ harness: createLifecycleHarness() });
+    const enqueue = vi.spyOn(queue, "enqueueFollowupRun").mockReturnValue(false);
+    const announce = vi.spyOn(announcement, "deliverSubagentAnnouncement");
+    const result = { meta: { durationMs: 0, stopReason: "stop" } };
+    try {
+      for (const ending of [
+        "direct",
+        "siblings",
+        "mixed siblings",
+        "handled failure",
+        "revoked",
+        "replay",
+        "failed delivery",
+        "cancelled",
+        "no displaced turn",
+        "uncaptured",
+      ]) {
+        const operation = createReplyOperation({
+          sessionKey,
+          sessionId,
+          resetTriggered: false,
+          target: captureSessionTarget({
+            sessionKey,
+            agentId: "main",
+            storeScope: storePath,
+            incarnation: sessionId,
+          }),
+        });
+        const caller = new AbortController();
+        const base = createTestFollowupRun({ sessionKey, sessionId });
+        base.operatorAuthority = createTestOperatorAuthority({
+          profileId: "original",
+          scopes: ["operator.write"],
+          signal: caller.signal,
+        });
+        base.queuedFollowupReplyDisposition = {
+          kind: "deliver",
+          deliver: createChatSendLateFollowupDisposition({
+            runId: "foreground",
+            originatingChannel: "webchat",
+            logGateway: context.logGateway,
+            deliver: async () => ({ kind: "delivered" }),
+          }).deliver,
+        };
+        enqueue.mockClear();
+        const deliver = (id: string) =>
+          deliverCompletion({
+            scope,
+            completionCustody: ending === "uncaptured" ? undefined : custody,
+            childSessionKey: `native:${id}`,
+            childSessionId: id,
+            announceId: `native:parent:${id}:${ending}`,
+            status:
+              ending === "handled failure"
+                ? "failed"
+                : ending === "cancelled" || (ending === "mixed siblings" && id === "child")
+                  ? "cancelled"
+                  : "succeeded",
+            result: "First change checked.",
+            isSourceSessionAdmissionAllowed: () => true,
+          });
+
+        announce.mockImplementation(
+          async ({ directIdempotencyKey: runId, sourceSessionKey, controllerInput }) => {
+            const mixed = ending === "mixed siblings" && sourceSessionKey === "native:child";
+            const waiting =
+              mixed || ["direct", "failed delivery", "cancelled", "uncaptured"].includes(ending)
+                ? claimSessionControllerTask(controllerInput!, () => {})
+                : undefined;
+            if (mixed || (ending === "siblings" && sourceSessionKey === "native:child")) {
+              expect((await deliver("sibling")).delivered).toBe(true);
+              expect(enqueue).not.toHaveBeenCalled();
+            } else if (ending !== "no displaced turn") {
+              await enqueueGoalContinuation({
+                base,
+                result,
+                operation,
+                sessionKey,
+                storePath,
+                queueKey: sessionKey,
+                settings: { mode: "followup" },
+                initialGoalId: goalId,
+                expectedSession: sessionEntry,
+                runFollowup: async () => {},
+                sourceRunId: "foreground",
+              });
+              expect(enqueue).not.toHaveBeenCalled();
+            }
+            operation.complete();
+            if (waiting) {
+              releaseSessionControllerClaim(await waiting);
+            }
+            if (ending !== "replay") {
+              prepareGoalContinuationContext({ runId, sessionKey, sessionEntry });
+              expect(readGoalContinuationContext({ runId, sessionKey })).toBeUndefined();
+              recordGoalContinuationSettlement({ runId, sessionKey, result, succeeded: true });
+            }
+            if (ending === "revoked") {
+              caller.abort();
+            }
+            return { delivered: !mixed && ending !== "failed delivery", path: "direct" };
+          },
+        );
+        try {
+          const receipt = await deliver("child");
+          expect(receipt.delivered, ending).toBe(
+            ending !== "failed delivery" && ending !== "mixed siblings",
+          );
+          const resumes =
+            ending === "direct" || ending === "handled failure" || ending === "siblings";
+          expect(enqueue, ending).toHaveBeenCalledTimes(Number(resumes));
+          if (resumes) {
+            const queued = enqueue.mock.calls[0]![1];
+            expect(queued.goalContinuation).toMatchObject({
+              goalId,
+              localCodexGoal: true,
+              sessionId,
+            });
+            expect(queued.operatorAuthority).toBe(base.operatorAuthority);
+          }
+        } finally {
+          operation.complete();
+        }
+      }
+    } finally {
+      custody.release();
+      announce.mockRestore();
+      enqueue.mockRestore();
+      registered.mockRestore();
+    }
+  }));

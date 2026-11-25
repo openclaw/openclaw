@@ -126,8 +126,8 @@ function hasQueuedInput(
         mailbox.entries.some(
           (input) =>
             input.phase !== "consumed" &&
-            counts(input) &&
-            !isCurrentSessionControllerTurnInput(input),
+            !isCurrentSessionControllerTurnInput(input) &&
+            counts(input),
         )),
     );
   });
@@ -150,12 +150,14 @@ export function hasSessionControllerQueuedTurn(
   scope: string,
   identities: Iterable<string | undefined>,
   agentId?: string,
+  defer?: (input: SessionControllerInput) => boolean,
 ): boolean {
   return hasQueuedInput(
     scope,
     identities,
     agentId,
-    (input) => input.source !== undefined || input.task === undefined,
+    // An adopted completion can already be waiting as a task behind the active turn.
+    (input) => !defer?.(input) && (input.source !== undefined || input.task === undefined),
   );
 }
 export function isCompetingSessionControllerWorkActive(

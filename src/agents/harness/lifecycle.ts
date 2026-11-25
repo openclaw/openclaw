@@ -1,3 +1,4 @@
+import { readGoalContinuationContext } from "../../auto-reply/reply/goal-continuation-return.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { assertContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { truncateDiagnosticContent } from "../../infra/diagnostic-content.js";
@@ -368,7 +369,10 @@ export async function runAgentHarnessLifecycleAttempt(
     diagnostics.startAgentRun();
     const runAndClassify = async () => {
       diagnostics.setPhase("send");
-      const rawResult = await execute(params);
+      const currentInboundContext = readGoalContinuationContext(params);
+      const rawResult = await execute(
+        currentInboundContext ? { ...params, currentInboundContext } : params,
+      );
       diagnostics.setPhase("resolve");
       // Classification happens inside the diagnostic phase so failures identify
       // whether they came from send or result resolution.

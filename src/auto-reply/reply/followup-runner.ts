@@ -248,11 +248,7 @@ export function createFollowupRunner(
       // Queued user input can explicitly start the next goal after completion.
       const initialGoalId = initialGoal?.status === "complete" ? undefined : initialGoal?.id;
       const runWithGoalReturn = createGoalContinuationReturn(
-        turn.session.kind === "session" &&
-          turn.session.storePath &&
-          initialSessionEntry &&
-          (initialSessionEntry.agentHarnessId === undefined ||
-            initialSessionEntry.agentHarnessId === "openclaw")
+        turn.session.kind === "session" && turn.session.storePath && initialSessionEntry
           ? {
               base: turn.queued,
               initialGoalId:

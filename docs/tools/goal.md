@@ -235,10 +235,14 @@ and do not appear as new human messages. Queued user input and existing
 child/tool continuations take precedence; the nudge does not run alongside them.
 Children collected within the turn do not block continuation merely because they
 were spawned.
-When a built-in chat Goal yields to children, their settled requester turn
-receives the current Goal context. A normal final returns pursuit to the same
-follow-up queue only after the child completion batch is committed; it does not
-make independent command runs autonomous.
+When a chat Goal yields to children, the selected harness or CLI receives the
+current Goal context on their return. After the child completion batch commits,
+a successful parent turn can continue pursuit through the same queue.
+If a detached Codex result arrives just as the next Goal turn would be queued,
+the child result takes priority. After a normal parent reply and confirmed
+delivery, the delayed turn can proceed under the original caller's permissions.
+This also applies when the parent handles a child's failure. Cancellation and
+independent command runs cannot start automatic pursuit.
 The goal and session are checked again at admission, so a stale queued nudge
 cannot pursue a cleared, replaced, completed, blocked, paused, or limited goal.
 

@@ -27,8 +27,10 @@ import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
 } from "../agents/subagents/announce/subagent-announce-origin.js";
+import { withNativeGoalBarrier } from "../auto-reply/reply/goal-continuation-return.js";
 import { runWithOperatorToolGatewayContinuationContext } from "../gateway/server-plugin-in-process-authority.js";
 import {
+  getInProcessGatewayRequestContext,
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
@@ -171,6 +173,7 @@ async function deliverAgentHarnessCompletionBound(
       },
     ];
     const prompt = formatAgentInternalEventsForPrompt(internalEvents);
+    const sourceRunId = buildAnnounceIdempotencyKey(params.announceId);
     const deliver = async (): Promise<AgentHarnessCompletionDelivery> => {
       if (!requesterSessionId || !isRequesterCurrent(true)) {
         return {
@@ -184,11 +187,10 @@ async function deliverAgentHarnessCompletionBound(
         {
           scope,
           sourceSessionKey: childSessionKey,
-          sourceRunId: buildAnnounceIdempotencyKey(params.announceId),
+          sourceRunId,
           isSourceCurrent: isSourceSessionEffectsAllowed,
         },
         async () => {
-          const sourceRunId = buildAnnounceIdempotencyKey(params.announceId);
           const assertCurrent = assertHarnessCompletionSourceAdmission({
             requesterSessionKey,
             requesterAgentId: scope.requesterAgentId,
@@ -215,32 +217,58 @@ async function deliverAgentHarnessCompletionBound(
                   },
                 })
               : undefined;
-          try {
-            return await deliverSubagentAnnouncement({
-              requesterSessionKey,
-              requesterAgentId: scope.requesterAgentId,
-              isSourceSessionEffectsAllowed,
-              triggerMessage: prompt,
-              internalEvents,
-              requesterSessionOrigin: scope.requesterOrigin,
-              completionDirectOrigin: completionDirectOrigin ?? directOrigin,
-              directOrigin,
-              sourceSessionKey: childSessionKey,
-              sourceTool: "agent_harness_completion",
-              isSourceSessionAdmissionAllowed: isSourceSessionEffectsAllowed,
-              targetRequesterSessionKey: requesterSessionKey,
-              requesterIsSubagent,
-              expectsCompletionMessage: true,
-              bestEffortDeliver: true,
-              directIdempotencyKey: buildAnnounceIdempotencyKey(params.announceId),
-              signal,
-              controllerInput,
-            });
-          } finally {
-            if (controllerInput && !controllerInput.custody.rpcAdopted) {
-              retireSessionControllerInput(controllerInput);
+          const announce = async () => {
+            try {
+              return await deliverSubagentAnnouncement({
+                requesterSessionKey,
+                requesterAgentId: scope.requesterAgentId,
+                isSourceSessionEffectsAllowed,
+                triggerMessage: prompt,
+                internalEvents,
+                requesterSessionOrigin: scope.requesterOrigin,
+                completionDirectOrigin: completionDirectOrigin ?? directOrigin,
+                directOrigin,
+                sourceSessionKey: childSessionKey,
+                sourceTool: "agent_harness_completion",
+                isSourceSessionAdmissionAllowed: isSourceSessionEffectsAllowed,
+                targetRequesterSessionKey: requesterSessionKey,
+                requesterIsSubagent,
+                expectsCompletionMessage: true,
+                bestEffortDeliver: true,
+                directIdempotencyKey: sourceRunId,
+                signal,
+                controllerInput,
+              });
+            } finally {
+              if (controllerInput && !controllerInput.custody.rpcAdopted) {
+                retireSessionControllerInput(controllerInput);
+              }
             }
+          };
+          if (!controllerInput) {
+            return announce();
           }
+          return withNativeGoalBarrier(
+            controllerInput,
+            completionCustody &&
+              requester.entry &&
+              (params.status === "succeeded" || params.status === "failed")
+              ? {
+                  runId: sourceRunId,
+                  sessionKey: requester.canonicalKey,
+                  agentId: scope.requesterAgentId,
+                  session: requester.entry,
+                  isCurrent: isSourceSessionEffectsAllowed,
+                }
+              : null,
+            announce,
+            (receipt) =>
+              receipt.path === "direct" && isDurableAgentHarnessCompletionDelivery(receipt),
+            () =>
+              getInProcessGatewayRequestContext(resolveGatewayContext)?.logGateway.warn(
+                "Child result delivered, but Goal continuation failed. Check the session before resuming.",
+              ),
+          );
         },
       );
     };

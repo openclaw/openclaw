@@ -6,11 +6,15 @@ import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subage
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-events.js";
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
-import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import type {
+  ReplyOperation,
+  SessionControllerInput,
+} from "../../sessions/session-controller.contracts.js";
 import { runAfterReplyOperationClear } from "../../sessions/session-controller.state.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
 import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
+import { replyCallbackCustody } from "./reply-callback-custody.js";
 
 type GoalReturnParams = {
   base: FollowupRun;
@@ -39,7 +43,7 @@ type GoalReturn = {
   signal: AbortSignal;
   sourceRunId?: string;
   cohort?: { keys: readonly object[]; rearmGeneration: number };
-  release?: () => void;
+  holds?: DisposableStack;
   closed: boolean;
   close: () => void;
   terminal?: { runId: string; result: EmbeddedAgentRunResult };
@@ -75,13 +79,18 @@ function closeGoalReturn(owner: GoalReturn): void {
     }
   }
   owner.signal.removeEventListener("abort", owner.close);
-  owner.release?.();
+  owner.holds?.dispose();
 }
 
 /** Preserve the admitted chat route independently of the expiring settle capability. */
 export function createGoalContinuationReturnScope(
   params: GoalReturnParams,
 ): <T>(run: () => T) => T {
+  const owner = createGoalReturn(params);
+  return (run) => goalReturns.run(owner, run);
+}
+
+function createGoalReturn(params: GoalReturnParams): GoalReturn {
   const sourceSignal = resolveFollowupAbortSignal(params.base);
   const owner: GoalReturn = {
     params,
@@ -100,7 +109,7 @@ export function createGoalContinuationReturnScope(
       owner.close();
     }
   });
-  return (run) => goalReturns.run(owner, run);
+  return owner;
 }
 
 /** The reply execution owner supplies its physical run ID before any tools can yield. */
@@ -172,6 +181,151 @@ export function readCreatedGoalContinuationId(
     : undefined;
 }
 
+function retainGoalReturn(owner: GoalReturn): boolean {
+  if (!owner.holds) {
+    const { base } = owner.params;
+    const source = base.queuedFollowupReplyDisposition;
+    if (source?.kind === "drop") {
+      owner.close();
+      return false;
+    }
+    using holds = new DisposableStack();
+    if (base.operatorAuthority?.retain) {
+      holds.defer(base.operatorAuthority.retain());
+    }
+    if (base[replyCallbackCustody]) {
+      holds.defer(base[replyCallbackCustody].retain());
+    }
+    // Allocate one-shot delivery before the lending source settles.
+    owner.params.base = {
+      ...base,
+      queuedFollowupReplyDisposition:
+        source?.kind === "deliver"
+          ? {
+              kind: "deliver",
+              deliver: source.deliver.createSourceRetry?.() ?? source.deliver,
+            }
+          : source,
+    };
+    if (
+      owner.closed ||
+      owner.signal.aborted ||
+      owner.generation !== getAgentRunLifecycleGeneration()
+    ) {
+      return false;
+    }
+    owner.holds = holds.move();
+    retainedReturns.add(owner);
+    owner.signal.addEventListener("abort", owner.close, { once: true });
+  }
+  return true;
+}
+
+type NativeGoalBarrier = {
+  runId: string;
+  agentId: string;
+  sessionKey: string;
+  session: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+  isCurrent: () => boolean;
+  displaced?: {
+    owner: GoalReturn;
+    remaining: number;
+    eligible: (result: EmbeddedAgentRunResult) => boolean;
+  };
+  terminal?: GoalReturn["terminal"];
+};
+
+const { pending, commands } = resolveGlobalSingleton(
+  Symbol.for("openclaw.nativeGoalBarriers"),
+  () => ({
+    pending: new WeakMap<SessionControllerInput, NativeGoalBarrier | null>(),
+    commands: new AsyncLocalStorage<NativeGoalBarrier>(),
+  }),
+);
+
+/** A native input can delay an eligible chat nudge. It never borrows chat context or authority. */
+export async function withNativeGoalBarrier<T>(
+  input: SessionControllerInput,
+  barrier: NativeGoalBarrier | null,
+  deliver: () => Promise<T>,
+  delivered: (receipt: T) => boolean,
+  onError: () => void,
+): Promise<T> {
+  if (pending.has(input)) {
+    return deliver();
+  }
+  pending.set(input, barrier);
+  try {
+    // Uncaptured or cancelled inputs still block pursuit after becoming mailbox tasks.
+    if (!barrier) {
+      return await deliver();
+    }
+    const receipt = await commands.run(barrier, deliver);
+    const group = barrier.displaced;
+    if (
+      group &&
+      barrier.terminal &&
+      delivered(receipt) &&
+      group.owner.params.operation.result?.kind === "completed"
+    ) {
+      // An acknowledged delivery must never be replayed because pursuit failed.
+      try {
+        if (barrier.isCurrent() && group.eligible(barrier.terminal.result)) {
+          if (--group.remaining === 0) {
+            group.owner.terminal = barrier.terminal;
+            await resumeGoalReturn(group.owner, barrier.isCurrent);
+          } else {
+            barrier.displaced = undefined;
+          }
+        }
+      } catch {
+        onError();
+      }
+    }
+    return receipt;
+  } finally {
+    pending.delete(input);
+    barrier?.displaced?.owner.close();
+  }
+}
+
+export function isNativeGoalBarrier(input: SessionControllerInput): boolean {
+  return pending.has(input);
+}
+
+export function deferGoalContinuation(
+  inputs: ReadonlySet<SessionControllerInput>,
+  params: GoalReturnParams,
+  continuation: GoalContinuation,
+  eligible: (result: EmbeddedAgentRunResult) => boolean,
+): void {
+  const barriers: NativeGoalBarrier[] = [];
+  for (const input of inputs) {
+    const barrier = pending.get(input);
+    if (
+      !barrier ||
+      barrier.displaced ||
+      input.abortSignal.aborted ||
+      barrier.sessionKey !== params.sessionKey ||
+      barrier.agentId !== params.base.run.agentId ||
+      barrier.session.sessionId !== continuation.sessionId ||
+      barrier.session.lifecycleRevision !== continuation.lifecycleRevision ||
+      params.operation.sessionId !== continuation.sessionId
+    ) {
+      return;
+    }
+    barriers.push(barrier);
+  }
+  const owner = createGoalReturn(params);
+  owner.continuation = { ...continuation, nativeReturn: true };
+  if (retainGoalReturn(owner)) {
+    const displaced = { owner, remaining: barriers.length, eligible };
+    for (const barrier of barriers) {
+      barrier.displaced = displaced;
+    }
+  }
+}
+
 /** The committed yield publisher binds the return before the completion wake becomes eligible. */
 export function promoteGoalContinuationYield(params: {
   entries: readonly SubagentRunRecord[];
@@ -211,23 +365,8 @@ export function promoteGoalContinuationYield(params: {
   ) {
     return;
   }
-  if (!owner.cohort) {
-    const source = base.queuedFollowupReplyDisposition;
-    if (source?.kind === "drop") {
-      owner.close();
-      return;
-    }
-    // Allocate one-shot delivery before the lending source settles.
-    owner.params.base = {
-      ...base,
-      queuedFollowupReplyDisposition:
-        source?.kind === "deliver"
-          ? { kind: "deliver", deliver: source.deliver.createSourceRetry?.() ?? source.deliver }
-          : source,
-    };
-    owner.release = base.operatorAuthority?.retain?.();
-    retainedReturns.add(owner);
-    owner.signal.addEventListener("abort", owner.close, { once: true });
+  if (!retainGoalReturn(owner)) {
+    return;
   }
   for (const key of owner.cohort?.keys ?? []) {
     cohortReturns.delete(key);
@@ -278,7 +417,7 @@ export function withGoalContinuationSettlement<T>(
   return owner ? goalSettlements.run({ owner, runId, isCurrent }, run) : run();
 }
 
-/** Command preparation captures current Goal facts without injecting them into a native runtime. */
+/** Command preparation supplies current session facts for runtime admission. */
 export function prepareGoalContinuationContext(params: {
   runId: string;
   sessionKey?: string;
@@ -295,7 +434,7 @@ export function prepareGoalContinuationContext(params: {
   }
 }
 
-/** Only the actual built-in harness consumes this transient context. */
+/** Only the exact admitted child-result command consumes this context. */
 export function readGoalContinuationContext(params: {
   runId: string;
   sessionKey?: string;
@@ -329,6 +468,17 @@ export function recordGoalContinuationSettlement(params: {
   result: EmbeddedAgentRunResult;
   succeeded: boolean;
 }): void {
+  const barrier = commands.getStore();
+  if (
+    barrier?.runId === params.runId &&
+    barrier.sessionKey === params.sessionKey &&
+    barrier.isCurrent()
+  ) {
+    barrier.terminal = params.succeeded
+      ? { runId: params.runId, result: params.result }
+      : undefined;
+    return;
+  }
   const settlement = goalSettlements.getStore();
   if (
     settlement &&
@@ -337,9 +487,26 @@ export function recordGoalContinuationSettlement(params: {
     settlement.isCurrent() &&
     !settlement.owner.closed
   ) {
-    settlement.owner.terminal = params.succeeded
-      ? { runId: params.runId, result: params.result }
-      : undefined;
+    settlement.owner.terminal =
+      settlement.admitted && params.succeeded
+        ? { runId: params.runId, result: params.result }
+        : undefined;
+  }
+}
+
+async function resumeGoalReturn(owner: GoalReturn, current?: () => boolean): Promise<void> {
+  const isCurrent = () =>
+    !owner.closed &&
+    !owner.signal.aborted &&
+    owner.generation === getAgentRunLifecycleGeneration() &&
+    current?.() !== false;
+  if (owner.terminal && owner.continuation && isCurrent()) {
+    await owner.params.resume({
+      continuation: owner.continuation,
+      base: owner.params.base,
+      ...owner.terminal,
+      isCurrent,
+    });
   }
 }
 
@@ -361,13 +528,8 @@ export async function finishGoalContinuationSettlement(
     return;
   }
   try {
-    if (delivered && owner.terminal && owner.continuation) {
-      await owner.params.resume({
-        continuation: owner.continuation,
-        base: owner.params.base,
-        ...owner.terminal,
-        isCurrent: () => !owner.closed && owner.generation === getAgentRunLifecycleGeneration(),
-      });
+    if (delivered) {
+      await resumeGoalReturn(owner);
     }
   } catch (error) {
     if (owner.closed) {

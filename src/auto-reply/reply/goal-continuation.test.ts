@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
+import { runWithCliTurn } from "../../agents/cli-runner/turn-admission.js";
 import { runEmbeddedAttempt } from "../../agents/embedded-agent-runner/run/attempt.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createOpenClawAgentHarness } from "../../agents/harness/builtin-openclaw.js";
+import { runAgentHarnessLifecycleAttempt } from "../../agents/harness/lifecycle.js";
 import {
   createAttemptParams,
+  createBaseAttemptParams,
   createAttemptResult,
+  createLifecycleHarness,
 } from "../../agents/harness/lifecycle.test-support.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -55,6 +59,7 @@ import {
 } from "./goal-continuation.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import type { FollowupRun } from "./queue/types.js";
+import { replyCallbackCustody } from "./reply-callback-custody.js";
 
 // mock-isolation: This unit contract observes the actual built-in context consumer without a provider call.
 vi.mock("../../agents/embedded-agent-runner/run/attempt.js", () => ({
@@ -118,6 +123,12 @@ const identity = {
 const normal: EmbeddedAgentRunResult = {
   meta: { durationMs: 0, stopReason: "end_turn" },
   payloads: [{ text: "More work remains." }],
+};
+const cliSuccess = {
+  meta: {
+    durationMs: 0,
+    completion: { stopReason: "completed", finishReason: "stop", refusal: false },
+  },
 };
 const operations = new Set<ReplyOperation>();
 function entry(): SessionEntry {
@@ -310,6 +321,12 @@ describe("Goal continuation eligibility", () => {
       ).toBe(expected);
     }
   });
+  it("does not turn a scheduled CLI result into an automatic Goal turn", async () => {
+    const f = fixture();
+    f.params.base.run.scheduledAutomation = { ...TEST_SCHEDULED_TURN, job: makeCronJob({}) };
+    f.params.result = cliSuccess;
+    expect(await enqueueGoalContinuation(f.params)).toBe(false);
+  });
   it("observes fresh token exhaustion before scheduling another turn", () => {
     const current = entry();
     current.goal!.tokenBudget = 50;
@@ -326,7 +343,13 @@ describe("Goal continuation eligibility", () => {
     { meta: { timeoutPhase: "provider" as const } },
     { meta: { error: { kind: "hook_block" as const, message: "Blocked" } } },
     { meta: { pendingToolCalls: [{ id: "tool-1", name: "exec", arguments: "{}" }] } },
-    { meta: { stopReason: "refusal" } },
+    {
+      meta: {
+        stopReason: "refusal",
+        completion: { finishReason: "stop", stopReason: "completed" },
+      },
+    },
+    { meta: { completion: { refusal: true } } },
     { didSendDeterministicApprovalPrompt: true },
     {
       acceptedSessionSpawns: [
@@ -670,36 +693,71 @@ describe("Goal return from committed child custody", () => {
     expect(enqueueFollowupRun).toHaveBeenCalledOnce();
   });
 
-  it.each(["settle-run", "independent-command"])(
-    "injects Goal context at the actual built-in harness only for the admitted settlement (%s)",
-    async (runId) => {
+  it.each([
+    ["openclaw", "settle-run", true],
+    ["codex", "settle-run", true],
+    ["codex", "independent-command", false],
+    ["external", "settle-run", false],
+    ["cli", "settle-run", true],
+  ] as const)(
+    "carries Goal context through %s admission for %s and rechecks queue eligibility",
+    async (runtime, runId, shouldQueue) => {
       const f = retainedGoal();
       f.retain();
+      f.operation.complete();
+      const sessionEntry = { ...entry(), agentHarnessId: runtime === "cli" ? undefined : runtime };
+      vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(sessionEntry);
       await withGoalContinuationSettlement(
         [f.child],
         "settle-run",
         () => true,
         async () => {
-          prepareGoalContinuationContext({
-            runId: "settle-run",
-            sessionKey: f.params.sessionKey,
-            sessionEntry: entry(),
-          });
-          vi.mocked(runEmbeddedAttempt).mockClear();
-          await createOpenClawAgentHarness().runAttempt({
-            ...createAttemptParams(),
+          const sessionKey = f.params.sessionKey;
+          prepareGoalContinuationContext({ runId: "settle-run", sessionKey, sessionEntry });
+          const params = {
+            ...createBaseAttemptParams(),
             runId,
-            sessionKey: f.params.sessionKey,
+            sessionKey,
+            sessionId: identity.sessionId,
             currentInboundContext: { text: "Preserve the requester context." },
-          });
-          const context = vi.mocked(runEmbeddedAttempt).mock.calls[0]?.[0].currentInboundContext;
-          expect(context?.text).toContain("Preserve the requester context.");
-          expect(context?.text.includes("Active goal: Finish the checklist")).toBe(
+          };
+          let context: string | undefined;
+          let result = normal;
+          if (runtime === "cli") {
+            result = await runWithCliTurn(
+              { ...params, provider: "fixture-cli", model: params.modelId },
+              async (attempt) => {
+                context = attempt.currentInboundContext?.text;
+                return cliSuccess;
+              },
+            );
+          } else {
+            const harness =
+              runtime === "openclaw"
+                ? createOpenClawAgentHarness()
+                : createLifecycleHarness({
+                    id: runtime,
+                    runAttempt: async (attempt) => {
+                      context = attempt.currentInboundContext?.text;
+                      return createAttemptResult();
+                    },
+                  });
+            vi.mocked(runEmbeddedAttempt).mockClear();
+            await runAgentHarnessLifecycleAttempt(harness, { ...createAttemptParams(), ...params });
+            if (runtime === "openclaw") {
+              context =
+                vi.mocked(runEmbeddedAttempt).mock.calls[0]?.[0].currentInboundContext?.text;
+            }
+          }
+          expect(context).toContain("Preserve the requester context.");
+          expect(context?.includes("Active goal: Finish the checklist")).toBe(
             runId === "settle-run",
           );
+          recordGoalContinuationSettlement({ runId, sessionKey, result, succeeded: true });
         },
       );
-      await f.finish(false);
+      await f.finish();
+      expect(enqueueFollowupRun).toHaveBeenCalledTimes(Number(shouldQueue));
     },
   );
 
@@ -717,6 +775,8 @@ describe("Goal return from committed child custody", () => {
       },
     });
     f.params.base.operatorAuthority = source;
+    const released = vi.fn();
+    f.params.base[replyCallbackCustody] = { retain: () => released };
     f.params.base.originatingThreadId = "original-thread";
     f.params.base.originatingChannel = "webchat";
     const delivered = vi.fn(async () => ({ kind: "delivered" as const }));
@@ -742,6 +802,7 @@ describe("Goal return from committed child custody", () => {
     f.operation.complete();
     holds--; // The original chat input has settled, but child custody is independent.
     expect(holds).toBe(1);
+    expect(released).not.toHaveBeenCalled();
     expect(f.publish()?.text).toContain("Active goal: Finish the checklist");
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
     await f.finish();
@@ -761,6 +822,7 @@ describe("Goal return from committed child custody", () => {
     });
     expect(delivered).toHaveBeenCalledTimes(2);
     expect(holds).toBe(0);
+    expect(released).toHaveBeenCalledOnce();
     await f.finish();
     expect(enqueueFollowupRun).toHaveBeenCalledOnce();
   });

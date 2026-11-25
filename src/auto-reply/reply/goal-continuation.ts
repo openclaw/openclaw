@@ -24,7 +24,11 @@ import {
 } from "../../sessions/session-controller.mailbox.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { transferCommandOwnerAuthorityToSuccessor } from "../command-owner-authority.js";
-import { createGoalContinuationReturnScope } from "./goal-continuation-return.js";
+import {
+  createGoalContinuationReturnScope,
+  deferGoalContinuation,
+  isNativeGoalBarrier,
+} from "./goal-continuation-return.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { scheduleFollowupDrain } from "./queue/drain.js";
@@ -78,16 +82,26 @@ async function resolveCodexGoalPlacement(params: {
   }
 }
 
-export function isGoalContinuationCurrent(
-  continuation: GoalContinuation,
-  entry: SessionEntry | undefined,
-): boolean {
+function isGoalActive(continuation: GoalContinuation, entry: SessionEntry | undefined): boolean {
   const goal = entry && accountSessionGoalUsage(entry, Date.now());
   return Boolean(
     entry &&
     goal?.id === continuation.goalId &&
     goal.status === "active" &&
     !entry.abortedLastRun &&
+    (!continuation.nativeReturn ||
+      (entry.sessionId === continuation.sessionId &&
+        entry.lifecycleRevision === continuation.lifecycleRevision)),
+  );
+}
+
+export function isGoalContinuationCurrent(
+  continuation: GoalContinuation,
+  entry: SessionEntry | undefined,
+): boolean {
+  return Boolean(
+    entry &&
+    isGoalActive(continuation, entry) &&
     (entry.agentHarnessId === undefined ||
       entry.agentHarnessId === "openclaw" ||
       (entry.agentHarnessId === "codex" &&
@@ -127,7 +141,12 @@ export async function isGoalContinuationPlacementCurrent(params: {
 function isGoalContinuationOutcome(result: EmbeddedAgentRunResult): boolean {
   const meta = result.meta;
   return (
-    (meta.stopReason === "end_turn" || meta.stopReason === "stop") &&
+    (meta.stopReason === "end_turn" ||
+      meta.stopReason === "stop" ||
+      (meta.stopReason === undefined &&
+        meta.completion?.stopReason === "completed" &&
+        meta.completion.finishReason === "stop")) &&
+    !meta.completion?.refusal &&
     !meta.aborted &&
     !meta.error &&
     !meta.timeoutPhase &&
@@ -159,6 +178,14 @@ type GoalContinuationParams = {
 };
 
 export async function enqueueGoalContinuation(params: GoalContinuationParams): Promise<boolean> {
+  const native = new Set<SessionControllerInput>();
+  const deferNative = (input: SessionControllerInput) => {
+    if (!isNativeGoalBarrier(input)) {
+      return false;
+    }
+    native.add(input);
+    return true;
+  };
   const eligible = () =>
     params.isCurrent?.() !== false &&
     !params.controllerInput?.abortSignal.aborted &&
@@ -166,13 +193,17 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     params.operation.result?.kind !== "failed" &&
     params.operation.result?.kind !== "aborted" &&
     !isFollowupRunAborted(params.base) &&
-    // A queued reply turn continues the Goal at its own end; post-turn upkeep does not.
     !hasSessionControllerQueuedTurn(
       params.storePath,
       [params.sessionKey, params.expectedSession.sessionId],
       params.base.run.agentId,
+      deferNative,
     );
-  if (!isGoalContinuationOutcome(params.result) || !eligible()) {
+  if (
+    params.base.run.scheduledAutomation ||
+    !isGoalContinuationOutcome(params.result) ||
+    !eligible()
+  ) {
     return false;
   }
   const { listUnsettledRequesterChildren } =
@@ -226,6 +257,17 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     ...(codexPlacement === "local" ? { localCodexGoal: true as const } : {}),
   };
   if (!isGoalContinuationCurrent(continuation, entry)) {
+    return false;
+  }
+  if (native.size) {
+    if (params.initialGoalId) {
+      deferGoalContinuation(
+        native,
+        goalReturnParams(params),
+        continuation,
+        isGoalContinuationOutcome,
+      );
+    }
     return false;
   }
   const source = params.base.queuedFollowupReplyDisposition;
@@ -299,14 +341,20 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   return enqueued;
 }
 
-/** The queue owner retains only the return from an admitted built-in chat Goal. */
+/** Child results can carry Goal context. Automatic successors still require eligible placement. */
 export function createGoalContinuationReturn(
   params: Omit<GoalContinuationParams, "result" | "sourceRunId"> | undefined,
 ): <T>(run: () => T) => T {
-  if (!params) {
+  if (!params || params.base.run.scheduledAutomation) {
     return (run) => run();
   }
-  return createGoalContinuationReturnScope({
+  return createGoalContinuationReturnScope(goalReturnParams(params));
+}
+
+function goalReturnParams(
+  params: Omit<GoalContinuationParams, "result" | "sourceRunId">,
+): Parameters<typeof createGoalContinuationReturnScope>[0] {
+  return {
     base: params.base,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
@@ -317,9 +365,7 @@ export function createGoalContinuationReturn(
     initialGoalId: params.initialGoalId,
     operation: params.operation,
     context: (continuation, entry, existing) =>
-      isGoalContinuationCurrent(continuation, entry)
-        ? refreshActiveGoalContext(existing, entry)
-        : undefined,
+      isGoalActive(continuation, entry) ? refreshActiveGoalContext(existing, entry) : undefined,
     async resume({ continuation, base, runId, result, isCurrent }) {
       // The controller sees this pending input before admission reads yield to Stop.
       const input = reserveSessionControllerSource(params.queueKey, {
@@ -360,5 +406,5 @@ export function createGoalContinuationReturn(
         }
       }
     },
-  });
+  };
 }
