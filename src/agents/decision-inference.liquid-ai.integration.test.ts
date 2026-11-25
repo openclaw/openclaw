@@ -150,7 +150,7 @@ export default {
                 models: [
                   {
                     id: "liquid.auto",
-                    name: "Liquid Inference",
+                    name: "Architect Inference",
                     reasoning: false,
                     input: ["text"],
                     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
