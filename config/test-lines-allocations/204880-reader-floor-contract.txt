@@ -1,7 +1,7 @@
 # Reader-floor contract #204880, measured against main 8aaf3820112a:
-# 527 net test lines after consolidation, less the 400-line allowance.
-# Approved allocation 127: the requested real step-44 NULL-safe CHECK contract
-# and six non-additive negatives add 17 beyond the previous allocation of 110.
-# The excess proves three-engine admission, malformed/raised floors, catalogs,
-# atomic publication/rollback, warm-cache invalidation and optional ownership.
-127
+# 540 net test lines after consolidation, less the 400-line allowance.
+# Approved allocation 140: step-44 contract and six non-additive negatives,
+# plus optional-floor reference catalog (5), persisted-floor refusal (2),
+# and cold-worker zero-comparison-DDL coverage (6).
+# Three-engine admission, rollback, cache and ownership contracts stay intact.
+140
