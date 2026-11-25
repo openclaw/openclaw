@@ -1,5 +1,7 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { wakeOwedExec } from "../agents/bash-tools.exec-notify.js";
+import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-target.js";
 import { readMessageClientSources } from "../chat/message-client-source.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
@@ -89,16 +91,34 @@ export async function continueSessionQueuedInputs(
       const owedText = message.content;
       if (owedKind && typeof owedText === "string") {
         // A result owed to this chat wakes its turn from the stored row; that turn appends it once.
-        // Like the live wake, one failed attempt gets one retry from the stored row.
+        // Like the live wake, one failed attempt gets one retry from the stored row. The wake runs
+        // as the requester whose turn started the command, admitted again from its recorded
+        // source; an older row without one wakes as the session principal.
+        const source = asOptionalRecord(asOptionalRecord(message)?.originFacts)?.operatorSource;
         const owed = {
           id: row.idempotency_key,
           to: chatRef(target),
           kind: owedKind,
           text: owedText,
         };
-        withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
-          wakeOwedExec(owed, {}, undefined, 1),
-        );
+        await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
+          admitted =
+            source === undefined
+              ? undefined
+              : await restoreGatewayQueuedOperatorRecovery({
+                  agentId: target.agentId,
+                  context,
+                  source,
+                  assertCurrent,
+                });
+          const expectedTarget =
+            admitted &&
+            (await captureSessionEventTargetForHost(target.agentId, target.sessionKey, {
+              operatorAuthority: admitted.authority,
+              assertCurrent,
+            }));
+          wakeOwedExec(owed, expectedTarget ? { expectedTarget } : {}, undefined, 1);
+        });
         return undefined;
       }
       if (message["__openclaw"]?.activeSteer) {

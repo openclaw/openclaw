@@ -101,6 +101,8 @@ type Facts = (
       > & { assignedRole: string | null; githubLogin?: string | null };
     }
   | { kind: "live"; authority: AdmittedRunOperatorAuthority }
+  // A session's person with no recorded source: a background turn admits only their role.
+  | { kind: "person"; snapshot: { profileId: string } }
 ) & { agentId?: string };
 type PreparedOperatorAdmission = {
   config: OpenClawConfig;
@@ -373,7 +375,12 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     ) {
       refuse();
     }
-    let scopes = snapshot.scopes;
+    let scopes =
+      facts.kind === "person"
+        ? ["operator.admin"]
+        : facts.kind === "live"
+          ? facts.authority.scopes
+          : facts.snapshot.scopes;
     let grant = channel
       ? channel.operatorProfile.gatewayAccessGrant
       : live
@@ -519,7 +526,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         throw new GatewayOperatorRecoveryAuthorizationError(error);
       }
     }
-    if (profile && (gateway || live || facts.kind === "recorded")) {
+    if (profile && facts.kind !== "channel") {
       const access =
         principal?.kind === "owner"
           ? null
@@ -548,6 +555,9 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     );
     if (role) {
       scopes = intersectOperatorScopes(scopes, role.scopes);
+    } else if (facts.kind === "person" && profileId !== GATEWAY_OWNER_PROFILE_ID) {
+      // Without a recorded source, a person has only what a named role gives them.
+      scopes = [];
     }
     const agents = role?.agents ?? (!identity ? live?.rolePolicy?.agents : undefined);
     if (facts.agentId && agents && agents !== "*" && !agents.includes(facts.agentId)) {

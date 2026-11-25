@@ -74,7 +74,6 @@ export const ADMISSION_FILES = new Set([
   "src/gateway/session-communication-approval.ts",
   "src/gateway/session-companion-rpc.ts",
   "src/gateway/session-permission-authorization.ts",
-  "src/gateway/session-sharing-authorization-async.ts",
   "src/gateway/session-sharing-policy.ts",
   "src/gateway/session-sharing-read.ts",
   "src/gateway/tools-invoke-shared.ts",
