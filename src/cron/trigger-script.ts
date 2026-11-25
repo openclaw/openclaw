@@ -37,6 +37,7 @@ import {
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
+import { retainRuntimePluginWork } from "../agents/runtime-plugin-work.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox/context.js";
 import {
@@ -390,7 +391,14 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
   ) => {
     const release = entry.lifetime.retain();
     try {
-      return { runtime: await scope.wait(entry.promise), release };
+      const runtime = await scope.wait(entry.promise);
+      if (!runtime.isCurrent()) {
+        return release();
+      }
+      // Validation and acquisition share one continuation, so reload cannot drain between them.
+      const registries = runtime.pluginRegistry ? [runtime.pluginRegistry] : [];
+      const releasePluginWork = retainRuntimePluginWork(registries, "invocation-scope");
+      return { runtime, release: () => [releasePluginWork, release].forEach((close) => close?.()) };
     } catch (error) {
       release();
       throw error;
@@ -402,94 +410,102 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     scope: ReturnType<typeof createHeadlessDeadlineScope>,
     preparationLimits: { cancelSignal?: AbortSignal; wallClockMs: number },
   ): Promise<{ runtime: CachedTriggerRuntime; release: () => void }> => {
-    const agentId = resolveTriggerAgentId(request.runtimeConfig, request.agentId);
-    const toolsAllowKey = JSON.stringify([
-      request.toolsAllow ?? null,
-      request.scheduledToolPolicy ?? null,
-      request.callerOrigin ?? null,
-      request.execTarget ?? null,
-    ]);
-    const cached = runtimeCache.get(request.jobId);
-    if (
-      cached &&
-      cached.configEpoch === request.runtimeConfig &&
-      cached.agentId === agentId &&
-      cached.toolsAllowKey === toolsAllowKey
-    ) {
-      runtimeCache.delete(request.jobId);
-      runtimeCache.set(request.jobId, cached);
-      // Shared preparation follows its first caller's cancellation, not its deadline;
-      // a later caller's cancellation leaves the shared work for the next tick.
-      const retained = await retainRuntime(cached, scope);
-      if (retained.runtime.isCurrent()) {
-        return retained;
+    // Each retry re-reads the cache so concurrent stale waiters share one replacement.
+    while (true) {
+      const agentId = resolveTriggerAgentId(request.runtimeConfig, request.agentId);
+      const toolsAllowKey = JSON.stringify([
+        request.toolsAllow ?? null,
+        request.scheduledToolPolicy ?? null,
+        request.callerOrigin ?? null,
+        request.execTarget ?? null,
+      ]);
+      const cached = runtimeCache.get(request.jobId);
+      if (
+        cached &&
+        cached.configEpoch === request.runtimeConfig &&
+        cached.agentId === agentId &&
+        cached.toolsAllowKey === toolsAllowKey
+      ) {
+        runtimeCache.delete(request.jobId);
+        runtimeCache.set(request.jobId, cached);
+        // Shared preparation follows its first caller's cancellation, not its deadline;
+        // a later caller's cancellation leaves the shared work for the next tick.
+        const retained = await retainRuntime(cached, scope);
+        if (retained) {
+          return retained;
+        }
       }
-      retained.release();
-    }
-    if (cached) {
-      retireRuntime(request.jobId, cached);
-    }
-    const { cancelSignal } = preparationLimits;
-    const preparation = new AbortController();
-    const cancelPreparation = () => preparation.abort(new CodeModeHeadlessAbortError());
-    const settlePreparation = () => {
-      clearTimeout(preparationTimer);
-      cancelSignal?.removeEventListener("abort", cancelPreparation);
-    };
-    // Expiry evicts even a preparation that ignores its signal; a late result is disposed.
-    const preparationTimer = setTimeout(
-      () => {
-        settlePreparation();
-        preparation.abort(new CodeModeHeadlessTimeoutError("cron script preparation timed out"));
-        retireRuntime(request.jobId, entry);
-      },
-      Math.max(MIN_TRIGGER_PREPARATION_TIMEOUT_MS, preparationLimits.wallClockMs),
-    );
-    cancelSignal?.addEventListener("abort", cancelPreparation, { once: true });
-    if (cancelSignal?.aborted) {
-      cancelPreparation();
-    }
-    const promise = prepareRuntime({ ...request, signal: preparation.signal }).then((runtime) => {
-      entry.lifetime.publish(runtime);
-      const registry = runtime.pluginRegistry;
-      const registryCurrent =
-        registry && capturePluginLifecycleAuthority(registry, undefined, { scopedRuntime: true });
-      return {
-        ...runtime,
-        // Per-plugin replacement disposes one instance without retiring this
-        // retained registry; its stale hooks would fail every later tool call.
-        isCurrent: () =>
-          !registry ||
-          (registryCurrent?.() === true && isPluginRegistryRecordSetAdmitting(registry)),
+      if (cached) {
+        retireRuntime(request.jobId, cached);
+        continue;
+      }
+      const { cancelSignal } = preparationLimits;
+      const preparation = new AbortController();
+      const cancelPreparation = () => preparation.abort(new CodeModeHeadlessAbortError());
+      const settlePreparation = () => {
+        clearTimeout(preparationTimer);
+        cancelSignal?.removeEventListener("abort", cancelPreparation);
       };
-    });
-    const entry: TriggerRuntimeCacheEntry = {
-      promise,
-      configEpoch: request.runtimeConfig,
-      agentId,
-      toolsAllowKey,
-      lifetime: createCronTriggerRuntimeLifetime(),
-    };
-    runtimeCache.set(request.jobId, entry);
-    const oldest = runtimeCache.entries().next().value;
-    if (runtimeCache.size > MAX_CACHED_TRIGGER_RUNTIMES && oldest) {
-      retireRuntime(...oldest);
-    }
-    // Failed preparations evict themselves so the next tick retries cold.
-    void promise
-      .catch(() => {
-        retireRuntime(request.jobId, entry);
-      })
-      .finally(settlePreparation);
-    try {
-      return await retainRuntime(entry, scope);
-    } catch (error) {
-      // A missed deadline keeps preparation running for the next tick instead of
-      // repeating the same cold load forever; cancellation still starts cold.
-      if (!(error instanceof CodeModeHeadlessTimeoutError)) {
-        retireRuntime(request.jobId, entry);
+      // Expiry evicts even a preparation that ignores its signal; a late result is disposed.
+      const preparationTimer = setTimeout(
+        () => {
+          settlePreparation();
+          preparation.abort(new CodeModeHeadlessTimeoutError("cron script preparation timed out"));
+          retireRuntime(request.jobId, entry);
+        },
+        Math.max(MIN_TRIGGER_PREPARATION_TIMEOUT_MS, preparationLimits.wallClockMs),
+      );
+      cancelSignal?.addEventListener("abort", cancelPreparation, { once: true });
+      if (cancelSignal?.aborted) {
+        cancelPreparation();
       }
-      throw error;
+      const promise = prepareRuntime({ ...request, signal: preparation.signal }).then((runtime) => {
+        entry.lifetime.publish(runtime);
+        const registry = runtime.pluginRegistry;
+        const registryCurrent =
+          registry && capturePluginLifecycleAuthority(registry, undefined, { scopedRuntime: true });
+        return {
+          ...runtime,
+          // Per-plugin replacement disposes one instance without retiring this
+          // retained registry; its stale hooks would fail every later tool call.
+          isCurrent: () =>
+            !registry ||
+            (registryCurrent?.() === true && isPluginRegistryRecordSetAdmitting(registry)),
+        };
+      });
+      const entry: TriggerRuntimeCacheEntry = {
+        promise,
+        configEpoch: request.runtimeConfig,
+        agentId,
+        toolsAllowKey,
+        lifetime: createCronTriggerRuntimeLifetime(),
+      };
+      runtimeCache.set(request.jobId, entry);
+      const oldest = runtimeCache.entries().next().value;
+      if (runtimeCache.size > MAX_CACHED_TRIGGER_RUNTIMES && oldest) {
+        retireRuntime(...oldest);
+      }
+      // Failed preparations evict themselves so the next tick retries cold.
+      void promise
+        .catch(() => {
+          retireRuntime(request.jobId, entry);
+        })
+        .finally(settlePreparation);
+      try {
+        const retained = await retainRuntime(entry, scope);
+        if (retained) {
+          return retained;
+        }
+        retireRuntime(request.jobId, entry);
+        continue;
+      } catch (error) {
+        // A missed deadline keeps preparation running for the next tick instead of
+        // repeating the same cold load forever; cancellation still starts cold.
+        if (!(error instanceof CodeModeHeadlessTimeoutError)) {
+          retireRuntime(request.jobId, entry);
+        }
+        throw error;
+      }
     }
   };
 
@@ -583,7 +599,6 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       });
       assertActive();
       const triggerState = await observePrAutoFix(params, caller, evaluationScope, assertActive);
-      // Reload during setup is best effort; the next invocation refreshes its cache.
       let tools = await withPluginRuntimeRegistryScope(runtime.pluginRegistry, () =>
         runtime.createTools(
           admitted,
