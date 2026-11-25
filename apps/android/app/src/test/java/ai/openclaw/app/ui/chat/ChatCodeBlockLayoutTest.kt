@@ -38,6 +38,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -88,6 +89,7 @@ class ChatCodeBlockLayoutTest {
   }
 
   @Test
+  @Config(qualifiers = "w360dp-h2400dp-mdpi")
   fun settlingAndRefreshingKeepEachFencesOwnReadingPosition() {
     val code = (0..260).joinToString("\n") { "line $it" }
     val fence = "```text\n$code\n```"
@@ -107,13 +109,14 @@ class ChatCodeBlockLayoutTest {
     val run = mutableStateOf("run")
     val history = mutableStateOf(listOf(older))
     val row = mutableStateOf<ChatTimelineItem?>(live)
-    show {
-      val item = row.value
+    val concurrentHistory = mutableStateOf<ChatTimelineItem.Message?>(null)
+    show(height = 2400.dp) {
+      val rows = listOfNotNull(row.value, concurrentHistory.value)
       val owner = ChatComposerOwner("gateway", "main", session.value)
-      val stream = if (item === live) ChatController.StreamingAssistant(ChatController.ChatRunOwner(owner, run.value), text) else null
+      val stream = if (live in rows) ChatController.StreamingAssistant(ChatController.ChatRunOwner(owner, run.value), text) else null
       val forRow = key(session.value) { rememberChatCodeReaderForRow(history.value, stream, owner, if (stream == null) 0 else 2, ChatMessage::content) }
       LazyColumn {
-        if (item != null) {
+        rows.forEach { item ->
           item(key = chatTimelineItemKey(item)) {
             val markdown =
               when (item) {
@@ -170,7 +173,7 @@ class ChatCodeBlockLayoutTest {
       history.value = listOf(older, commentary, note)
       row.value = ChatTimelineItem.Message(note)
     }
-    assertTrue(offsets().isEmpty())
+    composeRule.waitForIdle()
     composeRule.runOnIdle {
       history.value = listOf(older, commentary, note, final)
       row.value = ChatTimelineItem.Message(final)
@@ -205,6 +208,32 @@ class ChatCodeBlockLayoutTest {
     assertEquals(0f, offsets()[1], 0f)
     composeRule.runOnIdle { session.value = "another-session" }
     assertEquals(start, offsets())
+
+    // A transcript refresh can mount the history row while the stream is still visible.
+    read(0, 160f)
+    read(1, 420f)
+    val delivered = message("early-history").copy(runId = run.value)
+    composeRule.runOnIdle {
+      history.value += delivered
+      concurrentHistory.value = ChatTimelineItem.Message(delivered)
+    }
+    assertEquals(positions + start, offsets())
+    read(2, 96f)
+    assertEquals(positions + listOf(96f, 0f), offsets())
+    composeRule.runOnIdle {
+      row.value = concurrentHistory.value
+      concurrentHistory.value = null
+    }
+    assertEquals("Only the untouched history fence inherits its live position", listOf(96f, 420f), offsets())
+    read(1, 80f)
+    val afterReading = listOf(96f, 500f)
+    assertEquals(afterReading, offsets())
+    composeRule.runOnIdle {
+      val refreshed = delivered.copy(timestampMs = 3L)
+      history.value = history.value.dropLast(1) + refreshed
+      row.value = ChatTimelineItem.Message(refreshed)
+    }
+    assertEquals("Refreshing must keep the user's newer position", afterReading, offsets())
   }
 
   @Test
@@ -318,10 +347,13 @@ class ChatCodeBlockLayoutTest {
     }
   }
 
-  private fun show(content: @Composable () -> Unit) {
+  private fun show(
+    height: Dp = 800.dp,
+    content: @Composable () -> Unit,
+  ) {
     composeRule.setContent {
       ClawDesignTheme {
-        Box(Modifier.size(360.dp, 800.dp).clipToBounds()) { content() }
+        Box(Modifier.size(360.dp, height).clipToBounds()) { content() }
       }
     }
   }

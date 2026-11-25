@@ -392,9 +392,19 @@ internal fun rememberFenceScroll(
   val row = LocalChatCodeReaderHandoff.current
   val handoff = row?.run
   return key(if (live) handoff?.owner else null, if (live) handoff?.key else null) {
-    val initial = remember { handoff?.initialPosition(path, code, language) }
+    val initial = remember { if (live) handoff?.initialPosition(path, code, language) else null }
     val scroll = rememberLazyListState(initial?.first ?: 0, initial?.second ?: 0)
-    if (row?.entry != null && initial != null) SideEffect { row.run.consume(path, row.entry) }
+    if (row?.entry != null) {
+      SideEffect {
+        row.run.initialPosition(path, code, language)?.let { (index, offset) ->
+          // History can arrive before settlement and already have its own reading position.
+          if (scroll.firstVisibleItemIndex == 0 && scroll.firstVisibleItemScrollOffset == 0) {
+            scroll.requestScrollToItem(index, offset)
+          }
+          row.run.consume(path, row.entry)
+        }
+      }
+    }
     if (live && handoff != null && path != null) {
       DisposableEffect(handoff, path, code, language, scroll) {
         onDispose(handoff.observe(path, code, language, scroll))
