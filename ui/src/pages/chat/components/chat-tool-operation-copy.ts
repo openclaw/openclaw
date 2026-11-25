@@ -1,5 +1,6 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   unwrapToolCallForDisplay,
   unwrapToolResultTextForDisplay,
@@ -16,6 +17,33 @@ const catalog: Readonly<Record<string, object>> =
   registerChatToolOperationsEnglish.catalog.chat.toolCards.operationLabels;
 
 const operationIcons = new Map<string, IconName>([
+  ["discussion", "messageSquare"],
+  ["facetime_call", "audioLines"],
+  ["feishu_app_scopes", "fileText"],
+  ["feishu_bitable_create_app", "fileText"],
+  ["feishu_bitable_create_field", "fileText"],
+  ["feishu_bitable_create_record", "fileText"],
+  ["feishu_bitable_get_meta", "fileText"],
+  ["feishu_bitable_get_record", "fileText"],
+  ["feishu_bitable_list_fields", "fileText"],
+  ["feishu_bitable_list_records", "fileText"],
+  ["feishu_bitable_update_record", "fileText"],
+  ["feishu_chat", "fileText"],
+  ["feishu_doc", "fileText"],
+  ["feishu_drive", "fileText"],
+  ["feishu_perm", "fileText"],
+  ["feishu_wiki", "fileText"],
+  ["google_meet", "users"],
+  ["slack_huddles", "users"],
+  ["talk_voice", "audioLines"],
+  ["teams_meetings", "users"],
+  ["voice_call", "audioLines"],
+  ["whatsapp_call", "messageCircle"],
+  ["whatsapp_login", "messageCircle"],
+  ["zalouser", "messageCircle"],
+  ["zoom_meetings", "users"],
+  ["facetime_end_call", "audioLines"],
+  ["openclaw_end_call", "audioLines"],
   ["x_search", "search"],
   ["theme", "pipette"],
   ["portal", "panelsTopLeft"],
@@ -57,6 +85,20 @@ const operationIcons = new Map<string, IconName>([
 
 export function catalogToolIcon(name: string): IconName | undefined {
   return operationIcons.get(name.trim().toLowerCase());
+}
+
+function readMessageReceipt(card: ToolCard): Record<string, unknown> | undefined {
+  const details = asNullableRecord(card.details);
+  // History projects only a few fields from details; the channel receipt stays in the JSON output.
+  const receipt = {
+    ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
+    ...(asNullableRecord(asNullableRecord(details?.result)?.details) ?? details),
+  };
+  // Telegram can echo the attempted change in a refusal. None of those fields confirms an effect.
+  if (receipt.ok === false) {
+    return { ok: false };
+  }
+  return receipt.ok === true ? receipt : undefined;
 }
 
 function browserOperation(args: Record<string, unknown> | null, labels: object): string {
@@ -136,7 +178,33 @@ export function catalogToolOperation(
   if (!labels) {
     return undefined;
   }
-  const action = typeof args?.action === "string" ? args.action : undefined;
+  let action = typeof args?.action === "string" ? args.action : undefined;
+  if (name === "message" && action === "react") {
+    const receipt =
+      outcome === "succeeded" && args?.dryRun !== true ? readMessageReceipt(card) : undefined;
+    const removed = receipt?.removed;
+    const clearCount = Array.isArray(removed)
+      ? removed.length
+      : typeof removed === "number"
+        ? removed
+        : undefined;
+    if (args?.remove === true || receipt?.remove === true || removed === null) {
+      action = "remove_reaction";
+    } else if (
+      clearCount !== undefined ||
+      (typeof args?.emoji === "string"
+        ? !args.emoji.trim()
+        : args?.channel === "feishu" && args.clearAll === true)
+    ) {
+      action = "clear_reactions";
+    }
+    if (receipt?.ok === false || receipt?.dryRun === true) {
+      return { label: t(`chat.toolCards.operationLabels.message.${action}.action`) };
+    }
+    if (receipt?.changed === false || removed === null || clearCount === 0) {
+      return { label: t(`chat.toolCards.operationLabels.message.${action}.unchanged`) };
+    }
+  }
   const key =
     name === "update_goal" && typeof args?.status === "string"
       ? `status_${args.status}`
@@ -147,7 +215,26 @@ export function catalogToolOperation(
   if (!Object.hasOwn(labels, operation)) {
     return undefined;
   }
-  const phase = outcome === "running" ? "running" : outcome === "succeeded" ? "done" : "action";
+  let phase =
+    outcome === "running"
+      ? "running"
+      : outcome === "succeeded" && !(name === "message" && args?.dryRun === true)
+        ? "done"
+        : "action";
+  if (name === "message" && operation === "reply" && phase === "done") {
+    const receipt = readMessageReceipt(card);
+    const messageId = normalizeOptionalString(receipt?.messageId);
+    // repliedTo is the parent. The iMessage bridge can return "ok" or "unknown" without a new ID.
+    if (
+      !normalizeOptionalString(receipt?.repliedTo) ||
+      !messageId ||
+      ["ok", "unknown", "skipped", "suppressed"].includes(messageId) ||
+      receipt?.dryRun === true ||
+      receipt?.status === "suppressed"
+    ) {
+      phase = "action";
+    }
+  }
   const query =
     name === "web_search" && typeof args?.query === "string"
       ? truncateUtf16WithEllipsis(

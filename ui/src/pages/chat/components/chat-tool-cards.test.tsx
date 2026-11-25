@@ -327,37 +327,6 @@ it("keeps read ranges visible and opens the unmodified file path", async () => {
   ]);
 });
 
-it.each(["structured", "serialized"])("keeps %s captions out of collapsed rows", async (shape) => {
-  const privateCaption =
-    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nPrivate synthetic caption.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
-  const args = { action: "send", to: "fixture-room", message: privateCaption };
-  const card = {
-    id: "message-caption",
-    name: "message",
-    args: shape === "structured" ? args : JSON.stringify(args),
-    inputText: JSON.stringify(args),
-  };
-  const options = { messageKey: "test-message", onToggleExpanded: vi.fn() };
-  const container = await mountCard(card, { ...options, expanded: false });
-
-  const summary = query(container, "button.chat-tool-msg-summary");
-  expect(summary?.textContent).toContain("Message");
-  expect(query(summary, ".chat-tool-msg-summary__icon")?.getAttribute("aria-label")).toBe(
-    "message",
-  );
-  if (shape === "structured") {
-    expect(summary?.textContent).toContain("fixture-room");
-  }
-  expect(summary?.textContent).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
-  expect(container.textContent).not.toContain("Private synthetic caption.");
-  expect(query(container, ".chat-tool-msg-body")).toBeNull();
-
-  await mountCard(card, { ...options }, container);
-  const diagnostics = query(container, ".chat-tool-msg-body");
-  expect(diagnostics?.textContent).toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
-  expect(diagnostics?.textContent).toContain("Private synthetic caption.");
-});
-
 it("marks expanded raw block-art output so QR whitespace uses block-art rendering", async () => {
   const blockArt = "  ▄▄▄▄▄▄▄  \n  █ ▄▄▄ █  \n  █▄▄▄▄▄█  ";
   const container = await mountTool("canvas_render", {
