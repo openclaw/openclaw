@@ -529,7 +529,12 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   if (!options.versionMigrationOnly) {
     revokeSqliteDatabaseAdmissions(db);
   }
-  if (maintenanceLease.agentDatabaseMaintenanceAuthority.getStore()) {
+  // Historical value repair belongs to Doctor, not catalog-only version admission.
+  if (
+    !options.versionMigrationOnly &&
+    getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance &&
+    maintenanceLease.agentDatabaseMaintenanceAuthority.getStore()
+  ) {
     const normalizationVersion = readSqliteUserVersion(db);
     if (normalizationVersion > 0 && normalizationVersion < OPENCLAW_AGENT_SCHEMA_VERSION) {
       maintenanceLease.assertAgentDatabaseMaintenanceAuthority();
