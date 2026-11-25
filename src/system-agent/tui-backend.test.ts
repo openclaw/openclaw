@@ -299,6 +299,25 @@ describe("runSystemAgentTui", () => {
     }
   });
 
+  it("returns an explanation without putting the pasted error in backend history", async () => {
+    await withBackend(async (backend) => {
+      const terminal = new Promise<string>((resolve) => {
+        backend.onEvent = ({ payload }) => {
+          if (payload?.state === "final" || payload?.state === "error") {
+            resolve(payload.state);
+          }
+        };
+      });
+      await send(backend, "explain error: Invalid config at /fixture-private/openclaw.json:");
+      await expect(terminal).resolves.toBe("final");
+      const tail = await history(backend, 2);
+      expect(tail.messages.map((entry) => entry.content[0]?.text)).toEqual([
+        "Explain error: [error text omitted]",
+        expect.stringContaining("`openclaw config validate`"),
+      ]);
+    });
+  });
+
   it("reports the verified model without its auth profile and the effective thinking level", async () => {
     const config: OpenClawConfig = {
       ...verifiedConfig,

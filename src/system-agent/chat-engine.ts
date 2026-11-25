@@ -14,6 +14,7 @@ import {
 } from "./agent-turn.js";
 import type { SystemAgentApprovalClassifier } from "./approval-intent.js";
 import type { SystemAgentAssistantTurn } from "./assistant.js";
+import { SystemAgentChatHistory } from "./chat-history.js";
 import {
   ChatWizardHost,
   type ChatWizardResult,
@@ -30,6 +31,10 @@ import {
   verifySystemAgentConfigAfterWrite,
   type CaptureRuntime,
 } from "./dialogue.js";
+import {
+  explainPastedSystemAgentError,
+  SYSTEM_AGENT_ERROR_HISTORY_TEXT,
+} from "./error-explanation.js";
 import type { SystemAgentGreetingPlanner } from "./greeting.js";
 import {
   SystemAgentInferenceUnavailableError,
@@ -93,7 +98,7 @@ export type SystemAgentChatEngineOptions = {
 type PersistentApplyGuard = () => void;
 
 export class SystemAgentChatEngine {
-  private readonly history: SystemAgentAssistantTurn[] = [];
+  private readonly history = new SystemAgentChatHistory();
   private inference?: {
     binding: SystemAgentVerifiedInferenceBinding;
     session: SystemAgentSession;
@@ -188,24 +193,17 @@ export class SystemAgentChatEngine {
       if (reply && decision === "allow-once" && !reply.applied && !reviewingPlugin) {
         reply.text += ` ${SYSTEM_AGENT_APPROVAL_APPLICATION_UNCONFIRMED_TEXT}`;
       }
-      if (reply?.text) {
-        this.history.push({ role: "assistant", text: reply.text });
-      }
+      this.history.appendAssistant(reply?.text || undefined);
       return reply;
     });
   }
 
   noteAssistantMessage(text: string): void {
-    this.history.push({ role: "assistant", text });
+    this.history.appendAssistant(text);
   }
 
   seedHistory(turns: readonly SystemAgentAssistantTurn[]): void {
-    this.history.push(
-      ...turns.map((turn) => ({
-        ...turn,
-        text: turn.role === "user" ? redactSensitiveCommandText(turn.text) : turn.text,
-      })),
-    );
+    this.history.seed(turns);
   }
 
   historyLength(): number {
@@ -213,7 +211,7 @@ export class SystemAgentChatEngine {
   }
 
   historySince(index: number): SystemAgentAssistantTurn[] {
-    return this.history.slice(index).map((turn) => ({ role: turn.role, text: turn.text }));
+    return this.history.since(index);
   }
 
   async dispose(): Promise<void> {
@@ -234,6 +232,14 @@ export class SystemAgentChatEngine {
 
   async handle(text: string, options?: SystemAgentChatTurnOptions): Promise<SystemAgentChatReply> {
     return await this.enqueueTurn(async () => {
+      // Handle the whole paste before wizard, approval, or model dispatch.
+      const explanation = !this.options.operatorApprovalOnly && explainPastedSystemAgentError(text);
+      if (explanation) {
+        return this.completeTurn(
+          { text: explanation, action: "none" },
+          SYSTEM_AGENT_ERROR_HISTORY_TEXT,
+        );
+      }
       const exactConfig =
         !this.wizard.active &&
         (parseSystemAgentConfigCommand(text) ||
@@ -283,10 +289,7 @@ export class SystemAgentChatEngine {
 
   private completeTurn(reply: SystemAgentChatReply, userHistoryText: string): SystemAgentChatReply {
     const completed = this.wizard.decorateReply(reply);
-    this.history.push({ role: "user", text: userHistoryText });
-    if (completed.text) {
-      this.history.push({ role: "assistant", text: completed.text });
-    }
+    this.history.appendTurn(userHistoryText, completed.text);
     return completed;
   }
 
@@ -376,7 +379,7 @@ export class SystemAgentChatEngine {
     if (cancelWizard) {
       this.wizard.dispose();
     }
-    this.history.splice(0);
+    this.history.clear();
     throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
   }
 

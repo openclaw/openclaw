@@ -4,6 +4,7 @@ import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { explainPastedSystemAgentError } from "../system-agent/error-explanation.js";
 import type { BoundVerifySetupInferenceResult } from "../system-agent/setup-inference.js";
 import type { SystemAgentCommandOptions } from "../system-agent/system-agent.js";
 import type { OnboardOptions } from "./onboard-types.js";
@@ -38,6 +39,16 @@ export async function runSystemAgentWithInference(
   runtime: RuntimeEnv = defaultRuntime,
   onboardingOptions: Pick<OnboardOptions, "workspace" | "agentName" | "acceptRisk"> = {},
 ): Promise<void> {
+  const explanation = explainPastedSystemAgentError(opts.message);
+  if (explanation !== undefined) {
+    if (opts.json) {
+      writeRuntimeJson(runtime, { reply: explanation });
+    } else {
+      runtime.log(explanation);
+    }
+    requestExitAfterOneShotOutput(runtime);
+    return;
+  }
   if (opts.yes && !opts.message?.trim()) {
     failOneShotExecution(
       opts,
