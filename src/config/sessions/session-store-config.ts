@@ -75,10 +75,7 @@ export function isSameFixedSessionStoreConfig(
   }
   const sourceCaseInsensitive = tryResolvePathCaseInsensitive(sourceIdentity);
   const targetCaseInsensitive = tryResolvePathCaseInsensitive(targetIdentity);
-  if (sourceCaseInsensitive === false || targetCaseInsensitive === false) {
-    return false;
-  }
   // Case-equivalent missing paths are owned when the filesystem folds case or
   // when probing cannot prove that the future paths will remain distinct.
-  return true;
+  return sourceCaseInsensitive !== false && targetCaseInsensitive !== false;
 }

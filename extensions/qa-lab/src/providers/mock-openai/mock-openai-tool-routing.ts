@@ -12,7 +12,7 @@ import {
   hasDeclaredTool,
   hasToolDefinition,
 } from "./mock-openai-directives.js";
-import { extractPlannedToolArgs, extractPlannedToolName } from "./mock-openai-events.js";
+import { buildAssistantEvents, extractPlannedTool } from "./mock-openai-events.js";
 import {
   extractAllRequestTexts,
   extractToolOutput,
@@ -20,6 +20,7 @@ import {
   extractLatestToolOutput,
   extractToolOutputCallId,
   extractToolOutputStructuredError,
+  isResponsesToolCallOutput,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import {
@@ -192,10 +193,7 @@ function findGeneratedCodeModeWaitTarget(
     return undefined;
   }
   for (const item of input) {
-    if (
-      (item.type !== "function_call_output" && item.type !== "custom_tool_call_output") ||
-      typeof item.call_id !== "string"
-    ) {
+    if (!isResponsesToolCallOutput(item) || typeof item.call_id !== "string") {
       continue;
     }
     const native = parseNativeCodeModeOutput(item.output);
@@ -235,21 +233,6 @@ export function readRestartCheckpointProgress(input: ResponsesInputItem[]) {
   };
 }
 
-function isCodeModeControlToolOutput(body: Record<string, unknown>, input: ResponsesInputItem[]) {
-  if (!hasCodeModeExecSurface(body)) {
-    return false;
-  }
-  const toolOutputCallId = extractToolOutputCallId(input);
-  if (!toolOutputCallId) {
-    return false;
-  }
-  const toolCall = findToolCallByCallId(input, toolOutputCallId);
-  return (
-    isGeneratedCodeModeExecCall(toolCall) ||
-    Boolean(toolCall && findGeneratedCodeModeWaitTarget(input, toolCall))
-  );
-}
-
 export function canCallScenarioTool(
   body: Record<string, unknown>,
   name: string,
@@ -261,7 +244,7 @@ export function canCallScenarioTool(
     (!requireDeclaredTool || hasDeclaredTool(body, name)) &&
     (hasToolDefinition(body, name) ||
       hasCodeModeExecSurface(body) ||
-      hasToolDefinition(body, "tool_call"))
+      hasToolDefinition(body, "dispatch_action"))
   );
 }
 
@@ -273,7 +256,7 @@ function readScenarioCompletedToolName(
     toolCall?.name === "wait"
       ? (findGeneratedCodeModeWaitTarget(input, toolCall) ?? toolCall)
       : toolCall;
-  if (call?.name === "tool_call") {
+  if (call?.name === "dispatch_action") {
     const id = parseToolCallArguments(call)?.id;
     return typeof id === "string" ? id : undefined;
   }
@@ -289,7 +272,7 @@ export function unwrapScenarioCatalogOutput(
   projection: "details" | "content" = "details",
 ) {
   const call = findToolCallByCallId(input, extractToolOutputCallId(input));
-  if (call?.name !== "tool_call") {
+  if (call?.name !== "dispatch_action") {
     return output;
   }
   const envelope = parseToolOutputJson(output);
@@ -330,7 +313,13 @@ export function readScenarioToolCompletion(
 ) {
   const rawToolOutput = extractToolOutput(input);
   const codeModeSurface = resolveCodeModeExecSurface(toolDeclarationBody);
-  const hasCodeModeControlOutput = isCodeModeControlToolOutput(toolDeclarationBody, input);
+  const toolOutputCallId = extractToolOutputCallId(input);
+  const completedToolCall = findToolCallByCallId(input, toolOutputCallId);
+  const hasCodeModeControlOutput =
+    codeModeSurface !== null &&
+    Boolean(toolOutputCallId) &&
+    (isGeneratedCodeModeExecCall(completedToolCall) ||
+      Boolean(completedToolCall && findGeneratedCodeModeWaitTarget(input, completedToolCall)));
   const codeModeControlJson = hasCodeModeControlOutput
     ? codeModeSurface === "native"
       ? parseNativeCodeModeOutput(extractToolOutputValue(input))
@@ -342,7 +331,6 @@ export function readScenarioToolCompletion(
       : codeModeSurface === "native" && hasCodeModeControlOutput
         ? ""
         : unwrapScenarioCatalogOutput(input, rawToolOutput);
-  const completedToolCall = findToolCallByCallId(input, extractToolOutputCallId(input));
   const completedToolName = readScenarioCompletedToolName(completedToolCall, input);
   const scenarioToolOutput =
     toolOutput ||
@@ -371,7 +359,7 @@ export function readScenarioToolCompletion(
   };
 }
 
-function readProgressCommandOutput(input: ResponsesInputItem[], command: string, isPoll = false) {
+function readProgressCommandOutput(input: ResponsesInputItem[], command: string, isPoll: boolean) {
   const text = unwrapScenarioCatalogOutput(input, extractToolOutput(input), "content");
   // Provider wires carry content, not process details; JSON stdout remains data.
   const sessionId = !isPoll
@@ -438,7 +426,7 @@ function readProgressCommandOutput(input: ResponsesInputItem[], command: string,
   return { state, sessionId };
 }
 
-export function readProgressCommand(input: ResponsesInputItem[], command: string) {
+function readProgressCommand(input: ResponsesInputItem[], command: string) {
   let current: ReturnType<typeof readProgressCommandOutput> | undefined;
   let sessionId: string | undefined;
   let pendingCall: ResponsesInputItem | undefined;
@@ -446,8 +434,10 @@ export function readProgressCommand(input: ResponsesInputItem[], command: string
   for (const item of input) {
     if (item.type === "function_call" || item.type === "custom_tool_call") {
       const wireArgs = parseToolCallArguments(item);
-      const name = item.name === "tool_call" ? readScenarioCompletedToolName(item) : item.name;
-      const args = item.name === "tool_call" && isRecord(wireArgs?.args) ? wireArgs.args : wireArgs;
+      const name =
+        item.name === "dispatch_action" ? readScenarioCompletedToolName(item) : item.name;
+      const args =
+        item.name === "dispatch_action" && isRecord(wireArgs?.args) ? wireArgs.args : wireArgs;
       if (
         pendingCall ||
         typeof item.call_id !== "string" ||
@@ -463,7 +453,7 @@ export function readProgressCommand(input: ResponsesInputItem[], command: string
         return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
       }
       pendingCall = item;
-    } else if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
+    } else if (isResponsesToolCallOutput(item)) {
       if (!pendingCall || item.call_id !== pendingCall.call_id) {
         return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
       }
@@ -476,9 +466,7 @@ export function readProgressCommand(input: ResponsesInputItem[], command: string
     }
   }
   if (!current) {
-    return {
-      error: pendingCall ? "BUG-TOOL-PROGRESS-RESULT-MISSING" : "BUG-TOOL-PROGRESS-CALL-MISMATCH",
-    };
+    return pendingCall ? { error: "BUG-TOOL-PROGRESS-RESULT-MISSING" } : { initial: true };
   }
   if (pendingCall || current.state === "unconfirmed") {
     return { error: "BUG-TOOL-DID-NOT-COMPLETE" };
@@ -487,6 +475,34 @@ export function readProgressCommand(input: ResponsesInputItem[], command: string
     return sessionId ? { sessionId } : { error: "BUG-TOOL-PROGRESS-SESSION-MISSING" };
   }
   return { failed: current.state === "failed" };
+}
+
+export function buildCommandProgressEvents(
+  body: Record<string, unknown>,
+  input: ResponsesInputItem[],
+  command: string,
+  expectedOutcome: "success" | "failure" | "either" = "success",
+) {
+  const progress = readProgressCommand(input, command);
+  if (progress.initial) {
+    return buildScenarioToolCallEvents(body, "exec", { command });
+  }
+  if (progress.error) {
+    return buildAssistantEvents(progress.error);
+  }
+  if (progress.sessionId) {
+    return buildScenarioToolCallEvents(body, "process", {
+      action: "poll",
+      sessionId: progress.sessionId,
+      timeout: 30_000,
+    });
+  }
+  if (expectedOutcome === "failure" && !progress.failed) {
+    return buildAssistantEvents("BUG-TOOL-DID-NOT-FAIL");
+  }
+  return progress.failed && expectedOutcome === "success"
+    ? buildAssistantEvents("BUG-TOOL-FAILED")
+    : null;
 }
 
 export function buildScenarioToolCallEvents(
@@ -499,9 +515,9 @@ export function buildScenarioToolCallEvents(
   if (
     !hasToolDefinition(body, name) &&
     !hasCodeModeExecSurface(body) &&
-    hasToolDefinition(body, "tool_call")
+    hasToolDefinition(body, "dispatch_action")
   ) {
-    return buildScenarioToolCallEvents(body, "tool_call", { id: name, args });
+    return buildScenarioToolCallEvents(body, "dispatch_action", { id: name, args });
   }
   if (
     name === "exec" ||
@@ -533,57 +549,50 @@ export function buildScenarioToolCallEvents(
     return buildRawToolCallEventsWithArgs(name, callArgs, namespace);
   }
   const encodedTarget = encodeCodeModeTarget(name, args);
-  if (resolveCodeModeExecSurface(body) === "native") {
-    return buildCustomToolCallEventsWithInput(
-      "exec",
-      [
-        `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
-        `const targetName = ${JSON.stringify(name)};`,
-        `const targetArgs = ${JSON.stringify(args)};`,
-        "const target = ALL_TOOLS.find((entry) => entry.name === targetName);",
-        "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
-        "let value = await tools[target.name](targetArgs);",
-        'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
-        "  value = { ...value, content: value.content.slice(0, 2048) };",
-        "}",
-        "text(JSON.stringify(value));",
-      ].join("\n"),
-    );
-  }
-  return buildRawToolCallEventsWithArgs("exec", {
-    title: "Run the QA fixture step",
-    code: [
-      `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
-      `const targetName = ${JSON.stringify(name)};`,
-      `const targetArgs = ${JSON.stringify(args)};`,
-      "const target = (await catalog.search(targetName)).find((entry) => entry.toolName === targetName);",
-      "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
-      "const value = await target(targetArgs);",
-      'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
-      "  return { ...value, content: value.content.slice(0, 2048) };",
-      "}",
-      "return value;",
-    ].join("\n"),
-  });
+  const native = resolveCodeModeExecSurface(body) === "native";
+  const code = [
+    `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
+    `const targetName = ${JSON.stringify(name)};`,
+    `const targetArgs = ${JSON.stringify(args)};`,
+    native
+      ? "const target = ALL_TOOLS.find((entry) => entry.name === targetName);"
+      : "const target = (await catalog.search(targetName)).find((entry) => entry.toolName === targetName);",
+    "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
+    native
+      ? "let value = await tools[target.name](targetArgs);"
+      : "const value = await target(targetArgs);",
+    'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
+    native
+      ? "  value = { ...value, content: value.content.slice(0, 2048) };"
+      : "  return { ...value, content: value.content.slice(0, 2048) };",
+    "}",
+    native ? "text(JSON.stringify(value));" : "return value;",
+  ].join("\n");
+  return native
+    ? buildCustomToolCallEventsWithInput("exec", code)
+    : buildRawToolCallEventsWithArgs("exec", { title: "Run the QA fixture step", code });
 }
 
 export function extractScenarioPlannedTool(events: StreamEvent[]) {
-  const wireName = extractPlannedToolName(events);
-  const wireArgs = extractPlannedToolArgs(events);
+  const { name: wireName, args: wireArgs, ...identity } = extractPlannedTool(events);
   const source =
     typeof wireArgs?.input === "string"
       ? wireArgs.input
       : typeof wireArgs?.code === "string"
         ? wireArgs.code
         : undefined;
-  if (wireName === "tool_call" && typeof wireArgs?.id === "string" && isRecord(wireArgs.args)) {
-    return { name: wireArgs.id, args: wireArgs.args, wireName };
+  if (
+    wireName === "dispatch_action" &&
+    typeof wireArgs?.id === "string" &&
+    isRecord(wireArgs.args)
+  ) {
+    return { name: wireArgs.id, args: wireArgs.args, wireName, ...identity };
   }
   if (wireName !== "exec" || !source) {
-    return { name: wireName, args: wireArgs, wireName };
+    return { name: wireName, args: wireArgs, wireName, ...identity };
   }
   const target = decodeCodeModeTarget(source);
   return target
-    ? { name: target.name, args: target.args, wireName }
-    : { name: wireName, args: wireArgs, wireName };
+    ? { name: target.name, args: target.args, wireName, ...identity }
+    : { name: wireName, args: wireArgs, wireName, ...identity };
 }

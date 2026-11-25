@@ -31,7 +31,12 @@ export type CuaExecutionResources = {
 
 export function createLazyCuaExecutionResources(): CuaExecutionResources {
   let resourcesPromise: Promise<CuaExecutionResources> | undefined;
-  const resources = () => (resourcesPromise ??= createCuaExecutionResources());
+  const resources = () =>
+    (resourcesPromise ??= createCuaExecutionResources().catch((error: unknown) => {
+      // Let the same execution retry or close after initialization fails.
+      resourcesPromise = undefined;
+      throw error;
+    }));
   return {
     createDirectory: async (label) => await (await resources()).createDirectory(label),
     resolveFiles: async (handles) => await (await resources()).resolveFiles(handles),
@@ -49,10 +54,6 @@ export function createLazyCuaExecutionResources(): CuaExecutionResources {
 
 function resourceError(message: string): Error {
   return new Error(`COMPUTER_INVALID_RESOURCE: ${message}`);
-}
-
-function newHandle(): string {
-  return `${RESOURCE_HANDLE_PREFIX}${randomUUID()}`;
 }
 
 async function requireEntry(
@@ -117,25 +118,10 @@ async function createCuaExecutionResources(): Promise<CuaExecutionResources> {
     if (existing) {
       return existing;
     }
-    const handle = newHandle();
+    const handle = `${RESOURCE_HANDLE_PREFIX}${randomUUID()}`;
     resources.set(handle, { kind, relativePath });
     handlesByPath.set(relativePath, handle);
     return handle;
-  };
-
-  const removeHandle = async (handle: string) => {
-    const entry = resources.get(handle);
-    if (!entry) {
-      return;
-    }
-    await removePathWithinRoot({
-      rootDir: executionRoot.rootReal,
-      relativePath: entry.relativePath,
-      recursive: true,
-      force: true,
-    });
-    resources.delete(handle);
-    handlesByPath.delete(entry.relativePath);
   };
 
   return {
@@ -197,7 +183,18 @@ async function createCuaExecutionResources(): Promise<CuaExecutionResources> {
     },
     async discard(handle) {
       assertActive();
-      await removeHandle(handle);
+      const entry = resources.get(handle);
+      if (!entry) {
+        return;
+      }
+      await removePathWithinRoot({
+        rootDir: executionRoot.rootReal,
+        relativePath: entry.relativePath,
+        recursive: true,
+        force: true,
+      });
+      resources.delete(handle);
+      handlesByPath.delete(entry.relativePath);
     },
     async dispose(discard) {
       if (disposed) {

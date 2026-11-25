@@ -23,7 +23,7 @@ openclaw plugins search "calendar"
 Install a ClawHub plugin with an explicit source prefix:
 
 ```bash
-openclaw plugins install clawhub:<package-name>
+openclaw plugins install <package-name>
 ```
 
 npm remains a supported direct-install path:

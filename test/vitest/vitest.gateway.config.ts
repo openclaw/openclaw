@@ -29,7 +29,6 @@ export function createGatewayVitestConfig(env?: Record<string, string | undefine
       ...databaseWorkerCoreTestFiles,
       ...gatewayDatabaseWorkerTestFiles,
       "src/gateway/gateway.test.ts",
-      "src/gateway/server.startup-matrix-migration.integration.test.ts",
       ...gatewayMethodsIsolatedTestFiles,
       ...gatewayServerIsolatedTestFiles,
     ],

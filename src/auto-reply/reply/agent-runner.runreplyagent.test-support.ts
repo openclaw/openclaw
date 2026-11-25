@@ -1,36 +1,31 @@
 import path from "node:path";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { rootDir } from "./agent-runner.misc.runreplyagent.test-support.js";
-import {
-  createTestQueueSettings,
-  createTestQueuedFollowupRun,
-  createTestTemplateContext,
-} from "./agent-runner.test-fixtures.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createTestQueuedFollowupRun } from "./agent-runner.test-fixtures.js";
+import { createMockTypingController, createReplyParams } from "./test-helpers.js";
 
-type RunReplyAgent = typeof import("./agent-runner.js").runReplyAgent;
+type RunReplyAgent = typeof import("./agent-runner-run.js").runReplyAgent;
+type ReplyParams = Parameters<RunReplyAgent>[0];
 
 export type BaseRunOptions = {
-  context?: Parameters<typeof createTestTemplateContext>[0];
+  context?: Partial<ReplyParams["sessionCtx"]>;
   followup?: Partial<Omit<Parameters<typeof createTestQueuedFollowupRun>[0], "run">>;
   run?: Parameters<typeof createTestQueuedFollowupRun>[0]["run"];
-  reply?: Partial<
-    Omit<Parameters<RunReplyAgent>[0], "followupRun" | "resolvedQueue" | "sessionCtx" | "typing">
-  >;
+  reply?: Partial<Omit<ReplyParams, "followupRun" | "resolvedQueue" | "sessionCtx" | "typing">>;
 };
 
 export function createBaseRun(options: BaseRunOptions = {}) {
-  const sessionKey = options.run?.sessionKey ?? "main";
-  const messageProvider = options.run?.messageProvider ?? "whatsapp";
+  const sessionKey = options.run?.sessionKey ?? options.reply?.sessionKey ?? "main";
   const typing = createMockTypingController();
-  const sessionCtx = createTestTemplateContext(
-    options.context ?? {
+  const sessionCtx: ReplyParams["sessionCtx"] = {
+    ...(options.context ?? {
       Provider: "whatsapp",
       OriginatingTo: "+15550001111",
       AccountId: "primary",
       MessageSid: "msg",
-    },
-  );
-  const resolvedQueue = createTestQueueSettings({ mode: "interrupt" });
+    }),
+  };
+  const resolvedQueue: ReplyParams["resolvedQueue"] = { mode: "interrupt" };
   const followupRun = createTestQueuedFollowupRun({
     prompt: "hello",
     summaryLine: "hello",
@@ -39,7 +34,7 @@ export function createBaseRun(options: BaseRunOptions = {}) {
     run: {
       sessionId: "session",
       sessionKey,
-      messageProvider,
+      messageProvider: options.run?.messageProvider ?? "whatsapp",
       sessionFile: path.join(rootDir, "session.jsonl"),
       workspaceDir: rootDir,
       config: {},
@@ -66,32 +61,24 @@ export function createBaseRun(options: BaseRunOptions = {}) {
       ...options.run,
     },
   });
-  const replyParams = {
+  const replyParams = createReplyParams(followupRun, {
     commandBody: "hello",
-    followupRun,
-    queueKey: "main",
+    queueKey: sessionKey,
     resolvedQueue,
-    shouldSteer: false,
-    shouldFollowup: false,
-    isActive: false,
     typing,
     sessionCtx,
     defaultModel: "anthropic/claude-opus-4-6",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
     typingMode: "instant",
     ...options.reply,
-  } satisfies Parameters<RunReplyAgent>[0];
+  });
   return {
     typing,
     sessionCtx,
     resolvedQueue,
     followupRun,
     run: async () => {
-      const { runReplyAgent } = await import("./agent-runner.js");
+      const { runReplyAgent } = await import("./agent-runner-run.js");
+      setRuntimeConfigSnapshot(followupRun.run.config, followupRun.run.config);
       return runReplyAgent(replyParams);
     },
   };

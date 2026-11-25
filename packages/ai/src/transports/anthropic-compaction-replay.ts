@@ -1,5 +1,13 @@
-import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
+import type {
+  AssistantHistoryMessage,
+  AssistantMessage,
+  Context,
+  Model,
+  ProviderReplayState,
+} from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AnthropicContextManagementOptions } from "../provider-options.js";
+import { resolveNewestCompactionReplaySource } from "./provider-compaction-checkpoint.js";
 import {
   buildProviderReplayContext,
   isProviderReplayContext,
@@ -39,7 +47,7 @@ type AnthropicCompactionReplayPlan = {
   compaction?: AnthropicCompactionBlock;
 };
 
-type ReplayOpts = { authProfileId?: string; sessionId?: string };
+type ReplayOpts = NonNullable<Parameters<typeof buildProviderReplayContext>[1]>;
 type ReplayOut = Pick<AssistantMessage, "providerReplay">;
 
 export function createCompactionCapture(output: ReplayOut, model: Model, options?: ReplayOpts) {
@@ -141,10 +149,17 @@ function captureAnthropicCompaction(
   output.providerReplay = replay;
 }
 
+/**
+ * Record a rejected replay on the failed output and notify the transcript owner, which must
+ * durably strip the checkpoint: hosts may persist failed turns without their replay state.
+ */
 export function suppressAnthropicCompaction(
   output: ReplayOut,
   model: Model,
-  options?: ReplayOpts,
+  options:
+    | (ReplayOpts & Pick<AnthropicContextManagementOptions, "onCompactionRejected">)
+    | undefined,
+  rejected: AnthropicCompactionBlock,
 ): void {
   const context = buildProviderReplayContext(model, options);
   if (!context.baseUrlHash) {
@@ -157,6 +172,31 @@ export function suppressAnthropicCompaction(
     ...context,
     baseUrlHash: context.baseUrlHash,
   };
+  options?.onCompactionRejected?.({ data: rejected.content });
+}
+
+/** Read one live replay envelope; null blocks older checkpoints, undefined skips it. */
+export function createAnthropicCompactionSourceReader(model: Model, options?: ReplayOpts) {
+  const context = buildProviderReplayContext(model, options);
+  return (value: ProviderReplayState | undefined) => {
+    const replayState = readAnthropicCompactionState(value);
+    if (replayState?.type === ANTHROPIC_COMPACTION_SUPPRESSION_TYPE) {
+      return providerReplayContextMatches(replayState, context) ? null : undefined;
+    }
+    if (value?.type !== ANTHROPIC_COMPACTION_REPLAY_TYPE) {
+      return undefined;
+    }
+    if (!replayState || !providerReplayContextMatches(replayState, context)) {
+      return null;
+    }
+    return {
+      replayIndex: replayState.replayIndex ?? 0,
+      summary: replayState.data,
+      ...(replayState.encryptedContent !== undefined
+        ? { encryptedContent: replayState.encryptedContent }
+        : {}),
+    };
+  };
 }
 
 export function resolveNewestAnthropicCompaction(
@@ -165,44 +205,21 @@ export function resolveNewestAnthropicCompaction(
   options?: ReplayOpts,
 ):
   | {
-      owner: AssistantMessage;
+      owner: AssistantHistoryMessage;
       replayIndex: number;
       summary: string;
       encryptedContent?: string | null;
     }
   | undefined {
-  const context = buildProviderReplayContext(model, options);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "assistant") {
-      continue;
-    }
-    const replayState = readAnthropicCompactionState(message.providerReplay);
-    if (replayState?.type === ANTHROPIC_COMPACTION_SUPPRESSION_TYPE) {
-      if (providerReplayContextMatches(replayState, context)) {
-        return undefined;
-      }
-      continue;
-    }
-    if (message.providerReplay?.type !== ANTHROPIC_COMPACTION_REPLAY_TYPE) {
-      continue;
-    }
-    if (!replayState) {
-      return undefined;
-    }
-    if (!providerReplayContextMatches(replayState, context)) {
-      return undefined;
-    }
-    return {
-      owner: message,
-      replayIndex: replayState.replayIndex ?? 0,
-      summary: replayState.data,
-      ...(replayState.encryptedContent !== undefined
-        ? { encryptedContent: replayState.encryptedContent }
-        : {}),
-    };
+  const read = createAnthropicCompactionSourceReader(model, options);
+  const selected = resolveNewestCompactionReplaySource(messages, (message) =>
+    message?.role === "assistant" ? read(message.providerReplay) : undefined,
+  );
+  if (!selected) {
+    return undefined;
   }
-  return undefined;
+  const owner = messages[selected.ownerIndex];
+  return owner?.role === "assistant" ? { ...selected.source, owner } : undefined;
 }
 
 export function buildAnthropicReplayPlan(

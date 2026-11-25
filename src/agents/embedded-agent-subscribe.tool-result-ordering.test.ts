@@ -24,13 +24,19 @@ import {
   createSubscribedSessionHarness,
   emitAssistantTextDeltaAndEnd,
 } from "./embedded-agent-subscribe.e2e-harness.js";
-import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.js";
+import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import {
   createOpenAiResponsesPartial,
   createOpenAiResponsesTextBlock,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
+import {
+  createToolSearchTools,
+  registerHeadlessToolSearchCatalog,
+  TOOL_CALL_RAW_TOOL_NAME,
+} from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
 
 type Params = SubscribeEmbeddedAgentSessionParams;
@@ -59,7 +65,121 @@ function harness(params: Omit<Params, "session" | "runId"> = {}) {
   };
 }
 
+function deliveryHarness(params: Omit<Params, "session" | "runId"> = {}) {
+  const observers = {
+    onToolResult: vi.fn<NonNullable<Params["onToolResult"]>>(),
+    onPartialReply: vi.fn<NonNullable<Params["onPartialReply"]>>(),
+    onBlockReply: vi.fn<NonNullable<Params["onBlockReply"]>>(),
+    onAgentEvent: vi.fn<NonNullable<Params["onAgentEvent"]>>(),
+  };
+  return { ...observers, ...harness({ ...observers, blockReplyBreak: "message_end", ...params }) };
+}
+
 describe("tool result ordering", () => {
+  it("retires accepted dispatcher wrappers before the provider turn ends", async () => {
+    const h = createSubscribedCodeModeHarness({ name: "spawn-progress" });
+    const items: AgentActivityItem[] = [];
+    const stop = subscribeToAgentEvents((event) => {
+      if (
+        event.runId === h.runId &&
+        event.stream === "item" &&
+        Value.Check(AgentActivityItemSchema, event.data)
+      ) {
+        items.push(event.data);
+      }
+    });
+    const receipt = jsonResult({
+      status: "accepted",
+      runId: "00000000-0000-4000-8000-000000002633",
+      childSessionKey: "agent:main:subagent:00000000-0000-4000-8000-000000002633",
+      expectsCompletionMessage: true,
+    });
+    registerHeadlessToolSearchCatalog({
+      catalogRef: h.catalogRef,
+      tools: [{ ...createStubTool("sessions_spawn"), execute: async () => receipt }],
+    });
+    const dispatcher = expectDefined(
+      createToolSearchTools(h).find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME),
+      "dispatcher",
+    );
+    const args = { id: "sessions_spawn", args: { label: "Verify fixture" } };
+    try {
+      const result = await h.subscription.runToolLifecycle({
+        toolName: dispatcher.name,
+        toolCallId: "outer-spawn",
+        args,
+        execute: async (started) => {
+          started();
+          return dispatcher.execute("outer-spawn", args);
+        },
+      });
+      expect(result.details).toMatchObject({ tool: { name: "sessions_spawn" }, result: receipt });
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          name: "sessions_spawn",
+          phase: "end",
+          status: "completed",
+          meta: "Verify fixture …2633",
+        }),
+      );
+      // A real nested receipt replaced the dispatcher, not a second worker.
+      // This must happen while the provider is still composing/yielding, not at agent_end.
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          itemId: "tool:outer-spawn",
+          phase: "end",
+          hideFromChannelProgress: true,
+        }),
+      );
+      expect(h.subscription.getItemLifecycle()).toEqual({
+        startedCount: 2,
+        completedCount: 2,
+        activeCount: 0,
+      });
+    } finally {
+      stop();
+      h.dispose();
+    }
+  });
+
+  it.each(["discarded", "rejected"] as const)(
+    "settles nested lifecycle accounting when terminal presentation is %s",
+    async (outcome) => {
+      const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
+      const h = harness({ onAgentEvent });
+      let lifecycleAtTerminal: ReturnType<typeof h.subscription.getItemLifecycle> | undefined;
+      const failure = new Error("terminal acceptance failed");
+      const execution = h.subscription.runToolLifecycle({
+        toolName: "read",
+        toolCallId: "discarded-terminal",
+        args: {},
+        execute: async (started) => {
+          started();
+          return jsonResult({ done: true });
+        },
+        onTerminal: () => {
+          lifecycleAtTerminal = h.subscription.getItemLifecycle();
+          if (outcome === "rejected") {
+            throw failure;
+          }
+          return false;
+        },
+      });
+      if (outcome === "rejected") {
+        await expect(execution).rejects.toBe(failure);
+      } else {
+        await execution;
+      }
+      expect(lifecycleAtTerminal).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
+      expect(h.subscription.getItemLifecycle()).toEqual(lifecycleAtTerminal);
+      expect(
+        onAgentEvent.mock.calls.some(
+          ([event]) => event.stream === "item" && event.data.phase === "end",
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("settles subscribed nested dispatch exactly once across repeated exec and wait turns", async () => {
     const blockReplyFlush = createDeferred();
     const onBlockReplyFlush = vi.fn(() => blockReplyFlush.promise);
@@ -126,10 +246,17 @@ describe("tool result ordering", () => {
         completedCount: 4,
         activeCount: 0,
       });
-      expect(summarizeAgentActivity(liveItems).total).toBe(4);
+      expect(summarizeAgentActivity(liveItems).total).toBe(2);
       emitAssistantTextDeltaAndEnd({ emit: h.emit, text: "Both stages finished." });
       h.emit({ type: "agent_end", messages: [], willRetry: false });
       await h.subscription.waitForPendingEvents();
+      const retractions = liveItems.filter(
+        (item) => item.hideFromChannelProgress && /^tool:code-call-stage-\d$/.test(item.itemId),
+      );
+      expect(retractions.map((item) => item.itemId)).toEqual([
+        "tool:code-call-stage-0",
+        "tool:code-call-stage-1",
+      ]);
       expect(summarizeAgentActivity(liveItems).total).toBe(2);
       expect(h.subscription.getItemLifecycle()).toEqual({
         startedCount: 4,
@@ -158,23 +285,31 @@ describe("tool result ordering", () => {
     }
   });
 
-  it.each(["execution-failed", "incomplete", "overlapping", "reused-active"])(
+  it.each(["execution-failed", "overlapping", "reused-active", "routine-child", "active-child"])(
     "preserves the %s wrapper outcome",
     async (outcome) => {
       const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
       const h = harness({ onAgentEvent });
+      // A completed wrapper stays the operation when its only call is routine or still active.
+      const routine = outcome === "routine-child";
+      const active = outcome === "active-child";
       h.start("exec", "outer");
       if (outcome === "overlapping") {
         h.start("exec", "outer");
       }
-      h.start("read", "child", { path: "missing.txt" }, "outer");
-      h.end("read", "child", { content: [{ type: "text", text: "Missing file" }] }, true);
-      if (outcome !== "incomplete") {
-        h.end("exec", "outer", {
-          content: [{ type: "text", text: "Finished" }],
-          ...(outcome === "execution-failed" ? { details: { status: "failed" } } : {}),
-        });
+      if (routine) {
+        h.start("progress_card", "child", { plan: [] }, "outer");
+        h.end("progress_card", "child", { content: [{ type: "text", text: "Updated" }] });
+      } else {
+        h.start("read", "child", { path: "missing.txt" }, "outer");
+        if (!active) {
+          h.end("read", "child", { content: [{ type: "text", text: "Missing file" }] }, true);
+        }
       }
+      h.end("exec", "outer", {
+        content: [{ type: "text", text: "Finished" }],
+        ...(outcome === "execution-failed" ? { details: { status: "failed" } } : {}),
+      });
       if (outcome === "reused-active") {
         h.start("exec", "outer");
       }
@@ -192,12 +327,108 @@ describe("tool result ordering", () => {
       expect(
         events.findLast((event) => event.stream === "item" && event.data.toolCallId === "child")
           ?.data,
-      ).toMatchObject({ status: "failed" });
+      ).toMatchObject(
+        routine
+          ? { status: "completed", hideFromChannelProgress: true }
+          : { status: active ? "running" : "failed" },
+      );
       expect(h.subscription.getItemLifecycle()).toEqual(counters);
     },
   );
 
-  it("captures sanitized trajectory pairs while tool-start delivery remains blocked", async () => {
+  it("finishes a nested tool without revisiting unrelated completed activities", async () => {
+    const h = harness();
+    h.start("read", "unrelated", { path: "fixture.txt" });
+    h.end("read", "unrelated", jsonResult({ done: true }));
+    await h.subscription.waitForPendingEvents();
+    const unrelated = h.subscription.toolMetas[0]!;
+    const activity = unrelated.activity;
+    let reads = 0;
+    Object.defineProperty(unrelated, "activity", {
+      configurable: true,
+      get: () => {
+        reads += 1;
+        return activity;
+      },
+    });
+    h.start("exec", "outer");
+    for (let index = 0; index < 100; index += 1) {
+      h.start("read", `child-${index}`, { path: "fixture.txt" }, "outer");
+      h.end("read", `child-${index}`, jsonResult({ done: true }));
+    }
+    h.end("exec", "outer", jsonResult({ done: true }));
+    await h.subscription.waitForPendingEvents();
+    expect(reads).toBe(0);
+  });
+
+  it.each(["completed", "failed", "cancelled", "routine", "parallel"])(
+    "preserves nested presentation snapshots for %s tools",
+    async (outcome) => {
+      const events: AgentActivityItem[] = [];
+      const h = harness({
+        onAgentEvent: (event) => {
+          if (event.stream === "item" && Value.Check(AgentActivityItemSchema, event.data)) {
+            events.push(event.data);
+          }
+        },
+      });
+      const name = outcome === "routine" ? "progress_card" : "read";
+      h.start("exec", "outer");
+      h.start("exec", "inner", {}, "outer");
+      if (outcome !== "cancelled") {
+        h.start(name, "leaf", { path: "fixture.txt" }, "inner");
+      }
+      if (outcome === "parallel") {
+        h.start("read", "sibling", { path: "fixture.txt" }, "inner");
+      }
+      h.end("exec", "outer", jsonResult({ done: true }));
+      h.end("exec", "inner", jsonResult({ done: true }));
+      await h.subscription.waitForPendingEvents();
+      const before = events.map((event) => ({ ...event }));
+      if (outcome === "cancelled") {
+        await expect(
+          h.subscription.runToolLifecycle({
+            toolName: name,
+            toolCallId: "leaf",
+            parentToolCallId: "inner",
+            args: { path: "fixture.txt" },
+            execute: async (started) => {
+              started();
+              throw new DOMException("Cancelled", "AbortError");
+            },
+          }),
+        ).rejects.toThrow("Cancelled");
+      } else {
+        h.end(name, "leaf", jsonResult({ done: true }), outcome === "failed");
+      }
+      if (outcome === "parallel") {
+        h.end("read", "sibling", jsonResult({ done: true }));
+      }
+      await h.subscription.waitForPendingEvents();
+      expect(events.slice(0, before.length)).toEqual(before);
+      const latest = new Map(events.map((event) => [event.toolCallId, event]));
+      expect(
+        [...latest].map(([id, item]) => [id, item.status, Boolean(item.hideFromChannelProgress)]),
+      ).toEqual([
+        ["outer", "completed", true],
+        ["inner", "completed", outcome !== "routine"],
+        [
+          "leaf",
+          outcome === "failed" || outcome === "cancelled" ? "failed" : "completed",
+          outcome === "routine",
+        ],
+        ...(outcome === "parallel" ? [["sibling", "completed", false]] : []),
+      ]);
+      const retractions = events.filter(
+        (item) => item.hideFromChannelProgress && item.name === "exec",
+      );
+      expect(retractions.map((item) => item.toolCallId)).toEqual(
+        outcome === "routine" ? ["outer"] : ["outer", "inner"],
+      );
+    },
+  );
+
+  it("captures faithful trajectory pairs while tool-start delivery remains blocked", async () => {
     const entered = createDeferred();
     const pending = createDeferred();
     const onBlockReplyFlush = vi.fn(() => {
@@ -215,9 +446,8 @@ describe("tool result ordering", () => {
       expect(recordEvent).toHaveBeenCalledExactlyOnceWith("tool.call", {
         toolCallId: "first-call",
         name: "exec",
-        args: { command: "printf fixture", apiKey: expect.any(String) },
+        args: { command: "printf fixture", apiKey },
       });
-      expect(JSON.stringify(recordEvent.mock.calls)).not.toContain(apiKey);
       await entered.promise;
       h.end("exec", "first-call", {
         content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
@@ -346,7 +576,15 @@ describe("tool result ordering", () => {
       const notice = createDeferred();
       const order: string[] = [];
       const answer = "I recovered the answer using another tool.";
-      const onToolResult = vi.fn(async () => {
+      const onBlockReplyFlush = vi.fn(async () => {});
+      const h = deliveryHarness({
+        onBlockReplyFlush: flush ? onBlockReplyFlush : undefined,
+        onAssistantMessageStart: () => {
+          order.push("assistant start");
+        },
+      });
+      const { onToolResult, onPartialReply, onBlockReply, onAgentEvent } = h;
+      onToolResult.mockImplementation(async () => {
         order.push("notice entered");
         entered.resolve();
         try {
@@ -355,28 +593,16 @@ describe("tool result ordering", () => {
           order.push("notice settled");
         }
       });
-      const onPartialReply = vi.fn(() => {
+      onPartialReply.mockImplementation(() => {
         order.push("partial");
       });
-      const onBlockReply = vi.fn(() => {
+      onBlockReply.mockImplementation(() => {
         order.push("block");
       });
-      const onBlockReplyFlush = vi.fn(async () => {});
-      const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>(({ stream, data }) => {
+      onAgentEvent.mockImplementation(({ stream, data }) => {
         if (stream === "lifecycle" && data.phase === "end") {
           order.push("terminal");
         }
-      });
-      const h = harness({
-        onToolResult,
-        onPartialReply,
-        onBlockReply,
-        onBlockReplyFlush: flush ? onBlockReplyFlush : undefined,
-        onAssistantMessageStart: () => {
-          order.push("assistant start");
-        },
-        onAgentEvent,
-        blockReplyBreak: "message_end",
       });
       try {
         h.start("exec", "notice");
@@ -384,8 +610,7 @@ describe("tool result ordering", () => {
           details: { status: "approval-unavailable", reason: "no-approval-route" },
         });
         await entered.promise;
-        expect(onToolResult).toHaveBeenCalledOnce();
-        expect(onToolResult).toHaveBeenCalledWith(
+        expect(onToolResult).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             channelData: { execApprovalUnavailable: { reason: "no-approval-route" } },
           }),
@@ -459,17 +684,8 @@ describe("tool result ordering", () => {
   );
 
   it("suppresses live and terminal-only assistant blocks after an approval prompt", async () => {
-    const onToolResult = vi.fn();
-    const onBlockReply = vi.fn();
-    const onPartialReply = vi.fn();
-    const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
-    const h = harness({
-      onToolResult,
-      onBlockReply,
-      onPartialReply,
-      onAgentEvent,
-      blockReplyBreak: "message_end",
-    });
+    const h = deliveryHarness();
+    const { onToolResult, onBlockReply, onPartialReply, onAgentEvent } = h;
     const approvalId = "12345678-1234-1234-1234-123456789012";
     const first = createOpenAiResponsesPartial({
       text: "Approval is needed.",

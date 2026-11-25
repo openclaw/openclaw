@@ -31,26 +31,10 @@ const context: Pick<GatewayRequestContext, "applyPluginLifecycleChange"> = {
 };
 const lifecycleRequests = [
   {
-    method: "plugins.install",
-    params: { source: "official", pluginId: "workboard" },
-    operation: managementMocks.install,
-  },
-  {
-    method: "plugins.setEnabled",
-    params: { pluginId: "workboard", enabled: false },
-    operation: managementMocks.setEnabled,
-  },
-  {
-    method: "plugins.uninstall",
-    params: { pluginId: "workboard" },
-    operation: managementMocks.uninstall,
-  },
-  {
     method: "plugins.reload",
     params: { plugins: [{ pluginId: "workboard" }] },
     operation: managementMocks.reload,
   },
-  { method: "plugins.refresh", params: {}, operation: managementMocks.refreshMetadata },
 ] as const;
 type ManagedMutationOptions = Pick<
   Parameters<typeof installManagedPlugin>[0],
@@ -60,10 +44,7 @@ type ManagedMutationOptions = Pick<
 async function callHandler(
   method: string,
   params: Record<string, unknown>,
-  invocation: Pick<
-    GatewayRequestHandlerOptions,
-    "signal" | "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
-  >,
+  invocation: Pick<GatewayRequestHandlerOptions, "signal" | "sessionMutationCommitGuard">,
 ) {
   let ok: boolean | null = null;
   let error: ErrorShape | undefined;
@@ -155,22 +136,17 @@ describe("plugin lifecycle invoker ownership", () => {
       await pending;
     }
   });
-  describe.each(["signal", "guard", "client"] as const)("closed %s", (fence) => {
+  describe.each(["signal", "guard"] as const)("closed %s", (fence) => {
     const createInvocation = () => {
       const controller = new AbortController();
       const failure = new Error(
-        fence === "signal"
-          ? "plugin request aborted"
-          : fence === "client"
-            ? "Plugin mutation authority is no longer active."
-            : "plugin mutation owner closed",
+        fence === "signal" ? "plugin request aborted" : "plugin mutation owner closed",
       );
       let open = true;
       return {
         failure,
         invocation: {
           signal: controller.signal,
-          hasCurrentClientAuthority: () => fence !== "client" || open,
           sessionMutationCommitGuard: () => {
             if (fence === "guard" && !open) {
               throw failure;

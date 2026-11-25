@@ -1,3 +1,7 @@
+import noForcedProcessExit from "./lib/no-forced-process-exit.mjs";
+import noOperatorPermissionRead from "./lib/no-operator-permission-read.mjs";
+import noRecursiveReaddir from "./lib/no-recursive-readdir.mjs";
+import noTurnAuthorityDerivation from "./lib/no-turn-authority-derivation.mjs";
 import {
   BOUNDARY_GUARD_FIXTURE_ROOT,
   CHAINED_ASSERTION_EXCLUDED_ROOTS,
@@ -29,7 +33,7 @@ function restrictedCallRule({ allowedFiles = [], message, objects, property, roo
     create(context) {
       const repoPath = repositoryPath(context);
       if (
-        !repoPath.endsWith(".ts") ||
+        !/\.tsx?$/u.test(repoPath) ||
         !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
         TYPE_ASSERTION_TEST_FILE_SUFFIXES.some((suffix) => repoPath.endsWith(suffix)) ||
         allowedFiles.includes(repoPath)
@@ -513,7 +517,7 @@ function noWidenThenAssertRule({ roots }) {
         return {};
       }
 
-      let scopes = [];
+      let scopes;
       const checkAssertion = (node) => {
         if (isNestedAssertion(node)) {
           return;
@@ -523,6 +527,7 @@ function noWidenThenAssertRule({ roots }) {
           return;
         }
 
+        scopes ??= context.sourceCode.scopeManager.scopes;
         const variable = resolvedVariableForIdentifier(scopes, expression);
         if (variable === null) {
           return;
@@ -551,9 +556,6 @@ function noWidenThenAssertRule({ roots }) {
       };
 
       return {
-        Program() {
-          scopes = context.sourceCode.scopeManager.scopes;
-        },
         TSAsExpression: checkAssertion,
         TSTypeAssertion: checkAssertion,
       };
@@ -564,6 +566,10 @@ function noWidenThenAssertRule({ roots }) {
 export default {
   meta: { name: "openclaw-boundaries" },
   rules: {
+    "no-forced-process-exit": noForcedProcessExit,
+    "no-operator-permission-read": noOperatorPermissionRead,
+    "no-recursive-readdir": noRecursiveReaddir,
+    "no-turn-authority-derivation": noTurnAuthorityDerivation,
     "no-raw-window-open-call": restrictedCallRule({
       allowedFiles: ["ui/src/lib/editor-links.ts", "ui/src/lib/open-external-url.ts"],
       roots: ["ui/src", "test/fixtures/oxlint-boundary-guards"],

@@ -34,15 +34,10 @@ export function sameNodeApprovalSurfaceSet(
 ): boolean {
   const normalizedLeft = new Set(normalizeNodeApprovalSurfaceList(left));
   const normalizedRight = new Set(normalizeNodeApprovalSurfaceList(right));
-  if (normalizedLeft.size !== normalizedRight.size) {
-    return false;
-  }
-  for (const entry of normalizedLeft) {
-    if (!normalizedRight.has(entry)) {
-      return false;
-    }
-  }
-  return true;
+  return (
+    normalizedLeft.size === normalizedRight.size &&
+    [...normalizedLeft].every((entry) => normalizedRight.has(entry))
+  );
 }
 
 /** Compare node permission maps deterministically so key order cannot trigger repairs. */

@@ -19,6 +19,7 @@ import type { PluginMigrationInspection } from "./doctor/shared/plugin-migration
 import { shouldDeferConfiguredPluginInstallRepair } from "./doctor/shared/update-phase.js";
 
 type StartupPluginConvergenceResult = {
+  changed?: boolean;
   warnings?: string[];
   quarantinedPlugins: DegradedPlugin[];
   deferredPlugins?: DeferredPluginMigration[];
@@ -68,6 +69,7 @@ export async function runDoctorPluginConvergence(params: {
   env: NodeJS.ProcessEnv;
   retainedPluginIds?: readonly string[];
   measure?: ConfigSnapshotReadMeasure;
+  deferPackageRepair?: boolean;
 }): Promise<StartupPluginConvergenceResult> {
   const plan = await planStartupPluginVerification(params);
   if (!plan.required) {
@@ -83,19 +85,43 @@ export async function runDoctorPluginConvergence(params: {
       `Doctor ${PLUGIN_AVAILABILITY_POLICY.severity}s`,
     );
   }
-  if (isUpdateRehearsal || shouldDeferConfiguredPluginInstallRepair(params.env)) {
+  const deferredToUpdate =
+    isUpdateRehearsal || shouldDeferConfiguredPluginInstallRepair(params.env);
+  if (deferredToUpdate || params.deferPackageRepair) {
     const payloads = await verifyStartupPluginPayloads(params, plan.installRecords);
+    const warnings: string[] = [];
+    if (!deferredToUpdate) {
+      const {
+        detectConfiguredPluginInstallHealthIssues,
+        configuredPluginInstallIssueToHealthFinding,
+      } = await import("./doctor/shared/missing-configured-plugin-install.js");
+      for (const issue of await detectConfiguredPluginInstallHealthIssues(params)) {
+        const finding = configuredPluginInstallIssueToHealthFinding(issue);
+        warnings.push(`${finding.message} ${finding.fixHint ?? ""}`.trim());
+      }
+      if (warnings.length > 0) {
+        note(
+          warnings.map((warning) => `- ${warning}`).join("\n"),
+          `Doctor ${PLUGIN_AVAILABILITY_POLICY.severity}s`,
+        );
+      }
+    }
     const { pending, ...migrationInspection } = await inspectPluginMigrationAvailability({
       ...params,
       installRecords: plan.installRecords,
-      deferInstallation: true,
+      // Already-installed migration owners remain available during unattended diagnostics.
+      deferInstallation: deferredToUpdate,
     });
     return {
       ...payloads,
+      ...(warnings.length > 0 ? { warnings } : {}),
       migrationInspection,
       deferredPlugins: [
         ...new Map(
-          [...(payloads.deferredPlugins ?? []), ...pending].map((entry) => [entry.pluginId, entry]),
+          [...(payloads.deferredPlugins ?? []), ...pending].map((entry) => [
+            entry.pluginId,
+            deferredToUpdate ? entry : { ...entry, command: "openclaw doctor --fix" },
+          ]),
         ).values(),
       ],
     };
@@ -144,30 +170,29 @@ export async function runDoctorPluginConvergence(params: {
     deferInstallation: false,
   });
   const deferredPlugins = new Map(pending.map((plugin) => [plugin.pluginId, plugin]));
+  const deferPlugin = (pluginId: string, reason: string) => {
+    deferredPlugins.set(pluginId, {
+      ...deferredPlugins.get(pluginId),
+      pluginId,
+      reason,
+      command: "openclaw update repair",
+    });
+  };
   for (const warning of convergence.warnings) {
     if (warning.pluginId) {
-      deferredPlugins.set(warning.pluginId, {
-        ...deferredPlugins.get(warning.pluginId),
-        pluginId: warning.pluginId,
-        reason: warning.reason,
-        command: "openclaw update repair",
-      });
+      deferPlugin(warning.pluginId, warning.reason);
     }
   }
   for (const plugin of quarantinedPlugins) {
-    deferredPlugins.set(plugin.pluginId, {
-      ...deferredPlugins.get(plugin.pluginId),
-      pluginId: plugin.pluginId,
-      reason: plugin.diagnostic.detail,
-      command: "openclaw update repair",
-    });
+    deferPlugin(plugin.pluginId, plugin.diagnostic.detail);
   }
   return {
+    changed: convergence.changes.length > 0 || convergence.configChanges.length > 0,
     ...(warnings.length > 0 ? { warnings } : {}),
     quarantinedPlugins,
     ...(migrationInspection.requiredPluginIds.length > 0 ||
     migrationInspection.inspectionRequiredPluginIds.length > 0 ||
-    migrationInspection.statelessPluginIds.length > 0
+    migrationInspection.statelessPlugins.length > 0
       ? { migrationInspection }
       : {}),
     ...(deferredPlugins.size > 0 ? { deferredPlugins: [...deferredPlugins.values()] } : {}),
@@ -178,12 +203,53 @@ export async function refreshStartupPluginQuarantine(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   measure?: ConfigSnapshotReadMeasure;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<StartupPluginConvergenceResult> {
   const plan = await planStartupPluginVerification(params);
   if (!plan.required) {
     return { quarantinedPlugins: [] };
   }
-  return verifyStartupPluginPayloads(params, plan.installRecords);
+  if (
+    resolveUpdateRehearsalRoot(params.env) ||
+    shouldDeferConfiguredPluginInstallRepair(params.env)
+  ) {
+    return verifyStartupPluginPayloads(params, plan.installRecords);
+  }
+  const warnings: string[] = [];
+  const { maybeRepairPluginOpenClawHostLinks } = await import("./doctor-plugin-host-links.js");
+  let effectFailure: { error: unknown } | undefined;
+  try {
+    // External Node/package-manager reinstalls bypass update finalization. Repair
+    // only owned host links before their stale targets can quarantine valid plugins.
+    await maybeRepairPluginOpenClawHostLinks({
+      env: params.env,
+      installRecords: plan.installRecords,
+      prompter: { shouldRepair: true },
+      beforePersistentEffect: async () => {
+        if (effectFailure) {
+          throw effectFailure.error;
+        }
+        try {
+          await params.beforePersistentEffect?.();
+        } catch (error) {
+          effectFailure = { error };
+          throw error;
+        }
+      },
+    });
+  } catch (error) {
+    if (effectFailure) {
+      throw effectFailure.error;
+    }
+    warnings.push(
+      `Could not repair OpenClaw host links: ${String(error)}. Run openclaw doctor --fix.`,
+    );
+  }
+  const verification = await verifyStartupPluginPayloads(params, plan.installRecords);
+  return {
+    ...verification,
+    ...(warnings.length > 0 ? { warnings: [...warnings, ...(verification.warnings ?? [])] } : {}),
+  };
 }
 
 async function verifyStartupPluginPayloads(

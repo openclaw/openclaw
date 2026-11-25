@@ -1,7 +1,8 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
-export const SESSION_VISIBILITY_VALUES = ["shared", "read-only", "suggest", "draft"] as const;
+export { SESSION_VISIBILITY_VALUES } from "./sessions-sharing-constants.js";
 
 export const SessionVisibilitySchema = Type.Union([
   Type.Literal("shared"),
@@ -9,6 +10,8 @@ export const SessionVisibilitySchema = Type.Union([
   Type.Literal("suggest"),
   Type.Literal("draft"),
 ]);
+
+export const SessionMemberPermissionLevelSchema = stringLiteralUnion(["read", "suggest", "send"]);
 
 export const SessionSharingRoleSchema = Type.Union([
   Type.Literal("admin"),

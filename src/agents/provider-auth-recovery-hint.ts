@@ -1,8 +1,3 @@
-/**
- * Provider authentication recovery hint builder.
- *
- * Prefers plugin manifest login commands, then falls back to configure/env-var guidance.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,13 +12,11 @@ function normalizeProviderIdForAuth(
   return normalized ? (aliases[normalized] ?? normalized) : normalized;
 }
 
-/** Build a concise user-facing hint for recovering provider authentication. */
 export function buildProviderAuthRecoveryHint(params: {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  includeConfigure?: boolean;
   includeEnvVar?: boolean;
 }): string {
   const aliases = resolveProviderAuthAliasMap(params);
@@ -39,14 +32,9 @@ export function buildProviderAuthRecoveryHint(params: {
   if (loginCommand) {
     parts.push(`Run \`${loginCommand}\``);
   }
-  if (params.includeConfigure !== false) {
-    parts.push(`\`${formatCliCommand("openclaw configure")}\``);
-  }
+  parts.push(`\`${formatCliCommand("openclaw configure")}\``);
   if (params.includeEnvVar) {
     parts.push("set an API key env var");
-  }
-  if (parts.length === 0) {
-    return `Run \`${formatCliCommand("openclaw configure")}\`.`;
   }
   if (parts.length === 1) {
     return `${parts[0]}.`;

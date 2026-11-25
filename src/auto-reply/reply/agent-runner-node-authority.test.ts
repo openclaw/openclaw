@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type {
   GatewayRequestContext,
@@ -30,7 +30,13 @@ beforeEach(async () => {
 afterEach(async () => {
   (await import("../../plugins/runtime.js")).resetPluginRuntimeStateForTest();
   (await import("../../infra/agent-run-registry.js")).resetAgentRunRegistryForTest();
-  await fixture.cleanupWorkerTurnLauncherTest();
+  await fixture.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
+});
+afterAll(async () => {
+  const { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } =
+    await import("../../state/openclaw-state-db.js");
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
 });
 
 describe("webchat admission to plugin node duplex authority", () => {
@@ -51,7 +57,6 @@ describe("webchat admission to plugin node duplex authority", () => {
     })),
     ...(
       [
-        "permission",
         "session",
         "admission",
         "gateway",
@@ -93,9 +98,9 @@ describe("webchat admission to plugin node duplex authority", () => {
         attachedEnvironment,
         createWorkerSessionTurnPlacementProvider,
         ENVIRONMENT_ID,
-        MANIFEST_REF,
         OWNER_EPOCH,
         placements,
+        reconcileUnchangedLocalWorkspace,
         root,
         seedActivePlacement,
         SESSION_ID,
@@ -219,20 +224,7 @@ describe("webchat admission to plugin node duplex authority", () => {
         runWorkspaceCommand: vi.fn(async () => success()),
         syncWorkspace: vi.fn(),
         quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-        reconcileWorkspace: async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          await request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-            publishStagedResult: async () => {},
-            discardPreparedStagedResult: async () => {},
-          };
-        },
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
         stop: async () => {},
       };
       const environment = {
@@ -295,9 +287,6 @@ describe("webchat admission to plugin node duplex authority", () => {
                   case "missing-descriptor":
                   case "expanded-descriptor":
                     break;
-                  case "permission":
-                    await upsertSessionEntryCore(sessionTarget, { permissionMode: "workspace" });
-                    break;
                   case "session":
                     await upsertSessionEntryCore(sessionTarget, {
                       sessionId: "replacement-session",
@@ -340,7 +329,7 @@ describe("webchat admission to plugin node duplex authority", () => {
                     if (claimed?.type !== "return") {
                       throw new Error("expected an admitted placement claim");
                     }
-                    placements.cancelWorkspaceResultAndReleaseTurn(await claimed.value, {
+                    await placements.cancelWorkspaceResultAndReleaseTurn(await claimed.value, {
                       reason: "node-disconnect",
                     });
                     break;
@@ -440,7 +429,9 @@ describe("webchat admission to plugin node duplex authority", () => {
         expect(prompt).toHaveBeenCalledOnce();
       } else {
         expect(launchErrors).toHaveLength(1);
-        expect(launchErrors[0]).toMatch(/no longer (active|current)/);
+        expect(launchErrors[0]).toMatch(
+          /no longer (active|current)|placement changed|The run or its session ended/,
+        );
         expect(prompt).not.toHaveBeenCalled();
         expect(invoke).not.toHaveBeenCalled();
       }

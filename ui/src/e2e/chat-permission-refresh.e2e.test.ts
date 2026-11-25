@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import type { ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   chatSessionListResponse,
@@ -14,7 +14,6 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
-type PermissionTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
   it("keeps a saved permission mode when its list refresh fails", async () => {
@@ -44,6 +43,7 @@ suite.define(() => {
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         const trigger = pane.locator('[data-chat-permission-select="true"]');
         await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("guarded");
+        await expect.poll(async () => (await trigger.textContent())?.trim()).toBe("Ask me");
         const patchMatch = { key: session.key, permissionMode: "workspace" };
         await gateway.deferNext("sessions.patch", patchMatch);
 
@@ -51,39 +51,40 @@ suite.define(() => {
         await pane.locator('[data-chat-permission-option="workspace"]').click();
         await gateway.waitForRequest("sessions.patch", { match: patchMatch });
         // Hydration can observe the old permission while its write is still pending.
-        await page.evaluate(async () => {
-          const app = document.querySelector("openclaw-app") as PermissionTestApp;
-          await app.runtime?.context.sessions.list({ agentId: "main" });
+        await evaluateControlUiContext(page, async (context) => {
+          await context.sessions.list({ agentId: "main" });
         });
         const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
         await gateway.deferNext("sessions.list", rosterMatch);
         await gateway.resolveDeferred("sessions.patch");
         await gateway.waitForRequest("sessions.list", { after: listRequests, match: rosterMatch });
         // Swarm hydration can finish here; the parent must not appear in its own child query.
-        await page.evaluate(async (key) => {
-          const app = document.querySelector("openclaw-app") as PermissionTestApp;
-          await app.runtime?.context.sessions.list({
-            spawnedBy: key,
-            includeGlobal: false,
-            includeUnknown: false,
-            configuredAgentsOnly: true,
-            limit: 10_000,
-          });
-        }, session.key);
+        await evaluateControlUiContext(
+          page,
+          async (application, key) => {
+            await application.sessions.list({
+              spawnedBy: key,
+              includeGlobal: false,
+              includeUnknown: false,
+              configuredAgentsOnly: true,
+              limit: 10_000,
+            });
+          },
+          session.key,
+        );
         await gateway.rejectDeferred("sessions.list", {
           code: "UNAVAILABLE",
           message: "Roster refresh unavailable",
         });
 
         await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
+        await expect.poll(async () => (await trigger.textContent())?.trim()).toBe("Auto-review");
         await expect.poll(() => trigger.isEnabled()).toBe(true);
         await pane
           .locator(".chat-error")
-          .getByText("Permissions were saved", { exact: false })
-          .waitFor();
-        await pane
-          .locator(".chat-error")
-          .getByText("Roster refresh unavailable", { exact: false })
+          .getByText("Couldn’t refresh this session. Reload to see the saved permissions.", {
+            exact: false,
+          })
           .waitFor();
       },
       async ({ page }) => {
@@ -135,12 +136,14 @@ suite.define(() => {
       });
       await expect
         .poll(() =>
-          page.evaluate((key) => {
-            const app = document.querySelector("openclaw-app") as PermissionTestApp;
-            return app.runtime?.context.sessions.state.result?.sessions.find(
-              (row) => row.key === key,
-            )?.permissionMode;
-          }, session.key),
+          evaluateControlUiContext(
+            page,
+            (application, key) => {
+              return application.sessions.state.result?.sessions.find((row) => row.key === key)
+                ?.permissionMode;
+            },
+            session.key,
+          ),
         )
         .toBe("full");
       await gateway.waitForRequest("sessions.list", { after: listRequests, match: rosterMatch });
@@ -252,7 +255,7 @@ suite.define(() => {
       await gateway.resolveDeferred("sessions.list", workspaceList);
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
-      expect(await trigger.getAttribute("aria-label")).toContain("Workspace");
+      expect(await trigger.getAttribute("aria-label")).toContain("Auto-review");
 
       // Admit this event's refresh before measuring the next mutation's own roster request.
       await waitForRequests(gateway, "sessions.list", workspaceEventListCount + 1, rosterMatch);
@@ -298,7 +301,7 @@ suite.define(() => {
       });
       await pane
         .locator(".chat-error")
-        .getByText("Failed to update permissions", { exact: false })
+        .getByText("Couldn’t change permissions", { exact: false })
         .waitFor();
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
       await expect.poll(() => trigger.isEnabled()).toBe(true);

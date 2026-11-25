@@ -11,15 +11,47 @@ import {
   S3ServiceException,
   UploadPartCommand,
   type CompletedPart,
+  type GetObjectCommandOutput,
   type S3Client,
 } from "@aws-sdk/client-s3";
 import type { StorageBackend } from "openclaw/plugin-sdk/plugin-entry";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { describeR2Target, type R2Settings } from "./settings.js";
 
 const PART_BYTES = 64 * 1024 * 1024;
 const MAX_PARTS = 10_000;
+// Scale recovery with object size, not elapsed time on a slow connection.
+const DOWNLOAD_RETRIES_PER_PART = 8;
 
 class R2StorageError extends Error {}
+
+function downloadRetryReason(error: unknown): string | undefined {
+  if (error instanceof S3ServiceException) {
+    const code = error.$metadata.httpStatusCode;
+    return code === 500 || code === 502 || code === 503 || code === 504
+      ? `HTTP ${code}`
+      : undefined;
+  }
+  if (error instanceof Error) {
+    const code = "code" in error ? error.code : error.name;
+    if (
+      typeof code === "string" &&
+      [
+        "ECONNRESET",
+        "ETIMEDOUT",
+        "ESOCKETTIMEDOUT",
+        "ECONNABORTED",
+        "EPIPE",
+        "ERR_STREAM_PREMATURE_CLOSE",
+        "TimeoutError",
+        "RequestTimeout",
+      ].includes(code)
+    ) {
+      return code;
+    }
+  }
+  return undefined;
+}
 
 function missingObject(error: unknown): boolean {
   return (
@@ -76,20 +108,17 @@ async function* uploadChunks(body: AsyncIterable<Uint8Array>, signal?: AbortSign
   signal?.throwIfAborted();
   const iterator = body[Symbol.asyncIterator]();
   let exhausted = false;
-  let onAbort: (() => void) | undefined;
-  const aborted =
-    signal &&
-    new Promise<never>((_resolve, reject) => {
-      onAbort = () => {
-        const error = new Error("R2 upload aborted; retry when ready.");
-        error.name = "AbortError";
-        reject(error);
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
   try {
     while (true) {
-      const next = aborted ? await Promise.race([iterator.next(), aborted]) : await iterator.next();
+      const next = await racePromiseWithAbortSignal(
+        () => iterator.next(),
+        signal,
+        () => {
+          const error = new Error("R2 upload aborted; retry when ready.");
+          error.name = "AbortError";
+          return error;
+        },
+      );
       if (next.done) {
         exhausted = true;
         return;
@@ -97,9 +126,6 @@ async function* uploadChunks(body: AsyncIterable<Uint8Array>, signal?: AbortSign
       yield next.value;
     }
   } finally {
-    if (onAbort) {
-      signal?.removeEventListener("abort", onAbort);
-    }
     const closing = iterator.return?.();
     if (!exhausted) {
       // A producer blocked in next() or finally cannot delay multipart cleanup.
@@ -270,30 +296,99 @@ export function createR2Backend(
       }
     },
     async getObject(key, opts) {
+      let offset = 0;
+      let size: number | undefined;
+      const failed = (error: unknown) => {
+        const failure = storageError(error, settings, "download");
+        const reason = downloadRetryReason(error);
+        failure.message += ` Download stopped after ${offset} of ${size ?? "unknown"} bytes (next offset ${offset}${reason ? `; ${reason}` : ""}).`;
+        return failure;
+      };
       try {
-        const { Body } = await client.send(
-          new GetObjectCommand({ Bucket: settings.bucket, Key: keyFor(key) }),
-          { abortSignal: opts?.signal },
-        );
-        if (!Body) {
-          throw new R2StorageError("R2 returned no object body; retry the download.");
+        const target = { Bucket: settings.bucket, Key: keyFor(key) };
+        const { ETag, ContentLength } = await client.send(new HeadObjectCommand(target), {
+          abortSignal: opts?.signal,
+        });
+        size = ContentLength;
+        if (!ETag || size === undefined || !Number.isSafeInteger(size) || size < 0) {
+          throw new R2StorageError("R2 returned no valid object size or ETag; retry the download.");
         }
-        const stream = Body.transformToWebStream();
+        const totalBytes = size;
         return (async function* () {
           try {
-            for await (const chunk of stream) {
-              opts?.signal?.throwIfAborted();
-              yield chunk;
+            while (offset < totalBytes) {
+              const end = Math.min(offset + PART_BYTES, totalBytes) - 1;
+              let retries = 0;
+              while (offset <= end) {
+                opts?.signal?.throwIfAborted();
+                try {
+                  const result: GetObjectCommandOutput = await client.send(
+                    new GetObjectCommand({
+                      ...target,
+                      Range: `bytes=${offset}-${end}`,
+                      IfMatch: ETag,
+                    }),
+                    { abortSignal: opts?.signal },
+                  );
+                  opts?.signal?.throwIfAborted();
+                  if (!result.Body) {
+                    throw new R2StorageError("R2 returned no object body; retry the download.");
+                  }
+                  const stream = result.Body.transformToWebStream();
+                  if (
+                    result.ETag !== ETag ||
+                    result.ContentRange !== `bytes ${offset}-${end}/${totalBytes}`
+                  ) {
+                    await stream.cancel();
+                    throw new R2StorageError(
+                      result.ETag !== ETag
+                        ? "R2 object changed during download; restart the download."
+                        : "R2 returned an unexpected byte range; retry the download.",
+                    );
+                  }
+                  for await (const chunk of stream) {
+                    opts?.signal?.throwIfAborted();
+                    if (offset + chunk.byteLength > end + 1) {
+                      throw new R2StorageError(
+                        "R2 returned more bytes than requested; retry the download.",
+                      );
+                    }
+                    offset += chunk.byteLength;
+                    yield chunk;
+                  }
+                  if (offset <= end) {
+                    throw Object.assign(new Error("Incomplete R2 range"), {
+                      code: "ERR_STREAM_PREMATURE_CLOSE",
+                    });
+                  }
+                } catch (error) {
+                  if (
+                    error instanceof S3ServiceException &&
+                    error.$metadata.httpStatusCode === 412
+                  ) {
+                    throw new R2StorageError(
+                      "R2 object changed during download; restart the download.",
+                    );
+                  }
+                  if (
+                    opts?.signal?.aborted ||
+                    !downloadRetryReason(error) ||
+                    retries++ >= DOWNLOAD_RETRIES_PER_PART
+                  ) {
+                    throw error;
+                  }
+                }
+              }
             }
           } catch (error) {
-            throw storageError(error, settings, "download");
+            throw failed(error);
           }
         })();
       } catch (error) {
         if (missingObject(error)) {
           return undefined;
         }
-        throw storageError(error, settings, "download");
+        throw failed(error);
       }
     },
     async statObject(key, opts) {

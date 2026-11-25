@@ -1,5 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import {
@@ -8,18 +7,23 @@ import {
 } from "../accepted-session-spawn.js";
 import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
+import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  prepareGatewayToolCallerAssertion,
 } from "./gateway-caller-context.js";
-import { runWithGatewayToolCleanupContext } from "./in-process-gateway.js";
+import {
+  getInProcessGatewayToolContext,
+  runWithGatewayToolCleanupContext,
+} from "./in-process-gateway.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 import {
   startSessionsSendAgentRun,
   trySessionsSendActiveRunDelivery,
 } from "./sessions-send-tool.delivery.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 import { jsonResult } from "./tool-results.js";
 
 /** Reconcile only the original admission; an uncertain ACK never starts a replacement. */
@@ -47,15 +51,15 @@ export async function startSessionsSendFollowup(
         targetAgentId: request.targetAgentId,
         requesterAgentId: request.requesterAgentId,
         requesterSessionKey: request.requesterSessionKey,
-        maxPingPongTurns: 0,
-        replyMode: "one-way",
+        replyMode: replyContext.replyMode === "peer" ? "peer" : "one-way",
         notifyRequesterOnWaitFailure: true,
       });
       return {
         start: {
           ...start,
+          selfHeld: undefined,
           result: jsonResult({
-            ...(isRecord(start.result.details) ? start.result.details : {}),
+            ...start.result.details,
             sentBeforeError: true,
           }),
         },
@@ -73,32 +77,60 @@ export async function startSessionsSendFollowup(
   return { start, completion };
 }
 
-/** Dispatch and acceptance share one owner for watched completion and state-watch installation. */
+/**
+ * The target run keeps its dispatch assertion for as long as it lives. A closed admission can only
+ * refuse, so it drops the sender's checks instead of keeping the sending turn reachable.
+ */
+function openChildFollowupAdmission(assertCurrent: () => void, assertDispatchCurrent?: () => void) {
+  let checks: { assertCurrent: () => void; assertDispatchCurrent?: () => void } | undefined = {
+    assertCurrent,
+    assertDispatchCurrent,
+  };
+  return {
+    assertDispatchCurrent: () => {
+      if (!checks) {
+        throw new Error("Child followup admission was closed.");
+      }
+      checks.assertCurrent();
+      checks.assertDispatchCurrent?.();
+    },
+    close: () => {
+      checks = undefined;
+    },
+  };
+}
+
+/** Eligible followups retain their accepted result through the existing completion owner. */
 export async function dispatchSessionsSendFollowup(
   params: Parameters<typeof startSessionsSendAgentRun>[0],
   replyContext: Parameters<typeof startSessionsSendFollowup>[2],
   options: {
+    message: string;
     ownChild: boolean;
+    persistentChildAccess?: boolean;
     nativeChild: boolean;
     watch: boolean;
     requesterSessionKey: string;
     requesterAgentId: string;
     requesterTurnRunId?: string;
+    targetSession?: AgentStepSession & { label?: string };
     withRequesterAuthority?: <T>(run: () => T) => T;
   },
 ) {
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
+  const caller = getGatewayToolCallerIdentity();
+  const instance = caller?.operationalRunInstance;
   const completionChild = options.watch
-    ? getLatestLiveSubagentRunByChildSessionKey(params.sessionStoreTarget.canonicalKey)
+    ? getLatestLiveSubagentRunByChildSessionKey(
+        params.sessionStoreTarget.canonicalKey,
+        undefined,
+        params.sessionStoreTarget.agentId,
+      )
     : undefined;
   const sameRequester = replyContext.requesterSessionKey === options.requesterSessionKey;
-  const watchedTurn =
-    options.watch &&
-    params.allowActiveRunQueueDelivery &&
-    !params.expectedSessionId &&
+  const isCronRequester = isCronRunSessionKey(options.requesterSessionKey);
+  const requesterTurn =
+    (!params.expectedSessionId || options.persistentChildAccess) &&
     options.nativeChild &&
-    !isCronRunSessionKey(options.requesterSessionKey) &&
     sameRequester &&
     (options.ownChild ||
       (completionChild?.requesterSessionKey === options.requesterSessionKey &&
@@ -106,10 +138,27 @@ export async function dispatchSessionsSendFollowup(
         completionChild.expectsCompletionMessage === true))
       ? options.requesterTurnRunId
       : undefined;
+  if (requesterTurn && !replyContext.requesterSession) {
+    throw new Error("Child followup completion requires its original requester session.");
+  }
   const active = await trySessionsSendActiveRunDelivery(params, options.ownChild);
+  const registryTurn =
+    (!isCronRequester && options.watch) || (options.ownChild && !("ok" in active))
+      ? requesterTurn
+      : undefined;
+  const completionTurn = isCronRequester ? undefined : registryTurn;
+  // A queued self-send has no separate recipient to observe it with operator.write.
+  // Keep the original run's result, without registering the session as its own child.
+  const ownSessionCompletion =
+    replyContext.replyMode === "peer" &&
+    options.requesterSessionKey === params.sessionStoreTarget.canonicalKey &&
+    options.requesterAgentId === params.sendParams.agentId &&
+    getInProcessGatewayToolContext()?.lifecycleRuntime !== undefined;
   const request =
     !("ok" in active) &&
-    (watchedTurn || (replyContext.replyMode === "one-way" && options.ownChild)) &&
+    (registryTurn ||
+      ownSessionCompletion ||
+      (replyContext.replyMode === "one-way" && options.ownChild)) &&
     sameRequester
       ? await prepareSessionsSendFollowup({
           runId: params.runId,
@@ -121,42 +170,31 @@ export async function dispatchSessionsSendFollowup(
           targetSessionKey: params.sessionStoreTarget.canonicalKey,
         })
       : undefined;
-  let admissionOpen = true;
-  const assertCurrent = () => {
-    assertCallerCurrent?.();
-    request?.custody.assertCurrent();
-  };
+  const assertCurrent = () => request?.custody.assertCurrent();
+  const admission = registryTurn
+    ? openChildFollowupAdmission(assertCurrent, params.assertDispatchCurrent)
+    : undefined;
   const { start, completion } =
     "ok" in active
       ? { start: active, completion: undefined }
       : await startSessionsSendFollowup(
-          watchedTurn ? undefined : request,
+          registryTurn ? undefined : request,
           {
             ...params,
             ...active,
-            ...(watchedTurn
-              ? {
-                  retainAcceptance: true,
-                  assertDispatchCurrent: () => {
-                    if (!admissionOpen) {
-                      throw new Error("Watched followup admission was closed.");
-                    }
-                    assertCurrent();
-                  },
-                }
+            ...(admission
+              ? { retainAcceptance: true, assertDispatchCurrent: admission.assertDispatchCurrent }
               : {}),
           },
           replyContext,
         );
   try {
-    if (start.ok && watchedTurn) {
+    if (start.ok && registryTurn) {
       const { registerSubagentRun, adoptSubagentRunForRequesterTurn } =
         await import("../subagents/registry/subagent-registry.js");
-      // Acceptance already owns the input; retained custody owns recording its result obligation.
-      const assertCompletionCurrent = () =>
-        request ? request.custody.assertCurrent() : assertCurrent();
       const claim = async () => {
-        assertCompletionCurrent();
+        // Acceptance already owns the input; retained custody owns recording its result obligation.
+        assertCurrent();
         const childSessionKey = start.a2aSessionKey ?? params.sessionStoreTarget.canonicalKey;
         let accepted: AcceptedSessionSpawn | undefined;
         if (start.targetDisposition === "steered") {
@@ -164,6 +202,7 @@ export async function dispatchSessionsSendFollowup(
             ? getLatestLiveSubagentRunByChildSessionKey(
                 childSessionKey,
                 (entry) => entry.runId === start.steeredRunId,
+                params.sessionStoreTarget.agentId,
               )
             : undefined;
           if (expected) {
@@ -171,8 +210,9 @@ export async function dispatchSessionsSendFollowup(
               expected,
               requesterSessionKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
-              requesterTurnRunId: watchedTurn,
-              assertCurrent: assertCompletionCurrent,
+              requesterTurnRunId: registryTurn,
+              requesterRunInstance: instance,
+              assertCurrent,
             });
           }
           if (!accepted) {
@@ -184,25 +224,46 @@ export async function dispatchSessionsSendFollowup(
           await registerSubagentRun(
             {
               runId: start.runId,
+              gatewayContextResolver: caller?.gatewayContextResolver,
               childSessionKey,
+              sessionEntry: options.targetSession,
               childAgentId: params.sessionStoreTarget.agentId,
               requesterSessionKey: options.requesterSessionKey,
               requesterDisplayKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
-              requesterTurnRunId: watchedTurn,
+              requesterTurnRunId: registryTurn,
               requesterOrigin: replyContext.requesterOrigin,
-              task: replyContext.message,
+              task: options.message,
+              // The completion receipt names the child as its session does.
+              label: options.targetSession?.label,
               cleanup: "keep",
               spawnMode: "session",
-              expectsCompletionMessage: true,
+              expectsCompletionMessage: Boolean(completionTurn),
+              completionTarget: completionTurn ? "parent" : undefined,
+              completionRequesterSessionId: replyContext.requesterSession?.sessionId,
+              completionRequesterLifecycleRevision:
+                replyContext.requesterSession?.lifecycleRevision,
             },
             {
-              assertCurrent: assertCompletionCurrent,
+              assertCurrent,
               assertPublicationCurrent: () => request?.custody.assertCurrent(),
-              persistence: "worker",
+              acceptedRunReplay: true,
+              requesterRunInstance: instance,
             },
           );
-          accepted = { runId: start.runId, childSessionKey, expectsCompletionMessage: true };
+          accepted = {
+            runId: start.runId,
+            childSessionKey,
+            expectsCompletionMessage: Boolean(completionTurn),
+          };
+        }
+        if (completionTurn && request?.requesterAuthority) {
+          const runId = start.targetDisposition === "steered" ? start.steeredRunId : start.runId;
+          const entry = runId ? subagentRuns.get(runId) : undefined;
+          if (!entry) {
+            throw new Error("Accepted child followup has no registry owner.");
+          }
+          request.requesterAuthority.bind({ entry, runs: subagentRuns });
         }
         return accepted;
       };
@@ -214,7 +275,7 @@ export async function dispatchSessionsSendFollowup(
     }
   } catch (error) {
     let failure = error;
-    if (start.ok && watchedTurn) {
+    if (start.ok && completionTurn) {
       const runId = start.targetDisposition === "steered" ? start.steeredRunId : start.runId;
       if (runId && instance) {
         try {
@@ -239,6 +300,8 @@ export async function dispatchSessionsSendFollowup(
     return {
       start: {
         ok: false as const,
+        // Only an accepted start reaches this catch, so it is never a retainable refusal.
+        selfHeld: undefined,
         result: jsonResult({
           runId: start.ok ? start.runId : params.runId,
           status: "error",
@@ -252,31 +315,46 @@ export async function dispatchSessionsSendFollowup(
       watchField: {},
     };
   } finally {
-    admissionOpen = false;
-    if (watchedTurn) {
+    admission?.close();
+    if (registryTurn) {
       request?.custody.release();
     }
   }
   const targetSessionKey = start.ok
     ? (start.a2aSessionKey ?? params.sessionStoreTarget.canonicalKey)
     : undefined;
-  const watched =
+  let watched = false;
+  if (
     start.ok &&
     options.watch &&
-    !params.expectedSessionId &&
+    (!params.expectedSessionId || options.persistentChildAccess) &&
     replyContext.requesterSessionKey &&
     targetSessionKey &&
     replyContext.requesterSessionKey !== targetSessionKey
-      ? registerSessionStateWatch({
-          watcherSessionKey: replyContext.requesterSessionKey,
-          targetSessionKey,
-          targetAgentId: params.sendParams.agentId,
-        })
-      : false;
+  ) {
+    watched = await registerSessionStateWatch(
+      {
+        watcherSessionKey: replyContext.requesterSessionKey,
+        targetSessionKey,
+        targetAgentId: params.sendParams.agentId,
+      },
+      { prepareCurrent: prepareGatewayToolCallerAssertion },
+    );
+  }
   return {
     start,
     completion,
-    registryCompletion: Boolean(start.ok && watchedTurn),
-    watchField: options.watch ? { watched } : {},
+    registryCompletion: Boolean(start.ok && completionTurn),
+    watchField: options.watch
+      ? {
+          watched,
+          ...(!watched && start.ok
+            ? {
+                watchError:
+                  "The send was accepted, but no proactive state watch was registered. Watches require distinct, valid agent-qualified session keys and current session authority. Use owner-scoped session_status changesSince to reconcile state.",
+              }
+            : {}),
+        }
+      : {},
   };
 }

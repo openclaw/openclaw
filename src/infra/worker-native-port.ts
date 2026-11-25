@@ -1,6 +1,8 @@
 import type { MessagePort } from "node:worker_threads";
 
 const livePort = new Error("Native worker port validation reached the live sentinel");
+// This private identity sentinel must not retain the first importer's stack.
+livePort.stack = undefined;
 const portValidation = {
   get value(): never {
     throw livePort;

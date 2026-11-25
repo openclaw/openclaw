@@ -6,7 +6,7 @@ import type { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-f
 
 // Invalid overrides retain the normal/test defaults; partial numeric parsing
 // must not silently widen cleanup waits.
-const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS =
+export const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS =
   parseStrictPositiveInteger(process.env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS) ??
   (isFastTestRuntimeEnv() ? 250 : 2_000);
 
@@ -79,14 +79,11 @@ export async function cleanupEmbeddedAttemptResources(params: {
   } catch {
     recordAgentCleanupFailure();
   }
-  try {
-    await params.bundleMcpRuntime?.dispose();
-  } catch {
-    recordAgentCleanupFailure();
-  }
-  try {
-    await params.bundleLspRuntime?.dispose();
-  } catch {
-    recordAgentCleanupFailure();
+  for (const key of ["bundleMcpRuntime", "bundleLspRuntime"] as const) {
+    try {
+      await params[key]?.dispose();
+    } catch {
+      recordAgentCleanupFailure();
+    }
   }
 }

@@ -1,7 +1,7 @@
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {
@@ -90,7 +90,7 @@ it.each([
       model,
       settingsManager,
       sessionManager,
-      resourceLoader: { ...createResourceLoader(), getSystemPrompt: () => systemPrompt },
+      systemPrompt,
     });
     if (queued) {
       const suppressed = buildRuntimeContextCustomMessage("Discarded queued context. ".repeat(35));
@@ -240,12 +240,10 @@ it.each([
     model,
     settingsManager,
     sessionManager,
-    resourceLoader: {
-      ...createResourceLoader(new Map([["session_before_compact", [hook]]])),
-      ...(fixedOnly
-        ? { getSystemPrompt: () => "Required operating instructions. ".repeat(340) }
-        : {}),
-    },
+    resourceLoader: await createResourceLoader((api) => {
+      api.on("session_before_compact", hook);
+    }),
+    ...(fixedOnly ? { systemPrompt: "Required operating instructions. ".repeat(340) } : {}),
   });
   const before = structuredClone(sessionManager.getBranch());
   const budget = createCompactionRequestBudget({

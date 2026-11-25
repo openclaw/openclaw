@@ -1,0 +1,308 @@
+import { describe, expect, it, onTestFinished, vi, type Mock } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createServiceRegistration } from "../plugins/services.test-support.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
+import { beginGatewayReloadLifecycle } from "./server-reload-generation.js";
+import {
+  captureConfigWriteListener,
+  createConfigWriteListenerRef,
+  createConfigWriteNotification,
+  createHotTailPlan,
+  createValidConfigSnapshot,
+  makePluginReloadResult,
+  type ReloadTestFactories,
+} from "./server-reload-handlers.config.test-support.js";
+import * as modelRuntime from "./server-reload-model-runtime-scope.js";
+
+export function registerGatewayTargetedServiceReloadTests({
+  createGatewayReloadHandlers,
+  startManagedGatewayConfigReloader,
+  reloadMocks,
+}: ReloadTestFactories & {
+  reloadMocks: {
+    reloadEvents: string[];
+    refreshContextWindowCache: Mock;
+    markPreparedModelRuntimeSnapshotsStale: Mock;
+    refreshPreparedModelRuntimeSnapshots: Mock;
+  };
+}): void {
+  describe("gateway targeted service reload", () => {
+    it("keeps mixed reload state old until the plugin replacement commit", async () => {
+      const events: string[] = [];
+      const started = createDeferred();
+      const release = createDeferred();
+      const sourceConfig: OpenClawConfig = {
+        plugins: { enabled: true },
+        hooks: { enabled: true, token: "token", path: "/next" },
+      };
+      const nextConfig: OpenClawConfig = {
+        ...sourceConfig,
+        plugins: {
+          enabled: true,
+          allow: ["external-plugin"],
+          entries: { "external-plugin": { enabled: true } },
+        },
+      };
+      const reloadPlugins = vi.fn<GatewayReloadHandlerParams["reloadPlugins"]>(async (params) => {
+        events.push("reload:start");
+        reloadMocks.reloadEvents.push("prepare-plugins");
+        started.resolve();
+        await release.promise;
+        await params.commitRuntime();
+        events.push("registry:replace");
+        reloadMocks.reloadEvents.push("replace-plugins");
+        return makePluginReloadResult();
+      });
+      const setState = vi.fn();
+      const handlers = createGatewayReloadHandlers({
+        setState,
+        startChannel: vi.fn(async () => new Map()),
+        stopChannel: vi.fn(async (channel) => {
+          events.push(`stop:${channel}`);
+        }),
+        reloadPlugins,
+      });
+
+      const reload = handlers.applyHotReload(
+        createHotTailPlan({
+          changedPaths: ["hooks.path", "plugins.enabled"],
+          hotReasons: ["hooks.path", "plugins.enabled"],
+          reloadHooks: true,
+          reloadPlugins: true,
+        }),
+        nextConfig,
+        {
+          sourceConfig,
+          isCurrent: () => true,
+          publish: async (commit) => {
+            events.push("runtime:publish");
+            setRuntimeConfigSnapshot(nextConfig, sourceConfig);
+            await commit();
+          },
+        },
+      );
+
+      await started.promise;
+      expect(events).toEqual(["reload:start"]);
+      expect(setState).not.toHaveBeenCalled();
+
+      release.resolve();
+      await reload;
+
+      expect(events).toEqual(["reload:start", "runtime:publish", "registry:replace"]);
+      expect(setState).toHaveBeenCalledTimes(1);
+      expect(reloadPlugins.mock.calls[0]?.[0].nextConfig).toBe(nextConfig);
+      expect(reloadPlugins.mock.calls[0]?.[0].sourceConfig).toBe(sourceConfig);
+      const firstPrepareIndex = reloadMocks.reloadEvents.indexOf("prepare-plugins");
+      expect(firstPrepareIndex).toBeGreaterThanOrEqual(0);
+      expect(reloadMocks.reloadEvents.slice(firstPrepareIndex)).toEqual([
+        "prepare-plugins",
+        "stale-prepared-model-runtime",
+        "replace-plugins",
+        "refresh-prepared-model-runtime",
+        "refresh-context-window",
+      ]);
+      expect(reloadMocks.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
+      expect(reloadMocks.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledWith(
+        "prepared model runtime owner is stale before config publication",
+        { waitForReplacement: true },
+      );
+      expect(reloadMocks.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+        allowGatewaySubagentBinding: true,
+        catalogMode: "static",
+        joinSupersedingPublication: true,
+      });
+    });
+
+    it("forwards the service owner through managed config publication", async () => {
+      vi.useFakeTimers();
+      const registry = createTestRegistry([]);
+      registry.services.push(
+        createServiceRegistration(
+          { id: "exporter", reload: { configPrefixes: ["diagnostics.otel"] }, start() {} },
+          { pluginId: "exporter" },
+        ),
+      );
+      setActivePluginRegistry(registry);
+      const initialConfig: OpenClawConfig = { diagnostics: { otel: { enabled: true } } };
+      const nextConfig: OpenClawConfig = { diagnostics: { otel: { enabled: false } } };
+      const listener = createConfigWriteListenerRef();
+      const reloadPluginServices = vi.fn(async () => {});
+      const reloader = startManagedGatewayConfigReloader({
+        initialConfig,
+        readSnapshot: async () => createValidConfigSnapshot(nextConfig, "otel-disabled"),
+        subscribeToWrites: captureConfigWriteListener(listener),
+        reloadPluginServices,
+      });
+      await reloader.ready;
+      try {
+        const application = createRuntimeConfigWriteApplication();
+        if (!listener.current) {
+          throw new Error("Expected managed config write listener");
+        }
+        listener.current(
+          attachRuntimeConfigWriteApplication(
+            createConfigWriteNotification(nextConfig, "otel-disabled", 1, "runtime", "source"),
+            application,
+          ),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        await expect(application.result).resolves.toBe("applied");
+        expect(reloadPluginServices).toHaveBeenCalledExactlyOnceWith(
+          nextConfig,
+          new Set(["exporter"]),
+        );
+      } finally {
+        await reloader.stop();
+      }
+    });
+
+    it.each([
+      "success",
+      "failure",
+      "superseded",
+      "plugin failure",
+      "model failure",
+      "model recovery failure",
+      "retired gateway",
+    ] as const)(
+      "reloads retained services after a different plugin changes in the same config publication (%s)",
+      async (outcome) => {
+        vi.useFakeTimers();
+        const registry = createTestRegistry([]);
+        for (const id of ["replaced", "retained"]) {
+          registry.services.push(createServiceRegistration({ id, start() {} }, { pluginId: id }));
+        }
+        const runtime = {
+          operationId: "mixed-services",
+          generation: 1,
+          pluginIds: ["replaced"],
+          sourceDigests: {},
+        };
+        const events: string[] = [];
+        let modelsSettled = false;
+        const refreshModels = vi
+          .spyOn(modelRuntime, "refreshModelRuntimeAfterHotReload")
+          .mockImplementation(async () => {
+            await Promise.resolve();
+            modelsSettled = true;
+            events.push("models-settled");
+            if (outcome === "retired gateway") {
+              beginGatewayReloadLifecycle();
+            }
+            if (outcome === "model failure" || outcome === "model recovery failure") {
+              throw new Error("Model preparation failed");
+            }
+          });
+        onTestFinished(() => refreshModels.mockRestore());
+        const pluginFailure =
+          outcome === "plugin failure" ||
+          outcome === "model recovery failure" ||
+          outcome === "retired gateway";
+        let current = true;
+        const logReload = { info: vi.fn(), warn: vi.fn() };
+        const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+        const reloadPluginServices = vi.fn(async () => {
+          expect(modelsSettled).toBe(true);
+          events.push("retained-service");
+          if (outcome === "failure" || outcome === "superseded") {
+            current = outcome !== "superseded";
+            throw new Error("retained service failed");
+          }
+        });
+        const handlers = createGatewayReloadHandlers({
+          logReload,
+          requestRecoveryRestart,
+          getPluginRegistry: () => registry,
+          reloadPluginServices,
+          reloadPlugins: async ({ commitRuntime, prepareConfigEffects }) => {
+            prepareConfigEffects({
+              pluginIds: new Set(runtime.pluginIds),
+              channels: new Set(),
+            }).retire();
+            await commitRuntime();
+            events.push("replaced-plugin");
+            if (pluginFailure) {
+              throw new PluginRuntimeApplicationError("Plugin activation failed", {
+                ...runtime,
+                phase: "activate",
+                committed: true,
+              });
+            }
+            return makePluginReloadResult({ runtime });
+          },
+        });
+        const nextConfig: OpenClawConfig = { diagnostics: { otel: { enabled: false } } };
+        try {
+          const applying = handlers.applyHotReload(
+            createHotTailPlan({
+              changedPaths: ["plugins.entries.replaced.enabled", "diagnostics.otel.enabled"],
+              reloadPlugins: true,
+              pluginLifecycle: {
+                operationId: runtime.operationId,
+                pluginIds: ["replaced"],
+                reason: "enable",
+              },
+              restartServices: new Set(["replaced", "retained"]),
+            }),
+            nextConfig,
+            {
+              sourceConfig: nextConfig,
+              isCurrent: () => current,
+              publish: async (commit) => {
+                setRuntimeConfigSnapshot(nextConfig, nextConfig);
+                await commit();
+                events.push("published");
+              },
+            },
+          );
+          if (pluginFailure) {
+            await expect(applying).rejects.toThrow(
+              outcome === "model recovery failure"
+                ? "Plugin model/reply recovery failed"
+                : "Plugin activation failed",
+            );
+          } else if (outcome === "model failure") {
+            await expect(applying).rejects.toThrow(
+              "Plugin runtime application failed during prepared model runtime reload",
+            );
+          } else {
+            await expect(applying).resolves.toEqual({ status: "applied", runtime });
+          }
+          expect(events).toEqual([
+            "published",
+            "replaced-plugin",
+            "models-settled",
+            ...(outcome === "retired gateway" ? [] : ["retained-service"]),
+          ]);
+          if (outcome === "retired gateway") {
+            expect(reloadPluginServices).not.toHaveBeenCalled();
+          } else {
+            expect(reloadPluginServices).toHaveBeenCalledExactlyOnceWith(
+              nextConfig,
+              new Set(["retained"]),
+            );
+          }
+          await vi.advanceTimersByTimeAsync(500);
+          expect(requestRecoveryRestart).not.toHaveBeenCalled();
+          if (outcome === "failure" || outcome === "superseded") {
+            expect(logReload.warn).toHaveBeenCalledWith(
+              "plugin services reload failed: retained service failed",
+            );
+          }
+        } finally {
+          handlers.stopRestartRetries();
+        }
+      },
+    );
+  });
+}

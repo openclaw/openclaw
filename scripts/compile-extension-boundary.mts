@@ -37,6 +37,13 @@ if (compilerOptions) {
   }
 }
 const inputReceipt = boundary.assert(request.inputReceipt);
+let roots: string[] | undefined;
+if ("roots" in request) {
+  if (!Array.isArray(request.roots) || !request.roots.every((root) => typeof root === "string")) {
+    throw new Error("Invalid extension boundary compiler roots");
+  }
+  roots = request.roots.map((root: string) => boundary.assert(root));
+}
 const outDir =
   compilerOptions && "outDir" in compilerOptions && typeof compilerOptions.outDir === "string"
     ? boundary.assert(compilerOptions.outDir)
@@ -50,8 +57,10 @@ const result = await compileNativeProject({
   compilerRoot: boundary.root,
   configFile: boundary.assert(request.configFile),
   compilerOptions,
+  roots,
   diagnostics: "all",
-  assertInput: (file) => boundary.assert(file),
+  // The compiler owns physical input confinement; this worker adds no narrower input policy.
+  assertInput: (file) => file,
   emit: request.emit,
 });
 const outputs = [...result.outputFiles].map(([file, output]) => {

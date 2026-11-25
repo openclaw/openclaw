@@ -133,10 +133,7 @@ export function findWrapperShadowingViolations(modules: SourceModule[]) {
     for (const [index, sourceFile] of sourceFiles.entries()) {
       const sourceModule = batch[index]!;
       const modulePath = normalizeRelativePath(sourceModule.path);
-      modulesByPath.set(
-        modulePath,
-        collectModuleExportNames(sourceModule.content, modulePath, sourceFile),
-      );
+      modulesByPath.set(modulePath, collectModuleExportNames(modulePath, sourceFile));
     }
   }
 

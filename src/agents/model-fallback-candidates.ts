@@ -11,7 +11,6 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
-import { isPluginProvidersLoadInFlight } from "../plugins/providers.runtime.js";
 import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
@@ -23,7 +22,10 @@ import {
   allowsPluginModelNormalization,
   hasExactConfiguredProviderModel,
 } from "./configured-provider-model.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { resolveContextTokensForModelFromCache } from "./context-resolution.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
+import { extractObservedOverflowTokenCount } from "./embedded-agent-helpers/context-overflow-observation.js";
+import { isFailoverError } from "./failover/error.js";
 import type {
   ModelCandidate,
   ModelFallbackCandidate,
@@ -33,9 +35,9 @@ import type {
 import {
   type ModelManifestNormalizationContext,
   modelKey,
-  normalizeModelRef,
   normalizeProviderId,
 } from "./model-ref-shared.js";
+import { normalizeModelRef } from "./model-selection-normalize.js";
 import {
   buildModelAliasIndex,
   resolveConfiguredModelFallbacks,
@@ -52,11 +54,52 @@ const fallbackContextIds = new WeakMap<object, number>();
 let nextFallbackContextId = 0;
 const log = createSubsystemLogger("model-selection");
 
+/** Prefer known headroom without dropping operator-selected models with incomplete metadata. */
+export function preferContextFitFallbackCandidates(params: {
+  candidates: ModelFallbackCandidate[];
+  failedIndex: number;
+  error: unknown;
+  cfg: OpenClawConfig | undefined;
+}): ModelFallbackCandidate[] {
+  if (
+    !isFailoverError(params.error) ||
+    params.error.reason !== "context_overflow" ||
+    params.error.requestSizeCeiling
+  ) {
+    return params.candidates;
+  }
+  const failedCandidate = params.candidates[params.failedIndex];
+  if (!failedCandidate) {
+    return params.candidates;
+  }
+  const contextTokens = (candidate: ModelCandidate) =>
+    resolveContextTokensForModelFromCache({
+      cfg: params.cfg,
+      ...candidate,
+      allowUnscopedModelLookup: false,
+    });
+  const failedTokens = contextTokens(failedCandidate);
+  // Without provider counts, a larger window is a preference, not a guarantee of fit.
+  const requiredTokens =
+    extractObservedOverflowTokenCount(params.error.rawError ?? params.error.message) ??
+    (failedTokens === undefined ? undefined : failedTokens + 1);
+  if (requiredTokens === undefined) {
+    return params.candidates;
+  }
+  const remaining = params.candidates
+    .slice(params.failedIndex + 1)
+    .map((candidate) => ({ candidate, fits: (contextTokens(candidate) ?? 0) >= requiredTokens }))
+    .toSorted((left, right) => Number(right.fits) - Number(left.fits))
+    .map(({ candidate }) => candidate);
+  return [...params.candidates.slice(0, params.failedIndex + 1), ...remaining];
+}
+
 type ModelCandidateChainParams = ModelManifestNormalizationContext & {
   cfg: OpenClawConfig | undefined;
   agentId?: string;
-  provider: string;
-  model: string;
+  /** The requested route; omitted parts use the configured primary. */
+  provider?: string;
+  model?: string;
   /** An explicit list, including empty, replaces the configured model fallbacks. */
   fallbacksOverride?: string[];
   requestedRouteResolution?: ModelFallbackRouteResolution;
@@ -158,14 +201,11 @@ export function resolveModelCandidateChain(
   const { cacheKey, manifestPlugins } = resolveFallbackCandidateContext(params);
   const cached = cacheKey ? fallbackCandidateCache.get(cacheKey) : undefined;
   if (cached) {
-    return cached.map((candidate) => Object.assign({}, candidate));
+    return cached;
   }
   const candidates = resolveFallbackCandidatesUncached({ ...params, manifestPlugins });
   if (cacheKey) {
-    fallbackCandidateCache.set(
-      cacheKey,
-      candidates.map((candidate) => Object.assign({}, candidate)),
-    );
+    fallbackCandidateCache.set(cacheKey, candidates);
     pruneMapToMaxSize(fallbackCandidateCache, MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES);
   }
   return candidates;
@@ -199,18 +239,11 @@ function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
     allowWorkspaceScopedSnapshot: true,
     requireDefaultDiscoveryContext: params.cfg === undefined,
   });
-  if (
-    isPluginProvidersLoadInFlight({
-      config: params.cfg,
-      workspaceDir,
-      env,
-      ...(providerLoadMetadata ? { pluginMetadataSnapshot: providerLoadMetadata } : {}),
-      activate: false,
-    })
-  ) {
+  const registryState = getPluginRegistryState();
+  // register() can add provider hooks between lookups in the same growing registry.
+  if (registryState?.registrationContext) {
     return { cacheKey: null, manifestPlugins: providerLoadMetadata };
   }
-  const registryState = getPluginRegistryState();
   const registry = getPluginRuntimeGenerationRegistry() ?? getPluginRegistryForContext();
   const agentConfig =
     params.cfg && params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
@@ -255,12 +288,8 @@ function resolveFallbackCandidateModelProviderCacheParts(cfg: OpenClawConfig | u
   }
   return Object.entries(providers).map(([providerId, providerConfig]) => ({
     providerId,
-    api: typeof providerConfig?.api === "string" ? providerConfig.api : undefined,
-    models: Array.isArray(providerConfig?.models)
-      ? providerConfig.models
-          .map((entry) => (typeof entry?.id === "string" ? entry.id : undefined))
-          .filter((id): id is string => id !== undefined)
-      : [],
+    api: providerConfig.api,
+    models: providerConfig.models?.map((entry) => entry.id) ?? [],
   }));
 }
 
@@ -272,31 +301,17 @@ function resolveFallbackCandidatesUncached(
         cfg: params.cfg,
         agentId: params.agentId,
         defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
         allowPluginNormalization: false,
         manifestPlugins: params.manifestPlugins,
       })
-    : null;
+    : undefined;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
-  const defaultModel = primary?.model ?? DEFAULT_MODEL;
   const providerRaw = normalizeOptionalString(params.provider) || defaultProvider;
-  const modelRaw = normalizeOptionalString(params.model) || defaultModel;
+  // No requested and no configured model leaves only the configured fallbacks.
+  const modelRaw = normalizeOptionalString(params.model) || primary?.model;
   const allowPluginModelAliases =
     params.allowPluginNormalization !== false && params.cfg?.plugins?.enabled !== false;
   const requestedRouteResolution = params.requestedRouteResolution ?? "raw";
-  const normalizedPrimary =
-    requestedRouteResolution === "resolved"
-      ? { provider: normalizeProviderId(providerRaw), model: modelRaw }
-      : normalizeModelRef(providerRaw, modelRaw, {
-          allowPluginNormalization:
-            params.allowPluginNormalization !== false &&
-            allowsPluginModelNormalization({
-              cfg: params.cfg,
-              provider: providerRaw,
-              model: modelRaw,
-            }),
-          manifestPlugins: params.manifestPlugins,
-        });
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     agentId: params.agentId,
@@ -305,39 +320,54 @@ function resolveFallbackCandidatesUncached(
     manifestPlugins: params.manifestPlugins,
   });
   const { candidates, addCandidate } = createModelCandidateCollector();
-  let requestedCandidate = normalizedPrimary;
-  const exactRequestedRouteConfigured =
-    hasExactConfiguredProviderModel({
-      cfg: params.cfg,
-      provider: normalizedPrimary.provider,
-      model: normalizedPrimary.model,
-    }) || aliasIndex.byKey.has(modelKey(normalizedPrimary.provider, normalizedPrimary.model));
-  // Persisted legacy pairs may still contain aliases. Prepared routes already
-  // own their provider, so reparsing them can silently select another route.
-  if (requestedRouteResolution === "raw" && !exactRequestedRouteConfigured) {
-    requestedCandidate =
-      resolveModelAliasFromPair({
+  if (modelRaw) {
+    const normalizedPrimary =
+      requestedRouteResolution === "resolved"
+        ? { provider: normalizeProviderId(providerRaw), model: modelRaw }
+        : normalizeModelRef(providerRaw, modelRaw, {
+            allowPluginNormalization:
+              params.allowPluginNormalization !== false &&
+              allowsPluginModelNormalization({
+                cfg: params.cfg,
+                provider: providerRaw,
+                model: modelRaw,
+              }),
+            manifestPlugins: params.manifestPlugins,
+          });
+    let requestedCandidate = normalizedPrimary;
+    const exactRequestedRouteConfigured =
+      hasExactConfiguredProviderModel({
         cfg: params.cfg,
-        agentId: params.agentId,
-        provider: providerRaw,
-        model: modelRaw,
-        defaultProvider,
-        aliasIndex,
-        allowPluginNormalization:
-          params.allowPluginNormalization !== false &&
-          allowsPluginModelNormalization({
-            cfg: params.cfg,
-            provider: providerRaw,
-            model: modelRaw,
-          }),
-        manifestPlugins: params.manifestPlugins,
-      }) ?? normalizedPrimary;
+        provider: normalizedPrimary.provider,
+        model: normalizedPrimary.model,
+      }) || aliasIndex.byKey.has(modelKey(normalizedPrimary.provider, normalizedPrimary.model));
+    // Persisted legacy pairs may still contain aliases. Prepared routes already
+    // own their provider, so reparsing them can silently select another route.
+    if (requestedRouteResolution === "raw" && !exactRequestedRouteConfigured) {
+      requestedCandidate =
+        resolveModelAliasFromPair({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          provider: providerRaw,
+          model: modelRaw,
+          defaultProvider,
+          aliasIndex,
+          allowPluginNormalization:
+            params.allowPluginNormalization !== false &&
+            allowsPluginModelNormalization({
+              cfg: params.cfg,
+              provider: providerRaw,
+              model: modelRaw,
+            }),
+          manifestPlugins: params.manifestPlugins,
+        }) ?? normalizedPrimary;
+    }
+    addCandidate(
+      requestedCandidate,
+      "requested",
+      params.manifestPlugins !== undefined ? "resolved" : requestedRouteResolution,
+    );
   }
-  addCandidate(
-    requestedCandidate,
-    "requested",
-    params.manifestPlugins !== undefined ? "resolved" : requestedRouteResolution,
-  );
 
   const modelFallbacks =
     params.fallbacksOverride !== undefined

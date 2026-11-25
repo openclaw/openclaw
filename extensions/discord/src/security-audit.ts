@@ -10,6 +10,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
+import type { OpenClawPluginSecurityAuditCollector } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import { isDiscordMutableAllowEntry } from "./security-doctor.js";
@@ -24,10 +25,7 @@ function hasNarrowMemberRestriction(
 ): boolean {
   const users = channel?.users ?? guild.users ?? [];
   const roles = channel?.roles ?? guild.roles ?? [];
-  if ([...users, ...roles].some((entry) => isWildcardEntry(entry))) {
-    return false;
-  }
-  return users.length > 0 || roles.length > 0;
+  return ![...users, ...roles].some(isWildcardEntry) && (users.length > 0 || roles.length > 0);
 }
 
 function listBroadMemberTargetPaths(params: {
@@ -61,13 +59,7 @@ export async function collectDiscordSecurityAuditFindings(params: {
   orderedAccountIds: string[];
   hasExplicitAccountPath: boolean;
 }) {
-  const findings: Array<{
-    checkId: string;
-    severity: "info" | "warn" | "critical";
-    title: string;
-    detail: string;
-    remediation?: string;
-  }> = [];
+  const findings: Awaited<ReturnType<OpenClawPluginSecurityAuditCollector>> = [];
   const discordCfg = params.account.config ?? {};
   const accountId =
     normalizeOptionalString(params.accountId) ?? params.account.accountId ?? "default";
@@ -187,7 +179,8 @@ export async function collectDiscordSecurityAuditFindings(params: {
   const guildsConfigured = Object.keys(guildEntries).length > 0;
   const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
   const ownerAllowFromConfigured =
-    normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
+    normalizeAllowFromList([...(discordCfg.allowFrom ?? dmAllowFrom), ...storeAllowFrom]).length >
+    0;
   if (
     effectiveGroupPolicy !== "disabled" &&
     guildsConfigured &&

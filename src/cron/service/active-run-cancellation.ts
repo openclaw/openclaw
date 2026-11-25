@@ -1,5 +1,6 @@
 // Process-local cancellation handles for live cron task runs.
 
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 
 const activeCronTaskRunsByRunId = new Map<
@@ -53,7 +54,9 @@ export function registerActiveCronTaskRun(params: {
   // A durable remove/disable can land after marker admission but before this
   // controller exists; consume that exact marker's request before provider work.
   const cancelJobRun = (reason: string) => {
-    cancelActiveCronTaskRun({ runId, reason });
+    // The marker owns this exact run even after shutdown retires registry tracking.
+    handle.controller.abort(reason);
+    handle.onCancel?.(reason);
   };
   if (params.activeJobMarker?.cancellation?.kind === "requested") {
     cancelJobRun(params.activeJobMarker.cancellation.reason);
@@ -74,14 +77,16 @@ export function registerActiveCronTaskRun(params: {
   };
 }
 
-export function abortActiveCronTaskRuns(reason = "Gateway restarting."): number {
+export function abortActiveCronTaskRuns(
+  reason: string | Error = createAgentRunRestartAbortError(),
+): number {
   let aborted = 0;
   for (const handle of activeCronTaskRunsByRunId.values()) {
     if (handle.controller.signal.aborted) {
       continue;
     }
     handle.controller.abort(reason);
-    handle.onCancel?.(reason);
+    handle.onCancel?.(typeof reason === "string" ? reason : reason.message);
     aborted += 1;
   }
   // Shutdown also retires main-session runs without cancellation handles.
@@ -168,21 +173,6 @@ export async function waitForActiveCronTaskRuns(timeoutMs: number): Promise<{
     drained: activeCronTaskRunsByRunId.size === 0 && settlingCronTaskRuns.size === 0,
     active: activeCronTaskRunsByRunId.size + settlingCronTaskRuns.size,
   };
-}
-
-function cancelActiveCronTaskRun(params: { runId: string | undefined; reason?: string }): boolean {
-  const runId = params.runId?.trim();
-  if (!runId) {
-    return false;
-  }
-  const handle = activeCronTaskRunsByRunId.get(runId);
-  if (!handle || handle.controller.signal.aborted) {
-    return false;
-  }
-  const reason = params.reason?.trim() || "Cancelled by operator.";
-  handle.controller.abort(reason);
-  handle.onCancel?.(reason);
-  return true;
 }
 
 function resetActiveCronTaskRunsForTests(): void {

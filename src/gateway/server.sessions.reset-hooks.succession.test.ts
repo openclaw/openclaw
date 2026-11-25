@@ -1,8 +1,8 @@
-// sessions.create parent-disposition coverage. Kept separate because the main
-// reset-hook suite is already at its max-lines budget.
 import { expect, test, vi } from "vitest";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
+import { writeSessionStore } from "./test-helpers.js";
 import {
   beforeResetHookMocks,
   beforeResetHookState,
@@ -13,35 +13,17 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const providerRuntimeMocks = vi.hoisted(() => ({ cleanupSessionResources: vi.fn() }));
-
-vi.mock("@openclaw/ai/internal/runtime", async () => {
-  const actual = await vi.importActual<typeof import("@openclaw/ai/internal/runtime")>(
-    "@openclaw/ai/internal/runtime",
-  );
-  return { ...actual, cleanupSessionResources: providerRuntimeMocks.cleanupSessionResources };
-});
+const cleanupSessionResources = vi.hoisted(() => vi.fn());
+vi.mock(import("@openclaw/ai/internal/runtime"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  cleanupSessionResources,
+}));
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-type HookEvent = {
-  sessionKey?: string;
-  nextSessionKey?: string;
-};
-
-function firstHookEvent(mock: { mock: { calls: unknown[][] } }): HookEvent {
-  const call = mock.mock.calls.at(0);
-  if (!call) {
-    throw new Error("Expected hook call");
-  }
-  return call[0] as HookEvent;
-}
-
 async function seedParent(sessionId: string) {
   const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: { main: { sessionId, updatedAt: Date.now() } },
-  });
+  await writeSessionStore({ entries: { main: { sessionId, updatedAt: Date.now() } } });
   await seedSessionTranscript({
     agentId: "main",
     sessionId,
@@ -49,32 +31,36 @@ async function seedParent(sessionId: string) {
     storePath,
     messages: [{ role: "user", content: "before child creation", id: "m1" }],
   });
+  return { storePath };
 }
 
-async function startDeferredSessionCleanup(sessionId: string) {
-  await seedParent(sessionId);
-  providerRuntimeMocks.cleanupSessionResources.mockClear();
-  embeddedRunMock.activeIds.add(sessionId);
-  embeddedRunMock.waitResults.set(sessionId, false);
-
-  const retirement = createDeferredCore();
-  const retirementStarted = createDeferredCore();
-  let retirements = 0;
-  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(
-    async ({ retainAcrossReuse }) => {
-      if (!retainAcrossReuse && ++retirements === 1) {
-        retirementStarted.resolve();
-        await retirement.promise;
-      }
-      return true;
+async function holdControllerTurn(
+  sessionId: string,
+  existing?: ReturnType<typeof captureSessionTarget>,
+) {
+  const target =
+    existing ??
+    captureSessionTarget({
+      storeScope: (await seedParent(sessionId)).storePath,
+      sessionKey: "agent:main:main",
+      aliases: ["main", sessionId],
+      incarnation: sessionId,
+      agentId: "main",
+    });
+  const { promise: released, resolve: release } = createDeferredCore();
+  const { promise: started, resolve: begin } = createDeferredCore();
+  const { promise: interrupted, resolve: interrupt } = createDeferredCore();
+  let running = false;
+  const work = withSessionTurn(
+    { sessionKey: target.sessionKey, sessionId, target },
+    async (_operation, signal) => {
+      signal.addEventListener("abort", () => interrupt(), { once: true });
+      running = true;
+      begin();
+      await released;
     },
   );
-
-  expect((await directSessionReq("sessions.reset", { key: "main", reason: "new" })).ok).toBe(false);
-  embeddedRunMock.activeIds.delete(sessionId);
-  embeddedRunMock.endWaiters.get(sessionId)?.(true);
-  await retirementStarted.promise;
-  return { release: retirement.resolve, retirements: () => retirements };
+  return { started, interrupted, release, target, work, isRunning: () => running };
 }
 
 test("sessions.create keeps the parent active for an explicit parallel child", async () => {
@@ -91,132 +77,79 @@ test("sessions.create keeps the parent active for an explicit parallel child", a
   expect(result.payload?.key).toMatch(/^agent:main:dashboard:/);
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
   expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
-  expect(firstHookEvent(sessionLifecycleHookMocks.runSessionStart).sessionKey).toBe(
-    result.payload?.key,
-  );
+  expect(sessionLifecycleHookMocks.runSessionStart.mock.calls[0]?.[0]).toMatchObject({
+    sessionKey: result.payload?.key,
+  });
 });
 
-test("sessions.create accepts an explicit successor with a minted dashboard key", async () => {
-  await seedParent("sess-successor");
-
-  const result = await directSessionReq<{ key: string }>("sessions.create", {
-    parentSessionKey: "main",
-    emitCommandHooks: true,
-    succeedsParent: true,
+test.each([
+  [
+    /fork/i,
+    true,
+    { parentSessionKey: "main", emitCommandHooks: true, fork: true, succeedsParent: true },
+  ],
+  [/parentSessionKey/i, false, { emitCommandHooks: true, succeedsParent: false }],
+  [/emitCommandHooks/i, true, { parentSessionKey: "main", succeedsParent: false }],
+] as const)("sessions.create rejects invalid disposition: %s", async (message, parent, params) => {
+  if (parent) {
+    await seedParent("sess-invalid-disposition");
+  } else {
+    await createSessionStoreDir();
+  }
+  const result = await directSessionReq("sessions.create", { key: "child", ...params });
+  expect(result).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: expect.stringMatching(message) },
   });
-
-  expect(result.ok).toBe(true);
-  expect(result.payload?.key).toMatch(/^agent:main:dashboard:/);
-  const endEvent = firstHookEvent(sessionLifecycleHookMocks.runSessionEnd);
-  expect(endEvent.sessionKey).toBe("agent:main:main");
-  expect(endEvent.nextSessionKey).toBe(result.payload?.key);
-  expect(firstHookEvent(sessionLifecycleHookMocks.runSessionStart).sessionKey).toBe(
-    result.payload?.key,
-  );
-});
-
-test("sessions.create rejects an explicit successor fork", async () => {
-  await seedParent("sess-fork");
-
-  const result = await directSessionReq("sessions.create", {
-    key: "forked-child",
-    parentSessionKey: "main",
-    emitCommandHooks: true,
-    fork: true,
-    succeedsParent: true,
-  });
-
-  expect(result.ok).toBe(false);
-  expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
-  expect(result.error?.message).toMatch(/fork/i);
   expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
 });
 
-test("sessions.create requires a parent for either explicit disposition", async () => {
-  await createSessionStoreDir();
-
-  const result = await directSessionReq("sessions.create", {
-    key: "parallel-child",
-    emitCommandHooks: true,
-    succeedsParent: false,
-  });
-
-  expect(result.ok).toBe(false);
-  expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
-  expect(result.error?.message).toMatch(/parentSessionKey/i);
-});
-
-test("sessions.create requires command hooks for either explicit disposition", async () => {
-  await seedParent("sess-no-hooks");
-
-  const result = await directSessionReq("sessions.create", {
-    key: "parallel-child",
-    parentSessionKey: "main",
-    succeedsParent: false,
-  });
-
-  expect(result.ok).toBe(false);
-  expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
-  expect(result.error?.message).toMatch(/emitCommandHooks/i);
-});
-
-test("sessions.reset joins cleanup deferred by a prior timeout before same-id reuse", async () => {
-  const cleanup = await startDeferredSessionCleanup("sess-provider-cleanup");
-
-  embeddedRunMock.activeIds.add("sess-provider-cleanup");
-  embeddedRunMock.waitResults.set("sess-provider-cleanup", true);
-  let resetSettled = false;
-  const resetPromise = directSessionReq("sessions.reset", { key: "main", reason: "new" }).finally(
-    () => {
-      resetSettled = true;
-    },
-  );
-  await vi.waitFor(() => expect(cleanup.retirements()).toBe(2));
-  await Promise.resolve();
-
-  expect(resetSettled).toBe(false);
-  expect(providerRuntimeMocks.cleanupSessionResources).not.toHaveBeenCalled();
-
-  cleanup.release();
-  const reset = await resetPromise;
-  expect(reset.ok).toBe(true);
-  expect(providerRuntimeMocks.cleanupSessionResources).toHaveBeenCalledWith(
-    "sess-provider-cleanup",
-  );
-  const cleanupCount = providerRuntimeMocks.cleanupSessionResources.mock.calls.length;
-  await Promise.resolve();
-  expect(providerRuntimeMocks.cleanupSessionResources).toHaveBeenCalledTimes(cleanupCount);
-});
-
-test("completed wait keeps cleanup armed when a same-id replacement starts during retirement", async () => {
-  const sessionId = "sess-provider-ended-replacement";
-  await seedParent(sessionId);
-  providerRuntimeMocks.cleanupSessionResources.mockClear();
-  embeddedRunMock.activeIds.add(sessionId);
-  embeddedRunMock.waitResults.set(sessionId, true);
+test.for([false, true])("sessions.reset settlement (replacement=%s)", async (replace) => {
+  const sessionId = `sess-provider-${replace ? "replacement" : "cleanup"}`;
+  if (replace) {
+    cleanupSessionResources.mockClear();
+  }
+  const active = await holdControllerTurn(sessionId);
+  await active.started;
   const retirement = createDeferredCore();
-  let terminalRetirements = 0;
-  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(
-    async ({ retainAcrossReuse }) => {
-      if (!retainAcrossReuse && ++terminalRetirements <= 2) {
-        await retirement.promise;
-      }
+  const retirementStarted = createDeferredCore();
+  if (replace) {
+    bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async () => {
+      retirementStarted.resolve();
+      await retirement.promise;
       return true;
-    },
-  );
-
-  const reset = directSessionReq("sessions.reset", { key: "main", reason: "new" });
-  await vi.waitFor(() => expect(terminalRetirements).toBe(2));
-  embeddedRunMock.activeIds.add(sessionId);
-  retirement.resolve();
-
-  expect((await reset).error).toMatchObject({ code: "UNAVAILABLE" });
-  expect(providerRuntimeMocks.cleanupSessionResources).not.toHaveBeenCalled();
-  await vi.waitFor(() => expect(embeddedRunMock.endWaitCalls).toEqual([sessionId, sessionId]));
-
-  embeddedRunMock.activeIds.delete(sessionId);
-  embeddedRunMock.endWaiters.get(sessionId)?.(true);
-  await vi.waitFor(() => {
-    expect(providerRuntimeMocks.cleanupSessionResources).toHaveBeenCalledTimes(1);
+    });
+  }
+  let resetSettled = false;
+  const reset = directSessionReq("sessions.reset", { key: "main", reason: "new" }).finally(() => {
+    resetSettled = true;
   });
+  await active.interrupted;
+  await Promise.resolve();
+  expect(resetSettled).toBe(false);
+  expect(cleanupSessionResources).not.toHaveBeenCalled();
+  active.release();
+  await active.work;
+
+  let replacement: Awaited<ReturnType<typeof holdControllerTurn>> | undefined;
+  if (replace) {
+    await retirementStarted.promise;
+    replacement = await holdControllerTurn(sessionId, active.target);
+    await Promise.resolve();
+    expect(replacement.isRunning()).toBe(false);
+    expect(cleanupSessionResources).not.toHaveBeenCalled();
+    retirement.resolve();
+  }
+  expect((await reset).ok).toBe(true);
+  expect(cleanupSessionResources).toHaveBeenCalledWith(sessionId);
+  if (replacement) {
+    expect(cleanupSessionResources).toHaveBeenCalledOnce();
+    await replacement.started;
+    replacement.release();
+    await replacement.work;
+  } else {
+    const count = cleanupSessionResources.mock.calls.length;
+    await Promise.resolve();
+    expect(cleanupSessionResources).toHaveBeenCalledTimes(count);
+  }
 });

@@ -1,4 +1,5 @@
 import type { ControlUiHost } from "../../../src/plugin-sdk/control-ui.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 
 type SessionParams = Parameters<NonNullable<ControlUiHost["dock"]>["openSession"]>[0];
 
@@ -11,7 +12,7 @@ export type AssistantDockOwner = {
 /** Application-local adapter. The mounted assistant panel owns all dock state. */
 export class AssistantDock {
   private owner: AssistantDockOwner | undefined;
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
 
   attach(owner: AssistantDockOwner): () => void {
     this.owner = owner;
@@ -26,7 +27,7 @@ export class AssistantDock {
 
   openSession(params: SessionParams, activation: object): void {
     if (!this.owner) {
-      throw new Error("The conversation dock is unavailable. Reopen the Control UI and try again.");
+      throw new Error("Couldn’t open the session dock. Reopen the Control UI and try again.");
     }
     this.owner.openSession(params, activation);
   }
@@ -39,14 +40,7 @@ export class AssistantDock {
     return this.owner?.openSessionKey ?? null;
   }
 
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
-  notify(): void {
-    for (const listener of this.listeners) {
-      listener();
-    }
-  }
+  readonly notify = this.listeners.publish;
 }

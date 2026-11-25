@@ -3,6 +3,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
   readCurrentProjectionSnapshot,
+  withBorrowedProjectionSnapshot,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
@@ -19,14 +20,21 @@ import { startSessionTranscriptIndexReconcile } from "./session-transcript-recon
 export function withCurrentProjectionSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (projection: CurrentTranscriptProjection) => T,
-  options: { readOnly?: boolean; resolvedScope?: ResolvedTranscriptReadScope } = {},
+  options: {
+    readOnly?: boolean;
+    resolvedScope?: ResolvedTranscriptReadScope;
+    transaction?: CurrentTranscriptProjection["database"];
+  } = {},
 ): T {
   const resolved = options.resolvedScope ?? resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
+  if (options.transaction) {
+    return withBorrowedProjectionSnapshot(options.transaction, resolved, read);
+  }
   const readSnapshot = (database: CurrentTranscriptProjection["database"]) =>
     readCurrentProjectionSnapshot(database, resolved, read);
   const result = options.readOnly
-    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions)
+    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions, { snapshot: true })
     : { found: true as const, value: readSnapshot(openOpenClawAgentDatabase(databaseOptions)) };
   if (!result.found) {
     throw new SessionTranscriptStorageUnavailableError(result.reason);

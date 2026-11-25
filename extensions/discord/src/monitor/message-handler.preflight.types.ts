@@ -12,6 +12,7 @@ import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ChannelType, Client, User } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordIngressLifecycle } from "./ingress.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 import type { DiscordAvatarResolver } from "./message-avatar.js";
 import type { DiscordChannelInfo } from "./message-channel-info.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
@@ -24,7 +25,7 @@ export type { DiscordSenderIdentity } from "./sender-identity.js";
 
 type BuildChannelInboundContext =
   typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
-export type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
+type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 
@@ -46,11 +47,13 @@ type DiscordMessagePreflightSharedFields = {
   ackReactionScope: "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
   groupPolicy: "open" | "disabled" | "allowlist";
   turnAdoptionLifecycle?: DiscordIngressLifecycle;
+  data: DiscordMessageEvent;
+  client: Client;
+  threadBindings: DiscordThreadBindingLookup;
+  discordRestFetch?: typeof fetch;
 };
 
 export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields & {
-  data: DiscordMessageEvent;
-  client: Client;
   message: DiscordMessageEvent["message"];
   messageChannelId: string;
   author: User;
@@ -77,13 +80,11 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   // Keep one required receipt-time snapshot: queued processing must never
   // fall back to Discord's expiring attachment URLs.
   preparedMedia: DiscordMediaInfo[];
-  wasMentioned: boolean;
   conversationAvatar?: string;
 
   route: ReturnType<typeof resolveAgentRoute>;
   threadBinding?: SessionBindingRecord;
   boundSessionKey?: string;
-  boundAgentId?: string;
 
   guildInfo: DiscordGuildEntryResolved | null;
   guildSlug: string;
@@ -108,9 +109,6 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   groupThread?: GroupThreadMentionFacts;
   inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
-
-  threadBindings: DiscordThreadBindingLookup;
-  discordRestFetch?: typeof fetch;
 };
 
 export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {
@@ -120,10 +118,7 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
-  threadBindings: DiscordThreadBindingLookup;
-  discordRestFetch?: typeof fetch;
   avatarResolver?: DiscordAvatarResolver;
+  readPolicy?: DiscordLivePolicyReader;
   precedingMessages?: readonly DiscordMessageEvent["message"][];
-  data: DiscordMessageEvent;
-  client: Client;
 };

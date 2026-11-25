@@ -5,16 +5,15 @@ import {
   parseDiscordModalCustomId,
 } from "../component-custom-id.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
-import { decodeCustomIdComponent } from "../custom-id-codec.js";
 import type { ComponentData, ModalInteraction } from "../internal/discord.js";
 import type { AgentComponentInteraction } from "./agent-components.types.js";
 import { formatDiscordUserTag } from "./format.js";
 
-function readParsedComponentId(data: ComponentData): unknown {
+function readParsedId(data: ComponentData, key: "cid" | "mid"): unknown {
   if (!data || typeof data !== "object") {
     return undefined;
   }
-  return "cid" in data ? data.cid : data.componentId;
+  return key in data ? data[key] : data[key === "cid" ? "componentId" : "modalId"];
 }
 
 function normalizeComponentId(value: unknown): string | undefined {
@@ -38,20 +37,6 @@ function mapOptionLabels(
   return values.map((value) => map.get(value) ?? value);
 }
 
-export function parseAgentComponentData(data: ComponentData): { componentId: string } | null {
-  const raw = readParsedComponentId(data);
-  const componentId =
-    typeof raw === "string"
-      ? decodeCustomIdComponent(raw)
-      : typeof raw === "number"
-        ? String(raw)
-        : null;
-  if (!componentId) {
-    return null;
-  }
-  return { componentId };
-}
-
 export function parseDiscordComponentData(
   data: ComponentData,
   customId?: string,
@@ -59,8 +44,8 @@ export function parseDiscordComponentData(
   if (!data || typeof data !== "object") {
     return null;
   }
-  const rawComponentId = readParsedComponentId(data);
-  const rawModalId = "mid" in data ? data.mid : data.modalId;
+  const rawComponentId = readParsedId(data, "cid");
+  const rawModalId = readParsedId(data, "mid");
   let componentId = normalizeComponentId(rawComponentId);
   let modalId = normalizeComponentId(rawModalId);
   if (!componentId && customId) {
@@ -77,12 +62,9 @@ export function parseDiscordComponentData(
 }
 
 export function parseDiscordModalId(data: ComponentData, customId?: string): string | null {
-  if (data && typeof data === "object") {
-    const rawModalId = "mid" in data ? data.mid : data.modalId;
-    const modalId = normalizeComponentId(rawModalId);
-    if (modalId) {
-      return modalId;
-    }
+  const modalId = normalizeComponentId(readParsedId(data, "mid"));
+  if (modalId) {
+    return modalId;
   }
   if (customId) {
     return parseDiscordModalCustomId(customId);
@@ -93,12 +75,6 @@ export function parseDiscordModalId(data: ComponentData, customId?: string): str
 export function resolveInteractionCustomId(
   interaction: AgentComponentInteraction,
 ): string | undefined {
-  if (!interaction?.rawData || typeof interaction.rawData !== "object") {
-    return undefined;
-  }
-  if (!("data" in interaction.rawData)) {
-    return undefined;
-  }
   return normalizeOptionalString(interaction.rawData.data?.custom_id);
 }
 
@@ -134,16 +110,12 @@ export function resolveModalFieldValues(
         return mapOptionLabels(field.options, fields.getStringSelect(field.id, required));
       }
       case "role-select": {
-        try {
-          const roles = fields.getRoleSelect(field.id, required);
-          return roles.map((role) => role.name ?? role.id);
-        } catch {
-          return fields.getStringSelect(field.id, required);
-        }
+        const roles = fields.getRoleSelect(field.id, required);
+        return roles.map((role) => role.name || role.id);
       }
       case "user-select": {
         const users = fields.getUserSelect(field.id, required);
-        return users.map((user) => formatDiscordUserTag(user));
+        return users.map(formatDiscordUserTag);
       }
       default:
         return [];
@@ -158,16 +130,10 @@ export function formatModalSubmissionText(
   entry: DiscordModalEntry,
   interaction: ModalInteraction,
 ): string {
-  const lines: string[] = [`Form "${entry.title}" submitted.`];
-  for (const field of entry.fields) {
+  const title = `Form "${entry.title}" submitted.`;
+  const lines = entry.fields.flatMap((field) => {
     const values = resolveModalFieldValues(field, interaction);
-    if (values.length === 0) {
-      continue;
-    }
-    lines.push(`- ${field.label}: ${values.join(", ")}`);
-  }
-  if (lines.length === 1) {
-    lines.push("- (no values)");
-  }
-  return lines.join("\n");
+    return values.length > 0 ? [`- ${field.label}: ${values.join(", ")}`] : [];
+  });
+  return [title, ...(lines.length > 0 ? lines : ["- (no values)"])].join("\n");
 }

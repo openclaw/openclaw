@@ -1,12 +1,4 @@
-/**
- * Matrix Poll Types (MSC3381)
- *
- * Defines types for Matrix poll events:
- * - m.poll.start - Creates a new poll
- * - m.poll.response - Records a vote
- * - m.poll.end - Closes a poll
- */
-
+// Matrix polls follow MSC3381.
 import {
   M_POLL_KIND_DISCLOSED,
   type PollKind as MatrixPollKind,
@@ -18,12 +10,12 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const M_POLL_START = "m.poll.start" as const;
+const M_POLL_START = "m.poll.start" as const;
 const M_POLL_RESPONSE = "m.poll.response" as const;
 const M_POLL_END = "m.poll.end" as const;
 
-const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
-const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
+export const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
+export const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
 const ORG_POLL_END = "org.matrix.msc3381.poll.end" as const;
 
 const POLL_EVENT_TYPES = [
@@ -71,18 +63,9 @@ export type PollStartContent = {
   "org.matrix.msc1767.text"?: string;
 };
 
-type PollSummary = {
-  eventId: string;
-  roomId: string;
-  sender: string;
-  senderName: string;
+type PollResultsSummary = {
   question: string;
-  answers: string[];
   kind: PollKind;
-  maxSelections: number;
-};
-
-type PollResultsSummary = PollSummary & {
   entries: Array<{
     id: string;
     text: string;
@@ -212,11 +195,8 @@ function parsePollResponseAnswerIds(content: unknown): string[] | null {
 }
 
 export function buildPollResultsSummary(params: {
-  pollEventId: string;
-  roomId: string;
   sender: string;
-  senderName: string;
-  content: PollStartContent;
+  poll: ParsedPollStart;
   relationEvents: Array<{
     event_id?: string;
     sender?: string;
@@ -227,11 +207,8 @@ export function buildPollResultsSummary(params: {
       redacted_because?: unknown;
     };
   }>;
-}): PollResultsSummary | null {
-  const parsed = parsePollStart(params.content);
-  if (!parsed) {
-    return null;
-  }
+}): PollResultsSummary {
+  const parsed = params.poll;
 
   let pollClosedAt = Number.POSITIVE_INFINITY;
   for (const event of params.relationEvents) {
@@ -304,14 +281,8 @@ export function buildPollResultsSummary(params: {
   }
 
   return {
-    eventId: params.pollEventId,
-    roomId: params.roomId,
-    sender: params.sender,
-    senderName: params.senderName,
     question: parsed.question,
-    answers: parsed.answers.map((answer) => answer.text),
     kind: parsed.kind,
-    maxSelections: parsed.maxSelections,
     entries: parsed.answers.map((answer) => ({
       id: answer.id,
       text: answer.text,
@@ -348,13 +319,6 @@ function buildTextContent(body: string): TextContent {
   };
 }
 
-function buildPollFallbackText(question: string, answers: string[]): string {
-  if (answers.length === 0) {
-    return question;
-  }
-  return `${question}\n${answers.map((answer, idx) => `${idx + 1}. ${answer}`).join("\n")}`;
-}
-
 export function buildPollStartContent(poll: PollInput): PollStartContent {
   const normalized = normalizePollInput(poll);
   const answers = normalized.options.map((option, idx) => ({
@@ -363,15 +327,14 @@ export function buildPollStartContent(poll: PollInput): PollStartContent {
   }));
 
   const isMultiple = normalized.maxSelections > 1;
-  const fallbackText = buildPollFallbackText(
-    normalized.question,
-    answers.map((answer) => getTextContent(answer)),
-  );
+  const fallbackText = `${normalized.question}\n${normalized.options.map((option, idx) => `${idx + 1}. ${option}`).join("\n")}`;
 
   return {
-    [M_POLL_START]: {
+    [ORG_POLL_START]: {
       question: buildTextContent(normalized.question),
-      kind: isMultiple ? "m.poll.undisclosed" : "m.poll.disclosed",
+      kind: isMultiple
+        ? "org.matrix.msc3381.poll.undisclosed"
+        : "org.matrix.msc3381.poll.disclosed",
       max_selections: normalized.maxSelections,
       answers,
     },

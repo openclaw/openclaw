@@ -22,6 +22,24 @@ enum GatewayHosting: String, Sendable {
             stateDirectory: stateDirectory) == nil
     }
 
+    static func canChangeHosting(
+        hasService: Bool,
+        installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI?,
+        retainedCLI: GatewayLaunchAgentManager.InstalledServiceCLI?,
+        hasRetainedMetadata: Bool,
+        stateDirectory: URL) -> Bool
+    {
+        guard let cli = hasService ? installedCLI : retainedCLI else {
+            return !hasService && !hasRetainedMetadata
+        }
+        guard let executable = cli.prefix.first, URL(fileURLWithPath: executable).lastPathComponent == "bun",
+              self.usesSeededGateway(
+                  hasService: true, installedCLI: cli, hasCurrentSeed: false, stateDirectory: stateDirectory)
+        else { return false }
+        return GatewayLaunchAgentManager.bundledRuntimeReplacementError(
+            appManaged: true, installedRuntimePath: executable, stateDirectory: stateDirectory) == nil
+    }
+
     static func resolve(stored: String?, bundled: Bool, serviceExists: Bool) -> Self {
         guard bundled, !serviceExists else { return .service }
         if let stored, let hosting = Self(rawValue: stored) { return hosting }

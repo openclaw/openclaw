@@ -47,25 +47,11 @@ data class MascotPose(
   var effect: MascotEffect = MascotEffect.None,
   var effectPhase: Double = 0.0,
 ) {
-  /** Keeps every channel inside the drawable 120x120 art-space bounds. */
+  /** Clips the channels whose combined mood and gesture offsets can exceed art-space bounds. */
   fun clamp(): MascotPose {
     floatOffset = floatOffset.coerceIn(-12.0, 2.0)
-    antennaDegrees = antennaDegrees.coerceIn(-14.0, 14.0)
-    antennaDroop = antennaDroop.coerceIn(0.0, 1.0)
     leftClawDegrees = leftClawDegrees.coerceIn(-45.0, 45.0)
     rightClawDegrees = rightClawDegrees.coerceIn(-45.0, 45.0)
-    eyeGlowAlpha = eyeGlowAlpha.coerceIn(0.0, 1.0)
-    glowScale = glowScale.coerceIn(0.5, 1.6)
-    leftEyeOpenness = leftEyeOpenness.coerceIn(0.0, 1.0)
-    rightEyeOpenness = rightEyeOpenness.coerceIn(0.0, 1.0)
-    happyEyes = happyEyes.coerceIn(0.0, 1.0)
-    gaze = MascotGaze(gaze.x.coerceIn(-1.2, 1.2), gaze.y.coerceIn(-1.2, 1.2))
-    mouthCurve = mouthCurve.coerceIn(-1.0, 1.0)
-    mouthOpen = mouthOpen.coerceIn(0.0, 1.0)
-    mouthRound = mouthRound.coerceIn(0.0, 1.0)
-    blush = blush.coerceIn(0.0, 1.0)
-    hardHat = hardHat.coerceIn(0.0, 1.0)
-    bodyTilt = bodyTilt.coerceIn(-8.0, 8.0)
     bodyStretch = bodyStretch.coerceIn(0.86, 1.05)
     return this
   }

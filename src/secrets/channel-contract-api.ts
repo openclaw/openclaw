@@ -6,7 +6,7 @@ import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-met
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { pluginCacheExistsSync } from "../plugins/plugin-cache-files.js";
 import { getPluginCacheRoot } from "../plugins/plugin-cache.js";
 import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
@@ -128,12 +128,6 @@ function loadExternalChannelSecretContractFromRecord(
     if (throwOnLoadError) {
       throw error;
     }
-    if (process.env.OPENCLAW_DEBUG_CHANNEL_CONTRACT_API === "1") {
-      const detail = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `[channel-contract-api] failed to load ${record.id} contract ${validated.modulePath}: ${detail}`,
-      );
-    }
   }
   return undefined;
 }
@@ -147,39 +141,13 @@ function recordOwnsChannel(record: PluginManifestRecord, channelId: string): boo
   );
 }
 
-function listChannelSecretContractRecords(params: {
-  channelId: string;
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
-}): PluginManifestRecord[] {
-  const manifestRegistry = resolveConfigWidePluginManifestRegistry({
-    config: params.config,
-    env: params.env,
-  });
-  return manifestRegistry.plugins
-    .filter((record) => record.origin !== "bundled")
-    .filter((record) => recordOwnsChannel(record, params.channelId))
-    .filter(
-      (record) => !params.loadablePluginOrigins || params.loadablePluginOrigins.has(record.id),
-    )
-    .toSorted((left, right) => {
-      if (left.id === params.channelId && right.id !== params.channelId) {
-        return -1;
-      }
-      if (right.id === params.channelId && left.id !== params.channelId) {
-        return 1;
-      }
-      return left.id.localeCompare(right.id);
-    });
-}
-
 export function loadChannelSecretContractApi(params: {
   channelId: string;
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
   bundledOnly?: boolean;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): BundledChannelSecretContractApi | undefined {
   const bundled = loadBundledChannelSecretContractApi(params.channelId);
   if (bundled || params.bundledOnly) {
@@ -191,12 +159,24 @@ export function loadChannelSecretContractApi(params: {
   const officialFallback = loadOfficialExternalChannelSecretContractApi(params.channelId);
   let records: PluginManifestRecord[];
   try {
-    records = listChannelSecretContractRecords({
-      channelId: params.channelId,
-      config: params.config,
-      env,
-      loadablePluginOrigins: params.loadablePluginOrigins,
-    });
+    const channelId = params.channelId;
+    const config = params.config;
+    const loadablePluginOrigins = params.loadablePluginOrigins;
+    const manifestRegistry =
+      params.manifestRegistry ?? resolveConfigWidePluginManifestRegistry({ config, env });
+    records = manifestRegistry.plugins
+      .filter((record) => record.origin !== "bundled")
+      .filter((record) => recordOwnsChannel(record, channelId))
+      .filter((record) => !loadablePluginOrigins || loadablePluginOrigins.has(record.id))
+      .toSorted((left, right) => {
+        if (left.id === channelId && right.id !== channelId) {
+          return -1;
+        }
+        if (right.id === channelId && left.id !== channelId) {
+          return 1;
+        }
+        return left.id.localeCompare(right.id);
+      });
   } catch (error) {
     // Catalog contracts are process-stable fallbacks when plugin metadata is unavailable.
     if (officialFallback) {

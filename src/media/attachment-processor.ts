@@ -8,7 +8,7 @@ import {
 
 const pool = new WorkerTaskPool<AttachmentInput, PreparedAttachment>({
   workerUrl: resolveRuntimeProcessEntrypointUrl("attachmentProcessor"),
-  maxWorkers: 2,
+  workerClass: "compute",
   sharedCompute: true,
 });
 

@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -24,14 +25,15 @@ import {
 } from "./managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "./managed-image-record-store.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./method-scopes.js";
+import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer } from "./server.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-} from "./test-helpers.e2e.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
-import type { WorkerEnvironmentServiceRecord } from "./worker-environments/service-contract.js";
+import { acquireGatewayE2ePortBlock } from "./test-helpers.listener.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerEnvironmentServiceRecord,
+} from "./worker-environments/service-contract.js";
 
 const injectedWorkerService = vi.hoisted(() => {
   const records = new Map<string, WorkerEnvironmentServiceRecord>();
@@ -43,11 +45,16 @@ const injectedWorkerService = vi.hoisted(() => {
     get: (environmentId: string) => records.get(environmentId),
     readPreparedPoolSummary: () => ({ maxTotal: 4, reservedEnvironmentIds: [] }),
     readReadyWorkerTarget: () => 1,
-    create: async (profileId: string, idempotencyKey: string) => {
+    createWithRequest: async ({
+      profileId,
+      idempotencyKey,
+      beforeProvision,
+    }: Parameters<WorkerEnvironmentServiceContract["createWithRequest"]>[0]) => {
       const existingId = idempotency.get(idempotencyKey);
       if (existingId) {
         return records.get(existingId)!;
       }
+      beforeProvision?.();
       createCount += 1;
       const environmentId = `worker-qa-${createCount}`;
       const record: WorkerEnvironmentServiceRecord = {
@@ -55,6 +62,8 @@ const injectedWorkerService = vi.hoisted(() => {
         providerId: profileId,
         profileId,
         leaseId: `lease-${createCount}`,
+        resourceReceipt: null,
+        retention: null,
         sharedHost: null,
         state: "ready",
         ownerEpoch: 1,
@@ -171,7 +180,7 @@ describe("Gateway agent and artifact APIs", () => {
           gateway: { auth: { mode: "token", token } },
           agents: {
             entries: {
-              main: { default: true, workspace: mainWorkspace },
+              main: { workspace: mainWorkspace },
             },
           },
         },
@@ -196,17 +205,39 @@ describe("Gateway agent and artifact APIs", () => {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = await getGatewayE2ePortBlock();
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
-    let server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
+    const claim = await acquireGatewayE2ePortBlock();
+    // Restarts reuse the port, so the claim outlives each server.
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let releaseClaim: (() => Promise<void>) | undefined = claim.release;
+    cleanup.push(async () => {
+      await server?.close();
+      await releaseClaim?.();
     });
-    cleanup.push(() => server.close());
+    const recoveryRestart = vi.fn(() => {
+      throw new Error("Agent mutations must hot-apply without a recovery restart");
+    });
+    const startServer = () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+        hotReloadRecovery: recoveryRestart,
+      }).catch((error: unknown) => {
+        // Incomplete startup rollback can leave the listener bound; keep the port claimed.
+        if (
+          collectNestedErrorCandidates(error).some(
+            (cause) => cause instanceof GatewayStartupCleanupError,
+          )
+        ) {
+          releaseClaim = undefined;
+        }
+        throw error;
+      });
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
+    server = await startServer();
 
     let client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
+      url: `ws://127.0.0.1:${claim.port}`,
       token,
       clientDisplayName: "gateway agent artifact APIs",
       scopes: [ADMIN_SCOPE, READ_SCOPE],
@@ -215,16 +246,13 @@ describe("Gateway agent and artifact APIs", () => {
     cleanup.push(() => disconnectGatewayClient(client));
     const restartGateway = async (clientDisplayName: string) => {
       await disconnectGatewayClient(client);
-      await server.close();
+      await server?.close();
+      server = undefined;
       clearRuntimeConfigSnapshot();
       clearConfigCache();
-      server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
+      server = await startServer();
       client = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
+        url: `ws://127.0.0.1:${claim.port}`,
         token,
         clientDisplayName,
         scopes: [ADMIN_SCOPE, READ_SCOPE],
@@ -404,7 +432,7 @@ describe("Gateway agent and artifact APIs", () => {
 
     await disconnectGatewayClient(client);
     client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
+      url: `ws://127.0.0.1:${claim.port}`,
       token,
       clientDisplayName: "gateway artifact APIs after reload",
       scopes: [ADMIN_SCOPE, READ_SCOPE],
@@ -461,7 +489,7 @@ describe("Gateway agent and artifact APIs", () => {
       );
       expect(download.url).toContain("mediaTicket=");
       expect(download.expiresAt).toBeTruthy();
-      const downloadUrl = `http://127.0.0.1:${port}${download.url}`;
+      const downloadUrl = `http://127.0.0.1:${claim.port}${download.url}`;
       const response = await fetch(downloadUrl);
       expect(response.status).toBe(200);
       expect(Buffer.from(await response.arrayBuffer())).toEqual(fixture.body);
@@ -472,6 +500,73 @@ describe("Gateway agent and artifact APIs", () => {
       expect(range.status).toBe(206);
       expect(Buffer.from(await range.arrayBuffer())).toEqual(fixture.body.subarray(0, 4));
     }
+
+    const appendAt = Date.now();
+    await appendTranscriptMessage(scope, {
+      eventId: "gateway-agent-artifact-chatter",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Plain progress without attachments." }],
+        timestamp: appendAt,
+      } as never,
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "gateway-agent-artifact-upload",
+      message: {
+        role: "user",
+        content: "Please review this screenshot.",
+        timestamp: appendAt + 1,
+        __openclaw: {
+          media: [
+            {
+              url: "media://inbound/upload---0b6f3d7e.png",
+              contentType: "image/png",
+              kind: "image",
+              fileName: "upload.png",
+              sizeBytes: 2048,
+            },
+          ],
+        },
+      } as never,
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "gateway-agent-artifact-directive",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: `Here is the summary.\n\nMEDIA:${path.join(mainWorkspace, "report.pdf")}`,
+          },
+        ],
+        timestamp: appendAt + 2,
+      } as never,
+    });
+    const { attachments } = await client.request<{
+      attachments: {
+        messages: Array<{
+          role: string;
+          content: unknown;
+          __openclaw?: { id?: string; seq?: number };
+        }>;
+        sessionId: string;
+        truncated?: boolean;
+      };
+    }>("artifacts.list", { sessionKey });
+    expect(attachments.truncated).toBeUndefined();
+    expect(attachments.sessionId).toBe(sessionId);
+    expect(attachments.messages.map((message) => message["__openclaw"]?.seq)).toEqual([1, 3, 4]);
+    const [managed, upload, directive] = attachments.messages;
+    expect(managed?.content).toHaveLength(2);
+    expect(upload).toMatchObject({
+      role: "user",
+      content: [],
+      __openclaw: { media: [expect.objectContaining({ fileName: "upload.png" })] },
+    });
+    // Only the directive survives; the reply prose never leaves the Gateway.
+    expect(directive?.content).toEqual([
+      { type: "text", text: `MEDIA:${path.join(mainWorkspace, "report.pdf")}` },
+    ]);
 
     const artifact = artifactList.artifacts[0]!;
 
@@ -498,5 +593,6 @@ describe("Gateway agent and artifact APIs", () => {
     await restartGateway("gateway agent artifact APIs after delete");
     const finalAgents = await client.request<{ agents: Array<{ id: string }> }>("agents.list", {});
     expect(finalAgents.agents.map((entry) => entry.id)).not.toContain(createdAgent.agentId);
+    expect(recoveryRestart).not.toHaveBeenCalled();
   }, 120_000);
 });

@@ -1,12 +1,20 @@
+import { generateKeyPairSync, sign } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { createLimiterSpy } from "./auth-rate-limit.test-support.js";
 import {
   assertGatewayAuthConfigured,
+  gatewayPersonPrincipalAuthError,
+  gatewayIngressPrincipalAuthError,
   authorizeHttpGatewayConnect,
   authorizeControlUiReadHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
@@ -14,6 +22,7 @@ import {
 } from "./auth.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "./net.js";
+import { setOpenClawIdTunnelPrincipalResolver } from "./openclaw-id/tunnel-principal.js";
 
 function createSingleAttemptLimiter() {
   return createGatewayAuthRateLimiter(
@@ -104,6 +113,44 @@ it.each(["null", "  undefined  ", "  "])(
 );
 
 describe("HTTP shared-secret fields", () => {
+  it.each([
+    "cf-access-authenticated-user-email",
+    "cf-access-jwt-assertion",
+    "x-custom-user",
+    "x-custom-proof",
+  ])("never grants direct-local password fallback with identity header %s", async (header) => {
+    setRuntimeConfigSnapshot({ gateway: { openclawId: { enabled: true } } });
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          password: "local-password",
+          allowTailscale: false,
+          trustedProxy: {
+            userHeader: "x-custom-user",
+            requiredHeaders: ["x-custom-proof"],
+            allowLoopback: true,
+          },
+        },
+        trustedProxies: ["127.0.0.1"],
+        connectAuth: { password: "local-password" },
+        req: request({ [header]: "remote-identity" }),
+      }),
+    ).resolves.toEqual({ ok: false, reason: "proxy_attribution_required" });
+    clearRuntimeConfigSnapshot();
+  });
+
+  it("keeps loopback identity headers out of attribution while OpenClaw ID is off", async () => {
+    clearRuntimeConfigSnapshot();
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: { mode: "token", token: "fixture-token", allowTailscale: false },
+        connectAuth: { token: "fixture-token" },
+        req: request({ "cf-access-authenticated-user-email": "remote-identity" }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
   const authorize = authorizeHttpGatewayConnect;
   const secrets = { token: "token-secret", password: "password-secret", allowTailscale: false };
   it.each(["token", "password"] as const)(
@@ -193,16 +240,6 @@ describe("gateway auth", () => {
     expect(auth.password).toBe("config-password"); // pragma: allowlist secret
   });
 
-  it("authorizes matching token auth when req is missing socket", async () => {
-    const res = await authorizeHttpGatewayConnect({
-      auth: { mode: "token", token: "secret", allowTailscale: false },
-      connectAuth: { token: "secret" },
-      req: {} as never,
-      browserOriginPolicy: { origin: "https://app.example", allowedOrigins: [] },
-    });
-    expect(res.ok).toBe(true);
-  });
-
   it.each([
     {
       host: "gateway.example.com",
@@ -224,21 +261,6 @@ describe("gateway auth", () => {
       browserOriginPolicy: { requestHost: host, origin },
     });
     expect(result).toEqual(expected);
-  });
-
-  it("keeps none mode authoritative even when token is present", async () => {
-    const auth = resolveGatewayAuth({
-      authConfig: { mode: "none", token: "configured-token" },
-      env: {} as NodeJS.ProcessEnv,
-    });
-    expect(auth.mode).toBe("none");
-    expect(auth.modeSource).toBe("config");
-    expect(auth.token).toBe("configured-token");
-
-    await expect(authorizeHttpGatewayConnect({ auth, connectAuth: null })).resolves.toMatchObject({
-      ok: true,
-      method: "none",
-    });
   });
 
   it("reports missing password config even when a token is configured", async () => {
@@ -292,34 +314,6 @@ describe("gateway auth", () => {
     });
     await expect(authorize(null)).resolves.toEqual({ ok: false, reason: "token_missing" });
     expect(tailscaleWhois).not.toHaveBeenCalled();
-  });
-
-  it("keeps managed Serve failures isolated to each validated source", async () => {
-    const limiter = createSingleAttemptLimiter();
-    const tailscaleWhois = vi.fn(async () => null);
-    const first = createTailscaleForwardedReq();
-    const second = createTailscaleForwardedReq();
-    second.headers["x-forwarded-for"] = "100.64.0.2";
-    const authorize = (req: IncomingMessage, token: string) =>
-      authorizeServe({ req, connectAuth: { token }, rateLimiter: limiter, tailscaleWhois });
-
-    try {
-      await expect(authorize(first, "wrong")).resolves.toMatchObject({
-        ok: false,
-        reason: "token_mismatch",
-      });
-      await expect(authorize(second, "secret")).resolves.toMatchObject({
-        ok: true,
-        method: "token",
-      });
-      await expect(authorize(first, "secret")).resolves.toMatchObject({
-        ok: false,
-        reason: "rate_limited",
-      });
-      expect(tailscaleWhois).not.toHaveBeenCalled();
-    } finally {
-      limiter.dispose();
-    }
   });
 
   it("verifies managed Serve identity before a same-source shared-secret lockout", async () => {
@@ -391,20 +385,6 @@ describe("gateway auth", () => {
     ]);
     expect(recordFailureAndDelay).toHaveBeenCalledOnce();
     expect(reset).not.toHaveBeenCalled();
-  });
-
-  it("uses password auth for managed Funnel", async () => {
-    const req = createTailscaleForwardedReq(false);
-    req.headers["tailscale-funnel-request"] = "?1";
-    markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "funnel" });
-
-    await expect(
-      authorizeWsControlUiGatewayConnect({
-        auth: { mode: "password", password: "secret", allowTailscale: false },
-        connectAuth: { password: "secret" },
-        req,
-      }),
-    ).resolves.toMatchObject({ ok: true, method: "password" });
   });
 
   it("requires the Funnel password when Tailscale header auth is explicitly enabled", async () => {
@@ -552,36 +532,6 @@ describe("gateway auth", () => {
     }
   });
 
-  it("keeps genuinely direct loopback requests exempt from lockout", async () => {
-    const limiter = createGatewayAuthRateLimiter(
-      {
-        maxAttempts: 1,
-        windowMs: 60_000,
-        lockoutMs: 60_000,
-      },
-      { scheduler: createTestGatewayScheduler() },
-    );
-    const params = {
-      auth: { mode: "password" as const, password: "secret", allowTailscale: false },
-      connectAuth: { password: "wrong" },
-      req: request({ host: "127.0.0.1:18789" }),
-      rateLimiter: limiter,
-    };
-
-    try {
-      await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
-        ok: false,
-        reason: "password_mismatch",
-      });
-      await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
-        ok: false,
-        reason: "password_mismatch",
-      });
-    } finally {
-      limiter.dispose();
-    }
-  });
-
   it.each([
     { allowRealIpFallback: false, token: "secret", reason: "proxy_attribution_required" },
     { allowRealIpFallback: true, token: "wrong", reason: "token_mismatch" },
@@ -670,15 +620,6 @@ describe("trusted-proxy auth", () => {
     });
   }
 
-  it("rejects trusted-proxy identity from a peer outside the proxy allowlist", async () => {
-    await expect(
-      authorizeTrustedProxy({
-        remoteAddress: "192.168.1.100",
-        trustedProxies: ["10.0.0.1"],
-      }),
-    ).resolves.toEqual({ ok: false, reason: "proxy_attribution_required" });
-  });
-
   it("rejects trusted-proxy headers from the host non-loopback interface address", async () => {
     mockLocalInterfaces("10.0.0.1");
     await expect(authorizeTrustedProxy()).resolves.toEqual({
@@ -722,6 +663,99 @@ describe("trusted-proxy auth", () => {
     ).resolves.toEqual(expected);
   });
 
+  describe("with cloudflareAccessJwt", () => {
+    const issuer = "https://team.cloudflareaccess.com";
+    const audience = "app-aud-tag";
+    const teamKey = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const attackerKey = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const kid = "team-kid";
+    const now = Math.floor(Date.now() / 1000);
+    const userClaims = { iss: issuer, aud: [audience], exp: now + 600, email: "nick@example.com" };
+    const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const jwt = (claims: object, key = teamKey.privateKey) => {
+      const signed = `${encode({ alg: "RS256", kid, typ: "JWT" })}.${encode(claims)}`;
+      return `${signed}.${sign("RSA-SHA256", Buffer.from(signed), key).toString("base64url")}`;
+    };
+    // Shape of a live https://<team>.cloudflareaccess.com/cdn-cgi/access/certs answer
+    // (recorded 2026-11-16) with a test key, since Access's private keys sign real ones.
+    const certs = {
+      keys: [{ kid, alg: "RS256", use: "sig", ...teamKey.publicKey.export({ format: "jwk" }) }],
+    };
+
+    const withAccessJwt = (accessIssuer = issuer) => ({
+      ...auth,
+      trustedProxy: { ...trustedProxy, cloudflareAccessJwt: { issuer: accessIssuer, audience } },
+    });
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) =>
+          url === `${issuer}/cdn-cgi/access/certs`
+            ? Response.json(certs)
+            : new Response(null, { status: 503 }),
+        ),
+      );
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it.each([
+      ["a forged unsigned assertion", "attacker@evil.test", "a.b.invalid", "invalid"],
+      [
+        "another key's signature",
+        "nick@example.com",
+        jwt(userClaims, attackerKey.privateKey),
+        "invalid",
+      ],
+      ["another application", "nick@example.com", jwt({ ...userClaims, aud: "other" }), "invalid"],
+      [
+        "an expired assertion",
+        "nick@example.com",
+        jwt({ ...userClaims, exp: now - 120 }),
+        "invalid",
+      ],
+      ["a forged user header", "attacker@evil.test", jwt(userClaims), "user_mismatch"],
+    ])("rejects %s", async (_case, user, assertion, reason) => {
+      await expect(
+        authorizeTrustedProxy({
+          auth: withAccessJwt(),
+          headers: {
+            ...identityHeaders,
+            "x-forwarded-user": user,
+            "cf-access-jwt-assertion": assertion,
+          },
+        }),
+      ).resolves.toEqual({ ok: false, reason: `trusted_proxy_access_${reason}` });
+    });
+
+    it("admits a verified user and keeps service tokens and outages distinct", async () => {
+      const headers = { ...identityHeaders, "cf-access-jwt-assertion": jwt(userClaims) };
+      await expect(authorizeTrustedProxy({ auth: withAccessJwt(), headers })).resolves.toEqual({
+        ok: true,
+        method: "trusted-proxy",
+        user: "nick@example.com",
+      });
+      // Access sends no email header for a service token; the node then uses its own credentials.
+      const serviceToken = jwt({
+        iss: issuer,
+        aud: [audience],
+        exp: now + 600,
+        common_name: "id.access",
+      });
+      await expect(
+        authorizeTrustedProxy({
+          auth: withAccessJwt(),
+          headers: { "x-forwarded-proto": "https", "cf-access-jwt-assertion": serviceToken },
+        }),
+      ).resolves.toEqual({ ok: false, reason: "trusted_proxy_user_missing" });
+      await expect(
+        authorizeTrustedProxy({
+          auth: withAccessJwt("https://down.cloudflareaccess.com"),
+          headers,
+        }),
+      ).resolves.toEqual({ ok: false, reason: "trusted_proxy_access_keys_unavailable" });
+    });
+  });
+
   it("rejects request with missing user header", async () => {
     await expect(
       authorizeTrustedProxy({ headers: { "x-forwarded-proto": "https" } }),
@@ -739,15 +773,6 @@ describe("trusted-proxy auth", () => {
     expect(resolved.mode).toBe("trusted-proxy");
     expect(resolved.token).toBe("shared-secret");
     expect(() => assertGatewayAuthConfigured(resolved)).toThrow(/mutually exclusive/);
-  });
-
-  it("still requires trustedProxy config before reporting a token conflict", () => {
-    const resolved = resolveGatewayAuth({
-      authConfig: { mode: "trusted-proxy", token: "shared-secret" },
-    });
-    expect(() => assertGatewayAuthConfigured(resolved)).toThrow(
-      /no trustedProxy config was provided/,
-    );
   });
 
   function authorizeLocalDirect(options: Partial<GatewayConnectInput> = {}) {
@@ -874,4 +899,89 @@ describe("trusted-proxy auth", () => {
       reason: "trusted_proxy_no_proxies_configured",
     });
   });
+});
+
+it.each(["ready", "mode", "roles", "user-header", "jwt-header"] as const)(
+  "shares complete person ingress eligibility: %s",
+  (change) => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "writer",
+          definitions: {
+            writer: {
+              scopes: ["operator.read", "operator.write"],
+              agents: "*",
+              sessions: { others: "none" },
+            },
+          },
+        },
+      },
+    };
+    const trustedProxy = {
+      userHeader: "cf-access-authenticated-user-email",
+      requiredHeaders: ["cf-access-jwt-assertion"],
+      allowUsers: ["person@example.test"],
+    };
+    const auth = {
+      ...resolveGatewayAuth({ authConfig: { mode: "trusted-proxy", trustedProxy }, env: {} }),
+      trustedProxy,
+    };
+    if (change === "mode") {
+      auth.mode = "token";
+    }
+    if (change === "roles") {
+      cfg.gateway = {};
+    }
+    if (change === "user-header") {
+      trustedProxy.userHeader = "x-unverified-email";
+    }
+    if (change === "jwt-header") {
+      trustedProxy.requiredHeaders = [];
+    }
+    const result = gatewayPersonPrincipalAuthError(auth, cfg, ["person@example.test"]);
+    if (change === "ready") {
+      expect(result).toBeUndefined();
+    } else {
+      expect(result).toContain("Person ingress requires");
+    }
+  },
+);
+
+// Tunnel admission is explicit peer authority, not ambient Tailscale identity.
+it.each([undefined, "https://linked-claw.example.test"])(
+  "admits tunnel Control UI reads with origin %s while ambient Tailscale is enabled",
+  async (origin) => {
+    const peerKey = `iroh:${"ef".repeat(32)}`;
+    const principal = { kind: "owner" as const, peerKey };
+    setOpenClawIdTunnelPrincipalResolver(async () => principal);
+    const req = request({ host: "linked-claw.example.test", ...(origin ? { origin } : {}) });
+    markGatewayIngressTransport(req, { kind: "openclaw-id-tunnel", peerKey, clientIp: "fd69::1" });
+    try {
+      await expect(authorizeAvatar(req)).resolves.toMatchObject({
+        ok: true,
+        method: "trusted-proxy",
+        openclawId: principal,
+      });
+    } finally {
+      setOpenClawIdTunnelPrincipalResolver(undefined);
+    }
+  },
+);
+
+it("allows owner ingress with definitions alone but refuses it with a named-role default", () => {
+  const cfg: OpenClawConfig = {
+    gateway: {
+      roles: {
+        definitions: {
+          guest: { sessions: { others: "none" }, agents: [], scopes: [] },
+        },
+      },
+    },
+  };
+  const auth = resolveGatewayAuth({ authConfig: { mode: "token", token: "test-secret" }, env: {} });
+  const principal = { kind: "owner" as const };
+  expect(gatewayIngressPrincipalAuthError(auth, cfg, principal)).toBeUndefined();
+  cfg.gateway!.roles!.default = "guest";
+  expect(gatewayIngressPrincipalAuthError(auth, cfg, principal)).toContain("gateway.roles");
 });

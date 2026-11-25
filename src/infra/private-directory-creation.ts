@@ -1,6 +1,6 @@
 const refusedCreations = new WeakSet<object>();
 
-/** Record a completed native refusal without replacing its code, errno, or identity. */
+/** Record a completed native refusal without replacing its semantic code, diagnostics, or identity. */
 export function markPrivateDirectoryCreationRefused<T>(error: T): T {
   if (error !== null && typeof error === "object") {
     refusedCreations.add(error);

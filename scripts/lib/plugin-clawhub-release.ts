@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-s
 import { retryClawHubRead } from "../../src/infra/clawhub-retry.js";
 import { runTasksWithConcurrency } from "../../src/utils/run-with-concurrency.js";
 import { readBoundedResponseText } from "./bounded-response.mjs";
+import { resolveOpenClawClawHubPackageFamily } from "./clawhub-package-family.mjs";
 import {
   classifyClawHubPublication,
   type ClawHubPublicationState,
@@ -43,6 +44,7 @@ type PluginReleasePlanItem = PublishablePluginPackage & {
   publication: ClawHubPublicationState;
   alreadyPublished: boolean;
   artifactName: string;
+  family: "" | "code-plugin";
 };
 
 type PluginReleasePlan = {
@@ -54,12 +56,6 @@ type PluginReleasePlan = {
   skippedPublished: PluginReleasePlanItem[];
   pendingPublication: PluginReleasePlanItem[];
   failedPublication: PluginReleasePlanItem[];
-};
-
-type ClawHubTrustedPublisherConfig = {
-  repository?: unknown;
-  workflowFilename?: unknown;
-  environment?: unknown;
 };
 
 export type ClawHubPackageObservation = {
@@ -106,6 +102,7 @@ const CLAWHUB_RELEASE_AUTHORITY_PATHS = [
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
+  "scripts/lib/clawhub-package-family.mjs",
   "scripts/lib/clawhub-publication-state.mjs",
   "scripts/plugin-clawhub-recovery.mjs",
   "scripts/openclaw-npm-release-check.ts",
@@ -238,7 +235,7 @@ async function buildClawHubQueryError(
   ]
     .filter((value): value is string => Boolean(value))
     .join(" ");
-  return new Error(`${message}: ${response.status} ${detail}`);
+  return new Error(`${message}: HTTP ${response.status} ${detail}`);
 }
 
 function formatClawHubPackageArtifactName(
@@ -394,10 +391,13 @@ export function collectClawHubVersionGateErrors(params: {
   return errors;
 }
 
-async function readClawHubPublication(
+export async function readClawHubPublication(
   packageName: string,
   version: string,
-  options: ClawHubRetryOptions & { registryBaseUrl?: string } = {},
+  options: ClawHubRetryOptions & {
+    allowLegacyVersionFallback?: boolean;
+    registryBaseUrl?: string;
+  } = {},
 ): Promise<ClawHubPublicationState> {
   const resource = `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(version)}`;
   const message = `Failed to query ClawHub for ${packageName}@${version}`;
@@ -406,6 +406,17 @@ async function readClawHubPublication(
     body === undefined ? null : classifyClawHubPublication(body, { name: packageName, version });
   if (publication) {
     return publication;
+  }
+  if (options.allowLegacyVersionFallback === false) {
+    throw new Error(
+      body === undefined
+        ? "ClawHub publication-state endpoint is unavailable for " +
+            packageName +
+            "@" +
+            version +
+            "; refusing to infer authoritative absence from the legacy version probe."
+        : "ClawHub returned an invalid publication state for " + packageName + "@" + version + ".",
+    );
   }
   return {
     state: (await clawHubResourceExists(resource, message, options)) ? "published" : "absent",
@@ -529,21 +540,13 @@ export async function observeClawHubPackage(
     packageExists,
     publication,
     alreadyPublished: publication.state === "published",
-    hasTrustedPublisher: isOpenClawPluginTrustedPublisher(trustedPublisher),
+    hasTrustedPublisher:
+      trustedPublisher !== null &&
+      trustedPublisher.repository === OPENCLAW_PLUGIN_CLAWHUB_REPOSITORY &&
+      trustedPublisher.workflowFilename === OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME &&
+      trustedPublisher.environment === null,
     trustedPublisher,
   };
-}
-
-function isOpenClawPluginTrustedPublisher(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const trustedPublisher = value as ClawHubTrustedPublisherConfig;
-  return (
-    trustedPublisher.repository === OPENCLAW_PLUGIN_CLAWHUB_REPOSITORY &&
-    trustedPublisher.workflowFilename === OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME &&
-    trustedPublisher.environment == null
-  );
 }
 
 function stripPackageReleaseState(
@@ -638,6 +641,7 @@ export async function collectPluginClawHubReleasePlan(params?: {
       alreadyPublished: publication.state === "published",
       publication,
       artifactName: formatClawHubPackageArtifactName(plugin),
+      family: resolveOpenClawClawHubPackageFamily(plugin.packageName),
     } satisfies PluginReleasePlanItemWithPackageState;
   });
   const planResult = await runTasksWithConcurrency({

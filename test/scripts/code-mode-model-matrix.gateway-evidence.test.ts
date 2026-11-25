@@ -7,10 +7,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  getEffectiveQaEvidenceEntries,
   projectQaEvidenceScenarioOutcomes,
   validateQaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/api.js";
@@ -19,17 +19,61 @@ import {
   runCodeModeModelMatrix,
   type CodeModeMatrixCellResult,
 } from "../../scripts/code-mode-model-matrix.js";
-import { createGatewayMatrixWorkload } from "../../scripts/lib/code-mode-matrix-gateway.js";
+import { compareCodeModeMatrixResults } from "../../scripts/lib/code-mode-matrix-comparison.js";
+import * as gatewayFixtures from "../../scripts/lib/code-mode-matrix-gateway-fixtures.js";
+import {
+  collectGatewayMatrixTrace,
+  createGatewayMatrixWorkload,
+  requireGatewayMatrixTools,
+} from "../../scripts/lib/code-mode-matrix-gateway.js";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../../scripts/lib/local-build-metadata.mts";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
+import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const readJson = async (file: string) => JSON.parse(await fs.readFile(file, "utf8"));
+const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
+const sha256 = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+const readJsonLines = async (file: string) =>
+  (await fs.readFile(file, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+const readEvidence = async (root: string) =>
+  validateQaEvidenceSummaryJson(await readJson(path.join(root, "qa-evidence.json")));
+async function frozenRuntime(root: string, head: string, entry: string) {
+  await fs.mkdir(path.join(root, "dist"), { recursive: true });
+  await fs.writeFile(path.join(root, "dist", "entry.js"), entry);
+  for (const stamp of [BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE]) {
+    await writeJson(path.join(root, "dist", stamp), { head, inputsClean: true });
+  }
+}
+function matrixOptions(repoRoot: string, runtimeDir = repoRoot) {
+  return {
+    allowFailures: false,
+    dryRun: false,
+    keepState: false,
+    models: ["fixture/model"],
+    modes: ["code" as const],
+    tasks: ["read" as const],
+    repetitions: 1,
+    repoRoot,
+    runtimeDir,
+    outputDir: "artifacts",
+    thinking: "off" as const,
+    timeoutSeconds: 10,
+  };
+}
+function outcomes(evidence: Parameters<typeof projectQaEvidenceScenarioOutcomes>[0]) {
+  return projectQaEvidenceScenarioOutcomes(evidence).map((outcome) => outcome.status);
+}
 
 function initializeGitFixture(root: string, env = createNestedGitEnv()) {
   const git = (args: string[]) =>
@@ -40,25 +84,15 @@ function initializeGitFixture(root: string, env = createNestedGitEnv()) {
     }).trim();
   git(["init", "--quiet"]);
   git(["add", "."]);
-  git([
-    "-c",
-    "user.name=QA Fixture",
-    "-c",
-    "user.email=qa@example.test",
-    "commit",
-    "--no-gpg-sign",
-    "--allow-empty",
-    "--quiet",
-    "-m",
-    "fixture",
-  ]);
+  const author = ["-c", "user.name=QA Fixture", "-c", "user.email=qa@example.test"];
+  git([...author, "commit", "--no-gpg-sign", "--allow-empty", "--quiet", "-m", "fixture"]);
   return { env, git, head: git(["rev-parse", "HEAD"]) };
 }
 
-it("the actual CLI completes a Gateway cell without a live provider or entrypoint import cycle", async () => {
+it("runs the actual Gateway matrix CLI without a provider or import cycle", async ({ signal }) => {
   const root = tempDirs.make("openclaw-matrix-cli-");
   await Promise.all(
-    ["dist", "node_modules", "packages", "home", "tmp"].map((directory) =>
+    ["node_modules", "packages", "home", "tmp"].map((directory) =>
       fs.mkdir(path.join(root, directory)),
     ),
   );
@@ -66,11 +100,7 @@ it("the actual CLI completes a Gateway cell without a live provider or entrypoin
     path.join(root, ".gitignore"),
     "/dist/\n/node_modules/\n/packages/\n/home/\n/tmp/\n/artifacts/\n",
   );
-  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
-  await fs.writeFile(
-    path.join(root, "dist", "entry.js"),
-    'throw new Error("Unexpected synthetic runtime launch");\n',
-  );
+  await writeJson(path.join(root, "package.json"), { type: "module" });
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
     SystemRoot: process.env.SystemRoot,
@@ -91,43 +121,30 @@ it("the actual CLI completes a Gateway cell without a live provider or entrypoin
     GIT_CONFIG_VALUE_1: "0",
   };
   const { head } = initializeGitFixture(root, env);
-  for (const stamp of [BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE]) {
-    await fs.writeFile(path.join(root, "dist", stamp), JSON.stringify({ head, inputsClean: true }));
-  }
-  const run = spawnSync(
-    resolveTestNodeExecPath(),
-    [
-      "--import",
-      new URL("../../scripts/tsx.mjs", import.meta.url).href,
-      fileURLToPath(new URL("../../scripts/code-mode-model-matrix.ts", import.meta.url)),
+  await frozenRuntime(root, head, 'throw new Error("Unexpected synthetic runtime launch");\n');
+  const run = await runNodeScript(
+    (workerArgv) => [
+      ...workerArgv(resolveRuntimeWorkerUrl(toolingTsEntrypoints.codeModeModelMatrix)),
       "--runtime-dir",
       root,
-      "--model",
-      "openai/fixture",
-      "--mode",
-      "code",
-      "--task",
-      "javascript-contracts",
-      "--repetitions",
-      "1",
-      "--output-dir",
-      "artifacts",
+      ..."--model openai/fixture --mode code --task javascript-contracts --repetitions 1 --output-dir artifacts".split(
+        " ",
+      ),
     ],
-    { cwd: root, env, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 },
+    env,
+    30_000,
+    { cwd: root, signal, maxBuffer: 1024 * 1024 },
   );
-  expect(run.error).toBeUndefined();
+  expect(run.error, run.stdout + run.stderr).toBeUndefined();
   expect(run.status, run.stderr).toBe(1);
-  const resultsPath = path.join(root, "artifacts", "results.jsonl");
-  const resultsText = await fs.readFile(resultsPath, "utf8").catch((cause: unknown) => {
-    throw new Error(
-      `Real CLI produced no result.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
-      { cause },
-    );
-  });
-  const rows = resultsText
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
+  const rows = await readJsonLines(path.join(root, "artifacts/results.jsonl")).catch(
+    (cause: unknown) => {
+      throw new Error(
+        `Real CLI produced no result.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+        { cause },
+      );
+    },
+  );
   expect(rows).toMatchObject([
     { task: "javascript-contracts", failureCategory: "provider_auth", passed: false },
   ]);
@@ -136,9 +153,7 @@ it("the actual CLI completes a Gateway cell without a live provider or entrypoin
   const streamedResult = run.stdout.split("\n").find((line) => line.startsWith(resultPrefix));
   expect(streamedResult).toBeDefined();
   expect(JSON.parse(streamedResult?.slice(resultPrefix.length) ?? "null")).toEqual(rows[0]);
-  const summary = JSON.parse(
-    await fs.readFile(path.join(root, "artifacts", "summary.json"), "utf8"),
-  );
+  const summary = await readJson(path.join(root, "artifacts", "summary.json"));
   expect(summary.counts).toEqual({ total: 1, passed: 0, failed: 1 });
 });
 
@@ -166,7 +181,7 @@ it.each([
   await fs.writeFile(input, "export const changed = true;\n");
   testCase.write(producer);
   const stampPath = path.join(root, "dist", testCase.stamp);
-  const stamp = JSON.parse(await fs.readFile(stampPath, "utf8"));
+  const stamp = await readJson(stampPath);
   expect(stamp).toMatchObject({ head, inputsClean: false });
   await fs.writeFile(input, "export {};\n");
   expect(git(["status", "--porcelain"])).toBe("");
@@ -177,25 +192,9 @@ it.each([
     throw new Error("unverified frozen runtime reached the cell boundary");
   });
   for (const inputsClean of [false, null, undefined]) {
-    await fs.writeFile(stampPath, JSON.stringify({ ...stamp, inputsClean }));
+    await writeJson(stampPath, { ...stamp, inputsClean });
     await expect(
-      runCodeModeModelMatrix(
-        {
-          allowFailures: false,
-          dryRun: false,
-          keepState: false,
-          models: ["fixture/model"],
-          modes: ["code"],
-          tasks: ["read"],
-          repetitions: 1,
-          repoRoot: root,
-          runtimeDir: root,
-          outputDir: "artifacts",
-          thinking: "off",
-          timeoutSeconds: 10,
-        },
-        { buildCliArtifacts, readBuildSha256, runCell },
-      ),
+      runCodeModeModelMatrix(matrixOptions(root), { buildCliArtifacts, readBuildSha256, runCell }),
     ).rejects.toThrow(`Frozen runtime ${testCase.stamp}`);
     expect(buildCliArtifacts).not.toHaveBeenCalled();
     expect(readBuildSha256).not.toHaveBeenCalled();
@@ -214,20 +213,10 @@ it.each([
     const runtimeDir = tempDirs.make("openclaw-matrix-frozen-runtime-");
     const { head: harnessSha } = initializeGitFixture(repoRoot);
     const runtimeSha = "a".repeat(40);
-    for (const root of [repoRoot, runtimeDir]) {
-      await fs.mkdir(path.join(root, "dist"));
-      await fs.writeFile(
-        path.join(root, "dist", "entry.js"),
-        root === repoRoot ? "harness" : "runtime",
-      );
-    }
-    for (const stamp of [".buildstamp", ".runtime-postbuildstamp"]) {
-      await fs.writeFile(
-        path.join(runtimeDir, "dist", stamp),
-        JSON.stringify({ head: runtimeSha, inputsClean: true }),
-      );
-    }
-    const buildSha256 = createHash("sha256").update("runtime").digest("hex");
+    const source = { gitSha: runtimeSha, sourceDirty: false, sourcePatchSha256: null };
+    await frozenRuntime(repoRoot, harnessSha, "harness");
+    await frozenRuntime(runtimeDir, runtimeSha, "runtime");
+    const buildSha256 = sha256("runtime");
     const model = "openai/fixture";
     const task = "inventory-join";
     const baselineResults = path.join(repoRoot, "baseline.jsonl");
@@ -244,36 +233,27 @@ it.each([
     }));
     await fs.writeFile(baselineResults, baselineRows.map((row) => JSON.stringify(row)).join("\n"));
     const outputDir = path.join(repoRoot, "artifacts");
+    const artifact = (name: string) => path.join(outputDir, name);
     let calls = 0;
     const previousSigintListeners = process.rawListeners("SIGINT");
     const previousSigtermListeners = process.rawListeners("SIGTERM");
     const run = runCodeModeModelMatrix(
       {
-        allowFailures: false,
-        dryRun: false,
-        keepState: false,
+        ...matrixOptions(repoRoot, runtimeDir),
         models: [model],
         gatewayExecutor: executor,
-        modes: ["code"],
         tasks: [task],
         repetitions: 3,
-        repoRoot,
-        runtimeDir,
         baselineResults,
-        outputDir: "artifacts",
-        thinking: "off",
-        timeoutSeconds: 10,
       },
       {
         readSourceIdentity: async (root) => {
           expect(root).toBe(runtimeDir);
-          return { gitSha: runtimeSha, sourceDirty: false, sourcePatchSha256: null };
+          return source;
         },
         readBuildSha256: async (root) => {
           expect(root).toBe(runtimeDir);
-          return createHash("sha256")
-            .update(await fs.readFile(path.join(root, "dist", "entry.js")))
-            .digest("hex");
+          return sha256(await fs.readFile(path.join(root, "dist", "entry.js")));
         },
         buildCliArtifacts: async () => {
           throw new Error("must not rebuild a frozen runtime");
@@ -288,17 +268,12 @@ it.each([
             buildSha256,
             executor,
           });
-          const before = validateQaEvidenceSummaryJson(
-            JSON.parse(await fs.readFile(path.join(outputDir, "qa-evidence.json"), "utf8")),
-          );
-          expect(
-            projectQaEvidenceScenarioOutcomes(before).map((outcome) => outcome.status),
-          ).toEqual(
-            calls === 1
-              ? [null, null, null]
-              : calls === 2
-                ? ["pass", null, null]
-                : ["pass", "fail", null],
+          expect(outcomes(await readEvidence(outputDir))).toEqual(
+            [
+              [null, null, null],
+              ["pass", null, null],
+              ["pass", "fail", null],
+            ][calls - 1],
           );
           if (calls === 2) {
             if (interrupted) {
@@ -319,9 +294,7 @@ it.each([
           return {
             ...params.cell,
             buildSha256,
-            gitSha: runtimeSha,
-            sourceDirty: false,
-            sourcePatchSha256: null,
+            ...source,
             timestamp: new Date().toISOString(),
             elapsedMs: 10,
             expected: "fixture",
@@ -347,69 +320,343 @@ it.each([
       await expect(run).rejects.toThrow("Code Mode matrix interrupted");
     } else {
       expect((await run).exitCode).toBe(1);
-      const comparison = JSON.parse(
-        await fs.readFile(path.join(outputDir, "comparison.json"), "utf8"),
-      );
+      const comparison = await readJson(artifact("comparison.json"));
       expect(comparison).toMatchObject({ total: 3, baselinePassed: 3, candidatePassed: 2 });
-      expect(comparison.cells.map((cell: { candidateSha: string }) => cell.candidateSha)).toEqual([
-        runtimeSha,
-        runtimeSha,
-        runtimeSha,
-      ]);
+      expect(comparison.cells.map((cell: { candidateSha: string }) => cell.candidateSha)).toEqual(
+        Array(3).fill(runtimeSha),
+      );
     }
     expect(process.rawListeners("SIGINT")).toEqual(previousSigintListeners);
     expect(process.rawListeners("SIGTERM")).toEqual(previousSigtermListeners);
     expect(calls).toBe(interrupted ? 2 : 3);
-    const manifest = JSON.parse(await fs.readFile(path.join(outputDir, "manifest.json"), "utf8"));
-    expect(manifest).toMatchObject({
+    expect(await readJson(artifact("manifest.json"))).toMatchObject({
       gitSha: runtimeSha,
       buildSha256,
       harness: { gitSha: harnessSha },
       gatewayExecutor: executor,
     });
-    const rows: CodeModeMatrixCellResult[] = (
-      await fs.readFile(path.join(outputDir, "results.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    const evidence = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(path.join(outputDir, "qa-evidence.json"), "utf8")),
+    const evidence = await readEvidence(outputDir);
+    expect(outcomes(evidence)).toEqual(["pass", "fail", interrupted ? null : "pass"]);
+    const rows: CodeModeMatrixCellResult[] = await readJsonLines(artifact("results.jsonl"));
+    expect(rows.map(({ executor: selected, workload }) => [selected, workload])).toEqual(
+      baselineRows.slice(0, calls).map(({ workload }) => [executor, workload]),
     );
-    if (evidence.schemaVersion !== 3) {
-      throw new Error("expected canonical invocation evidence after comparison");
-    }
-    expect(projectQaEvidenceScenarioOutcomes(evidence).map((outcome) => outcome.status)).toEqual([
-      "pass",
-      "fail",
-      interrupted ? null : "pass",
-    ]);
-    expect(getEffectiveQaEvidenceEntries(evidence)).toHaveLength(calls);
-    expect(evidence.occurrences).toHaveLength(3 + calls);
-    expect(new Set(rows.map((row) => row.evidenceOccurrenceId)).size).toBe(calls);
-    for (const row of rows) {
-      expect(row.executor).toBe(executor);
-      expect(row.workload).toEqual(baselineRows[row.repetition - 1]?.workload);
-      const occurrence = evidence.occurrences.find((item) => item.id === row.evidenceOccurrenceId);
-      expect(occurrence).toMatchObject({
-        retryOf: null,
-        launch: {
-          source: { ref: runtimeSha },
-          package: null,
-          protocol: null,
-          accountRef: null,
-          proofClass: null,
-        },
-      });
-      expect(occurrence?.receipts).toHaveLength(1);
-      const receipt = occurrence?.receipts[0];
-      if (!receipt) {
-        throw new Error("expected a prepared observation receipt");
-      }
-      expect(receipt.phase).toBe("prepared");
-      const bytes = await fs.readFile(path.join(outputDir, receipt.artifact.path));
-      expect(createHash("sha256").update(bytes).digest("hex")).toBe(receipt.artifact.sha256);
-      expect(JSON.parse(bytes.toString()).result).toEqual(row);
+  },
+);
+
+it("compares only complete, unique cells with the same workload identity", () => {
+  const baseline = {
+    id: "fixture-code-inventory-1",
+    model: "openai/fixture",
+    mode: "code",
+    task: "inventory-join",
+    repetition: 1,
+    passed: true,
+    gitSha: "baseline",
+    elapsedMs: 10,
+    workload: createGatewayMatrixWorkload("inventory-join", 1, "off", 10, "node"),
+  };
+  const candidate = { ...baseline, gitSha: "candidate", elapsedMs: 8 };
+  expect(compareCodeModeMatrixResults([baseline], [candidate])).toMatchObject({
+    total: 1,
+    cells: [{ baselineSha: "baseline", candidateSha: "candidate", bothPassed: true }],
+  });
+  expect(() => compareCodeModeMatrixResults([baseline, baseline], [candidate])).toThrow(
+    "Duplicate comparison cell",
+  );
+  expect(() => compareCodeModeMatrixResults([baseline], [candidate, candidate])).toThrow(
+    "Duplicate comparison cell",
+  );
+  expect(() => compareCodeModeMatrixResults([baseline], [])).toThrow("same model/mode/task");
+  expect(() =>
+    compareCodeModeMatrixResults([baseline], [{ ...candidate, workload: undefined }]),
+  ).toThrow("fixed workload fingerprints");
+  for (const workload of [
+    { ...candidate.workload, promptSha256: "different-prompt" },
+    { ...candidate.workload, fixtureSha256: "different-fixture" },
+    {
+      ...candidate.workload,
+      settings: { ...candidate.workload.settings, timeoutSeconds: 11 },
+    },
+  ]) {
+    expect(() => compareCodeModeMatrixResults([baseline], [{ ...candidate, workload }])).toThrow(
+      "workload changed",
+    );
+  }
+});
+
+it("includes the exact process-helper bytes in the fixed workload fingerprint", () => {
+  const fixture = gatewayFixtures.createGatewayMatrixFixture("process-contracts", 1);
+  const firstHelper = {
+    ...fixture,
+    processHelperSource: 'console.log("probe"); setTimeout(() => {}, 2000);\n',
+  };
+  const secondHelper = {
+    ...fixture,
+    processHelperSource: 'console.log("probe"); setTimeout(() => {}, 3000);\n',
+  };
+  const spy = vi.spyOn(gatewayFixtures, "createGatewayMatrixFixture");
+  try {
+    spy.mockReturnValue(firstHelper);
+    const baseline = createGatewayMatrixWorkload("process-contracts", 1, "off", 120);
+    spy.mockReturnValue(secondHelper);
+    const candidate = createGatewayMatrixWorkload("process-contracts", 1, "off", 120);
+    expect(candidate.promptSha256).toBe(baseline.promptSha256);
+    expect(candidate.settings).toEqual(baseline.settings);
+    expect(candidate.fixtureSha256).not.toBe(baseline.fixtureSha256);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it("counts one underlying shell outcome through direct exec with error=true", () => {
+  const input = { command: "node ./process-probe.mjs" };
+  const result = { status: "failed", exitCode: 1, aggregated: "synthetic process failure" };
+  const trace = collectGatewayMatrixTrace([
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "invoke", name: "exec", arguments: input }],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "invoke",
+        toolName: "exec",
+        isError: true,
+        details: result,
+        content: [{ type: "text", text: JSON.stringify(result) }],
+      },
+    },
+  ]);
+  expect(trace.activities).toEqual([
+    expect.objectContaining({ name: "exec", input, result, isError: true, eventIndex: 1 }),
+  ]);
+  expect(trace.activities[0]?.parentId).toBeUndefined();
+  expect(trace.calls.map((call) => call.name)).toEqual(["exec"]);
+  expect(trace.outcomes.map((outcome) => outcome.name)).toEqual(["exec"]);
+});
+
+const TASK_DELTAS = {
+  taskElapsedMs: -2000,
+  assistantTurns: null,
+  upstreamCalls: 0,
+  inputTokens: null,
+  outputTokens: null,
+  costUsd: null,
+};
+
+function comparisonRow(includeOutcomes = false) {
+  return {
+    id: "invoice-code-r1",
+    task: "invoices-auto-retention",
+    model: "openai/gpt-5.6-sol",
+    mode: "code",
+    repetition: 1,
+    gitSha: "baseline-sha",
+    passed: true,
+    elapsedMs: 20000,
+    oracle: includeOutcomes ? { identity: true } : undefined,
+    workload: {
+      promptSha256: "fixed-prompt",
+      fixtureSha256: "fixed-fixture",
+      settings: { executor: "node", thinking: "off", timeoutSeconds: 120 },
+    },
+    gateway: {
+      upstreamCalls: 1,
+      taskElapsedMs: 10000,
+      ...(includeOutcomes
+        ? {
+            traceAvailable: true,
+            behavior: { answer: true, complete: true },
+            interview: {
+              traceAvailable: true,
+              checks: { answered: true, priorReferenceUnavailable: true },
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+it("compares task time separately from startup and leaves unobserved metrics null", () => {
+  const baseline = comparisonRow();
+  const candidate = { ...comparisonRow(), gitSha: "candidate-sha", elapsedMs: 30000 };
+  candidate.gateway.taskElapsedMs = 8000;
+  const compared = compareCodeModeMatrixResults([baseline], [candidate]);
+  expect(expectDefined(compared.cells[0], "paired comparison cell").deltas).toEqual(TASK_DELTAS);
+});
+
+it("separates interview failure from the other outcome", () => {
+  const baseline = comparisonRow(true);
+  const candidate = comparisonRow(true);
+  candidate.passed = false;
+  candidate.gateway.taskElapsedMs = 8000;
+  expectDefined(candidate.gateway.interview, "interview").checks.priorReferenceUnavailable = false;
+  const compared = compareCodeModeMatrixResults([baseline], [candidate]);
+  const cell = expectDefined(compared.cells[0], "paired outcome comparison");
+  expect(cell).toMatchObject({
+    baselinePassed: true,
+    candidatePassed: false,
+    bothPassed: false,
+    deltas: null,
+  });
+  expect(cell.taskBehavior).toEqual({
+    baselinePassed: true,
+    candidatePassed: true,
+    bothPassed: true,
+    modelsMatched: true,
+    deltas: TASK_DELTAS,
+  });
+  expect(cell.interviewConsistency).toEqual({ baselinePassed: true, candidatePassed: false });
+  expect(compared).toMatchObject({ baselinePassed: 1, candidatePassed: 0 });
+  expect(compared.outcomes).toEqual({
+    taskBehavior: {
+      baseline: { passed: 1, failed: 0, unavailable: 0 },
+      candidate: { passed: 1, failed: 0, unavailable: 0 },
+    },
+    interviewConsistency: {
+      baseline: { passed: 1, failed: 0, unavailable: 0 },
+      candidate: { passed: 0, failed: 1, unavailable: 0 },
+    },
+  });
+});
+
+it.each([
+  { label: "zero placeholders", input: 0, output: 0, known: "none" },
+  { label: "provisional counters", input: 20, output: 3, known: "none" },
+  { label: "known then unavailable", input: 20, output: 3, known: "before" },
+  { label: "unavailable then known", input: 20, output: 3, known: "after" },
+])("does not qualify $label as measured savings", ({ input, output, known }) => {
+  const observed = matrixUsageEvent({
+    input: 100,
+    output: 10,
+    totalTokens: 110,
+    cost: { total: 0.002 },
+    usageReport: { state: "available" },
+  });
+  expect(collectGatewayMatrixTrace([observed])).toMatchObject({
+    usage: { input: 100, output: 10, total: 110 },
+    costUsd: 0.002,
+  });
+  const unavailable = matrixUsageEvent({
+    input,
+    output,
+    totalTokens: input + output,
+    cost: { total: 0.5 },
+    usageReport: { state: "unavailable" },
+  });
+  unavailable.message.content.push({
+    type: "toolCall",
+    id: "unavailable",
+    name: "exec",
+    arguments: { code: "return await matrix_read({});" },
+  });
+  const trace = collectGatewayMatrixTrace([
+    ...(known === "before" ? [observed] : []),
+    unavailable,
+    {
+      customType: "openclaw.nested-tool.v1",
+      details: {
+        parentToolCallId: "unavailable",
+        toolName: "matrix_read",
+        input: {},
+        result: { content: [], details: { value: 1 } },
+        isError: false,
+      },
+    },
+    {
+      message: {
+        role: "toolResult",
+        toolCallId: "unavailable",
+        toolName: "exec",
+        details: { status: "completed", value: 1 },
+      },
+    },
+    ...(known === "after" ? [observed] : []),
+  ]);
+  expect(trace.calls).toMatchObject([{ id: "unavailable", name: "exec" }]);
+  expect(trace.outcomes).toMatchObject([
+    { id: "unavailable", details: { status: "completed", value: 1 } },
+  ]);
+  expect(trace.activities).toEqual([
+    expect.objectContaining({ name: "matrix_read", result: { value: 1 } }),
+  ]);
+  expect(trace.usage).toBeUndefined();
+  expect(trace.costUsd).toBeUndefined();
+  const compared = compareCodeModeMatrixResults(
+    [{ ...comparisonRow(), usage: { input: 100, output: 10 }, costUsd: 0.002 }],
+    [{ ...comparisonRow(), gitSha: "candidate-sha", usage: trace.usage, costUsd: trace.costUsd }],
+  );
+  expect(expectDefined(compared.cells[0], "paired comparison cell").deltas).toMatchObject({
+    inputTokens: null,
+    outputTokens: null,
+    costUsd: null,
+  });
+});
+
+function matrixUsageEvent(usage?: Record<string, unknown>) {
+  return {
+    message: {
+      role: "assistant",
+      provider: "openai",
+      model: "fixture",
+      usage,
+      content: [] as { type: string; id: string; name: string; arguments: { code: string } }[],
+    },
+  };
+}
+
+it("does not turn missing usage or cost observations into zero-valued measurements", () => {
+  const observed = matrixUsageEvent({
+    input: 100,
+    output: 10,
+    totalTokens: 110,
+    cost: { total: 0.002 },
+  });
+  expect(collectGatewayMatrixTrace([observed])).toMatchObject({
+    usage: { input: 100, output: 10, total: 110 },
+    costUsd: 0.002,
+  });
+  const incomplete = collectGatewayMatrixTrace([observed, matrixUsageEvent()]);
+  expect(incomplete.usage).toBeUndefined();
+  expect(incomplete.costUsd).toBeUndefined();
+});
+
+it("retains genuinely measured zero usage and cost", () => {
+  const trace = collectGatewayMatrixTrace([
+    matrixUsageEvent({
+      input: 0,
+      output: 0,
+      totalTokens: 0,
+      cost: { total: 0, totalOrigin: "provider-billed" },
+      usageReport: { state: "available" },
+    }),
+  ]);
+  expect(trace.usage).toEqual({ input: 0, output: 0, total: 0 });
+  expect(trace.costUsd).toBe(0);
+});
+
+it.each(["registered", "wrong-plugin"] as const)(
+  "requires the fixture's registered capability: %s",
+  (registration) => {
+    const required = ["exec", "matrix_invoice_export"];
+    const tools = [
+      { id: "exec", source: "core" },
+      {
+        id: "matrix_invoice_export",
+        source: "plugin",
+        pluginId: registration === "registered" ? "code-mode-matrix-fixture" : "unrelated-plugin",
+      },
+    ];
+    const check = () => requireGatewayMatrixTools({ groups: [{ tools }] }, required);
+    if (registration === "registered") {
+      expect(check()).toEqual(required);
+    } else {
+      expect(check).toThrow("preflight failed before model call: matrix_invoice_export");
     }
   },
 );

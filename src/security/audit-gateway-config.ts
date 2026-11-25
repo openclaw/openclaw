@@ -1,4 +1,3 @@
-// Audits gateway config for bind, auth, and exposure risks.
 import { isIP } from "node:net";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -109,7 +108,7 @@ export function collectGatewayConfigFindings(
       title: "Gateway HTTP /tools/invoke re-enables dangerous tools",
       detail:
         `gateway.tools.allow includes ${reenabledOverHttp.join(", ")} which removes them from the default HTTP deny list. ` +
-        "This can allow remote session spawning / control-plane actions via HTTP and increases RCE blast radius if the gateway is reachable.",
+        "This can allow remote session spawning / control-plane actions via HTTP and increases the damage from remote code execution if the gateway is reachable.",
       remediation:
         "Remove these entries from gateway.tools.allow (recommended). " +
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
@@ -332,7 +331,7 @@ export function collectGatewayConfigFindings(
       title: "Trusted-proxy auth mode enabled",
       detail:
         'gateway.auth.mode="trusted-proxy" delegates authentication to a reverse proxy. ' +
-        "Ensure your proxy (Pomerium, Caddy, nginx) handles auth correctly and that gateway.trustedProxies " +
+        "Check that your proxy (Pomerium, Caddy, nginx) handles auth correctly and that gateway.trustedProxies " +
         "only contains IPs of your actual proxy servers.",
       remediation:
         "Verify: (1) Your proxy terminates TLS and authenticates users. " +
@@ -407,6 +406,18 @@ export function collectGatewayConfigFindings(
             "Remove operator.admin and approve admin access manually, or grant admin per identity via gateway.auth.identityScopes.",
         });
       }
+    }
+
+    if (trustedProxyConfig?.narrowToDeviceGrant === true) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_narrow_to_device_grant",
+        severity: "warn",
+        title: "Trusted-proxy TUI devices hold durable device tokens",
+        detail:
+          "gateway.auth.trustedProxy.narrowToDeviceGrant=true issues the TUI a device token, as the CLI already receives. Until the device or token is revoked, that token authenticates a direct Gateway connection without the proxy identity.",
+        remediation:
+          "Enable this only when the proxy is the exclusive Gateway ingress, and remove a device with `openclaw devices remove <deviceId>` when its user's access ends.",
+      });
     }
 
     const allowUsers = trustedProxyConfig?.allowUsers ?? [];

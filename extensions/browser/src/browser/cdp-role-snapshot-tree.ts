@@ -1,21 +1,15 @@
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { axValue, type RawAXNode } from "./cdp-ax.js";
-import type { RoleSnapshotOptions } from "./pw-role-snapshot.js";
+import type { RoleRefMap, RoleSnapshotOptions } from "./pw-role-snapshot.js";
 import { ROLE_SNAPSHOT_MAX_DEPTH } from "./snapshot-depth-limit.js";
 import { INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-/** Role snapshot ref metadata used by agent-facing snapshots. */
-export type CdpRoleRef = {
-  role: string;
-  name?: string;
-  nth?: number;
+export type CdpRoleRef = RoleRefMap[string] & {
   backendDOMNodeId?: number;
   frameId?: string;
 };
 
 export type CursorInteractiveInfo = {
   text: string;
-  tagName: string;
   hasOnClick?: boolean;
   hasCursorPointer?: boolean;
   hasTabIndex?: boolean;
@@ -31,7 +25,6 @@ export type RoleTreeNode = {
   backendDOMNodeId?: number;
   children: number[];
   parent?: number;
-  depth: number;
   ref?: string;
   nth?: number;
   url?: string;
@@ -40,6 +33,16 @@ export type RoleTreeNode = {
   iframeLineIndex?: number;
   transparent?: boolean;
 };
+
+/** Ignored nodes and unnamed generic wrappers carry no role structure of their own. */
+function isWrapperNode(raw: RawAXNode, role: string, name: string): boolean {
+  const normalizedRole = role.toLowerCase();
+  return (
+    raw.ignored === true ||
+    ["none", "presentation", "fragment"].includes(normalizedRole) ||
+    (normalizedRole === "generic" && !name)
+  );
+}
 
 export function buildRoleTree(
   nodes: RawAXNode[],
@@ -54,7 +57,6 @@ export function buildRoleTree(
     }
     const role = axValue(raw.role) || "unknown";
     const name = axValue(raw.name);
-    const normalizedRole = role.toLowerCase();
     byId.set(nodeId, tree.length);
     tree.push({
       raw,
@@ -66,15 +68,7 @@ export function buildRoleTree(
           ? Math.floor(raw.backendDOMNodeId)
           : undefined,
       children: [],
-      depth: 0,
-      ...(rootBackendNodeId !== undefined
-        ? {
-            transparent:
-              raw.ignored === true ||
-              ["none", "presentation", "fragment"].includes(normalizedRole) ||
-              (normalizedRole === "generic" && !name),
-          }
-        : {}),
+      ...(rootBackendNodeId !== undefined ? { transparent: isWrapperNode(raw, role, name) } : {}),
     });
   }
 
@@ -85,7 +79,7 @@ export function buildRoleTree(
         continue;
       }
       node.children.push(childIndex);
-      expectDefined(tree[childIndex], "CDP child node index").parent = index;
+      tree[childIndex]!.parent = index;
     }
   }
 
@@ -101,19 +95,6 @@ export function buildRoleTree(
       if (node.parent === undefined) {
         roots.push(index);
       }
-    }
-  }
-  const stack = roots.map((index) => ({ index, depth: 0 }));
-  while (stack.length) {
-    const current = stack.pop();
-    if (!current) {
-      break;
-    }
-    const node = expectDefined(tree[current.index], "CDP traversal node index");
-    node.depth = current.depth;
-    for (let i = node.children.length - 1; i >= 0; i--) {
-      const child = expectDefined(node.children[i], "CDP traversal child index");
-      stack.push({ index: child, depth: current.depth + (node.transparent ? 0 : 1) });
     }
   }
   return { tree, roots: roots.length ? roots : tree.length ? [0] : [] };
@@ -173,23 +154,19 @@ export function renderRoleTree(
   output: string[],
   options: RoleSnapshotOptions,
   state: { truncated: boolean; recordIframePositions?: boolean; flattenInteractive?: boolean },
+  depth = 0,
+  level = 0,
 ): void {
-  const node = tree[index];
-  if (!node) {
+  const node = tree[index]!;
+  if (options.maxDepth !== undefined && depth > options.maxDepth) {
     return;
   }
-  if (options.maxDepth !== undefined && node.depth > options.maxDepth) {
-    return;
-  }
-  const effectiveDepth = Math.max(0, node.depth);
-  if (effectiveDepth > ROLE_SNAPSHOT_MAX_DEPTH) {
+  if (level > ROLE_SNAPSHOT_MAX_DEPTH) {
     state.truncated = true;
     return;
   }
   if (shouldIncludeRoleNode(node, options)) {
-    const indent = "  ".repeat(
-      state.flattenInteractive && options.interactive ? 0 : effectiveDepth,
-    );
+    const indent = "  ".repeat(state.flattenInteractive && options.interactive ? 0 : level);
     const name = node.name ? ` ${JSON.stringify(node.name)}` : "";
     const ref = node.ref ? ` [ref=${node.ref}]` : "";
     const nth = node.nth !== undefined && node.nth > 0 ? ` [nth=${node.nth}]` : "";
@@ -203,7 +180,10 @@ export function renderRoleTree(
       `${indent}- ${node.role}${name}${ref}${nth}${roleStateSuffix(node.raw)}${value}${url}${cursorSuffix(node.cursorInfo)}`,
     );
   }
+  // Wrappers never count toward maxDepth; unscoped trees still render and indent them.
+  const childDepth = depth + (isWrapperNode(node.raw, node.role, node.name) ? 0 : 1);
+  const childLevel = level + (node.transparent ? 0 : 1);
   for (const child of node.children) {
-    renderRoleTree(tree, child, output, options, state);
+    renderRoleTree(tree, child, output, options, state, childDepth, childLevel);
   }
 }

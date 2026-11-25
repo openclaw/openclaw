@@ -84,7 +84,3 @@ export type GoogleMeetSession = Omit<GoogleMeetPluginSession, "chrome" | "mode">
     introSent?: boolean;
   };
 };
-
-export type GoogleMeetJoinResult = Omit<GoogleMeetPluginTypes["JoinResult"], "session"> & {
-  session: GoogleMeetSession;
-};

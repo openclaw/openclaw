@@ -43,7 +43,7 @@ const exportHtmlDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../src/auto-reply/reply/export-html",
 );
-export const templateHtml = fs.readFileSync(path.join(exportHtmlDir, "template.html"), "utf8");
+const templateHtml = fs.readFileSync(path.join(exportHtmlDir, "template.html"), "utf8");
 export const templateCss = fs.readFileSync(path.join(exportHtmlDir, "template.css"), "utf8");
 const templateJs = fs.readFileSync(path.join(exportHtmlDir, "template.js"), "utf8");
 const vendorAssets = generateExportHtmlVendorAssets();

@@ -1,16 +1,35 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { prepareModelSelectionRuntime } from "../auto-reply/reply/model-runtime-normalization.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
-import { preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "./cli-backends.test-support.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
+import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
+import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const published = vi.hoisted((): { owner?: PreparedModelRuntimeSnapshot } => ({}));
-vi.mock("./prepared-model-catalog.js", () => ({
+vi.mock("./prepared-model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./prepared-model-catalog.js")>()),
   getPublishedPreparedModelCatalogOwnerSnapshot: () => published.owner,
+  loadPublishedPreparedModelCatalogOwnerSnapshot: async () => {
+    if (!published.owner) {
+      throw new Error("No published test model owner");
+    }
+    return published.owner;
+  },
   materializePreparedModelCatalogOwner: (owner: PreparedModelRuntimeSnapshot) => owner,
   loadProviderScopedThinkingCatalog: async () => {
     if (!published.owner) {
@@ -18,26 +37,407 @@ vi.mock("./prepared-model-catalog.js", () => ({
     }
     return published.owner.modelCatalog.entries;
   },
+  withPreparedModelCatalogOwner: async <T>(
+    _params: unknown,
+    read: (owner: PreparedModelRuntimeSnapshot) => T | Promise<T>,
+  ) => {
+    if (!published.owner) {
+      throw new Error("No published test model owner");
+    }
+    return await read(published.owner);
+  },
 }));
 beforeEach(() => {
   published.owner = undefined;
 });
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   vi.unstubAllEnvs();
 });
 const request = { agentId: "main", provider: "fixture", model: "model" };
 const custom: OpenClawConfig = {
   plugins: { enabled: false },
-  models: {
-    providers: {
-      fixture: {
-        api: "openai-completions",
-        baseUrl: "https://custom.invalid/v1",
-        models: [],
+  ...configFor("fixture", "https://custom.invalid/v1", { api: "openai-completions" }),
+};
+
+it.each(["auto", "openclaw"])(
+  "preflights the %s turn runtime without borrowing a signed-in alternative",
+  async (runtime) => {
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: true },
+      agents: { defaults: { models: { "fixture/model": { agentRuntime: { id: runtime } } } } },
+    };
+    const entry: ModelCatalogEntry = {
+      provider: "fixture",
+      id: "model",
+      name: "Model",
+      api: "openai-completions",
+    };
+    const registry = harnessRegistry("native-test", {
+      authBootstrap: "harness",
+      supports: ({ requestedRuntime }) => ({ supported: requestedRuntime === "native-test" }),
+      readModelCatalogReadiness: () => ({ accountType: "oauth" }),
+    });
+    const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+      pluginRegistry: registry,
+      modelCatalog: {
+        entries: [entry],
+        // The alternate harness is opt-in, not the native owner of this catalog row.
+        routeVariants: [entry],
+      },
+    });
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+    published.owner = owner;
+    // The picker may offer a signed-in opt-in harness; the ordinary turn still uses the host.
+    expect(await preparePublishedModelRuntimeChoice({ ...request, cfg })).toMatchObject({
+      kind: "ready",
+      runtimeId: "native-test",
+    });
+    expect(
+      await preparePublishedModelRuntimeChoice({ ...request, cfg, useConfiguredRuntime: true }),
+    ).toMatchObject({ kind: "unavailable" });
+    bindPreparedModelRuntimeAuth(owner, {
+      store: {
+        version: 1,
+        profiles: {
+          "fixture:account": { type: "api_key", provider: "fixture", key: "synthetic-key" },
+        },
+      },
+    });
+    expect(
+      await preparePublishedModelRuntimeChoice({ ...request, cfg, useConfiguredRuntime: true }),
+    ).toMatchObject({ kind: "ready", runtimeId: "openclaw" });
+  },
+);
+
+it.each([
+  ["published", "before request"],
+  ["published", "after response"],
+  ["support", "before request"],
+  ["support", "after response"],
+] as const)("revalidates %s off-catalog discovery authority %s", async (entrypoint, revocation) => {
+  let current = revocation !== "before request";
+  const started = createDeferredCore();
+  const finish = createDeferredCore();
+  const model = makeProviderModelFixture({
+    provider: "fixture",
+    id: "off-catalog",
+    api: "openai-responses",
+    baseUrl: "https://dynamic.invalid/v1",
+  });
+  const prepareDynamicModel = vi.fn(async () => {
+    started.resolve();
+    if (revocation === "after response") {
+      await finish.promise;
+    }
+    return model;
+  });
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "fixture",
+    source: "fixture",
+    provider: { id: "fixture", label: "Fixture", auth: [], prepareDynamicModel },
+  });
+  const cfg: OpenClawConfig = {};
+  published.owner = createModelRuntimeChoiceOwnerFixture(cfg, () => current, {
+    pluginRegistry: registry,
+    modelCatalog: { entries: [], routeVariants: [] },
+    metadataSnapshot: createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "fixture", providers: ["fixture"] }],
+    }),
+  });
+  const choice =
+    entrypoint === "published"
+      ? preparePublishedModelRuntimeChoice({
+          ...request,
+          cfg,
+          model: "off-catalog",
+          runtimeId: "openclaw",
+        })
+      : prepareModelChoice({
+          cfg,
+          agentId: "main",
+          raw: "fixture/off-catalog",
+          source: "override",
+        });
+  const unavailable =
+    entrypoint === "published"
+      ? expect(choice).rejects.toThrow("Model catalog changed")
+      : expect(choice).resolves.toMatchObject({
+          kind: "unavailable",
+          error: "Model configuration changed during selection. Retry the request.",
+        });
+  if (revocation === "after response") {
+    await Promise.race([started.promise, choice]);
+    current = false;
+    finish.resolve();
+  }
+  await unavailable;
+  expect(prepareDynamicModel).toHaveBeenCalledTimes(revocation === "before request" ? 0 : 1);
+});
+
+it.each(["worker", "gateway", "optional", "account"] as const)(
+  "admits an explicit keyless OpenClaw selection only for required worker inference (%s)",
+  async (inference) => {
+    const cfg: OpenClawConfig = {
+      ...custom,
+      cloudWorkers: {
+        ...(inference !== "optional" ? { requiredProfile: "node" } : {}),
+        profiles: {
+          node: {
+            provider: "device",
+            settings: {
+              device: "node-b",
+              inference: inference === "gateway" ? "gateway" : "worker",
+            },
+          },
+        },
+      },
+    };
+    const owner = createModelRuntimeChoiceOwnerFixture(cfg);
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+    published.owner = owner;
+    const entry: SessionEntry = {
+      sessionId: "worker-session",
+      updatedAt: 0,
+      providerOverride: "fixture",
+      modelOverride: "model",
+      agentRuntimeOverride: "openclaw",
+      ...(inference === "account"
+        ? { authProfileOverride: "fixture:missing", authProfileOverrideSource: "user" as const }
+        : {}),
+    };
+    const selection = await prepareModelSelectionRuntime({
+      cfg,
+      ...request,
+      rawRuntime: "openclaw",
+      sessionEntry: entry,
+      catalog: owner.modelCatalog.entries,
+      hydrateThinkingCatalog: false,
+    });
+    expect(selection.status).toBe(inference === "worker" ? "ready" : "rejected");
+    if (selection.status === "ready") {
+      expect(selection.runtime).toEqual({ kind: "set", runtime: "openclaw" });
+      expect(selection.validateRuntimeSelection?.()).toBeUndefined();
+    } else {
+      expect(selection.message).toContain('Runtime "openclaw" is not available');
+    }
+  },
+);
+
+it("reports missing sign-in instead of a catalog refresh", async () => {
+  const owner = createModelRuntimeChoiceOwnerFixture(custom);
+  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+  published.owner = owner;
+  const selection = await preparePublishedModelRuntimeChoice({
+    ...request,
+    cfg: custom,
+    runtimeId: "openclaw",
+  });
+  expect(selection).toEqual({
+    kind: "unavailable",
+    message:
+      'Runtime "openclaw" is not available for fixture/model: sign-in needed. Connect its provider account, or choose another model.',
+  });
+});
+
+it("keeps the configured Claude CLI runtime when switching models with saved setup tokens", async () => {
+  vi.stubEnv("ANTHROPIC_API_KEY", "");
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: createClaudeCliBackends,
+  });
+  const entry: ModelCatalogEntry = {
+    provider: "anthropic",
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet",
+    api: "anthropic-messages",
+  };
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-opus-5" },
+        models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } },
       },
     },
+  };
+  const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+    modelCatalog: { entries: [entry], routeVariants: [entry] },
+    authModes: {},
+    metadataSnapshot: createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "anthropic", providers: ["anthropic"], cliBackends: ["claude-cli"] }],
+    }),
+  });
+  bindPreparedModelRuntimeAuth(owner, {
+    store: {
+      version: 1,
+      profiles: {
+        first: { type: "token", provider: "anthropic", token: "synthetic-first-token" },
+        second: { type: "token", provider: "anthropic", token: "synthetic-second-token" },
+      },
+    },
+  });
+  published.owner = owner;
+  const selection = await prepareModelSelectionRuntime({
+    cfg,
+    agentId: "main",
+    provider: entry.provider,
+    model: entry.id,
+    sessionEntry: { modelProvider: "anthropic" },
+    catalog: [entry],
+    hydrateThinkingCatalog: false,
+  });
+  expect(selection).toMatchObject({
+    status: "ready",
+    runtime: { kind: "set", runtime: "claude-cli" },
+  });
+});
+
+it("points a signed-out Claude CLI route at claude auth login", async () => {
+  vi.stubEnv("ANTHROPIC_API_KEY", "");
+  cliBackendsTesting.setDepsForTest({ resolveRuntimeCliBackends: createClaudeCliBackends });
+  const entry: ModelCatalogEntry = {
+    provider: "anthropic",
+    id: "claude-fixture",
+    name: "Claude Fixture",
+    reasoning: false,
+  };
+  const cfg: OpenClawConfig = {
+    agents: { defaults: { models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } } } },
+  };
+  const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+    modelCatalog: { entries: [entry], routeVariants: [entry] },
+    metadataSnapshot: createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "anthropic", providers: ["anthropic"], cliBackends: ["claude-cli"] }],
+    }),
+  });
+  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+  published.owner = owner;
+  const selection = await preparePublishedModelRuntimeChoice({
+    cfg,
+    agentId: "main",
+    provider: "anthropic",
+    model: "claude-fixture",
+  });
+  expect(selection).toEqual({
+    kind: "unavailable",
+    message:
+      "A runtime is not available for anthropic/claude-fixture: sign-in needed. If Claude Code is signed out, run claude auth login on the Gateway host, or choose another model.",
+  });
+});
+
+it.each([
+  { source: "default", runtime: "claude-cli", rejected: false, profileId: "anthropic:selected" },
+  { source: "session", runtime: "claude-cli", rejected: false, profileId: "anthropic:selected" },
+  { source: "session", runtime: "openclaw", rejected: false, profileId: "anthropic:selected" },
+  { source: "default", runtime: "claude-cli", rejected: true, profileId: "anthropic:selected" },
+  { source: "session", runtime: "claude-cli", rejected: true, profileId: "personal:work" },
+] as const)(
+  "directs a $source account failure to that account ($runtime, $profileId, rejected=$rejected)",
+  async ({ source, runtime, rejected, profileId }) => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    cliBackendsTesting.setDepsForTest({ resolveRuntimeCliBackends: createClaudeCliBackends });
+    const entry: ModelCatalogEntry = {
+      provider: "anthropic",
+      id: "claude-fixture",
+      name: "Claude Fixture",
+      api: "anthropic-messages",
+    };
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: `anthropic/claude-fixture${source === "default" ? `@${profileId}` : ""}`,
+          },
+          models: { "anthropic/*": { agentRuntime: { id: runtime } } },
+        },
+      },
+    };
+    const credential = { type: "token" as const, provider: "anthropic", token: "synthetic-token" };
+    const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+      modelCatalog: {
+        entries: [entry],
+        routeVariants: [entry],
+        providerOutcomes: rejected
+          ? [{ provider: "anthropic", profileId, status: "auth-rejected" }]
+          : [],
+      },
+      authModes: { "claude-cli": { source: "native", mode: "oauth" } },
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "anthropic", providers: ["anthropic"], cliBackends: ["claude-cli"] }],
+      }),
+    });
+    bindPreparedModelRuntimeAuth(owner, {
+      store: {
+        version: 1,
+        profiles: {
+          "anthropic:other": credential,
+          ...(rejected ? { [profileId]: credential } : {}),
+        },
+      },
+    });
+    published.owner = owner;
+    const selection = await preparePublishedModelRuntimeChoice({
+      cfg,
+      agentId: "main",
+      provider: entry.provider,
+      model: entry.id,
+      sessionEntry:
+        source === "session"
+          ? {
+              authProfileOverride: profileId,
+              authProfileOverrideSource: "user",
+              modelProvider: entry.provider,
+            }
+          : undefined,
+    });
+    expect(selection).toEqual({
+      kind: "unavailable",
+      message: `A runtime is not available for anthropic/claude-fixture: selected account "${profileId}" is unavailable. Restore that account, or change the explicit or default account selection.`,
+    });
   },
-};
+);
+
+it("retains the missing personal account privately but hides its locator in runtime rejection", async () => {
+  const profileId =
+    "personal:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002";
+  const owner = createModelRuntimeChoiceOwnerFixture(custom);
+  const decisions = createModelCatalogDecisions({
+    cfg: custom,
+    agentId: "main",
+    snapshot: owner.modelCatalog,
+    metadataSnapshot: owner.metadataSnapshot,
+    preferredProfileId: profileId,
+    preparedAuthStore: { version: 1, profiles: {} },
+    preparedPersonalCatalog: { profiles: {}, links: [], isCurrent: () => true },
+  });
+  expect(decisions.evaluateEntry(owner.modelCatalog.entries[0]!)).toMatchObject({
+    availability: false,
+    unavailableReason: "missing-auth",
+    selectedProfileId: profileId,
+  });
+  await withOpenClawTestState(
+    { label: "missing-personal-runtime", prepareProfileCatalog: true },
+    async () => {
+      bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+      published.owner = owner;
+      await expect(
+        preparePublishedModelRuntimeChoice({
+          ...request,
+          cfg: custom,
+          sessionEntry: {
+            authProfileOverride: profileId,
+            authProfileOverrideSource: "user",
+            modelProvider: request.provider,
+          },
+        }),
+      ).resolves.toEqual({
+        kind: "unavailable",
+        message:
+          "A runtime is not available for fixture/model: selected personal account is unavailable. Restore that account, or change the explicit or default account selection.",
+      });
+    },
+  );
+});
 
 it("keeps keyless host selection after an explicit runtime reset without granting explicit availability", async () => {
   for (const agentRuntimeOverride of [undefined, "claude-cli"]) {
@@ -113,6 +513,7 @@ it.each(["configured", "literal"] as const)(
         cfg: config,
         model: entry.id,
         catalog: entries,
+        thinkingPolicyRequired: false,
       });
       expect(result).toMatchObject({
         status: "ready",
@@ -132,6 +533,43 @@ it.each(["configured", "literal"] as const)(
     for (const validate of checks) {
       expect(validate()).toContain("not available");
     }
+  },
+);
+
+it.each([true, false])(
+  "selects an opt-in harness only when supported with a host default (%s)",
+  async (supported) => {
+    const cfg: OpenClawConfig = {
+      ...custom,
+      plugins: { entries: { copilot: { enabled: true } } },
+      agents: {
+        defaults: { models: { "fixture/model": { agentRuntime: { id: "openclaw" } } } },
+      },
+    };
+    const registry = harnessRegistry("copilot", {
+      supports: ({ requestedRuntime }) => ({
+        supported: supported && requestedRuntime === "copilot",
+      }),
+    });
+    published.owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+      pluginRegistry: registry,
+    });
+    const result = await prepareModelSelectionRuntime({
+      ...request,
+      cfg,
+      catalog: published.owner.modelCatalog.entries,
+      rawRuntime: "copilot",
+      hydrateThinkingCatalog: false,
+    });
+    if (!supported) {
+      expect(result).toMatchObject({ status: "rejected", reason: "invalid-runtime" });
+      return;
+    }
+    expect(result).toMatchObject({
+      status: "ready",
+      runtime: { kind: "set", runtime: "copilot" },
+      harness: { id: "copilot" },
+    });
   },
 );
 
@@ -174,7 +612,62 @@ it("validates off-catalog host routes without granting an incompatible runtime",
   expect(choice.validate()).toContain("not available");
 });
 
-it("rejects a stale native observation without renewing it", async () => {
+it.each(["implicit", "configured"] as const)(
+  "admits a %s native-only model for spawn like the turn path",
+  async (routing) => {
+    // Only the native runtime lists this model; no API row can materialize it.
+    const entry: ModelCatalogEntry = {
+      provider: "fixture",
+      id: "native-only",
+      name: "Native only",
+      reasoning: true,
+      nativeRuntime: "native-test",
+    };
+    const cfg: OpenClawConfig =
+      routing === "configured"
+        ? {
+            agents: {
+              defaults: {
+                models: { "fixture/native-only": { agentRuntime: { id: "native-test" } } },
+              },
+            },
+          }
+        : {};
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "native-test",
+      source: "fixture",
+      harness: {
+        id: "native-test",
+        label: "Native test",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        readModelCatalogReadiness: () => ({ accountType: "oauth" }),
+        runAttempt: vi.fn(),
+      },
+    });
+    const owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
+      pluginRegistry: registry,
+      modelCatalog: { entries: [entry], routeVariants: [entry] },
+    });
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+    published.owner = owner;
+    expect(
+      await prepareModelChoice({
+        cfg,
+        agentId: "main",
+        raw: "fixture/native-only",
+        source: "override",
+      }),
+    ).toMatchObject({
+      kind: "resolved",
+      ref: { provider: "fixture", model: "native-only" },
+      model: { provider: "fixture", id: "native-only" },
+    });
+  },
+);
+
+it("renews an implicit native observation only when catalog preparation is allowed", async () => {
   // This choice also runs inside config write locks; native discovery there needs its own decision.
   const entry: ModelCatalogEntry = {
     provider: "fixture",
@@ -184,6 +677,7 @@ it("rejects a stale native observation without renewing it", async () => {
     nativeRuntime: "native-test",
   };
   const registry = createEmptyPluginRegistry();
+  let ready = false;
   registry.agentHarnesses.push({
     pluginId: "native-test",
     source: "fixture",
@@ -193,11 +687,15 @@ it("rejects a stale native observation without renewing it", async () => {
       authBootstrap: "harness",
       supports: () => ({ supported: true }),
       // Another agent's turn retired the client that produced this observation.
-      readModelCatalogReadiness: () => undefined,
+      readModelCatalogReadiness: () => (ready ? { accountType: "oauth" } : undefined),
+      loadModelCatalog: async () => [entry],
       runAttempt: vi.fn(),
     },
   });
-  const reload = vi.fn(async () => ({ entries: [entry], routeVariants: [entry] }));
+  const reload = vi.fn(async () => {
+    ready = true;
+    return { entries: [entry], routeVariants: [entry] };
+  });
   const owner = {
     ...createModelRuntimeChoiceOwnerFixture({}, () => true, {
       pluginRegistry: registry,
@@ -214,4 +712,17 @@ it("rejects a stale native observation without renewing it", async () => {
     message: expect.stringContaining("Refresh the model catalog and choose again"),
   });
   expect(reload).not.toHaveBeenCalled();
+  expect(
+    await preparePublishedModelRuntimeChoice({
+      ...request,
+      cfg: {},
+      useConfiguredRuntime: true,
+      prepareNativeCatalog: (operation) => operation(),
+    }),
+  ).toMatchObject({ kind: "ready", runtimeId: "native-test" });
+  expect(reload).toHaveBeenCalledWith({
+    provider: "fixture",
+    modelId: "model",
+    runtime: "native-test",
+  });
 });

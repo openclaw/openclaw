@@ -1,14 +1,14 @@
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import { isActiveWorkboardCard, nextWorkboardCardPosition } from "../lib/workboard/card-state.ts";
+import { loadWorkboard } from "../lib/workboard/loading.ts";
 import { moveWorkboardCard } from "../lib/workboard/mutations.ts";
-import { normalizeCardsPayload } from "../lib/workboard/normalization.ts";
 import {
   getWorkboardRuntime,
   getWorkboardState,
-  isCurrentWorkboardLoadGeneration,
-  nextWorkboardLoadGeneration,
+  hasCurrentWorkboardCards,
+  invalidateWorkboardLoads,
+  subscribeWorkboard,
   workboardHasActiveWrites,
 } from "../lib/workboard/runtime.ts";
 import {
@@ -54,40 +54,13 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
         while (pending && isCurrent() && current.connected && !workboardHasActiveWrites(state)) {
           const request = pending;
           pending = null;
-          current.loading = true;
-          // Mutations invalidate this owner generation before writing, fencing older snapshots.
-          const loadGeneration = nextWorkboardLoadGeneration(owner);
-          const isCurrentLoad = () =>
-            isCurrent() && isCurrentWorkboardLoadGeneration(owner, loadGeneration);
-          // A deferred request must preserve newer write failures; read failures can recover.
-          if (state.error === request.error || state.error === workboardRuntime.loadError) {
-            state.error = null;
-          }
-          delete workboardRuntime.loadError;
-          current.notify();
-          try {
-            const snapshot = normalizeCardsPayload(
-              await current.client.request("workboard.cards.list", {}),
-            );
-            if (!isCurrentLoad()) {
-              continue;
-            }
-            state.cards = snapshot.cards;
-            state.statuses = snapshot.statuses;
-            state.loaded = true;
-            state.loadAttempted = true;
-            state.mutationReadiness = "ready";
-          } catch (error) {
-            if (isCurrentLoad() && state.error === null) {
-              workboardRuntime.loadError = formatUiError(error);
-              state.error = workboardRuntime.loadError;
-            }
-          } finally {
-            if (isCurrent()) {
-              current.loading = false;
-              current.notify();
-            }
-          }
+          await loadWorkboard({
+            host: owner,
+            client: current.client,
+            force: true,
+            preserveError:
+              state.error !== request.error && state.error !== workboardRuntime.loadError,
+          });
         }
       })();
       load = run;
@@ -108,7 +81,9 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
       owner: {},
       client: host,
       connected: host.connection.connected,
-      loading: false,
+      get loading() {
+        return getWorkboardState(current.owner).loading;
+      },
       listeners: new Set(),
       notify() {
         for (const notify of current.listeners) {
@@ -127,26 +102,42 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
       },
       dispose() {
         disposed = true;
+        invalidateWorkboardLoads(current.owner);
         stopHost();
         stopEvents();
+        stopState();
         current.listeners.clear();
       },
     };
+    let stopState = subscribeWorkboard(current.owner, () => current.notify());
+    let canWrite = host.connection.canWrite;
     const stopHost = host.subscribe(() => {
-      if (current.connected !== host.connection.connected) {
-        current.connected = host.connection.connected;
+      const connection = host.connection;
+      const connectedChanged = current.connected !== connection.connected;
+      const writeChanged = canWrite !== connection.canWrite;
+      canWrite = connection.canWrite;
+      if (connectedChanged) {
+        current.connected = connection.connected;
         load = null;
         pending = null;
+        invalidateWorkboardLoads(current.owner);
+        stopState();
         current.owner = {};
-        current.loading = false;
+        stopState = subscribeWorkboard(current.owner, () => current.notify());
         if (current.connected) {
           void current.refresh();
         }
       }
-      current.notify();
+      // Roster, selection, and theme updates do not change Workboard data.
+      // Locale has its own reactive binding; mutation checks read live authority.
+      if (connectedChanged || writeChanged) {
+        current.notify();
+      }
     });
-    const stopEvents = host.onEvent(WORKBOARD_CHANGED_EVENT, () => {
-      void current.refresh();
+    const stopEvents = host.onEvent(WORKBOARD_CHANGED_EVENT, (payload) => {
+      if (!hasCurrentWorkboardCards(current.owner, payload)) {
+        void current.refresh();
+      }
     });
     runtime = current;
     runtimes.set(host, runtime);
@@ -191,6 +182,25 @@ export class WorkboardWidgetModel {
   get cards() {
     return getWorkboardState(this.runtime.owner).cards.filter(isActiveWorkboardCard);
   }
+  get hasMore() {
+    return Boolean(getWorkboardState(this.runtime.owner).nextCursor);
+  }
+  get loadedCardCount() {
+    return getWorkboardState(this.runtime.owner).cards.length;
+  }
+  get loading() {
+    return this.runtime.loading;
+  }
+  async loadMore(): Promise<boolean> {
+    if (this.isActive() && this.connected) {
+      return loadWorkboard({
+        host: this.runtime.owner,
+        client: this.host,
+        more: true,
+      });
+    }
+    return false;
+  }
   get statuses() {
     return getWorkboardState(this.runtime.owner).statuses;
   }
@@ -225,11 +235,6 @@ export class WorkboardWidgetModel {
       cardId: card.id,
       status,
       position: nextWorkboardCardPosition(getWorkboardState(owner).cards, card, status),
-      requestUpdate: () => {
-        if (owner === this.runtime.owner) {
-          this.runtime.notify();
-        }
-      },
     });
   }
   async handleStatusChange(event: Event) {

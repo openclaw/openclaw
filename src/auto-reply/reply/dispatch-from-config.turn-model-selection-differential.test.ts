@@ -1,150 +1,79 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import {
-  TURN_MODEL_DEFAULT_REF,
-  TURN_MODEL_DIFFERENTIAL_FIXTURES,
-  TURN_MODEL_OVERRIDE_REF,
-  turnModelRefLabel,
-  type TurnModelDifferentialFixture,
-} from "../../test-utils/turn-model-selection-differential.js";
+import * as models from "../../test-utils/turn-model-selection-differential.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-const selectAgentHarnessMock = vi.hoisted(() => vi.fn());
-
+const selectHarness = vi.hoisted(() => vi.fn());
+// mock-isolation: capture harness selection without loading a provider runtime.
 vi.mock("../../agents/harness/selection-decision.js", () => ({
-  resolveAgentHarnessDeliveryDefaults: (...args: unknown[]) => selectAgentHarnessMock(...args),
+  resolveAgentHarnessDeliveryDefaults: (...args: unknown[]) => selectHarness(...args),
 }));
-
 const { resolveVisibleRepliesPolicy } = await import("./dispatch-from-config.harness-defaults.js");
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => {
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(createSessionConversationTestRegistry());
+  selectHarness.mockReset().mockReturnValue({ visibleReplies: "automatic" });
+});
+afterEach(resetPluginRuntimeStateForTest);
 
-function expectHarnessSelection(fixture: TurnModelDifferentialFixture) {
+it.each([
+  ...models.TURN_MODEL_DIFFERENTIAL_FIXTURES.filter(
+    ({ name }) =>
+      name === "explicit turn override" ||
+      name === "parent persisted override versus channel" ||
+      name === "explicit default rejects stale child and parent overrides",
+  ).map((fixture) => ({ name: fixture.name, fixture })),
+  { name: "turn aliases in the session agent scope", fixture: undefined },
+])("pins observed $name behavior", async ({ fixture }) => {
+  const agentId = fixture ? "main" : "worker";
+  const sessionKey = `agent:${agentId}:telegram:group:selection`;
   const storePath = path.join(tempDirs.make("turn-model-harness-"), "sessions.json");
-  const sessionKey = "agent:main:telegram:group:selection";
-  if (fixture.parent) {
+  if (fixture?.parent) {
     replaceSessionEntrySync(
       { agentId: "main", storePath, sessionKey: fixture.parent.key },
       fixture.parent.entry,
     );
   }
-
-  selectAgentHarnessMock.mockClear();
-  resolveVisibleRepliesPolicy({
-    cfg: {
-      session: { store: storePath },
-      agents: { defaults: { model: { primary: turnModelRefLabel(TURN_MODEL_DEFAULT_REF) } } },
-      channels: fixture.modelByChannel ? { modelByChannel: fixture.modelByChannel } : undefined,
-    },
-    // Visible-reply defaults are queried only for direct delivery. The stored
-    // chat type still drives the real channel matcher for group fixtures.
+  const aliased = (model: string) => ({ models: { [model]: { alias: "fast" } } });
+  const cfg = fixture
+    ? {
+        session: { store: storePath },
+        agents: {
+          defaults: { model: { primary: models.turnModelRefLabel(models.TURN_MODEL_DEFAULT_REF) } },
+        },
+        channels: fixture.modelByChannel ? { modelByChannel: fixture.modelByChannel } : undefined,
+      }
+    : ({
+        agents: {
+          defaults: { model: "openai/global-model", ...aliased("openai/global-model") },
+          entries: { worker: aliased("anthropic/worker-model") },
+        },
+      } as unknown as OpenClawConfig);
+  await resolveVisibleRepliesPolicy({
+    cfg,
+    // Stored group context controls channel matching; direct delivery queries harness defaults.
     chatType: "direct",
-    ctx: buildTestCtx({ SessionKey: sessionKey, ...fixture.ctx }),
-    entry: fixture.child,
-    sessionAgentId: "main",
+    ctx: buildTestCtx({ SessionKey: sessionKey, ...fixture?.ctx }),
+    entry: fixture?.child ?? { sessionId: "worker-session", updatedAt: Date.now() },
+    sessionAgentId: agentId,
     sessionKey,
-    turnModelOverride: fixture.heartbeat ? turnModelRefLabel(TURN_MODEL_OVERRIDE_REF) : undefined,
+    turnModelOverride: fixture
+      ? fixture.turnModelOverride
+        ? models.turnModelRefLabel(models.TURN_MODEL_OVERRIDE_REF)
+        : undefined
+      : "fast",
   });
-  const { provider, model } = fixture.expected.harness;
-  expect(selectAgentHarnessMock).toHaveBeenLastCalledWith(
-    expect.objectContaining({ provider, modelId: model }),
-  );
-}
-
-describe("turn model selection harness-path differential", () => {
-  beforeEach(() => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createSessionConversationTestRegistry());
-    selectAgentHarnessMock.mockReturnValue({ visibleReplies: "automatic" });
-  });
-
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-  });
-
-  it.each(
-    TURN_MODEL_DIFFERENTIAL_FIXTURES.filter(
-      ({ name }) => name !== "default only" && name !== "locked stored selection",
+  expect(selectHarness).toHaveBeenLastCalledWith(
+    expect.objectContaining(
+      fixture
+        ? { provider: fixture.expected.harness.provider, modelId: fixture.expected.harness.model }
+        : { provider: "anthropic", modelId: "worker-model", agentId: "worker" },
     ),
-  )("pins observed $name behavior", (fixture) => {
-    expectHarnessSelection(fixture);
-  });
-
-  it.each([
-    { pluginOwnerId: "model-owner", expectedPin: undefined, expectedOverride: "openclaw" },
-    { pluginOwnerId: undefined, expectedPin: "codex", expectedOverride: "codex" },
-  ])(
-    "preserves the delivery-policy owner with pluginOwnerId=$pluginOwnerId",
-    ({ pluginOwnerId, expectedPin, expectedOverride }) => {
-      selectAgentHarnessMock.mockClear();
-      resolveVisibleRepliesPolicy({
-        cfg: {
-          agents: { defaults: { model: { primary: "openai/dispatch-model" } } },
-        },
-        chatType: "direct",
-        ctx: buildTestCtx({ Provider: "openai" }),
-        entry: {
-          sessionId: "owned-session",
-          updatedAt: 100,
-          agentHarnessId: "codex",
-          agentRuntimeOverride: "openclaw",
-          modelSelectionLocked: true,
-          pluginOwnerId,
-        },
-        sessionAgentId: "main",
-      });
-
-      expect(selectAgentHarnessMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          agentHarnessId: expectedPin,
-          agentHarnessRuntimeOverride: expectedOverride,
-        }),
-      );
-    },
   );
-
-  it("resolves turn aliases in the session agent scope", () => {
-    const sessionKey = "agent:worker:telegram:group:selection";
-    const cfg = {
-      agents: {
-        defaults: {
-          model: "openai/global-model",
-          models: {
-            "openai/global-model": { alias: "fast" },
-          },
-        },
-        entries: {
-          worker: {
-            models: {
-              "anthropic/worker-model": { alias: "fast" },
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    selectAgentHarnessMock.mockClear();
-    resolveVisibleRepliesPolicy({
-      cfg,
-      chatType: "direct",
-      ctx: buildTestCtx({ SessionKey: sessionKey }),
-      entry: { sessionId: "worker-session", updatedAt: Date.now() },
-      sessionAgentId: "worker",
-      sessionKey,
-      turnModelOverride: "fast",
-    });
-
-    expect(selectAgentHarnessMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        provider: "anthropic",
-        modelId: "worker-model",
-        agentId: "worker",
-      }),
-    );
-  });
 });

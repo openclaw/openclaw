@@ -6,121 +6,43 @@ import {
   type ChannelAccountInspectionResult,
 } from "../channels/account-inspection.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
-import { formatChannelAllowFrom } from "../channels/account-summary.js";
+import { buildChannelAccountNotes, formatChannelAllowFrom } from "../channels/account-summary.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { formatTimeAgo } from "./format-time/format-relative.ts";
 
-type ChannelSummaryOptions = {
-  colorize?: boolean;
-  includeAllowFrom?: boolean;
-  plugins?: readonly ChannelPlugin[];
-  sourceConfig?: OpenClawConfig;
-};
-
-type ChannelAccountEntry = ChannelAccountInspectionResult & {
-  accountId: string;
-};
-
-const formatAccountLabel = (params: { accountId: string; name?: string }) => {
-  const base = params.accountId || DEFAULT_ACCOUNT_ID;
-  if (params.name?.trim()) {
-    return `${base} (${params.name.trim()})`;
-  }
-  return base;
-};
-
-const accountLine = (label: string, details: string[]) =>
-  `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
-
-const buildAccountDetails = (params: {
-  entry: ChannelAccountEntry;
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  includeAllowFrom: boolean;
-}): string[] => {
-  const details: string[] = [];
-  const snapshot = params.entry.snapshot;
-  if (snapshot.enabled === false) {
-    details.push("disabled");
-  }
-  if (snapshot.dmPolicy) {
-    details.push(`dm:${snapshot.dmPolicy}`);
-  }
-  for (const [key, label] of [
-    ["tokenSource", "token"],
-    ["botTokenSource", "bot"],
-    ["appTokenSource", "app"],
-    ["signingSecretSource", "signing"],
-  ] as const) {
-    const source = snapshot[key];
-    if (source && source !== "none") {
-      details.push(`${label}:${source}`);
-    }
-  }
-  if (
-    params.entry.kind === "unavailable" ||
-    hasConfiguredUnavailableCredentialStatus(params.entry.account)
-  ) {
-    details.push("secret unavailable in this command path");
-  }
-  if (snapshot.baseUrl) {
-    details.push(snapshot.baseUrl);
-  }
-  if (snapshot.port != null) {
-    details.push(`port:${snapshot.port}`);
-  }
-  if (snapshot.cliPath) {
-    details.push(`cli:${snapshot.cliPath}`);
-  }
-  if (snapshot.dbPath) {
-    details.push(`db:${snapshot.dbPath}`);
-  }
-
-  if (params.includeAllowFrom && snapshot.allowFrom?.length) {
-    const formatted = formatChannelAllowFrom({
-      plugin: params.plugin,
-      cfg: params.cfg,
-      accountId: snapshot.accountId,
-      allowFrom: snapshot.allowFrom,
-    }).slice(0, 2);
-    if (formatted.length > 0) {
-      details.push(`allow:${formatted.join(",")}`);
-    }
-  }
-  return details;
-};
-
 export async function buildChannelSummary(
-  cfg?: OpenClawConfig,
-  options?: ChannelSummaryOptions,
+  cfg: OpenClawConfig,
+  options?: {
+    colorize?: boolean;
+    includeAllowFrom?: boolean;
+    sourceConfig?: OpenClawConfig;
+  },
 ): Promise<string[]> {
-  const effective = cfg ?? (await import("../config/config.js")).getRuntimeConfig();
   const lines: string[] = [];
   const { colorize = false, includeAllowFrom = false } = options ?? {};
-  const tint = (value: string, color?: (input: string) => string) =>
-    colorize && color ? color(value) : value;
-  const sourceConfig = options?.sourceConfig ?? effective;
+  const sourceConfig = options?.sourceConfig ?? cfg;
 
-  const plugins =
-    options?.plugins ??
-    (await import("../channels/plugins/read-only.js")).listReadOnlyChannelPluginsForConfig(
-      effective,
-      { activationSourceConfig: sourceConfig, includeSetupFallbackPlugins: false },
-    );
+  const plugins = await (
+    await import("../channels/plugins/read-only.js")
+  ).listReadOnlyChannelPluginsForConfigAsync(cfg, {
+    activationSourceConfig: sourceConfig,
+    includeSetupFallbackPlugins: false,
+  });
   for (const plugin of plugins) {
-    const accountIds = plugin.config.listAccountIds(effective);
+    const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId =
-      plugin.config.defaultAccountId?.(effective) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
+      plugin.config.defaultAccountId?.(cfg) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
     const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
-    const entries: ChannelAccountEntry[] = [];
+    const entries: (ChannelAccountInspectionResult & {
+      accountId: string;
+    })[] = [];
 
     for (const accountId of resolvedAccountIds) {
       const inspected = await resolveInspectedChannelAccount({
         plugin,
-        cfg: effective,
+        cfg,
         sourceConfig,
         accountId,
       });
@@ -138,7 +60,7 @@ export async function buildChannelSummary(
       fallbackEntry?.kind === "resolved" && plugin.status?.buildChannelSummary
         ? await plugin.status.buildChannelSummary({
             account: fallbackEntry.account,
-            cfg: effective,
+            cfg,
             defaultAccountId,
             snapshot: fallbackEntry.snapshot,
           })
@@ -189,24 +111,31 @@ export async function buildChannelSummary(
       line += ` auth ${formatTimeAgo(authAgeMs)}`;
     }
 
-    lines.push(tint(line, statusColor));
+    lines.push(colorize ? statusColor(line) : line);
 
     for (const entry of configuredEntries) {
-      const details = buildAccountDetails({
-        entry,
-        plugin,
-        cfg: effective,
-        includeAllowFrom,
-      });
-      lines.push(
-        accountLine(
-          formatAccountLabel({
-            accountId: entry.accountId,
-            name: entry.snapshot.name,
-          }),
-          details,
-        ),
+      const snapshot = entry.snapshot;
+      const details = buildChannelAccountNotes(
+        snapshot,
+        entry.kind === "unavailable" || hasConfiguredUnavailableCredentialStatus(entry.account)
+          ? "secret unavailable in this command path"
+          : undefined,
       );
+      if (includeAllowFrom && snapshot.allowFrom?.length) {
+        const formatted = formatChannelAllowFrom({
+          plugin,
+          cfg,
+          accountId: snapshot.accountId,
+          allowFrom: snapshot.allowFrom,
+        }).slice(0, 2);
+        if (formatted.length > 0) {
+          details.push(`allow:${formatted.join(",")}`);
+        }
+      }
+      const accountId = entry.accountId || DEFAULT_ACCOUNT_ID;
+      const name = entry.snapshot.name?.trim();
+      const label = name ? `${accountId} (${name})` : accountId;
+      lines.push(`  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`);
     }
   }
 

@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
-import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
+import {
+  supportedSpawnModelChoice,
+  withSpawnTestModel,
+} from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 
@@ -42,16 +45,17 @@ describe("sessions_spawn with retained completion deliveries", () => {
       const gateway = { call: callInProcessGatewayTool };
       const callGateway = vi.spyOn(gateway, "call").mockResolvedValue({
         key: "agent:main:dashboard:new-child",
+        sessionId: "new-child",
         runStarted: true,
         runId: "run-visible",
       });
       const registerRun = vi.fn();
       const tool = createSessionsSpawnTool({
         agentSessionKey: "agent:main:main",
-        config: {
+        config: withSpawnTestModel({
           session: { store: path.join(dir, "sessions.json") },
           agents: { entries: { main: { workspace: dir } } },
-        },
+        }),
         callGateway: gateway.call,
         registerRun,
       });

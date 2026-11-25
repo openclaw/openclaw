@@ -3,12 +3,13 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";
 import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createSilentPluginLogger } from "../../../test/helpers/mock-logger.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { sendPluginSessionAttachment } from "../host-hook-attachments.js";
 import { clearPluginLoaderCache } from "../loader.test-fixtures.js";
@@ -18,6 +19,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runt
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
+import { seedPluginSessionEntry } from "./test-helpers/session-entry.js";
 
 const workflowMocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
@@ -45,21 +47,12 @@ vi.mock("../../infra/outbound/message.js", () => ({
   sendMessage: workflowMocks.sendMessage,
 }));
 
-function createSilentPluginLogger() {
-  return {
-    info() {},
-    warn() {},
-    error() {},
-    debug() {},
-  };
-}
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-attachments-");
 
 async function withSessionStore(
   run: (params: { stateDir: string; storePath: string; filePath: string }) => Promise<void>,
 ) {
-  const stateDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-session-attachments-"),
-  );
+  const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const filePath = path.join(stateDir, "x.txt");
   await fs.writeFile(filePath, "x", "utf8");
@@ -76,7 +69,6 @@ async function withSessionStore(
     } else {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
-    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 
@@ -87,11 +79,7 @@ async function writeSessionEntry(
   },
   key = MAIN_SESSION_KEY,
 ) {
-  await replaceSessionEntry({ storePath, sessionKey: key }, {
-    sessionId: "session-id",
-    updatedAt: Date.now(),
-    ...entry,
-  } as unknown as SessionEntry);
+  await seedPluginSessionEntry(storePath, entry, key);
 }
 
 function mockSuccessfulAttachmentDelivery(messageId = "attachment-1") {
@@ -244,7 +232,7 @@ describe("plugin session attachments", () => {
         config: {
           session: { store: storePath },
           agents: {
-            list: [{ id: "main", default: true, workspace: workspaceDir }],
+            entries: { main: { workspace: workspaceDir } },
           },
         },
       });
@@ -508,7 +496,7 @@ describe("plugin session attachments", () => {
       });
       setActivePluginRegistry(registry.registry);
 
-      const attachment = capturedApi?.sendSessionAttachment({
+      const attachment = capturedApi?.session.workflow.sendSessionAttachment({
         sessionKey: MAIN_SESSION_KEY,
         files: [{ path: filePath }],
       });
@@ -576,7 +564,7 @@ describe("plugin session attachments", () => {
       setActivePluginRegistry(registry.registry);
 
       await expect(
-        capturedApi?.sendSessionAttachment({
+        capturedApi?.session.workflow.sendSessionAttachment({
           sessionKey: MAIN_SESSION_KEY,
           files: [{ path: filePath }],
         }),

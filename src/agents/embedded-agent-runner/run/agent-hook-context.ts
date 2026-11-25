@@ -3,11 +3,20 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
+import { buildAgentHookMemoryAudienceFields } from "../../harness/hook-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type EmbeddedAgentHookRun = Pick<
   EmbeddedRunAttemptParams,
-  "runId" | "sessionId" | "sessionKey" | "workspaceDir" | "trigger"
+  | "runId"
+  | "jobId"
+  | "sessionId"
+  | "sessionKey"
+  | "workspaceDir"
+  | "trigger"
+  | "memoryAudience"
+  | "sandbox"
+  | "isTurnTainted"
 > &
   Parameters<typeof buildAgentHookContextChannelFields>[0] &
   Parameters<typeof buildAgentHookContextIdentityFields>[0];
@@ -19,12 +28,16 @@ export function buildEmbeddedAgentHookContext(
 ) {
   return {
     runId: run.runId,
+    jobId: run.jobId,
     trace,
     agentId,
     sessionKey: run.sessionKey,
     sessionId: run.sessionId,
+    ...buildAgentHookMemoryAudienceFields(run.memoryAudience, run.sessionKey),
+    sandboxed: run.sandbox?.enabled === true,
     workspaceDir: run.workspaceDir,
     trigger: run.trigger,
+    ...(run.isTurnTainted ? { turnTainted: run.isTurnTainted() } : {}),
     ...buildAgentHookContextChannelFields(run),
     ...buildAgentHookContextIdentityFields(run),
   };

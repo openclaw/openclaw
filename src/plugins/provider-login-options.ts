@@ -1,3 +1,4 @@
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { compareProviderAuthChoiceGroups } from "./provider-auth-choice-order.js";
 import {
   resolveManifestDeclaredProviderAuthChoices,
@@ -6,6 +7,7 @@ import {
 
 export type ProviderLoginOption = {
   id: string;
+  pluginId?: string;
   brandId: string;
   label: string;
   hint?: string;
@@ -15,6 +17,8 @@ export type ProviderLoginOption = {
   docsUrl?: string;
   kind: "oauth" | "device-code" | "secret";
   featured: boolean;
+  /** This sign-in activates a provider runtime rather than only saving credentials. */
+  requiresSetup?: true;
 };
 export type ProviderChannelLoginChoice = {
   choiceId: string;
@@ -42,52 +46,96 @@ function isEligible(choice: ProviderAuthChoiceMetadata): boolean {
 }
 
 function loginKind(choice: ProviderAuthChoiceMetadata): ProviderLoginOption["kind"] | undefined {
-  if (!isEligible(choice) || choice.credentialOnly !== true || choice.appGuidedDiscovery) {
+  if (
+    !isEligible(choice) ||
+    choice.appGuidedDiscovery ||
+    (choice.credentialOnly !== true && !choice.appGuidedAuth)
+  ) {
     return undefined;
   }
   return choice.appGuidedAuth ?? (choice.appGuidedSecret ? "secret" : undefined);
+}
+
+/** CLI `--device-code` (method `device-code`) also selects a declared device-code sign-in with another method id. */
+export function matchesProviderLoginMethod(
+  choice: Pick<ProviderAuthChoiceMetadata, "methodId" | "appGuidedAuth">,
+  method: string,
+): boolean {
+  return (
+    choice.methodId.toLowerCase() === method ||
+    (method === "device-code" && choice.appGuidedAuth === "device-code")
+  );
 }
 
 export function isProviderLoginChoiceStartable(choice: ProviderAuthChoiceMetadata): boolean {
   return loginKind(choice) !== undefined;
 }
 
+export function hasProviderModelSignIn(
+  params: NonNullable<Parameters<typeof resolveManifestDeclaredProviderAuthChoices>[0]> & {
+    pluginId: string;
+    metadataSnapshot: PluginMetadataSnapshot;
+  },
+): boolean {
+  const { pluginId, ...lookup } = params;
+  const { providers, modelCatalogProviders } = lookup.metadataSnapshot.owners;
+  return resolveManifestDeclaredProviderAuthChoices(lookup).some(
+    (choice) =>
+      choice.pluginId === pluginId &&
+      (providers.has(choice.providerId) || modelCatalogProviders.has(choice.providerId)) &&
+      isProviderLoginChoiceStartable(choice),
+  );
+}
+
+/** CLI API-key logins use the same credential-only runner without changing UI discovery. */
+export function isProviderCliLoginChoiceStartable(choice: ProviderAuthChoiceMetadata): boolean {
+  return (
+    isProviderLoginChoiceStartable(choice) ||
+    (isEligible(choice) && choice.methodId === "api-key" && choice.appGuidedSecret === true)
+  );
+}
+
 export function listProviderLoginOptions(
   choices: readonly ProviderAuthChoiceMetadata[],
 ): ProviderLoginOption[] {
-  return choices
-    .filter(isEligible)
-    .toSorted(
-      (a, b) =>
-        compareProviderAuthChoiceGroups(
-          { id: a.groupId ?? a.providerId, label: a.groupLabel ?? a.choiceLabel },
-          { id: b.groupId ?? b.providerId, label: b.groupLabel ?? b.choiceLabel },
-        ) ||
-        (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0) ||
-        Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
-        a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
-        a.choiceId.localeCompare(b.choiceId),
-    )
-    .flatMap((choice): ProviderLoginOption[] => {
-      const kind = loginKind(choice);
-      if (!kind) {
-        return [];
-      }
-      return [
-        {
-          id: formatProviderLoginChoiceRef(choice),
-          brandId: choice.providerId,
-          label: choice.choiceLabel,
-          hint: choice.choiceHint,
-          groupLabel: choice.groupLabel,
-          icon: choice.icon,
-          website: choice.website,
-          docsUrl: choice.docsUrl,
-          kind,
-          featured: choice.onboardingFeatured === true,
-        },
-      ];
-    });
+  return (
+    choices
+      .filter(isEligible)
+      // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array.
+      .sort(
+        (a, b) =>
+          compareProviderAuthChoiceGroups(
+            { id: a.groupId ?? a.providerId, label: a.groupLabel ?? a.choiceLabel },
+            { id: b.groupId ?? b.providerId, label: b.groupLabel ?? b.choiceLabel },
+          ) ||
+          (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0) ||
+          Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
+          a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
+          a.choiceId.localeCompare(b.choiceId),
+      )
+      .flatMap((choice): ProviderLoginOption[] => {
+        const kind = loginKind(choice);
+        if (!kind) {
+          return [];
+        }
+        return [
+          {
+            id: formatProviderLoginChoiceRef(choice),
+            pluginId: choice.pluginId,
+            brandId: choice.providerId,
+            label: choice.choiceLabel,
+            hint: choice.choiceHint,
+            groupLabel: choice.groupLabel,
+            icon: choice.icon,
+            website: choice.website,
+            docsUrl: choice.docsUrl,
+            kind,
+            featured: choice.onboardingFeatured === true,
+            ...(choice.credentialOnly !== true ? { requiresSetup: true as const } : {}),
+          },
+        ];
+      })
+  );
 }
 
 export function formatProviderLoginChoiceRef(
@@ -107,7 +155,7 @@ function normalizeInput(value: string | undefined): string {
 }
 
 function projectChannelChoice(choice: ProviderAuthChoiceMetadata): ProviderChannelLoginChoice {
-  const kind = loginKind(choice);
+  const kind = choice.credentialOnly === true ? loginKind(choice) : undefined;
   return {
     choiceId: choice.choiceId,
     pluginId: choice.pluginId,
@@ -156,7 +204,8 @@ export function resolveProviderChannelLoginChoice(
     }
     return {
       status: "providers",
-      providers: [...providers.values()].toSorted(
+      // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a private array.
+      providers: [...providers.values()].sort(
         (a, b) =>
           a.label.localeCompare(b.label, "en") ||
           formatProviderOAuthLoginRef(a).localeCompare(formatProviderOAuthLoginRef(b)),

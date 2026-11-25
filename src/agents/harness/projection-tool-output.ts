@@ -1,51 +1,73 @@
 import { formatToolAggregate } from "../../auto-reply/tool-meta.js";
-import { redactToolDetail } from "../../logging/redact.js";
 import { formatFencedCodeBlock } from "../../shared/markdown-code.js";
-import { truncateUtf16Safe } from "../../utils.js";
+import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
 export const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 export const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 10_000;
+const TOOL_LIVE_OUTPUT_MAX_CHARS = 600;
 
 export class NativeToolOutputAccumulator {
   constructor(private readonly nativeToolLabel: string) {}
 
-  private readonly prefixByItem = new Map<string, string>();
-  private readonly originalLengthByItem = new Map<string, number>();
-  private readonly trimStateByItem = new Map<string, ToolOutputTrimState>();
-  private readonly truncatedItemIds = new Set<string>();
+  private readonly items = new Map<string, ToolOutputState>();
   readonly textByItem = new Map<string, string>();
 
   isTruncated(itemId: string): boolean {
-    return this.truncatedItemIds.has(itemId);
+    return (this.items.get(itemId)?.originalLength ?? 0) > TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS;
   }
 
   append(
     itemId: string,
     delta: string,
-  ): { text: string; originalLength: number; normalizedLength: number; rawPrefix: string } {
-    const previousOriginalLength =
-      this.originalLengthByItem.get(itemId) ?? this.textByItem.get(itemId)?.length ?? 0;
-    const originalLength = previousOriginalLength + delta.length;
-    this.originalLengthByItem.set(itemId, originalLength);
-    const normalizedLength = updateToolOutputTrimState(this.trimStateByItem, itemId, delta);
+  ): {
+    text: string;
+    originalLength: number;
+    normalizedLength: number;
+    rawPrefix: string;
+    liveOutput?: { text: string; omittedChars: number };
+  } {
+    const state = this.items.get(itemId) ?? {
+      rawPrefix: this.textByItem.get(itemId) ?? "",
+      originalLength: this.textByItem.get(itemId)?.length ?? 0,
+      normalizedLength: 0,
+      trailingWhitespaceLength: 0,
+      liveTail: "",
+    };
+    const truncated = this.isTruncated(itemId);
+    const originalLength = (state.originalLength += delta.length);
+    const normalizedLength = updateToolOutputTrimState(state, delta);
+    const tail = state.liveTail + delta;
+    state.liveTail = sliceUtf16Safe(tail, Math.max(0, tail.length - TOOL_LIVE_OUTPUT_MAX_CHARS));
     // Lengths keep growing after truncation for echo matching + the notice total;
     // the stored raw prefix freezes so later deltas cannot fill UTF-16 capacity
     // recovered by backing up over a split surrogate pair.
-    const currentPrefix = this.prefixByItem.get(itemId) ?? this.textByItem.get(itemId) ?? "";
     const next = appendBoundedToolTranscriptText(
-      currentPrefix,
-      this.truncatedItemIds.has(itemId) ? "" : delta,
+      state.rawPrefix,
+      truncated ? "" : delta,
       originalLength,
       this.nativeToolLabel,
     );
-    this.prefixByItem.set(itemId, next.rawPrefix);
+    state.rawPrefix = next.rawPrefix;
+    this.items.set(itemId, state);
     this.textByItem.set(itemId, next.text);
-    if (originalLength > TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
-      this.truncatedItemIds.add(itemId);
-    }
-    return { text: next.text, originalLength, normalizedLength, rawPrefix: next.rawPrefix };
+    return {
+      text: next.text,
+      originalLength,
+      normalizedLength,
+      rawPrefix: next.rawPrefix,
+      // The transcript keeps its prefix. Only saturated live previews need a
+      // separate rolling window; final receipts never consume this tail.
+      ...(originalLength > TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS
+        ? {
+            liveOutput: {
+              text: state.liveTail,
+              omittedChars: originalLength - state.liveTail.length,
+            },
+          }
+        : {}),
+    };
   }
 }
 
@@ -87,9 +109,6 @@ export function formatNativeToolOutput(
   return `${formatNativeToolSummary(toolName, meta)}\n${formatFencedCodeBlock(formattedOutput, "txt")}`;
 }
 
-/**
- * Prepare verbose tool output for user-facing progress messages.
- */
 export function formatToolProgressOutput(
   output: string,
   options?: { maxChars?: number },
@@ -98,51 +117,33 @@ export function formatToolProgressOutput(
   if (!trimmed) {
     return undefined;
   }
-  const redacted = redactToolDetail(trimmed);
   const maxChars = options?.maxChars ?? TOOL_PROGRESS_OUTPUT_MAX_CHARS;
-  if (redacted.length <= maxChars) {
-    return redacted;
+  if (trimmed.length <= maxChars) {
+    return trimmed;
   }
-  return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
+  return `${truncateUtf16Safe(trimmed, maxChars)}\n...(truncated)...`;
 }
 
-type ToolOutputTrimState = {
-  totalLength: number;
-  leadingWhitespaceLength: number;
+type ToolOutputState = {
+  rawPrefix: string;
+  originalLength: number;
+  normalizedLength: number;
   trailingWhitespaceLength: number;
-  sawNonWhitespace: boolean;
+  liveTail: string;
 };
 
-function updateToolOutputTrimState(
-  trimStateByItem: Map<string, ToolOutputTrimState>,
-  itemId: string,
-  delta: string,
-): number {
-  const state = trimStateByItem.get(itemId) ?? {
-    totalLength: 0,
-    leadingWhitespaceLength: 0,
-    trailingWhitespaceLength: 0,
-    sawNonWhitespace: false,
-  };
-  state.totalLength += delta.length;
+function updateToolOutputTrimState(state: ToolOutputState, delta: string): number {
   const firstNonWhitespace = delta.search(/\S/u);
   if (firstNonWhitespace === -1) {
-    if (!state.sawNonWhitespace) {
-      state.leadingWhitespaceLength += delta.length;
-    }
     state.trailingWhitespaceLength += delta.length;
-    trimStateByItem.set(itemId, state);
-    return state.sawNonWhitespace
-      ? state.totalLength - state.leadingWhitespaceLength - state.trailingWhitespaceLength
-      : 0;
+  } else {
+    const trimmedLength = delta.trimEnd().length;
+    state.normalizedLength +=
+      (state.normalizedLength > 0 ? state.trailingWhitespaceLength : -firstNonWhitespace) +
+      trimmedLength;
+    state.trailingWhitespaceLength = delta.length - trimmedLength;
   }
-  if (!state.sawNonWhitespace) {
-    state.leadingWhitespaceLength += firstNonWhitespace;
-    state.sawNonWhitespace = true;
-  }
-  state.trailingWhitespaceLength = delta.match(/\s*$/u)?.[0].length ?? 0;
-  trimStateByItem.set(itemId, state);
-  return state.totalLength - state.leadingWhitespaceLength - state.trailingWhitespaceLength;
+  return state.normalizedLength;
 }
 
 function appendBoundedToolTranscriptText(

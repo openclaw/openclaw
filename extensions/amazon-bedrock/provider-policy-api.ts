@@ -5,7 +5,6 @@
 import { normalizeProviderId } from "openclaw/plugin-sdk/model-ref-parse";
 import { resolveBedrockClaudeThinkingProfile } from "./thinking-policy.js";
 
-/** Resolve the Bedrock thinking profile for a provider/model pair. */
 export function resolveThinkingProfile(params: {
   provider: string;
   modelId: string;

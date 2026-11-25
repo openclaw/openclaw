@@ -5,17 +5,9 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
  * box. The manifest `configSchema` validates the JSON shape; this resolver
  * normalizes it and coexists with the sibling `warmImages` block.
  */
-export type ResolvedCrabboxSandboxConfig = {
-  provider?: string;
-  class?: string;
-  ttl?: string;
-  idleTimeout?: string;
-  binary?: string;
-};
+export type ResolvedCrabboxSandboxConfig = Partial<Record<(typeof FIELDS)[number], string>>;
 
-const DURATION_PATTERN = /^\d+(?:ms|s|m|h)$/u;
 const FIELDS = ["provider", "class", "binary", "ttl", "idleTimeout"] as const;
-const KNOWN_FIELDS: ReadonlySet<string> = new Set(FIELDS);
 
 /** Returns undefined when no sandbox block is configured; the backend then stays unregistered. */
 export function resolveCrabboxSandboxConfig(
@@ -28,11 +20,6 @@ export function resolveCrabboxSandboxConfig(
   if (!isRecord(raw)) {
     throw new Error("Crabbox sandbox must be an object.");
   }
-  for (const key of Object.keys(raw)) {
-    if (!KNOWN_FIELDS.has(key)) {
-      throw new Error(`Crabbox sandbox.${key} is not a supported option.`);
-    }
-  }
   const resolved: ResolvedCrabboxSandboxConfig = {};
   for (const key of FIELDS) {
     const value = raw[key];
@@ -40,11 +27,8 @@ export function resolveCrabboxSandboxConfig(
       continue;
     }
     const trimmed = normalizeOptionalString(value);
-    const duration = key === "ttl" || key === "idleTimeout";
-    if (!trimmed || (duration && !DURATION_PATTERN.test(trimmed))) {
-      throw new Error(
-        `Crabbox sandbox.${key} must be ${duration ? "a duration such as 90m, 2h, or 30s" : "a non-empty string"}.`,
-      );
+    if (!trimmed) {
+      throw new Error(`Crabbox sandbox.${key} must be a non-empty string.`);
     }
     resolved[key] = trimmed;
   }

@@ -8,28 +8,28 @@ scenario:
     secondary:
       - automation.failure-destinations
       - automation.run-history-cron
-  objective: Verify a scheduled turn that reports AUTOMATION_FAILED records a failed run that feeds the existing failure alerts, while no-delivery jobs stay silent and quiet or quoting replies stay successful.
+  objective: Verify completed scheduled turns that report task blockers in ordinary prose remain successful without failure alerts or repair requests, while delivery and intentional silence retain their normal behavior.
   successCriteria:
-    - An owned no-delivery run whose reply starts with AUTOMATION_FAILED is recorded as an error with the reported reason, and repeated failures send no alert and no repair request.
-    - An unowned announce run with the same reply delivers the reason, is recorded as an error, and two such runs send the failure alert.
-    - A reply that only quotes AUTOMATION_FAILED mid-text stays ok.
-    - NO_REPLY runs stay ok with and without announce delivery.
+    - Repeated owned no-delivery runs retain the blocker report as successful output without notifying the owner.
+    - Repeated owned and unowned announce runs deliver the blocker prose, stay successful, and send no failure alert or repair request.
+    - NO_REPLY runs stay successful and silent with and without announce delivery.
+    - Manual runs preserve the future one-shot schedule without recording execution errors or failure auto-disable state.
   docsRefs:
     - docs/automation/cron-jobs/payloads.md
     - docs/automation/cron-jobs/delivery.md
   codeRefs:
-    - src/cron/isolated-agent/helpers.ts
-    - src/cron/isolated-agent/run-prepare-runtime.ts
+    - src/cron/isolated-agent/run-finalize.ts
+    - src/cron/isolated-agent/delivery-dispatch.ts
     - src/cron/service/failure-alerts.ts
     - extensions/qa-lab/src/providers/mock-openai/mock-openai-cron-blocked-outcome.ts
   execution:
     kind: flow
     suiteIsolation: isolated
-    isolationReason: Forces failing cron runs whose repair request and failure alert land in qa-channel conversations.
+    isolationReason: Owns cron jobs and qa-channel conversations and checks for unexpected failure alerts and owner repair requests.
     channel: qa-channel
     retryCount: 0
     timeoutMs: 360000
-    summary: Run no-delivery and announce jobs with mock-openai and check which runs fail, alert, or reach the owner conversation.
+    summary: Run no-delivery and announce jobs with mock-openai; verify blocker prose stays successful, only requested output is delivered, and NO_REPLY stays silent.
     config:
       requiredProviderMode: mock-openai
       conversationId: qa-cron-blocked-outcome
@@ -40,7 +40,7 @@ scenario:
 
 flow:
   steps:
-    - name: an owned no-delivery run that reports AUTOMATION_FAILED records the error and stays silent
+    - name: an owned no-delivery run retains ordinary blocker prose as successful output and stays silent
       actions:
         - assert:
             expr: "env.providerMode === config.requiredProviderMode"
@@ -69,12 +69,16 @@ flow:
             senderName: QA Driver
             text:
               expr: "`@openclaw Cron blocked outcome owner ready. Reply exactly \\`${config.ownerMarker}\\`.`"
-        - call: waitForCondition
+          saveAs: ownerInbound
+        - call: waitForCompletedQaReply
+          saveAs: ownerReply
           args:
-            - lambda:
-                expr: "state.getSnapshot().messages.some((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.conversationId && message.text.includes(config.ownerMarker)) || undefined"
+            - ref: state
+            - ref: ownerInbound
             - 60000
-            - 100
+        - assert:
+            expr: "ownerReply.text.includes(config.ownerMarker)"
+            message: owner conversation did not finish its setup reply
         - set: addJob
           value:
             expr: "async (testCase, extra) => await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-blocked-${testCase}-${randomUUID()}`, enabled: true, deleteAfterRun: false, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', timeoutSeconds: 90, message: `Cron blocked outcome QA check: case=${testCase}. Run the monthly report command and post the result.` }, delivery: { mode: 'none' }, ...extra }, { timeoutMs: 30000 })"
@@ -86,64 +90,88 @@ flow:
             expr: "await addJob('blocked', { owner: { agentId: 'qa', sessionKey: ownerSessionKey } })"
         - set: ownedRuns
           value:
-            expr: "[await runJob(ownedJob.id), await runJob(ownedJob.id), await runJob(ownedJob.id)]"
+            expr: "[await runJob(ownedJob.id), await runJob(ownedJob.id)]"
         - assert:
-            expr: "ownedRuns.every((run) => run.status === 'error' && run.error === config.blockedReason && run.deliveryStatus === 'not-requested')"
+            expr: "ownedRuns.every((run) => run.status === 'ok' && run.completionStatus === 'succeeded' && !run.error && run.summary === config.blockedReason && run.deliveryStatus === 'not-requested')"
             message:
-              expr: "`reported failures were not recorded as errors: ${JSON.stringify(ownedRuns)}`"
+              expr: "`blocker reports were not retained as successful output: ${JSON.stringify(ownedRuns)}`"
         - set: repairRequests
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.prompt ?? '').includes(config.repairBriefNeedle))"
         - set: ownerOutbound
           value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && !message.text.includes(config.ownerMarker))"
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.conversationId && message.id !== ownerReply.id)"
         - assert:
             expr: "repairRequests.length === 0 && ownerOutbound.length === 0"
             message:
               expr: "`a no-delivery job notified: ${JSON.stringify({ repairs: repairRequests.length, outbound: ownerOutbound.map((message) => message.text) })}`"
       detailsExpr: "`runs=${JSON.stringify(ownedRuns.map((run) => ({ status: run.status, error: run.error, delivery: run.deliveryStatus })))} repairRequests=${repairRequests.length} ownerOutbound=${ownerOutbound.length}`"
 
-    - name: an unowned announce run that reports AUTOMATION_FAILED delivers the reason and alerts
+    - name: owned and unowned announce runs deliver blocker prose without failure notifications
       actions:
-        - set: controlJob
+        - set: announceResults
           value:
-            expr: "await addJob('blocked', { delivery: { mode: 'announce', channel: 'qa-channel', to: `group:${config.controlConversationId}` } })"
-        - set: controlRuns
-          value:
-            expr: "[await runJob(controlJob.id), await runJob(controlJob.id)]"
-        - assert:
-            expr: "controlRuns.every((run) => run.status === 'error' && run.error === config.blockedReason && run.deliveryStatus === 'delivered')"
-            message:
-              expr: "`announce reported failures were not recorded as delivered errors: ${JSON.stringify(controlRuns)}`"
-        - call: waitForCondition
-          saveAs: controlAlerts
-          args:
-            - lambda:
-                expr: '(() => { const matches = state.getSnapshot().messages.filter((message) => message.direction === ''outbound'' && !message.deleted && message.conversation.id === config.controlConversationId && message.text.startsWith(`Automation "${controlJob.name}" failed 2 times`)); return matches.length > 0 ? matches : undefined; })()'
-            - expr: "liveTurnTimeoutMs(env, 30000)"
-            - 250
+            expr: "[]"
+        - forEach:
+            items:
+              expr: "[false, true]"
+            item: withOwner
+            actions:
+              - set: announceJob
+                value:
+                  expr: "await addJob('blocked', { ...(withOwner ? { owner: { agentId: 'qa', sessionKey: ownerSessionKey } } : {}), delivery: { mode: 'announce', channel: 'qa-channel', to: `group:${config.controlConversationId}` } })"
+              - set: announceRuns
+                value:
+                  expr: "[await runJob(announceJob.id), await runJob(announceJob.id)]"
+              - assert:
+                  expr: "announceRuns.every((run) => run.status === 'ok' && run.completionStatus === 'succeeded' && !run.error && run.summary === config.blockedReason && run.deliveryStatus === 'delivered')"
+                  message:
+                    expr: "`announce blocker reports did not complete successfully: ${JSON.stringify(announceRuns)}`"
+              - set: announceResults
+                value:
+                  expr: "[...announceResults, { jobId: announceJob.id, withOwner, runs: announceRuns }]"
         - set: controlOutbound
           value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.controlConversationId).map((message) => message.text)"
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.controlConversationId).map((message) => message.text)"
         - assert:
-            expr: "controlOutbound.filter((text) => text.includes(config.blockedReason)).length === 2 && !controlOutbound.some((text) => text.includes('AUTOMATION_FAILED'))"
+            expr: "controlOutbound.length === 4 && controlOutbound.every((text) => text.startsWith(config.blockedReason))"
             message:
-              expr: "`announce runs did not deliver the reported reason without the token: ${JSON.stringify(controlOutbound)}`"
-      detailsExpr: "`runs=${JSON.stringify(controlRuns.map((run) => ({ status: run.status, error: run.error, delivery: run.deliveryStatus })))} outbound=${JSON.stringify(controlOutbound)}`"
+              expr: "`expected one blocker report per announce run and no failure alert: ${JSON.stringify(controlOutbound)}`"
+      detailsExpr: "`runs=${JSON.stringify(announceResults)} outbound=${JSON.stringify(controlOutbound)}`"
 
-    - name: quoting the token and NO_REPLY stay ok
+    - name: NO_REPLY stays successful and silent and manual runs preserve the schedule without failure state
       actions:
-        - set: quotedRun
+        - set: silentJob
           value:
-            expr: "await runJob((await addJob('quoted')).id)"
+            expr: "await addJob('silent')"
         - set: silentRun
           value:
-            expr: "await runJob((await addJob('silent')).id)"
+            expr: "await runJob(silentJob.id)"
+        - set: silentAnnounceJob
+          value:
+            expr: "await addJob('silent', { delivery: { mode: 'announce', channel: 'qa-channel', to: `group:${config.controlConversationId}` } })"
         - set: silentAnnounceRun
           value:
-            expr: "await runJob((await addJob('silent', { delivery: { mode: 'announce', channel: 'qa-channel', to: `group:${config.controlConversationId}` } })).id)"
+            expr: "await runJob(silentAnnounceJob.id)"
         - assert:
-            expr: "[quotedRun, silentRun, silentAnnounceRun].every((run) => run.status === 'ok' && run.completionStatus === 'succeeded')"
+            expr: "[silentRun, silentAnnounceRun].every((run) => run.status === 'ok' && run.completionStatus === 'succeeded' && !run.error) && silentRun.deliveryStatus === 'not-requested' && silentAnnounceRun.deliveryStatus === 'not-delivered' && silentAnnounceRun.deliverySuppressionReason === 'silent'"
             message:
-              expr: "`quiet or quoting runs did not stay ok: ${JSON.stringify([quotedRun, silentRun, silentAnnounceRun])}`"
-      detailsExpr: "`quoted=${quotedRun.status} silent=${silentRun.status}/${silentRun.deliveryStatus} silentAnnounce=${silentAnnounceRun.status}/${silentAnnounceRun.deliveryStatus}`"
+              expr: "`quiet runs did not complete with intentional silence: ${JSON.stringify([silentRun, silentAnnounceRun])}`"
+        - set: repairRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.prompt ?? '').includes(config.repairBriefNeedle))"
+        - set: finalOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.id !== ownerReply.id)"
+        - assert:
+            expr: "repairRequests.length === 0 && finalOutbound.length === 4 && finalOutbound.every((message) => message.conversation.id === config.controlConversationId && message.text.startsWith(config.blockedReason))"
+            message:
+              expr: "`unexpected repair request, failure alert, or quiet-run delivery: ${JSON.stringify({ repairs: repairRequests.length, outbound: finalOutbound })}`"
+        - set: completedJobs
+          value:
+            expr: "(await env.gateway.call('cron.list', { includeDisabled: true }, { timeoutMs: 30000 })).jobs.filter((job) => [ownedJob.id, ...announceResults.map((result) => result.jobId), silentJob.id, silentAnnounceJob.id].includes(job.id))"
+        - assert:
+            expr: "completedJobs.length === 5 && completedJobs.every((job) => job.enabled && job.state.nextRunAtMs === Date.parse(job.schedule.at) && job.state.lastRunStatus === 'ok' && job.state.consecutiveErrors === 0 && !job.state.lastError && !job.state.autoDisabled)"
+            message:
+              expr: "`manual runs changed the future schedule or retained failure state: ${JSON.stringify(completedJobs)}`"
+      detailsExpr: "`silent=${silentRun.status}/${silentRun.deliveryStatus} silentAnnounce=${silentAnnounceRun.status}/${silentAnnounceRun.deliveryStatus} repairRequests=${repairRequests.length} completedJobs=${completedJobs.length}`"

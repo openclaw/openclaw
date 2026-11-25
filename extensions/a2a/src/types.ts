@@ -14,4 +14,8 @@ export type ResolvedA2aChannelAccount = {
   enabled: boolean;
   configured: boolean;
   config: A2aChannelConfig;
+  /** Peers withheld from `config` because their inbound token reference did not resolve. */
+  unresolvedPeers: string[];
+  /** Peers kept for inbound auth whose authored `outboundToken` reference did not resolve. */
+  unresolvedOutboundPeers: string[];
 };

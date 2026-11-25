@@ -1,5 +1,4 @@
-import { boundSessionDiagnosticText } from "../config/sessions/session-diagnostic-text.js";
-import { withSessionDiagnosticTextInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
 import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import {
@@ -7,31 +6,21 @@ import {
   isValidAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 
 type SessionDiagnosticContext = {
   cronJobId?: string;
   cronRunId?: string;
   cronJobName?: string;
-  lastAssistant?: string;
 };
 
 type SessionDiagnosticTarget = {
   sessionKey?: string;
-  activeSessionId?: string;
 };
-
-let logGeneration = 0;
-
-export function retireSessionDiagnosticLogs(): void {
-  logGeneration += 1;
-}
 
 async function withSessionDiagnosticContext(
   params: SessionDiagnosticTarget,
   consume: (context: SessionDiagnosticContext) => void,
-  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   const sessionKey = params.sessionKey?.trim();
   const parsed = parseAgentSessionKey(sessionKey);
@@ -50,69 +39,27 @@ async function withSessionDiagnosticContext(
     kind === "cron" && cronJobId
       ? { cronJobId, cronRunId: runIndex >= 0 ? rest[runIndex + 1] : undefined }
       : {};
-  const sessionId = params.activeSessionId?.trim();
-  let identityChanged = false;
-  const unsubscribe = onSessionIdentityMutation((mutation) => {
-    if (
-      mutation.previous.sessionKeys.includes(sessionKey) ||
-      ("current" in mutation && mutation.current.sessionKeys.includes(sessionKey)) ||
-      (mutation.agentId === parsed.agentId &&
-        sessionId &&
-        mutation.previous.sessionId === sessionId)
-    ) {
-      identityChanged = true;
+  if (context.cronJobId) {
+    try {
+      const resolveName = await prepareCronJobNameResolver([context.cronJobId]);
+      context.cronJobName = resolveName(context.cronJobId);
+    } catch {
+      // Display enrichment is optional, including a retired resolver.
     }
-  });
-  const assertCurrent = () => {
-    if (identityChanged || !isCurrent()) {
-      throw new Error("Diagnostic session context is no longer current");
-    }
-  };
-  let consumed = false;
-  const publish = (value: SessionDiagnosticContext) => {
-    assertCurrent();
-    consumed = true;
-    consume(value);
-  };
-  try {
-    assertCurrent();
-    if (context.cronJobId) {
-      const resolveName = await prepareCronJobNameResolver([context.cronJobId]).catch(
-        () => undefined,
-      );
-      assertCurrent();
-      context.cronJobName = resolveName?.(context.cronJobId);
-    }
-    if (sessionId) {
-      await withSessionDiagnosticTextInWorker(
-        { agentId: parsed.agentId, sessionKey, sessionId },
-        assertCurrent,
-        (lastAssistant) => publish({ ...context, lastAssistant }),
-      );
-    } else {
-      publish(context);
-    }
-  } catch {
-    // Enrichment cannot delay recovery or publish a replaced session's text.
-    if (!consumed && isCurrent()) {
-      consume(identityChanged ? {} : context);
-    }
-  } finally {
-    unsubscribe();
   }
+  consume(context);
 }
 
-function formatSessionDiagnosticFields(
-  context: SessionDiagnosticContext,
-  cronNameLabel: "cronJob" | "stopped" = "cronJob",
-): string {
-  const quote = (value: string) =>
-    `"${boundSessionDiagnosticText(value).replace(/["\\]/g, "\\$&")}"`;
+function formatSessionDiagnosticFields(context: SessionDiagnosticContext): string {
+  const quote = (value: string) => {
+    const oneLine = value.replace(/\s+/g, " ").trim();
+    const bounded = oneLine.length > 140 ? `${truncateUtf16Safe(oneLine, 137)}...` : oneLine;
+    return `"${bounded.replace(/["\\]/g, "\\$&")}"`;
+  };
   return [
     context.cronJobId ? `cronJobId=${context.cronJobId}` : "",
     context.cronRunId ? `cronRunId=${context.cronRunId}` : "",
-    context.cronJobName ? `${cronNameLabel}=${quote(context.cronJobName)}` : "",
-    context.lastAssistant ? `lastAssistant=${quote(context.lastAssistant)}` : "",
+    context.cronJobName ? `cronJob=${quote(context.cronJobName)}` : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -123,23 +70,12 @@ export function logWithSessionDiagnosticContext(
   params: SessionDiagnosticTarget & {
     level: "debug" | "warn";
     format: (fields: string) => string;
-    cronNameLabel?: "cronJob" | "stopped";
   },
 ): Promise<void> | undefined {
-  const generation = logGeneration;
-  const isCurrent = () => areDiagnosticsEnabledForProcess() && generation === logGeneration;
-  if (!isCurrent() || !diag.isEnabled(params.level)) {
+  if (!areDiagnosticsEnabledForProcess() || !diag.isEnabled(params.level)) {
     return undefined;
   }
-  return withSessionDiagnosticContext(
-    params,
-    (context) => {
-      if (isCurrent() && diag.isEnabled(params.level)) {
-        diag[params.level](
-          params.format(formatSessionDiagnosticFields(context, params.cronNameLabel)),
-        );
-      }
-    },
-    isCurrent,
-  );
+  return withSessionDiagnosticContext(params, (context) => {
+    diag[params.level](params.format(formatSessionDiagnosticFields(context)));
+  });
 }

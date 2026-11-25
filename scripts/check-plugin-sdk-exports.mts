@@ -26,7 +26,6 @@ import { reportLimitViolations } from "./lib/check-limits.mts";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
-  MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
   MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
   PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES,
   evaluatePluginSdkDeclarationBudget,
@@ -42,6 +41,7 @@ const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
 const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchemas(?:\$\d+)?\b/u;
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
 const requiredSubpathExports: Record<string, string[]> = {
+  "reply-payload": ["isHostNoticePayload"],
   "diagnostic-flags": ["isDiagnosticFlagEnabled"],
   "diagnostic-runtime": ["areDiagnosticsEnabledForProcess", "createSubsystemLogger"],
   "secret-input-runtime": [
@@ -105,7 +105,6 @@ import { prepareHostChannelContextAdmissionEvidence } from "openclaw/plugin-sdk/
 import { registerChannelAdmissionEvidenceOwner } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { buildModelsProviderData, buildPreparedModelsProviderData, ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
-import type { buildModelsProviderData as buildCommandAuthModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import type { ClientRequestArgs } from "node:http";
 import type { ClientOptions as PublishedClientOptions, WebSocket as PublishedWebSocket } from "ws";
 import { WebSocket, type ClientOptions } from "openclaw/plugin-sdk/websocket-runtime";
@@ -180,9 +179,8 @@ const legacyModelsData = {
 };
 const modelsData: ModelsProviderData = legacyModelsData;
 const modelsAdapter: typeof buildModelsProviderData = async () => legacyModelsData;
-const commandAuthModelsAdapter: typeof buildCommandAuthModelsProviderData = modelsAdapter;
 void modelsData;
-void commandAuthModelsAdapter;
+void modelsAdapter;
 declare const preparedModelsData: Awaited<ReturnType<typeof buildPreparedModelsProviderData>>;
 const preparedCatalog: { id: string; provider: string; contextWindow?: number }[] = preparedModelsData.modelCatalog;
 void preparedCatalog;
@@ -377,38 +375,30 @@ while (declarationQueue.length > 0) {
   }
 }
 
-const declarationBytes = Array.from(declarationPaths).reduce<number>(
-  (total, dtsPath) => total + statSync(dtsPath).size,
-  0,
-);
-const declarationBudget = evaluatePluginSdkDeclarationBudget({
-  buildPrivateQa: isPrivateQaPluginSdkBuild(process.env),
-  declarationBytes,
-});
-if (declarationBudget.shouldFail) {
-  const budgetLabel =
-    declarationBudget.budgetKind === "private-qa-public-entry"
-      ? "PRIVATE QA PUBLIC-ENTRY PLUGIN SDK"
-      : "PLUGIN SDK";
-  if (
-    reportLimitViolations([
-      {
-        file: "scripts/lib/plugin-sdk-declaration-budget.mts",
-        title: "Plugin SDK declaration size budget",
-        message: `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes. Budget: ${declarationBudget.ratchetBytes}-byte ratchet + ${declarationBudget.varianceBytes}-byte Rolldown output variance. Keep plugin SDK declarations in the canonical unified tsdown graph.`,
-      },
-    ])
-  ) {
-    missing += 1;
+// Only the public build is published; private entrypoints change its chunk topology.
+if (!isPrivateQaPluginSdkBuild(process.env)) {
+  const declarationBytes = Array.from(declarationPaths).reduce<number>(
+    (total, dtsPath) => total + statSync(dtsPath).size,
+    0,
+  );
+  const declarationBudget = evaluatePluginSdkDeclarationBudget({ declarationBytes });
+  if (declarationBudget.shouldFail) {
+    if (
+      reportLimitViolations([
+        {
+          file: "scripts/lib/plugin-sdk-declaration-budget.mts",
+          title: "Plugin SDK declaration size budget",
+          message: `PLUGIN SDK DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes. Budget: ${declarationBudget.ratchetBytes}-byte ratchet + ${declarationBudget.varianceBytes}-byte Rolldown output variance. Keep plugin SDK declarations in the canonical unified tsdown graph.`,
+        },
+      ])
+    ) {
+      missing += 1;
+    }
+  } else {
+    console.log(
+      `Public plugin SDK declaration graph: ${declarationBytes}/${declarationBudget.budgetBytes} bytes (${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES}-byte ratchet + ${PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES}-byte output variance).`,
+    );
   }
-} else if (declarationBudget.budgetKind === "private-qa-public-entry") {
-  console.log(
-    `Private QA build public-entry declaration graph: ${declarationBytes}/${declarationBudget.budgetBytes} bytes (${MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES}-byte ratchet + ${PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES}-byte output variance); publication ratchet ${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes is not applied.`,
-  );
-} else {
-  console.log(
-    `Public plugin SDK declaration graph: ${declarationBytes}/${declarationBudget.budgetBytes} bytes (${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES}-byte ratchet + ${PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES}-byte output variance).`,
-  );
 }
 
 {

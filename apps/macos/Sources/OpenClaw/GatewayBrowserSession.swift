@@ -60,10 +60,6 @@ struct GatewayBrowserSession: Codable, Equatable, Sendable {
         self.expiresAt = expiresAt
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case provider, origin, issuer, audience, subject, expiresAt, token
-    }
-
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         _ = try values.decode(Provider.self, forKey: .provider)

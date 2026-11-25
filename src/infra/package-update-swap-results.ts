@@ -6,6 +6,7 @@ import type {
 } from "./package-update-swap-contract.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
+import { verifyRuntimeLauncher } from "./update-runtime-relocation.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 /** Result reporting shares warnings with the swap owner but never performs recovery effects. */
@@ -16,6 +17,7 @@ export function createPackageSwapResults(
   startedAt: number,
 ) {
   const warnings: string[] = [];
+  const diagnostics: string[] = [];
   const integrityFailures: NonNullable<UpdateStepResult["failureFacts"]> = [];
   const step = (
     exitCode: number,
@@ -32,6 +34,7 @@ export function createPackageSwapResults(
     stdoutTail,
     stderrTail,
     ...(warnings.length > 0 ? { warnings: [...warnings] } : {}),
+    ...(diagnostics.length > 0 ? { diagnostics: [...diagnostics] } : {}),
     ...(exitCode !== 0
       ? {
           failureFacts: integrityFailures.length
@@ -59,6 +62,36 @@ export function createPackageSwapResults(
   return {
     warnings,
     step,
+    async verifyLaunchers(launchers: readonly { destination: string }[]) {
+      if (!params.stage.native) {
+        return;
+      }
+      // A published launcher that cannot start the new package leaves no CLI. Fail so the
+      // transaction restores the previous launchers instead of reporting success.
+      for (const { destination } of launchers) {
+        try {
+          if ((await verifyRuntimeLauncher(destination, "openclaw.mjs")) === "unknown-format") {
+            warnings.push(
+              `Published launcher ${destination} could not be verified: Cannot resolve the launcher's executable target. Reinstall the current ${params.packageName} version with ${params.installTarget.manager} to recreate the launcher.`,
+            );
+          }
+        } catch (error) {
+          throw new Error(
+            `Published launcher ${destination} cannot start ${params.packageName}: ${formatErrorMessage(error)}`,
+            { cause: error },
+          );
+        }
+      }
+    },
+    activationWarning: (message: string | undefined) => {
+      if (message === undefined) {
+        return;
+      }
+      if (!warnings.includes(message)) {
+        warnings.push(message);
+      }
+      params.activation?.onWarning?.(message);
+    },
     rollbackError(error: unknown): string {
       if (error instanceof PackageIntegrityMismatchError && error.differences.length > 0) {
         integrityFailures.splice(
@@ -74,15 +107,6 @@ export function createPackageSwapResults(
         );
       }
       return formatErrorMessage(error);
-    },
-    invalidLayout(activePackageRoot: string | null): StagedPackageSwapResult {
-      return {
-        status: "failed",
-        activePackageRoot,
-        step: step(1, null, "cannot resolve npm global prefix layout"),
-        postVerifyStep: null,
-        packageRollbackVerified: false,
-      };
     },
     verificationFailed(
       activePackageRoot: string | null,
@@ -139,6 +163,19 @@ export function createPackageSwapResults(
       packageRollbackVerified: boolean,
       baselineError?: Error,
     ): StagedPackageSwapResult {
+      if (baselineError?.cause instanceof PackageIntegrityMismatchError) {
+        const cause = baselineError.cause;
+        diagnostics.push(cause.message);
+        integrityFailures.push(
+          ...cause.differences.map((message) =>
+            createUpdateFailureFact({
+              check: "package-swap",
+              code: "baseline-scan-failed",
+              message,
+            }),
+          ),
+        );
+      }
       return {
         status: "failed",
         activePackageRoot,
@@ -153,7 +190,7 @@ export function createPackageSwapResults(
               : error instanceof Error
                 ? error.name
                 : "swap-failed",
-          baselineError,
+          baselineError ?? (error instanceof Error ? error : undefined),
         ),
         postVerifyStep: null,
         packageRollbackVerified,

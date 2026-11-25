@@ -1,0 +1,2 @@
+# Exact net regression lines: excluded subagents skip disclosure predicates while denied matching rows remain hidden.
+10

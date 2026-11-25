@@ -11,7 +11,9 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { callSessionTargetGateway, type SessionTargetGateway } from "./session-target.js";
 
 export type SessionsImportOptions = SessionTargetGateway & {
@@ -54,7 +56,9 @@ function printResult(result: ImportResult, runtime: RuntimeEnv): void {
       .join("/"),
   );
   if (!result.ok) {
-    runtime.error(`Failed ${source || "catalog listing"}: ${sanitizeTerminalText(result.error)}`);
+    // Gateway failures carry remedy lines; sanitize each line and indent it under its source.
+    const detail = result.error.split("\n").map(sanitizeTerminalText).join("\n  ");
+    runtime.error(`Failed ${source || "catalog listing"}: ${detail}`);
   } else if (result.status === "would_import") {
     runtime.log(`[dry-run] Would import ${source}`);
   } else {
@@ -99,6 +103,7 @@ export async function sessionsImportCommand(
     token: opts.token,
     password: opts.password,
   };
+  const signal = getAsyncWorkSignal();
   const results: ImportResult[] = [];
   const record = (result: ImportResult) => {
     results.push(result);
@@ -106,8 +111,14 @@ export async function sessionsImportCommand(
       printResult(result, runtime);
     }
   };
+  const recordFailure = (error: string, source: Partial<SessionCatalogLocator> = {}) =>
+    record({ ...source, ok: false, status: "failed", error });
   const seen = new Set<string>();
+  const shouldStop = () => signal?.aborted || (limit !== undefined && seen.size >= limit);
   const importOne = async (locator: SessionsCatalogImportParams) => {
+    if (shouldStop()) {
+      return;
+    }
     const identity = JSON.stringify([
       locator.catalogId,
       locator.hostId,
@@ -123,6 +134,7 @@ export async function sessionsImportCommand(
       return;
     }
     try {
+      // Accepted imports retain their receipt; cancellation only stops the next request.
       const result = await callSessionTargetGateway<SessionsCatalogImportResult>({
         gateway,
         method: "sessions.catalog.import",
@@ -137,7 +149,7 @@ export async function sessionsImportCommand(
         status: result.created ? "imported" : result.importedItems > 0 ? "updated" : "unchanged",
       });
     } catch (error) {
-      record({ ...locator, ok: false, status: "failed", error: formatErrorMessage(error) });
+      recordFailure(formatErrorMessage(error), locator);
     }
   };
   const list = (request: SessionsCatalogListParams) =>
@@ -146,9 +158,9 @@ export async function sessionsImportCommand(
       method: "sessions.catalog.list",
       request,
       requiredScope: "operator.read",
+      signal,
       timeoutMs: timeoutMs ?? 300_000,
     });
-  const limitReached = () => limit !== undefined && seen.size >= limit;
   const listParams = {
     ...(agentId ? { agentId } : {}),
     limitPerHost: Math.min(limit ?? 100, 100),
@@ -162,18 +174,12 @@ export async function sessionsImportCommand(
     let catalogHasError = initialCatalogHasError;
     const cursors = new Set<string>();
     try {
-      while (!limitReached()) {
+      while (!shouldStop()) {
         if (host.error) {
-          record({
-            catalogId: id,
-            hostId: host.hostId,
-            ok: false,
-            status: "failed",
-            error: host.error.message,
-          });
+          recordFailure(host.error.message, { catalogId: id, hostId: host.hostId });
         }
         for (const row of host.sessions) {
-          if (limitReached()) {
+          if (shouldStop()) {
             return;
           }
           const displayName = truncateUtf16Safe(row.name?.trim() ?? "", 500);
@@ -186,7 +192,7 @@ export async function sessionsImportCommand(
             ...(agentId ? { agentId } : {}),
           });
         }
-        if (host.error || catalogHasError || !host.nextCursor || limitReached()) {
+        if (host.error || catalogHasError || !host.nextCursor || shouldStop()) {
           return;
         }
         if (cursors.has(host.nextCursor)) {
@@ -202,12 +208,7 @@ export async function sessionsImportCommand(
         const nextCatalog = page.catalogs.find((candidate) => candidate.id === id);
         if (nextCatalog?.error) {
           catalogHasError = true;
-          record({
-            catalogId: id,
-            ok: false,
-            status: "failed",
-            error: nextCatalog.error.message,
-          });
+          recordFailure(nextCatalog.error.message, { catalogId: id });
         }
         const nextHost = nextCatalog?.hosts.find((candidate) => candidate.hostId === host.hostId);
         if (!nextHost) {
@@ -219,13 +220,9 @@ export async function sessionsImportCommand(
         host = nextHost;
       }
     } catch (error) {
-      record({
-        catalogId: id,
-        hostId: host.hostId,
-        ok: false,
-        status: "failed",
-        error: formatErrorMessage(error),
-      });
+      if (!signal?.aborted) {
+        recordFailure(formatErrorMessage(error), { catalogId: id, hostId: host.hostId });
+      }
     }
   };
   if (opts.all) {
@@ -236,18 +233,20 @@ export async function sessionsImportCommand(
         ...(hostId ? { hostIds: [hostId] } : {}),
       });
       for (const entry of page.catalogs) {
-        if (limitReached()) {
+        if (shouldStop()) {
           break;
         }
         if (entry.error) {
-          record({ catalogId: entry.id, ok: false, status: "failed", error: entry.error.message });
+          recordFailure(entry.error.message, { catalogId: entry.id });
         }
         for (const host of entry.hosts) {
           await importHost(entry.id, host, Boolean(entry.error));
         }
       }
     } catch (error) {
-      record({ ok: false, status: "failed", error: formatErrorMessage(error) });
+      if (!signal?.aborted) {
+        recordFailure(formatErrorMessage(error));
+      }
     }
   } else {
     const source = {
@@ -278,7 +277,9 @@ export async function sessionsImportCommand(
       }
       await importOne({ ...source, hostId: selectedHostId });
     } catch (error) {
-      record({ ...source, ok: false, status: "failed", error: formatErrorMessage(error) });
+      if (!signal?.aborted) {
+        recordFailure(formatErrorMessage(error), source);
+      }
     }
   }
   const count = (status: ImportResult["status"]) =>
@@ -290,7 +291,8 @@ export async function sessionsImportCommand(
     wouldImport: count("would_import"),
     failed: count("failed"),
   };
-  const ok = summary.failed === 0;
+  const interrupted = signal?.aborted === true;
+  const ok = !interrupted && summary.failed === 0;
   if (opts.json) {
     writeRuntimeJson(runtime, {
       ...(ok ? { ok } : formatCliJsonFailure("Session import did not complete for every source.")),
@@ -306,7 +308,7 @@ export async function sessionsImportCommand(
         : `${summary.imported} imported; ${summary.updated} updated; ${summary.unchanged} unchanged; ${summary.failed} failed.`,
     );
   }
-  if (!ok) {
+  if (!ok && !interrupted) {
     runtime.exit(1);
   }
 }

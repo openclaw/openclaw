@@ -1,6 +1,7 @@
-import type { ReactiveControllerHost } from "lit";
+import { createSignal, onSettled } from "solid-js";
+import { listen } from "../../lib/reactive/listener.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
-import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
+import type { ChatPaneElement } from "./chat-pane-elements.ts";
 import {
   resolveSplitDropZone,
   splitDropIndicatorRect,
@@ -11,13 +12,12 @@ import {
 export type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
 
 function resolveDropIndicator(
-  host: ParentNode,
+  container: HTMLElement | undefined,
   pane: ChatPaneElement,
   x: number,
   y: number,
 ): DropIndicator | null {
   const paneId = pane.paneId ?? pane.dataset.unboundPaneId;
-  const container = host.querySelector<HTMLElement>(".chat-split-view__drop-container");
   if (!paneId || !container) {
     return null;
   }
@@ -37,47 +37,29 @@ function resolveDropIndicator(
   };
 }
 
-export class ChatPageDropIndicator {
-  indicator: DropIndicator | null = null;
-  private dragDepth = 0;
-  private dragFrame = 0;
-  private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
+export function createChatPageDropIndicator(
+  host: HTMLElement,
+  options: {
+    sessionSplitAvailable: () => boolean;
+    narrow: () => boolean;
+    applySessionDrop: (sessionKey: string, paneId: string, zone: SplitDropZone) => void;
+  },
+) {
+  const [indicator, setIndicator] = createSignal<DropIndicator | null>(null);
+  let container: HTMLElement | undefined;
+  let dragDepth = 0;
+  let dragFrame = 0;
+  let pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
 
-  constructor(
-    private readonly host: HTMLElement & Pick<ReactiveControllerHost, "requestUpdate">,
-    private readonly options: {
-      sessionSplitAvailable: () => boolean;
-      narrow: () => boolean;
-      applySessionDrop: (sessionKey: string, paneId: string, zone: SplitDropZone) => void;
-    },
-  ) {}
-
-  connect(): void {
-    this.host.addEventListener("dragenter", this.handleDragEnter);
-    this.host.addEventListener("dragover", this.handleDragOver);
-    this.host.addEventListener("dragleave", this.handleDragLeave);
-    this.host.addEventListener("drop", this.handleDrop);
-    window.addEventListener("dragend", this.clear);
-  }
-
-  disconnect(): void {
-    this.host.removeEventListener("dragenter", this.handleDragEnter);
-    this.host.removeEventListener("dragover", this.handleDragOver);
-    this.host.removeEventListener("dragleave", this.handleDragLeave);
-    this.host.removeEventListener("drop", this.handleDrop);
-    window.removeEventListener("dragend", this.clear);
-    this.clear();
-  }
-
-  private readonly handleDragEnter = (event: DragEvent) => {
-    if (!this.options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
+  const handleDragEnter = (event: DragEvent) => {
+    if (!options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
       return;
     }
-    this.dragDepth += 1;
+    dragDepth += 1;
   };
 
-  private readonly handleDragOver = (event: DragEvent) => {
-    if (!this.options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
+  const handleDragOver = (event: DragEvent) => {
+    if (!options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
       return;
     }
     event.preventDefault();
@@ -86,78 +68,96 @@ export class ChatPageDropIndicator {
     }
     const target = event.target instanceof Element ? event.target : null;
     const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane, [data-unbound-pane-id]");
-    if (!pane || !this.host.contains(pane)) {
-      this.clear();
+    if (!pane || !host.contains(pane)) {
+      clear();
       return;
     }
-    this.pendingDragOver = { pane, x: event.clientX, y: event.clientY };
-    if (this.dragFrame) {
+    pendingDragOver = { pane, x: event.clientX, y: event.clientY };
+    if (dragFrame) {
       return;
     }
-    this.dragFrame = window.requestAnimationFrame(() => {
-      this.dragFrame = 0;
-      const pending = this.pendingDragOver;
-      this.pendingDragOver = null;
-      if (!pending || this.options.narrow() || !this.host.isConnected) {
+    dragFrame = window.requestAnimationFrame(() => {
+      dragFrame = 0;
+      const pending = pendingDragOver;
+      pendingDragOver = null;
+      if (!pending || options.narrow() || !host.isConnected) {
         return;
       }
-      const indicator = resolveDropIndicator(this.host, pending.pane, pending.x, pending.y);
-      if (!indicator) {
-        this.clear();
+      const next = resolveDropIndicator(container, pending.pane, pending.x, pending.y);
+      if (!next) {
+        clear();
         return;
       }
-      const current = this.indicator;
-      if (
-        current?.paneId === indicator.paneId &&
-        current.zone.kind === indicator.zone.kind &&
-        (indicator.zone.kind === "center" ||
-          (current.zone.kind === "edge" && current.zone.edge === indicator.zone.edge))
-      ) {
-        return;
-      }
-      this.indicator = indicator;
-      this.host.requestUpdate();
+      setIndicator((current) =>
+        current?.paneId === next.paneId &&
+        current.zone.kind === next.zone.kind &&
+        (next.zone.kind === "center" ||
+          (current.zone.kind === "edge" && current.zone.edge === next.zone.edge))
+          ? current
+          : next,
+      );
     });
   };
 
-  private readonly handleDragLeave = (event: DragEvent) => {
-    if (!this.options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
+  const handleDragLeave = (event: DragEvent) => {
+    if (!options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
       return;
     }
-    this.dragDepth = Math.max(0, this.dragDepth - 1);
-    if (this.dragDepth === 0) {
-      this.clear();
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) {
+      clear();
     }
   };
 
-  private readonly handleDrop = (event: DragEvent) => {
-    if (!this.options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
+  const handleDrop = (event: DragEvent) => {
+    if (!options.sessionSplitAvailable() || !sessionDragActive(event.dataTransfer)) {
       return;
     }
     event.preventDefault();
     const sessionKey = readSessionDragData(event.dataTransfer);
     const target = event.target instanceof Element ? event.target : null;
     const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane, [data-unbound-pane-id]");
-    const indicator =
-      pane && this.host.contains(pane)
-        ? resolveDropIndicator(this.host, pane, event.clientX, event.clientY)
+    const destination =
+      pane && host.contains(pane)
+        ? resolveDropIndicator(container, pane, event.clientX, event.clientY)
         : null;
-    this.clear();
-    if (sessionKey && indicator) {
-      this.options.applySessionDrop(sessionKey, indicator.paneId, indicator.zone);
+    clear();
+    if (sessionKey && destination) {
+      options.applySessionDrop(sessionKey, destination.paneId, destination.zone);
     }
   };
 
-  readonly clear = () => {
-    this.dragDepth = 0;
-    this.pendingDragOver = null;
-    if (this.dragFrame) {
-      window.cancelAnimationFrame(this.dragFrame);
-      this.dragFrame = 0;
+  const clear = () => {
+    dragDepth = 0;
+    pendingDragOver = null;
+    if (dragFrame) {
+      window.cancelAnimationFrame(dragFrame);
+      dragFrame = 0;
     }
-    if (this.indicator) {
-      this.indicator = null;
-      this.host.requestUpdate();
-    }
+    setIndicator(null);
+  };
+
+  onSettled(() => {
+    const stop = [
+      listen(host, "dragenter", { handleEvent: handleDragEnter }),
+      listen(host, "dragover", { handleEvent: handleDragOver }),
+      listen(host, "dragleave", { handleEvent: handleDragLeave }),
+      listen(host, "drop", { handleEvent: handleDrop }),
+      listen(window, "dragend", clear),
+    ];
+    return () => {
+      stop.forEach((release) => release());
+      pendingDragOver = null;
+      if (dragFrame) {
+        window.cancelAnimationFrame(dragFrame);
+      }
+    };
+  });
+  return {
+    indicator,
+    clear,
+    containerRef: (element: HTMLElement) => {
+      container = element;
+    },
   };
 }

@@ -9,21 +9,21 @@ import { toBoolean } from "./routes/utils.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 
 describe("toBoolean", () => {
-  it("parses yes/no and 1/0", () => {
-    expect(toBoolean("yes")).toBe(true);
-    expect(toBoolean("1")).toBe(true);
-    expect(toBoolean("no")).toBe(false);
-    expect(toBoolean("0")).toBe(false);
-  });
-
-  it("returns undefined for on/off strings", () => {
-    expect(toBoolean("on")).toBeUndefined();
-    expect(toBoolean("off")).toBeUndefined();
-  });
-
-  it("passes through boolean values", () => {
-    expect(toBoolean(true)).toBe(true);
-    expect(toBoolean(false)).toBe(false);
+  it.each([
+    ["yes", true],
+    ["1", true],
+    ["no", false],
+    ["0", false],
+    [" YES ", true],
+    [1, true],
+    [0, false],
+    [2, undefined],
+    ["on", undefined],
+    ["off", undefined],
+    [true, true],
+    [false, false],
+  ])("parses %j as %j", (input, expected) => {
+    expect(toBoolean(input)).toBe(expected);
   });
 });
 

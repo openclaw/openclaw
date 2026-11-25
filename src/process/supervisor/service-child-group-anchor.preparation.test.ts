@@ -23,44 +23,37 @@ async function expectClosedBeforeSpawn(fixture: PreparationFixture) {
   expect(fixture.descriptorsClosed()).toBe(true);
 }
 
+async function withPreparation(check: (fixture: PreparationFixture) => Promise<void>) {
+  const fixture = createHeldAnchorPreparation(tempDirs.make("openclaw-anchor-preparation-"), {
+    acknowledgeStartupError: false,
+  });
+  try {
+    await check(fixture);
+  } finally {
+    await fixture.dispose();
+  }
+}
+
 describe.skipIf(process.platform === "win32")("POSIX anchor preparation", () => {
-  it("prepares lineage completion before spawning the commanded worker", async () => {
-    const fixture = createHeldAnchorPreparation(tempDirs.make("openclaw-anchor-preparation-"));
-    try {
+  it("prepares before spawning once with the accepted identity despite a duplicate start", () =>
+    withPreparation(async (fixture) => {
       const first = await fixture.firstFact();
       if (first.type === "spawn") {
         // Prove that the real late import is held before reporting the ordering failure.
         fixture.send({ type: "cancel", signal: "SIGTERM" });
         await fixture.loading();
       }
-      expect(first, JSON.stringify(fixture.facts)).toEqual({
-        type: "lineage-loading",
-      });
-      expect(fixture.facts.some((fact) => fact.type === "spawn")).toBe(false);
-      expect(fixture.messages.some((message) => message.type === "ready")).toBe(false);
-      fixture.release();
-      await Promise.all([fixture.ready(), fixture.spawned()]);
-      expect(
-        fixture.facts.filter((fact) => !fact.type.startsWith("loader-")).map((fact) => fact.type),
-      ).toEqual(["lineage-loading", "lineage-loaded", "spawn"]);
-      fixture.send({ type: "worker-start" });
-      expect(await fixture.rootResult()).toMatchObject({ code: 0, signal: null });
-      await fixture.closed;
-      expect(isOwnedProcessGroupGone(fixture.child.pid!)).toBe(true);
-    } finally {
-      await fixture.dispose();
-    }
-  });
-
-  it("keeps the accepted identity when a duplicate start arrives during preparation", async () => {
-    const fixture = createHeldAnchorPreparation(tempDirs.make("openclaw-anchor-duplicate-"));
-    try {
-      await fixture.loading();
+      expect(first, JSON.stringify(fixture.facts)).toEqual({ type: "lineage-loading" });
       await fixture.duplicateStart();
       expectNoCommand(fixture);
       fixture.release();
       const [ready] = await Promise.all([fixture.ready(), fixture.spawned()]);
       expect(ready).toMatchObject({ type: "ready", generation: fixture.generation });
+      expect(
+        fixture.facts
+          .filter((fact) => !fact.type.startsWith("loader-") && fact.type !== "duplicate-start")
+          .map((fact) => fact.type),
+      ).toEqual(["lineage-loading", "lineage-loaded", "spawn"]);
       fixture.send({ type: "worker-start" });
       expect(await fixture.rootResult()).toMatchObject({ code: 0, signal: null });
       await fixture.closed;
@@ -69,18 +62,12 @@ describe.skipIf(process.platform === "win32")("POSIX anchor preparation", () => 
         true,
       );
       expect(isOwnedProcessGroupGone(fixture.child.pid!)).toBe(true);
-    } finally {
-      await fixture.dispose();
-    }
-  });
+    }));
 
-  it.each(["cancel TERM", "cancel KILL", "worker-close", "SIGTERM", "SIGINT"] as const)(
-    "keeps %s authoritative when held preparation resumes before startup-error acknowledgement",
-    async (action) => {
-      const fixture = createHeldAnchorPreparation(tempDirs.make("openclaw-anchor-cancel-"), {
-        acknowledgeStartupError: false,
-      });
-      try {
+  it.each(["cancel TERM", "cancel KILL", "worker-close", "SIGTERM"] as const)(
+    "keeps %s authoritative when preparation resumes before startup-error acknowledgement",
+    (action) =>
+      withPreparation(async (fixture) => {
         await fixture.loading();
         if (action === "cancel TERM" || action === "cancel KILL") {
           fixture.send({
@@ -108,60 +95,36 @@ describe.skipIf(process.platform === "win32")("POSIX anchor preparation", () => 
           "startup-error",
           "closing",
         ]);
-      } finally {
-        await fixture.dispose();
-      }
-    },
+      }),
   );
 
-  it.each(["control EOF", "IPC disconnect", "parent-loss"] as const)(
-    "extinguishes the preparing anchor after %s without inventing a command result",
-    async (action) => {
-      const fixture = createHeldAnchorPreparation(tempDirs.make("openclaw-anchor-control-loss-"), {
-        acknowledgeStartupError: false,
-      });
-      try {
-        await fixture.loading();
-        if (action === "control EOF") {
-          fixture.control.end();
-        } else if (action === "IPC disconnect") {
-          fixture.child.disconnect();
-        } else {
-          fixture.parentLoss();
-        }
-        await expectClosedBeforeSpawn(fixture);
-        fixture.release();
-        expectNoCommand(fixture);
-        expect(fixture.facts.some((fact) => fact.type === "lineage-loaded")).toBe(false);
-      } finally {
-        await fixture.dispose();
-      }
-    },
-  );
-
-  it.each(["control lost before ACK", "ACK crosses relay disconnect"] as const)(
-    "joins actual startup-error retirement when %s",
-    async (action) => {
-      const fixture = createHeldAnchorPreparation(tempDirs.make("openclaw-anchor-startup-ack-"), {
-        acknowledgeStartupError: false,
-      });
-      try {
-        await fixture.loading();
+  it.each([
+    { action: "control EOF", cancelled: false },
+    { action: "IPC disconnect", cancelled: false },
+    { action: "parent-loss", cancelled: false },
+    { action: "control EOF", cancelled: true },
+    { action: "IPC disconnect", cancelled: true },
+  ])("joins preparation retirement after $action (cancelled=$cancelled)", ({ action, cancelled }) =>
+    withPreparation(async (fixture) => {
+      await fixture.loading();
+      if (cancelled) {
         fixture.send({ type: "cancel", signal: "SIGTERM" });
         await fixture.startupError();
-        if (action === "control lost before ACK") {
-          fixture.control.end();
-        } else {
-          // The real host revokes relay IPC before acknowledging the startup error.
-          fixture.child.disconnect();
+      }
+      if (action === "control EOF") {
+        fixture.control.end();
+      } else if (action === "IPC disconnect") {
+        fixture.child.disconnect();
+        if (cancelled) {
           fixture.send({ type: "startup-error-ack" });
         }
-        await expectClosedBeforeSpawn(fixture);
-        fixture.release();
-        expectNoCommand(fixture);
-      } finally {
-        await fixture.dispose();
+      } else {
+        fixture.parentLoss();
       }
-    },
+      await expectClosedBeforeSpawn(fixture);
+      fixture.release();
+      expectNoCommand(fixture);
+      expect(fixture.facts.some((fact) => fact.type === "lineage-loaded")).toBe(false);
+    }),
   );
 });

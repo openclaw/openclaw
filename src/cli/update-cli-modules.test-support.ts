@@ -3,17 +3,15 @@ import { commandTransport } from "./update-cli-mocks.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-const { createUpdateStateProfileInitializer } =
+const { initializeExistingUpdateProfile } =
   await import("./update-cli-state-snapshot.test-support.js");
-const { updateGitCheckout } = await import("../infra/update-runner-git.js");
-const { createUpdateRun, getUpdateRun, listUpdateRuns } =
-  await import("../infra/update-run-ledger.js");
+const { updateGitRelease } = await import("../infra/update-runner-git-release.js");
+const { createUpdateRun, listUpdateRuns } = await import("../infra/update-run-ledger.js");
 const { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } =
   await import("../state/openclaw-state-db.js");
 // Real recovery dependencies need the initialized runtime and child-process mocks.
 const { runUpdateFailureTriage } = await import("../infra/update-triage.js");
-const { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
-  await import("../infra/openclaw-root.js");
+const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
 const { resolveGatewayInstallEntrypoint } = await import("../daemon/gateway-entrypoint.js");
 const {
   mutateConfigFileWithRetry,
@@ -33,7 +31,6 @@ const { fetchNpmPackageTargetStatus } = await import("../infra/update-check-pack
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } =
   await import("../infra/update-control-plane-sentinel.js");
 const { runUtf8CommandWithTimeout } = await import("../process/exec.js");
-const doctorChild = await import("./update-cli/update-command-doctor-child.js");
 const runExec: typeof import("../process/exec.js").runExec = commandTransport.exec;
 const runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout =
   commandTransport.run;
@@ -56,11 +53,7 @@ const {
   invokeUpdateCli: runUpdateCli,
   makeOkUpdateResult,
   mockGitUpdateAfterMutation,
-  devTargetRefusalCases,
-  expectGitMetadataPreview,
   expectPluginCapabilityRetryNotice,
-  expectUpdateFailureReport,
-  expectDelegatedPluginDoctorInput,
   expectSelectorTriageFailure,
 } = await import("./update-cli-invocation.test-support.js");
 
@@ -75,33 +68,24 @@ const { updateFinalizeCommand } = await import("./update-cli/update-command-fina
 const { updateStatusCommand } = await import("./update-cli/status.js");
 const { updateWizardCommand } = await import("./update-cli/wizard.js");
 const updateCliShared = await import("./update-cli/shared.js");
-const { resolveGitInstallDir } = updateCliShared;
-const { clearRestartSentinelIfRevision, readRestartSentinel } =
-  await import("../infra/restart-sentinel.js");
+const { readRestartSentinel } = await import("../infra/restart-sentinel.js");
 
 export {
   checkUpdateStatus,
-  clearRestartSentinelIfRevision,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   completePostCorePluginUpdate,
   continuePostCoreUpdateInFreshProcess,
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   createUpdateRun,
-  createUpdateStateProfileInitializer,
+  initializeExistingUpdateProfile,
   defaultRuntime,
-  devTargetRefusalCases,
-  doctorChild,
   doctorCommand,
   ExitError,
-  expectDelegatedPluginDoctorInput,
-  expectGitMetadataPreview,
   expectPluginCapabilityRetryNotice,
   expectSelectorTriageFailure,
-  expectUpdateFailureReport,
   fetchNpmPackageTargetStatus,
   fetchNpmTagVersion,
-  getUpdateRun,
   invokeUpdateCli,
   listUpdateRuns,
   makeOkUpdateResult,
@@ -114,10 +98,8 @@ export {
   replaceConfigFile,
   resolveExtendedStablePackage,
   resolveGatewayInstallEntrypoint,
-  resolveGitInstallDir,
   resolveNpmChannelTag,
   resolveOpenClawPackageRoot,
-  resolveOpenClawPackageRootSync,
   resolveUpdateInstallIdentity,
   resolveUpdateInstallKind,
   runCommandWithTimeout,
@@ -130,7 +112,7 @@ export {
   updateCliShared,
   updateCommand,
   updateFinalizeCommand,
-  updateGitCheckout,
+  updateGitRelease,
   updateStatusCommand,
   updateWizardCommand,
 };

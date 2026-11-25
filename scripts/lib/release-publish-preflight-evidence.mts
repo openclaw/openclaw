@@ -7,8 +7,13 @@ import {
   resolveFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
   verifyReleasePreflightToolingIdentity,
+  verifyNpmPreflightPublicationLineage,
 } from "../npm-preflight-tooling-identity.mjs";
-import { validatePreparedCorePackages } from "../npm-prepared-bundle.mjs";
+import {
+  isBuildOnlyNpmPreflight,
+  SEALED_NPM_PREFLIGHT_SCHEMA,
+  validatePreparedCorePackages,
+} from "../npm-prepared-bundle.mjs";
 import { validateNpmPreflightDistTag } from "../openclaw-npm-extended-stable-release.mjs";
 import { validatePluginSdkApiReleaseEvidence } from "../plugin-sdk-api-release-evidence.mjs";
 import { createReleaseEvidenceClient } from "../release-ci-summary.mjs";
@@ -524,6 +529,8 @@ function readPreflightArchive(repo: string, artifact: PublishPreflightRecord) {
     minEntries: 1,
     maxEntries: 1024,
     allowPath: (name: string) =>
+      // SDK evidence producers also upload this exact human-readable summary.
+      name === "plugin-sdk-api-release-diff.md" ||
       /^[A-Za-z0-9_.-]+\.(?:tgz|json|txt)$|^core-packages-SHA256SUMS$|^dependency-evidence\/[A-Za-z0-9_.-]+\.(?:json|md)$/u.test(
         name,
       ),
@@ -531,7 +538,7 @@ function readPreflightArchive(repo: string, artifact: PublishPreflightRecord) {
   });
 }
 
-export function validatePublishPreflightNpm(
+export async function validatePublishPreflightNpm(
   options: {
     repo: string;
     tag: string;
@@ -543,6 +550,7 @@ export function validatePublishPreflightNpm(
     fullReleaseValidationRunId: string;
     fullReleaseValidationRunAttempt: string;
     fullManifest?: PublishPreflightRecord;
+    fastTrackRequest?: string;
     pluginSdkApiAcknowledgement: string;
     currentSelectorRef: string;
     currentSelectorSha: string;
@@ -555,31 +563,27 @@ export function validatePublishPreflightNpm(
   } = {},
 ) {
   const { repo, runGh } = options;
-  const qualified =
-    options.preflightRunId === options.fullReleaseValidationRunId
-      ? resolveFullReleaseNpmPreflight({
-          manifest: options.fullManifest,
-          repository: repo,
-          runId: options.fullReleaseValidationRunId,
-          runAttempt: options.fullReleaseValidationRunAttempt,
-          sourceSha: options.targetSha,
-          toolingSha: String(options.fullManifest?.workflowSha),
-          runGh,
-        })
-      : undefined;
-  const run =
-    qualified?.run ??
-    requirePreflightRecord(
-      preflightApi(runGh, repo, `actions/runs/${options.preflightRunId}`),
-      "npm preflight run",
-    );
+  if (options.preflightRunId !== options.fullReleaseValidationRunId) {
+    throw new Error("Npm preflight must use the selected Full Release Validation evidence.");
+  }
+  const qualified = resolveFullReleaseNpmPreflight({
+    fastTrackRequest: options.fastTrackRequest,
+    manifest: options.fullManifest,
+    repository: repo,
+    runId: options.fullReleaseValidationRunId,
+    runAttempt: options.fullReleaseValidationRunAttempt,
+    sourceSha: options.targetSha,
+    toolingSha: String(options.fullManifest?.workflowSha),
+    runGh,
+  });
+  const run = qualified.run;
   const producerRunId = String(run.id);
   const workflowPath = String(run.path).split("@", 1)[0];
   if (
     run.status !== "completed" ||
-    run.conclusion !== "success" ||
-    run.event !== "workflow_dispatch" ||
-    (!qualified && workflowPath !== ".github/workflows/openclaw-npm-release.yml")
+    (run.conclusion !== "success" &&
+      !(options.fastTrackRequest && producerRunId === options.fullReleaseValidationRunId)) ||
+    run.event !== "workflow_dispatch"
   ) {
     throw new Error("Npm preflight producer must be a successful canonical workflow dispatch.");
   }
@@ -594,41 +598,40 @@ export function validatePublishPreflightNpm(
       workflowSha: sha,
       runGh,
     });
-  } else if (!qualified && branch !== "main" && branch !== options.workflowRef) {
-    throw new Error(
-      "Npm preflight must come from main, the active protected branch, or a verified protected tag.",
-    );
   }
-  const comparison = requirePreflightRecord(
-    preflightApi(runGh, repo, `compare/${sha}...${options.toolingSha}?per_page=1`),
-    "preflight tooling ancestry",
-  );
-  if (comparison.status !== "ahead" && comparison.status !== "identical") {
-    throw new Error("Npm preflight tooling is not on the selected publisher lineage.");
-  }
+  const admittedPreflight = await verifyNpmPreflightPublicationLineage({
+    manifest: options.fullManifest,
+    fastTrackRequest: options.fastTrackRequest,
+    repository: repo,
+    sourceSha: options.targetSha,
+    toolingSha: sha,
+    publisherSha: options.toolingSha,
+    producerRunId,
+    producerRunAttempt: String(run.run_attempt),
+    runGh,
+    publisherFullRef: options.workflowRef.startsWith("release-publish/")
+      ? "refs/tags/" + options.workflowRef
+      : "refs/heads/" + options.workflowRef,
+  });
+  // Full evidence authentication above must succeed before missing validation
+  // evidence can be admitted. A marker or packet alone grants no authority.
+  const buildOnly = admittedPreflight.schema === SEALED_NPM_PREFLIGHT_SCHEMA;
   let manifest = context.npmManifest;
   let manifestSha256: string | undefined;
   let files: Map<string, Buffer>;
   if (!manifest) {
     const artifacts = listPreflightArtifacts(runGh, repo, producerRunId);
-    const candidates = artifacts.filter(
-      (item) => item.expired === false && String(item.name).startsWith("openclaw-npm-preflight-"),
-    );
-    const preferred = candidates.filter(
-      (item) => item.name === `openclaw-npm-preflight-${options.tag}`,
-    );
-    const selected = qualified ? [qualified.artifact] : preferred.length ? preferred : candidates;
     const sdk = artifacts.filter(
       (item) =>
         item.expired === false &&
         item.name === `plugin-sdk-api-release-diff-${producerRunId}-${run.run_attempt}`,
     );
-    if (selected.length !== 1 || sdk.length !== 1) {
+    if (!buildOnly && sdk.length !== 1) {
       throw new Error(
         "Expected one npm preflight artifact and one immutable Plugin SDK evidence artifact.",
       );
     }
-    files = readPreflightArchive(repo, selected[0]);
+    files = readPreflightArchive(repo, qualified.artifact);
     const manifestBytes = files.get("preflight-manifest.json");
     if (!manifestBytes) {
       throw new Error("Npm preflight manifest is missing from the artifact.");
@@ -638,14 +641,16 @@ export function validatePublishPreflightNpm(
       JSON.parse(manifestBytes.toString("utf8")),
       "npm preflight manifest",
     );
-    const sdkBytes = readPreflightArchive(repo, sdk[0]!).get(
-      "plugin-sdk-api-release-evidence.json",
-    );
-    if (
-      !sdkBytes ||
-      !isDeepStrictEqual(manifest.pluginSdkApi, JSON.parse(sdkBytes.toString("utf8")))
-    ) {
-      throw new Error("Npm preflight SDK evidence differs from its immutable artifact.");
+    if (!buildOnly) {
+      const sdkBytes = readPreflightArchive(repo, sdk[0]!).get(
+        "plugin-sdk-api-release-evidence.json",
+      );
+      if (
+        !sdkBytes ||
+        !isDeepStrictEqual(manifest.pluginSdkApi, JSON.parse(sdkBytes.toString("utf8")))
+      ) {
+        throw new Error("Npm preflight SDK evidence differs from its immutable artifact.");
+      }
     }
   } else {
     if (!context.npmManifestPath) {
@@ -673,6 +678,13 @@ export function validatePublishPreflightNpm(
     );
   }
   if (
+    buildOnly !== isBuildOnlyNpmPreflight(manifest) ||
+    (buildOnly &&
+      (manifest.npmDistTag !== options.npmDistTag || options.pluginSdkApiAcknowledgement !== ""))
+  ) {
+    throw new Error("Build-only npm validation mode or exact publication channel mismatch.");
+  }
+  if (
     manifest.releaseTag !== options.tag ||
     manifest.releaseSha !== options.targetSha ||
     manifest.packageVersion !== options.tag.slice(1)
@@ -685,6 +697,7 @@ export function validatePublishPreflightNpm(
   }
   const corePackages = verifyPreflightCorePackages(manifest, files, options.targetSha);
   verifyNpmPreflightProducer({
+    fastTrackRequest: options.fastTrackRequest,
     manifest,
     manifestSha256,
     repository: repo,
@@ -699,17 +712,19 @@ export function validatePublishPreflightNpm(
     runGh,
   });
   validateNpmPreflightDistTag({ manifest, npmDistTag: options.npmDistTag });
-  validatePluginSdkApiReleaseEvidence({
-    evidence: manifest.pluginSdkApi,
-    acknowledgement: options.pluginSdkApiAcknowledgement,
-    expectedHeadSha: options.targetSha,
-    expectedWorkflowSha: sha,
-    npmDistTag: options.npmDistTag,
-    currentSelectorRef: options.currentSelectorRef,
-    currentSelectorSha: options.currentSelectorSha,
-    targetRef: options.tag,
-  });
-  return { manifest, run, corePackages };
+  if (!buildOnly) {
+    validatePluginSdkApiReleaseEvidence({
+      evidence: manifest.pluginSdkApi,
+      acknowledgement: options.pluginSdkApiAcknowledgement,
+      expectedHeadSha: options.targetSha,
+      expectedWorkflowSha: sha,
+      npmDistTag: options.npmDistTag,
+      currentSelectorRef: options.currentSelectorRef,
+      currentSelectorSha: options.currentSelectorSha,
+      targetRef: options.tag,
+    });
+  }
+  return { manifest, run, corePackages, buildOnly };
 }
 
 export function verifyPublishSourceLineage(input: {

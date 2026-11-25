@@ -88,20 +88,27 @@ class DocsSource {
     }
     const origins = [];
     let end = 0;
+    let changed = false;
     this.text = this.text.replace(pattern, (...args) => {
       const offset = args.at(-2);
       const value = typeof replacement === "function" ? replacement(...args) : replacement;
+      if (value === args[0]) {
+        return value;
+      }
+      changed = true;
       for (let i = end; i < offset; i++) {
         origins.push(this.origins[i]);
       }
-      for (let i = 0; i < value.length; i++) {
-        origins.push(
-          value === args[0] ? this.origins[offset + i] : mapped ? this.origins[offset] : undefined,
-        );
+      // Replacement offsets count UTF-16 code units, including both surrogate halves.
+      for (let codeUnits = value.length; codeUnits > 0; codeUnits--) {
+        origins.push(mapped ? this.origins[offset] : undefined);
       }
       end = offset + args[0].length;
       return value;
     });
+    if (!changed) {
+      return this;
+    }
     for (let i = end; i < this.origins.length; i++) {
       origins.push(this.origins[i]);
     }
@@ -257,6 +264,7 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   let literalLine = 0;
   let depth = 0;
   let fenceEndLine = 0;
+  let fenceIndent = 0;
   const projectionLines = [];
   const recordLine = (line, projection = line) => {
     projectionLines.push(projection);
@@ -266,12 +274,13 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   let text = new DocsSource(input, firstLine).replace(
     /(?<=^|\n)[^\n]*/g,
     (line, offset, source) => {
-      const insideLiteral = offset < literalEnd;
-      let normalized =
-        depth && (!insideLiteral || inlineCode)
-          ? line.replace(new RegExp(`^ {1,${depth * 2}}`), "")
-          : line;
       const lineIndex = projectionLines.length;
+      const insideLiteral = offset < literalEnd;
+      const indent = lineIndex < fenceEndLine ? fenceIndent : depth * 2;
+      let normalized =
+        indent && (!insideLiteral || inlineCode)
+          ? line.replace(new RegExp(`^ {1,${indent}}`), "")
+          : line;
       if (insideLiteral && !inlineCode) {
         literalContinuationLines.add(lineIndex);
       }
@@ -280,18 +289,22 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
       }
       if (!insideLiteral && /`{3,}|~{3,}/.test(normalized)) {
         const suffix = source.slice(offset + line.length);
-        // Keep the processed prefix for list/quote context. Component depth is
-        // fixed inside this fence; CommonMark owns its closing/container boundary.
+        const openingIndent = line.length - normalized.length;
+        // Remove only the opener's component indentation from literal content.
+        // CommonMark still owns list/quote context and the closing boundary.
         const projection = [
           ...projectionLines,
           normalized +
-            (depth ? suffix.replace(new RegExp(`^ {1,${depth * 2}}`, "gm"), "") : suffix),
+            (openingIndent
+              ? suffix.replace(new RegExp(`^ {1,${openingIndent}}`, "gm"), "")
+              : suffix),
         ].join("\n");
         const token = codeParser
           .parse(projection, {})
           .find((entry) => entry.type === "fence" && entry.map[0] === lineIndex);
         if (token) {
           fenceEndLine = token.map[1];
+          fenceIndent = openingIndent;
           return recordLine(normalized);
         }
       }
@@ -749,7 +762,7 @@ export function parseFrontmatter(source) {
 
   const frontmatterStart = opening[0].length;
   const closing = closingDelimiter.exec(input.slice(frontmatterStart));
-  if (!closing || closing.index === undefined) {
+  if (!closing) {
     return { data: {}, content: input };
   }
 

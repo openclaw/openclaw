@@ -8,7 +8,8 @@ import {
   WorkerIdentifierSchema,
   checkWorkerProtocolJson,
   workerMessageSchemas,
-  WorkerTranscriptUsageSchema,
+  WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+  WorkerInferenceUsageSchema,
   WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
   workerErrorResponseSchema,
   workerRequestSchema,
@@ -38,15 +39,34 @@ export const WorkerInferenceImageContentSchema = inferenceSchemas.image;
 
 const WorkerInferenceAssistantMessageSchema = closedObject({
   ...inferenceSchemas.assistant,
+  usage: WorkerInferenceUsageSchema,
   stopReason: Type.Enum(["stop", "length", "toolUse"]),
 });
 
 const WorkerInferenceMessageSchema = Type.Union([
+  // Inference is admitted only for the exact prepared worker bundle. Reject the
+  // retired carrier shape instead of creating a steady-state mixed-build dialect.
+  closedObject({
+    role: Type.Literal("user"),
+    content: Type.Union([
+      InferenceTextSchema,
+      Type.Array(
+        closedObject({
+          type: Type.Literal("text"),
+          text: InferenceTextSchema,
+          textSignature: Type.Optional(InferenceTextSchema),
+        }),
+        { minItems: 1, maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
+      ),
+    ]),
+    timestamp: LiveIntegerSchema,
+    runtimeContext: closedObject({ retained: Type.Optional(Type.Boolean()) }),
+  }),
   closedObject({
     role: Type.Literal("user"),
     content: Type.Union([InferenceTextSchema, inferenceSchemas.userContent]),
     timestamp: LiveIntegerSchema,
-    runtimeContextCarrier: Type.Optional(Type.Boolean()),
+    operatorMessage: Type.Optional(inferenceSchemas.operatorMessage),
   }),
   inferenceSchemas.contextAssistant,
   inferenceSchemas.toolResult,
@@ -63,7 +83,7 @@ export const WorkerInferenceModelRefSchema = closedObject({
   model: WorkerIdentifierSchema,
 });
 
-const WorkerInferenceContextSchema = closedObject({
+export const WorkerInferenceContextSchema = closedObject({
   systemPrompt: Type.Optional(InferenceTextSchema),
   messages: Type.Array(WorkerInferenceMessageSchema, {
     maxItems: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
@@ -222,7 +242,10 @@ const WorkerInferenceTerminalErrorSchema = closedObject({
   type: Type.Literal("error"),
   reason: WorkerInferenceErrorReasonSchema,
   message: Type.String({ minLength: 1, maxLength: 256 }),
-  usage: Type.Optional(WorkerTranscriptUsageSchema),
+  usage: Type.Optional(WorkerInferenceUsageSchema),
+  retryAfterMs: Type.Optional(
+    Type.Union([Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), Type.Null()]),
+  ),
 });
 
 const WorkerInferenceTerminalOutcomeSchema = Type.Union([

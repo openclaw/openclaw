@@ -59,9 +59,10 @@ private func chatPreviewURLs(in markup: any Markup) -> [URL] {
     return markup.children.flatMap(chatPreviewURLs)
 }
 
+private let chatBarePreviewURLExpression = try? NSRegularExpression(pattern: #"(?i)https?://[^\s<>\"`]+"#)
+
 private func chatBarePreviewURLs(in text: String) -> [URL] {
-    let pattern = #"(?i)https?://[^\s<>\"`]+"#
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+    guard let regex = chatBarePreviewURLExpression else { return [] }
     return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
         guard let range = Range(match.range, in: text) else { return nil }
         var candidate = String(text[range])
@@ -176,9 +177,11 @@ private func chatHTMLTagEnd(in html: String, after start: String.Index) -> Strin
     return nil
 }
 
+private let chatHTMLAttributeExpression = try? NSRegularExpression(
+    pattern: #"([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))"#)
+
 private func chatHTMLAttributes(in tag: String) -> [String: String] {
-    let pattern = #"([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))"#
-    guard let expression = try? NSRegularExpression(pattern: pattern) else { return [:] }
+    guard let expression = chatHTMLAttributeExpression else { return [:] }
     let range = NSRange(tag.startIndex..<tag.endIndex, in: tag)
     var attributes: [String: String] = [:]
     for match in expression.matches(in: tag, range: range) {
@@ -196,9 +199,11 @@ private func chatHTMLAttributes(in tag: String) -> [String: String] {
     return attributes
 }
 
+private let chatHTMLTitleExpression = try? NSRegularExpression(
+    pattern: #"(?is)<title(?:\s[^>]*)?>(.*?)</title\s*>"#)
+
 private func chatHTMLTitle(in html: String) -> String? {
-    let pattern = #"(?is)<title(?:\s[^>]*)?>(.*?)</title\s*>"#
-    guard let expression = try? NSRegularExpression(pattern: pattern),
+    guard let expression = chatHTMLTitleExpression,
           let match = expression.firstMatch(
               in: html,
               range: NSRange(html.startIndex..<html.endIndex, in: html)),
@@ -218,11 +223,12 @@ private func chatSanitizeMetadataText(_ value: String?, maxCharacters: Int) -> S
     return collapsed.isEmpty ? nil : String(collapsed.prefix(maxCharacters))
 }
 
+private let chatHTMLEntityExpression = try? NSRegularExpression(
+    pattern: #"&#(x[0-9a-fA-F]+|[0-9]+);?|&(amp|lt|gt|quot|apos|nbsp);"#,
+    options: .caseInsensitive)
+
 private func chatDecodeHTMLEntities(_ value: String) -> String {
-    let pattern = #"&#(x[0-9a-fA-F]+|[0-9]+);?|&(amp|lt|gt|quot|apos|nbsp);"#
-    guard let expression = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
-        return value
-    }
+    guard let expression = chatHTMLEntityExpression else { return value }
     var decoded = value
     let matches = expression.matches(
         in: value,
@@ -719,7 +725,6 @@ final class ChatLinkPreviewModel {
     private let metadataFetch: MetadataFetch
     private let imageFetch: ImageFetch
     private(set) var sourceURL: URL?
-    private var loadGeneration: UInt64 = 0
 
     init(metadataFetch: @escaping MetadataFetch, imageFetch: @escaping ImageFetch) {
         self.metadataFetch = metadataFetch
@@ -734,14 +739,12 @@ final class ChatLinkPreviewModel {
     func loadMetadata(_ url: URL) async {
         if self.sourceURL != url {
             self.sourceURL = url
-            self.loadGeneration &+= 1
             self.result = nil
             self.imageResult = nil
         }
         guard self.expanded, self.result == nil else { return }
-        let generation = self.loadGeneration
         let result = await self.metadataFetch(url)
-        guard !Task.isCancelled, self.loadGeneration == generation else { return }
+        guard !Task.isCancelled else { return }
         self.result = result
     }
 
@@ -750,9 +753,8 @@ final class ChatLinkPreviewModel {
               self.imageResult == nil,
               let imageURL = self.imageURL
         else { return }
-        let generation = self.loadGeneration
         let result = await self.imageFetch(imageURL)
-        guard !Task.isCancelled, self.loadGeneration == generation else { return }
+        guard !Task.isCancelled else { return }
         self.imageResult = result
     }
 }

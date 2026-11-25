@@ -3,6 +3,7 @@ import {
   type WorkboardBoardMetadata,
   type WorkboardOrchestrationSettings,
 } from "@openclaw/workboard-contract";
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WorkboardBoardInput } from "./store-inputs.js";
 import {
@@ -99,10 +100,11 @@ function normalizeOrchestration(
   const autoDecompose =
     typeof record.autoDecompose === "boolean" ? record.autoDecompose : fallback?.autoDecompose;
   const autoDecomposePerDispatch =
-    typeof record.autoDecomposePerDispatch === "number" &&
-    Number.isFinite(record.autoDecomposePerDispatch)
-      ? Math.max(1, Math.min(20, Math.trunc(record.autoDecomposePerDispatch)))
-      : fallback?.autoDecomposePerDispatch;
+    resolveOptionalIntegerOption(record.autoDecomposePerDispatch, { min: 1, max: 20 }) ??
+    fallback?.autoDecomposePerDispatch;
+  const maxActivePerOwner =
+    resolveOptionalIntegerOption(record.maxActivePerOwner, { min: 1, max: 20 }) ??
+    fallback?.maxActivePerOwner;
   const defaultAssignee = normalizeBoundedString(
     record.defaultAssignee,
     fallback?.defaultAssignee,
@@ -118,6 +120,7 @@ function normalizeOrchestration(
   const next: WorkboardOrchestrationSettings = {
     ...(autoDecompose !== undefined ? { autoDecompose } : {}),
     ...(autoDecomposePerDispatch ? { autoDecomposePerDispatch } : {}),
+    ...(maxActivePerOwner ? { maxActivePerOwner } : {}),
     ...(defaultAssignee ? { defaultAssignee } : {}),
     ...(orchestratorProfile ? { orchestratorProfile } : {}),
   };

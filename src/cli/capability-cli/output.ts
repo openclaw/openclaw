@@ -1,18 +1,4 @@
-import { writeRuntimeJson, type RuntimeEnv } from "../../runtime.js";
-import type { CapabilityEnvelope } from "./metadata.js";
-
-export function emitJsonOrText<T>(
-  runtime: RuntimeEnv,
-  json: boolean | undefined,
-  value: T,
-  textFormatter: (value: T) => string,
-) {
-  if (json) {
-    writeRuntimeJson(runtime, value);
-    return;
-  }
-  runtime.log(textFormatter(value));
-}
+import type { CapabilityEnvelope } from "./result-types.js";
 
 export function formatEnvelopeForText(envelope: CapabilityEnvelope): string {
   if (!envelope.ok) {
@@ -30,6 +16,15 @@ export function formatEnvelopeForText(envelope: CapabilityEnvelope): string {
   for (const output of envelope.outputs) {
     const pathValue = typeof output.path === "string" ? output.path : undefined;
     const textValue = typeof output.text === "string" ? output.text : undefined;
+    if (envelope.capability === "embedding.create" && Array.isArray(output.embedding)) {
+      const preview = output.embedding.slice(0, 8).join(", ");
+      lines.push(
+        textValue ?? "",
+        `dimensions: ${String(output.dimensions)}`,
+        `embedding: [${preview}${output.embedding.length > 8 ? ", ..." : ""}]`,
+      );
+      continue;
+    }
     if (pathValue || textValue) {
       lines.push(...[pathValue, textValue].filter((entry): entry is string => Boolean(entry)));
     } else {

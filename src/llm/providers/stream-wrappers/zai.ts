@@ -13,13 +13,11 @@ export function createToolStreamWrapper(
   enabled: boolean,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    if (!enabled) {
-      return underlying(model, context, options);
-    }
-
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+  if (!enabled) {
+    return underlying;
+  }
+  return (model, context, options) =>
+    streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
       payloadObj.tool_stream = true;
     });
-  };
 }

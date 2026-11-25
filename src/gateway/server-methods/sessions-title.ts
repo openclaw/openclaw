@@ -1,13 +1,12 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   validateSessionsTitlePrepareParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { prepareDashboardSessionTitle } from "../dashboard-session-title.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { prepareSessionCreateModelSelection } from "../session-create-model-selection.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
@@ -31,7 +30,6 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
         rawAgentId: request.agentId,
         respond,
         cfg,
-        normalize: normalizeOptionalString,
       });
       if (!agent) {
         return;
@@ -56,7 +54,7 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      if (request.incognito || !request.message.trim() || request.message.trim().startsWith("/")) {
+      if (request.incognito || !request.message.trim()) {
         respond(true, { title: null });
         return;
       }
@@ -67,7 +65,7 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
         respond(true, { title: null });
         return;
       }
-      let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      let capturedOperator: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
       try {
         const personalSelection = await preparePersonalModelSelection(
           { client, context, signal },
@@ -85,7 +83,7 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
             throw new SessionMutationAuthorizationChangedError(currentCreationError);
           }
         };
-        capturedOperator = await captureGatewayOperatorRunAuthority({
+        capturedOperator = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority,
@@ -113,7 +111,6 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
           if (error) {
             throw new SessionMutationAuthorizationChangedError(error);
           }
-          capturedOperator?.authority.assertCurrent();
         };
         const title = await prepareDashboardSessionTitle({
           cfg,

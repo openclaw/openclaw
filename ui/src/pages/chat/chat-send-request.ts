@@ -1,28 +1,34 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChatAppContextAttachment } from "../../../../packages/gateway-protocol/src/chat-app-context.js";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   resolveUiSelectedSessionAgentId,
+  resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
+import { reconcileChatAccessProgram } from "./chat-session.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 
 export async function requestChatSend(
-  state: ChatState,
+  state: ChatHost,
   params: {
     message: string;
+    appContext?: ChatAppContextAttachment[];
     workContext?: ChatWorkContext;
     mentions?: readonly HumanMention[];
     attachments?: ChatAttachment[];
@@ -40,6 +46,9 @@ export async function requestChatSend(
     assertUploadsEnabled(state.uploadConfig);
   }
   const sessionKey = params.sessionKey ?? state.sessionKey;
+  if (sessionKey === state.sessionKey && state.isRouteSessionPending?.()) {
+    throw new Error(t("chat.thread.loading"));
+  }
   const selectedAgentId = params.agentId
     ? normalizeAgentId(params.agentId)
     : resolveUiSelectedSessionAgentId(state);
@@ -53,31 +62,74 @@ export async function requestChatSend(
     canReuseCurrentSessionId && typeof currentSessionId === "string" && currentSessionId.trim()
       ? currentSessionId.trim()
       : undefined;
-  if (chatProviderReviewRow(state, sessionKey, selectedAgentId)?.providerReview) {
+  const row = chatProviderReviewRow(state, sessionKey, selectedAgentId);
+  if (row?.providerReview) {
     throw new Error(t("chat.providerReview.pausedBody"));
   }
   const sessionId = params.sessionId ?? (params.intent ? undefined : routingSessionId);
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
   );
-  const payload = await state.client!.request("chat.send", {
-    sessionKey,
-    ...(isUiGlobalSessionKey(sessionKey) && selectedAgentId ? { agentId: selectedAgentId } : {}),
-    ...(sessionId ? { sessionId } : {}),
-    ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
-    message: params.message,
-    ...(params.workContext ? { workContext: params.workContext } : {}),
-    ...(params.mentions?.length ? { mentions: params.mentions } : {}),
-    ...(params.intent ? { intent: params.intent } : {}),
-    deliver: false,
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    ...(params.queueMode ? { queueMode: params.queueMode } : {}),
-    ...(params.expectedLeafEntryId !== undefined
-      ? { expectedLeafEntryId: params.expectedLeafEntryId }
-      : {}),
-    idempotencyKey: params.runId,
-    attachments: buildChatApiAttachments(params.attachments),
-  });
+  const attachments = buildChatApiAttachments(params.attachments);
+  const hasAudio = attachments?.some((attachment) =>
+    attachment.mimeType.toLowerCase().startsWith("audio/"),
+  );
+  const request = chatOutboxOwner(state).admissions.beginRequest(
+    state,
+    resolveUiConversationIdentity(state, sessionKey, selectedAgentId),
+    params.runId,
+  );
+  let payload: unknown;
+  const client = state.client!;
+  try {
+    if (
+      row?.cyberAccessProgram &&
+      row.cyberAccessProgram !== "standard" &&
+      (!sessionId || row.sessionId === sessionId) &&
+      visibleSessionMatches(state, sessionKey, selectedAgentId)
+    ) {
+      const repair = reconcileChatAccessProgram(state, row, sessionKey);
+      if (repair) {
+        if (!(await repair)) {
+          throw new Error(state.chatError ?? t("chat.modelControls.modelsUnavailable"));
+        }
+        request.signal.throwIfAborted();
+      }
+    }
+    payload = await client.request(
+      "chat.send",
+      {
+        sessionKey,
+        ...(isUiGlobalSessionKey(sessionKey) && selectedAgentId
+          ? { agentId: selectedAgentId }
+          : {}),
+        ...(sessionId ? { sessionId } : {}),
+        ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
+        message: params.message,
+        ...(params.workContext ? { workContext: params.workContext } : {}),
+        ...(params.appContext ? { appContext: params.appContext } : {}),
+        ...(params.mentions?.length ? { mentions: params.mentions } : {}),
+        ...(params.intent ? { intent: params.intent } : {}),
+        deliver: false,
+        ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+        ...(params.queueMode ? { queueMode: params.queueMode } : {}),
+        ...(params.expectedLeafEntryId !== undefined
+          ? { expectedLeafEntryId: params.expectedLeafEntryId }
+          : {}),
+        idempotencyKey: params.runId,
+        attachments,
+      },
+      // Audio transcription precedes admission; cancellation and connection lifetime
+      // still own that wait. Text retains the bounded startup admission deadline.
+      {
+        timeoutMs: hasAudio ? null : GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        signal: request.signal,
+        retainSentResultOnAbort: true,
+      },
+    );
+  } finally {
+    request.release();
+  }
   if (controlUiReconnectResume) {
     state.reconnectResumeSessionId = null;
   }
@@ -93,13 +145,4 @@ export function resolveDisplayedLeafEntryId(state: ChatState): string | null | u
   }
   const leafEntryId = state.chatDisplayedLeafEntryId?.trim();
   return leafEntryId || undefined;
-}
-
-const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
-
-export function isActiveLeafChangedError(err: unknown): err is GatewayRequestError {
-  return (
-    err instanceof GatewayRequestError &&
-    asOptionalRecord(err.details)?.reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
-  );
 }

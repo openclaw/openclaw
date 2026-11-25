@@ -58,7 +58,7 @@ type MatrixDeliveryPlan = {
   transactionScopeId: string;
   partIndex: number;
   partCount: number;
-  events: MatrixPreparedEvent[];
+  events: readonly MatrixPreparedEvent[];
 };
 
 function createDeliveryPlanStore() {
@@ -159,7 +159,7 @@ function isPlan(value: unknown): value is MatrixDeliveryPlan {
 function decodePlan(bytes: Uint8Array): MatrixDeliveryPlan {
   let value: unknown;
   try {
-    value = JSON.parse(new TextDecoder().decode(bytes));
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan is invalid JSON");
   }
@@ -200,7 +200,7 @@ export function createMatrixPlannedEvents(params: {
   events: readonly Omit<MatrixPreparedEvent, "transactionId">[];
 }): MatrixPreparedEvent[] {
   return params.events.map((event, index) => ({
-    ...structuredClone(event),
+    ...event,
     transactionId: transactionId(params.identity, index),
   }));
 }
@@ -236,11 +236,8 @@ export async function loadMatrixDeliveryPlan(
     return null;
   }
   const plan = decodePlan(entry.bytes);
-  if (planKey(plan) !== planKey(params.identity)) {
-    throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan key is invalid");
-  }
   assertPlanIdentity(plan, params);
-  return structuredClone(plan);
+  return plan;
 }
 
 export async function persistMatrixDeliveryPlan(
@@ -262,14 +259,13 @@ export async function persistMatrixDeliveryPlan(
     );
   }
   const partCount = requirePartCount(params.identity.partCount);
-  const events = params.events.map((event, index) => {
+  for (const [index, event] of params.events.entries()) {
     if (event.transactionId !== transactionId(params.identity, index)) {
       throw new MatrixDeliveryPlanInvariantError(
         "Matrix durable delivery plan has an invalid transaction identifier",
       );
     }
-    return structuredClone(event);
-  });
+  }
   const plan: MatrixDeliveryPlan = {
     version: DELIVERY_PLAN_VERSION,
     queueId: params.identity.queueId,
@@ -282,11 +278,11 @@ export async function persistMatrixDeliveryPlan(
     transactionScopeId: params.transactionScopeId,
     partIndex: requireIndex(params.identity.partIndex, "part index"),
     partCount,
-    events,
+    events: params.events,
   };
+  const bytes = new TextEncoder().encode(JSON.stringify(plan));
   const store = createDeliveryPlanStore();
   await store.deleteExpired();
-  const bytes = new TextEncoder().encode(JSON.stringify(plan));
   if (await store.registerIfAbsent(planKey(params.identity), bytes, {})) {
     return plan;
   }
@@ -324,7 +320,9 @@ async function loadQueuePlans(queueId: string): Promise<MatrixDeliveryPlan[]> {
 function assertCompletePartTopology(plans: readonly MatrixDeliveryPlan[]): void {
   const partCount = plans[0]?.partCount;
   if (!partCount) {
-    throw new MatrixDeliveryPlanInvariantError("Matrix ambiguous delivery has no event plan");
+    throw new MatrixDeliveryPlanInvariantError(
+      "Matrix ambiguous delivery has no persisted event plan",
+    );
   }
   if (plans.some((plan) => plan.partCount !== partCount)) {
     throw new MatrixDeliveryPlanInvariantError(
@@ -332,12 +330,8 @@ function assertCompletePartTopology(plans: readonly MatrixDeliveryPlan[]): void 
     );
   }
   const storedParts = new Set(plans.map((plan) => plan.partIndex));
-  if (
-    storedParts.size !== partCount ||
-    Array.from({ length: partCount }, (_, partIndex) => partIndex).some(
-      (partIndex) => !storedParts.has(partIndex),
-    )
-  ) {
+  // Decoding bounds every integer index to [0, partCount), so cardinality proves coverage.
+  if (storedParts.size !== partCount) {
     throw new MatrixDeliveryPlanInvariantError(
       "Matrix ambiguous delivery has an incomplete event plan",
     );
@@ -364,11 +358,6 @@ export async function reconcileMatrixUnknownSend(
       );
     }
     const plans = await loadQueuePlans(ctx.queueId);
-    if (plans.length === 0) {
-      throw new MatrixDeliveryPlanInvariantError(
-        "Matrix ambiguous delivery has no persisted event plan",
-      );
-    }
     assertCompletePartTopology(plans);
     return await withResolvedMatrixSendClient(
       { cfg: ctx.cfg, accountId: ctx.accountId },

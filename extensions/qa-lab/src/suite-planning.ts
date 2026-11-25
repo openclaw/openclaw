@@ -132,11 +132,9 @@ function listQaSuiteScenarioChannels(scenarios: QaSeedScenario[]) {
   ];
 }
 
-function resolveQaSuiteScenarioChannel(params: {
-  defaultChannel: string;
-  explicitChannel?: string | null;
-  scenarios: QaSeedScenario[];
-}) {
+function resolveQaSuiteScenarioChannel(
+  params: Parameters<typeof resolveQaSuiteScenarioChannels>[0],
+) {
   const scenarioChannels = resolveQaSuiteScenarioChannels(params);
   const [scenarioChannel] = scenarioChannels;
   if (scenarioChannels.length === 1 && scenarioChannel) {
@@ -331,6 +329,7 @@ function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
   return (
     scenario.execution.suiteIsolation === "isolated" ||
     scenario.execution.runtime !== undefined ||
+    scenario.execution.liveConfiguredRuntime !== undefined ||
     // Transport policy is fixed when the gateway starts; sharing it would leak routing rules.
     scenario.execution.transportPolicy !== undefined ||
     scenario.execution.config?.agentE2e === true ||
@@ -405,25 +404,14 @@ async function mapQaSuiteWithConcurrency<T, U>(
   const sleepImpl = opts?.sleepImpl ?? sleep;
   async function waitForStartSlot(shouldReleaseNextSlot: boolean) {
     const currentGate = nextStartGate;
-    let releaseNextSlot: (() => void) | undefined;
     if (shouldReleaseNextSlot) {
-      nextStartGate = new Promise<void>((resolve) => {
-        releaseNextSlot = resolve;
-      });
-    }
-    await currentGate;
-    if (!releaseNextSlot) {
-      return;
-    }
-    void (async () => {
-      try {
+      nextStartGate = currentGate.then(async () => {
         if (!stopped && startStaggerMs > 0) {
           await sleepImpl(startStaggerMs);
         }
-      } finally {
-        releaseNextSlot();
-      }
-    })();
+      });
+    }
+    await currentGate;
   }
   const { results, hasError, firstError } = await runTasksWithConcurrency({
     tasks: items.map((item, index) => async () => {

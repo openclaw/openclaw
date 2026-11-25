@@ -1,6 +1,5 @@
-/** Carries and discovers canonical terminal outcomes through thrown-error boundaries. */
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
-import type { AgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
+import type { AgentRunTerminalOutcome } from "./agent-run-terminal-outcome.types.js";
 
 /** Carries a canonical terminal outcome when an embedded attempt exits by throwing. */
 export class AgentRunTerminalOutcomeError extends Error {
@@ -13,7 +12,6 @@ export class AgentRunTerminalOutcomeError extends Error {
   }
 }
 
-/** Finds a canonical terminal outcome through ordinary error wrapper boundaries. */
 export function findAgentRunTerminalOutcome(error: unknown): AgentRunTerminalOutcome | undefined {
   for (const candidate of collectNestedErrorCandidates(error)) {
     if (candidate instanceof AgentRunTerminalOutcomeError) {

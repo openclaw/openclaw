@@ -84,7 +84,7 @@ function parseBindSourcePath(bind: string): string {
 }
 
 /**
- * String-only blocked-path check (no filesystem I/O).
+ * Check lexical and canonical sources against blocked paths.
  * Blocks:
  * - binds that target blocked paths (equal or under)
  * - binds that cover the system root (mounting "/" is never safe)
@@ -238,26 +238,6 @@ function getReservedTargetReason(bind: string): BlockedBindReason | null {
   return null;
 }
 
-function enforceSourcePathPolicy(params: {
-  bind: string;
-  sourcePath: string;
-  allowedRoots: string[];
-  blockedHostPaths: string[];
-  allowSourcesOutsideAllowedRoots: boolean;
-}): void {
-  const blockedReason = getBlockedReasonForSourcePath(params.sourcePath, params.blockedHostPaths);
-  if (blockedReason) {
-    throw formatBindBlockedError({ bind: params.bind, reason: blockedReason });
-  }
-  if (params.allowSourcesOutsideAllowedRoots) {
-    return;
-  }
-  const allowedReason = getOutsideAllowedRootsReason(params.sourcePath, params.allowedRoots);
-  if (allowedReason) {
-    throw formatBindBlockedError({ bind: params.bind, reason: allowedReason });
-  }
-}
-
 function formatBindBlockedError(params: { bind: string; reason: BlockedBindReason }): Error {
   if (params.reason.kind === "non_absolute") {
     return new Error(
@@ -300,14 +280,12 @@ function validateBindMounts(
   }
 
   const allowedRoots = normalizeAllowedRoots(options?.allowedSourceRoots);
-  const blockedHostPaths = getBlockedHostPaths();
-
   for (const bind of binds) {
     if (!bind.trim()) {
       continue;
     }
 
-    // Fast string-only check (covers .., //, ancestor/descendant logic).
+    // Checks both lexical and canonical sources against blocked paths.
     const blocked = getBlockedBindReason(bind);
     if (blocked) {
       throw formatBindBlockedError({ bind, reason: blocked });
@@ -320,25 +298,15 @@ function validateBindMounts(
       }
     }
 
-    const sourceRaw = parseBindSourcePath(bind);
-    const sourceNormalized = normalizeSandboxHostPath(sourceRaw);
-    enforceSourcePathPolicy({
-      bind,
-      sourcePath: sourceNormalized,
-      allowedRoots,
-      blockedHostPaths,
-      allowSourcesOutsideAllowedRoots: options?.allowSourcesOutsideAllowedRoots === true,
-    });
-
-    // Symlink escape hardening: resolve through existing ancestors and re-check.
-    const sourceCanonical = resolveSandboxHostPathViaExistingAncestor(sourceNormalized);
-    enforceSourcePathPolicy({
-      bind,
-      sourcePath: sourceCanonical,
-      allowedRoots,
-      blockedHostPaths,
-      allowSourcesOutsideAllowedRoots: options?.allowSourcesOutsideAllowedRoots === true,
-    });
+    if (options?.allowSourcesOutsideAllowedRoots !== true) {
+      const source = normalizeSandboxHostPath(parseBindSourcePath(bind));
+      for (const sourcePath of [source, resolveSandboxHostPathViaExistingAncestor(source)]) {
+        const reason = getOutsideAllowedRootsReason(sourcePath, allowedRoots);
+        if (reason) {
+          throw formatBindBlockedError({ bind, reason });
+        }
+      }
+    }
   }
 }
 

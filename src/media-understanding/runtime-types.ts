@@ -1,14 +1,15 @@
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
+import type {
+  ImageDescriptionResult,
+  ImagesDescriptionInput,
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+  StructuredExtractionResult,
+} from "../../packages/media-understanding-common/src/types.js";
 // Public media-understanding runtime API types for file-based image/audio/video
 // helpers and direct structured extraction.
 import type { OpenClawConfig } from "../config/types.js";
-import type {
-  MediaUnderstandingDecision,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-  ImagesDescriptionInput,
-  StructuredExtractionRequest,
-} from "./types.js";
+import type { StructuredExtractionRequest } from "./provider-types.js";
 
 export type RunMediaUnderstandingFileParams = {
   capability: "image" | "audio" | "video";
@@ -22,13 +23,11 @@ export type RunMediaUnderstandingFileParams = {
   activeModel?: ActiveMediaModel;
   prompt?: string;
   timeoutMs?: number;
-  scopeContext?: MediaUnderstandingScopeContext;
-};
-
-type MediaUnderstandingScopeContext = {
-  sessionKey?: string;
-  channel?: string;
-  chatType?: string;
+  scopeContext?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+  };
 };
 
 export type RunMediaUnderstandingFileResult = {
@@ -41,22 +40,15 @@ export type RunMediaUnderstandingFileResult = {
 
 export type DescribeImageFileParams = Omit<RunMediaUnderstandingFileParams, "capability">;
 
-export type DescribeImageFileWithModelParams = {
-  filePath: string;
-  mediaUrl?: string;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  mime?: string;
+export type DescribeImageFileWithModelParams = Omit<
+  RunMediaUnderstandingFileParams,
+  "capability" | "activeModel" | "scopeContext" | "prompt"
+> & {
   provider: string;
   model: string;
   prompt: string;
   maxTokens?: number;
-  timeoutMs?: number;
 };
-
-export type PreparedImageDescriptionInput = ImagesDescriptionInput;
 
 export type PrepareImageDescriptionInputParams = Pick<
   DescribeImageFileWithModelParams,
@@ -67,12 +59,8 @@ export type DescribePreparedImageWithModelParams = Omit<
   DescribeImageFileWithModelParams,
   "filePath" | "mediaUrl" | "mime"
 > & {
-  image: PreparedImageDescriptionInput;
+  image: ImagesDescriptionInput;
 };
-
-type DescribeImageFileWithModelResult = Awaited<
-  ReturnType<NonNullable<MediaUnderstandingProvider["describeImage"]>>
->;
 
 export type ExtractStructuredWithModelParams = Omit<
   StructuredExtractionRequest,
@@ -83,10 +71,6 @@ export type ExtractStructuredWithModelParams = Omit<
   agentDir?: string;
   timeoutMs?: number;
 };
-
-type ExtractStructuredWithModelResult = Awaited<
-  ReturnType<NonNullable<MediaUnderstandingProvider["extractStructured"]>>
->;
 
 export type DescribeVideoFileParams = Omit<
   DescribeImageFileParams,
@@ -108,16 +92,16 @@ export type MediaUnderstandingRuntime = {
   describeImageFile: (params: DescribeImageFileParams) => Promise<RunMediaUnderstandingFileResult>;
   prepareImageDescriptionInput: (
     params: PrepareImageDescriptionInputParams,
-  ) => Promise<PreparedImageDescriptionInput>;
+  ) => Promise<ImagesDescriptionInput>;
   describePreparedImageWithModel: (
     params: DescribePreparedImageWithModelParams,
-  ) => Promise<DescribeImageFileWithModelResult>;
+  ) => Promise<ImageDescriptionResult>;
   describeImageFileWithModel: (
     params: DescribeImageFileWithModelParams,
-  ) => Promise<DescribeImageFileWithModelResult>;
+  ) => Promise<ImageDescriptionResult>;
   extractStructuredWithModel: (
     params: ExtractStructuredWithModelParams,
-  ) => Promise<ExtractStructuredWithModelResult>;
+  ) => Promise<StructuredExtractionResult>;
   describeVideoFile: (params: DescribeVideoFileParams) => Promise<RunMediaUnderstandingFileResult>;
   transcribeAudioFile: (
     params: TranscribeAudioFileParams,

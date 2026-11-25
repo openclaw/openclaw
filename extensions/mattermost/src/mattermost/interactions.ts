@@ -1,14 +1,15 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
+import { sendJsonWithoutCharset as sendInteractionResponse } from "openclaw/plugin-sdk/http-response-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
-import { getMattermostRuntime } from "../runtime.js";
-import { isWildcardBindHost } from "./callback-host.js";
+import { requestBodyErrorToText } from "openclaw/plugin-sdk/webhook-request-guards";
+import { resolveCallbackHost } from "./callback-host.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import {
   isRequestBodyLimitError,
@@ -124,15 +125,7 @@ export function computeInteractionCallbackUrl(
     return `${callbackBaseUrl.replace(/\/+$/, "")}${path}`;
   }
   const port = resolveGatewayPort(cfg);
-  let host =
-    cfg?.gateway?.customBindHost && !isWildcardBindHost(cfg.gateway.customBindHost)
-      ? cfg.gateway.customBindHost.trim()
-      : "localhost";
-
-  // Bracket IPv6 literals so the URL is valid: http://[::1]:18789/...
-  if (host.includes(":") && !(host.startsWith("[") && host.endsWith("]"))) {
-    host = `[${host}]`;
-  }
+  const host = resolveCallbackHost(cfg?.gateway?.customBindHost, true);
 
   return `http://${host}:${port}${path}`;
 }
@@ -202,23 +195,6 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-type MattermostButton = {
-  id: string;
-  type: "button" | "select";
-  name: string;
-  style?: "default" | "primary" | "danger";
-  integration: {
-    url: string;
-    context: Record<string, unknown>;
-  };
-};
-
-type MattermostAttachment = {
-  text?: string;
-  actions?: MattermostButton[];
-  [key: string]: unknown;
-};
-
 /**
  * Sanitize a button ID so Mattermost's action router can match it.
  * Mattermost uses the action ID in the URL path `/api/v4/posts/{id}/actions/{actionId}`
@@ -239,8 +215,8 @@ export function buildButtonAttachments(params: {
     context?: Record<string, unknown>;
   }>;
   text?: string;
-}): MattermostAttachment[] {
-  const actions: MattermostButton[] = params.buttons.map((btn) => {
+}) {
+  const actions = params.buttons.map((btn) => {
     const safeId = sanitizeActionId(btn.id);
     const context: Record<string, unknown> = {
       action_id: safeId,
@@ -310,27 +286,12 @@ export function buildButtonProps(params: {
   };
 }
 
-function sendInteractionResponse(
-  res: ServerResponse,
-  statusCode: number,
-  body: MattermostInteractionResponse | { error: string },
-): void {
-  res.statusCode = statusCode;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(body));
-}
-
 export function createMattermostInteractionHandler(params: {
   client: MattermostClient;
   accountId: string;
   allowedSourceIps?: string[];
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
-  resolveSessionKey?: (params: {
-    channelId: string;
-    userId: string;
-    post: MattermostPost;
-  }) => Promise<string>;
   handleInteraction?: (opts: {
     payload: MattermostInteractionPayload;
     userName: string;
@@ -350,13 +311,13 @@ export function createMattermostInteractionHandler(params: {
     userName: string;
     actionId: string;
     actionName: string;
+    callbackData?: unknown;
     postId: string;
     post: MattermostPost;
   }) => Promise<void>;
   log?: (message: string) => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { client, accountId, log } = params;
-  const core = getMattermostRuntime();
 
   function parseInteractionPayload(raw: string): MattermostInteractionPayload {
     const payload = safeParseJson<MattermostInteractionPayload>(raw);
@@ -368,10 +329,8 @@ export function createMattermostInteractionHandler(params: {
 
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method !== "POST") {
-      res.statusCode = 405;
       res.setHeader("Allow", "POST");
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Method Not Allowed" }));
+      sendInteractionResponse(res, 405, { error: "Method Not Allowed" });
       return;
     }
 
@@ -401,22 +360,15 @@ export function createMattermostInteractionHandler(params: {
       payload = parseInteractionPayload(raw);
     } catch (err) {
       log?.(`mattermost interaction: failed to parse body: ${String(err)}`);
-      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
+      if (
+        isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE") ||
+        isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")
+      ) {
         await sendHttpRequestRejection(
           req,
           res,
-          413,
-          JSON.stringify({ error: "Payload too large" }),
-          "application/json",
-        );
-        return;
-      }
-      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-        await sendHttpRequestRejection(
-          req,
-          res,
-          408,
-          JSON.stringify({ error: "Request body timeout" }),
+          err.statusCode,
+          JSON.stringify({ error: requestBodyErrorToText(err.code) }),
           "application/json",
         );
         return;
@@ -554,31 +506,6 @@ export function createMattermostInteractionHandler(params: {
       }
     }
 
-    // Dispatch as system event so the agent can handle it.
-    // Wrapped in try/catch — the post update below must still run even if
-    // system event dispatch fails (e.g. missing sessionKey or channel lookup).
-    try {
-      const eventLabel =
-        `Mattermost button click: action="${actionId}" ` +
-        `by ${payload.user_name ?? payload.user_id} ` +
-        `in channel ${payload.channel_id}`;
-
-      const sessionKey = params.resolveSessionKey
-        ? await params.resolveSessionKey({
-            channelId: payload.channel_id,
-            userId: payload.user_id,
-            post: originalPost,
-          })
-        : `agent:main:mattermost:${accountId}:${payload.channel_id}`;
-
-      core.system.enqueueSystemEvent(eventLabel, {
-        sessionKey,
-        contextKey: `mattermost:interaction:${payload.post_id}:${actionId}`,
-      });
-    } catch (err) {
-      log?.(`mattermost interaction: system event dispatch failed: ${String(err)}`);
-    }
-
     try {
       await updateMattermostPost(client, payload.post_id, {
         message: originalMessage,
@@ -596,7 +523,6 @@ export function createMattermostInteractionHandler(params: {
 
     sendInteractionResponse(res, 200, {});
 
-    // Dispatch a synthetic inbound message so the agent responds to the button click.
     if (params.dispatchButtonClick) {
       try {
         await params.dispatchButtonClick({
@@ -605,6 +531,7 @@ export function createMattermostInteractionHandler(params: {
           userName,
           actionId,
           actionName: clickedButtonName,
+          callbackData: contextWithoutToken.callback_data,
           postId: payload.post_id,
           post: originalPost,
         });

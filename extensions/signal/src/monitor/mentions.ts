@@ -3,17 +3,6 @@ import type { SignalMention } from "./event-handler.types.js";
 
 const OBJECT_REPLACEMENT = "\uFFFC";
 
-type SignalNativeMentionFacts = {
-  canDetectBotMention: boolean;
-  hasAnyMention: boolean;
-  mentionsBot: boolean;
-};
-
-type SignalNativeMentionIdentity = {
-  account?: string | null;
-  accountUuid?: string | null;
-};
-
 function isValidMention(mention: SignalMention | null | undefined): mention is SignalMention {
   if (!mention) {
     return false;
@@ -63,10 +52,13 @@ function normalizeAccountPhone(account?: string | null) {
 }
 
 export function resolveSignalMentionFacts(
-  identity: SignalNativeMentionIdentity,
+  identity: {
+    account?: string | null;
+    accountUuid?: string | null;
+  },
   message: string,
   mentions?: SignalMention[] | null,
-): SignalNativeMentionFacts {
+) {
   const validMentions = (mentions ?? []).filter((mention) =>
     isValidStructuredMention(message, mention),
   );

@@ -1,5 +1,6 @@
 // Legacy config migration bridge for channel doctor compatibility contracts.
 
+import { z } from "zod";
 import { isChannelConfigMetadataKey } from "../../../channels/config-metadata.js";
 import { getBootstrapChannelPlugin } from "../../../channels/plugins/bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "../../../channels/plugins/doctor-contract-api.js";
@@ -14,12 +15,52 @@ import {
   collectDoctorConfigRepairPluginIds,
   isPluginDoctorMigrationDeferred,
 } from "../../../plugins/doctor-contract-registry.js";
+import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.types.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
-import { isRecord } from "./legacy-config-record-shared.js";
+import { isRecord, visitChannelEntries } from "./legacy-config-record-shared.js";
+import { HISTORICAL_WEBHOOK_CHANNELS } from "./legacy-webhook-pins.js";
 
 const log = createSubsystemLogger("plugins/doctor-contracts");
 
-function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
+export const LegacyHeartbeatVisibilitySchema = z
+  .object({
+    showOk: z.boolean().optional(),
+    showAlerts: z.boolean().optional(),
+    useIndicator: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+/** Feishu owns visibility/intervalMs; only its shared heartbeat keys belong to retirement. */
+export function selectLegacyHeartbeatVisibility(
+  channel: string,
+  entry: Record<string, unknown> | undefined,
+) {
+  if (!entry) {
+    return undefined;
+  }
+  const keys =
+    channel === "feishu"
+      ? (["heartbeatVisibility", "heartbeat"] as const)
+      : (["heartbeatVisibility"] as const);
+  for (const key of keys) {
+    const value = entry[key];
+    if (value === undefined) {
+      continue;
+    }
+    if (
+      channel === "feishu" &&
+      (!isRecord(value) ||
+        !["showOk", "showAlerts", "useIndicator"].some((field) => Object.hasOwn(value, field)))
+    ) {
+      continue;
+    }
+    return { key, value };
+  }
+  return undefined;
+}
+
+export function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
   const channels = isRecord(raw.channels) ? raw.channels : null;
   if (!channels) {
     return;
@@ -38,6 +79,13 @@ function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: strin
     ) {
       return;
     }
+    if (
+      preserveEmptyPluginBlock &&
+      entry.heartbeatVisibility !== undefined &&
+      selectLegacyHeartbeatVisibility("feishu", entry)?.key !== "heartbeatVisibility"
+    ) {
+      return;
+    }
     if (entry.heartbeatVisibility === undefined) {
       entry.heartbeatVisibility = entry.heartbeat;
       changes.push(`Moved ${path}.heartbeat → ${path}.heartbeatVisibility.`);
@@ -50,25 +98,13 @@ function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: strin
   if (defaults) {
     migrateEntry(defaults, "channels.defaults");
   }
-  for (const [channelId, value] of Object.entries(channels)) {
-    if (!channelId.trim() || isChannelConfigMetadataKey(channelId) || !isRecord(value)) {
+  for (const channelId of Object.keys(channels)) {
+    if (!channelId.trim() || isChannelConfigMetadataKey(channelId)) {
       continue;
     }
-    const preserveEmptyPluginBlock = channelId === "feishu";
-    migrateEntry(value, `channels.${channelId}`, preserveEmptyPluginBlock);
-    const accounts = isRecord(value.accounts) ? value.accounts : null;
-    if (!accounts) {
-      continue;
-    }
-    for (const [accountId, account] of Object.entries(accounts)) {
-      if (isRecord(account)) {
-        migrateEntry(
-          account,
-          `channels.${channelId}.accounts.${accountId}`,
-          preserveEmptyPluginBlock,
-        );
-      }
-    }
+    visitChannelEntries(raw, channelId, (entry, path) =>
+      migrateEntry(entry, path, channelId === "feishu"),
+    );
   }
 }
 
@@ -86,10 +122,19 @@ function resolveBundledChannelCompatibilityNormalizer(
   return getBootstrapChannelPlugin(channelId)?.doctor?.normalizeCompatibilityConfig;
 }
 
+export type ChannelDoctorCompatibilityOptions = {
+  pluginContracts?: boolean;
+  historicalWebhookListeners?: boolean;
+  pluginCompatibility?: {
+    pluginIds: readonly string[];
+    manifestRegistry: PluginManifestRegistry;
+  };
+};
+
 /** Apply bundled and plugin channel compatibility migrations to a legacy config object. */
 export function applyChannelDoctorCompatibilityMigrations(
   cfg: Record<string, unknown>,
-  options?: { pluginContracts?: boolean },
+  options?: ChannelDoctorCompatibilityOptions,
 ): {
   next: Record<string, unknown>;
   changes: string[];
@@ -127,16 +172,23 @@ export function applyChannelDoctorCompatibilityMigrations(
   const pluginIds =
     options?.pluginContracts === false
       ? []
-      : [
+      : (options?.pluginCompatibility?.pluginIds ??
+        [
           ...new Set([...unresolvedChannelIds, ...collectDoctorConfigRepairPluginIds(cfg)]),
-        ].toSorted();
-  const plugins: ReturnType<typeof applyPluginDoctorCompatibilityMigrations> = pluginIds.length
-    ? applyPluginDoctorCompatibilityMigrations(bundled.config, {
-        config,
-        pluginIds,
-      })
-    : { config: bundled.config, changes: [] };
-  const warnings = [...(bundled.warnings ?? []), ...(plugins.warnings ?? [])];
+        ].toSorted());
+  const plugins: ReturnType<typeof applyPluginDoctorCompatibilityMigrations> =
+    pluginIds.length || options?.historicalWebhookListeners
+      ? applyPluginDoctorCompatibilityMigrations(bundled.config, {
+          config,
+          pluginIds: options?.historicalWebhookListeners
+            ? [...new Set([...pluginIds, ...HISTORICAL_WEBHOOK_CHANNELS])]
+            : pluginIds,
+          historicalWebhookListeners: options?.historicalWebhookListeners,
+          manifestRegistry: options?.pluginCompatibility?.manifestRegistry,
+        })
+      : { config: bundled.config, changes: [] };
+  // Bundled and installed contract views can report the same warning-only condition.
+  const warnings = [...new Set([...(bundled.warnings ?? []), ...(plugins.warnings ?? [])])];
   return {
     next: plugins.config,
     changes: [...changes, ...bundled.changes, ...plugins.changes],

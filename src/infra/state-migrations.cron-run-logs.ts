@@ -7,6 +7,7 @@ import {
   parseCronRunLogEntryObject,
 } from "../cron/run-history-detail.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "./sqlite-number.js";
+import { hasLegacyCronRunLogs } from "./state-legacy-cron-presence.js";
 
 type CronRunLogEntry = import("../cron/run-log-types.js").CronRunLogEntry;
 type CronDeliveryStatus = import("../cron/types.js").CronDeliveryStatus;
@@ -52,16 +53,6 @@ type CronRunLogTaskImportResult = {
   malformed: number;
   skipped: boolean;
 };
-
-export function hasLegacyCronRunLogs(db: DatabaseSync): boolean {
-  return Boolean(
-    db
-      .prepare(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cron_run_logs' LIMIT 1",
-      )
-      .get(),
-  );
-}
 
 function collectMirroredTasks(db: DatabaseSync): Map<string, MirroredIdentity[]> {
   const rows = db

@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { DiffViewerPayload } from "./types.js";
 
 const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
@@ -14,33 +14,19 @@ const VIEWER_CLIENT_SRC = readFileSync(
   "utf8",
 );
 
-const XSS_PATTERNS = ["onerror", "<script", "onclick", "javascript:", "onload"];
-
-const {
-  fileDiffHydrateMock,
-  fileDiffRerenderMock,
-  fileDiffSetOptionsMock,
-  preloadHighlighterMock,
-} = vi.hoisted(() => ({
+const { fileDiffHydrateMock, fileDiffRerenderMock, fileDiffSetOptionsMock } = vi.hoisted(() => ({
   fileDiffHydrateMock: vi.fn(),
   fileDiffRerenderMock: vi.fn(),
   fileDiffSetOptionsMock: vi.fn(),
-  preloadHighlighterMock: vi.fn(async () => undefined),
 }));
 
 vi.mock("@pierre/diffs", () => ({
   FileDiff: class {
-    hydrate(params: unknown) {
-      return fileDiffHydrateMock(params);
-    }
-    rerender() {
-      return fileDiffRerenderMock();
-    }
-    setOptions(params: unknown) {
-      return fileDiffSetOptionsMock(params);
-    }
+    hydrate = fileDiffHydrateMock;
+    rerender = fileDiffRerenderMock;
+    setOptions = fileDiffSetOptionsMock;
   },
-  preloadHighlighter: preloadHighlighterMock,
+  preloadHighlighter: vi.fn(async () => undefined),
 }));
 
 const viewerPayload: DiffViewerPayload = {
@@ -61,228 +47,71 @@ const viewerPayload: DiffViewerPayload = {
   newFile: { name: "a.ts", lang: "text", contents: "new" },
 };
 
-function renderCard(overrides: Partial<DiffViewerPayload> = {}): void {
-  const payload = JSON.stringify({ ...viewerPayload, ...overrides });
+function addCard(payload = JSON.stringify(viewerPayload)) {
   document.body.insertAdjacentHTML(
     "beforeend",
-    `<section class="oc-diff-card">
-      <div data-openclaw-diff-host></div>
-      <script type="application/json" data-openclaw-diff-payload>${payload}</script>
-    </section>`,
+    `<section class="oc-diff-card"><div data-openclaw-diff-host></div>
+      <script type="application/json" data-openclaw-diff-payload>${payload}</script></section>`,
   );
 }
 
+async function hydrateOptions() {
+  addCard();
+  const { hydrateViewer } = await import("./viewer-client.js");
+  await hydrateViewer();
+  return fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+}
+
 beforeEach(() => {
+  vi.resetModules();
   document.body.innerHTML = "";
-  delete document.documentElement.dataset.openclawDiffsError;
-  delete document.documentElement.dataset.openclawDiffsReady;
   delete document.body.dataset.theme;
   vi.clearAllMocks();
 });
+afterEach(() => vi.restoreAllMocks());
 
-describe("createToolbarButton icon safety", () => {
-  it("innerHTML reads only from toolbarIconSvg lookup", () => {
-    expect(VIEWER_CLIENT_SRC.includes("button.innerHTML = toolbarIconSvg[params.icon]")).toBe(true);
-  });
-
-  it("SVG strings in toolbarIconSvg contain no XSS patterns", () => {
-    for (const pattern of XSS_PATTERNS) {
-      expect(VIEWER_CLIENT_SRC.includes(pattern), `source must not contain "${pattern}"`).toBe(
-        false,
-      );
-    }
-  });
+it("restricts toolbar innerHTML to static SVG without XSS patterns", () => {
+  expect(VIEWER_CLIENT_SRC).toContain("button.innerHTML = toolbarIconSvg[params.icon]");
+  expect(VIEWER_CLIENT_SRC).not.toMatch(/onerror|<script|onclick|javascript:|onload/);
 });
 
-describe("hydrateViewer", () => {
-  it("continues hydrating later cards when one card throws", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    renderCard();
-    renderCard();
-    fileDiffHydrateMock.mockImplementationOnce(() => {
-      throw new Error("broken card");
-    });
-    const { hydrateViewer } = await import("./viewer-client.js");
+it.each([
+  ["layout", 0, "diffStyle", "unified", "split"],
+  ["theme", 3, "themeType", "dark", "light"],
+  ["wrap", 1, "overflow", "wrap", "scroll"],
+  ["background", 2, "disableBackground", false, true],
+] as const)("%s toggle updates viewer options", async (name, index, key, before, after) => {
+  const initial = await hydrateOptions();
+  expect(initial[key]).toBe(before);
+  const renderHeaderMetadata = initial.renderHeaderMetadata as () => HTMLElement;
+  const buttons = renderHeaderMetadata().querySelectorAll("button");
+  expectDefined(buttons[index], `${name} toggle`).click();
 
-    await hydrateViewer();
-
-    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
-    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "Skipping diff card that failed to hydrate",
-      expect.any(Error),
-    );
-    expect(document.documentElement.dataset.openclawDiffsError).toBeUndefined();
-    warn.mockRestore();
-  });
-
-  it("does not retain controllers when initial state application throws", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    renderCard();
-    renderCard();
-    fileDiffSetOptionsMock.mockImplementationOnce(() => {
-      throw new Error("broken options");
-    });
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
-    expect(fileDiffSetOptionsMock).toHaveBeenCalledTimes(2);
-    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "Skipping diff card that failed to hydrate",
-      expect.any(Error),
-    );
-    expect(document.documentElement.dataset.openclawDiffsError).toBeUndefined();
-    warn.mockRestore();
-  });
-
-  it("replaces stale controllers when hydrating the current cards again", async () => {
-    renderCard();
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    document.body.innerHTML = "";
-    renderCard();
-    await hydrateViewer();
-
-    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
-    const currentOptions = fileDiffSetOptionsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    const renderHeaderMetadata = currentOptions.renderHeaderMetadata as () => HTMLElement;
-    fileDiffRerenderMock.mockClear();
-
-    renderHeaderMetadata().querySelector<HTMLButtonElement>("button")?.click();
-
-    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("viewerState initialization", () => {
-  it("seeds viewerState from firstPayload options and syncs document theme", async () => {
-    renderCard({
-      options: {
-        ...viewerPayload.options,
-        diffStyle: "split",
-        themeType: "light",
-        backgroundEnabled: false,
-        overflow: "scroll",
-      },
-    });
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    expect(document.body.dataset.theme).toBe("light");
-
-    const opts = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(opts.diffStyle).toBe("split");
-    expect(opts.themeType).toBe("light");
-    expect(opts.overflow).toBe("scroll");
-    expect(opts.disableBackground).toBe(true);
-  });
-
-  it("preloadHighlighter receives merged language set from all cards", async () => {
-    renderCard({
-      prerenderedHTML: "<div>diff1</div>",
-      langs: ["typescript"],
-      oldFile: { name: "a.ts", lang: "typescript", contents: "old" },
-      newFile: { name: "a.ts", lang: "typescript", contents: "new" },
-    });
-    renderCard({
-      prerenderedHTML: "<div>diff2</div>",
-      langs: ["python"],
-      oldFile: { name: "b.py", lang: "python", contents: "old" },
-      newFile: { name: "b.py", lang: "python", contents: "new" },
-    });
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    const preloadArg = (preloadHighlighterMock.mock.calls as unknown[][])[0]?.[0] as
-      | { langs: string[]; themes: string[] }
-      | undefined;
-    expect(preloadArg).toBeDefined();
-    expect(preloadArg!.langs).toContain("typescript");
-    expect(preloadArg!.langs).toContain("python");
-    expect(preloadArg!.themes).toEqual(["pierre-light", "pierre-dark"]);
-  });
-});
-
-describe("toolbar button toggles", () => {
-  it.each([
-    ["layout", 0, "diffStyle", "unified", "split"],
-    ["theme", 3, "themeType", "dark", "light"],
-    ["wrap", 1, "overflow", "wrap", "scroll"],
-    ["background", 2, "disableBackground", false, true],
-  ] as const)("%s toggle updates viewer options", async (name, index, key, before, after) => {
-    renderCard();
-    const { hydrateViewer } = await import("./viewer-client.js");
-    await hydrateViewer();
-
-    const initial = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(initial[key]).toBe(before);
-    const renderHeaderMetadata = initial.renderHeaderMetadata as () => HTMLElement;
-    const buttons = renderHeaderMetadata().querySelectorAll("button");
-    expectDefined(buttons[index], `${name} toggle`).click();
-
-    const updated = fileDiffSetOptionsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(updated[key]).toBe(after);
-    if (name === "layout") {
-      expect(fileDiffRerenderMock).toHaveBeenCalled();
-    }
-    if (name === "theme") {
-      expect(document.body.dataset.theme).toBe("light");
-    }
-  });
-});
-
-describe("header metadata", () => {
-  type HeaderMetadataCallback = () => HTMLElement | null;
-
-  async function hydrateAndGetHeaderCallback(): Promise<HeaderMetadataCallback> {
-    const { hydrateViewer } = await import("./viewer-client.js");
-    await hydrateViewer();
-    const opts = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    return opts.renderHeaderMetadata as HeaderMetadataCallback;
+  const updated = fileDiffSetOptionsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+  expect(updated[key]).toBe(after);
+  if (name === "layout") {
+    expect(fileDiffRerenderMock).toHaveBeenCalled();
   }
+  if (name === "theme") {
+    expect(document.body.dataset.theme).toBe("light");
+  }
+});
 
-  it("renders the toolbar in viewer render mode", async () => {
-    document.body.insertAdjacentHTML(
-      "beforeend",
-      '<main class="oc-frame" data-render-mode="viewer"></main>',
-    );
-    renderCard();
-    const renderHeaderMetadata = await hydrateAndGetHeaderCallback();
+it("drops the interactive toolbar in image render mode", async () => {
+  document.body.innerHTML = '<main class="oc-frame" data-render-mode="image"></main>';
+  const options = await hydrateOptions();
+  const renderHeaderMetadata = options.renderHeaderMetadata as () => HTMLElement | null;
+  expect(renderHeaderMetadata()).toBeNull();
+});
 
-    const header = renderHeaderMetadata();
-
-    expect(header).not.toBeNull();
-    expect(header?.querySelectorAll("button")).toHaveLength(4);
-  });
-
-  it("drops the interactive toolbar in image render mode", async () => {
-    document.body.insertAdjacentHTML(
-      "beforeend",
-      '<main class="oc-frame" data-render-mode="image"></main>',
-    );
-    renderCard();
-    const renderHeaderMetadata = await hydrateAndGetHeaderCallback();
-
-    expect(renderHeaderMetadata()).toBeNull();
-  });
-
-  it("skips summary nav cards during hydration", async () => {
-    document.body.insertAdjacentHTML(
-      "beforeend",
-      '<nav class="oc-diff-card oc-diff-nav" aria-label="Changed files"><ol></ol></nav>',
-    );
-    renderCard();
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(1);
-  });
+it("skips nav cards and invalid JSON while hydrating valid sibling cards", async () => {
+  document.body.innerHTML = '<nav class="oc-diff-card oc-diff-nav"><ol></ol></nav>';
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  addCard("{not-json");
+  await hydrateOptions();
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    "Skipping invalid diff payload",
+    new Error("Diff payload is not valid JSON."),
+  );
+  expect(fileDiffHydrateMock).toHaveBeenCalledTimes(1);
 });

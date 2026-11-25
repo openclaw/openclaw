@@ -1,9 +1,11 @@
-import type {
-  WorkboardCard,
-  WorkboardExecutionStatus,
-  WorkboardStatus,
-} from "@openclaw/workboard-contract";
+import { AsyncResource } from "node:async_hooks";
+import type { WorkboardCard } from "@openclaw/workboard-contract";
+import {
+  isAgentLifecycleYieldedWaiting,
+  resolveAgentRunLifecycleTerminalFacts,
+} from "openclaw/plugin-sdk/agent-lifecycle";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
 import {
@@ -15,38 +17,34 @@ import {
   workboardCardMatchesLifecycleLink,
   workboardCardSessionLookupKey,
 } from "./session-link.js";
-import { cardRunId, cardSessionKey } from "./store-card-helpers.js";
-import { DEFAULT_WORKBOARD_DISPATCH_OWNER } from "./store-constants.js";
+import { cardRunId, cardSessionKey, latestRunningAttempt } from "./store-card-helpers.js";
 import type { WorkboardStore } from "./store.js";
 
 const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
-const WORKBOARD_SESSION_SWEEP_LIMIT = 10_000;
+const WORKBOARD_SESSION_LOOKUP_LIMIT = 2;
 const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
-// Keep readiness across plugin-only reloads, while the singleton lifecycle
-// clears it before an in-process Gateway restart starts replacement services.
+// Prepared hook generations route to the active service, never a worker's
+// caller authority. Gateway restart clears readiness and the active handler.
 const workboardLifecycleGatewayState = resolveGlobalSingleton<{
   ready: boolean;
   abortSignal?: AbortSignal;
+  onRunSettled?: WorkboardRunSettledHandler;
 }>(
   Symbol.for("openclaw.workboard.lifecycleGatewayState"),
   () => ({ ready: false }),
   (state) => {
     state.ready = false;
     state.abortSignal = undefined;
+    state.onRunSettled = undefined;
   },
 );
 
-type WorkboardLifecycleState = "running" | "succeeded" | "failed" | "idle" | "stale";
-
-type WorkboardLifecycleObservation = {
-  state: WorkboardLifecycleState;
-  sourceUpdatedAt?: number;
-  stale?: {
-    detectedAt: number;
-    lastSessionUpdatedAt: number;
-    reason: string;
-  };
+type WorkboardLifecycleSync = Parameters<WorkboardStore["syncLifecycle"]>[1];
+type WorkboardLifecycleObservation = Partial<
+  Pick<WorkboardLifecycleSync, "sourceUpdatedAt" | "stale">
+> & {
+  state: keyof typeof LIFECYCLE_TARGETS;
 };
 
 type WorkboardLifecycleSession = {
@@ -72,71 +70,65 @@ function sessionProvesPreparedAcceptance(session: WorkboardLifecycleSession): bo
   );
 }
 
-type WorkboardLifecycleSessionReadOptions = {
-  includeUnknown: boolean;
+type WorkboardLifecycleSweep = {
+  agentIds?: Promise<string[]>;
 };
+
+type WorkboardLifecycleSessionReadOptions = {
+  sessionKey: string;
+  sweep?: WorkboardLifecycleSweep;
+};
+
+type WorkboardLifecycleSessionReader = (
+  options: WorkboardLifecycleSessionReadOptions,
+) => Promise<WorkboardLifecycleSessionSnapshot>;
 
 type WorkboardLifecycleMatchHandler = (input: {
   cards: readonly WorkboardCard[];
   sessionKey?: string;
 }) => Promise<void>;
 
+type WorkboardRunEvent = Parameters<
+  Parameters<OpenClawPluginApi["agent"]["events"]["registerAgentEventSubscription"]>[0]["handle"]
+>[0];
+type WorkboardRunSettledHandler = (event: WorkboardRunEvent) => Promise<void>;
+
 type WorkboardLifecycleService = OpenClawPluginService & {
   stop: () => void;
   onGatewayStart: (abortSignal?: AbortSignal) => void;
   onGatewayStop: () => void;
+  onRunSettled: WorkboardRunSettledHandler;
 };
 
-function needsWorkboardLifecycleReconciliation(card: WorkboardCard): boolean {
+function needsWorkboardLifecycleReconciliation(card: WorkboardCard, now: number): boolean {
   if (card.metadata?.archivedAt) {
     return false;
   }
   // A running claim can own an accepted session even when persisting its link failed.
   // Keep those cards, and stale cleanup, in the missed-event recovery sweep.
+  const claim = card.metadata?.claim;
+  const settled = card.status === "review" || card.status === "blocked" || card.status === "done";
   return Boolean(
-    card.sessionKey ||
-    card.runId ||
-    card.execution ||
+    (!settled && (card.sessionKey || card.runId || card.execution)) ||
     card.status === "running" ||
-    card.metadata?.claim ||
+    card.execution?.status === "running" ||
+    latestRunningAttempt(card) ||
+    card.metadata?.automation?.launch?.phase === "prepared" ||
+    (claim && (!claim.expiresAt || claim.expiresAt > now)) ||
     card.metadata?.stale,
   );
 }
 
 const LIFECYCLE_TARGETS = {
-  running: { card: "running", execution: "running" },
-  succeeded: { card: "review", execution: "review" },
-  failed: { card: "blocked", execution: "blocked" },
-  idle: { execution: "idle" },
-  stale: { card: "running", execution: "running" },
+  running: { targetStatus: "running", executionStatus: "running" },
+  succeeded: { targetStatus: "review", executionStatus: "review" },
+  failed: { targetStatus: "blocked", executionStatus: "blocked" },
+  idle: { targetStatus: undefined, executionStatus: "idle" },
+  stale: { targetStatus: "running", executionStatus: "running" },
 } as const satisfies Record<
-  WorkboardLifecycleState,
-  { card?: WorkboardStatus; execution?: WorkboardExecutionStatus }
+  string,
+  Pick<WorkboardLifecycleSync, "targetStatus" | "executionStatus">
 >;
-
-async function syncWorkboardCardLifecycle(params: {
-  store: WorkboardStore;
-  cardId: string;
-  observation: WorkboardLifecycleObservation;
-  now: number;
-  association?: {
-    expectedSessionKey?: string;
-    expectedRunId?: string;
-    sessionKey: string;
-    runId?: string;
-    acceptedAt?: number;
-  };
-}): Promise<boolean> {
-  const target = LIFECYCLE_TARGETS[params.observation.state];
-  return await params.store.syncLifecycle(params.cardId, {
-    targetStatus: "card" in target ? target.card : undefined,
-    executionStatus: "execution" in target ? target.execution : undefined,
-    sourceUpdatedAt: params.observation.sourceUpdatedAt,
-    stale: params.observation.stale,
-    now: params.now,
-    ...(params.association ? { association: params.association } : {}),
-  });
-}
 
 async function syncWorkboardLifecycleEvent(params: {
   store: WorkboardStore;
@@ -144,29 +136,34 @@ async function syncWorkboardLifecycleEvent(params: {
   observation: WorkboardLifecycleObservation;
   now: number;
   onMatched?: WorkboardLifecycleMatchHandler;
+  isCurrent?: () => boolean;
 }): Promise<{ cards: readonly WorkboardCard[]; count: number }> {
   const cards = (await params.store.list()).filter(
     (card) => !card.metadata?.archivedAt && workboardCardMatchesLifecycleLink(card, params.source),
   );
+  if (params.isCurrent && !params.isCurrent()) {
+    return { cards: [], count: 0 };
+  }
   const updates = Promise.all(
-    cards.map(
-      async (card) =>
-        await syncWorkboardCardLifecycle({
-          ...params,
-          cardId: card.id,
-          ...(params.source.sessionKey
-            ? {
-                association: {
-                  ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
-                  ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
-                  sessionKey: params.source.sessionKey,
-                  ...(params.source.runId ? { runId: params.source.runId } : {}),
-                  acceptedAt: params.observation.sourceUpdatedAt ?? params.now,
-                },
-              }
-            : {}),
-        }),
-    ),
+    cards.map(async (card) => {
+      return await params.store.syncLifecycle(card.id, {
+        ...LIFECYCLE_TARGETS[params.observation.state],
+        sourceUpdatedAt: params.observation.sourceUpdatedAt,
+        stale: params.observation.stale,
+        now: params.now,
+        ...(params.source.sessionKey
+          ? {
+              association: {
+                ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
+                ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
+                sessionKey: params.source.sessionKey,
+                ...(params.source.runId ? { runId: params.source.runId } : {}),
+                acceptedAt: params.observation.sourceUpdatedAt ?? params.now,
+              },
+            }
+          : {}),
+      });
+    }),
   );
   await Promise.all([
     updates,
@@ -216,27 +213,37 @@ export async function syncWorkboardSubagentEnded(params: {
   return synced.count;
 }
 
-export async function syncWorkboardAgentEnded(params: {
+async function syncWorkboardRunSettled(params: {
   store: WorkboardStore;
-  event: { runId?: string; success: boolean };
-  context: { runId?: string; sessionKey?: string };
-  now?: number;
+  event: WorkboardRunEvent;
+  isCurrent?: () => boolean;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
-  const now = params.now ?? Date.now();
+  const { event } = params;
+  const phase = event.data.phase;
+  // The execution owner publishes this only after fallback settles. Attempt hooks
+  // and yielded parents are not completion facts; never infer completion from idleness.
+  if (
+    event.stream !== "lifecycle" ||
+    (phase !== "end" && phase !== "error") ||
+    event.data.executionSettled !== true ||
+    isAgentLifecycleYieldedWaiting(event.data) ||
+    !event.sessionKey
+  ) {
+    return 0;
+  }
+  const outcome = resolveAgentRunLifecycleTerminalFacts({ phase, data: event.data });
   return (
     await syncWorkboardLifecycleEvent({
       store: params.store,
-      source: {
-        sessionKey: params.context.sessionKey,
-        runId: params.event.runId ?? params.context.runId,
-      },
+      source: { sessionKey: event.sessionKey, runId: event.runId },
       observation: {
-        state: params.event.success ? "succeeded" : "failed",
-        sourceUpdatedAt: now,
+        state: outcome.status === "ok" ? "succeeded" : "failed",
+        sourceUpdatedAt: event.ts,
       },
-      now,
-      ...(params.onMatched ? { onMatched: params.onMatched } : {}),
+      now: event.ts,
+      onMatched: params.onMatched,
+      isCurrent: params.isCurrent,
     })
   ).count;
 }
@@ -279,99 +286,6 @@ function lifecycleFromSession(
   return { state: "idle", sourceUpdatedAt };
 }
 
-async function syncWorkboardLifecycleSessions(params: {
-  store: WorkboardStore;
-  cards?: readonly WorkboardCard[];
-  sessions: readonly WorkboardLifecycleSession[];
-  complete?: boolean;
-  now?: number;
-}): Promise<number> {
-  const now = params.now ?? Date.now();
-  const sessionsByKey = new Map<string, WorkboardLifecycleSession>();
-  const sessionsByWorkboardSuffix = new Map<string, WorkboardLifecycleSession>();
-  const ambiguousWorkboardSuffixes = new Set<string>();
-  for (const session of params.sessions) {
-    sessionsByKey.set(session.key, session);
-    const suffixIndex = session.key.lastIndexOf(":subagent:workboard-");
-    if (suffixIndex >= 0) {
-      const suffix = session.key.slice(suffixIndex + 1);
-      const existing = sessionsByWorkboardSuffix.get(suffix);
-      if (existing && existing.key !== session.key) {
-        sessionsByWorkboardSuffix.delete(suffix);
-        ambiguousWorkboardSuffixes.add(suffix);
-      } else if (!ambiguousWorkboardSuffixes.has(suffix)) {
-        sessionsByWorkboardSuffix.set(suffix, session);
-      }
-    }
-  }
-  let count = 0;
-  for (const card of params.cards ?? (await params.store.list())) {
-    if (card.metadata?.archivedAt) {
-      continue;
-    }
-    const lookupKey = workboardCardSessionLookupKey(card);
-    const suffixIndex = lookupKey.lastIndexOf("subagent:workboard-");
-    const linkedSessionKey = cardSessionKey(card);
-    const canUseAgentlessFallback =
-      linkedSessionKey?.startsWith("subagent:workboard-") === true ||
-      (!linkedSessionKey &&
-        (!card.agentId ||
-          (card.agentId === DEFAULT_WORKBOARD_DISPATCH_OWNER &&
-            card.metadata?.claim?.ownerId === DEFAULT_WORKBOARD_DISPATCH_OWNER)));
-    // Persisted links and explicit agent targets stay authoritative. The unique
-    // suffix fallback recovers a run accepted before its link could be persisted.
-    const session =
-      sessionsByKey.get(lookupKey) ??
-      (canUseAgentlessFallback && suffixIndex >= 0
-        ? sessionsByWorkboardSuffix.get(lookupKey.slice(suffixIndex))
-        : undefined);
-    const launch = card.metadata?.automation?.launch;
-    const preparedAcceptanceAt =
-      launch?.phase === "prepared" && session && sessionProvesPreparedAcceptance(session)
-        ? session.hasActiveRun === true
-          ? Math.max(now, launch.preparedAt)
-          : session.updatedAt
-        : undefined;
-    if (
-      launch?.phase === "prepared" &&
-      (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt)
-    ) {
-      if (
-        params.complete &&
-        (await params.store.failPreparedLaunch(card.id, {
-          expectedLaunch: launch,
-          reason: "Gateway did not accept the prepared Workboard session before restart.",
-          failedAt: now,
-        }))
-      ) {
-        count += 1;
-      }
-      continue;
-    }
-    if (!session) {
-      continue;
-    }
-    const observation = lifecycleFromSession(session, now);
-    if (
-      await syncWorkboardCardLifecycle({
-        store: params.store,
-        cardId: card.id,
-        observation,
-        now,
-        association: {
-          ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
-          ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
-          sessionKey: session.key,
-          ...(preparedAcceptanceAt === undefined ? {} : { acceptedAt: preparedAcceptanceAt }),
-        },
-      })
-    ) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 function normalizeSession(value: unknown): WorkboardLifecycleSession | undefined {
   if (!isRecord(value) || typeof value.key !== "string" || !value.key) {
     return undefined;
@@ -396,14 +310,59 @@ function normalizeSession(value: unknown): WorkboardLifecycleSession | undefined
 }
 
 export async function readWorkboardLifecycleSessions(
-  gateway: Pick<OpenClawPluginApi["runtime"]["gateway"], "isAvailable" | "request">,
-  options: WorkboardLifecycleSessionReadOptions = { includeUnknown: false },
+  gateway: Pick<OpenClawPluginApi["runtime"]["gateway"], "isAvailable"> & {
+    request: (
+      ...args: Parameters<OpenClawPluginApi["runtime"]["gateway"]["request"]>
+    ) => Promise<unknown>;
+  },
+  options: WorkboardLifecycleSessionReadOptions,
 ): Promise<WorkboardLifecycleSessionSnapshot> {
   if (!(await gateway.isAvailable())) {
     return { sessions: [], complete: false };
   }
+  if (parseAgentSessionKey(options.sessionKey)) {
+    const payload = await gateway.request(
+      "sessions.describe",
+      { key: options.sessionKey, includeDerivedTitles: false, includeLastMessage: false },
+      { scopes: ["operator.read"] },
+    );
+    if (!isRecord(payload) || (payload.session !== null && !isRecord(payload.session))) {
+      throw new Error("sessions.describe returned an invalid lifecycle snapshot");
+    }
+    const session = normalizeSession(payload.session);
+    // Completeness is scoped to the requested identity, never the catalog.
+    return { sessions: session ? [session] : [], complete: true };
+  }
+  if (options.sessionKey.startsWith("subagent:workboard-")) {
+    // Success and failure are shared only within this admitted sweep.
+    const sweep: WorkboardLifecycleSweep = options.sweep ?? {};
+    sweep.agentIds ??= gateway
+      .request("agents.list", {}, { scopes: ["operator.read"] })
+      .then((payload) => {
+        if (!isRecord(payload) || !Array.isArray(payload.agents)) {
+          throw new Error("agents.list returned an invalid ownership snapshot");
+        }
+        return payload.agents.map((agent) => {
+          if (!isRecord(agent) || typeof agent.id !== "string" || !agent.id) {
+            throw new Error("agents.list returned an invalid agent identity");
+          }
+          return agent.id;
+        });
+      });
+    const sessions: WorkboardLifecycleSession[] = [];
+    for (const agentId of await sweep.agentIds) {
+      const exact = await readWorkboardLifecycleSessions(gateway, {
+        sessionKey: `agent:${agentId}:${options.sessionKey}`,
+      });
+      if (!exact.complete) {
+        return { sessions: [], complete: false };
+      }
+      sessions.push(...exact.sessions);
+    }
+    return { sessions, complete: true };
+  }
   let includeUnknown = false;
-  if (options.includeUnknown) {
+  if (options.sessionKey === "unknown") {
     const agentsPayload = await gateway.request("agents.list", {}, { scopes: ["operator.read"] });
     if (!isRecord(agentsPayload) || typeof agentsPayload.selectionRequired !== "boolean") {
       throw new Error("agents.list returned an invalid ownership snapshot");
@@ -415,8 +374,12 @@ export async function readWorkboardLifecycleSessions(
   const payload = await gateway.request(
     "sessions.list",
     {
-      limit: WORKBOARD_SESSION_SWEEP_LIMIT,
+      source: "workboard-lifecycle",
+      rowMode: "compact",
+      search: options.sessionKey,
+      limit: WORKBOARD_SESSION_LOOKUP_LIMIT,
       configuredAgentsOnly: true,
+      archived: "all",
       includeGlobal: false,
       includeUnknown,
     },
@@ -425,31 +388,32 @@ export async function readWorkboardLifecycleSessions(
   if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
     throw new Error("sessions.list returned an invalid lifecycle snapshot");
   }
+  const sessions = payload.sessions.flatMap((value) => {
+    const session = normalizeSession(value);
+    return session ? [session] : [];
+  });
   return {
-    sessions: payload.sessions.flatMap((value) => {
-      const session = normalizeSession(value);
-      return session ? [session] : [];
-    }),
-    // A short page proves the snapshot is complete. Keep full pages conservative
-    // so absent sessions are never inferred as "missing" when the page is truncated.
-    complete: payload.sessions.length < WORKBOARD_SESSION_SWEEP_LIMIT,
+    sessions,
+    // An exact hit establishes this identity despite unrelated title matches.
+    // Otherwise, only a short page can prove absence or a unique suffix owner.
+    complete:
+      sessions.some((session) => session.key === options.sessionKey) ||
+      payload.sessions.length < WORKBOARD_SESSION_LOOKUP_LIMIT,
   };
 }
 
 export function createWorkboardLifecycleService(params: {
   store: WorkboardStore;
   worktrees?: WorkboardWorktreeCleanupRuntime;
-  readSessions: (
-    options: WorkboardLifecycleSessionReadOptions,
-  ) => Promise<WorkboardLifecycleSessionSnapshot>;
-  onSweep?: () => void;
-  now?: () => number;
+  readSessions: WorkboardLifecycleSessionReader;
+  onMatched?: WorkboardLifecycleMatchHandler;
 }): WorkboardLifecycleService {
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let begin: (() => void) | undefined;
   let removeDrainListener: (() => void) | undefined;
   let cleanupCursor = 0;
+  let handleRunSettled: WorkboardRunSettledHandler | undefined;
   const cleanupWorktrees = async (
     cards: readonly WorkboardCard[],
     warn: (message: string) => void,
@@ -475,6 +439,10 @@ export function createWorkboardLifecycleService(params: {
     }
   };
   const stop = () => {
+    if (workboardLifecycleGatewayState.onRunSettled === handleRunSettled) {
+      workboardLifecycleGatewayState.onRunSettled = undefined;
+    }
+    handleRunSettled = undefined;
     removeDrainListener?.();
     removeDrainListener = undefined;
     generation += 1;
@@ -505,44 +473,113 @@ export function createWorkboardLifecycleService(params: {
   };
   return {
     id: "workboard-lifecycle-sync",
+    async onRunSettled(event) {
+      await workboardLifecycleGatewayState.onRunSettled?.(event);
+    },
     start(ctx) {
       const owner = ++generation;
+      const readSessions = AsyncResource.bind(params.readSessions);
       let begun = false;
+      const onMatched: WorkboardLifecycleMatchHandler = async (input) => {
+        if (generation === owner) {
+          await params.onMatched?.(input);
+        }
+      };
       const reconcile = async () => {
         try {
           await params.store.runOperation(async () => {
-            if (generation === owner) {
-              params.onSweep?.();
-            }
             let cards = await params.store.list();
             if (generation !== owner) {
               return;
             }
-            if (cards.some((card) => needsWorkboardLifecycleReconciliation(card))) {
+            const cardsByKey = new Map<string, WorkboardCard[]>();
+            const now = Date.now();
+            const sweep: WorkboardLifecycleSweep = {};
+            for (const card of cards.filter((candidate) =>
+              needsWorkboardLifecycleReconciliation(candidate, now),
+            )) {
+              const key = workboardCardSessionLookupKey(card);
+              const group = cardsByKey.get(key) ?? [];
+              group.push(card);
+              cardsByKey.set(key, group);
+            }
+            for (const [sessionKey, linkedCards] of cardsByKey) {
               try {
-                const snapshot = await params.readSessions({
-                  includeUnknown: cards.some(
-                    (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
-                  ),
-                });
-                if (generation !== owner) {
-                  return;
+                const snapshot = await readSessions({ sessionKey, sweep });
+                // A partial suffix search cannot establish a unique owner or absence.
+                if (!snapshot.complete) {
+                  continue;
                 }
-                await syncWorkboardLifecycleSessions({
-                  store: params.store,
-                  cards,
-                  ...snapshot,
-                  now: params.now?.() ?? Date.now(),
-                });
-                if (generation !== owner) {
-                  return;
+                const store = params.store;
+                const sessions = snapshot.sessions;
+                for (const card of linkedCards) {
+                  const lookupKey = workboardCardSessionLookupKey(card);
+                  const candidates = lookupKey.startsWith("subagent:workboard-")
+                    ? sessions.filter((entry) => entry.key.endsWith(`:${lookupKey}`))
+                    : [];
+                  // Persisted links win; an unlinked dispatcher claim needs one configured owner.
+                  const session =
+                    sessions.find((entry) => entry.key === lookupKey) ??
+                    (candidates.length === 1 ? candidates[0] : undefined);
+                  if (!session && candidates.length > 1) {
+                    continue;
+                  }
+                  const launch = card.metadata?.automation?.launch;
+                  const preparedAcceptanceAt =
+                    launch?.phase === "prepared" &&
+                    session &&
+                    sessionProvesPreparedAcceptance(session)
+                      ? session.hasActiveRun === true
+                        ? Math.max(now, launch.preparedAt)
+                        : session.updatedAt
+                      : undefined;
+                  if (
+                    launch?.phase === "prepared" &&
+                    (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt)
+                  ) {
+                    await store.failPreparedLaunch(card.id, {
+                      expectedLaunch: launch,
+                      reason:
+                        "Gateway did not accept the prepared Workboard session before restart.",
+                      failedAt: now,
+                    });
+                    continue;
+                  }
+                  if (!session) {
+                    continue;
+                  }
+                  const observation = lifecycleFromSession(session, now);
+                  if (
+                    await store.syncLifecycle(card.id, {
+                      ...LIFECYCLE_TARGETS[observation.state],
+                      sourceUpdatedAt: observation.sourceUpdatedAt,
+                      stale: observation.stale,
+                      now,
+                      association: {
+                        ...(cardSessionKey(card)
+                          ? { expectedSessionKey: cardSessionKey(card) }
+                          : {}),
+                        ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
+                        sessionKey: session.key,
+                        ...(preparedAcceptanceAt === undefined
+                          ? {}
+                          : { acceptedAt: preparedAcceptanceAt }),
+                      },
+                    })
+                  ) {
+                    if (observation.state === "succeeded" || observation.state === "failed") {
+                      await onMatched({ cards: [card], sessionKey: session.key });
+                    }
+                  }
                 }
-                cards = await params.store.list();
               } catch (error) {
                 if (generation === owner) {
                   ctx.logger.warn(`workboard lifecycle sync failed: ${String(error)}`);
                 }
               }
+            }
+            if (cardsByKey.size > 0) {
+              cards = await params.store.list();
             }
             if (generation === owner) {
               await cleanupWorktrees(cards, (message) => ctx.logger.warn(message));
@@ -559,6 +596,17 @@ export function createWorkboardLifecycleService(params: {
           }
         }
       };
+      const isCurrent = () =>
+        generation === owner && workboardLifecycleGatewayState.onRunSettled === handleRunSettled;
+      handleRunSettled = AsyncResource.bind(async (event) => {
+        if (!isCurrent()) {
+          return;
+        }
+        await params.store.runOperation(() =>
+          syncWorkboardRunSettled({ store: params.store, event, isCurrent, onMatched }),
+        );
+      });
+      workboardLifecycleGatewayState.onRunSettled = handleRunSettled;
       begin = () => {
         if (generation !== owner || begun) {
           return;

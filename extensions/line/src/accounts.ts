@@ -1,5 +1,4 @@
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
-// Line plugin module implements accounts behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,

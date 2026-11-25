@@ -1,8 +1,8 @@
 import type { SessionsListResult } from "../api/types.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
+import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 import { findSidebarSessionInTree } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
 
 function hasMultipleSidebarSessionIdentities(
   ownerOptions: readonly SessionOwnerOption[],
@@ -49,6 +49,7 @@ export function applySidebarSessionOwnerFilter(input: {
   projected: SidebarRecentSession[];
   ownerFacet: SessionsListResult["owners"];
   selectedOwnerId: string | null;
+  selectedProfileId?: string;
   self?: { id: string; name?: string; avatarUrl?: string } | null;
 }): {
   rows: SidebarRecentSession[];
@@ -71,19 +72,27 @@ export function applySidebarSessionOwnerFilter(input: {
   };
   // An absent facet is unresolved during hydration. A present facet is the
   // Gateway's complete owner inventory, even when rows are owner-filtered.
-  const selectedOwnerId = input.selectedOwnerId?.trim() || null;
-  const activeOwnerId =
-    selectedOwnerId &&
-    (input.ownerFacet === undefined || ownerOptions.some((owner) => owner.id === selectedOwnerId))
-      ? selectedOwnerId
-      : null;
+  // A complete facet may omit an owner with no rows. That means an empty
+  // filtered list, never permission to broaden the selected owner to everyone.
+  const activeOwnerId = input.selectedOwnerId?.trim() || null;
   const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
     const filtered: SidebarRecentSession[] = [];
     for (const row of treeRows) {
       const children = filterTree(row.children);
       const ownerId = row.owner?.actor.id;
-      if (ownerId === activeOwnerId) {
-        filtered.push({ ...row, children });
+      const profileMatches =
+        !input.selectedProfileId ||
+        (row.owner?.actor.type === "human" && ownerId === input.selectedProfileId);
+      if (ownerId === activeOwnerId && profileMatches) {
+        // Retain unloaded links for discovery, but count only visible loaded children.
+        const childSessionKeys = new Set(row.childSessionKeys);
+        for (const child of row.children) {
+          childSessionKeys.delete(child.key);
+        }
+        for (const child of children) {
+          childSessionKeys.add(child.key);
+        }
+        filtered.push({ ...row, children, childSessionKeys: [...childSessionKeys] });
       } else {
         for (const child of children) {
           filtered.push({ ...child, isChild: false });

@@ -1,3 +1,4 @@
+import { Script } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { nestedToolHistoryFixture } from "../test/nested-tool-activity-fixture.js";
 import { createQaBusState } from "./bus-state.js";
@@ -156,9 +157,11 @@ function runCompletionPolicyFlow(
                     message.direction === "inbound" &&
                     message.conversation.id === "issue-109025-completion",
                 )?.text ?? "";
-            const commandTemplate = inboundText.match(/run this exact command: ([^\n]+)/u)?.[1];
-            const childMarker = workspaceWrites.at(-1)?.content.trim();
-            if (!commandTemplate || !childMarker) {
+            const childReply = workspaceWrites.at(-1)?.content.trim();
+            const deliveredExecCommand = childReply?.match(
+              /REQUESTER_ACTION: Call exec exactly once with this command: (.+) Then reply with exactly the command's trimmed stdout\.$/u,
+            )?.[1];
+            if (!inboundText || !deliveredExecCommand) {
               throw new Error("completion fixture is missing its command or child marker");
             }
             const execToolCall = {
@@ -166,9 +169,7 @@ function runCompletionPolicyFlow(
               id: params.parentExecToolCallId ?? completionExecToolCallId,
               name: "exec",
               arguments: {
-                command:
-                  params.parentExecCommand ??
-                  commandTemplate.replace("__CHILD_COMPLETION_TOKEN__", childMarker),
+                command: params.parentExecCommand ?? deliveredExecCommand,
               },
             };
             const parentReplyIsVisible =
@@ -260,7 +261,8 @@ function runCompletionPolicyFlow(
       },
       fs: {
         readFile: async () => {
-          const childMarker = workspaceWrites.at(-1)?.content.trim() ?? "";
+          const childMarker =
+            workspaceWrites.at(-1)?.content.match(/^(CHILD_DONE:[0-9a-f-]+)/u)?.[1] ?? "";
           const completionText =
             params.proofCompletionText === undefined ||
             params.proofCompletionText === "__DELIVERED_CHILD_TOKEN__"
@@ -858,9 +860,16 @@ describe("live subagent scenario timeouts", () => {
     const { result, state, workspaceWrites } = runCompletionPolicyFlow();
 
     await expect(result).resolves.toMatchObject({ status: "pass" });
-    expect(workspaceWrites).toHaveLength(4);
+    expect(workspaceWrites).toHaveLength(5);
 
-    const chainFileNames = workspaceWrites.map(({ filePath }) => filePath.split("/").at(-1));
+    const [helperWrite, ...chainWrites] = workspaceWrites;
+    const helperFileName = helperWrite?.filePath.split("/").at(-1);
+    expect(helperFileName).toMatch(/^issue-109025-completion-exec-[0-9a-f-]+\.cjs$/u);
+    expect(helperWrite?.content).toContain("ISSUE109025_COMPLETION_EXEC_OK");
+    expect(helperWrite?.content).not.toContain("__CHILD_COMPLETION_TOKEN__");
+    expect(() => new Script(helperWrite?.content ?? "")).not.toThrow();
+
+    const chainFileNames = chainWrites.map(({ filePath }) => filePath.split("/").at(-1));
     const chainUuids = chainFileNames.map(
       (fileName) =>
         fileName?.match(
@@ -869,19 +878,28 @@ describe("live subagent scenario timeouts", () => {
     );
     expect(chainUuids.every((uuid) => uuid !== undefined)).toBe(true);
     expect(new Set(chainUuids).size).toBe(4);
-    expect(workspaceWrites.slice(0, -1).map(({ content }) => content.trim())).toEqual(
+    expect(chainWrites.slice(0, -1).map(({ content }) => content.trim())).toEqual(
       chainFileNames.slice(1),
     );
 
-    const terminalMarker = workspaceWrites.at(-1)?.content.trim();
-    expect(terminalMarker).toMatch(/^CHILD_DONE:[0-9a-f-]+$/u);
+    const terminalReply = chainWrites.at(-1)?.content.trim() ?? "";
+    const terminalToken = terminalReply.match(/^CHILD_DONE:[0-9a-f-]+/u)?.[0];
+    expect(terminalToken).toBeDefined();
+    expect(terminalReply).toContain("REQUESTER_ACTION: Call exec exactly once with this command:");
+    expect(terminalReply).toContain("Then reply with exactly the command's trimmed stdout.");
     const inboundText = state.getSnapshot().messages[0]?.text ?? "";
     expect(inboundText).toContain(chainFileNames[0]);
-    expect(inboundText).toContain("__CHILD_COMPLETION_TOKEN__");
+    expect(terminalReply).toContain(
+      `node ${JSON.stringify(helperFileName)} ${JSON.stringify(terminalToken)}`,
+    );
+    expect(inboundText).not.toContain(helperFileName);
+    expect(inboundText).not.toContain("__CHILD_COMPLETION_TOKEN__");
+    expect(inboundText).not.toContain("node -e");
     for (const chainFileName of chainFileNames.slice(1)) {
       expect(inboundText).not.toContain(chainFileName);
     }
-    expect(inboundText).not.toContain(terminalMarker);
+    expect(inboundText).not.toContain(terminalReply);
+    expect(inboundText).not.toContain(terminalToken);
   });
 
   it("accepts authenticated spawn, yield, completion, and exec in the same millisecond", async () => {

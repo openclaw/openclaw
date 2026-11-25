@@ -44,9 +44,10 @@ export type SnapshotVerificationResult = {
 
 export type SnapshotSummary = SnapshotResult;
 
-export type SqliteSnapshotProvider = {
-  create(database: SnapshotDatabaseRef): Promise<SnapshotResult>;
-  list(): Promise<SnapshotSummary[]>;
-  restoreFresh(snapshot: SnapshotRef, targetPath: string): Promise<SnapshotVerificationResult>;
-  verify(snapshot: SnapshotRef): Promise<SnapshotVerificationResult>;
+type EngineSnapshotManifest =
+  | SnapshotManifest
+  | import("./export-envelope.js").PostgresExportEnvelope;
+export type EngineSnapshotResult = {
+  readonly ref: SnapshotRef;
+  readonly manifest: EngineSnapshotManifest;
 };

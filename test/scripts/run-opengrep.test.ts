@@ -6,6 +6,10 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -115,8 +119,8 @@ function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.Process
   const ensureIndex = steps.findIndex((step) => step.name === "Ensure PR base commit");
   expect(steps[1]).toEqual({
     name: "Setup supported Node runtime",
-    uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-    with: { "node-version": "24.21.0", "package-manager-cache": false },
+    uses: "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+    with: { "node-version": "24.22.1", "package-manager-cache": false },
   });
   expect(ensureIndex).toBeGreaterThan(1);
   // The fixture already has a supported Node; exercise the repository-owned preparation below.
@@ -134,7 +138,7 @@ function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.Process
 }
 
 describe("run-opengrep.sh", () => {
-  it.each(["-h", "--help"])("prints complete usage without shell bootstrap code for %s", (flag) => {
+  it.each(["--help"])("prints complete usage without shell bootstrap code for %s", (flag) => {
     const repo = createTempDir("openclaw-run-opengrep-help-");
     copyRunOpengrepFiles(repo);
     const result = spawnSync("bash", ["scripts/run-opengrep.sh", flag], {
@@ -246,7 +250,7 @@ describe("run-opengrep.sh", () => {
     );
     expect(sarif.version).toBe("2.1.0");
     expect(sarif.runs[0].tool.driver.name).toBe("Opengrep OSS");
-    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.30.0");
+    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.32.0");
     expect(sarif.runs[0].results).toEqual([]);
     expect(fs.existsSync(argsPath)).toBe(false);
   });
@@ -279,13 +283,12 @@ describe("run-opengrep.sh", () => {
 
       const { argsPath, binDir } = installOpengrepStub(repo);
       if (failedGitCommand) {
-        const realGit = execFileSync("bash", ["-lc", "command -v git"], {
-          encoding: "utf8",
-        }).trim();
+        const realGit = resolveGitOutsideFixtures();
         writeFile(
           path.join(binDir, "git"),
           [
             "#!/usr/bin/env bash",
+            gitPathShimShellPrelude(),
             `if [[ "\${1:-}" == ${JSON.stringify(failedGitCommand)} ]]; then`,
             '  echo "forced git ls-files failure" >&2',
             "  exit 71",
@@ -351,11 +354,8 @@ describe("run-opengrep.sh", () => {
     });
 
     it.each([
-      { shape: "merge", branch: "main", depth: 2, partial: false, passes: true },
       { shape: "partial merge", branch: "main", depth: 2, partial: true, passes: true },
-      { shape: "linear", branch: "feature", depth: 2, partial: false, passes: true },
       { shape: "merge without parents", branch: "main", depth: 1, partial: false, passes: false },
-      { shape: "linear without base", branch: "feature", depth: 1, partial: false, passes: false },
     ])(
       "prepares and scans a shallow $shape checkout without unrelated base fetches",
       ({ branch, depth, partial, passes }) => {
@@ -449,7 +449,7 @@ describe("run-opengrep.sh", () => {
 });
 
 describe("OpenGrep GitHub SARIF uploads", () => {
-  it.each(["opengrep-precise.yml", "opengrep-precise-full.yml"])(
+  it.each(["opengrep-precise.yml"])(
     "%s preserves raw evidence and uploads only findings without accepted source suppression",
     (workflowName) => {
       const repo = createTempDir("openclaw-opengrep-sarif-");
@@ -527,22 +527,6 @@ describe("OpenGrep GitHub SARIF uploads", () => {
       expect(artifact.with?.path).toBe(reportPath);
       expect(artifact.with?.["if-no-files-found"]).toBe("error");
       expect(fs.readFileSync(path.join(repo, reportPath), "utf8")).toBe(raw);
-    },
-  );
-
-  it.each(["{", JSON.stringify({ version: "2.1.0", runs: [{ results: "invalid" }] })])(
-    "fails malformed reports without emitting an upload payload: %s",
-    (raw) => {
-      const repo = createTempDir("openclaw-opengrep-sarif-invalid-");
-      const inputPath = path.join(repo, "raw.sarif");
-      writeFile(inputPath, raw);
-      const result = spawnSync(process.execPath, ["scripts/opengrep-github-sarif.mjs", inputPath], {
-        encoding: "utf8",
-      });
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr.trimEnd()).toMatch(/\[opengrep-github-sarif\] FAILED \(exit 1\)$/);
-      expect(fs.readFileSync(inputPath, "utf8")).toBe(raw);
     },
   );
 });

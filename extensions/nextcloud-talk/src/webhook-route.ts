@@ -9,10 +9,7 @@ export const DEFAULT_NEXTCLOUD_TALK_WEBHOOK_PATH = "/nextcloud-talk-webhook";
 
 export function resolveNextcloudTalkLegacyWebhook(config: NextcloudTalkAccountConfig) {
   const listener = config.legacyWebhook;
-  if (listener === false) {
-    return undefined;
-  }
-  return { port: listener?.port ?? 8788, host: listener?.host ?? "0.0.0.0" };
+  return listener ? { port: listener.port, host: listener.host ?? "0.0.0.0" } : undefined;
 }
 
 export function describeNextcloudTalkWebhookRouteConflict(
@@ -23,7 +20,7 @@ export function describeNextcloudTalkWebhookRouteConflict(
   const probe = classifyGatewayProbePath(pathname);
   const reason =
     probe !== "outside" && probe !== "namespace"
-      ? "is reserved for Gateway probes"
+      ? "is reserved for Gateway checks"
       : isProtectedPluginRoutePathFromContext(resolvePluginRoutePathContext(pathname))
         ? "requires Gateway authentication"
         : undefined;

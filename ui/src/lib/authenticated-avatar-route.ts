@@ -1,5 +1,9 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../app/browser-http.ts";
+import {
+  fetchGatewayContextResource,
+  readAvatarGatewayContext,
+  registerAvatarGatewayReset,
+} from "./identity-avatar-context.ts";
 
 type AvatarRouteEntry = {
   blobUrl: string | null;
@@ -8,14 +12,13 @@ type AvatarRouteEntry = {
   releaseTimer: ReturnType<typeof setTimeout> | undefined;
   retryTimer: ReturnType<typeof setTimeout> | undefined;
   retryAttempts: number;
-  retryEligibleAt: number | undefined;
+  unavailable: boolean;
 };
 
 /** Bound protected avatar fetches so a stalled Gateway route cannot pin UI state forever. */
 const AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS = 30_000;
 const AUTHENTICATED_AVATAR_MAX_RETRY_AFTER_MS = 30_000;
 const AUTHENTICATED_AVATAR_MAX_RETRIES = 3;
-const AUTHENTICATED_AVATAR_RETRY_COOLDOWN_MS = 30_000;
 const sharedAvatarRoutes = new Map<string, AvatarRouteEntry>();
 
 function retryAfterMs(response: Response): number | undefined {
@@ -52,15 +55,6 @@ function deleteEntry(key: string, entry: AvatarRouteEntry) {
   }
 }
 
-function avatarRouteKey(
-  url: string,
-  authTokens: readonly string[],
-  cacheNotFound: boolean,
-  retryUnavailable: boolean,
-): string {
-  return `${cacheNotFound ? "stable-miss" : "retry-miss"}\0${retryUnavailable ? "retry-503" : "drop-503"}\0${authTokens.join("")}\0${url}`;
-}
-
 function releaseEntry(key: string, owner: symbol) {
   const entry = sharedAvatarRoutes.get(key);
   if (!entry) {
@@ -70,7 +64,7 @@ function releaseEntry(key: string, owner: symbol) {
   if (entry.consumers.size > 0 || entry.releaseTimer !== undefined) {
     return;
   }
-  // Lit can replace one route consumer with another in a later microtask. Finalize
+  // A view can replace one route consumer with another in a later microtask. Finalize
   // unowned routes on the next task so the shared request survives that DOM handoff.
   entry.releaseTimer = setTimeout(() => {
     entry.releaseTimer = undefined;
@@ -85,10 +79,13 @@ async function fetchAvatarRoute(
   key: string,
   url: string,
   authTokens: readonly string[],
-  cacheNotFound: boolean,
   retryUnavailable: boolean,
   entry: AvatarRouteEntry,
+  gatewayContext = false,
 ) {
+  // Only the current response can retain an unavailable entry. A failed retry
+  // must not inherit the preceding 503 and strand a still-retryable route.
+  entry.unavailable = false;
   const timeout = setTimeout(() => entry.controller.abort(), AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS);
   let blobUrl: string | null = null;
   let notFound = false;
@@ -97,17 +94,23 @@ async function fetchAvatarRoute(
     // Ordered credential recovery: a saved token can be stale while the session's
     // password is valid, so a rejected credential falls through to the next one
     // instead of silently leaving the caller on its fallback forever.
-    for (const authToken of authTokens.length > 0 ? authTokens : [""]) {
-      const response = await fetchControlUiResource(url, {
-        ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
-        signal: entry.controller.signal,
-      });
+    for (const authToken of !gatewayContext && authTokens.length > 0 ? authTokens : [""]) {
+      const response = gatewayContext
+        ? await fetchGatewayContextResource(url, 5_000, entry.controller.signal)
+        : await fetchControlUiResource(url, {
+            ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
+            signal: entry.controller.signal,
+          });
       if (response.ok) {
         blobUrl = URL.createObjectURL(await response.blob());
         break;
       }
+      // Rejected bodies are never read, including cached misses. Release them
+      // without letting stalled cleanup block credential recovery or fallback.
+      void response.body?.cancel().catch(() => undefined);
       notFound = response.status === 404;
-      retryDelayMs = retryUnavailable ? retryAfterMs(response) : undefined;
+      entry.unavailable = retryUnavailable && response.status === 503;
+      retryDelayMs = entry.unavailable ? retryAfterMs(response) : undefined;
       if (response.status !== 401 && response.status !== 403) {
         break;
       }
@@ -125,33 +128,32 @@ async function fetchAvatarRoute(
     return;
   }
   if (!blobUrl) {
-    if (notFound && cacheNotFound) {
+    if (notFound) {
       return;
     }
-    if (retryDelayMs !== undefined && entry.consumers.size > 0) {
-      if (entry.retryAttempts < AUTHENTICATED_AVATAR_MAX_RETRIES) {
+    if (entry.unavailable && entry.consumers.size > 0) {
+      if (retryDelayMs !== undefined && entry.retryAttempts < AUTHENTICATED_AVATAR_MAX_RETRIES) {
         entry.retryAttempts += 1;
         // The budget belongs to this persistent shared entry. Keeping an
-        // exhausted miss prevents Lit rerenders from minting a new poll loop.
+        // exhausted miss prevents view rerenders from minting a new poll loop.
         entry.retryTimer = setTimeout(() => {
           entry.retryTimer = undefined;
           if (sharedAvatarRoutes.get(key) !== entry || entry.consumers.size === 0) {
             return;
           }
           entry.controller = new AbortController();
-          void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
+          void fetchAvatarRoute(key, url, authTokens, retryUnavailable, entry, gatewayContext);
         }, retryDelayMs);
-      } else {
-        // Keep the exhausted entry through a cooldown so render churn cannot
-        // remint the budget. A later render may start a fresh bounded window.
-        entry.retryEligibleAt = Date.now() + AUTHENTICATED_AVATAR_RETRY_COOLDOWN_MS;
       }
+      // A render is not evidence that Gateway preparation changed. Keep the
+      // fallback until auth recovery, a new route/credential, or final release.
       return;
     }
     // Avatar misses stay retryable because a later identity publication may make the route valid.
     deleteEntry(key, entry);
     return;
   }
+  entry.unavailable = false;
   entry.blobUrl = blobUrl;
   for (const update of entry.consumers.values()) {
     update();
@@ -162,34 +164,55 @@ async function fetchAvatarRoute(
  * Resolves protected same-origin avatar routes to one browser-local blob shared by all views.
  * The owning view releases its reference on credential change or disconnect.
  */
-export class AuthenticatedAvatarRouteLoader implements ReactiveController {
+export class AuthenticatedAvatarRouteLoader {
   private readonly owner = Symbol("authenticated-avatar-route-owner");
   private keys = new Set<string>();
   private connected = false;
   private stopAuthRecovery?: () => void;
+  private stopGatewayReset?: () => void;
   private readonly onUpdate = () => {
     if (this.connected) {
-      this.host.requestUpdate();
+      this.changed();
     }
   };
 
   constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly options: { cacheNotFound?: boolean; retryUnavailable?: boolean } = {},
-  ) {
-    host.addController(this);
-  }
+    private readonly changed: () => void,
+    private readonly options: { retryUnavailable?: boolean; gatewayContext?: boolean } = {},
+  ) {}
 
-  hostConnected() {
+  connect() {
     this.connected = true;
-    this.stopAuthRecovery ??= subscribeBrowserAuthRestored(this.onUpdate);
-    this.host.requestUpdate();
+    if (this.options.gatewayContext) {
+      this.stopGatewayReset ??= registerAvatarGatewayReset(() => {
+        for (const key of this.keys) {
+          const entry = sharedAvatarRoutes.get(key);
+          if (entry) {
+            deleteEntry(key, entry);
+          }
+        }
+        this.keys.clear();
+        this.onUpdate();
+      });
+    }
+    this.stopAuthRecovery ??= subscribeBrowserAuthRestored(() => {
+      for (const key of this.keys) {
+        const entry = sharedAvatarRoutes.get(key);
+        if (entry?.unavailable && entry.retryTimer === undefined) {
+          deleteEntry(key, entry);
+        }
+      }
+      this.onUpdate();
+    });
+    this.changed();
   }
 
-  hostDisconnected() {
+  disconnect() {
     this.connected = false;
     this.stopAuthRecovery?.();
     this.stopAuthRecovery = undefined;
+    this.stopGatewayReset?.();
+    this.stopGatewayReset = undefined;
     this.reset();
   }
 
@@ -214,19 +237,36 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
     }
   }
 
-  /** `authTokens` is an ordered candidate list; a rejected credential falls through to the next. */
-  resolve(url: string, authTokens: readonly string[]): string | null {
+  /**
+   * `authTokens` are ordered credential candidates. A lifecycle-owned `cacheScope`
+   * allows recovery after a genuine connection change, never an ordinary render.
+   */
+  resolve(url: string, authTokens: readonly string[] = [], cacheScope = ""): string | null {
+    const gatewayContext = this.options.gatewayContext === true;
     if (!url.startsWith("/")) {
-      return url;
+      return gatewayContext ? null : url;
     }
-    // Lit can finish a queued render after disconnect. That render must not
+    // A view can finish a queued render after disconnect. That render must not
     // reacquire a released route and keep an orphaned request or retry alive.
     if (!this.connected) {
       return null;
     }
-    const cacheNotFound = this.options.cacheNotFound === true;
+    const context = gatewayContext ? readAvatarGatewayContext() : null;
+    const routeUrl = context
+      ? new URL(context.resourceBasePath + url, context.origin ?? globalThis.location.origin).href
+      : url;
+    const routeTokens = context?.authTokens ?? authTokens;
+    const routeScope = context
+      ? JSON.stringify([context.origin, context.resourceBasePath, context.storageScope])
+      : cacheScope;
     const retryUnavailable = this.options.retryUnavailable === true;
-    const key = avatarRouteKey(url, authTokens, cacheNotFound, retryUnavailable);
+    const key = JSON.stringify([
+      gatewayContext,
+      retryUnavailable,
+      routeTokens,
+      routeScope,
+      routeUrl,
+    ]);
     let entry = sharedAvatarRoutes.get(key);
     if (!entry) {
       entry = {
@@ -236,20 +276,10 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
         releaseTimer: undefined,
         retryTimer: undefined,
         retryAttempts: 0,
-        retryEligibleAt: undefined,
+        unavailable: false,
       };
       sharedAvatarRoutes.set(key, entry);
-      void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
-    } else if (
-      entry.blobUrl === null &&
-      entry.retryTimer === undefined &&
-      entry.retryEligibleAt !== undefined &&
-      Date.now() >= entry.retryEligibleAt
-    ) {
-      entry.retryAttempts = 0;
-      entry.retryEligibleAt = undefined;
-      entry.controller = new AbortController();
-      void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
+      void fetchAvatarRoute(key, routeUrl, routeTokens, retryUnavailable, entry, gatewayContext);
     }
     if (entry.releaseTimer !== undefined) {
       clearTimeout(entry.releaseTimer);

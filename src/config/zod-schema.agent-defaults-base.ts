@@ -1,37 +1,24 @@
 import { z } from "zod";
+import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
-import { AgentModelMapSchema, AgentModelPolicySchema } from "./zod-schema.agent-entry-base.js";
+import {
+  AgentCompactionMaxSummaryCharsSchema,
+  AgentModelMapSchema,
+  AgentModelPolicySchema,
+  WorkspaceFileModeSchema,
+} from "./zod-schema.agent-entry-base.js";
 import {
   AgentModelSchema,
   AgentToolModelSchema,
   DecisionModelSchema,
 } from "./zod-schema.agent-model.js";
 
-const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
-
 const NonNegativeByteSizeSchema = z.union([
   z.number().int().nonnegative(),
   z.string().refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
 ]);
 
-const OptionalBootstrapFileNameSchema = z.enum([
-  "SOUL.md",
-  "USER.md",
-  "HEARTBEAT.md",
-  "IDENTITY.md",
-]);
-
-const AgentThinkingLevelSchema = z.enum([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "adaptive",
-  "max",
-  "ultra",
-]);
+const AgentThinkingLevelSchema = z.enum(ALL_THINKING_LEVELS);
 
 const EmbeddedAgentConfigSchema = z.strictObject({
   projectSettingsPolicy: z
@@ -41,15 +28,13 @@ const EmbeddedAgentConfigSchema = z.strictObject({
   cyberFailover: z
     .strictObject({
       mode: z.union([z.literal("auto"), z.literal("off")]).optional(),
-      model: z.string().min(1).optional(),
       cooloffMs: z.number().int().positive().optional(),
     })
     .optional(),
 });
 
 export const SilentReplyPolicyConfigSchema = z.strictObject({
-  group: SilentReplyPolicySchema.optional(),
-  internal: SilentReplyPolicySchema.optional(),
+  group: z.union([z.literal("allow"), z.literal("disallow")]).optional(),
 });
 
 const AgentOwnerTargetSchema = z
@@ -63,7 +48,7 @@ export const AgentDefaultsBaseSchema = z.strictObject({
   params: z.record(z.string(), z.unknown()).optional(),
   model: AgentModelSchema.optional(),
   modelSelectionScope: z.enum(["session", "agent", "global"]).optional(),
-  utilityModel: z.string().optional(),
+  utilityModel: AgentModelSchema.optional(),
   decisionModel: DecisionModelSchema.optional(),
   imageModel: AgentToolModelSchema.optional(),
   mediaModels: z
@@ -80,12 +65,15 @@ export const AgentDefaultsBaseSchema = z.strictObject({
   models: AgentModelMapSchema.optional(),
   modelPolicy: AgentModelPolicySchema.optional(),
   workspace: z.string().optional(),
+  workspaceFileMode: WorkspaceFileModeSchema.optional(),
   cwd: z.string().optional(),
   skills: z.array(z.string()).optional(),
   silentReply: SilentReplyPolicyConfigSchema.optional(),
   repoRoot: z.string().optional(),
   skipBootstrap: z.boolean().optional(),
-  skipOptionalBootstrapFiles: z.array(OptionalBootstrapFileNameSchema).optional(),
+  skipOptionalBootstrapFiles: z
+    .array(z.enum(["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"]))
+    .optional(),
   contextInjection: z
     .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
     .optional(),
@@ -95,6 +83,7 @@ export const AgentDefaultsBaseSchema = z.strictObject({
     .strictObject({
       /** Global opt-in for automatic Decision experiments; model selection is separate. */
       decisionAssistance: z.boolean().optional(),
+      usageRankedToolIndex: z.boolean().optional(),
       localModelLean: z.boolean().optional(),
     })
     .optional(),
@@ -144,22 +133,28 @@ export const AgentDefaultsBaseSchema = z.strictObject({
         .optional(),
     })
     .optional(),
+  /**
+   * Keep an idle interactive session's prompt cache warm with read-only prewarm requests sent
+   * shortly before the provider's known cache lifetime ends. Default: true.
+   */
+  promptCacheKeepWarm: z.boolean().optional(),
   compaction: z
     .strictObject({
       /** Enable embedded proactive auto-compaction. Default: true. */
       enabled: z.boolean().optional(),
-      /** Compaction summarization mode. */
       mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
       /**
        * Id of a registered compaction provider plugin.
-       * When set, the provider's summarize() is called instead of
-       * the built-in summarizeInStages(). Falls back to built-in on failure.
+       * When set, the provider's summarize() is called instead of the
+       * built-in summary request. Falls back to built-in on failure.
        */
       provider: z.string().optional(),
       /** Thinking level for embedded OpenClaw compaction summaries. Default: low. */
       thinkingLevel: z.union([AgentThinkingLevelSchema, z.literal("inherit")]).optional(),
       /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
       keepRecentTokens: z.number().int().positive().optional(),
+      /** Maximum persisted client-side summary characters. Default: 16000. */
+      maxSummaryChars: AgentCompactionMaxSummaryCharsSchema.optional(),
       /** Identifier-preservation instruction policy for compaction summaries. */
       identifierPolicy: z.union([z.literal("strict"), z.literal("off")]).optional(),
       /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
@@ -173,12 +168,11 @@ export const AgentDefaultsBaseSchema = z.strictObject({
           maxRetries: z.number().int().nonnegative().optional(),
         })
         .optional(),
-      /** Mid-turn precheck for tool-loop context pressure. Default: disabled. */
+      /** Optional estimated-pressure threshold; hard window admission remains active. */
       midTurnPrecheck: z
         .strictObject({
           /**
-           * Enable structured context pressure checks after tool results are appended
-           * and before the next agent model call. Default: false.
+           * Reserve compaction headroom against estimated tool-loop pressure. Default: false.
            */
           enabled: z.boolean().optional(),
         })
@@ -198,8 +192,6 @@ export const AgentDefaultsBaseSchema = z.strictObject({
         .strictObject({
           /** Enable the pre-compaction memory flush (default: true). */
           enabled: z.boolean().optional(),
-          /** Optional provider/model override used only for pre-compaction memory flush turns. */
-          model: z.string().optional(),
           /** Run the memory flush when context is within this many tokens of the compaction threshold. */
           softThresholdTokens: z.number().int().nonnegative().optional(),
           /**

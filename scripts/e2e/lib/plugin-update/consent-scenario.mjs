@@ -7,14 +7,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { classifyReleaseTrain, parseReleaseVersion } from "../../../lib/release-version.mjs";
 import { fixtureCapabilityConsentArgs } from "../package-compat.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { packFutureUpdateFixture } from "../update-first-hop-package-fixtures.mjs";
+import { settlePluginUpdate } from "./activation.mjs";
 import { observePostCoreCommand } from "./process-observer.mjs";
 
 // Without a core tarball, run only the plugin reinstall boundary against the supplied CLI.
 export async function runConsentScenario(entry, coreTarball, options = {}) {
   assert(entry, "expected CLI entry");
+  const packageRoot = path.dirname(entry);
   let coreTarballSha256;
   if (coreTarball) {
     const coreHash = createHash("sha256");
@@ -203,6 +206,16 @@ export async function runConsentScenario(entry, coreTarball, options = {}) {
     return { record, bytes };
   }
 
+  // Shipped extended-stable updaters refuse explicit --tag targets on their
+  // inferred channel, so a tag update first selects stable as an operator would.
+  function tagUpdateChannelArgs() {
+    const { version } = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+    const parsed = parseReleaseVersion(version);
+    return parsed && classifyReleaseTrain(parsed) === "extended-stable"
+      ? ["--channel", "stable"]
+      : [];
+  }
+
   function assertConsentBlocked(command, result, expectedStatus) {
     // A blocked plugin is an explicit warning, not a failed core update or repair.
     assert.equal(command.code, 0, `${command.output}\n${command.diagnostic}`);
@@ -343,22 +356,42 @@ export async function runConsentScenario(entry, coreTarball, options = {}) {
       await serve(2);
       const denied = await cli(
         "update-denied",
-        ["update", "--tag", deniedCoreTarball, "--yes", "--json"],
+        ["update", ...tagUpdateChannelArgs(), "--tag", deniedCoreTarball, "--yes", "--json"],
         { allowFailure: true },
       );
       const deniedResult = JSON.parse(denied.output);
-      assertConsentBlocked(denied, deniedResult, "ok");
-      assert.equal(deniedResult.after?.version, coreUpdateFixtures[0].targetVersion);
       assert(
         !denied.children.some(
           (child) => child.argv.includes("gateway") && child.argv.includes("restart"),
         ),
         "denied update attempted a Gateway restart",
       );
-      assert(
-        denied.children.some((child) => child.postCore),
-        "denied update did not hand off",
-      );
+      if (deniedResult.phase !== undefined) {
+        assert.equal(denied.code, 0, denied.diagnostic);
+        assert.equal(deniedResult.status, "running", "denied update must not activate on its own");
+        const { pluginStep } = await settlePluginUpdate(
+          entry,
+          deniedResult,
+          coreUpdateFixtures[0].targetVersion,
+          path.join(root, "denied-terminal.json"),
+        );
+        assert.equal(pluginStep.status, "failed");
+        assert(
+          pluginStep.detail
+            ?.split("\n")
+            .some(
+              (line) => line.includes(pluginId) && line.includes("requires capability consent"),
+            ),
+          "same-run denial must name the plugin and the missing consent",
+        );
+      } else {
+        assertConsentBlocked(denied, deniedResult, "ok");
+        assert.equal(deniedResult.after?.version, coreUpdateFixtures[0].targetVersion);
+        assert(
+          denied.children.some((child) => child.postCore),
+          "denied update did not hand off",
+        );
+      }
       assert.deepEqual(await snapshot("after-denial", 1), initial);
       await cli("repair-accepted", [
         "update",
@@ -378,6 +411,7 @@ export async function runConsentScenario(entry, coreTarball, options = {}) {
       assert.deepEqual(await snapshot("no-future-permission", 2), repaired);
       const accepted = await cli("update-accepted", [
         "update",
+        ...tagUpdateChannelArgs(),
         "--tag",
         acceptedCoreTarball,
         "--accept-capabilities",
@@ -386,15 +420,30 @@ export async function runConsentScenario(entry, coreTarball, options = {}) {
         "--json",
       ]);
       const acceptedResult = JSON.parse(accepted.output);
-      assert.equal(acceptedResult.status, "ok", "accepted core update must execute, not skip");
-      const installedPackage = JSON.parse(
-        fs.readFileSync(path.resolve(path.dirname(entry), "..", "package.json"), "utf8"),
-      );
-      assert.equal(installedPackage.version, coreUpdateFixtures[1].targetVersion);
-      assert(
-        accepted.children.some((child) => child.postCore),
-        "accepted update did not hand off to a fresh post-core process",
-      );
+      if (acceptedResult.phase !== undefined) {
+        assert.equal(
+          acceptedResult.status,
+          "running",
+          "--no-restart must leave activation pending",
+        );
+        const { pluginStep } = await settlePluginUpdate(
+          entry,
+          acceptedResult,
+          coreUpdateFixtures[1].targetVersion,
+          path.join(root, "accepted-terminal.json"),
+        );
+        assert.equal(pluginStep.status, "completed", pluginStep.detail);
+      } else {
+        assert.equal(acceptedResult.status, "ok", "accepted core update must execute, not skip");
+        const installedPackage = JSON.parse(
+          fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
+        );
+        assert.equal(installedPackage.version, coreUpdateFixtures[1].targetVersion);
+        assert(
+          accepted.children.some((child) => child.postCore),
+          "accepted update did not hand off to a fresh post-core process",
+        );
+      }
       const final = await snapshot("fresh-process-accepted", 3);
       const payload = path.join(final.record.installPath, "index.js");
       assert(

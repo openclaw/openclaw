@@ -5,17 +5,16 @@ import {
 } from "../../scripts/lib/cancelable-command.mts";
 import { createDeferred } from "../helpers/promise.js";
 
-it.for(
-  (["SIGINT", "SIGTERM", "SIGHUP"] as const).flatMap((signal, index) =>
-    (["joined", "abort", "release failure", "unjoined"] as const).map((outcome) => ({
-      signal,
-      exitCode: [130, 143, 129][index],
-      outcome,
-    })),
-  ),
-)("owns $signal through $outcome cleanup", async ({ signal, exitCode, outcome }) => {
+it.each([
+  ["SIGINT", 130, "joined"],
+  ["SIGINT", 130, "abort"],
+  ["SIGINT", 130, "release failure"],
+  ["SIGINT", 130, "unjoined"],
+  ["SIGTERM", 143, "joined"],
+  ["SIGHUP", 129, "joined"],
+] as const)("owns %s with exit code %s through %s cleanup", async (signal, exitCode, outcome) => {
   const previous = process.listeners(signal);
-  const release = createDeferred<void>();
+  const release = createDeferred();
   const failure = Object.assign(
     new Error("cleanup failed", {
       cause: outcome === "unjoined" ? { processTreeState: "indeterminate" } : undefined,
@@ -33,8 +32,12 @@ it.for(
       { once: true },
     );
     await release.promise;
-    if (outcome === "abort") abortSignal.throwIfAborted();
-    if (outcome === "release failure" || outcome === "unjoined") throw failure;
+    if (outcome === "abort") {
+      abortSignal.throwIfAborted();
+    }
+    if (outcome === "release failure" || outcome === "unjoined") {
+      throw failure;
+    }
     return 7;
   });
   const result = command

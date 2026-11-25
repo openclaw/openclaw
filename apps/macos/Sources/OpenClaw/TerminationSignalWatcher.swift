@@ -6,12 +6,20 @@ enum AppTerminationTiming {
     static let cleanupDeadlineSeconds = 2.0
     static let signalExitFailsafeSeconds = 3.0
 
-    static func cleanupDeadlineSeconds(hasAppHostedGateway: Bool) -> TimeInterval {
-        self.cleanupDeadlineSeconds + (hasAppHostedGateway ? GatewayChildSupervisor.shutdownTimeoutSeconds : 0)
+    static func cleanupDeadlineSeconds(
+        hasAppHostedGateway: Bool,
+        operationTimeout: TimeInterval = 0) -> TimeInterval
+    {
+        self.cleanupDeadlineSeconds + max(
+            operationTimeout, hasAppHostedGateway ? GatewayChildSupervisor.shutdownTimeoutSeconds : 0)
     }
 
-    static func signalExitFailsafeSeconds(hasAppHostedGateway: Bool) -> TimeInterval {
-        self.signalExitFailsafeSeconds + (hasAppHostedGateway ? GatewayChildSupervisor.shutdownTimeoutSeconds : 0)
+    static func signalExitFailsafeSeconds(
+        hasAppHostedGateway: Bool,
+        operationTimeout: TimeInterval = 0) -> TimeInterval
+    {
+        self.signalExitFailsafeSeconds + max(
+            operationTimeout, hasAppHostedGateway ? GatewayChildSupervisor.shutdownTimeoutSeconds : 0)
     }
 }
 
@@ -62,7 +70,8 @@ final class TerminationSignalWatcher {
 
     static func scheduleExitFailsafe() {
         let deadline = AppTerminationTiming.signalExitFailsafeSeconds(
-            hasAppHostedGateway: GatewayProcessManager.shared.hasAppHostedGateway)
+            hasAppHostedGateway: GatewayProcessManager.shared.hasAppHostedGateway,
+            operationTimeout: GatewayProcessManager.shared.gatewayOperationShutdownTimeout)
         // Keep the last-resort exit independent of a stuck main actor or AppKit loop.
         DispatchQueue.global(qos: .userInitiated).asyncAfter(
             deadline: .now() + deadline)

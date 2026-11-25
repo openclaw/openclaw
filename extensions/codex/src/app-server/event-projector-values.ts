@@ -95,10 +95,7 @@ export function codexProviderRefusalDiagnostics(
 
 export function readNullableString(record: JsonObject, key: string): string | null | undefined {
   const value = record[key];
-  if (value === null) {
-    return null;
-  }
-  return typeof value === "string" ? value : undefined;
+  return value === null || typeof value === "string" ? value : undefined;
 }
 
 export function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
@@ -125,14 +122,17 @@ export function readHookOutputEntries(
   });
 }
 
-export function extractRawAssistantText(item: JsonObject): string | undefined {
+export function extractRawResponseItemText(
+  item: JsonObject,
+  textType: "input_text" | "output_text" = "output_text",
+): string | undefined {
   const content = Array.isArray(item.content) ? item.content : [];
   const parts = content.flatMap((entry) => {
     if (!isJsonObject(entry)) {
       return [];
     }
     const type = readStringField(entry, "type");
-    if (type !== "output_text" && type !== "text") {
+    if (type !== textType && type !== "text") {
       return [];
     }
     const value = readStringField(entry, "text");

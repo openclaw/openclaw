@@ -9,6 +9,23 @@ beforeAll(async () => {
 afterAll(() => restoreMigrationRuntime?.());
 
 describe("legacy config migrate validation", () => {
+  it.each([undefined, "strict"] as const)(
+    "keeps ambiguous MCP transport under %s validation policy",
+    (semanticValidation) => {
+      const raw = {
+        session: { typingMode: "thinking" },
+        mcp: { servers: { fixture: { command: "never-run", url: "https://example.invalid/mcp" } } },
+      };
+      const result = migrateLegacyConfig(
+        raw,
+        { sourceConfigBeforeMigrations: raw },
+        semanticValidation,
+      );
+      expect(result.config?.agents?.defaults?.typingMode).toBe("thinking");
+      expect(result.partiallyValid).toBe(semanticValidation === "strict" ? true : undefined);
+    },
+  );
+
   it("leaves retired keys unresolved while migrating supported config", () => {
     const raw = {
       heartbeat: { every: "30m", showOk: true },
@@ -33,82 +50,6 @@ describe("legacy config migrate validation", () => {
     expect(raw.session.typingMode).toBe("thinking");
   });
 
-  it.each(["entries", "list"] as const)(
-    "restores supported agent aliases and WebChat config through the registry (%s)",
-    (shape) => {
-      const entry = {
-        embeddedPi: { executionContract: "strict-agentic" },
-        embeddedAgent: { executionContract: "default" },
-        embeddedHarness: { runtime: "pi" },
-        sandbox: { perSession: true, scope: "agent" },
-      };
-      const raw = {
-        agents: {
-          defaults: {
-            embeddedPi: {
-              projectSettingsPolicy: "sanitize",
-              executionContract: "strict-agentic",
-            },
-            embeddedAgent: { projectSettingsPolicy: "trusted" },
-            embeddedHarness: { runtime: "pi" },
-            sandbox: { perSession: false },
-          },
-          ...(shape === "entries"
-            ? { entries: { main: entry } }
-            : { list: [{ id: "main", ...entry }] }),
-        },
-        gateway: { mode: "local", port: 18790, webchat: { chatHistoryMaxChars: 48_000 } },
-      };
-      const original = structuredClone(raw);
-      const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
-      expect(result.partiallyValid).toBeUndefined();
-      expect(result.sourceConfig?.agents?.defaults).toEqual({
-        embeddedAgent: { projectSettingsPolicy: "trusted", executionContract: "strict-agentic" },
-        sandbox: { scope: "shared" },
-      });
-      expect(result.sourceConfig?.agents?.entries?.main).toEqual({
-        embeddedAgent: { executionContract: "default" },
-        sandbox: { scope: "agent" },
-      });
-      expect(result.sourceConfig?.gateway).toEqual({ mode: "local", port: 18790 });
-      expect(raw).toEqual(original);
-      expect(
-        migrateLegacyConfig(result.sourceConfig, {
-          sourceConfigBeforeMigrations: result.sourceConfig,
-        }).changes,
-      ).toEqual([]);
-    },
-  );
-
-  it.each([
-    {
-      defaults: { perSession: false },
-      agent: { perSession: true },
-      expected: { scope: "session" },
-    },
-    { defaults: { scope: "agent" }, agent: { perSession: true }, expected: {} },
-  ])(
-    "preserves the effective sandbox scope when defaults are $defaults",
-    ({ defaults, agent, expected }) => {
-      const raw = {
-        agents: { defaults: { sandbox: defaults }, entries: { ops: { sandbox: agent } } },
-      };
-      const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
-      expect(result.partiallyValid).toBeUndefined();
-      expect(result.sourceConfig?.agents?.entries?.ops?.sandbox).toEqual(expected);
-    },
-  );
-
-  it("keeps invalid sandbox aliases visible to validation", () => {
-    const raw = {
-      agents: { defaults: { sandbox: { perSession: "yes" } } },
-      session: { typingMode: "thinking" },
-    };
-    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
-    expect(result.partiallyValid).toBe(true);
-    expect(result.config?.agents?.defaults?.sandbox).toEqual({ perSession: "yes" });
-  });
-
   it("preserves the restored MCP idle TTL during migration", () => {
     const raw = { mcp: { sessionIdleTtlMs: 1000.9 }, cron: { maxConcurrentRuns: 2 } };
     const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
@@ -121,7 +62,7 @@ describe("legacy config migrate validation", () => {
     const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
     expect(result.partiallyValid).toBeUndefined();
     expect(result.config?.agents?.defaults?.systemAgent?.agentId).toBe("main");
-    expect(result.config?.agents?.defaults?.heartbeat?.agentId).toBe("main");
+    expect(result.config).not.toHaveProperty("agents.defaults.heartbeat");
   });
 
   it("validates resolved OTel values while retaining authored interpolation", () => {

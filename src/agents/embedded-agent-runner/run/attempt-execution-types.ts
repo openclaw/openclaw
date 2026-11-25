@@ -57,6 +57,7 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     | "emitPrepStageSummary"
     | "prepStages"
     | "sandbox"
+    | "sandboxRuntime"
     | "sandboxSessionKey"
     | "sessionAgentId"
   >;
@@ -76,6 +77,7 @@ export type EmbeddedAttemptExecutionPhaseInput = {
       yieldMessage: string | null;
       yieldAcknowledgment?: string;
       yieldMessageWaitRegistered?: boolean;
+      yieldExecWakeArmed?: boolean;
     };
     setToolSearchCatalogExecutor: (
       executor: ReturnType<typeof prepareEmbeddedAttemptStream>["toolSearchCatalogExecutor"],

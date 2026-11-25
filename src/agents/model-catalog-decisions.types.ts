@@ -1,0 +1,33 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import type { PersonalCatalogProfiles } from "../state/user-model-accounts.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { createOpenAIModelRoutesResolver } from "./openai-model-routes.js";
+
+export type ModelCatalogDecisionParams = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  snapshot: ModelCatalogSnapshot;
+  metadataSnapshot: PluginMetadataSnapshot;
+  preparedAuthStore: AuthProfileStore;
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
+  preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
+  preparedSyntheticAuthComplete?: boolean;
+  requesterProfileId?: string;
+  pluginRegistry?: PluginRegistry;
+  observationConfig?: OpenClawConfig;
+  preferredProfileId?: string;
+  pinnedProfileId?: string;
+  profileProvider?: string;
+  runtimeOverride?: string;
+  accountCatalog?: import("./prepared-model-runtime-auth.js").PreparedAccountCatalogAccess;
+  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
+  isCurrent?: () => boolean;
+  preparedPersonalCatalog?: PersonalCatalogProfiles & { isCurrent: () => boolean };
+};

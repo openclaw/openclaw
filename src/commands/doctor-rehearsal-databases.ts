@@ -14,7 +14,6 @@ export function createDoctorRehearsalDatabaseCoverage(env: NodeJS.ProcessEnv) {
   if (!root || !maintenance?.ownsSchemaMaintenance) {
     return undefined;
   }
-  maintenance.assertAdmission();
   // The native Doctor owner protects shared-state admission. Agent paths are
   // discovered separately; that owner does not pretend to lock each agent file.
   maintenance.assertDatabaseAccess(resolveOpenClawStateSqlitePath(env));
@@ -52,7 +51,6 @@ export function createDoctorRehearsalDatabaseCoverage(env: NodeJS.ProcessEnv) {
   const family = new Set<string>();
   const aliases = new Map<string, string>();
   const assertCurrent = () => {
-    maintenance.assertAdmission();
     maintenance.assertDatabaseAccess(resolveOpenClawStateSqlitePath(env));
     if (resolveUpdateRehearsalRoot(env) !== root || realpathSync(root) !== root) {
       throw new Error("Disposable Doctor database namespace changed");

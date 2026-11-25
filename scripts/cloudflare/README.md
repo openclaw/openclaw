@@ -171,7 +171,7 @@ Treat rollbacks like restores: stop traffic where possible, preserve the current
 
 - **Container never becomes ready:** the image must be `linux/amd64` and pulled from a public registry, referenced by digest rather than a moving tag.
 - **Requests time out after a successful deploy:** the Container helper waits for `GET /healthz` on port `8080`; confirm the Gateway still binds that port.
-- **A probe passes but nothing serves:** the Control UI answers unknown paths with a catch-all `200`, so probing a route the image does not serve looks healthy forever; assert the JSON body, not just the status.
+- **A health check passes but nothing serves:** the Control UI answers unknown paths with a catch-all `200`, so checking a route the image does not serve looks healthy forever; assert the JSON body, not just the status.
 - **Litestream authentication or signature errors:** Litestream needs R2 _S3 API_ credentials, not a Cloudflare API token, and `LITESTREAM_ENDPOINT` must contain the account ID.
 - **First boot reports no databases to restore:** expected on an empty bucket; the entrypoint treats that as a fresh installation.
 - **`/readyz` is 503 while `/startupz` is 200:** by design. Startup finished and a channel account is unhealthy; inspect channel status instead of restarting.

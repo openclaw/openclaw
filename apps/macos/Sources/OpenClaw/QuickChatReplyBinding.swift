@@ -23,7 +23,7 @@ final class QuickChatReplyBinding {
     /// Prepare the reply consumer before dispatch while keeping it hidden until show(route:).
     /// Subscription starts asynchronously; full snapshots and history bootstrap recover earlier turns.
     func prepare(route: OpenClawChatSessionTarget) {
-        guard self.preparedRoute != route || self.viewModel == nil else { return }
+        guard self.preparedRoute != route else { return }
         self.preparedRoute = route
         self.viewModel = self.viewModelFactory(route)
     }

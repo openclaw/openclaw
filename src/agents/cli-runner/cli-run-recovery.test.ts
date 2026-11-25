@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { FailoverError } from "../failover-error.js";
 import { runCliRecovery } from "./cli-run-recovery.js";
+import { cliBackendLog } from "./log.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -32,20 +33,38 @@ function recovery(timeoutMs = 60_000) {
   };
 }
 
+describe("cli-run-recovery delivered failure", () => {
+  it("logs the cause once when a failure after a message-tool send ends the run", async () => {
+    const warn = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => {});
+    const context = buildPreparedCliRunContext({ runId: "run-delivered" });
+    const delivered = { meta: { durationMs: 1 } };
+    const result = await runCliRecovery({
+      context,
+      executeAttempt: async () => {
+        throw new Error("CLI stream budget exceeded");
+      },
+      finishAttempt: async () => ({ meta: { durationMs: 0 } }),
+      finishDeliveredFailure: async () => delivered,
+      onTerminalFailure: async () => {},
+    });
+
+    expect(result).toBe(delivered);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toMatch(
+      /^cli delivered failure: provider=claude-cli model=\S+ durationMs=\d+ runId=run-delivered error=CLI stream budget exceeded$/,
+    );
+  });
+});
+
 describe("cli-run-recovery retry budget", () => {
-  it("keeps recovery budget after a forward wall-clock step", async () => {
+  it("keeps an integer monotonic retry budget after a wall-clock step", async () => {
     const { context, executeAttempt, run } = recovery();
     vi.spyOn(Date, "now").mockReturnValue(context.started + 120_000);
-    expect(await run()).toEqual({ done: true, meta: { durationMs: 1 } });
-    expect(executeAttempt).toHaveBeenCalledTimes(2);
-  });
-
-  it("passes an integer retry timeout to the next attempt when elapsed monotonic time is fractional", async () => {
-    const { context, executeAttempt, run } = recovery();
     vi.spyOn(performance, "now").mockReturnValue(12_345.4);
     context.startedMonotonicMs = 0;
 
     expect(await run()).toEqual({ done: true, meta: { durationMs: 1 } });
+    expect(executeAttempt).toHaveBeenCalledTimes(2);
     expect(executeAttempt).toHaveBeenNthCalledWith(2, undefined, {
       timeoutMs: 47_654,
       forkCliSessionOnResume: false,

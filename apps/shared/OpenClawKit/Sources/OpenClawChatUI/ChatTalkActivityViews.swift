@@ -36,20 +36,40 @@ struct ChatTalkActivityStrip: View {
 
         if self.control.isEnabled {
             VStack(alignment: .leading, spacing: 6) {
-                if model.hasTranscript {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            self.isExpanded.toggle()
+                HStack(spacing: 8) {
+                    if model.hasTranscript {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                self.isExpanded.toggle()
+                            }
+                        } label: {
+                            self.header(model: model, showsDisclosure: true)
                         }
-                    } label: {
-                        self.header(model: model, showsDisclosure: true)
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(self.isExpanded
+                            ? String(localized: "Hide talk transcript")
+                            : String(localized: "Show talk transcript"))
+                    } else {
+                        self.header(model: model, showsDisclosure: false)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(self.isExpanded
-                        ? String(localized: "Hide talk transcript")
-                        : String(localized: "Show talk transcript"))
-                } else {
-                    self.header(model: model, showsDisclosure: false)
+                    if let toggleMicrophone = self.control.toggleMicrophone {
+                        Button(action: toggleMicrophone) {
+                            Image(systemName: "mic.slash")
+                                .font(.system(size: OpenClawChatTypography.scaled(17), weight: .medium))
+                                .foregroundStyle(self.control.isMicrophoneMuted
+                                    ? OpenClawChatTheme.warning : OpenClawChatTheme.muted)
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(self.control.isMicrophoneMuted
+                            ? String(localized: "Unmute microphone")
+                            : String(localized: "Mute microphone"))
+                        .accessibilityValue(self.control.isMicrophoneMuted
+                            ? String(localized: "Microphone muted")
+                            : String(localized: "Microphone on"))
+                        .accessibilityIdentifier("chat-talk-microphone")
+                    }
                 }
 
                 if self.isExpanded, model.hasTranscript {
@@ -74,7 +94,7 @@ struct ChatTalkActivityStrip: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, self.control.toggleMicrophone == nil || self.isExpanded ? 7 : 2)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(OpenClawChatTheme.subtleCard))
@@ -86,14 +106,30 @@ struct ChatTalkActivityStrip: View {
         }
     }
 
+    private var statusText: String {
+        if self.control.isMicrophoneMuted,
+           self.control.statusText == String(localized: "Listening (Realtime)")
+        {
+            return String(localized: "Connected (Realtime)")
+        }
+        return self.control.statusText
+    }
+
     private func header(model: ChatTalkTranscriptStripModel, showsDisclosure: Bool) -> some View {
         HStack(spacing: 7) {
             Circle()
                 .fill(OpenClawChatTheme.accent)
                 .frame(width: 7, height: 7)
-            Text(self.control.statusText)
-                .font(OpenClawChatTypography.captionSemiBold)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.statusText)
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .lineLimit(1)
+                if self.control.isMicrophoneMuted {
+                    Text("Microphone muted")
+                        .font(OpenClawChatTypography.captionSemiBold)
+                        .foregroundStyle(OpenClawChatTheme.warning)
+                }
+            }
             if let collapsedText = model.collapsedText, !self.isExpanded {
                 Text(collapsedText)
                     .font(OpenClawChatTypography.caption)
@@ -132,61 +168,12 @@ struct ChatTalkButtonGlyph: View {
     private var waveformPhase: TalkWaveformPhase {
         if self.control.isListening {
             return .listening(
-                level: self.control.level,
+                level: self.control.resolvedLevel,
                 speechActive: !self.control.partialTranscript.isEmpty)
         }
         if self.control.isSpeaking {
-            return .speaking(level: self.control.level)
+            return .speaking(level: self.control.resolvedLevel)
         }
         return .thinking
-    }
-}
-
-private struct ChatTalkInputDeviceMenuModifier: ViewModifier {
-    let control: OpenClawChatTalkControl
-
-    func body(content: Content) -> some View {
-        if self.control.selectInputDevice != nil {
-            content.contextMenu {
-                Button {
-                    self.control.selectInputDevice?(nil)
-                } label: {
-                    self.menuLabel(
-                        String(localized: "System Default"),
-                        selected: self.control.selectedInputDeviceID == nil)
-                }
-                if !self.control.inputDevices.isEmpty {
-                    Divider()
-                    ForEach(self.control.inputDevices) { device in
-                        Button {
-                            self.control.selectInputDevice?(device.id)
-                        } label: {
-                            self.menuLabel(
-                                device.name,
-                                selected: self.control.selectedInputDeviceID == device.id)
-                        }
-                    }
-                }
-            }
-        } else {
-            content
-        }
-    }
-
-    @ViewBuilder
-    private func menuLabel(_ text: String, selected: Bool) -> some View {
-        if selected {
-            Label(text, systemImage: "checkmark")
-                .font(OpenClawChatTypography.body)
-        } else {
-            Text(text)
-                .font(OpenClawChatTypography.body)
-        }
-    }
-}
-
-extension View {
-    func chatTalkInputDeviceMenu(_ control: OpenClawChatTalkControl) -> some View {
-        self.modifier(ChatTalkInputDeviceMenuModifier(control: control))
     }
 }

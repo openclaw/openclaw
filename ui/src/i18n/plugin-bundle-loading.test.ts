@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   captureI18nStateForTesting,
   createI18nManagerForTesting,
@@ -10,15 +10,10 @@ vi.hoisted(() => vi.resetModules());
 
 let restoreI18n: () => Promise<void>;
 
-beforeEach(() => {
+afterEach(() => restoreI18n());
+
+it("loads bundle fallback copy with the file preview without replacing the active language", async () => {
   restoreI18n = captureI18nStateForTesting();
-});
-
-afterEach(async () => {
-  await restoreI18n();
-});
-
-it("loads bundle fallback copy with the skill preview without replacing the active language", async () => {
   const manager = createI18nManagerForTesting(async () => ({
     filePreview: { bundle: { binary: "Binärdatei" } },
   }));
@@ -26,14 +21,16 @@ it("loads bundle fallback copy with the skill preview without replacing the acti
   expect(manager.t("filePreview.label")).toBe("Support files");
 
   await manager.setLocale("de");
-  await import("../pages/plugins/skill-preview.ts");
+  await import("../pages/plugins/skill-preview.tsx");
+  expect(manager.t("filePreview.bundle.too-large")).toBe("filePreview.bundle.too-large");
+  await import("../components/file-preview-modal.tsx");
 
   expect(manager.t("filePreview.bundle.binary")).toBe("Binärdatei");
   expect(manager.t("filePreview.bundle.too-large")).toBe(
     "This file exceeds the preview limit. Its contents have not been truncated or loaded.",
   );
   expect(manager.t("filePreview.bundle.unavailable")).toBe(
-    "This file could not be read safely or is unavailable. Close and reopen the skill to try again.",
+    "Couldn’t read this file. Close and reopen the skill to try again.",
   );
   expect(manager.t("filePreview.bundle.incomplete")).toBe(
     "Some bundle content is unavailable. Select a file to see its status.",
@@ -41,6 +38,6 @@ it("loads bundle fallback copy with the skill preview without replacing the acti
   expect(manager.t("filePreview.label")).toBe("Support files");
   await manager.setLocale("en");
   expect(manager.t("filePreview.bundle.binary")).toBe(
-    "This binary file is included in the bundle but cannot be displayed as text.",
+    "This binary file is included in the bundle but can’t be displayed as text.",
   );
 });

@@ -1,20 +1,25 @@
 import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ChannelOutboundTargetRef } from "../../channels/plugins/types.adapters.js";
-import { hasReplyPayloadContent, type ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
+import type { ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { formatErrorMessage } from "../errors.js";
 import type {
   ChannelHandler,
+  ChannelHandlerParams,
   DeliverOutboundPayloadsCoreParams,
   NormalizedPayloadForChannelDelivery,
 } from "./deliver-contracts.js";
+import {
+  normalizeEmptyPayloadForDelivery,
+  stripInternalRuntimeScaffoldingFromPayload,
+} from "./deliver-payload-normalize.js";
 import type { OutboundDeliveryResult, OutboundPayloadDeliveryKind } from "./deliver-types.js";
+import { payloadMediaSources } from "./delivery-queue-media-paths.js";
 import { flattenMarkdownDetails } from "./markdown-details.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
-import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 
 const log = createSubsystemLogger("outbound/deliver");
@@ -32,38 +37,17 @@ export function deliveryKindForPayload(
   return "text";
 }
 
-export function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
-  const text = typeof payload.text === "string" ? payload.text : "";
-  if (!text.trim()) {
-    if (!hasReplyPayloadContent({ ...payload, text }, { extraContent: payload.location != null })) {
-      return null;
-    }
-    if (text) {
-      return copyReplyPayloadMetadata(payload, {
-        ...payload,
-        text: "",
-      });
-    }
-  }
-  return payload;
-}
-
 export function normalizeTransformedPayloadForDelivery(
   payload: ReplyPayload,
   handler: ChannelHandler,
-  copyMetadata: (
-    source: ReplyPayload,
-    payload: ReplyPayload,
-  ) => ReplyPayload = copyReplyPayloadMetadata,
+  copyMetadata: (source: ReplyPayload, payload: ReplyPayload) => ReplyPayload,
 ): ReplyPayload | null {
   const normalizedPayload = handler.normalizePayload ? handler.normalizePayload(payload) : payload;
   if (!normalizedPayload) {
     return null;
   }
   const normalized = copyMetadata(payload, normalizedPayload);
-  const stripped = copyMetadata(normalized, stripInternalRuntimeScaffoldingFromPayload(normalized));
-  const nonEmpty = normalizeEmptyPayloadForDelivery(stripped);
-  return nonEmpty ? copyMetadata(stripped, nonEmpty) : null;
+  return normalizeEmptyPayloadForDelivery(stripInternalRuntimeScaffoldingFromPayload(normalized));
 }
 
 export function normalizePayloadsForChannelDelivery(
@@ -74,29 +58,24 @@ export function normalizePayloadsForChannelDelivery(
   const copyMetadata = copyPayloadMetadata ?? copyReplyPayloadMetadata;
   const normalizedPayloads: NormalizedPayloadForChannelDelivery[] = [];
   for (const entry of plan) {
-    let sanitizedPayload = copyMetadata(
-      entry.payload,
-      stripInternalRuntimeScaffoldingFromPayload(entry.payload),
-    );
-    if (!handler.preserveMarkdownDetails && sanitizedPayload.text) {
-      const text = flattenMarkdownDetails(sanitizedPayload.text);
+    let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(entry.payload);
+    const replaceText = (text: string): void => {
       if (text !== sanitizedPayload.text) {
         sanitizedPayload = copyMetadata(sanitizedPayload, {
           ...sanitizedPayload,
           text,
         });
       }
+    };
+    if (!handler.preserveMarkdownDetails && sanitizedPayload.text) {
+      replaceText(flattenMarkdownDetails(sanitizedPayload.text));
     }
-    if (handler.sanitizeText && sanitizedPayload.text) {
-      if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
-        const text = handler.sanitizeText(sanitizedPayload);
-        if (text !== sanitizedPayload.text) {
-          sanitizedPayload = copyMetadata(sanitizedPayload, {
-            ...sanitizedPayload,
-            text,
-          });
-        }
-      }
+    if (
+      handler.sanitizeText &&
+      sanitizedPayload.text &&
+      !handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)
+    ) {
+      replaceText(handler.sanitizeText(sanitizedPayload));
     }
     const normalized = normalizeTransformedPayloadForDelivery(
       sanitizedPayload,
@@ -125,42 +104,9 @@ export function normalizePayloadsForChannelDelivery(
   });
 }
 
-function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
-  if (typeof value === "string") {
-    return stripInternalRuntimeScaffolding(value);
-  }
-  if (Array.isArray(value)) {
-    let changed = false;
-    const next = value.map((entry) => {
-      const stripped = stripInternalRuntimeScaffoldingFromValue(entry);
-      changed ||= stripped !== entry;
-      return stripped;
-    });
-    return changed ? next : value;
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const proto = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) {
-    return value;
-  }
-  let changed = false;
-  const entries = Object.entries(value);
-  for (const entry of entries) {
-    const stripped = stripInternalRuntimeScaffoldingFromValue(entry[1]);
-    changed ||= stripped !== entry[1];
-    entry[1] = stripped;
-  }
-  return changed ? Object.fromEntries(entries) : value;
-}
-
 /** Every media reference a payload set carries, in payload order. */
 export function collectPayloadMediaSources(payloads: readonly ReplyPayload[]): string[] {
-  return payloads.flatMap((payload) => [
-    ...(typeof payload.mediaUrl === "string" && payload.mediaUrl.trim() ? [payload.mediaUrl] : []),
-    ...(payload.mediaUrls ?? []).filter((url) => typeof url === "string" && url.trim()),
-  ]);
+  return payloads.flatMap(payloadMediaSources);
 }
 
 /**
@@ -171,7 +117,6 @@ export function collectPayloadMediaSources(payloads: readonly ReplyPayload[]): s
  */
 export function resolveOutboundMediaAccessForSend(
   params: DeliverOutboundPayloadsCoreParams,
-  channel: string,
   mediaSources: readonly string[],
 ): OutboundMediaAccess {
   if (mediaSources.length === 0) {
@@ -179,11 +124,11 @@ export function resolveOutboundMediaAccessForSend(
   }
   return resolveAgentScopedOutboundMediaAccess({
     cfg: params.cfg,
-    agentId: params.session?.agentId ?? params.mirror?.agentId,
+    agentId: params.session?.agentId,
     mediaSources,
     mediaAccess: params.mediaAccess,
     sessionKey: params.session?.policyKey ?? params.session?.key,
-    messageProvider: params.session?.key ? undefined : channel,
+    messageProvider: params.session?.key ? undefined : params.channel,
     accountId: params.session?.requesterAccountId ?? params.accountId,
     requesterSenderId: params.session?.requesterSenderId,
     requesterSenderName: params.session?.requesterSenderName,
@@ -192,14 +137,33 @@ export function resolveOutboundMediaAccessForSend(
   });
 }
 
-export function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload): ReplyPayload {
-  const stripped = stripInternalRuntimeScaffoldingFromValue(payload);
-  return stripped !== payload &&
-    stripped &&
-    typeof stripped === "object" &&
-    !Array.isArray(stripped)
-    ? copyReplyPayloadMetadata(payload, stripped as ReplyPayload)
-    : payload;
+export function resolveChannelHandlerParams(
+  params: DeliverOutboundPayloadsCoreParams,
+  reply: DeliverOutboundPayloadsCoreParams["reply"],
+  mediaSources: readonly string[],
+): ChannelHandlerParams {
+  return {
+    cfg: params.cfg,
+    agentId: params.session?.agentId,
+    sessionKey: params.session?.key,
+    channel: params.channel,
+    to: params.to,
+    deps: params.deps,
+    accountId: params.accountId,
+    replyToId: reply?.replyToId,
+    replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
+    formatting: params.formatting,
+    threadId: params.threadId,
+    identity: params.identity,
+    gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
+    silent: params.silent,
+    mediaAccess: resolveOutboundMediaAccessForSend(params, mediaSources),
+    gatewayClientScopes: params.gatewayClientScopes,
+    conversationReadOrigin: params.conversationReadOrigin,
+    preparedMessageId: params.preparedMessageId,
+    requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
+  };
 }
 
 export { summarizeOutboundPayloadForTransport as buildPayloadSummary } from "./payloads.js";
@@ -209,10 +173,7 @@ function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | 
   if (pin === true) {
     return { enabled: true };
   }
-  if (!pin || typeof pin !== "object" || Array.isArray(pin)) {
-    return undefined;
-  }
-  if (!pin.enabled) {
+  if (!pin || typeof pin !== "object" || Array.isArray(pin) || !pin.enabled) {
     return undefined;
   }
   return {
@@ -234,21 +195,19 @@ export async function maybePinDeliveredMessage(params: {
   if (!pin) {
     return;
   }
-  if (!params.messageId) {
+  if (!params.messageId || !params.handler.pinDeliveredMessage) {
+    const missingMessageId = !params.messageId;
+    const message = missingMessageId
+      ? "Delivery pin requested, but no delivered message id was returned."
+      : "Delivery pin requested, but channel does not support pinning delivered messages.";
     if (pin.required) {
-      throw new Error("Delivery pin requested, but no delivered message id was returned.");
+      throw new Error(
+        missingMessageId
+          ? message
+          : `Delivery pin is not supported by channel: ${params.target.channel}`,
+      );
     }
-    log.warn("Delivery pin requested, but no delivered message id was returned.", {
-      channel: params.target.channel,
-      to: params.target.to,
-    });
-    return;
-  }
-  if (!params.handler.pinDeliveredMessage) {
-    if (pin.required) {
-      throw new Error(`Delivery pin is not supported by channel: ${params.target.channel}`);
-    }
-    log.warn("Delivery pin requested, but channel does not support pinning delivered messages.", {
+    log.warn(message, {
       channel: params.target.channel,
       to: params.target.to,
     });

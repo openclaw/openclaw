@@ -8,14 +8,17 @@ import { applyMergePatch, createMergePatch, mergePatchConflicts } from "../confi
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { ProviderAuthConfigApplyError } from "../shared/provider-auth-result.js";
 import { transformConfigWithPendingPluginInstalls } from "./install-record-commit.js";
-import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
+import {
+  applyProviderAuthConfigPatchWithNormalization,
+  normalizeProviderAuthRows,
+} from "./provider-auth-choice-helpers.js";
 
 const patchOptions = { mergeObjectArraysById: true };
 
 export function createProviderAuthConfigPatch(base: OpenClawConfig, next: OpenClawConfig) {
   return createMergePatch(
-    applyProviderAuthConfigPatch(base, {}),
-    applyProviderAuthConfigPatch(next, {}),
+    applyProviderAuthConfigPatchWithNormalization(base, {}),
+    applyProviderAuthConfigPatchWithNormalization(next, {}),
     patchOptions,
   );
 }
@@ -30,9 +33,17 @@ export async function writeProviderAuthConfig(params: {
   beforeCommit?: () => void;
   writeOptions?: ConfigWriteOptions;
 }): Promise<OpenClawConfig> {
-  const loginConfig = applyProviderAuthConfigPatch(params.config, {});
-  const sourceConfig = applyProviderAuthConfigPatch(params.configSnapshot.sourceConfig, {});
-  const runtimeConfig = applyProviderAuthConfigPatch(params.configSnapshot.runtimeConfig, {});
+  // This is an RFC delta, not a whole auth result: never seed it with source rows.
+  const configPatch = normalizeProviderAuthRows(params.configPatch);
+  const loginConfig = applyProviderAuthConfigPatchWithNormalization(params.config, {});
+  const sourceConfig = applyProviderAuthConfigPatchWithNormalization(
+    params.configSnapshot.sourceConfig,
+    {},
+  );
+  const runtimeConfig = applyProviderAuthConfigPatchWithNormalization(
+    params.configSnapshot.runtimeConfig,
+    {},
+  );
   try {
     const written = await transformConfigWithPendingPluginInstalls({
       base: "source",
@@ -45,21 +56,22 @@ export async function writeProviderAuthConfig(params: {
           );
         }
         params.beforeCommit?.();
-        let next = applyProviderAuthConfigPatch(current, {});
-        if (params.configPatch) {
+        let next = applyProviderAuthConfigPatchWithNormalization(current, {});
+        if (configPatch) {
           if (
-            (mergePatchConflicts(loginConfig, runtimeConfig, params.configPatch, patchOptions) &&
-              mergePatchConflicts(loginConfig, sourceConfig, params.configPatch, patchOptions)) ||
-            mergePatchConflicts(sourceConfig, next, params.configPatch, patchOptions)
+            (mergePatchConflicts(loginConfig, runtimeConfig, configPatch, patchOptions) &&
+              mergePatchConflicts(loginConfig, sourceConfig, configPatch, patchOptions)) ||
+            mergePatchConflicts(sourceConfig, next, configPatch, patchOptions)
           ) {
             throw new Error(
               "Provider settings changed during sign-in. Review the current settings and retry.",
             );
           }
           // SAFETY: The patch derives from typed config; the config owner validates it before writing.
-          next = applyMergePatch(next, params.configPatch, patchOptions) as OpenClawConfig;
+          next = applyMergePatch(next, configPatch, patchOptions) as OpenClawConfig;
         }
         next = params.finalizeConfig ? params.finalizeConfig(next, current) : next;
+        next = applyProviderAuthConfigPatchWithNormalization(next, {});
         return { nextConfig: next, result: next };
       },
     });

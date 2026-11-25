@@ -40,16 +40,11 @@ export function selectForcedDangerFullAccessSandbox(params: {
 export function selectGuardianSandbox(
   allowedSandboxModes: Set<CodexSandboxMode> | undefined,
 ): CodexSandboxMode {
-  if (allowedSandboxModes === undefined || allowedSandboxModes.has("workspace-write")) {
-    return "workspace-write";
-  }
-  if (allowedSandboxModes.has("read-only")) {
-    return "read-only";
-  }
-  if (allowedSandboxModes.has("danger-full-access")) {
-    return "danger-full-access";
-  }
-  return "workspace-write";
+  return (
+    (["workspace-write", "read-only", "danger-full-access"] as const).find((mode) =>
+      allowedSandboxModes?.has(mode),
+    ) ?? "workspace-write"
+  );
 }
 
 export function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {

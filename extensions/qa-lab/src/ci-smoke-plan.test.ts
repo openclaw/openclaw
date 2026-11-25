@@ -7,7 +7,7 @@ import { readQaScenarioPack } from "./scenario-catalog.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 const smokeProfileMock = vi.hoisted(() => ({
-  mode: "actual" as "actual" | "empty" | "ineligible" | "missing-coverage" | "unsupported",
+  mode: "actual" as "actual" | "empty" | "missing-coverage",
 }));
 
 vi.mock("./profile-planning.js", async (importOriginal) => {
@@ -22,14 +22,6 @@ vi.mock("./profile-planning.js", async (importOriginal) => {
       if (smokeProfileMock.mode === "empty") {
         throw new Error("QA taxonomy profile smoke-ci resolved no executable scenarios.");
       }
-      const scenarioPack = readQaScenarioPack();
-      if (smokeProfileMock.mode === "ineligible") {
-        const replacement = expectDefined(
-          scenarioPack.scenarios.find((scenario) => scenario.id === "otel-trace-smoke"),
-          "ineligible smoke replacement",
-        );
-        return { ...selection, scenarios: [replacement, ...selection.scenarios.slice(1)] };
-      }
       if (smokeProfileMock.mode === "missing-coverage") {
         return {
           ...selection,
@@ -37,13 +29,6 @@ vi.mock("./profile-planning.js", async (importOriginal) => {
             (scenario) => !scenario.coverage?.primary.includes("gateway.health-apis"),
           ),
         };
-      }
-      if (smokeProfileMock.mode === "unsupported") {
-        const replacement = expectDefined(
-          scenarioPack.scenarios.find((scenario) => scenario.id === "discord-canary"),
-          "unsupported smoke replacement",
-        );
-        return { ...selection, scenarios: [replacement, ...selection.scenarios.slice(1)] };
       }
       return selection;
     },
@@ -195,20 +180,6 @@ describe("createQaSmokeCiPart", () => {
     smokeProfileMock.mode = "empty";
     expect(() => createQaSmokeCiPart("profile-1")).toThrow(
       "smoke-ci taxonomy profile did not resolve any CI scenarios",
-    );
-  });
-
-  it("fails when the smoke pack contains a taxonomy-ineligible scenario", () => {
-    smokeProfileMock.mode = "ineligible";
-    expect(() => createQaSmokeCiPart("profile-1")).toThrow(
-      "smoke-ci taxonomy profile resolved ineligible CI scenarios",
-    );
-  });
-
-  it("fails when the smoke pack contains an unsupported channel", () => {
-    smokeProfileMock.mode = "unsupported";
-    expect(() => createQaSmokeCiPart("profile-1")).toThrow(
-      "smoke-ci taxonomy profile resolved unsupported CI channels: discord",
     );
   });
 

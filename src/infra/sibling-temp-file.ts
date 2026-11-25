@@ -1,4 +1,3 @@
-// Exposes sibling temp file writes with fs-safe defaults.
 // Atomic sibling temp writes preserve target-directory permissions and avoid
 // cross-device rename behavior.
 import {
@@ -10,5 +9,6 @@ export async function writeSiblingTempFile<T>(options: WriteSiblingTempFileOptio
   return await writeSiblingTempFileBase({
     ...options,
     producerIsolation: "private-directory",
+    allowDrvfsRenameRecovery: options.allowDrvfsRenameRecovery ?? true,
   });
 }

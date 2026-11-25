@@ -95,8 +95,7 @@ export async function closeOpenAILiveSocket(
       const timeout = setTimeout(
         () => finish(new Error("GPT-Live session.closed timed out; finalization is unconfirmed")),
         15_000,
-      );
-      timeout.unref?.();
+      ).unref();
       socket.on("message", onMessage);
       socket.on("close", onClose);
       socket.on("error", onClose);
@@ -196,7 +195,7 @@ export function captureOpenAIQuicksilverTransportEvent(
 ): void {
   // Finalization retains capture failures; observe the Promise returned by the host view.
   void runtime
-    .captureWsEventAsync?.({
+    .captureWsEventAsync({
       url: "wss://realtime.invalid/private",
       direction,
       kind,

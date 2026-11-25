@@ -1,6 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SourceInfo } from "../../agents/sessions/source-info.js";
 import { decodeXml, escapeXml } from "../../shared/xml.js";
+import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
+
+export type SkillResourceRootIdentity = { realPath: string; dev: string; ino: string };
 
 export interface Skill {
   name: string;
@@ -13,6 +16,8 @@ export interface Skill {
   readContent?: string;
   /** Prepared runtime identity of instruction bytes, or the complete delivered bundle tree. */
   contentHash?: string;
+  /** Runtime-only directory admission supplied by the Gateway snapshot owner. */
+  resourceRootIdentity?: SkillResourceRootIdentity | { error: string };
   filePath: string;
   baseDir: string;
   /** Discovery provenance for collision diagnostics, never read authority. */
@@ -116,7 +121,7 @@ function formatSkillCatalog(
     if (description !== undefined) {
       lines.push(`    <description>${escapeXml(description)}</description>`);
     }
-    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    lines.push(`    <location>${escapeXml(resolveSkillReadPath(skill))}</location>`);
     if (skill.locationNote) {
       lines.push(`    <location_note>${escapeXml(skill.locationNote)}</location_note>`);
     }

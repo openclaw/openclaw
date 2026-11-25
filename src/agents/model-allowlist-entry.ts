@@ -4,9 +4,8 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
-import { resolveStaticAllowlistModelKey } from "./model-ref-shared.js";
+import { resolveStaticAllowlistModelKey } from "./model-selection-normalize.js";
 
-/** Ensures a static per-model config entry exists in agent defaults. */
 export function ensureStaticModelAllowlistEntry(params: {
   cfg: OpenClawConfig;
   modelRef: string;

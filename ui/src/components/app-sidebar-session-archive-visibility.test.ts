@@ -4,7 +4,6 @@ import {
   createSessionCapabilityHarness,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
-import { buildSessionListParams } from "../lib/sessions/session-requests.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
 import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
@@ -12,14 +11,12 @@ import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts"
 function project(rows: GatewaySessionRow[], statusFilter: SidebarSessionStatusFilter, now = 100) {
   return projectSidebarArchiveVisibility({
     sessionData: {
-      sessionsAgentId: "main",
-      sessionsResult: sessionsResult(rows, now),
-      sessionResultsByAgent: {},
       childSessionRowsByParent: {},
       loadedChildSessionKeys: new Set(),
       loadingChildSessionKeys: new Set(),
       childSessionErrorsByParent: new Map(),
     },
+    sourceRows: rows,
     selectedAgentId: "main",
     statusFilter,
     now,
@@ -45,12 +42,6 @@ describe("sidebar snooze visibility", () => {
     ["all", ["awake", "snoozed", "expired", "archived"]],
   ] as const)("shows the expected rows in %s", (filter, keys) => {
     expect(project(rows, filter).rows.map((row) => row.key)).toEqual(keys);
-  });
-
-  it("requests the same active lifecycle window for Snoozed and Active", () => {
-    expect(buildSessionListParams({ archivedFilter: "snoozed", agentId: "main" })).toEqual(
-      buildSessionListParams({ archivedFilter: "active", agentId: "main" }),
-    );
   });
 
   it("applies snooze and wake publications immediately without a pending visibility state or list read", async () => {
@@ -98,5 +89,56 @@ describe("sidebar snooze visibility", () => {
       expect(sessions.archiveVisibility(row.key)).toBeUndefined();
     }
     expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(reads);
+  });
+});
+
+describe("sidebar child link visibility", () => {
+  const parentKey = "agent:main:subagent:helper";
+  const listed: GatewaySessionRow = { key: "agent:main:dashboard:listed", kind: "direct" };
+  const unlisted = "agent:main:dashboard:unlisted";
+  const publication = "agent:main:dashboard:github-publication-e205588962dd675361e7676e2da8088e";
+
+  function childVisibility(params: {
+    loaded?: boolean;
+    loading?: boolean;
+    error?: boolean;
+    showSystem?: boolean;
+  }) {
+    const { isChildSessionVisible } = projectSidebarArchiveVisibility({
+      sessionData: {
+        childSessionRowsByParent: params.loaded ? { [parentKey]: [listed] } : {},
+        loadedChildSessionKeys: new Set(params.loaded ? [parentKey] : []),
+        loadingChildSessionKeys: new Set(params.loading ? [parentKey] : []),
+        childSessionErrorsByParent: new Map(params.error ? [[parentKey, "failed"]] : []),
+      },
+      sourceRows: [],
+      selectedAgentId: "main",
+      statusFilter: "active",
+      showSystem: params.showSystem,
+      now: 100,
+      deletionState: () => undefined,
+      archiveVisibility: () => undefined,
+    });
+    return (key: string) => isChildSessionVisible(parentKey, key);
+  }
+
+  it("keeps the settled window's answer while that window refreshes", () => {
+    const settled = childVisibility({ loaded: true });
+    const refreshing = childVisibility({ loaded: true, loading: true });
+    for (const visible of [settled, refreshing]) {
+      expect(visible(listed.key)).toBe(true);
+      expect(visible(unlisted)).toBe(false);
+    }
+  });
+
+  it("retains unconfirmed links before the first window and after a failed read", () => {
+    expect(childVisibility({})(unlisted)).toBe(true);
+    expect(childVisibility({ loading: true })(unlisted)).toBe(true);
+    expect(childVisibility({ error: true })(unlisted)).toBe(true);
+  });
+
+  it("hides unloaded GitHub publication links unless system sessions are shown", () => {
+    expect(childVisibility({ loading: true })(publication)).toBe(false);
+    expect(childVisibility({ loading: true, showSystem: true })(publication)).toBe(true);
   });
 });

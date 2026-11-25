@@ -1,21 +1,18 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   CodexHistoryRejection,
   codexHistoryRejectionReason,
   type CodexHistoryRejectionReason,
 } from "./history-rejection.js";
 import type { JsonValue } from "./protocol.js";
+import type { CodexBindingWithCurrent } from "./session-binding.js";
 import type { CodexMirroredSessionHistoryTarget } from "./session-history.js";
 import type { SettledTurnMessages } from "./settled-turn-evidence.js";
 
-function freezeProjection(value: JsonValue): void {
-  if (value !== null && typeof value === "object") {
-    for (const child of Object.values(value)) {
-      freezeProjection(child);
-    }
-    Object.freeze(value);
-  }
-}
+const loadSessionHistoryWorker = createLazyRuntimeModule(
+  () => import("../../session-history-worker-runtime.js"),
+);
 
 type CodexSettledTurnSelection = {
   model: string;
@@ -30,18 +27,18 @@ export class CodexSettledTurnContext {
   constructor(
     readonly data: JsonValue[],
     readonly selection: CodexSettledTurnSelection,
-  ) {
-    freezeProjection(data);
-    Object.freeze(selection);
-    Object.freeze(this);
-  }
+  ) {}
 }
 
-/** Verifies and freezes a complete replay projection while reading the active branch. */
+/** Verifies and captures a detached replay projection while reading the active branch. */
 export async function captureCodexSettledTurnFinalizationContext(
   params: CodexMirroredSessionHistoryTarget &
     SettledTurnMessages &
-    Partial<CodexSettledTurnSelection> & { signal?: AbortSignal; assertActive?: () => void },
+    Partial<CodexSettledTurnSelection> & {
+      signal?: AbortSignal;
+      assertActive?: () => void;
+      withCurrent?: CodexBindingWithCurrent;
+    },
 ): Promise<CodexSettledTurnContext | undefined> {
   let reason: CodexHistoryRejectionReason;
   try {
@@ -51,13 +48,17 @@ export async function captureCodexSettledTurnFinalizationContext(
     if (!model) {
       throw new CodexHistoryRejection("model_unavailable");
     }
-    const { projectCodexSettledHistoryInWorker } =
-      await import("../../session-history-worker-runtime.js");
+    const { projectCodexSettledHistoryInWorker } = await loadSessionHistoryWorker();
     const result = await projectCodexSettledHistoryInWorker(params, params.signal);
     params.signal?.throwIfAborted();
     params.assertActive?.();
     if (result.status === "ok") {
-      return new CodexSettledTurnContext(result.value, { model, modelProvider, authProfileId });
+      const consume = () => {
+        params.signal?.throwIfAborted();
+        params.assertActive?.();
+        return new CodexSettledTurnContext(result.value, { model, modelProvider, authProfileId });
+      };
+      return params.withCurrent ? await params.withCurrent(consume) : consume();
     }
     reason = result.reason;
   } catch (error) {

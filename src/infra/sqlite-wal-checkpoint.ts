@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerListener } from "../shared/listeners.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { normalizeSqliteNumber, readFiniteSqliteNumber } from "./sqlite-number.js";
@@ -28,6 +29,7 @@ export type SqliteWalHealth = {
   checkpointedFrames: number | null;
   lastCompletedAtMs: number | null;
   consecutiveBlocked: number;
+  bytePressure: boolean;
   warning: boolean;
   error?: string;
   activeReaders?: SqliteReaderDiagnostic[];
@@ -49,10 +51,7 @@ const checkpointListeners = resolveGlobalSingleton(
 export function onSqliteWalCheckpoint(
   listener: (observation: SqliteWalCheckpointObservation) => void,
 ): () => void {
-  checkpointListeners.add(listener);
-  return () => {
-    checkpointListeners.delete(listener);
-  };
+  return registerListener(checkpointListeners, listener);
 }
 
 /** A relayed worker result adds host observations without claiming visibility into other threads. */
@@ -139,6 +138,8 @@ function checkpoint(database: DatabaseSync, mode: SqliteWalCheckpointMode) {
 }
 
 /** Offline maintenance must stop before compaction or recovery if truncation remains busy. */
+export class SqliteWalCheckpointBusyError extends Error {}
+
 export function truncateSqliteWal(database: DatabaseSync, sqlitePath: string): void {
   const row = checkpoint(database, "TRUNCATE");
   const busy = readFiniteSqliteNumber(row?.busy ?? (row ? Object.values(row)[0] : undefined));
@@ -146,7 +147,9 @@ export function truncateSqliteWal(database: DatabaseSync, sqlitePath: string): v
     throw new Error(`SQLite checkpoint returned an invalid result for ${sqlitePath}.`);
   }
   if (busy !== 0) {
-    throw new Error(`SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenClaw and retry.`);
+    throw new SqliteWalCheckpointBusyError(
+      `SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenClaw and retry.`,
+    );
   }
 }
 
@@ -167,6 +170,7 @@ export function createSqliteWalCheckpoint(
     checkpointedFrames: null,
     lastCompletedAtMs: snapshot?.health.lastCompletedAtMs ?? null,
     consecutiveBlocked: 0,
+    bytePressure: false,
     warning: true,
   });
 
@@ -176,6 +180,7 @@ export function createSqliteWalCheckpoint(
       observedAtMs: Date.now(),
       state: "error",
       consecutiveBlocked: 0,
+      bytePressure: false,
       warning: true,
       error: formatErrorMessage(error),
     };
@@ -224,13 +229,14 @@ export function createSqliteWalCheckpoint(
           observation.error = formatErrorMessage(error);
         }
       }
-      // Allow the existing retained-WAL ceiling or two database images before warning early.
-      observation.warning =
+      observation.bytePressure =
         observation.state === "blocked" &&
-        (observation.consecutiveBlocked >= 2 ||
-          (observation.walBytes !== null &&
-            observation.databaseBytes !== null &&
-            observation.walBytes > Math.max(2 * observation.databaseBytes, journalSizeLimitBytes)));
+        observation.walBytes !== null &&
+        observation.databaseBytes !== null &&
+        observation.walBytes > Math.max(2 * observation.databaseBytes, journalSizeLimitBytes);
+      observation.warning =
+        observation.bytePressure ||
+        (observation.state === "blocked" && observation.consecutiveBlocked >= 2);
       snapshot = {
         observedAtNs,
         lastCompletedAtNs:
@@ -249,9 +255,10 @@ export function createSqliteWalCheckpoint(
     if (observation.error !== undefined) {
       options.onCheckpointError?.(sizeError);
     }
-    // Frequent checkpoint ticks expect readers to block some passes; only the
-    // reclaim cadence reports them, the health snapshot still records every one.
-    if ((busy || observation.warning) && !quiet) {
+    // Frequent checkpoint ticks expect readers to block some passes; only an
+    // observation that reaches the warning policy reports them, while the
+    // health snapshot still records every blocked pass.
+    if (observation.warning && !quiet) {
       const label = options.databaseLabel ?? "sqlite database";
       options.onCheckpointError?.(
         new Error(
@@ -310,6 +317,9 @@ export function createSqliteWalCheckpoint(
     },
     get health() {
       return snapshot ? structuredClone(snapshot.health) : undefined;
+    },
+    get observedAtNs() {
+      return snapshot?.observedAtNs;
     },
     get snapshot() {
       return snapshot ? structuredClone(snapshot) : undefined;

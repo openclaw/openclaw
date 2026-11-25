@@ -7,7 +7,7 @@ extension GatewayLaunchAgentManager {
         let plist: URL
         let environment: URL
         let wrapper: URL
-        let definition: ServiceDefinitionDigest
+        private(set) var definition: ServiceDefinitionDigest
         let isLocalGateway: Bool
         let updateSelection: CLIInstallPolicy.ManagedUpdateSelection
 
@@ -20,18 +20,14 @@ extension GatewayLaunchAgentManager {
         }
 
         var afterUninstall: Self {
-            Self(
-                plist: self.plist,
-                environment: self.environment,
-                wrapper: self.wrapper,
-                definition: self.definition.withoutPlist,
-                isLocalGateway: self.isLocalGateway,
-                updateSelection: self.updateSelection)
+            var authority = self
+            authority.definition = self.definition.withoutPlist
+            return authority
         }
     }
 
     struct ServiceDefinitionDigest: Equatable, Sendable {
-        let plist: String?
+        private(set) var plist: String?
         let environment: String?
         let wrapper: String?
 
@@ -44,32 +40,40 @@ extension GatewayLaunchAgentManager {
             self.wrapper = wrapper.map(digest)
         }
 
-        private init(plistDigest: String?, environmentDigest: String?, wrapperDigest: String?) {
-            self.plist = plistDigest
-            self.environment = environmentDigest
-            self.wrapper = wrapperDigest
-        }
-
         var withoutPlist: Self {
-            Self(plistDigest: nil, environmentDigest: self.environment, wrapperDigest: self.wrapper)
+            var definition = self
+            definition.plist = nil
+            return definition
         }
+    }
+
+    struct ServiceFileCapture: Equatable, Sendable {
+        let resolvedPath: String
+        let contents: Data
+
+        var digestData: Data {
+            Data((self.resolvedPath + "\0").utf8) + self.contents
+        }
+    }
+
+    static func captureServiceFile(at url: URL) throws -> ServiceFileCapture? {
+        let contents: Data
+        do { contents = try Data(contentsOf: url) } catch let error as NSError where
+            error.domain == NSCocoaErrorDomain &&
+            (error.code == NSFileReadNoSuchFileError || error.code == NSFileNoSuchFileError)
+        {
+            return nil
+        }
+        return ServiceFileCapture(resolvedPath: url.resolvingSymlinksInPath().path, contents: contents)
     }
 
     static func serviceDefinitionDigest(
         plist: URL, environment: URL, wrapper: URL) throws -> ServiceDefinitionDigest
     {
-        func data(_ url: URL) throws -> Data? {
-            let contents: Data
-            do { contents = try Data(contentsOf: url) } catch let error as NSError where
-                error.domain == NSCocoaErrorDomain &&
-                (error.code == NSFileReadNoSuchFileError || error.code == NSFileNoSuchFileError)
-            {
-                return nil
-            }
-            return Data((url.resolvingSymlinksInPath().path + "\0").utf8) + contents
-        }
-        return try ServiceDefinitionDigest(
-            plist: data(plist), environment: data(environment), wrapper: data(wrapper))
+        try ServiceDefinitionDigest(
+            plist: self.captureServiceFile(at: plist)?.digestData,
+            environment: self.captureServiceFile(at: environment)?.digestData,
+            wrapper: self.captureServiceFile(at: wrapper)?.digestData)
     }
 
     static func gatewayServiceAuthority(

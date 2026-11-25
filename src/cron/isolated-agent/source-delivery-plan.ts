@@ -1,47 +1,45 @@
-import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { CronDeliveryPlan } from "../delivery-plan.js";
 
 export function resolveCronSourceDeliveryPlan(params: {
   deliveryPlan: CronDeliveryPlan;
-  resolvedDelivery: SourceDeliveryPlan["target"] & { ok?: boolean };
-}): SourceDeliveryPlan {
-  const target = {
-    channel: params.resolvedDelivery.channel,
-    to: params.resolvedDelivery.to,
-    accountId: params.resolvedDelivery.accountId,
-    threadId: params.resolvedDelivery.threadId,
+  resolvedDelivery: SourceDeliveryPlan["target"] & {
+    ok?: boolean;
+    deliverySuppressionReason?: "channel_transform";
   };
-
-  if (params.deliveryPlan.mode === "webhook") {
-    return createSourceDeliveryPlan({
-      owner: "none",
-      reason: "cron_webhook",
-      messageToolEnabled: false,
-      directFallback: false,
-    });
-  }
-
-  if (params.deliveryPlan.mode === "none") {
-    return createSourceDeliveryPlan({
-      owner: "none",
-      reason: "cron_none",
-      target,
-      messageToolEnabled: true,
-      messageToolForced: false,
-      directFallback: false,
-    });
-  }
-
-  return createSourceDeliveryPlan({
-    owner: "direct_fallback",
-    reason: "cron_announce",
-    target,
-    messageToolEnabled: true,
-    messageToolForced: false,
-    requireExplicitMessageTarget: true,
-    requireExplicitMessageTargetEvidence: true,
-    directFallback: true,
-    skipFallbackWhenMessageToolSentToTarget: params.resolvedDelivery.ok ?? true,
-  });
+}): SourceDeliveryPlan {
+  const webhook = params.deliveryPlan.mode === "webhook";
+  const announce = !webhook && params.deliveryPlan.mode !== "none";
+  return {
+    owner: announce ? "direct_fallback" : "none",
+    reason: announce ? "cron_announce" : webhook ? "cron_webhook" : "cron_none",
+    target: webhook
+      ? {}
+      : {
+          channel: params.resolvedDelivery.channel,
+          to: params.resolvedDelivery.to,
+          accountId: params.resolvedDelivery.accountId,
+          threadId: params.resolvedDelivery.threadId,
+        },
+    normalFinal: announce ? "visible" : "private",
+    sourceReplyDeliveryMode: undefined,
+    messageTool: {
+      enabled:
+        !webhook &&
+        !params.resolvedDelivery.deliverySuppressionReason &&
+        (!announce ||
+          params.deliveryPlan.target !== "owner" ||
+          params.resolvedDelivery.ok === true),
+      force: false,
+      requireExplicitTarget: announce,
+      requireExplicitTargetEvidence: announce,
+      // The target is configured, not a conversation to answer: a send to it is
+      // delivery, and the job's post-send work must still run.
+      finalByDefault: false,
+    },
+    fallback: {
+      directDelivery: announce,
+      skipWhenMessageToolSentToTarget: announce && (params.resolvedDelivery.ok ?? true),
+    },
+  };
 }

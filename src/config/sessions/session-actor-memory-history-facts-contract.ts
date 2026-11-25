@@ -1,0 +1,127 @@
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type { SkillCommandSpec } from "../../skills/types.js";
+import type {
+  SessionTranscriptBoundedMessageTailOptions,
+  SessionTranscriptBoundedMessageTailPage,
+  SessionTranscriptMessageEvent,
+} from "./session-accessor.sqlite-projection-read.js";
+import type {
+  LatestTranscriptAssistantText,
+  SessionTranscriptStats,
+  TranscriptEvent,
+} from "./session-accessor.types.js";
+import type {
+  SessionBranchSummaryReadResult,
+  SessionPreviewItem,
+  SessionTitleFields,
+  SessionTranscriptEventMatch,
+  SessionTranscriptWatermark,
+} from "./session-history-read.types.js";
+import type {
+  SessionTranscriptAccountingOptions,
+  SessionTranscriptAccountingSnapshot,
+} from "./session-transcript-accounting.types.js";
+import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
+import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
+import type {
+  SessionTranscriptCurrentTurnEntryRead,
+  SessionTranscriptCurrentTurnEntryRequest,
+  SessionTranscriptMaintenanceFacts,
+  SessionTranscriptMaintenanceRead,
+} from "./session-transcript-hydration.types.js";
+
+type Reads = {
+  "visibility-inputs": {
+    input: { runIds: string[] };
+    output: Array<{
+      seq: number;
+      message: {
+        role: "user";
+        idempotencyKey: unknown;
+        provenance: unknown;
+        __openclaw: { runId: unknown; steerTargetRunId: unknown; idempotencyKey: unknown };
+      };
+    }>;
+  };
+  title: {
+    input: { includeInterSession?: boolean; skillCommands?: SkillCommandSpec[] };
+    output: { kind: "session-title-fields"; fields: SessionTitleFields };
+  };
+  preview: {
+    input: { maxItems: number; maxChars: number };
+    output: { kind: "session-preview"; items: SessionPreviewItem[] };
+  };
+  branches: { input: object; output: SessionBranchSummaryReadResult };
+  "current-turn-entry": {
+    input: SessionTranscriptCurrentTurnEntryRequest;
+    output: SessionTranscriptCurrentTurnEntryRead;
+  };
+  maintenance: {
+    input: { request: SessionTranscriptMaintenanceRead };
+    output: SessionTranscriptMaintenanceFacts;
+  };
+  stats: { input: object; output: SessionTranscriptStats };
+  match: {
+    input: { match: SessionTranscriptEventMatch };
+    output: { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };
+  };
+  watermark: {
+    input: object;
+    output: { kind: "transcript-watermark"; watermark: SessionTranscriptWatermark };
+  };
+  "latest-assistant": {
+    input: object;
+    output: LatestTranscriptAssistantText | undefined;
+  };
+  "latest-active-message": {
+    input: object;
+    output: SessionTranscriptMessageEvent | undefined;
+  };
+  "message-presence": { input: object; output: boolean };
+  "recent-active-events": { input: { maxEvents: number }; output: TranscriptEvent[] };
+  accounting: {
+    input: { options: SessionTranscriptAccountingOptions };
+    output: SessionTranscriptAccountingSnapshot;
+  };
+  "bounded-tail": {
+    input: { options: SessionTranscriptBoundedMessageTailOptions };
+    output: SessionTranscriptBoundedMessageTailPage;
+  };
+  "visitor-source": {
+    input: { offset?: number };
+    output: { messages: Array<{ message: unknown; seq: number }>; nextOffset?: number };
+  };
+};
+
+export type SessionActorMemoryHistoryFactsReads = {
+  [Key in keyof Reads as `session.history.${Key}`]: {
+    input: Reads[Key]["input"] & { sessionId?: string } & (Key extends
+        | "title"
+        | "preview"
+        | "current-turn-entry"
+        | "maintenance"
+        | "latest-assistant"
+        | "latest-active-message"
+        | "recent-active-events"
+        | "accounting"
+        | "bounded-tail"
+        | "visitor-source"
+        ? { admission?: UserTurnTranscriptAdmissionReceipt }
+        : object);
+    output: Reads[Key]["output"];
+  };
+};
+
+export type SessionActorMemoryHistoryFactsQuery = {
+  [Key in keyof SessionActorMemoryHistoryFactsReads]: {
+    type: Key;
+    input: SessionActorMemoryHistoryFactsReads[Key]["input"];
+  };
+}[keyof SessionActorMemoryHistoryFactsReads];
+
+export type SessionActorMemoryAnchorReads = {
+  "session.history.anchors": {
+    input: SessionTranscriptAnchorSelection & { sessionId?: string };
+    output: SessionTranscriptAnchorFacts;
+  };
+};

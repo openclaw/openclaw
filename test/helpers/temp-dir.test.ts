@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveTestTempRoot, withEnv } from "../../src/test-utils/env.js";
 import { resolveNativeFixtureShortPath } from "../scripts/native-boundary-fixture.js";
-import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "./temp-dir.js";
+import { cleanupTempDirs, makeTempDir } from "./temp-dir.js";
 
 const tempDirs = new Set<string>();
 
@@ -12,6 +12,19 @@ afterEach(() => {
 });
 
 describe("temp-dir test helpers", () => {
+  it.each([
+    ["linux", { TMPDIR: "/dir", TMP: "/tmp", TEMP: "/temp" }, "/dir"],
+    ["linux", { TMPDIR: "", TMP: "/tmp", TEMP: "/temp" }, "/tmp"],
+    ["linux", { TEMP: "/temp" }, "/temp"],
+    ["linux", {}, "/tmp"],
+    ["win32", { TMPDIR: "C:\\ignored", TEMP: "C:\\temp", TMP: "C:\\tmp" }, "C:\\temp"],
+    ["win32", { TEMP: "", TMP: "C:\\tmp" }, "C:\\tmp"],
+    ["win32", { SystemRoot: "C:\\Windows", windir: "D:\\Windows" }, "C:\\Windows\\temp"],
+    ["win32", { windir: "D:\\Windows" }, "D:\\Windows\\temp"],
+  ] as const)("resolves %s temp roots from %j", (platform, env, expected) => {
+    expect(resolveTestTempRoot(env, platform)).toBe(expected);
+  });
+
   it.each(["array", "set"] as const)(
     "continues after a failed removal and retains the failed directory in its %s",
     (collection) => {
@@ -76,12 +89,6 @@ describe("temp-dir test helpers", () => {
     }
   });
 
-  it("creates default temp dirs under the canonical system temp path", () => {
-    const dir = makeTempDir(tempDirs, "openclaw-temp-dir-canonical-");
-
-    expect(dir.startsWith(`${fs.realpathSync.native(os.tmpdir())}${path.sep}`)).toBe(true);
-  });
-
   it.skipIf(process.platform !== "win32")(
     "expands short names in default temp roots",
     ({ skip }) => {
@@ -91,70 +98,10 @@ describe("temp-dir test helpers", () => {
         skip();
         return;
       }
-      const tmpdir = vi.spyOn(os, "tmpdir").mockReturnValue(shortRoot);
-      try {
+      withEnv({ TEMP: shortRoot, TMP: shortRoot }, () => {
         const dir = makeTempDir(tempDirs, "child-");
         expect(path.dirname(dir)).toBe(fs.realpathSync.native(root));
-      } finally {
-        tmpdir.mockRestore();
-      }
+      });
     },
   );
-
-  it("caches canonical system temp roots by their raw path", () => {
-    const firstRoot = makeTempDir(tempDirs, "openclaw-temp-dir-cache-first-");
-    const secondRoot = makeTempDir(tempDirs, "openclaw-temp-dir-cache-second-");
-    const tmpdir = vi.spyOn(os, "tmpdir");
-    const realpath = vi.spyOn(fs.realpathSync, "native");
-    realpath.mockClear();
-
-    tmpdir.mockReturnValue(firstRoot);
-    const firstChild = makeTempDir(tempDirs, "child-");
-    const cachedChild = makeTempDir(tempDirs, "child-");
-    tmpdir.mockReturnValue(secondRoot);
-    const secondChild = makeTempDir(tempDirs, "child-");
-
-    expect(realpath).toHaveBeenCalledTimes(2);
-    expect(realpath).toHaveBeenNthCalledWith(1, firstRoot);
-    expect(realpath).toHaveBeenNthCalledWith(2, secondRoot);
-    expect(firstChild.startsWith(`${firstRoot}${path.sep}`)).toBe(true);
-    expect(cachedChild.startsWith(`${firstRoot}${path.sep}`)).toBe(true);
-    expect(secondChild.startsWith(`${secondRoot}${path.sep}`)).toBe(true);
-    realpath.mockRestore();
-    tmpdir.mockRestore();
-  });
-
-  it("preserves the spelling of explicit custom roots", () => {
-    const parent = makeTempDir(tempDirs, "openclaw-temp-dir-explicit-root-");
-    const realRoot = path.join(parent, "real");
-    const aliasRoot = path.join(parent, "alias");
-    fs.mkdirSync(realRoot);
-    fs.symlinkSync(realRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
-
-    const dir = makeTempDir(tempDirs, "child-", aliasRoot);
-
-    expect(dir.startsWith(`${aliasRoot}${path.sep}`)).toBe(true);
-    expect(fs.realpathSync(dir).startsWith(`${realRoot}${path.sep}`)).toBe(true);
-  });
-
-  describe("auto-cleaning tracker", () => {
-    const createdDirs: string[] = [];
-
-    afterEach(() => {
-      for (const dir of createdDirs.splice(0)) {
-        expect(fs.existsSync(dir)).toBe(false);
-      }
-      expect([...autoCleanupTracker.dirs]).toEqual([]);
-    });
-
-    const autoCleanupTracker = useAutoCleanupTempDirTracker(afterEach);
-
-    it("tracks temp dirs with Vitest cleanup", () => {
-      const autoCleanedDir = autoCleanupTracker.make("openclaw-temp-dir-auto-");
-      createdDirs.push(autoCleanedDir);
-      fs.writeFileSync(path.join(autoCleanedDir, "artifact.txt"), "artifact\n", "utf8");
-
-      expect(fs.existsSync(autoCleanedDir)).toBe(true);
-    });
-  });
 });

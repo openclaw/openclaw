@@ -1,40 +1,34 @@
-// Control UI helpers derive native constraints and safe initial values from config schemas.
 import {
-  isJsonSchemaValueValid,
-  jsonSchemaValuesEqual,
+  isJsonSchemaValueValid as isSupportedConfigValueValid,
+  jsonSchemaValuesEqual as configValuesEqual,
 } from "@openclaw/normalization-core/json-schema";
 import {
   asFiniteNumber as finiteNumber,
   asSafeIntegerInRange,
 } from "@openclaw/normalization-core/number-coercion";
-import { arrayItemSchema, collectAllOfSchemas, combinedSchema } from "./config-form.array-items.ts";
+import {
+  arrayItemSchema,
+  collectAllOfSchemas,
+  objectAdditionalPropertiesSchema,
+  objectPropertyKeys,
+  objectPropertySchema,
+  ownPropertySchema,
+  requiredPropertyKeys,
+} from "./config-form.array-items.ts";
 import { decimalRational } from "./config-form.numeric.ts";
 import { schemaType, type JsonSchema } from "./config-form.shared.ts";
 
-export const configValuesEqual = jsonSchemaValuesEqual;
-
-export function isSupportedConfigValueValid(schema: JsonSchema, value: unknown): boolean {
-  return isJsonSchemaValueValid(schema, value);
-}
-
-function ownPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
-  const properties = schema.properties;
-  return properties && Object.hasOwn(properties, key) ? properties[key] : undefined;
-}
-
-function decimalPlaces(value: number): number {
-  const text = String(value).toLowerCase();
-  const [coefficient = "", exponentText] = text.split("e");
-  const fractionLength = coefficient.split(".")[1]?.length ?? 0;
-  const exponent = Number(exponentText ?? 0);
-  return Math.max(0, fractionLength - exponent);
-}
+export { configValuesEqual, isSupportedConfigValueValid };
 
 function normalizePrecision(value: number, step: number | undefined): number {
   if (!step) {
     return value;
   }
-  const places = decimalPlaces(step);
+  const text = String(step).toLowerCase();
+  const [coefficient = "", exponentText] = text.split("e");
+  const fractionLength = coefficient.split(".")[1]?.length ?? 0;
+  const exponent = Number(exponentText ?? 0);
+  const places = Math.max(0, fractionLength - exponent);
   return places <= 100 ? Number(value.toFixed(places)) : value;
 }
 
@@ -47,20 +41,6 @@ function greatestCommonDivisor(left: bigint, right: bigint): bigint {
     b = remainder;
   }
   return a;
-}
-
-function leastCommonMultiple(left: bigint, right: bigint): bigint {
-  return (left / greatestCommonDivisor(left, right)) * right;
-}
-
-function integerCompatibleStep(multipleOf: number): number {
-  const { numerator, denominator } = decimalRational(multipleOf)!;
-  const divisor = greatestCommonDivisor(numerator, denominator);
-  const step = Number(numerator / divisor);
-  if (!Number.isFinite(step) || step <= 0) {
-    return 1;
-  }
-  return step;
 }
 
 function alignToStep(value: number, step: number, direction: "ceil" | "floor" | "round"): number {
@@ -93,21 +73,7 @@ type NumericInputConstraints = {
   step: number | "any";
 };
 
-type ArrayInputConstraints = {
-  minItems: number;
-  maxItems?: number;
-  uniqueItems: boolean;
-};
-
-type EffectiveNumericBound = {
-  value?: number;
-  exclusive: boolean;
-};
-
-function effectiveNumericBound(
-  schemas: JsonSchema[],
-  direction: "lower" | "upper",
-): EffectiveNumericBound {
+function effectiveNumericBound(schemas: JsonSchema[], direction: "lower" | "upper") {
   let value: number | undefined;
   let exclusive = false;
   for (const schema of schemas) {
@@ -135,6 +101,28 @@ function effectiveNumericBound(
   return { value, exclusive };
 }
 
+function alignedNumericBound(
+  bound: ReturnType<typeof effectiveNumericBound>,
+  step: number | undefined,
+  direction: "ceil" | "floor",
+): number | undefined {
+  const { value, exclusive } = bound;
+  if (value === undefined || !step) {
+    return value;
+  }
+  const aligned = alignToStep(value, step, direction);
+  if (!exclusive || (direction === "ceil" ? aligned > value : aligned < value)) {
+    return aligned;
+  }
+  const exclusiveAligned = normalizePrecision(
+    aligned + (direction === "ceil" ? step : -step),
+    step,
+  );
+  return direction === "ceil"
+    ? Math.max(aligned, exclusiveAligned)
+    : Math.min(aligned, exclusiveAligned);
+}
+
 function combinedMultipleOf(schemas: JsonSchema[]): number | undefined {
   let numerator: bigint | undefined;
   let denominator: bigint | undefined;
@@ -151,7 +139,9 @@ function combinedMultipleOf(schemas: JsonSchema[]): number | undefined {
     const nextNumerator = rational.numerator / divisor;
     const nextDenominator = rational.denominator / divisor;
     numerator =
-      numerator === undefined ? nextNumerator : leastCommonMultiple(numerator, nextNumerator);
+      numerator === undefined
+        ? nextNumerator
+        : (numerator / greatestCommonDivisor(numerator, nextNumerator)) * nextNumerator;
     denominator =
       denominator === undefined
         ? nextDenominator
@@ -164,7 +154,7 @@ function combinedMultipleOf(schemas: JsonSchema[]): number | undefined {
   return Number.isFinite(combined) && combined > 0 ? combined : undefined;
 }
 
-export function arrayInputConstraints(schema: JsonSchema): ArrayInputConstraints {
+export function arrayInputConstraints(schema: JsonSchema) {
   const schemas = collectAllOfSchemas(schema);
   let minItems = 0;
   let maxItems: number | undefined;
@@ -183,41 +173,8 @@ export function arrayInputConstraints(schema: JsonSchema): ArrayInputConstraints
   return { minItems, maxItems, uniqueItems };
 }
 
-export function requiredPropertyKeys(schema: JsonSchema): Set<string> {
-  return new Set(collectAllOfSchemas(schema).flatMap((entry) => entry.required ?? []));
-}
-
-export function objectPropertyKeys(schema: JsonSchema): string[] {
-  const schemas = collectAllOfSchemas(schema);
-  const keys = new Set(schemas.flatMap((entry) => Object.keys(entry.properties ?? {})));
-  return [...keys].filter((key) =>
-    schemas.every(
-      (entry) =>
-        ownPropertySchema(entry, key) !== undefined || entry.additionalProperties !== false,
-    ),
-  );
-}
-
-export function objectAdditionalPropertiesSchema(
-  schema: JsonSchema,
-): JsonSchema | false | undefined {
-  const policies = collectAllOfSchemas(schema)
-    .map((entry) => entry.additionalProperties)
-    .filter((policy) => policy !== undefined);
-  if (policies.some((policy) => policy === false)) {
-    return false;
-  }
-  const schemas = policies.filter(
-    (policy): policy is JsonSchema => Boolean(policy) && typeof policy === "object",
-  );
-  if (schemas.length > 0) {
-    return combinedSchema(schemas);
-  }
-  return policies.some((policy) => policy === true) ? {} : undefined;
-}
-
 function objectRepairIssueCount(schema: JsonSchema, value: Record<string, unknown>): number {
-  let issues = isSupportedConfigValueValid(schema, value) ? 0 : 1;
+  let issues = 1;
   const knownKeys = new Set(objectPropertyKeys(schema));
   for (const key of requiredPropertyKeys(schema)) {
     if (!Object.hasOwn(value, key)) {
@@ -277,30 +234,11 @@ export function canApplyObjectCandidate(
   return objectRepairIssueCount(schema, candidate) <= objectRepairIssueCount(schema, current);
 }
 
-export function objectPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
-  if (!objectPropertyKeys(schema).includes(key)) {
-    return undefined;
-  }
-  return combinedSchema(
-    collectAllOfSchemas(schema)
-      .map((entry) => ownPropertySchema(entry, key))
-      .filter((property): property is JsonSchema => property !== undefined),
-  );
-}
-
-export function arrayConstraintCandidates(
-  schema: JsonSchema,
-  seen = new Set<JsonSchema>(),
-): unknown[][] {
-  if (seen.has(schema)) {
-    return [];
-  }
-  seen.add(schema);
+export function arrayConstraintCandidates(schema: JsonSchema): unknown[][] {
   const candidates: unknown[][] = [schema.const, ...(schema.enum ?? [])].filter(Array.isArray);
   for (const entry of [...(schema.allOf ?? []), ...(schema.anyOf ?? []), ...(schema.oneOf ?? [])]) {
-    candidates.push(...arrayConstraintCandidates(entry, seen));
+    candidates.push(...arrayConstraintCandidates(entry));
   }
-  seen.delete(schema);
   return candidates;
 }
 
@@ -315,12 +253,8 @@ function arrayCandidateDistance(value: readonly unknown[], candidate: readonly u
   return distance;
 }
 
-function arrayRepairIssueCount(
-  schema: JsonSchema,
-  value: readonly unknown[],
-  uniqueItems: boolean,
-): number {
-  const { minItems, maxItems } = arrayInputConstraints(schema);
+function arrayRepairIssueCount(schema: JsonSchema, value: readonly unknown[]): number {
+  const { minItems, maxItems, uniqueItems } = arrayInputConstraints(schema);
   let issues = Math.max(0, minItems - value.length);
   const constrainedDistances = arrayConstraintCandidates(schema)
     .filter((candidate) => isSupportedConfigValueValid(schema, candidate))
@@ -350,7 +284,6 @@ export function canApplyArrayCandidate(
   schema: JsonSchema,
   current: readonly unknown[],
   candidate: readonly unknown[],
-  uniqueItems: boolean,
   allowEqualRepair: boolean,
 ): boolean {
   if (isSupportedConfigValueValid(schema, candidate)) {
@@ -359,8 +292,8 @@ export function canApplyArrayCandidate(
   if (isSupportedConfigValueValid(schema, current)) {
     return false;
   }
-  const currentIssues = arrayRepairIssueCount(schema, current, uniqueItems);
-  const candidateIssues = arrayRepairIssueCount(schema, candidate, uniqueItems);
+  const currentIssues = arrayRepairIssueCount(schema, current);
+  const candidateIssues = arrayRepairIssueCount(schema, candidate);
   return allowEqualRepair ? candidateIssues <= currentIssues : candidateIssues < currentIssues;
 }
 
@@ -382,49 +315,23 @@ export function numericInputConstraints(schema: JsonSchema): NumericInputConstra
       ? "number"
       : schemaType(schema);
   const multipleOf = combinedMultipleOf(schemas);
-  const numericStep =
-    type === "integer"
-      ? multipleOf === undefined
-        ? 1
-        : integerCompatibleStep(multipleOf)
-      : multipleOf;
-  const lowerBound = effectiveNumericBound(schemas, "lower");
-  const upperBound = effectiveNumericBound(schemas, "upper");
-  const exclusiveMinimum = lowerBound.exclusive ? lowerBound.value : undefined;
-  const exclusiveMaximum = upperBound.exclusive ? upperBound.value : undefined;
-
-  let min = lowerBound.value;
-  let max = upperBound.value;
-  if (numericStep) {
-    if (min !== undefined) {
-      min = alignToStep(min, numericStep, "ceil");
-    }
-    if (max !== undefined) {
-      max = alignToStep(max, numericStep, "floor");
-    }
-    if (exclusiveMinimum !== undefined) {
-      const aligned = alignToStep(exclusiveMinimum, numericStep, "ceil");
-      const exclusiveAligned =
-        aligned <= exclusiveMinimum
-          ? normalizePrecision(aligned + numericStep, numericStep)
-          : aligned;
-      min = min === undefined ? exclusiveAligned : Math.max(min, exclusiveAligned);
-    }
-    if (exclusiveMaximum !== undefined) {
-      const aligned = alignToStep(exclusiveMaximum, numericStep, "floor");
-      const exclusiveAligned =
-        aligned >= exclusiveMaximum
-          ? normalizePrecision(aligned - numericStep, numericStep)
-          : aligned;
-      max = max === undefined ? exclusiveAligned : Math.min(max, exclusiveAligned);
+  let numericStep = multipleOf;
+  if (type === "integer") {
+    numericStep = 1;
+    if (multipleOf !== undefined) {
+      const { numerator, denominator } = decimalRational(multipleOf)!;
+      const divisor = greatestCommonDivisor(numerator, denominator);
+      const step = Number(numerator / divisor);
+      numericStep = !Number.isFinite(step) || step <= 0 ? 1 : step;
     }
   }
-
+  const lowerBound = effectiveNumericBound(schemas, "lower");
+  const upperBound = effectiveNumericBound(schemas, "upper");
   return {
-    min,
-    max,
-    exclusiveMin: exclusiveMinimum,
-    exclusiveMax: exclusiveMaximum,
+    min: alignedNumericBound(lowerBound, numericStep, "ceil"),
+    max: alignedNumericBound(upperBound, numericStep, "floor"),
+    exclusiveMin: lowerBound.exclusive ? lowerBound.value : undefined,
+    exclusiveMax: upperBound.exclusive ? upperBound.value : undefined,
     step: numericStep ?? "any",
   };
 }
@@ -526,14 +433,7 @@ function validatedDefaultCandidate(schema: JsonSchema, candidate: unknown): unkn
   if (candidate === NO_SAFE_DEFAULT || !isSupportedConfigValueValid(schema, candidate)) {
     return NO_SAFE_DEFAULT;
   }
-  if (!candidate || typeof candidate !== "object") {
-    return candidate;
-  }
-  try {
-    return structuredClone(candidate);
-  } catch {
-    return NO_SAFE_DEFAULT;
-  }
+  return candidate;
 }
 
 export function defaultValue(schema?: JsonSchema, depth = 0): unknown {
@@ -610,10 +510,8 @@ export function defaultValue(schema?: JsonSchema, depth = 0): unknown {
     case "boolean":
       return validatedDefaultCandidate(schema, false);
     case "number":
-    case "integer": {
-      const value = defaultNumericValue(schema);
-      return validatedDefaultCandidate(schema, value);
-    }
+    case "integer":
+      return validatedDefaultCandidate(schema, defaultNumericValue(schema));
     case "string":
       return validatedDefaultCandidate(schema, defaultStringValue(schema));
     case "null":

@@ -1,5 +1,8 @@
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveChannelProgressDraftConfig } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  resolveChannelProgressDraftConfig,
+  resolveChannelProgressDraftMaxLines,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
@@ -11,7 +14,8 @@ import {
   resolveSlackReplyBlocks,
   type PreparedSlackReply,
 } from "../../reply-blocks.js";
-import { readLruMapEntry, writeLruMapEntry } from "../lru-map-cache.js";
+import { SLACK_STREAM_MESSAGE_TASK_BUDGET } from "../../stream-size.js";
+import { getOrCreateWeakOwnerMap, readLruMapEntry, writeLruMapEntry } from "../lru-map-cache.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -72,6 +76,23 @@ export function resolveExplicitSlackProgressTitle(
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
 }
 
+/**
+ * Task rows per native stream message. `progress.maxLines` caps it only when
+ * the account sets the key itself: its default (eight) sizes the draft card's
+ * rolling window, and a native message without it holds Slack's 50 rows. A
+ * message needs one slot for a row it carries (the quiet card's summary row,
+ * a tool still running) and one for new work, so the cap is at least two.
+ */
+export function resolveSlackNativeMessageRowLimit(
+  entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
+): number {
+  if (resolveChannelProgressDraftConfig(entry).maxLines === undefined) {
+    return SLACK_STREAM_MESSAGE_TASK_BUDGET;
+  }
+  const maxLines = resolveChannelProgressDraftMaxLines(entry, SLACK_STREAM_MESSAGE_TASK_BUDGET);
+  return Math.max(2, Math.min(maxLines, SLACK_STREAM_MESSAGE_TASK_BUDGET));
+}
+
 export function resolveSlackProgressStyle(
   entry: SlackProgressConfigEntry,
   hasReplyThread: boolean,
@@ -114,16 +135,6 @@ export type SlackEventDeliveryAttempt = {
 const SLACK_STREAM_RECIPIENT_TEAM_CACHE_MAX = 2000;
 const slackStreamRecipientTeamCaches = new WeakMap<object, Map<string, string>>();
 
-function getSlackStreamRecipientTeamCache(client: object): Map<string, string> {
-  const existing = slackStreamRecipientTeamCaches.get(client);
-  if (existing) {
-    return existing;
-  }
-  const cache = new Map<string, string>();
-  slackStreamRecipientTeamCaches.set(client, cache);
-  return cache;
-}
-
 export function buildSlackEventDeliveryKey(
   params: SlackEventDeliveryAttempt,
   preparedReply: PreparedSlackReply = prepareSlackReply(params.payload),
@@ -149,20 +160,6 @@ export function buildSlackEventDeliveryKey(
   });
 }
 
-export function createSlackEventDeliveryTracker() {
-  const deliveredKeys = new Set<string>();
-  return {
-    hasDelivered(key: string | null) {
-      return key ? deliveredKeys.has(key) : false;
-    },
-    markDelivered(key: string | null) {
-      if (key) {
-        deliveredKeys.add(key);
-      }
-    },
-  };
-}
-
 export async function resolveSlackStreamRecipientTeamId(params: {
   client: Pick<PreparedSlackMessage["ctx"]["app"]["client"], "users">;
   token: string;
@@ -173,7 +170,9 @@ export async function resolveSlackStreamRecipientTeamId(params: {
     params.fallbackTeamId && params.userId
       ? `${params.fallbackTeamId}:${params.userId}`
       : undefined;
-  const cache = cacheKey ? getSlackStreamRecipientTeamCache(params.client) : undefined;
+  const cache = cacheKey
+    ? getOrCreateWeakOwnerMap(slackStreamRecipientTeamCaches, params.client)
+    : undefined;
   const cachedTeamId = cache && cacheKey ? readLruMapEntry(cache, cacheKey) : undefined;
   if (cachedTeamId) {
     return cachedTeamId;

@@ -1,6 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveAgentDir } from "../agents/agent-scope-config.js";
-import { findPersistedAuthProfileCredential } from "../agents/auth-profiles/store.js";
 import { clearRemovedQueuedAuthProfiles } from "../auto-reply/reply/queue.js";
 import { patchSessionEntryTarget } from "../config/sessions/session-accessor.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
@@ -52,7 +50,6 @@ export async function clearRemovedSessionAuthProfiles(params: {
         );
       }
       const removed = expectDefined(params.removedByAgent.get(agentId), "removed agent profiles");
-      const agentDir = resolveAgentDir(params.cfg, agentId);
       const isRemoved = (profileId: string | undefined): profileId is string =>
         profileId !== undefined && removed.has(profileId);
       for (const { database } of reads) {
@@ -64,7 +61,7 @@ export async function clearRemovedSessionAuthProfiles(params: {
               registry.assertCurrent();
               owner.assertCurrent();
             };
-            const entries = await owner.readEntries({
+            const { entries } = await owner.readEntries({
               agentId: database.agentId,
               storePath: database.path,
               env: inventory.env,
@@ -90,6 +87,7 @@ export async function clearRemovedSessionAuthProfiles(params: {
               env: inventory.env,
               sessionKeys,
               includeAuthorization: true,
+              snapshotFields: [],
             });
             assertCurrent();
             if (selected.entries.length === 0) {
@@ -102,8 +100,6 @@ export async function clearRemovedSessionAuthProfiles(params: {
                   isRemoved,
                 ),
               );
-              // Retire each account independently so reconnecting one cannot retain
-              // another deleted account in fallback state.
               for (const profileId of profileIds) {
                 await patchSessionEntryTarget(
                   {
@@ -148,11 +144,7 @@ export async function clearRemovedSessionAuthProfiles(params: {
                   {
                     preserveActivity: true,
                     skipMaintenance: true,
-                    // Reconnect can reuse an ID while discovery/patch preparation awaits.
-                    // Do not clear the new credential's selection at the final commit.
-                    shouldCommit: () =>
-                      !findPersistedAuthProfileCredential({ agentDir, profileId }),
-                    assertCommitAllowed: assertCurrent,
+                    workerGuard: { assertCurrent },
                   },
                 );
               }

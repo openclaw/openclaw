@@ -1,28 +1,18 @@
-/**
- * Normalizes OpenAI Responses reasoning/tool-call history for safe replay.
- */
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOpenAIResponsesFunctionCallId,
-  replaceCompactionReplayOwnerContent,
   shouldNormalizeOpenAIResponsesToolCallId,
-  splitOpenAIFunctionCallPairing,
-} from "@openclaw/ai/transports";
-import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
+} from "../../../packages/ai/src/transports/openai-responses-tool-call-id-shape.js";
+import { replaceCompactionReplayOwnerContent } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { rewriteToolResultIds } from "../tool-call-id.js";
-
-type OpenAIThinkingBlock = {
-  type?: unknown;
-  thinking?: unknown;
-  thinkingSignature?: unknown;
-};
 
 type OpenAIToolCallBlock = {
   type?: unknown;
   id?: unknown;
 };
 
-function hasOpenAIReasoningSignature(value: unknown): boolean {
+export function hasOpenAIReasoningSignature(value: unknown): boolean {
   if (!value) {
     return false;
   }
@@ -52,10 +42,34 @@ function isOpenAIToolCallType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
 
-function createOpenAIResponsesToolCallIdResolver(): (id: string) => string {
-  const rewrittenByOriginalId = new Map<string, string>();
+const DROP_REPLAY_MESSAGE = Symbol("dropReplayMessage");
 
-  return (id) => {
+function rewriteReplayMessages(
+  messages: AgentMessage[],
+  rewrite: (message: AgentMessage) => AgentMessage | typeof DROP_REPLAY_MESSAGE,
+): AgentMessage[] {
+  let changed = false;
+  const result: AgentMessage[] = [];
+  for (const message of messages) {
+    const next = rewrite(message);
+    changed ||= !Object.is(next, message);
+    if (next !== DROP_REPLAY_MESSAGE) {
+      result.push(next);
+    }
+  }
+  return changed ? result : messages;
+}
+
+/**
+ * OpenAI Responses rejects replayed `function_call.call_id`,
+ * `function_call.id`, and matching `function_call_output.call_id` values
+ * that exceed its 64-char `call_*` / `fc_*` shape. pi-ai skips its own
+ * normalizer for same-model replay, then splits persisted `call_id|fc_id`
+ * pairs directly into the provider payload, so OpenClaw must normalize here.
+ */
+export function createOpenAIResponsesReplayIdResolver(): (id: string) => string {
+  const rewrittenByOriginalId = new Map<string, string>();
+  const resolveId = (id: string): string => {
     const rewritten = rewrittenByOriginalId.get(id);
     if (rewritten) {
       return rewritten;
@@ -67,50 +81,11 @@ function createOpenAIResponsesToolCallIdResolver(): (id: string) => string {
     rewrittenByOriginalId.set(id, normalized);
     return normalized;
   };
+  return resolveId;
 }
 
-function rewriteReplayMessages(
-  messages: AgentMessage[],
-  rewrite: (message: AgentMessage) => AgentMessage,
-): AgentMessage[] {
-  let changed = false;
-  const result: AgentMessage[] = [];
-  for (const message of messages) {
-    const next = rewrite(message);
-    changed ||= !Object.is(next, message);
-    result.push(next);
-  }
-  return changed ? result : messages;
-}
-
-type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
-type AssistantContentBlock = AssistantMessage["content"][number];
-
-function rewriteAssistantContent(
-  message: AssistantMessage,
-  rewrite: (block: AssistantContentBlock) => AssistantContentBlock,
-): AssistantMessage {
-  if (!Array.isArray(message.content)) {
-    return message;
-  }
-  let changed = false;
-  const content = message.content.map((block) => {
-    const next = rewrite(block);
-    changed ||= !Object.is(next, block);
-    return next;
-  });
-  return changed ? replaceCompactionReplayOwnerContent(message, content) : message;
-}
-
-/**
- * OpenAI Responses rejects replayed `function_call.call_id`,
- * `function_call.id`, and matching `function_call_output.call_id` values
- * that exceed its 64-char `call_*` / `fc_*` shape. pi-ai skips its own
- * normalizer for same-model replay, then splits persisted `call_id|fc_id`
- * pairs directly into the provider payload, so OpenClaw must normalize here.
- */
 export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): AgentMessage[] {
-  const resolveId = createOpenAIResponsesToolCallIdResolver();
+  const resolveId = createOpenAIResponsesReplayIdResolver();
   return rewriteReplayMessages(messages, (msg) => {
     if (!msg || typeof msg !== "object") {
       return msg;
@@ -119,7 +94,11 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
     const role = (msg as { role?: unknown }).role;
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      return rewriteAssistantContent(assistantMsg, (block) => {
+      if (!Array.isArray(assistantMsg.content)) {
+        return assistantMsg;
+      }
+      let changed = false;
+      const content = assistantMsg.content.map((block) => {
         if (!block || typeof block !== "object") {
           return block;
         }
@@ -132,11 +111,13 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         if (nextId === toolCallBlock.id) {
           return block;
         }
+        changed = true;
         return {
           ...block,
           id: nextId,
         } as typeof block;
       });
+      return changed ? replaceCompactionReplayOwnerContent(assistantMsg, content) : assistantMsg;
     }
 
     if (role === "toolResult") {
@@ -150,83 +131,6 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
 }
 
 /**
- * OpenAI can reject replayed `function_call` items with an `fc_*` id if the
- * matching `reasoning` item is absent in the same assistant turn.
- *
- * When that pairing is missing, strip the `|fc_*` suffix from tool call ids so
- * shared model runtime omits `function_call.id` on replay.
- */
-export function downgradeOpenAIFunctionCallReasoningPairs(
-  messages: AgentMessage[],
-): AgentMessage[] {
-  let pendingRewrittenIds: Map<string, string> | null = null;
-  return rewriteReplayMessages(messages, (msg) => {
-    if (!msg || typeof msg !== "object") {
-      pendingRewrittenIds = null;
-      return msg;
-    }
-
-    const role = (msg as { role?: unknown }).role;
-    if (role === "assistant") {
-      const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      const localRewrittenIds = new Map<string, string>();
-      let seenReplayableReasoning = false;
-      const next = rewriteAssistantContent(assistantMsg, (block) => {
-        if (!block || typeof block !== "object") {
-          return block;
-        }
-
-        const thinkingBlock = block as OpenAIThinkingBlock;
-        if (
-          thinkingBlock.type === "thinking" &&
-          hasOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
-        ) {
-          seenReplayableReasoning = true;
-          return block;
-        }
-
-        const toolCallBlock = block as OpenAIToolCallBlock;
-        if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
-          return block;
-        }
-
-        const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
-        if (seenReplayableReasoning || !pairing.itemId || !pairing.itemId.startsWith("fc_")) {
-          return block;
-        }
-
-        localRewrittenIds.set(toolCallBlock.id, pairing.callId);
-        return {
-          ...block,
-          id: pairing.callId,
-        } as typeof block;
-      });
-      pendingRewrittenIds = localRewrittenIds.size > 0 ? localRewrittenIds : null;
-      return next;
-    }
-
-    if (role === "toolResult" && pendingRewrittenIds && pendingRewrittenIds.size > 0) {
-      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
-        toolUseId?: unknown;
-      };
-      const updates: Record<string, string> = {};
-      for (const field of ["toolCallId", "toolUseId"] as const) {
-        const id = toolResult[field];
-        const nextId = typeof id === "string" ? pendingRewrittenIds.get(id) : undefined;
-        if (nextId && nextId !== id) {
-          updates[field] = nextId;
-        }
-      }
-      return Object.keys(updates).length > 0 ? { ...toolResult, ...updates } : msg;
-    }
-
-    pendingRewrittenIds = null;
-    return msg;
-  });
-}
-
-/**
- * Extracts the Responses `phase` (commentary/final_answer) from a v1 textSignature, if present.
  * Used when dropping the paired msg_* id so phase metadata can be preserved independently.
  */
 function extractTextSignaturePhase(signature: string): "commentary" | "final_answer" | undefined {
@@ -248,96 +152,97 @@ function extractTextSignaturePhase(signature: string): "commentary" | "final_ans
  * Drops reasoning from before a model route switch and clears paired message ids.
  * The transport owns orphan detection after preparing the actual replay payload.
  */
+export function dropStaleOpenAIReasoningWithAdapter<T, B>(
+  messages: T[],
+  dropBefore: number | undefined,
+  adapter: {
+    role(message: T): string | undefined;
+    timestamp(message: T): number | undefined;
+    content(message: T): readonly B[];
+    keep(block: B): boolean;
+    reasoning(block: B): boolean;
+    clearPairedSignature(block: B): B;
+    replace(message: T, content: B[]): T;
+  },
+): T[] {
+  if (dropBefore === undefined) {
+    return messages;
+  }
+  let changed = false;
+  const result: T[] = [];
+  for (const message of messages) {
+    if (adapter.role(message) !== "assistant") {
+      result.push(message);
+      continue;
+    }
+    const timestamp = adapter.timestamp(message);
+    if (timestamp !== undefined && timestamp > dropBefore) {
+      result.push(message);
+      continue;
+    }
+    const original = adapter.content(message);
+    let droppedReasoning = false;
+    const content = original.filter((block) => {
+      if (!adapter.keep(block)) {
+        return false;
+      }
+      if (adapter.reasoning(block)) {
+        droppedReasoning = true;
+        return false;
+      }
+      return true;
+    });
+    if (content.length === original.length) {
+      result.push(message);
+      continue;
+    }
+    changed = true;
+    if (content.length > 0) {
+      result.push(
+        adapter.replace(
+          message,
+          droppedReasoning ? content.map((block) => adapter.clearPairedSignature(block)) : content,
+        ),
+      );
+    }
+  }
+  return changed ? result : messages;
+}
+
 export function dropStaleOpenAIReasoning(
   messages: AgentMessage[],
   dropBefore?: number,
 ): AgentMessage[] {
-  if (dropBefore === undefined) {
-    return messages;
-  }
-  let anyChanged = false;
-  const out: AgentMessage[] = [];
-
-  for (const msg of messages) {
-    if (!msg || typeof msg !== "object") {
-      out.push(msg);
-      continue;
-    }
-
-    const role = (msg as { role?: unknown }).role;
-    if (role !== "assistant") {
-      out.push(msg);
-      continue;
-    }
-
-    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-    if (!Array.isArray(assistantMsg.content)) {
-      out.push(msg);
-      continue;
-    }
-    const messageTimestamp = parseDateFirstTimestampMs(assistantMsg.timestamp);
-    // Timestamp-less legacy entries cannot prove they belong to the new route;
-    // treat them as pre-switch so stale provider ids never re-enter replay.
-    if (messageTimestamp !== undefined && messageTimestamp > dropBefore) {
-      out.push(msg);
-      continue;
-    }
-
-    let changed = false;
-    let droppedReplayableReasoning = false;
-    const nextContent: AssistantContentBlock[] = [];
-    for (const block of assistantMsg.content) {
-      if (!block) {
-        changed = true;
-        continue;
-      }
-      const record = block as OpenAIThinkingBlock;
+  return dropStaleOpenAIReasoningWithAdapter<
+    AgentMessage,
+    Extract<AgentMessage, { role: "assistant" }>["content"][number]
+  >(messages, dropBefore, {
+    role: (message) => message?.role,
+    timestamp: (message) => parseDateFirstTimestampMs(message.timestamp),
+    content: (message) => (message.role === "assistant" ? message.content : []),
+    keep: (block) => Boolean(block),
+    reasoning: (block) =>
+      typeof block === "object" &&
+      block.type === "thinking" &&
+      hasOpenAIReasoningSignature(block.thinkingSignature),
+    clearPairedSignature: (block) => {
       if (
+        !block ||
         typeof block !== "object" ||
-        record.type !== "thinking" ||
-        !hasOpenAIReasoningSignature(record.thinkingSignature)
+        block.type !== "text" ||
+        block.textSignature === undefined
       ) {
-        nextContent.push(block);
-        continue;
+        return block;
       }
-      changed = true;
-      droppedReplayableReasoning = true;
-    }
-
-    if (!changed) {
-      out.push(msg);
-      continue;
-    }
-
-    anyChanged = true;
-    if (nextContent.length === 0) {
-      continue;
-    }
-
-    // When a replayable reasoning (rs_*) item is dropped after a model/fallback
-    // switch, its paired assistant message id (msg_*) must be dropped too. The
-    // Responses transport replays msg_* from a text block textSignature, so an
-    // orphaned msg_* without its rs_* makes providers like Azure reject the next
-    // turn (issue #88019). Drop the id from the signature, but keep any phase
-    // metadata (commentary/final_answer) so the Responses phase contract survives.
-    const finalContent = droppedReplayableReasoning
-      ? nextContent.map((contentBlock) => {
-          if (!contentBlock || typeof contentBlock !== "object") {
-            return contentBlock;
-          }
-          if (contentBlock.type !== "text" || contentBlock.textSignature === undefined) {
-            return contentBlock;
-          }
-          const phase = extractTextSignaturePhase(contentBlock.textSignature);
-          const { textSignature: _droppedTextSignature, ...rest } = contentBlock;
-          return phase !== undefined
-            ? { ...rest, textSignature: JSON.stringify({ v: 1, phase }) }
-            : rest;
-        })
-      : nextContent;
-
-    out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));
-  }
-
-  return anyChanged ? out : messages;
+      const phase = extractTextSignaturePhase(block.textSignature);
+      const { textSignature: _removed, ...rest } = block;
+      return phase !== undefined
+        ? { ...rest, textSignature: JSON.stringify({ v: 1, phase }) }
+        : rest;
+    },
+    replace: (message, content) =>
+      message.role === "assistant"
+        ? replaceCompactionReplayOwnerContent(message, content)
+        : message,
+  });
 }

@@ -8,6 +8,7 @@ import {
   readRuntimePlacementTimings,
   resolveRuntimePlacementSeconds,
 } from "./ci-test-timings.mts";
+import { groupBy } from "./group-by.mts";
 import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-files.mts";
 import type { VitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
 import {
@@ -145,22 +146,17 @@ export function estimateCommandWorkerSeconds(
 // retain their existing sessions/cron timing owner.
 const doctorSessionSqliteCorpusFiles = new Set([
   "doctor-session-sqlite.test.ts",
-  "doctor-session-sqlite.archive-safety.test.ts",
   "doctor-session-sqlite.compaction.test.ts",
-  "doctor-session-sqlite.compaction-recovery.test.ts",
   "doctor-session-sqlite.failure-reports.test.ts",
-  "doctor-session-sqlite.inspection.test.ts",
   "doctor-session-sqlite.manifests.test.ts",
   "doctor-session-sqlite.publication-recovery.test.ts",
   "doctor-session-sqlite.recovery.test.ts",
   "doctor-session-sqlite.recovery-generations.test.ts",
   "doctor-session-sqlite.recovery-shared-owners.test.ts",
-  "doctor-session-sqlite.restore-history.test.ts",
   "doctor-session-sqlite.restore-paths.test.ts",
   "doctor-session-sqlite.restore-publication.test.ts",
   "doctor-session-sqlite.retirement-disposal.test.ts",
   "doctor-session-sqlite.retirement-mutations.test.ts",
-  "doctor-session-sqlite.retirement-verification.test.ts",
   "doctor-session-sqlite.targets.test.ts",
 ]);
 
@@ -261,17 +257,13 @@ export function getCommandFilesByOwner(): Map<string, string[]> {
   }
   const excludedTests = new Set([...commandsLightTestFiles, ...databaseWorkerCoreTestFiles]);
   const unitFastFiles = new Set(getUnitFastTestFiles());
-  const groups = new Map<string, string[]>();
-  for (const file of listTrackedTestFiles("src/commands")) {
-    if (excludedTests.has(file) || !isStripeEligibleTestFile(file, unitFastFiles)) {
-      continue;
-    }
-    const shardName = resolveCommandShardName(file);
-    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
-  }
-
-  commandFilesByOwner = groups;
-  return groups;
+  commandFilesByOwner = groupBy(
+    listTrackedTestFiles("src/commands").filter(
+      (file) => !excludedTests.has(file) && isStripeEligibleTestFile(file, unitFastFiles),
+    ),
+    resolveCommandShardName,
+  );
+  return commandFilesByOwner;
 }
 
 export function createAgenticCommandSplitShards(

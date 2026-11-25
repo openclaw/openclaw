@@ -16,7 +16,7 @@ it("detects Teams feedback files without loading session storage", async () => {
     throw new Error("detection must not open plugin state");
   });
   const params = {
-    config: { agents: { list: [{ id: "work" }] } },
+    config: { agents: { entries: { work: {} } } },
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     stateDir,
     oauthDir: path.join(stateDir, "oauth"),

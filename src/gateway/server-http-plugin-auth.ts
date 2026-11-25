@@ -25,11 +25,7 @@ async function resolvePluginGatewayAuthBypassPaths(
   configSnapshot: OpenClawConfig,
 ): Promise<Set<string>> {
   const paths = new Set<string>();
-  const configuredChannels = configSnapshot.channels;
-  if (!configuredChannels || Object.keys(configuredChannels).length === 0) {
-    return paths;
-  }
-  for (const channelId of Object.keys(configuredChannels)) {
+  for (const channelId of Object.keys(configSnapshot.channels ?? {})) {
     for (const path of await resolveBundledChannelGatewayAuthBypassPaths({
       channelId,
       cfg: configSnapshot,

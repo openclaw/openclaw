@@ -18,15 +18,29 @@ export const authReads = new WeakMap<GatewayBrowserClient, ModelAuthRequestState
 
 export function modelAuthEventInvalidates(
   event: Pick<GatewayEventFrame, "event" | "payload">,
+  agentId?: string,
 ): boolean {
+  if (event.event !== "chat.metadata.changed") {
+    return false;
+  }
+  const payload = asNullableRecord(event.payload);
+  // Config commits precede prepared auth publication; only its committed facts retire reads.
   return (
-    event.event === "config.changed" ||
-    (event.event === "chat.metadata.changed" &&
-      asNullableRecord(event.payload)?.authChanged !== false)
+    payload?.authChanged !== false &&
+    (agentId === undefined || typeof payload?.agentId !== "string" || payload.agentId === agentId)
   );
 }
 
 /** Retire sharing eligibility without cancelling existing consumers' own reads. */
-export function invalidateModelAuthStatusRequests(client: GatewayBrowserClient): void {
-  authReads.get(client)?.entries.clear();
+export function invalidateModelAuthStatusRequests(
+  client: GatewayBrowserClient,
+  agentId?: string,
+): void {
+  const entries = authReads.get(client)?.entries;
+  if (agentId === undefined) {
+    entries?.clear();
+  } else {
+    entries?.delete(JSON.stringify([agentId, false]));
+    entries?.delete(JSON.stringify([agentId, true]));
+  }
 }

@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
@@ -14,24 +13,13 @@ export function isAbortRequestText(text?: string, options?: CommandNormalizeOpti
   if (!text) {
     return false;
   }
-  const normalized = normalizeCommandBody(text, options).trim();
-  if (!normalized) {
-    return false;
-  }
-  const normalizedLower = normalizeLowercaseStringOrEmpty(normalized);
-  return (
-    normalizedLower === "/stop" ||
-    normalizeAbortTriggerText(normalizedLower) === "/stop" ||
-    isAbortTrigger(normalizedLower)
-  );
+  const normalized = normalizeCommandBody(text, options);
+  return normalizeAbortTriggerText(normalized) === "/stop" || isAbortTrigger(normalized);
 }
 
 export function getAbortMemory(key: string): boolean | undefined {
   const normalized = key.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  return ABORT_MEMORY.get(normalized);
+  return normalized ? ABORT_MEMORY.get(normalized) : undefined;
 }
 
 export function setAbortMemory(key: string, value: boolean): void {
@@ -39,11 +27,10 @@ export function setAbortMemory(key: string, value: boolean): void {
   if (!normalized) {
     return;
   }
+  ABORT_MEMORY.delete(normalized);
   if (!value) {
-    ABORT_MEMORY.delete(normalized);
     return;
   }
-  ABORT_MEMORY.delete(normalized);
   ABORT_MEMORY.set(normalized, true);
   pruneMapToMaxSize(ABORT_MEMORY, ABORT_MEMORY_MAX);
 }

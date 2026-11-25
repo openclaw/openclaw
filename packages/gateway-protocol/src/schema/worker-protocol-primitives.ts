@@ -1,11 +1,14 @@
 import { Type, type TSchema, type TString, type TInteger } from "typebox";
 import { checkProtocolJson, type ValidationError } from "../validation-errors.js";
 import { closedObject } from "./closed-object.js";
+import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "./worker-protocol-constants.js";
+
+export { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "./worker-protocol-constants.js";
 
 export const WORKER_PUBLIC_INGRESS_PATH = "/__openclaw__/worker";
-export const WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH = 256;
 export const WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH = 128;
 export const WORKER_PROTOCOL_MAX_PAYLOAD_BYTES = 64 * 1024;
+export const WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS = 4;
 // Image-bearing inference, transcript and computer results share this transport ceiling.
 // Non-image control data keeps the ordinary frame budget.
 export const WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES = 25 * 1024 * 1024;
@@ -113,11 +116,16 @@ export function workerResponseSchema<const Payload extends TSchema, const Errors
   ]);
 }
 
-export const WorkerTranscriptUsageSchema = closedObject({
+export const WorkerInferenceUsageSchema = closedObject({
   input: Type.Number({ minimum: 0 }),
   output: Type.Number({ minimum: 0 }),
   cacheRead: Type.Number({ minimum: 0 }),
   cacheWrite: Type.Number({ minimum: 0 }),
+  usageReport: Type.Optional(
+    closedObject({
+      state: Type.Union([Type.Literal("available"), Type.Literal("unavailable")]),
+    }),
+  ),
   contextUsage: Type.Optional(
     Type.Union([
       closedObject({
@@ -137,6 +145,12 @@ export const WorkerTranscriptUsageSchema = closedObject({
     total: Type.Number({ minimum: 0 }),
     totalOrigin: Type.Optional(Type.Literal("provider-billed")),
   }),
+});
+
+// Saved transcript usage may predate pricing; fresh inference keeps required cost.
+const WorkerTranscriptUsageSchema = closedObject({
+  ...WorkerInferenceUsageSchema.properties,
+  cost: Type.Optional(WorkerInferenceUsageSchema.properties.cost),
 });
 
 const WorkerTranscriptAssistantDiagnosticSchema = closedObject({
@@ -240,13 +254,20 @@ export function workerMessageSchemas(text: TString, signature: TString, timestam
     provider: WorkerIdentifierSchema,
     model: WorkerIdentifierSchema,
     responseModel: Type.Optional(WorkerIdentifierSchema),
-    responseId: Type.Optional(WorkerIdentifierSchema),
+    responseId: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+        pattern: "^\\S(?:.*\\S)?$",
+      }),
+    ),
     providerReplay: Type.Optional(WorkerProviderReplayStateSchema),
     usage: WorkerTranscriptUsageSchema,
     timestamp,
   };
   return {
     image: content.image,
+    operatorMessage: closedObject({ turnScoped: Type.Boolean() }),
     userContent: Type.Array(textOrImage, {
       minItems: 1,
       maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
@@ -264,6 +285,9 @@ export function workerMessageSchemas(text: TString, signature: TString, timestam
       errorCode: Type.Optional(Type.String({ maxLength: 256 })),
       errorType: Type.Optional(Type.String({ maxLength: 256 })),
       errorBody: Type.Optional(text),
+      retryAfterMs: Type.Optional(
+        Type.Union([Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), Type.Null()]),
+      ),
     }),
     toolResult: closedObject({
       role: Type.Literal("toolResult"),

@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalog,
   SessionCatalogShareRoute,
@@ -17,7 +18,9 @@ export function catalogResult(
   return {
     id: provider.id,
     label: provider.label,
+    ...(provider.requiresFreshList ? { requiresFreshList: true as const } : {}),
     capabilities: {
+      ...(provider.supportsProfileRelation ? { profileRelation: true as const } : {}),
       continueSession: Boolean(provider.continueSession || provider.copyToGatewaySession),
       archive: Boolean(provider.archive),
       ...(provider.openTerminal ? { openTerminal: true } : {}),
@@ -38,10 +41,7 @@ export function catalogResult(
 }
 
 export function catalogError(error: unknown): { code: string; message: string } {
-  const record =
-    error && typeof error === "object"
-      ? (error as Record<string, unknown>) // SAFETY: Fields remain unknown and are checked below.
-      : undefined;
+  const record = asOptionalObjectRecord(error);
   const recordMessage = typeof record?.message === "string" ? record.message.trim() : "";
   const fallbackMessage = typeof error === "string" ? error.trim() : "";
   return {

@@ -11,9 +11,12 @@ import {
 } from "./lib/upgrade-survivor-policy.mjs";
 
 // Retained evidence must keep its producer schema so its immutable request and
-// manifest digests remain reproducible. Fresh candidate requests stay v2-only.
-const RETAINED_FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v1";
-const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v2";
+// manifest digests remain reproducible. Fresh candidate requests stay v3-only.
+const RETAINED_FULL_RELEASE_CANDIDATE_REQUEST_SCHEMAS = new Set([
+  "openclaw.full-release-candidate-request/v1",
+  "openclaw.full-release-candidate-request/v2",
+]);
+const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v3";
 const FULL_RELEASE_CANDIDATE_MANIFEST_SCHEMA = "openclaw.full-release-candidate/v2";
 const FULL_RELEASE_CANDIDATE_BINDING_SCHEMA = "openclaw.full-release-candidate-binding/v2";
 const FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX = "full-release-candidate-v2-";
@@ -138,6 +141,11 @@ export function buildFullReleaseCandidateRequest(input) {
   );
   const effectiveBaselines =
     explicitBaselines.length > 0 ? explicitBaselines : defaultBaseline ? [defaultBaseline] : [];
+  if (!defaultBaseline || !effectiveBaselines.includes(defaultBaseline)) {
+    fail(
+      "full release candidate request upgradeSurvivorBaseline must be included in upgradeSurvivorBaselines",
+    );
+  }
   const effectiveScenarios = parseUpgradeSurvivorScenarios(
     typeof input.upgradeSurvivorScenarios === "string" ? input.upgradeSurvivorScenarios : undefined,
   );
@@ -148,6 +156,7 @@ export function buildFullReleaseCandidateRequest(input) {
     toolingSha: input.toolingSha,
     releaseProfile: input.releaseProfile,
     releaseSoak: input.releaseSoak,
+    upgradeBaseline: defaultBaseline,
     upgradeSurvivorBaselines: effectiveBaselines.toSorted(compareAscii),
     upgradeSurvivorScenarios: effectiveScenarios.toSorted(compareAscii),
     allowFrozenTargetScenarioOmissions: input.allowFrozenTargetScenarioOmissions,
@@ -177,7 +186,7 @@ export function validateRecordedFullReleaseCandidateRequest(value) {
   }
   const schema = value.schema;
   if (
-    schema !== RETAINED_FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA &&
+    !RETAINED_FULL_RELEASE_CANDIDATE_REQUEST_SCHEMAS.has(schema) &&
     schema !== FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA
   ) {
     fail("full release candidate request schema is invalid");
@@ -188,7 +197,7 @@ export function validateRecordedFullReleaseCandidateRequest(value) {
       "allowFrozenTargetScenarioOmissions",
       "allowUnreleasedChangelog",
       "contractVersions",
-      ...(schema === FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA ? ["packagePublished"] : []),
+      ...(schema !== "openclaw.full-release-candidate-request/v1" ? ["packagePublished"] : []),
       "releaseProfile",
       "releaseSoak",
       "repository",
@@ -196,6 +205,7 @@ export function validateRecordedFullReleaseCandidateRequest(value) {
       "sharedImagePolicy",
       "targetSha",
       "toolingSha",
+      ...(schema === FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA ? ["upgradeBaseline"] : []),
       "upgradeSurvivorBaselines",
       "upgradeSurvivorScenarios",
     ],
@@ -246,6 +256,19 @@ export function validateRecordedFullReleaseCandidateRequest(value) {
       fail("full release candidate request upgradeSurvivorBaselines are not normalized");
     }
   }
+  const upgradeBaseline =
+    schema === FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA
+      ? ascii(value.upgradeBaseline, "full release candidate request upgradeBaseline")
+      : undefined;
+  if (
+    upgradeBaseline !== undefined &&
+    (normalizeUpgradeSurvivorBaselineSpec(upgradeBaseline) !== upgradeBaseline ||
+      !baselines.includes(upgradeBaseline))
+  ) {
+    fail(
+      "full release candidate request upgradeBaseline must be normalized and included in upgradeSurvivorBaselines",
+    );
+  }
   const scenarios = stringArray(
     value.upgradeSurvivorScenarios,
     "full release candidate request upgradeSurvivorScenarios",
@@ -267,7 +290,7 @@ export function validateRecordedFullReleaseCandidateRequest(value) {
     toolingSha: sha(value.toolingSha, "full release candidate request toolingSha"),
     releaseProfile,
     releaseSoak: boolean(value.releaseSoak, "full release candidate request releaseSoak"),
-    ...(schema === FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA
+    ...(schema !== "openclaw.full-release-candidate-request/v1"
       ? {
           packagePublished: boolean(
             value.packagePublished,
@@ -275,6 +298,7 @@ export function validateRecordedFullReleaseCandidateRequest(value) {
           ),
         }
       : {}),
+    ...(schema === FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA ? { upgradeBaseline } : {}),
     upgradeSurvivorBaselines: baselines,
     upgradeSurvivorScenarios: scenarios,
     allowFrozenTargetScenarioOmissions: boolean(

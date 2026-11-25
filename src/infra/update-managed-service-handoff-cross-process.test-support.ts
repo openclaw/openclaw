@@ -57,8 +57,9 @@ export function scopeWrapperSource(helperExitPath: string): string {
   return `#!${process.execPath}
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
-const [command, scriptPath, paramsPath] = process.argv.slice(-3);
-const helper = spawn(command, [scriptPath, paramsPath], { stdio: ["pipe", "pipe", "ignore"] });
+const args = process.argv.slice(2);
+const [command, ...helperArgs] = args.slice(args.findIndex((arg) => !arg.startsWith("-")));
+const helper = spawn(command, helperArgs, { stdio: ["pipe", "pipe", "ignore"] });
 let helperAlive = true;
 helper.stdin.on("error", () => {});
 helper.stdout.pipe(process.stdout, { end: false });

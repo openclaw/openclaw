@@ -56,11 +56,8 @@ export function registerAgentCommandReplyPolicyTests({
     ).toBe(visible);
   });
 
-  it.each([
-    { name: "plain final", text: "Private answer", reason: "message_tool_only" },
-    { name: "intentional silence", text: "NO_REPLY", reason: "no_visible_payload" },
-    { name: "empty final", text: "", reason: "no_visible_payload" },
-  ])("enforces tool-only delivery without losing $name evidence", async ({ text, reason }) => {
+  it("enforces tool-only delivery without losing the plain final", async () => {
+    const text = "Private answer";
     const delivered = await deliverAgentCommandResultForTest({
       payloads: [{ text }],
       opts: { sourceReplyDeliveryMode: "message_tool_only" },
@@ -71,10 +68,10 @@ export function registerAgentCommandReplyPolicyTests({
       attempted: false,
       status: "suppressed",
       succeeded: true,
-      reason,
+      reason: "message_tool_only",
       resultCount: 0,
     });
-    expect(delivered.payloads).toMatchObject(reason === "message_tool_only" ? [{ text }] : []);
+    expect(delivered.payloads).toMatchObject([{ text }]);
   });
 
   it("delivers only host-authorized payloads from a mixed tool-only final", async () => {

@@ -4,11 +4,9 @@ export type ChannelStartFence = {
   state: "paused" | "published" | "failed";
   snapshot?: {
     listedAccountIds: ReadonlySet<string>;
-    read: () => {
-      accounts: Record<string, ChannelAccountSnapshot>;
-      defaultAccountId: string;
-      defaultAccount: ChannelAccountSnapshot;
-    };
+    accounts: Record<string, ChannelAccountSnapshot>;
+    defaultAccountId: string;
+    defaultAccount: ChannelAccountSnapshot;
   };
 };
 
@@ -37,14 +35,10 @@ export function pauseChannelStarts(
       if (selected && !selected.has(channelId)) {
         continue;
       }
-      if (store.startFence === fence && fence.state === "paused") {
-        // Keep the token on settlement so delayed predecessor preparation stays stale.
-        // A cancelled retry restores the previous operation's recorded state.
-        if (outcome !== "rollback") {
-          fence.state = outcome;
-        } else {
-          store.startFence = previous;
-        }
+      if (outcome !== "rollback") {
+        fence.state = outcome;
+      } else {
+        store.startFence = previous;
       }
     }
   };

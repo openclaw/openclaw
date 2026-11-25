@@ -138,7 +138,7 @@ the configured Raft profile to check its pending messages.
   <Accordion title="A wake arrives but no Raft response is sent">
     This is expected when the agent does not invoke the Raft CLI. The wake
     bridge does not carry message bodies or automatic final replies. Check the
-    agent's tool policy and ensure it can run `raft --profile <profile>
+    agent's tool policy and check that it can run `raft --profile <profile>
     message check` and `message send`.
   </Accordion>
 </AccordionGroup>

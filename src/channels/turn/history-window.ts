@@ -8,7 +8,6 @@ import {
 } from "../../auto-reply/reply/history.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 
-/** Windowed channel history facade used by turn adapters to record and render recent context. */
 export type ChannelHistoryWindow<T extends HistoryEntry = HistoryEntry> = {
   record: (params: { historyKey: string; entry?: T | null; limit: number }) => T[];
   recordWithMedia: (
@@ -28,7 +27,6 @@ export type ChannelHistoryWindow<T extends HistoryEntry = HistoryEntry> = {
   clear: (params: { historyKey: string; limit: number }) => void;
 };
 
-/** Creates a bounded channel history window over a caller-owned history map. */
 export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
 }): ChannelHistoryWindow<T> {

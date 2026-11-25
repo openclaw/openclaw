@@ -4,7 +4,7 @@ import {
   normalizeCapabilityProviderId as normalizeSpeechProviderId,
 } from "../plugins/provider-registry-shared.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import type { SpeechProviderId } from "./provider-types.js";
+import type { SpeechProviderId } from "./tts-runtime-types.js";
 
 /** Resolver contract for configured speech provider discovery and lookup. */
 export type SpeechProviderRegistryResolver = {
@@ -29,13 +29,6 @@ export function compareSpeechProviderOrder(
 
 /** Create a registry facade with canonical listing, alias lookup, and ID canonicalization. */
 export function createSpeechProviderRegistry(resolver: SpeechProviderRegistryResolver) {
-  const buildAliasIndex = (cfg?: OpenClawConfig) =>
-    buildCapabilityProviderIndex(resolver.listProviders(cfg), "aliases");
-
-  const listProviders = (cfg?: OpenClawConfig): SpeechProviderPlugin[] => [
-    ...buildCapabilityProviderIndex(resolver.listProviders(cfg), "canonical").values(),
-  ];
-
   const getProvider = (
     providerId: string | undefined,
     cfg?: OpenClawConfig,
@@ -44,23 +37,23 @@ export function createSpeechProviderRegistry(resolver: SpeechProviderRegistryRes
     if (!normalized) {
       return undefined;
     }
-    return resolver.getProvider(normalized, cfg) ?? buildAliasIndex(cfg).get(normalized);
-  };
-
-  const canonicalizeProviderId = (
-    providerId: string | undefined,
-    cfg?: OpenClawConfig,
-  ): SpeechProviderId | undefined => {
-    const normalized = normalizeSpeechProviderId(providerId);
-    if (!normalized) {
-      return undefined;
-    }
-    return getProvider(normalized, cfg)?.id ?? normalized;
+    return (
+      resolver.getProvider(normalized, cfg) ??
+      buildCapabilityProviderIndex(resolver.listProviders(cfg), "aliases").get(normalized)
+    );
   };
 
   return {
-    canonicalizeSpeechProviderId: canonicalizeProviderId,
+    canonicalizeSpeechProviderId: (
+      providerId: string | undefined,
+      cfg?: OpenClawConfig,
+    ): SpeechProviderId | undefined => {
+      const normalized = normalizeSpeechProviderId(providerId);
+      return normalized ? (getProvider(normalized, cfg)?.id ?? normalized) : undefined;
+    },
     getSpeechProvider: getProvider,
-    listSpeechProviders: listProviders,
+    listSpeechProviders: (cfg?: OpenClawConfig): SpeechProviderPlugin[] => [
+      ...buildCapabilityProviderIndex(resolver.listProviders(cfg), "canonical").values(),
+    ],
   };
 }

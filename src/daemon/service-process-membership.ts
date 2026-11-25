@@ -1,14 +1,54 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { readProcessCoalition } from "@openclaw/proc-safe/darwin";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.js";
 import { spawnPsSync } from "../infra/spawn-ps.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 
 type ServiceProcessMembership = "inside" | "outside" | "unknown" | "absent";
+type ResourceCoalition = { id: number; name?: string };
 const PROBE_TIMEOUT_MS = 2_000;
+declare const SEALED_RUNTIME_BUILD: boolean;
 
-function readResourceCoalition(pid: number): { id: number; name: string } | null | undefined {
+export function resolveServiceProcessMembershipBlock(
+  membership: ServiceProcessMembership,
+  ancestryComplete: boolean,
+  platform: NodeJS.Platform = process.platform,
+) {
+  if (membership === "inside") {
+    return "inside-gateway-service";
+  }
+  if (membership === "unknown") {
+    return "service-membership-unverified";
+  }
+  // Darwin containment proves an external terminal even when a root-owned login is unreadable.
+  return !ancestryComplete && (platform !== "darwin" || membership !== "outside")
+    ? "service-ancestry-unverified"
+    : undefined;
+}
+
+function readNativeResourceCoalition(pid: number): ResourceCoalition | null | undefined {
+  if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
+    return undefined;
+  }
+  try {
+    const coalition = readProcessCoalition(pid);
+    if (!coalition) {
+      return null;
+    }
+    const id = Number(coalition.id);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return undefined;
+    }
+    const name = coalition.name?.trim();
+    return name && !containsAsciiControlCharacter(name) ? { id, name } : { id };
+  } catch {
+    return undefined;
+  }
+}
+
+function readResourceCoalition(pid: number): ResourceCoalition | null | undefined {
   const result = spawnSync("/bin/launchctl", ["print", `pid/${pid}`], {
     encoding: "utf8",
     env: resolveDiagnosticProcessEnv(),
@@ -16,8 +56,12 @@ function readResourceCoalition(pid: number): { id: number; name: string } | null
     killSignal: "SIGKILL",
     maxBuffer: 1024 * 1024,
   });
-  if (result.error || result.status !== 0) {
+  if (result.error) {
     return undefined;
+  }
+  if (result.status !== 0) {
+    // macOS 12 refuses `print pid/<pid>` for most processes (exit 1, EPERM).
+    return readNativeResourceCoalition(pid);
   }
   const lines = result.stdout.trim().split(/\r?\n/);
   if (/^pid\/([1-9]\d*)\s*=\s*\{$/.exec(lines[0] ?? "")?.[1] !== String(pid)) {
@@ -51,7 +95,7 @@ function readResourceCoalition(pid: number): { id: number; name: string } | null
   }
   const headers = result.stdout.match(/^\s*resource coalition\s*=/gm);
   if (!headers) {
-    return /resource coalition/i.test(result.stdout) ? undefined : null;
+    return /resource coalition/i.test(result.stdout) ? undefined : readNativeResourceCoalition(pid);
   }
   const body = /^\s*resource coalition\s*=\s*\{([^{}]*)^\s*\}/m.exec(result.stdout)?.[1];
   if (headers.length !== 1 || !body) {
@@ -76,8 +120,11 @@ function readResourceCoalition(pid: number): { id: number; name: string } | null
     : undefined;
 }
 
-function inspectLaunchdMembership(gatewayPid: number): ServiceProcessMembership {
-  const expected = new Set([process.pid, gatewayPid]);
+function inspectLaunchdMembership(
+  gatewayPid: number,
+  subjectPid = process.pid,
+): ServiceProcessMembership {
+  const expected = new Set([subjectPid, gatewayPid]);
   const result = spawnPsSync(
     ["-o", "pid=,pgid=,sess=", "-p", [...expected].join(",")],
     PROBE_TIMEOUT_MS,
@@ -98,11 +145,11 @@ function inspectLaunchdMembership(gatewayPid: number): ServiceProcessMembership 
   if (groups.size !== expected.size) {
     return "unknown";
   }
-  if (groups.get(process.pid) === groups.get(gatewayPid)) {
+  if (groups.get(subjectPid) === groups.get(gatewayPid)) {
     return "inside";
   }
   // Reparenting and setsid can remove ancestry/group evidence while launchd still owns the job.
-  const caller = readResourceCoalition(process.pid);
+  const caller = readResourceCoalition(subjectPid);
   const gateway = readResourceCoalition(gatewayPid);
   if (caller === undefined || gateway === undefined) {
     return "unknown";
@@ -110,9 +157,35 @@ function inspectLaunchdMembership(gatewayPid: number): ServiceProcessMembership 
   if (gateway === null) {
     return "absent";
   }
-  return caller && (caller.id === gateway.id || caller.name === gateway.name)
-    ? "inside"
-    : "outside";
+  if (!caller || caller.id === gateway.id) {
+    return caller ? "inside" : "outside";
+  }
+  // A job's earlier instance can leave children under the same name with another ID.
+  return !caller.name || !gateway.name
+    ? "unknown"
+    : caller.name === gateway.name
+      ? "inside"
+      : "outside";
+}
+
+/** Compare a listener with its launchd supervisor without trusting environment markers or argv. */
+export function inspectLaunchdProcessMembershipSync(
+  subjectPid: number,
+  managedPid: number,
+): ServiceProcessMembership {
+  if (
+    !Number.isSafeInteger(subjectPid) ||
+    subjectPid <= 0 ||
+    !Number.isSafeInteger(managedPid) ||
+    managedPid <= 0
+  ) {
+    return "unknown";
+  }
+  try {
+    return inspectLaunchdMembership(managedPid, subjectPid);
+  } catch {
+    return "unknown";
+  }
 }
 
 function readLinuxProcessGroupId(pid: number): number | undefined {
@@ -183,6 +256,31 @@ function readSystemdMembership(
   return selected[0]
     ? { hierarchy: selected[0][0], path: selected[0][1].path }
     : { hierarchy: null, atRoot: [...memberships.values()].every((entry) => entry.path === "/") };
+}
+
+/** One process against an observed systemd cgroup, including a stopped service. */
+export function inspectSystemdProcessMembershipSync(
+  pid: number,
+  controlGroup: string,
+): "inside" | "outside" | "unknown" {
+  if (
+    !Number.isSafeInteger(pid) ||
+    pid <= 0 ||
+    !isCgroupPath(controlGroup) ||
+    controlGroup === "/"
+  ) {
+    return "unknown";
+  }
+  try {
+    const membership = readSystemdMembership(pid);
+    return !membership || membership.hierarchy === null
+      ? "unknown"
+      : isWithinControlGroup(membership.path, controlGroup)
+        ? "inside"
+        : "outside";
+  } catch {
+    return "unknown";
+  }
 }
 
 /** Native containment survives parent exit; environment markers never establish it. */

@@ -1,3 +1,5 @@
+import { floorPositiveFiniteNumber as positiveInteger } from "@openclaw/normalization-core/number-coercion";
+
 /** Resolved pair-loop guard settings in milliseconds for runtime checks. */
 export type PairLoopGuardSettings = {
   /** Whether protection is active after config and channel capability gates. */
@@ -35,7 +37,7 @@ export type PairLoopGuardResult =
   | { suppressed: true; cooldownUntilMs: number };
 
 /** Snapshot entry for observability and tests. */
-export type PairLoopGuardSnapshotEntry = {
+type PairLoopGuardSnapshotEntry = {
   /** Internal pair key containing scope, conversation, and unordered participant ids. */
   key: string;
   /** Number of retained events in the current window. */
@@ -80,7 +82,7 @@ const DEFAULT_PRUNE_INTERVAL_MS = 60_000;
 const KEY_SEPARATOR = "\u0001";
 
 /** Default plugin-facing loop guard config before per-channel overrides. */
-export const DEFAULT_PAIR_LOOP_GUARD_CONFIG: Required<PairLoopGuardConfig> = {
+const DEFAULT_PAIR_LOOP_GUARD_CONFIG: Required<PairLoopGuardConfig> = {
   enabled: true,
   maxEventsPerWindow: 20,
   windowSeconds: 60,
@@ -113,12 +115,6 @@ export function mergePairLoopGuardConfig(
     }
   }
   return hasValue ? merged : undefined;
-}
-
-function positiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
 }
 
 /** Resolves runtime loop guard settings from config/defaults and the channel default-enabled gate. */

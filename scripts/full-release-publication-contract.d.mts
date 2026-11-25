@@ -1,4 +1,6 @@
 import type { ClawHubPublicationState } from "./lib/clawhub-publication-state.mjs";
+import type { ClawHubPackageObservation } from "./lib/plugin-clawhub-release.ts";
+import type { observeNpmPackage } from "./lib/plugin-npm-release.ts";
 export const FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1";
 export const FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1";
 export type ValidationPurpose =
@@ -15,15 +17,26 @@ export interface PublicationSelection {
   windowsNodeTag?: string;
   windowsNodeInstallerDigests?: Record<string, string>;
 }
+export function validatePublicationVersionSelection(
+  version: string,
+  selection: PublicationSelection,
+): NonNullable<ReturnType<typeof import("./lib/release-version.mjs").parseReleaseVersion>>;
 export interface PublicationIntent {
   validationPurpose: ValidationPurpose;
   publicationSelection: PublicationSelection | null;
 }
 export interface PublicationDispatchEnvelope extends PublicationIntent {
+  qualificationAdmission?: Record<string, unknown>;
   trustedWorkflow: { ref: string; fullRef: string; sha: string } | null;
-  laneInputs?: { extension_test_exclude_patterns_json?: string };
+  laneInputs?: {
+    extension_test_exclude_patterns_json?: string;
+    qualification_baselines_json?: string;
+    publication_artifact_source_json?: string;
+  };
 }
 export interface PublicationSourceRequest extends PublicationIntent {
+  qualificationAdmission?: Record<string, unknown>;
+  qualificationInputs?: Record<string, string | boolean | number>;
   repository: string;
   candidateSha: string;
   targetContextRef: string;
@@ -63,6 +76,7 @@ export function publicationDispatchEnvelope(
   trustedWorkflow: PublicationDispatchEnvelope["trustedWorkflow"],
   intent: PublicationIntent,
   laneInputs?: PublicationDispatchEnvelope["laneInputs"],
+  qualificationAdmission?: Record<string, unknown>,
 ): string;
 export function publicationSourceRequest(
   env: Record<string, string | undefined>,
@@ -93,12 +107,7 @@ export type PublicationNpmObservation = {
 } & (
   | {
       outcome: "observed";
-      state: {
-        packageExists: boolean;
-        hasVersionHistory: boolean;
-        selectedVersionExists: boolean;
-        latestVersion: string | null;
-      };
+      state: Awaited<ReturnType<typeof observeNpmPackage>>;
     }
   | { outcome: "unavailable"; error: string }
 );
@@ -106,18 +115,8 @@ export interface PublicationClawHubObservation {
   name: string;
   version: string;
   observedAt: string;
-  state: {
-    packageExists: boolean;
-    alreadyPublished: boolean;
-    publication?: ClawHubPublicationState;
-    hasTrustedPublisher: boolean;
-    trustedPublisher: {
-      provider: string | null;
-      repository: string | null;
-      workflowFilename: string | null;
-      environment: string | null;
-    } | null;
-  };
+  state: Omit<ClawHubPackageObservation, "publication"> &
+    Partial<Pick<ClawHubPackageObservation, "publication">>;
 }
 export interface PublicationPlanningSummary {
   all: Array<{
@@ -201,6 +200,9 @@ export function createPublicationAdmission(
   observations: PublicationObservations,
   artifact: PublicationObservationArtifact,
   admittedAt: string,
+  options?: {
+    workflowPath?: string;
+  },
 ): PublicationAdmission;
 export function validatePublicationAdmissionBinding(
   record: Record<string, unknown>,

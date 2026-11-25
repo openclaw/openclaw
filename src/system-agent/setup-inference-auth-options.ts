@@ -22,6 +22,7 @@ export type SetupInferenceManualProvider = SetupInferenceOptionPresentation & {
 };
 
 export type SetupInferenceAuthOption = SetupInferenceOptionPresentation & {
+  actionLabel?: string;
   kind: "oauth" | "device-code" | "install" | "custom";
   featured: boolean;
   groupLabel?: string;
@@ -62,12 +63,13 @@ function compareSetupInferenceOptions(
   );
 }
 
-function listSetupInferenceGuidedOptions<
+function listSetupInferenceChoices<
   TOption extends SetupInferenceOptionPresentation & { featured?: boolean },
 >(params: {
   choices: readonly ProviderAuthChoiceMetadata[];
   include: (choice: ProviderAuthChoiceMetadata) => boolean;
   project: (choice: ProviderAuthChoiceMetadata, id: string) => TOption;
+  compare?: (a: TOption, b: TOption) => number;
 }): TOption[] {
   const options = new Map<string, { metadata: ProviderAuthChoiceMetadata; option: TOption }>();
   for (const choice of params.choices) {
@@ -82,6 +84,9 @@ function listSetupInferenceGuidedOptions<
       continue;
     }
     options.set(id, { metadata: choice, option: params.project(choice, id) });
+  }
+  if (params.compare) {
+    return [...options.values()].map(({ option }) => option).toSorted(params.compare);
   }
   return [...options.values()]
     .toSorted(
@@ -152,29 +157,21 @@ export function supportsSetupManualSecret(choice: ProviderAuthChoiceMetadata): b
 export function listSetupInferenceManualProviders(
   authChoices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferenceManualProvider[] {
-  const choices = new Map<string, SetupInferenceManualProvider>();
-  for (const choice of authChoices) {
-    const id = choice.choiceId.trim();
-    if (
-      !id ||
-      choices.has(id) ||
-      choice.assistantVisibility === "detected-only" ||
-      !supportsSetupManualSecret(choice)
-    ) {
-      continue;
-    }
-    choices.set(id, {
+  return listSetupInferenceChoices({
+    choices: authChoices,
+    include: supportsSetupManualSecret,
+    project: (choice, id) => ({
       ...projectChoicePresentation(choice, id),
       ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
-    });
-  }
-  return [...choices.values()].toSorted(compareSetupInferenceOptions);
+    }),
+    compare: compareSetupInferenceOptions,
+  });
 }
 
 export function listSetupInferenceAuthOptions(
   authChoices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferenceAuthOption[] {
-  return listSetupInferenceGuidedOptions({
+  return listSetupInferenceChoices({
     choices: authChoices,
     include: (choice) =>
       Boolean(choice.appGuidedAuth) ||
@@ -182,6 +179,9 @@ export function listSetupInferenceAuthOptions(
     project: (choice, id) => ({
       ...projectChoicePresentation(choice, id),
       ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
+      ...(choice.appGuidedAuth && choice.appGuidedActionLabel
+        ? { actionLabel: choice.appGuidedActionLabel }
+        : {}),
       kind: choice.appGuidedAuth ?? "install",
       featured: choice.onboardingFeatured === true,
     }),
@@ -197,45 +197,41 @@ export function listSetupInferenceEnableOptions(
         choice.assistantVisibility !== "detected-only" &&
         supportsSetupTextInference(choice.onboardingScopes),
     )
-    .map((choice) => {
-      const option: SetupInferenceAuthOption = Object.assign(
+    .map((choice): SetupInferenceAuthOption =>
+      Object.assign(
         projectChoicePresentation(choice, choice.choiceId),
-        {
-          kind: "install",
-          featured: choice.onboardingFeatured === true,
-        } as const,
-      );
-      const groupLabel = choice.groupLabel?.trim();
-      if (groupLabel) {
-        option.groupLabel = groupLabel;
-      }
-      return option;
-    })
+        { kind: "install" as const, featured: choice.onboardingFeatured === true },
+        choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {},
+      ),
+    )
     .toSorted(compareSetupInferenceOptions);
 }
 
 export function listSetupInferencePrepareOptions(
   authChoices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferencePrepareOption[] {
-  return listSetupInferenceGuidedOptions({
+  return listSetupInferenceChoices({
     choices: authChoices,
     include: (choice) => choice.appGuidedDiscovery === true,
     project: (choice, id) => ({
       ...projectChoicePresentation(choice, id),
-      ...(choice.appGuidedActionLabel?.trim()
-        ? { actionLabel: choice.appGuidedActionLabel.trim() }
-        : {}),
+      actionLabel: choice.appGuidedActionLabel?.trim() || choice.choiceLabel,
     }),
   });
 }
 
-export function choiceMatchesCredential(
-  choice: ProviderAuthChoiceMetadata,
+export function findSetupCredentialChoice(
+  choices: readonly ProviderAuthChoiceMetadata[],
   credential: AuthProfileCredential,
-): boolean {
-  return (
-    normalizeProviderId(choice.providerId) === normalizeProviderId(credential.provider) &&
-    supportsSetupTextInference(choice.onboardingScopes) &&
-    (credential.type === "oauth" ? Boolean(choice.appGuidedAuth) : choice.appGuidedSecret === true)
+): ProviderAuthChoiceMetadata | undefined {
+  const saved = credential.setup;
+  return choices.find((choice) =>
+    saved?.authChoice
+      ? choice.choiceId === saved.authChoice && choice.pluginId === saved.pluginId
+      : normalizeProviderId(choice.providerId) === normalizeProviderId(credential.provider) &&
+        supportsSetupTextInference(choice.onboardingScopes) &&
+        (credential.type === "oauth"
+          ? Boolean(choice.appGuidedAuth)
+          : choice.appGuidedSecret === true),
   );
 }

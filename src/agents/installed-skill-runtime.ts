@@ -1,11 +1,16 @@
+import path from "node:path";
 import {
   hasUnavailableSkillSecretOwners,
   isSkillSecretOwnerUnavailable,
 } from "../skills/loading/config.js";
+import { prepareSkillResourceRoot } from "../skills/runtime/refresh.js";
+import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../skills/types.js";
+import { resolveSkillReadPath } from "../skills/workspace-skill-read-path.js";
 import { resolveCodeModeSkills, type CodeModeSkillReader } from "./code-mode-skills.js";
 import { MAX_SKILL_INSTRUCTION_BYTES, type InstalledSkill } from "./installed-skill-catalog.js";
 import type { SandboxContext } from "./sandbox/types.js";
+import { resolveSessionSkillResourceCatalog } from "./session-placement-skill-resources.js";
 import { getAgentWorkspaceAccess, WorkspaceAccessUnavailableError } from "./workspace-access.js";
 
 /** Bind already-admitted identities to the filesystem owner for this attempt. */
@@ -14,11 +19,18 @@ export function prepareInstalledSkillCatalog(params: {
   workspaceDir: string;
   sandbox?: SandboxContext | null;
   assertCurrent?: () => void;
+  instructionDelivery?: InstalledSkill["instructionDelivery"];
 }): InstalledSkill[] {
   const { snapshot, sandbox } = params;
   if (!snapshot) {
     return [];
   }
+  const delivered = sandbox?.enabled
+    ? resolveSessionSkillResourceCatalog(sandbox.readOnlyResourceMounts)
+    : undefined;
+  const deliveredByName = new Map(
+    delivered?.snapshot.discoverySkills?.map((skill) => [skill.name, skill]),
+  );
   const candidates = snapshot.discoverySkills ?? snapshot.resolvedSkills ?? [];
   const promptListed = new Set(
     resolveCodeModeSkills({ skillsPrompt: snapshot.prompt, candidates }).map((skill) => skill.name),
@@ -39,6 +51,14 @@ export function prepareInstalledSkillCatalog(params: {
         !isSkillSecretOwnerUnavailable(keys.get(skill.name) ?? skill.name),
     )
     .map((skill) => {
+      const fileHost = resolveSkillFileHost(skill);
+      const resource = deliveredByName.get(skill.name);
+      const deliveredContent =
+        resource?.filePath === skill.filePath ? resource.readContent : undefined;
+      const assertCurrent = () => {
+        params.assertCurrent?.();
+        delivered?.assertCurrent();
+      };
       let reader: CodeModeSkillReader | undefined;
       let readSearchContent: InstalledSkill["readSearchContent"];
       if (sandbox?.enabled) {
@@ -64,35 +84,55 @@ export function prepareInstalledSkillCatalog(params: {
         readSearchContent = readInstructions;
       } else if (
         workspace?.loadSkills &&
-        (skill.fileHost === "workspace" ||
-          (skill.fileHost !== "gateway" &&
+        (fileHost === "workspace" ||
+          (fileHost !== "gateway" &&
             !snapshot.librarySelections?.some((selection) => selection.name === skill.name)))
       ) {
-        reader = async ({ location, signal }) => {
+        reader = async ({ signal }) => {
           params.assertCurrent?.();
           if (!workspace.skillResources) {
             throw new WorkspaceAccessUnavailableError(
               "Remote workspace skill reads are unavailable",
             );
           }
-          const content = await workspace.skillResources.readInstructions(location, { signal });
+          const content = await workspace.skillResources.readInstructions(skill.filePath, {
+            signal,
+          });
           params.assertCurrent?.();
           return content;
         };
         // This resource owner supports whole reads only. Its document bridge
         // is not a substitute for bounded skill-resource authority.
       }
+      const resourceRoot =
+        !sandbox?.enabled &&
+        !reader &&
+        fileHost !== "workspace" &&
+        (fileHost === "gateway" || !workspace?.loadSkills) &&
+        path.isAbsolute(skill.filePath)
+          ? prepareSkillResourceRoot(path.dirname(skill.filePath), skill.resourceRootIdentity)
+          : undefined;
+      // Missing admission must not create an unhandled rejection before a companion read.
+      void resourceRoot?.catch(() => undefined);
+      const contentHash =
+        sandbox?.enabled && typeof deliveredContent === "string"
+          ? resource?.contentHash
+          : skill.contentHash;
       return {
+        instructionDelivery: params.instructionDelivery,
+        catalogRevision: contentHash,
         name: skill.name,
         promptListed: promptListed.has(skill.name),
         description: [skill.description, skill.locationNote].filter(Boolean).join("\n"),
-        location: skill.filePath,
+        location: resolveSkillReadPath(skill),
+        locationNote: skill.locationNote,
         source: {
           filePath: skill.filePath,
-          readContent: sandbox?.enabled ? undefined : skill.readContent,
+          readContent: sandbox?.enabled ? deliveredContent : skill.readContent,
         },
         reader,
-        assertCurrent: params.assertCurrent,
+        resourceRoot,
+        assertCurrent,
         readSearchContent,
       };
     });

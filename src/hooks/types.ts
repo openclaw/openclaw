@@ -1,4 +1,4 @@
-import type { RequirementRemote, RequirementsMetadata } from "../shared/requirements.js";
+import type { RequirementsMetadata } from "../shared/requirements.js";
 
 export type HookInstallSpec = {
   id?: string;
@@ -21,10 +21,6 @@ export type OpenClawHookMetadata = RequirementsMetadata & {
   install?: HookInstallSpec[];
 };
 
-export type HookInvocationPolicy = {
-  enabled: boolean;
-};
-
 export type ParsedHookFrontmatter = Record<string, string>;
 
 export type Hook = {
@@ -43,13 +39,9 @@ export type HookEntry = {
   hook: Hook;
   frontmatter: ParsedHookFrontmatter;
   metadata?: OpenClawHookMetadata;
-  invocation?: HookInvocationPolicy;
+  invocation?: { enabled: boolean };
 };
 
 export type HookPolicyEntry = Pick<HookEntry, "metadata"> & {
   hook: Pick<Hook, "name" | "source">;
-};
-
-export type HookEligibilityContext = {
-  remote?: Required<RequirementRemote> & { note?: string };
 };

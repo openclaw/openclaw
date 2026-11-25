@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -18,16 +20,23 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
-import { canReceiveSessionEvent } from "../session-sharing.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
+import {
+  canReceivePreparedSessionEvent,
+  createProjectedSessionEventPredicate,
+} from "../session-sharing.test-utils.js";
 import {
   broadcast,
   callQuestionRpc,
@@ -63,7 +72,13 @@ function questionPeer(
   };
   const client: GatewayWsClient = {
     socket: socket as unknown as GatewayWsClient["socket"],
-    connect: { role: "operator", scopes } as GatewayWsClient["connect"],
+    connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
+      role: "operator",
+      scopes,
+    },
     connId,
     usesSharedGatewayAuth: false,
     authenticatedUserProfile: {
@@ -74,6 +89,7 @@ function questionPeer(
       updatedAt: profile.updatedAt,
     },
   };
+  prepareGatewayRecipientProfile(client);
   return { client, socket };
 }
 
@@ -101,10 +117,11 @@ async function createOwnRunFixture() {
     visibility: "shared",
     createdActor: { type: "human", source: "profile", id: profile.id },
   };
+  setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore(sessionScope, entry);
   const browser = questionPeer(profile, "original-browser");
   const sourceController = new AbortController();
-  const source = await captureGatewayOperatorRunAuthority({
+  const captured = await prepareGatewayOperatorRunAuthority({
     client: browser.client,
     context: { getRuntimeConfig: () => cfg },
     sourceAuthority: {
@@ -112,13 +129,14 @@ async function createOwnRunFixture() {
       assertCurrent: () => sourceController.signal.throwIfAborted(),
     },
   });
-  if (!source) {
+  if (!captured) {
     throw new Error("expected the Guest's admitted operator authority");
   }
-  const authority = claimAgentRunDelegatedAuthority(
-    { instanceId: "guest-question-run", runId: requestParams.runId },
-    source.authority.assertCurrent,
-  );
+  const source = captured;
+  const authority = claimAgentRunDelegatedAuthority({
+    instanceId: "guest-question-run",
+    runId: requestParams.runId,
+  });
   const synthetic = createSyntheticPluginRuntimeClient({
     operatorRoleActor: { kind: "operator", profileId: profile.id },
     operatorRunAuthority: source.authority,
@@ -137,11 +155,12 @@ async function createOwnRunFixture() {
       },
     },
   };
+  const projection = await createSessionRowProjection({ cfg });
+  await projection.ensureMaterialized();
   const clients = new GatewayClientRegistry([browser.client]);
   const broadcaster = createGatewayBroadcaster({
     clients,
-    canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-      canReceiveSessionEvent({ cfg, client, sessionKeys, agentId, event, payload }),
+    canReceiveSessionEvent: createProjectedSessionEventPredicate(cfg, projection),
   });
   broadcast.mockImplementation(broadcaster.broadcast);
   const call = (
@@ -154,11 +173,7 @@ async function createOwnRunFixture() {
     expect(response[0], JSON.stringify(response[2])).toBe(true);
     return (response[1] as { id: string }).id;
   };
-  const beginWait = async (
-    id: string,
-    client: GatewayClient = browser.client,
-    hasCurrentClientAuthority?: () => boolean,
-  ) => {
+  const beginWait = async (id: string, client: GatewayClient = browser.client) => {
     const attached = createDeferred();
     const waitAnswer = manager.waitAnswer.bind(manager);
     const observer = vi.spyOn(manager, "waitAnswer").mockImplementationOnce((...args) => {
@@ -173,7 +188,6 @@ async function createOwnRunFixture() {
         cfg,
         client,
         registered: true,
-        hasCurrentClientAuthority,
       },
     );
     try {
@@ -203,10 +217,14 @@ async function createOwnRunFixture() {
     request,
     beginWait,
     close: async () => {
-      manager.reset();
-      await manager.drain();
-      releaseAgentRunDelegatedAuthority(authority);
-      source.release();
+      try {
+        manager.reset();
+        await manager.drain();
+        releaseAgentRunDelegatedAuthority(authority);
+        source.release();
+      } finally {
+        projection.dispose();
+      }
     },
   };
 }
@@ -253,22 +271,10 @@ describe("own-run question admission", () => {
                   foreign.client,
                 ),
               ).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
-              await expect(
-                callQuestionRpc(
-                  method,
-                  { id, ...(method === "question.resolve" ? { answers } : {}) },
-                  {
-                    cfg: f.cfg,
-                    client: f.browser.client,
-                    registered: true,
-                    hasCurrentClientAuthority: () => false,
-                  },
-                ),
-              ).rejects.toThrow("Gateway requester authority changed");
             }
             expect(
               read,
-              "foreign or revoked requests must be rejected before liveness is read",
+              "foreign requests must be rejected before liveness is read",
             ).not.toHaveBeenCalled();
             expect(getActiveGatewayRootWorkCount()).toBe(1);
 
@@ -366,7 +372,7 @@ describe("own-run question admission", () => {
       for (const peer of peers) {
         f.clients.add(peer.client);
         expect(
-          canReceiveSessionEvent({
+          await canReceivePreparedSessionEvent({
             cfg: f.cfg,
             client: peer.client,
             sessionKeys: [requestParams.sessionKey],
@@ -386,8 +392,8 @@ describe("own-run question admission", () => {
         retainedReads += 1;
         assertCurrent(read);
       });
-      const run = historyLane.pool.run.bind(historyLane.pool);
-      vi.spyOn(historyLane.pool, "run").mockImplementation((...args) => {
+      const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+      vi.spyOn(sessionStoreLane.pool, "run").mockImplementation((...args) => {
         retainedReads += 1;
         return run(...args);
       });
@@ -500,106 +506,181 @@ describe("own-run question admission", () => {
     });
   });
 
-  it.each(["source revoked", "exact run closed"] as const)(
-    "settles the original question when its %s",
-    async (cause) => {
-      await withOwnRunQuestion(async (f) => {
-        const id = await f.request();
-        const waiting = await f.beginWait(id);
-        if (cause === "source revoked") {
-          setUserProfileRole(f.profile.id, "suspended");
-          invalidateOperatorRolePolicy(f.profile.id);
-          expect(f.source.authority.signal?.aborted).toBe(true);
-        } else {
-          releaseAgentRunDelegatedAuthority(f.authority);
-        }
-        const system = createSyntheticPluginRuntimeClient({
-          operatorRoleActor: { kind: "system" },
-          scopes: ["operator.questions"],
-        });
-        expect((await f.call("question.get", { id }, system))[1]).toMatchObject({
-          question: { id, status: "cancelled" },
-        });
-        const response = await waiting.result;
-        if (cause === "source revoked") {
-          expect(response[0]).toBe(false);
-        } else {
-          expect(response).toEqual([true, { status: "cancelled" }, undefined]);
-        }
-        expect((await f.call("question.resolve", { id, answers }))[0]).toBe(false);
-        expect(manager.get(id)).not.toHaveProperty("answers");
-      });
-    },
-  );
-
-  it("settles the original source revoked during a current recipient's held worker read", async () => {
+  it("keeps an admitted question live after a role change and refuses the next producer", async () => {
     await withOwnRunQuestion(async (f) => {
       const id = await f.request();
       const observation = manager.observe(id)!;
       const waiting = manager.waitAnswer(id);
-      const recipient = questionPeer(f.profile, "independent-current-recipient");
-      const entered = createDeferred();
-      const release = createDeferred();
-      const run = historyLane.pool.run.bind(historyLane.pool);
-      const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce(async (...args) => {
-        const result = await run(...args);
-        entered.resolve();
-        await release.promise;
-        return result;
+      setUserProfileRole(f.profile.id, "suspended");
+      invalidateOperatorRolePolicy(f.profile.id);
+      expect(f.source.authority.signal?.aborted).not.toBe(true);
+      expect(observation.sessionAccess?.assertSourceCurrent).not.toThrow();
+      expect(observation.record.status).toBe("pending");
+      await expect(
+        f.call("question.request", { ...requestParams, id: "refused-producer" }, f.runtime),
+      ).resolves.toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
+      expect(manager.observe("refused-producer")).toBeNull();
+      const system = createSyntheticPluginRuntimeClient({
+        operatorRoleActor: { kind: "system" },
+        scopes: ["operator.questions"],
       });
-      const request = f.call("question.get", { id }, recipient.client);
-      const result = Promise.allSettled([request]);
-      try {
-        await entered.promise;
-        f.revokeSource();
-        expect(f.source.authority.signal?.aborted).toBe(true);
-        expect(recipient.client.invalidated).not.toBe(true);
-        expect(observation.record.status).toBe("pending");
-        release.resolve();
-        expect(await request).toMatchObject([
-          false,
-          undefined,
-          { details: { reason: "QUESTION_NOT_FOUND" } },
-        ]);
-        expect(observation.record.status).toBe("cancelled");
-        expect(await waiting).toEqual({ status: "cancelled" });
-        await manager.drain();
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-      } finally {
-        release.resolve();
-        await result;
-        spy.mockRestore();
-        manager.close();
-        await waiting;
-        await manager.drain();
-      }
+      expect(await f.call("question.resolve", { id, answers }, system)).toEqual([
+        true,
+        { status: "answered", answers },
+        undefined,
+      ]);
+      expect(await waiting).toEqual({ status: "answered", answers });
     });
   });
 
-  it("keeps a pending requester and waiter after a transient worker read failure", async () => {
-    await withOwnRunQuestion(async (f) => {
-      const id = await f.request();
-      const observation = manager.observe(id)!;
-      let settled = false;
-      const waiting = manager.waitAnswer(id).then((result) => {
-        settled = true;
-        return result;
+  it.each(["ordinary", "sessionless", "missing session", "secret"] as const)(
+    "preserves admitted admin producer lifetime and checks the next start (%s)",
+    async (kind) => {
+      await withOwnRunQuestion(async (f) => {
+        f.cfg.gateway!.roles!.definitions.admin = {
+          scopes: ["operator.admin"],
+          agents: "*",
+          sessions: { others: "write" },
+        };
+        setUserProfileRole(f.profile.id, "admin");
+        const client = {
+          ...f.browser.client,
+          connect: { ...f.browser.client.connect, scopes: ["operator.admin"] },
+        };
+        const admitted = await prepareGatewayOperatorRunAuthority({
+          client,
+          context: { getRuntimeConfig: () => f.cfg },
+        });
+        if (!admitted) {
+          throw new Error("Expected admitted admin source");
+        }
+        const producer: GatewayClient = {
+          ...client,
+          internal: {
+            operatorRunAuthority: admitted.authority,
+            ...(kind === "secret"
+              ? { agentRuntimeIdentity: f.runtime.internal!.agentRuntimeIdentity }
+              : {}),
+          },
+        };
+        const params = {
+          ...(kind === "secret" ? secretRequestParams : requestParams),
+          ...(kind === "sessionless"
+            ? { sessionKey: undefined, agentId: undefined, runId: undefined }
+            : kind === "missing session"
+              ? { sessionKey: "agent:main:missing" }
+              : {}),
+        };
+        try {
+          const response = await f.call("question.request", params, producer);
+          expect(response[0], JSON.stringify(response[2])).toBe(true);
+          const id = (response[1] as { id: string }).id;
+          const observation = manager.observe(id)!;
+          setUserProfileRole(f.profile.id, "suspended");
+          invalidateOperatorRolePolicy(f.profile.id);
+          expect(observation.record.status).toBe("pending");
+          expect(admitted.authority.signal?.aborted).not.toBe(true);
+          // Neither optional-session fallback nor a secret prompt can skip new admission.
+          const next = f.call("question.request", { ...params, id: "refused-producer" }, producer);
+          await expect(next).resolves.toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
+          expect(manager.observe("refused-producer")).toBeNull();
+        } finally {
+          admitted.release();
+        }
       });
-      const failure = new Error("Transient question worker read failure");
-      const spy = vi.spyOn(historyLane.pool, "run").mockRejectedValueOnce(failure);
-      try {
-        await expect(f.call("question.get", { id })).rejects.toThrow(failure);
-        expect(observation.isCurrent()).toBe(true);
-        expect(observation.record.status).toBe("pending");
-        expect(settled).toBe(false);
-      } finally {
-        spy.mockRestore();
-        manager.close();
-        await waiting;
-        await manager.drain();
-      }
-    });
-  });
+    },
+  );
+
+  it.each(["source revocation", "transient worker failure"] as const)(
+    "preserves the question's authority outcome across %s during a read",
+    async (cause) => {
+      await withOwnRunQuestion(async (f) => {
+        const id = await f.request();
+        const observation = manager.observe(id)!;
+        let settled = false;
+        const waiting = manager.waitAnswer(id).then((result) => {
+          settled = true;
+          return result;
+        });
+        const recipient = questionPeer(f.profile, "independent-current-recipient");
+        const entered = createDeferred();
+        const release = createDeferred();
+        const failure = new Error("Transient question worker read failure");
+        // The injected failure must exercise the worker instead of a warm entry receipt.
+        sessionChanges.invalidate({
+          ...sessionScope,
+          storePath: resolveOpenClawAgentSqlitePath(sessionScope),
+          factsInvalidated: true,
+        });
+        // Background membership refresh shares this lane; fault only the question's row read.
+        const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+        let injected = false;
+        const spy = vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
+          let selected = false;
+          const result = await run(async () => {
+            const input = typeof args[0] === "function" ? await args[0]() : args[0];
+            if (
+              !injected &&
+              input.kind === "session-exact-entries" &&
+              input.sessionKeys?.includes(sessionScope.sessionKey)
+            ) {
+              injected = true;
+              selected = true;
+              if (cause === "transient worker failure") {
+                throw failure;
+              }
+            }
+            return input;
+          }, args[1]);
+          if (selected) {
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        });
+        const request = f.call(
+          "question.get",
+          { id },
+          cause === "source revocation" ? recipient.client : f.browser.client,
+        );
+        const result = Promise.allSettled([request]);
+        try {
+          if (cause === "transient worker failure") {
+            await expect(request).rejects.toThrow(failure);
+            expect(observation.isCurrent()).toBe(true);
+            expect(observation.record.status).toBe("pending");
+            expect(settled).toBe(false);
+          } else {
+            await entered.promise;
+            f.revokeSource();
+            expect(f.source.authority.signal?.aborted).not.toBe(true);
+            expect(recipient.client.invalidated).not.toBe(true);
+            expect(observation.record.status).toBe("pending");
+            release.resolve();
+            expect(await request).toMatchObject([
+              true,
+              { question: { id, status: "pending" } },
+              undefined,
+            ]);
+            expect(settled).toBe(false);
+            expect(await f.call("question.resolve", { id, answers })).toEqual([
+              true,
+              { status: "answered", answers },
+              undefined,
+            ]);
+            expect(await waiting).toEqual({ status: "answered", answers });
+          }
+        } finally {
+          release.resolve();
+          await result;
+          spy.mockRestore();
+          manager.close();
+          await waiting;
+          await manager.drain();
+        }
+      });
+    },
+  );
 
   it.each(["sessionId", "lifecycleRevision"] as const)(
     "refuses the old binding after %s replacement under the same key",
@@ -628,83 +709,6 @@ describe("own-run question admission", () => {
         expect(manager.get(id)?.status).toBe("cancelled");
         await manager.drain();
         expect(f.browser.socket.send).toHaveBeenCalledOnce();
-      });
-    },
-  );
-
-  it.each(["client invalidation", "request authority revocation"] as const)(
-    "fences answer delivery after %s while retaining accepted truth",
-    async (cause) => {
-      await withOwnRunQuestion(async (f) => {
-        const id = await f.request();
-        const observer: GatewayClient = { ...f.browser.client };
-        let current = true;
-        const waiting = await f.beginWait(id, observer, () => current);
-        const rejected = expect(waiting.result).rejects.toThrow(
-          "Gateway requester authority changed",
-        );
-        if (cause === "client invalidation") {
-          observer.invalidated = true;
-        } else {
-          current = false;
-        }
-        expect((await f.call("question.resolve", { id, answers }))[0]).toBe(true);
-        await rejected;
-        expect((await f.call("question.get", { id }))[1]).toMatchObject({
-          question: { id, status: "answered", answers },
-        });
-      });
-    },
-  );
-
-  it.each(["answer", "cancel"] as const)(
-    "refuses to %s from a revoked request while the original question remains active",
-    async (action) => {
-      await withOwnRunQuestion(async (f) => {
-        const id = await f.request();
-        const observer = { ...f.browser.client, connId: "revoked-observer" };
-        await expect(
-          callQuestionRpc(
-            "question.resolve",
-            {
-              id,
-              ...(action === "answer" ? { answers } : { cancel: true }),
-            },
-            {
-              cfg: f.cfg,
-              client: observer,
-              registered: true,
-              hasCurrentClientAuthority: () => false,
-            },
-          ),
-        ).rejects.toThrow("Gateway requester authority changed");
-        expect(manager.get(id)?.status).toBe("pending");
-      });
-    },
-  );
-
-  it.each(["question.get", "question.list", "question.waitAnswer"] as const)(
-    "fences a revoked %s before reading the question owner",
-    async (method) => {
-      await withOwnRunQuestion(async (f) => {
-        const id = await f.request();
-        const read = vi.spyOn(manager, "get").mockImplementation(() => {
-          throw new Error("revoked request reached question state");
-        });
-        try {
-          await expect(
-            callQuestionRpc(method, method === "question.list" ? {} : { id }, {
-              cfg: f.cfg,
-              client: f.browser.client,
-              registered: true,
-              hasCurrentClientAuthority: () => false,
-            }),
-          ).rejects.toThrow("Gateway requester authority changed");
-          expect(read).not.toHaveBeenCalled();
-        } finally {
-          read.mockRestore();
-        }
-        expect(manager.get(id)?.status).toBe("pending");
       });
     },
   );

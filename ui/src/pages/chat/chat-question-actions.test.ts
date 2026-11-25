@@ -1,25 +1,86 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, vi } from "vitest";
-import { createQuestionPromptState } from "../../app/question-prompt.ts";
+import {
+  createQuestionHarness,
+  createQuestionResolver,
+} from "../../app/question-prompt.test-support.ts";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
-import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
+import type { ChatProps } from "./chat-view.tsx";
+import {
+  createAsyncQuestionPresentation,
+  subscribeAsyncQuestionState,
+} from "./components/chat-async-question.ts";
+
+const questions = createQuestionHarness();
+
+it("leaves composer replies with the Gateway instead of cancelling the question", async () => {
+  const { actions, request } = sendingQuestion(async () => true);
+  await expect(actions.onSend()).resolves.toBe(true);
+  expect(request).not.toHaveBeenCalled();
+});
+
+function sendingQuestion(onSend: ChatProps["onSend"]) {
+  const request = createQuestionResolver();
+  const { state: questionState } = questions.createConnectedState(request);
+  const state: Parameters<typeof createChatQuestionActions>[0]["state"] = {
+    sessionKey: "agent:main:main",
+    connectionEpoch: 1,
+    handleSendChat: vi.fn(),
+    lastError: null,
+    chatQueue: [],
+  };
+  let current = true;
+  const actions = createChatQuestionActions({
+    state,
+    questionState,
+    sendActions: { onSend },
+    canSend: true,
+    isCurrent: () => current,
+  });
+  return { state, request, actions, retire: () => (current = false) };
+}
 
 it.each(["session", "connection", "pane"] as const)(
-  "does not admit a retained question submission after its %s changes",
+  "does not send from a retired %s composer",
   async (changed) => {
     const send = vi.fn(async () => true);
-    const state = {
+    const fixture = sendingQuestion(send);
+    if (changed === "session") {
+      fixture.state.sessionKey = "agent:main:other";
+    } else if (changed === "connection") {
+      fixture.state.connectionEpoch += 1;
+    } else {
+      fixture.retire();
+    }
+    await fixture.actions.onSend();
+    expect(send).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["session", "connection", "pane", "outbox"] as const)(
+  "does not resubmit a question after %s changes",
+  async (changed) => {
+    const send = vi.fn(async () => true);
+    const pendingAnswer = {
+      id: "pending-answer",
+      asyncQuestionItemId: "audience",
+      text: "Original answer",
+      createdAt: 1,
+      sendState: "failed" as const,
+    };
+    const state: Parameters<typeof createChatQuestionActions>[0]["state"] = {
       sessionKey: "agent:main:one",
       connectionEpoch: 1,
       handleSendChat: send,
       lastError: null,
-      chatQueue: [],
+      chatQueue: changed === "outbox" ? [pendingAnswer] : [],
     };
     let current = true;
     const actions = createChatQuestionActions({
       state,
-      questionState: createQuestionPromptState(() => {}),
+      questionState: questions.createState(),
+      sendActions: { onSend: vi.fn() },
       canSend: true,
       isCurrent: () => current,
     });
@@ -27,10 +88,13 @@ it.each(["session", "connection", "pane"] as const)(
       state.sessionKey = "agent:main:two";
     } else if (changed === "connection") {
       state.connectionEpoch += 1;
-    } else {
+    } else if (changed === "pane") {
       current = false;
     }
-    expect(await actions.onAsyncQuestionSubmit?.("> Which audience?\n\nEveryone")).toBe(false);
+    const itemId = changed === "outbox" ? "audience" : undefined;
+    expect(await actions.onAsyncQuestionSubmit?.("Changed draft", itemId)).toBe(
+      changed === "outbox",
+    );
     expect(send).not.toHaveBeenCalled();
   },
 );
@@ -40,7 +104,7 @@ it.each(["session", "connection", "agent", "drafts"] as const)(
   async (changed) => {
     const originalSend = vi.fn(async () => true);
     const nextSend = vi.fn(async () => true);
-    const requestUpdate = vi.fn();
+    const notify = vi.fn();
     const state: Parameters<typeof createAsyncQuestionPresentation>[0] = {
       asyncQuestionDrafts: new Map(),
       asyncQuestionRevision: 0,
@@ -51,8 +115,8 @@ it.each(["session", "connection", "agent", "drafts"] as const)(
       currentAgentId: "main",
       connectionEpoch: 1,
       onAsyncQuestionSubmit: originalSend,
-      onRequestUpdate: requestUpdate,
     };
+    const stop = subscribeAsyncQuestionState(state, notify);
     const retained = createAsyncQuestionPresentation(state, props);
     if (changed === "session") {
       props.sessionKey = "agent:main:two";
@@ -66,43 +130,14 @@ it.each(["session", "connection", "agent", "drafts"] as const)(
     state.transcriptRenderContext.onAsyncQuestionSubmit = nextSend;
     const current = createAsyncQuestionPresentation(state, props);
     retained.onChange();
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
     current.onChange();
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledOnce();
+    stop();
     expect(await retained.submit?.("> Which audience?\n\nEveryone")).toBe(false);
-    expect(originalSend).not.toHaveBeenCalled();
-    expect(nextSend).not.toHaveBeenCalled();
-    expect(await current.submit?.("> Which audience?\n\nEngineers")).toBe(true);
-    expect(nextSend).toHaveBeenCalledExactlyOnceWith(
-      "> Which audience?\n\nEngineers",
-      undefined,
-      undefined,
-    );
+    expect([originalSend.mock.calls, nextSend.mock.calls]).toEqual([[], []]);
+    const answer = "> Which audience?\n\nEngineers";
+    expect(await current.submit?.(answer)).toBe(true);
+    expect(nextSend.mock.calls).toEqual([[answer, undefined, undefined]]);
   },
 );
-
-it("keeps an already admitted answer with the outbox instead of submitting a duplicate", async () => {
-  const send = vi.fn(async () => true);
-  const actions = createChatQuestionActions({
-    state: {
-      sessionKey: "agent:main:main",
-      connectionEpoch: 1,
-      handleSendChat: send,
-      lastError: null,
-      chatQueue: [
-        {
-          id: "pending-answer",
-          asyncQuestionItemId: "audience",
-          text: "Original answer",
-          createdAt: 1,
-          sendState: "failed",
-        },
-      ],
-    },
-    questionState: createQuestionPromptState(() => {}),
-    canSend: true,
-    isCurrent: () => true,
-  });
-  expect(await actions.onAsyncQuestionSubmit?.("Changed draft", "audience")).toBe(true);
-  expect(send).not.toHaveBeenCalled();
-});

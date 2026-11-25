@@ -1,4 +1,5 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
@@ -9,15 +10,11 @@ import {
   assertAgentDeletionDatabaseCleanupAccess,
   getAgentDeletionDatabaseCleanup,
 } from "./agent-deletion-cleanup.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
-import {
-  agentDatabaseLifecycle as cache,
-  retainAgentDatabase,
-} from "./openclaw-agent-db-lifecycle.js";
-import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { getOpenClawAgentDatabaseIfOpen, openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 
 /** Yield only for BEGIN admission; admitted writes and publications are never replayed. */
@@ -41,15 +38,13 @@ export async function runOpenClawAgentWriteWithYieldingAdmission<T>(
       database.db,
       async () => () => {
         assertAgentDeletionDatabaseCleanupAccess(database, captured);
-        const result = operation(database);
-        if (!cache.incognito.has(database)) {
-          ensureOpenClawAgentDatabasePermissions(database.path, captured);
-        }
-        return result;
+        return operation(database);
       },
       {
         ...transactionOptions,
-        busyTimeoutMs: readSqliteBusyTimeout(database.db),
+        ...(isPostgresSqlConnection(database.db)
+          ? {}
+          : { busyTimeoutMs: readSqliteBusyTimeout(database.db) }),
         databaseLabel: database.path,
         operationLabel: transactionOptions.operationLabel ?? "agent.write",
         withCommit: getAgentDeletionDatabaseCleanup(captured)?.withCommit,

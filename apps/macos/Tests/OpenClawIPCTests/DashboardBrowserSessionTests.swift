@@ -544,7 +544,7 @@ struct DashboardBrowserSessionTests {
         let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
         let controller = self.controller(url: session.origin, store: store, lease: store.lease(for: session))
         defer { controller.closeDashboard() }
-        #expect(!controller.hasCurrentBrowserSession)
+        #expect(!controller.documentHost.hasCurrentBrowserSession)
         controller.invalidateBrowserSession(error: .expired)
         var text = ""
         try await TestWait.state("expired session message") {

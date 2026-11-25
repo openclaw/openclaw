@@ -1,4 +1,3 @@
-// Signal plugin module owns native-reply quote author state.
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 type SignalReplyContextRecordBase = {
   accountId: string;
@@ -21,5 +20,4 @@ export const signalReplyAuthorState = {
       expiresAt: number;
     }
   >(),
-  persistentStoreDisabled: false,
 };

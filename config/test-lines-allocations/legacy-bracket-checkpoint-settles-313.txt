@@ -1,0 +1,2 @@
+# Regression test for streaming Markdown checkpoint settlement after a closed legacy bracket block (BUG-313).
+10

@@ -5,10 +5,16 @@ import {
   type CronActiveJobMarker,
 } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
-import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
-import { CronRunReceiptRevisionError } from "../store/run-receipt-store.js";
-import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import {
+  CronDeliveryAuthorityError,
+  type CronCompletionDeliveryFence,
+} from "../delivery-attempt-fence.js";
+import {
+  CronRunReceiptRevisionError,
+  type CronRunReceiptHandle,
+} from "../store/run-receipt.types.js";
 import type { CronJob } from "../types.js";
+import { finishCronRun } from "./run-history.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import type { CronServiceState } from "./state.js";
 
@@ -18,44 +24,80 @@ export function createCronCompletionDeliveryFence(params: {
   handle: CronRunReceiptHandle;
   activeJobMarker?: CronActiveJobMarker;
   signal: AbortSignal;
+  /** Keep the interrupted run's terminal notice within its retained shutdown owner. */
+  settlingRestart?: true;
 }): CronCompletionDeliveryFence {
   const { state, handle, activeJobMarker, signal } = params;
   const context = captureOpenClawStateWorkerContext();
   const generation = state.lifecycleGeneration;
-  const reservation = state.queuedRunReservationsByJobId.get(handle.jobId);
   const defaultAgentId = () => state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
   const admittedDefaultAgentId = defaultAgentId();
-  let preparedAgentFacts: { deletionBlocked: boolean } | undefined;
   const allowMissingJob = () =>
     activeJobMarker?.jobId === handle.jobId && isCronSelfRemovalCurrent(activeJobMarker);
   const assertCurrent = () => {
     context.admission.assertCurrent();
     signal.throwIfAborted();
-    if (
-      preparedAgentFacts &&
-      state.deps.isAgentAvailable?.(handle.agentId, undefined, preparedAgentFacts) === false
-    ) {
-      throw new CronRunReceiptRevisionError(
+    if (state.deps.isAgentAvailable?.(handle.agentId, { deletionBlocked: false }) === false) {
+      throw new CronDeliveryAuthorityError(
         handle.receiptId,
         describeUnavailableCronAgent(handle.agentId),
+        handle.jobId,
+        fence,
         "owner-unavailable",
       );
     }
     if (
-      state.lifecycleGeneration !== generation ||
-      !reservation ||
-      state.queuedRunReservationsByJobId.get(handle.jobId) !== reservation ||
-      reservation.runReceipt.receiptId !== handle.receiptId ||
+      // A reload handover retires scheduling only; its runs still deliver.
+      (state.lifecycleGeneration !== generation &&
+        !state.handedOver &&
+        !(params.settlingRestart && state.stopped)) ||
       !isCronActiveJobMarkerCurrent(activeJobMarker) ||
       activeJobMarker?.cancellation?.kind === "requested" ||
       (activeJobMarker?.jobRemoved && !allowMissingJob()) ||
       (!params.job.agentId?.trim() && defaultAgentId() !== admittedDefaultAgentId)
     ) {
-      throw new CronRunReceiptRevisionError(handle.receiptId, "cron delivery owner retired");
+      throw new CronDeliveryAuthorityError(
+        handle.receiptId,
+        "cron delivery owner retired",
+        handle.jobId,
+        fence,
+      );
     }
   };
-  return {
+  const fence: CronCompletionDeliveryFence = {
+    standingGrantAuthority: {
+      context,
+      handle,
+      assertCurrent: () => {
+        assertCurrent();
+        if (activeJobMarker?.jobRemoved) {
+          throw new CronRunReceiptRevisionError(handle.receiptId, "cron execution source removed");
+        }
+      },
+    },
     assertCurrent,
+    async recordWithheld({ runId, sessionKey, error }) {
+      // A continuation may outlive its completed occurrence. Keep that result and
+      // record the refused continuation separately, without changing the job or receipt.
+      await finishCronRun(state, {
+        taskRunId: `${handle.receiptId}:followup:${runId}`,
+        historySource: { context, storeKey: handle.storeKey, defaultAgentId: handle.agentId },
+        job: params.job,
+        event: {
+          action: "finished",
+          jobId: handle.jobId,
+          runId,
+          runAtMs: handle.startedAtMs,
+          status: "error",
+          completionStatus: "failed",
+          error,
+          delivered: false,
+          deliveryStatus: "not-delivered",
+          deliveryError: error,
+          sessionKey,
+        },
+      });
+    },
     async beforeAttempt() {
       assertCurrent();
       let committed = false;
@@ -65,38 +107,13 @@ export function createCronCompletionDeliveryFence(params: {
           type: "cron.markDeliveryStarted",
           input: { storeKey: handle.storeKey, handle: { ...handle } },
           assertCurrent,
-          prepare(facts) {
-            preparedAgentFacts = facts;
-            const missingJobAllowed = allowMissingJob();
-            const assertPreparedCurrent = () => {
-              assertCurrent();
-              if (
-                facts.deletionBlocked ||
-                state.deps.isAgentAvailable?.(handle.agentId, undefined, facts) === false
-              ) {
-                throw new CronRunReceiptRevisionError(
-                  handle.receiptId,
-                  describeUnavailableCronAgent(handle.agentId),
-                  "owner-unavailable",
-                );
-              }
-              if (allowMissingJob() !== missingJobAllowed) {
-                throw new CronRunReceiptRevisionError(handle.receiptId);
-              }
-            };
-            assertPreparedCurrent();
-            return {
-              value: { allowMissingJob: missingJobAllowed, defaultAgentId: admittedDefaultAgentId },
-              assertCurrent: assertPreparedCurrent,
-            };
-          },
+          snapshot: {},
           publish() {
             committed = true;
           },
         });
       } catch (error) {
-        // A lost ordinary reply is harmless only when the matching native commit
-        // already published; rollback and unknown outcomes never admit a send.
+        // A lost reply does not authorize delivery; the caller may inspect the recorded outcome.
         if (!committed) {
           throw error;
         }
@@ -104,4 +121,5 @@ export function createCronCompletionDeliveryFence(params: {
       assertCurrent();
     },
   };
+  return fence;
 }

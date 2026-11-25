@@ -9,6 +9,8 @@ struct ChatSessionKeyTests {
         ("main", "agent:other:main", false),
         ("agent:main:other", "other", false),
         ("chat-1", "chat-2", false),
+        ("Matrix:Channel:!Room:example.org", "matrix:channel:!Room:example.org", true),
+        ("matrix:channel:!Room:example.org", "matrix:channel:!room:example.org", false),
     ])
     func `Talk matches session keys without admitting other agent or named-session aliases`(
         incoming: String,

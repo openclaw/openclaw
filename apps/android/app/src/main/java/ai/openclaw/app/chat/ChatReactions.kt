@@ -2,6 +2,7 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySessionRouting
 import ai.openclaw.app.gateway.MessageReactionSummary
+import ai.openclaw.app.gateway.MessageReactionSummaryIdentitiesItem
 import android.icu.lang.UCharacter
 import android.icu.lang.UProperty
 import android.icu.text.BreakIterator
@@ -10,15 +11,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 
-data class ChatReactionIdentity(
-  val id: String,
-  val label: String? = null,
-)
-
 data class ChatReactionSummary(
   val emoji: String,
   val count: Int,
-  val identities: List<ChatReactionIdentity>,
+  val identities: List<MessageReactionSummaryIdentitiesItem>,
 )
 
 data class ChatReactionAccess(
@@ -118,7 +114,7 @@ internal fun MessageReactionSummary.toChatReactionSummary(): ChatReactionSummary
   ChatReactionSummary(
     emoji = emoji,
     count = Math.toIntExact(count),
-    identities = identities.map { ChatReactionIdentity(it.id, it.label) },
+    identities = identities,
   )
 
 /** State changes run under the controller's publication lock; queued writes wait outside it. */

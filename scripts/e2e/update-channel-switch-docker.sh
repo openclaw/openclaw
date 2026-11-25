@@ -9,14 +9,12 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+openclaw_resolve_frozen_update_channel_switch_contract "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-update-channel-switch-e2e" OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_SKIP_BUILD:-0}"
-cleanup() {
-  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"' EXIT
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz update-channel-switch "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 # Bare lanes mount the package artifact instead of baking app sources into the image.
@@ -37,9 +35,9 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
   -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
-  -e OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT \
-  -e OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT \
   -e OPENCLAW_E2E_GIT_CHANNEL_TIMEOUT \
+  -e "OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG=$OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG" \
+  -e "OPENCLAW_FROZEN_TARGET_PACKAGE_TO_GIT_MODE=$OPENCLAW_FROZEN_TARGET_PACKAGE_TO_GIT_MODE" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
@@ -59,6 +57,7 @@ export OPENCLAW_NO_PROMPT=1
 
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 git_root="/tmp/openclaw-git"
+git_mode="${OPENCLAW_FROZEN_TARGET_PACKAGE_TO_GIT_MODE:?missing package-to-Git contract}"
 mkdir -p "$git_root"
 # Build the fake git install from the packed package contents, not the checkout.
 tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
@@ -67,8 +66,19 @@ node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
 (
   cd "$git_root"
-  # Git-style fixtures still need optional native prebuilds; omit only development dependencies.
-  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=dev --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
+  if [ "$git_mode" = detached ]; then
+    # The release builder requires a frozen lockfile for the rewritten fixture manifest.
+    fixture_install=(pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts)
+    if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-}" ]; then
+      # Native pnpm does not read npm_config_registry. The lockfile must retain
+      # the candidate-only tarball URLs for the later frozen release build.
+      fixture_install+=(--registry="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL")
+    fi
+  else
+    # The in-place updater needs the fixture runtime and its optional native prebuilds.
+    fixture_install=(npm install --omit=dev --no-fund --no-audit)
+  fi
+  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" "${fixture_install[@]}" >/tmp/openclaw-git-install.log 2>&1; then
     openclaw_e2e_print_log /tmp/openclaw-git-install.log >&2
     exit 1
   fi
@@ -80,6 +90,10 @@ git config --global user.name "OpenClaw Docker E2E"
 git config --global gc.auto 0
 git -C "$git_root" init -q
 git -C "$git_root" config gc.auto 0
+if [ "$git_mode" = detached ]; then
+  printf "committed content\n" >"$git_root/operator-update-tracked.txt"
+  git -C "$git_root" add -f pnpm-lock.yaml
+fi
 git -C "$git_root" add -A
 git -C "$git_root" add -f dist/control-ui/index.html
 git -C "$git_root" commit -qm "test fixture"
@@ -105,10 +119,6 @@ done
 node scripts/docker/verify-fs-safe-native.mjs \
   --package-root /tmp/npm-prefix/lib/node_modules/openclaw \
   --mode fallback
-OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT:-0}"
-export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT
-OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT:-0}"
-export OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
 # Channel switches install dependencies and swap the whole package inside the
@@ -159,16 +169,26 @@ openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing
 export OPENCLAW_GIT_DIR="$git_root"
 export OPENCLAW_UPDATE_DEV_TARGET_REF="$fixture_sha"
 
+echo "==> package refuses main target ($OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG)"
+if main_json="$(openclaw update --tag "$OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG" --yes --json --no-restart)"; then
+  echo "Unsupported package target unexpectedly succeeded." >&2
+  exit 1
+fi
+UPDATE_JSON="$main_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-main-refusal
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel stable
+
 echo "==> package stable -> package beta channel"
 set +e
-beta_json="$(openclaw update --channel beta --yes --json --no-restart)"
+# The updater packs the bare override; without a tag npm would pick latest, not the candidate.
+beta_json="$(OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw npm_config_tag=beta NPM_CONFIG_TAG=beta \
+  openclaw update --channel beta --yes --json --no-restart)"
 beta_status=$?
 set -e
 printf "%s\n" "$beta_json"
 if [ "$beta_status" -ne 0 ]; then
   exit "$beta_status"
 fi
-UPDATE_JSON="$beta_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update beta
+UPDATE_JSON="$beta_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update beta "$package_version"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel beta
 node scripts/e2e/lib/update-channel-switch/assertions.mjs \
   assert-installed-version \
@@ -189,7 +209,7 @@ assert_package_dry_run() {
     assert-dry-run "$expected_kind" "$expected_channel" "$selection"
   node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
 }
-dev_channel_args=(--channel dev)
+dev_channel_args=()
 echo "==> package dry-run channel and one-off tag precedence"
 openclaw config set update.channel dev
 assert_package_dry_run git dev stored
@@ -197,33 +217,29 @@ assert_package_dry_run git dev explicit --channel dev
 assert_package_dry_run git dev explicit --channel dev --tag beta
 assert_package_dry_run package dev stored --tag beta
 assert_package_dry_run package stable explicit --channel stable
-# 7.33 reports a stored dev channel as a package update even though an
-# explicit --channel dev selects Git. Keep the explicit selector for the
-# destructive admission and actual switch probes on that frozen contract.
-if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then
-  dev_channel_args=()
-fi
-
-echo "==> ordinary untracked files still block Git admission"
 printf "retain user notes\n" >"$git_root/operator-update-notes.tmp"
-set +e
-dirty_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
-dirty_status=$?
-set -e
-# Historical update CLIs can report a blocked structured result with exit zero.
-# Admit only that exact legacy status; timeouts, signals, and other failures stay fatal.
-node scripts/e2e/lib/update-channel-switch/assertions.mjs \
-  assert-dirty-exit \
-  "$dirty_status" \
-  "$OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT"
-# The payload assertion proves the update was rejected and no checkout state changed.
-UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
-  assert-dirty-update "$git_root" "$fixture_sha"
-node -e "require(\"node:fs\").unlinkSync(process.argv[1])" "$git_root/operator-update-notes.tmp"
+case "$git_mode" in
+  in-place)
+    echo "==> ordinary untracked files still block in-place Git admission"
+    dirty_status=0
+    dirty_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)" || dirty_status=$?
+    node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-dirty-exit "$dirty_status"
+    UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+      assert-dirty-update "$git_root" "$fixture_sha"
+    rm -- "$git_root/operator-update-notes.tmp"
+    dev_channel_args+=(--no-restart)
+    ;;
+  detached)
+    echo "==> detached Git release preserves and excludes local input"
+    printf "retain tracked edit\n" >"$git_root/operator-update-tracked.txt"
+    # Omit --no-restart so the CLI selects the release now; no managed Gateway runs here.
+    ;;
+  *) echo "Unknown package-to-Git contract: $git_mode" >&2; exit 1 ;;
+esac
 
 echo "==> package -> git dev channel"
 set +e
-dev_json="$(OPENCLAW_E2E_COMMAND_TIMEOUT="$git_channel_timeout" openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
+dev_json="$(OPENCLAW_E2E_COMMAND_TIMEOUT="$git_channel_timeout" openclaw update "${dev_channel_args[@]}" --yes --json)"
 dev_status=$?
 set -e
 printf "%s\n" "$dev_json"
@@ -231,6 +247,10 @@ if [ "$dev_status" -ne 0 ]; then
   exit "$dev_status"
 fi
 UPDATE_JSON="$dev_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update dev
+if [ "$git_mode" = detached ]; then
+  node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-detached-switch \
+    "$git_root" "$OPENCLAW_STATE_DIR/git-install/openclaw" "$fixture_sha"
+fi
 node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-runtime-staging-clean "$git_root"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
 

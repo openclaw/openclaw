@@ -1,0 +1,87 @@
+{
+  "id": "subq",
+  "name": "SubQ",
+  "description": "SubQ Snap typed decisions (not a conversational model).",
+  "categories": [
+    "developer-tools"
+  ],
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "decisionProviders": [
+      "subq"
+    ]
+  },
+  "configContracts": {
+    "secretInputs": {
+      "bundledDefaultEnabled": false,
+      "paths": [
+        {
+          "path": "apiKey",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    }
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "SubQ API credential",
+      "help": "Select a SecretRef in Settings → Secrets. Create a key at console.subq.ai; never paste credentials in chat.",
+      "sensitive": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "apiKey": {
+        "type": "object",
+        "required": [
+          "source",
+          "provider",
+          "id"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "env",
+              "store",
+              "file",
+              "exec"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "additionalProperties": false
+  },
+  "modelCatalog": {
+    "providers": {
+      "subq": {
+        "models": []
+      }
+    },
+    "suppressions": [
+      {
+        "provider": "subq",
+        "model": "subq-snap-preview",
+        "reason": "SubQ retired Snap preview on 2026-11-11.",
+        "retirement": {}
+      }
+    ]
+  }
+}

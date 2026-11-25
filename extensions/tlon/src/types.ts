@@ -5,12 +5,8 @@ import {
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ResolvedChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  hasLegacyFlatAllowPrivateNetworkAlias,
-  isPrivateNetworkOptInEnabled,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import type { z } from "zod";
-import type { TlonConfigSchema } from "./config-schema.js";
+import type { TlonConfigSchema, TlonClubPolicy, TlonClubRules } from "./config-schema.js";
 
 type TlonAccountConfig = z.input<typeof TlonConfigSchema> & {
   implicitMentions?: Partial<ResolvedChannelImplicitMentions>;
@@ -29,9 +25,12 @@ export type TlonResolvedAccount = {
   dangerouslyAllowPrivateNetwork: boolean | null;
   groupChannels: string[];
   dmAllowlist: string[];
+  clubPolicy: TlonClubPolicy | null;
+  clubRules: TlonClubRules;
   /** Ships allowed to invite us to groups (security: prevent malicious group invites) */
   groupInviteAllowlist: string[];
   autoDiscoverChannels: boolean | null;
+  crossChannelCitations: boolean | null;
   showModelSignature: boolean | null;
   autoAcceptDmInvites: boolean | null;
   autoAcceptGroupInvites: boolean | null;
@@ -55,16 +54,12 @@ const {
 
 export { listTlonAccountIds };
 
-function resolveMergedTlonAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): Record<string, unknown> & TlonAccountConfig {
+function resolveMergedTlonAccountConfig(cfg: OpenClawConfig, accountId: string): TlonAccountConfig {
   const channel = resolveTlonChannelConfig(cfg);
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    return (channel ?? {}) as Record<string, unknown> & TlonAccountConfig;
+    return channel ?? {};
   }
-  return resolveMergedNamedTlonAccountConfig(cfg, accountId) as Record<string, unknown> &
-    TlonAccountConfig;
+  return resolveMergedNamedTlonAccountConfig(cfg, accountId);
 }
 
 export function resolveTlonAccount(
@@ -74,59 +69,36 @@ export function resolveTlonAccount(
   const resolvedAccountId = normalizeAccountId(accountId);
   const base = resolveTlonChannelConfig(cfg);
 
-  if (!base) {
-    return {
-      accountId: resolvedAccountId,
-      name: null,
-      enabled: false,
-      configured: false,
-      ship: null,
-      url: null,
-      code: null,
-      dangerouslyAllowPrivateNetwork: null,
-      groupChannels: [],
-      dmAllowlist: [],
-      groupInviteAllowlist: [],
-      autoDiscoverChannels: null,
-      showModelSignature: null,
-      autoAcceptDmInvites: null,
-      autoAcceptGroupInvites: null,
-      defaultAuthorizedShips: [],
-      ownerShip: null,
-    };
-  }
-
   const merged = resolveMergedTlonAccountConfig(cfg, resolvedAccountId);
   const ship = merged.ship ?? null;
   const url = merged.url ?? null;
   const code = merged.code ?? null;
-  const dangerouslyAllowPrivateNetwork = isPrivateNetworkOptInEnabled(merged)
-    ? true
-    : typeof merged.network?.dangerouslyAllowPrivateNetwork === "boolean"
-      ? merged.network.dangerouslyAllowPrivateNetwork
-      : hasLegacyFlatAllowPrivateNetworkAlias(merged) &&
-          typeof merged.allowPrivateNetwork === "boolean"
-        ? merged.allowPrivateNetwork
-        : null;
   return {
     accountId: resolvedAccountId,
     name: merged.name ?? null,
-    enabled: merged.enabled !== false,
+    enabled: Boolean(base) && merged.enabled !== false,
     configured: Boolean(ship && url && code),
-    requireMentionInBotThreads: merged.requireMentionInBotThreads,
-    mediaMaxBytes: resolveChannelMediaMaxBytes({
-      cfg,
-      accountId: resolvedAccountId,
-      resolveChannelLimitMb: () => merged.mediaMaxMb,
-    }),
+    ...(base
+      ? {
+          requireMentionInBotThreads: merged.requireMentionInBotThreads,
+          mediaMaxBytes: resolveChannelMediaMaxBytes({
+            cfg,
+            accountId: resolvedAccountId,
+            resolveChannelLimitMb: () => merged.mediaMaxMb,
+          }),
+        }
+      : {}),
     ship,
     url,
     code,
-    dangerouslyAllowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: merged.network?.dangerouslyAllowPrivateNetwork ?? null,
     groupChannels: merged.groupChannels ?? [],
     dmAllowlist: merged.dmAllowlist ?? [],
+    clubPolicy: merged.clubPolicy ?? null,
+    clubRules: merged.clubRules ?? {},
     groupInviteAllowlist: merged.groupInviteAllowlist ?? [],
     autoDiscoverChannels: merged.autoDiscoverChannels ?? null,
+    crossChannelCitations: merged.crossChannelCitations ?? null,
     showModelSignature: merged.showModelSignature ?? null,
     autoAcceptDmInvites: merged.autoAcceptDmInvites ?? null,
     autoAcceptGroupInvites: merged.autoAcceptGroupInvites ?? null,

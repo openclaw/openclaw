@@ -1,0 +1,236 @@
+import { createServer, type ServerResponse } from "node:http";
+import { buffer } from "node:stream/consumers";
+import { expect } from "vitest";
+import { writeToolCall } from "../../../src/gateway/gateway-provider-fixture.test-support.ts";
+import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.ts";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
+
+export const waitClockFixture = {
+  key: "agent:main:dashboard:wait-clock-proof",
+  label: "Wait clock proof",
+  childLabel: "Check the release notes",
+  childTask: "Check the synthetic release notes and report when the review is complete.",
+  initialPrompt: "Start a separate review session, then wait for its result.",
+  acknowledgment: "The review is running in a separate session. I will return with the result.",
+  updatePrompt: "Give me a brief update while the review continues.",
+  updateReply: "The review is still running. I will report its result when it finishes.",
+  childReply: "The release notes review is complete. No issues found.",
+  resumedReply: "The review finished successfully. No issues found in the release notes.",
+  trailingNarration: "Waiting quietly for the review session to finish before replying again.",
+};
+
+/**
+ * reply: the update turn answers with ordinary assistant text after already_pending.
+ * message-tool: it sends its visible reply with message(final: false), then yields; any
+ * trailing text the model writes after already_pending is narration, not a reply.
+ */
+export type WaitClockUpdateVia = "reply" | "message-tool";
+
+export async function createWaitClockInstance(
+  port: number,
+  controlUiRoot: string,
+  options: { visibleReplies?: "message_tool" } = {},
+) {
+  const instance = await createChatGatewayInstance({
+    name: "wait-clock",
+    provider: "wait-fixture",
+    identity: "Review assistant",
+    model: "parent",
+    agents: { ownership: "explicit" },
+    defaults: { workspace: "${OPENCLAW_WORKSPACE_DIR}" },
+    apiKey: "synthetic-wait-fixture-key",
+    baseUrl: "http://127.0.0.1:" + port + "/v1",
+    models: ["parent", "child"].map((id) => ({ id, name: id })),
+    // Admission below requires built artifacts; never let the helper rebuild during proof.
+    entrypoint: ["dist/index.js"],
+    config: {
+      update: { checkOnStart: false },
+      gateway: { controlUi: { enabled: true, root: controlUiRoot } },
+      tools: { profile: "full", codeMode: false, toolSearch: false },
+      ...(options.visibleReplies ? { messages: { visibleReplies: options.visibleReplies } } : {}),
+    },
+  });
+  instance.env.OPENCLAW_WORKSPACE_DIR = instance.state.path("public-workspace");
+  return instance;
+}
+
+type ProviderInput = { type?: string; name?: string; call_id?: string; output?: string };
+function toolOutput(input: ProviderInput[] | undefined, toolName: string) {
+  // Responses replay normalizes tool-call IDs; match the actual emitted call, not our wire ID.
+  const call = input?.findLast((item) => item.type === "function_call" && item.name === toolName);
+  expect(call?.call_id, "the real transcript must retain the tool call").toBeTruthy();
+  const output = input?.findLast(
+    (item) => item.type === "function_call_output" && item.call_id === call?.call_id,
+  )?.output;
+  expect(typeof output, "the real runtime must deliver this tool result").toBe("string");
+  return output!;
+}
+
+function toolResult(input: ProviderInput[] | undefined, toolName: string) {
+  const output = toolOutput(input, toolName);
+  const result: {
+    status?: string;
+    childSessionKey?: string;
+    pendingChildren?: unknown[];
+  } = JSON.parse(output);
+  return result;
+}
+
+function writeReply(response: ServerResponse, text: string, id: string) {
+  writeOpenAiResponsesText(response, {
+    text,
+    messageId: `${id}_reply`,
+    responseId: `${id}_response`,
+  });
+}
+
+/** Model transport only: the Gateway executes all tools and owns the native child registry. */
+export async function startWaitClockProvider(options: { updateVia?: WaitClockUpdateVia } = {}) {
+  const updateVia = options.updateVia ?? "reply";
+  const childStarted = createDeferred();
+  const failure = createDeferred<never>();
+  void failure.promise.catch(() => {});
+  const handlers = new Set<Promise<void>>();
+  const requests: Array<{ method?: string; url?: string }> = [];
+  const receipts: Array<{ step: number; tool: string; result: ReturnType<typeof toolResult> }> = [];
+  let parentRequests = 0;
+  let trailingNarrationRequests = 0;
+  let completionInput: string | undefined;
+  let childResponse: ServerResponse | undefined;
+  let childReleased = false;
+  let stopped = false;
+  const reserved = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () =>
+      createServer((request, response) => {
+        requests.push({ method: request.method, url: request.url });
+        const handler = (async () => {
+          if (request.method !== "POST" || request.url !== "/v1/responses") {
+            request.resume();
+            response.writeHead(404).end();
+            return;
+          }
+          const body: { model: string; tools?: Array<{ name?: string }>; input?: ProviderInput[] } =
+            JSON.parse((await buffer(request)).toString("utf8"));
+          if (body.model === "child") {
+            if (childReleased && updateVia === "message-tool") {
+              // A message-tool-only child may take one more model turn after its held reply.
+              writeReply(response, waitClockFixture.childReply, "child_followup");
+              return;
+            }
+            expect(childResponse, "the child must not retry while held").toBeUndefined();
+            childResponse = response;
+            childStarted.resolve();
+            return; // Release only after both real-browser waiting captures.
+          }
+          expect(body.model).toBe("parent");
+          const step = parentRequests++;
+          if (step === 0) {
+            expect(body.tools).toContainEqual(expect.objectContaining({ name: "sessions_spawn" }));
+            writeToolCall(response, "sessions_spawn", {
+              runtime: "subagent",
+              visible: true,
+              agentId: "main",
+              context: "isolated",
+              label: waitClockFixture.childLabel,
+              taskName: "review-notes",
+              task: waitClockFixture.childTask,
+              model: "wait-fixture/child",
+            });
+          } else if (step === 1) {
+            const result = toolResult(body.input, "sessions_spawn");
+            receipts.push({ step, tool: "sessions_spawn", result });
+            expect(result.status).toBe("accepted");
+            expect(result.childSessionKey).toMatch(/^agent:main:dashboard:/);
+            writeToolCall(response, "sessions_yield", {
+              acknowledgment: waitClockFixture.acknowledgment,
+            });
+          } else if (step === 2) {
+            expect(JSON.stringify(body.input)).toContain(waitClockFixture.updatePrompt);
+            expect(childReleased).toBe(false);
+            if (updateVia === "message-tool") {
+              writeToolCall(response, "message", {
+                action: "send",
+                message: waitClockFixture.updateReply,
+                final: false,
+              });
+            } else {
+              writeToolCall(response, "sessions_yield", {});
+            }
+          } else if (step === 3 && updateVia === "message-tool") {
+            // The message tool returns its human-readable delivery receipt, not JSON.
+            expect(toolOutput(body.input, "message")).toMatch(/^Sent\b/u);
+            receipts.push({ step, tool: "message", result: { status: "sent" } });
+            expect(childReleased).toBe(false);
+            writeToolCall(response, "sessions_yield", {});
+          } else if (step === 3 || (step === 4 && updateVia === "message-tool" && !childReleased)) {
+            const result = toolResult(body.input, "sessions_yield");
+            receipts.push({ step, tool: "sessions_yield", result });
+            // Never manufacture already_pending: this must come from the real registry/tool owner.
+            expect(result.status).toBe("already_pending");
+            expect(result.pendingChildren).toHaveLength(1);
+            if (updateVia === "message-tool") {
+              // Reached only when the runtime keeps the turn open after the delivered reply.
+              trailingNarrationRequests += 1;
+              writeReply(response, waitClockFixture.trailingNarration, "narration");
+            } else {
+              writeReply(response, waitClockFixture.updateReply, "update");
+            }
+          } else {
+            expect(step, "exactly one completion turn must resume the parent").toBe(4);
+            expect(childReleased).toBe(true);
+            completionInput = JSON.stringify(body.input);
+            if (updateVia === "reply") {
+              expect(completionInput).toContain(waitClockFixture.childReply);
+            }
+            writeReply(response, waitClockFixture.resumedReply, "resumed");
+          }
+        })();
+        handlers.add(handler);
+        void handler.then(
+          () => handlers.delete(handler),
+          (error: unknown) => {
+            handlers.delete(handler);
+            failure.reject(error);
+            response.destroy();
+          },
+        );
+      }),
+  });
+  return {
+    port: reserved.claim.port,
+    receipts,
+    requests,
+    waitForChild: (signal: AbortSignal) =>
+      withinTest(Promise.race([childStarted.promise, failure.promise]), signal),
+    check: () => Promise.race([failure.promise, Promise.resolve()]),
+    parentRequests: () => parentRequests,
+    trailingNarrationRequests: () => trailingNarrationRequests,
+    completionInput: () => completionInput,
+    childIsRunning: () => childResponse?.destroyed === false && !childReleased,
+    releaseChild() {
+      if (!childResponse || childResponse.destroyed || childReleased) {
+        throw new Error("The actual child provider request is not pending");
+      }
+      childReleased = true;
+      writeReply(childResponse, waitClockFixture.childReply, "child");
+    },
+    async stop() {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      await runQaGatewayFixture(
+        async () => {
+          reserved.listener.closeAllConnections();
+          await reserved.releaseListener();
+          await Promise.all(handlers);
+        },
+        () => reserved.claim.release(),
+      );
+    },
+  };
+}

@@ -1,8 +1,4 @@
-/** Argument serializers for command definitions that expose structured values. */
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type { CommandArgValues } from "./commands-registry.types.js";
 
 type CommandArgsFormatter = (values: CommandArgValues) => string | undefined;
@@ -27,7 +23,7 @@ function formatActionArgs(
   values: CommandArgValues,
   pathActions: readonly string[] = ["show", "get"],
 ): string | undefined {
-  const action = normalizeOptionalLowercaseString(normalizeArgValue(values.action));
+  const action = normalizeArgValue(values.action)?.toLowerCase();
   const path = normalizeArgValue(values.path);
   const value = normalizeArgValue(values.value);
   if (!action) {
@@ -56,7 +52,6 @@ function formatNamedArgs(
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
-/** Command-specific serializers used when rebuilding slash-command text from parsed args. */
 export const COMMAND_ARG_FORMATTERS: Record<string, CommandArgsFormatter> = {
   config: formatActionArgs,
   mcp: formatActionArgs,

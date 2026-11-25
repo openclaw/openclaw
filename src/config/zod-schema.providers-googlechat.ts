@@ -9,10 +9,6 @@ import {
 import { ChannelDeliveryStreamingConfigSchema, SecretRefSchema } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const GoogleChatDmSchema = z.strictObject({
-  enabled: z.boolean().optional(),
-});
-
 const GoogleChatGroupSchema = z.strictObject({
   enabled: z.boolean().optional(),
   requireMention: z.boolean().optional(),
@@ -44,7 +40,7 @@ const GoogleChatAccountSchemaBase = z.strictObject({
   webhookPath: z.string().optional(),
   webhookUrl: z.string().optional(),
   botUser: z.string().optional(),
-  dm: GoogleChatDmSchema.optional(),
+  dm: z.strictObject({ enabled: z.boolean().optional() }).optional(),
   typingIndicator: z.enum(["none", "message", "reaction"]).optional(),
 });
 

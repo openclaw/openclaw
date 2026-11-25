@@ -1,3 +1,4 @@
+import CoreImage
 import OpenClawKit
 import SwiftUI
 
@@ -73,26 +74,6 @@ enum OnboardingGatewayConnectionAttempt: Equatable {
     case trustCertificate
 }
 
-struct GatewaySetupLinkStaging {
-    private(set) var link: GatewayConnectDeepLink?
-
-    mutating func stage(_ link: GatewayConnectDeepLink) {
-        self.link = link
-    }
-
-    mutating func take() -> GatewayConnectDeepLink? {
-        defer { self.link = nil }
-        return self.link
-    }
-
-    @discardableResult
-    mutating func cancel() -> Bool {
-        guard self.link != nil else { return false }
-        self.link = nil
-        return true
-    }
-}
-
 enum OnboardingQRCodeDestination: Equatable {
     case mainUI
     case successScreen
@@ -118,5 +99,22 @@ struct OnboardingQRCodeCompletion {
         return GatewayStableIdentifier.matches(targetStableID, connectedStableID)
             ? .mainUI
             : .successScreen
+    }
+}
+
+extension OnboardingWizardView {
+    func detectQRCode(from data: Data) -> String? {
+        guard let ciImage = CIImage(data: data) else { return nil }
+        let detector = CIDetector(
+            ofType: CIDetectorTypeQRCode,
+            context: nil,
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
+        let features = detector?.features(in: ciImage) ?? []
+        for feature in features {
+            if let qr = feature as? CIQRCodeFeature, let message = qr.messageString {
+                return message
+            }
+        }
+        return nil
     }
 }

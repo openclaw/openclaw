@@ -21,6 +21,7 @@ export type SshSandboxSession = {
   host: string;
   /** Revalidate runtime authority after asynchronous upload preparation. */
   assertCurrent?: () => void;
+  prepareCurrent?: () => Promise<void>;
 };
 
 export type RunSshSandboxCommandParams = Parameters<RemoteShellSandboxSession["runCommand"]>[0] & {
@@ -49,21 +50,6 @@ function buildSshFailureMessage(stderr: string, exitCode: number): string {
     return `${trimmed}\nSSH sandbox failed to load the configured identity. The private key contents may be malformed (for example CRLF or escaped newlines). Prefer identityFile when possible.`;
   }
   return trimmed || `ssh exited with code ${exitCode}`;
-}
-
-export function buildSshSandboxArgv(params: {
-  session: SshSandboxSession;
-  remoteCommand: string;
-  tty?: boolean;
-}): string[] {
-  return [
-    params.session.command,
-    "-F",
-    params.session.configPath,
-    ...(params.tty ? ["-tt", "-o", "RequestTTY=force"] : ["-T", "-o", "RequestTTY=no"]),
-    params.session.host,
-    params.remoteCommand,
-  ];
 }
 
 export async function createSshSandboxSessionFromConfigText(params: {
@@ -153,10 +139,18 @@ export async function disposeSshSandboxSession(session: SshSandboxSession): Prom
 function commandSession(session: SshSandboxSession): RemoteShellSandboxSession {
   return createRemoteShellSandboxSession({
     buildCommand: ({ remoteCommand, tty }) => ({
-      argv: buildSshSandboxArgv({ session, remoteCommand, tty }),
+      argv: [
+        session.command,
+        "-F",
+        session.configPath,
+        ...(tty ? ["-tt", "-o", "RequestTTY=force"] : ["-T", "-o", "RequestTTY=no"]),
+        session.host,
+        remoteCommand,
+      ],
       env: sanitizeEnvVars(process.env).allowed,
     }),
     assertCurrent: session.assertCurrent,
+    prepareCurrent: session.prepareCurrent,
     formatFailure: buildSshFailureMessage,
   });
 }

@@ -3,6 +3,7 @@
  * @see https://bot.zaloplatforms.com/docs
  */
 
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   assertOkOrThrowProviderError,
@@ -10,6 +11,8 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { z } from "zod";
+import type { webhookMessageSchema, webhookUpdateSchema } from "./message-schema.js";
 import { ZALO_DEFAULT_REQUEST_TIMEOUT_MS, ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
@@ -32,66 +35,16 @@ export type ZaloBotInfo = {
   can_join_groups: boolean;
 };
 
-export type ZaloMessage = {
-  message_id: string;
-  from: {
-    id: string;
-    name?: string;
-    display_name?: string;
-    avatar?: string;
-    is_bot?: boolean;
-  };
-  chat: {
-    id: string;
-    chat_type: "PRIVATE" | "GROUP";
-  };
-  date: number;
-  text?: string;
-  photo_url?: string;
-  caption?: string;
-  sticker?: string;
-  message_type?: string;
-};
+export type ZaloMessage = z.infer<typeof webhookMessageSchema>;
 
-export type ZaloUpdate = {
-  event_name:
-    | "message.text.received"
-    | "message.image.received"
-    | "message.sticker.received"
-    | "message.unsupported.received";
+export type ZaloUpdate = Omit<z.infer<typeof webhookUpdateSchema>, "message"> & {
   message?: ZaloMessage;
-};
-
-type ZaloSendMessageParams = {
-  chat_id: string;
-  text: string;
-};
-
-type ZaloSendPhotoParams = {
-  chat_id: string;
-  photo: string;
-  caption?: string;
-};
-
-type ZaloSendChatActionParams = {
-  chat_id: string;
-  action: "typing" | "upload_photo";
-};
-
-type ZaloSetWebhookParams = {
-  url: string;
-  secret_token: string;
 };
 
 type ZaloWebhookInfo = {
   url?: string;
   updated_at?: number;
   has_custom_certificate?: boolean;
-};
-
-type ZaloGetUpdatesParams = {
-  /** Timeout in seconds (passed as string to API) */
-  timeout?: number;
 };
 
 export class ZaloApiError extends Error {
@@ -110,9 +63,8 @@ export class ZaloApiError extends Error {
   }
 }
 
-function resolveZaloApiUrl(apiUrl?: string): string {
-  const value =
-    apiUrl === undefined ? (process.env[ZALO_API_URL_ENV]?.trim() ?? ZALO_API_BASE) : apiUrl.trim();
+function resolveZaloApiUrl(): string {
+  const value = process.env[ZALO_API_URL_ENV]?.trim() ?? ZALO_API_BASE;
   if (!value) {
     throw new Error(`${ZALO_API_URL_ENV} must not be empty.`);
   }
@@ -136,13 +88,13 @@ export async function callZaloApi<T = unknown>(
   token: string,
   body?: Record<string, unknown>,
   options?: {
-    apiUrl?: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
     fetch?: ZaloFetch;
     assertDirectAdapterHandoff?: () => void;
   },
 ): Promise<ZaloApiResponse<T>> {
-  const url = `${resolveZaloApiUrl(options?.apiUrl)}/bot${token}/${method}`;
+  const url = `${resolveZaloApiUrl()}/bot${token}/${method}`;
   const controller = new AbortController();
   const requestTimeoutMs = resolveTimerTimeoutMs(
     options?.timeoutMs,
@@ -158,10 +110,14 @@ export async function callZaloApi<T = unknown>(
         "Content-Type": "application/json",
       },
       body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
+      signal: options?.signal
+        ? AbortSignal.any([controller.signal, options.signal])
+        : controller.signal,
     };
-    options?.assertDirectAdapterHandoff?.();
-    const response = await fetcher(url, request);
+    const response = await captureEffectAuthority().initiate(() => {
+      options?.assertDirectAdapterHandoff?.();
+      return fetcher(url, request);
+    });
 
     await assertOkOrThrowProviderError(response, `zalo.${method}`);
     const data = await readProviderJsonResponse<ZaloApiResponse<T>>(response, `zalo.${method}`);
@@ -190,7 +146,10 @@ export async function getMe(
 
 export async function sendMessage(
   token: string,
-  params: ZaloSendMessageParams,
+  params: {
+    chat_id: string;
+    text: string;
+  },
   fetcher?: ZaloFetch,
   assertDirectAdapterHandoff?: () => void,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
@@ -202,7 +161,11 @@ export async function sendMessage(
 
 export async function sendPhoto(
   token: string,
-  params: ZaloSendPhotoParams,
+  params: {
+    chat_id: string;
+    photo: string;
+    caption?: string;
+  },
   fetcher?: ZaloFetch,
   assertDirectAdapterHandoff?: () => void,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
@@ -242,7 +205,10 @@ export async function sendPhoto(
 
 export async function sendChatAction(
   token: string,
-  params: ZaloSendChatActionParams,
+  params: {
+    chat_id: string;
+    action: "typing" | "upload_photo";
+  },
   fetcher?: ZaloFetch,
   timeoutMs?: number,
 ): Promise<ZaloApiResponse<boolean>> {
@@ -257,18 +223,29 @@ export async function sendChatAction(
  */
 export async function getUpdates(
   token: string,
-  params?: ZaloGetUpdatesParams,
+  params?: {
+    signal?: AbortSignal;
+    /** Timeout in seconds (passed as string to API) */
+    timeout?: number;
+  },
   fetcher?: ZaloFetch,
 ): Promise<ZaloApiResponse<ZaloUpdate>> {
   const pollTimeoutSec = params?.timeout ?? 30;
   const timeoutMs = (pollTimeoutSec + 5) * 1000;
   const body = { timeout: String(pollTimeoutSec) };
-  return callZaloApi<ZaloUpdate>("getUpdates", token, body, { timeoutMs, fetch: fetcher });
+  return callZaloApi<ZaloUpdate>("getUpdates", token, body, {
+    timeoutMs,
+    signal: params?.signal,
+    fetch: fetcher,
+  });
 }
 
 export async function setWebhook(
   token: string,
-  params: ZaloSetWebhookParams,
+  params: {
+    url: string;
+    secret_token: string;
+  },
   fetcher?: ZaloFetch,
 ): Promise<ZaloApiResponse<ZaloWebhookInfo>> {
   return callZaloApi<ZaloWebhookInfo>("setWebhook", token, params, { fetch: fetcher });

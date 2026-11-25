@@ -1,0 +1,241 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { normalizeCommandBody } from "../../auto-reply/commands-registry-normalize.js";
+import { parseSlashCommandOrNull } from "../../auto-reply/reply/commands-slash-parse.js";
+import { parseConfigCommand } from "../../auto-reply/reply/config-commands.js";
+import { parseDebugCommand } from "../../auto-reply/reply/debug-commands.js";
+import { logVerbose } from "../../globals.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isSessionRunActiveForKey,
+  resolveActiveSessionRunId,
+} from "../../sessions/session-controller.queries.js";
+import {
+  captureSessionTarget,
+  type SessionTarget,
+} from "../../sessions/session-controller.target.js";
+import { waitForSessionRunIdle } from "../../sessions/session-controller.wait.js";
+import { getConfigValueAtPath, parseConfigPath, setConfigValueAtPath } from "../config-paths.js";
+import { REDACTED_SENTINEL } from "../redact-sentinel.js";
+import { resolveSessionStorePathCore } from "./paths.js";
+import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
+
+export function scopeCommandTranscriptId(
+  messageId: string,
+  context: { channelId?: string; accountId?: string; conversationId?: string },
+): string;
+export function scopeCommandTranscriptId(
+  messageId: string | undefined,
+  context: { channelId?: string; accountId?: string; conversationId?: string },
+): string | undefined;
+export function scopeCommandTranscriptId(
+  messageId: string | undefined,
+  context: { channelId?: string; accountId?: string; conversationId?: string },
+): string | undefined {
+  return messageId
+    ? JSON.stringify([
+        context.channelId ?? "",
+        context.accountId ?? "",
+        context.conversationId ?? "",
+        messageId,
+      ])
+    : undefined;
+}
+
+async function redactConfigCommandInput(text: string): Promise<string> {
+  const name = parseSlashCommandOrNull(text, "/config") ? "/config" : "/debug";
+  const action = parseSlashCommandOrNull(text, name);
+  if (action?.action !== "set") {
+    return text;
+  }
+  const command = name === "/config" ? parseConfigCommand(text) : parseDebugCommand(text);
+  if (command?.action !== "set") {
+    return `${name} set ${REDACTED_SENTINEL}`;
+  }
+  const path = parseConfigPath(command.path);
+  if (!path.ok) {
+    return `${name} set ${REDACTED_SENTINEL}`;
+  }
+  const [{ redactConfigObject }, { loadGatewayConfigRedactionHints }] = await Promise.all([
+    import("../redact-snapshot.js"),
+    import("../runtime-schema.js"),
+  ]);
+  const preview: Record<string, unknown> = {};
+  setConfigValueAtPath(preview, path.path, command.value);
+  const redacted = redactConfigObject(preview, loadGatewayConfigRedactionHints());
+  return `${name} set ${command.path}=${JSON.stringify(getConfigValueAtPath(redacted, path.path))}`;
+}
+
+function redactCommandTranscriptText(commandText: string, text: string): string {
+  const withoutCodes = text.replace(
+    /\b((?:device|pairing|verification|login|setup)\s+code|code)\s*:\s*(?:<code>)?[^\s<]+(?:<\/code>)?/gi,
+    "$1: [login code redacted]",
+  );
+  const withoutPairingPayload = /^\/pair(?:@\S+)?(?:\s|$)/i.test(commandText)
+    ? withoutCodes.replace(/\beyJ[A-Za-z0-9_-]{32,}={0,2}\b/g, "[pairing code redacted]")
+    : withoutCodes;
+  return withoutPairingPayload.replace(/https?:\/\/[^\s<>]+/gi, (url) =>
+    /^\/login(?:@\S+)?(?:\s|$)/i.test(commandText) ||
+    /[?&](?:[\w-]*token|state|code|user_code|device_code|secret|key)=/i.test(url)
+      ? "[login URL redacted]"
+      : url,
+  );
+}
+
+function normalizeCommandTranscriptText(commandText: string): string {
+  return normalizeCommandBody(commandText, {
+    targetedCommandMode: "pre-identity",
+    preserveArguments: true,
+  }).trim();
+}
+
+function isEphemeralCommandTranscript(commandText: string): boolean {
+  return /^\/(?:btw|side)(?:@\S+)?(?:\s|$)/i.test(commandText);
+}
+
+/** The stored, redacted form of a command input; undefined for ephemeral commands. */
+export async function prepareCommandTranscriptInput(
+  rawCommandText: string,
+): Promise<string | undefined> {
+  const commandText = normalizeCommandTranscriptText(rawCommandText);
+  if (!commandText || isEphemeralCommandTranscript(commandText)) {
+    return undefined;
+  }
+  return redactCommandTranscriptText(commandText, await redactConfigCommandInput(commandText));
+}
+
+type CommandExchangeParams = Pick<
+  Parameters<typeof appendAssistantMessageToSessionTranscript>[0],
+  | "agentId"
+  | "sessionKey"
+  | "expectedSessionId"
+  | "expectedLifecycleRevision"
+  | "expectedWriterRunId"
+  | "storePath"
+  | "config"
+  | "assertCurrent"
+  | "beforeMessageWrite"
+  | "contextFreeCommand"
+> & {
+  commandText: string;
+  replyText: string;
+  commandId: string;
+  replyId: string;
+  /** The command already committed its input as a user turn; record only the reply. */
+  commandInputCommitted?: boolean;
+};
+
+/** A local effect committed; this records its outcome, not delivery of the reply. */
+export function recordCommittedCommandExchange(params: CommandExchangeParams) {
+  return recordCommandExchange(params);
+}
+
+/** Bounds how often a deferred exchange re-waits when follow-up turns keep the session busy. */
+const MAX_DEFERRED_COMMAND_EXCHANGE_WAITS = 8;
+
+/**
+ * A started turn owns the session's model-context fence until it commits. A context-bearing
+ * exchange appended inside that window invalidates the turn's prepared answer, so it waits
+ * until no turn is executing. Rows coordinated with a writer run or kept out of context
+ * cannot move the fence.
+ */
+function resolveExchangeTarget(params: CommandExchangeParams): SessionTarget | undefined {
+  const sessionKey = params.sessionKey.trim();
+  try {
+    // Same physical owner the recorder writes to; a logical key can span several stores.
+    const agentId =
+      params.agentId?.trim() ||
+      resolveAgentIdFromSessionKey(
+        sessionKey,
+        params.config ? resolveDefaultAgentId(params.config) : undefined,
+      );
+    const storeScope =
+      params.storePath ?? resolveSessionStorePathCore(params.config?.session?.store, { agentId });
+    return captureSessionTarget({ storeScope, sessionKey, agentId });
+  } catch {
+    return undefined;
+  }
+}
+
+function shouldDeferUntilActiveTurnSettles(
+  params: CommandExchangeParams,
+  target: SessionTarget | undefined,
+): boolean {
+  if (params.contextFreeCommand === true || params.expectedWriterRunId) {
+    return false;
+  }
+  const sessionKey = params.sessionKey.trim();
+  try {
+    if (target) {
+      return (
+        resolveActiveSessionRunId(sessionKey, target, { executionStartedOnly: true }) !== undefined
+      );
+    }
+  } catch {
+    // Unresolvable ownership must not fail a delivered command; fall through.
+  }
+  return isSessionRunActiveForKey(sessionKey);
+}
+
+async function recordDeliveredCommandExchangeNow(params: CommandExchangeParams) {
+  try {
+    return await recordCommandExchange(params);
+  } catch {
+    // Delivery has already succeeded. A transcript failure must not trigger a resend.
+    logVerbose("Command transcript recording failed after delivery");
+    return { ok: false as const, reason: "transcript recording failed" };
+  }
+}
+
+async function recordAfterActiveTurnSettles(
+  params: CommandExchangeParams,
+  target: SessionTarget | undefined,
+) {
+  for (let attempt = 0; attempt < MAX_DEFERRED_COMMAND_EXCHANGE_WAITS; attempt += 1) {
+    // Only the receiving physical session's turn gates this write.
+    await waitForSessionRunIdle(params.sessionKey, undefined, target ? { target } : undefined);
+    if (!shouldDeferUntilActiveTurnSettles(params, target)) {
+      return await recordDeliveredCommandExchangeNow(params);
+    }
+  }
+  logVerbose("Command transcript recording skipped: session stayed busy after delivery");
+  return { ok: false as const, reason: "session stayed busy" };
+}
+
+/**
+ * Records only settled command output; callers must first confirm delivery. During an active
+ * turn the exchange is recorded after that turn settles, so it still enters later model context
+ * without cancelling the running answer.
+ */
+export async function recordDeliveredCommandExchange(params: CommandExchangeParams) {
+  const target = resolveExchangeTarget(params);
+  if (shouldDeferUntilActiveTurnSettles(params, target)) {
+    void recordAfterActiveTurnSettles(params, target).catch(() => {
+      logVerbose("Command transcript recording failed after delivery");
+    });
+    return { ok: false as const, reason: "deferred until the active turn settles" };
+  }
+  return await recordDeliveredCommandExchangeNow(params);
+}
+
+async function recordCommandExchange(params: CommandExchangeParams) {
+  const commandText = normalizeCommandTranscriptText(params.commandText);
+  if (isEphemeralCommandTranscript(commandText)) {
+    return { ok: false as const, reason: "ephemeral command" };
+  }
+  return appendAssistantMessageToSessionTranscript({
+    ...params,
+    text: redactCommandTranscriptText(commandText, params.replyText),
+    ...(params.commandInputCommitted
+      ? {}
+      : {
+          command: {
+            text: redactCommandTranscriptText(
+              commandText,
+              await redactConfigCommandInput(commandText),
+            ),
+            idempotencyKey: `command-input:${params.commandId}`,
+          },
+        }),
+    idempotencyKey: `command-reply:${params.commandId}:${params.replyId}`,
+  });
+}

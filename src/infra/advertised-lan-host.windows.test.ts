@@ -31,7 +31,6 @@ describe.runIf(process.platform === "win32")("advertised LAN host PowerShell con
     } as NetworkInterfacesSnapshot;
 
     await resolveAdvertisedLanHostCore({
-      platform: "win32",
       networkInterfaces: () => interfaces,
       runCommandWithTimeout: captureRunner,
     });
@@ -61,7 +60,6 @@ describe.runIf(process.platform === "win32")("advertised LAN host PowerShell con
 
     await expect(
       resolveAdvertisedLanHostCore({
-        platform: "win32",
         networkInterfaces: () => interfaces,
         runCommandWithTimeout: vi.fn(async () => result),
       }),

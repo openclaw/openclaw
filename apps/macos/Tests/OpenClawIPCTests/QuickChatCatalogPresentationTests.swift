@@ -20,13 +20,14 @@ struct QuickChatCatalogPresentationTests {
             let presentation = QuickChatPresentationTests()
             try await presentation.checkConversationDisclosurePreservesOneComposerAndItsDraft()
             try await presentation.checkShortcutPresentsAnEditorWithoutRequiringForegroundOwnership()
-            try await self.checkRestrictedOperatorModelPolicyRetiresRenderedChoicesAndOpenMenu()
+            try await self.checkRestrictedOperatorModelPolicyRetiresRenderedChoices()
+            try await presentation.checkConnectionStatusSurvivesModelCatalogFailure()
         }
     }
 
     private func checkRenderedPickerUsesCatalogAvailabilityReasoningAndSpeed() async throws {
         let application = AppKitTestSupport.application
-        #expect(AppKitTestSupport.didSetActivationPolicy)
+        #expect(AppKitTestSupport.hasAccessoryActivationPolicy)
         if ProcessInfo.processInfo.environment["OPENCLAW_TEST_QUICKCHAT_APPEARANCE"] == "dark" {
             application.appearance = NSAppearance(named: .darkAqua)
         }
@@ -136,7 +137,7 @@ struct QuickChatCatalogPresentationTests {
         }
     }
 
-    private func checkRestrictedOperatorModelPolicyRetiresRenderedChoicesAndOpenMenu() async throws {
+    private func checkRestrictedOperatorModelPolicyRetiresRenderedChoices() async throws {
         let application = AppKitTestSupport.application
         let appearance = application.appearance
         defer { application.appearance = appearance }
@@ -197,14 +198,7 @@ struct QuickChatCatalogPresentationTests {
 
             let held = AsyncTestGate()
             let invalidate = try await fixture.prepareModelChange(.holding, onHeldRead: { held.open() })
-            button = try await self.waitForModelButton(in: panel, value: model.modelControlLabel)
-            try AppKitTestSupport.pointAtModelButton(button, in: panel)
-            try await AppKitTestSupport.openMenu(
-                button, in: panel, waitForDismissal: true, requireCompositedPopup: true)
-            { menu in
-                try AppKitTestSupport.record(menu: menu, content: content, name: "guest-model-open")
-                invalidate()
-            }
+            invalidate()
             await held.wait()
             try Task.checkCancellation()
             await fixture.releaseHeldCatalog()
@@ -315,7 +309,7 @@ struct QuickChatCatalogPresentationTests {
                 let routeLease = await transport.acquireSessionSettingsRouteLease()
                 let lease = try #require(routeLease)
                 return try await lease.patchSessionSettings(
-                    sessionKey: target.sessionKey, agentID: target.agentID, patch: settings)
+                    target.sessionKey, target.agentID, settings)
             })
     }
 

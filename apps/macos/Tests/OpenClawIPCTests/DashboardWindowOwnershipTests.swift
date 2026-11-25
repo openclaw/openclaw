@@ -98,7 +98,7 @@ actor DashboardWindowOwnershipPresentationGate {
 private struct DashboardWindowOwnershipEndpointFailure: Error {}
 
 @MainActor
-private final class DashboardWindowOwnershipTrackingWindow: NSWindow {
+private final class DashboardWindowOwnershipTrackingWindow: DashboardWindow {
     var simulatesKeyWindow = false
     private(set) var foregroundRequestCount = 0
 
@@ -112,7 +112,7 @@ private final class DashboardWindowOwnershipTrackingWindow: NSWindow {
     }
 }
 
-// Suite limits cap every test; the localized case bounds its child test process at 120 s.
+/// Suite limits cap every test; the localized case bounds its child test process at 120 s.
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardWindowOwnershipTests {
@@ -132,7 +132,7 @@ struct DashboardWindowOwnershipTests {
         let url = server.url("/#token=before")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "before",
                 password: nil),
@@ -202,7 +202,7 @@ struct DashboardWindowOwnershipTests {
         let url = server.url("/#token=initial")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "initial",
                 password: nil),
@@ -257,7 +257,7 @@ struct DashboardWindowOwnershipTests {
         let url = server.url("/#token=before")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "before",
                 password: nil),
@@ -308,7 +308,7 @@ struct DashboardWindowOwnershipTests {
             defer: false)
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "before",
                 password: nil),
@@ -351,7 +351,7 @@ struct DashboardWindowOwnershipTests {
             defer: false)
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "initial",
                 password: nil),
@@ -407,7 +407,7 @@ struct DashboardWindowOwnershipTests {
         let currentEndpointURL = currentServer.websocketURL("/")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "initial",
                 password: nil),
@@ -421,8 +421,7 @@ struct DashboardWindowOwnershipTests {
         let gate = DashboardWindowOwnershipPresentationGate()
         let manager = DashboardManager._testMake(
             primaryEndpointProvider: { _ in
-                await gate.waitForRelease()
-                let request = await gate.numberOfRequests()
+                let request = await gate.waitForRelease()
                 let url = request == 1 ? staleEndpointURL : currentEndpointURL
                 let token = request == 1 ? "stale" : "current"
                 return GatewayConnection.EndpointSnapshot(
@@ -442,11 +441,17 @@ struct DashboardWindowOwnershipTests {
             token: "current",
             password: nil,
             routeRevision: 2))
+        let hidden = try #require(manager._testController())
+        #expect(hidden !== controller)
+        #expect(hidden.window === originalWindow)
+        #expect(!originalWindow.isVisible)
+        #expect(hidden.auth.gatewayUrl == currentEndpointURL.absoluteString)
         await gate.release()
         try await presentation.value
 
         let replacement = try #require(manager._testController())
-        #expect(await gate.numberOfRequests() == 2)
+        #expect(replacement.isWindowOpen)
+        #expect(replacement.auth.gatewayUrl == currentEndpointURL.absoluteString)
         #expect(replacement.window === originalWindow)
         #expect(replacement.currentURL.absoluteString ==
             currentServer.url("/").absoluteString)
@@ -460,7 +465,7 @@ struct DashboardWindowOwnershipTests {
         let url = server.url("/#token=initial")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "initial",
                 password: nil),
@@ -520,7 +525,7 @@ struct DashboardWindowOwnershipTests {
 
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "before",
                 password: nil),
@@ -534,7 +539,7 @@ struct DashboardWindowOwnershipTests {
         let transferredWindow = try #require(controller.detachWindowForReplacement())
         let replacement = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "after",
                 password: nil),

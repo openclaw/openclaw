@@ -7,7 +7,7 @@ import {
 import { resolveChannelAccountEnabled } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
@@ -23,26 +23,6 @@ export type MessageBroadcastAccountPlan = {
   candidateChannels: ChannelId[];
   secretChannels: ChannelId[];
 };
-
-function resolveListedAccountId(params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId: string;
-}): string | undefined {
-  const listedAccountId = params.plugin.config
-    .listAccountIds(params.cfg)
-    .find((candidate) => normalizeOptionalAccountId(candidate) === params.accountId);
-  if (listedAccountId) {
-    return listedAccountId;
-  }
-  const defaultAccountId = resolveChannelDefaultAccountId({
-    plugin: params.plugin,
-    cfg: params.cfg,
-  });
-  return normalizeOptionalAccountId(defaultAccountId) === params.accountId
-    ? defaultAccountId
-    : undefined;
-}
 
 /**
  * Binds a caller-supplied message account to one listed channel account.
@@ -81,7 +61,15 @@ export async function validateExplicitMessageAccountSelection(params: {
   if (!plugin) {
     return accountId;
   }
-  const listedAccountId = resolveListedAccountId({ plugin, cfg: params.cfg, accountId });
+  let listedAccountId = plugin.config
+    .listAccountIds(params.cfg)
+    .find((candidate) => normalizeOptionalAccountId(candidate) === accountId);
+  if (!listedAccountId) {
+    const defaultAccountId = resolveChannelDefaultAccountId({ plugin, cfg: params.cfg });
+    if (normalizeOptionalAccountId(defaultAccountId) === accountId) {
+      listedAccountId = defaultAccountId;
+    }
+  }
   if (!listedAccountId) {
     throw new MessageActionDeniedError(
       `Unknown account "${rawAccountId}" for channel ${channel}.`,
@@ -89,30 +77,14 @@ export async function validateExplicitMessageAccountSelection(params: {
       "message-account:known",
     );
   }
-  if (
-    isChannelAccountExplicitlyDisabled({
-      cfg: params.cfg,
-      channel: plugin.id,
-      accountId: listedAccountId,
-    })
-  ) {
-    throw new MessageActionDeniedError(
-      `Account "${listedAccountId}" for channel ${channel} is disabled.`,
-      "message_account_disabled",
-      "message-account:enabled",
-    );
-  }
-  if (params.checkResolvedAccount !== false) {
-    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
-    const account = await resolveChannelAccount({ plugin, cfg: params.cfg, accountId });
-    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
+  const assertAccountEnabled = (isResolvedEnabled?: () => boolean) => {
     if (
       isChannelAccountExplicitlyDisabled({
         cfg: params.cfg,
         channel: plugin.id,
         accountId: listedAccountId,
       }) ||
-      !resolveChannelAccountEnabled({ plugin, account, cfg: params.cfg })
+      (isResolvedEnabled && !isResolvedEnabled())
     ) {
       throw new MessageActionDeniedError(
         `Account "${listedAccountId}" for channel ${channel} is disabled.`,
@@ -120,6 +92,13 @@ export async function validateExplicitMessageAccountSelection(params: {
         "message-account:enabled",
       );
     }
+  };
+  assertAccountEnabled();
+  if (params.checkResolvedAccount !== false) {
+    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
+    const account = await resolveChannelAccount({ plugin, cfg: params.cfg, accountId });
+    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
+    assertAccountEnabled(() => resolveChannelAccountEnabled({ plugin, account, cfg: params.cfg }));
   }
   return accountId;
 }
@@ -132,12 +111,7 @@ export async function isPotentialConfiguredMessageChannel(params: {
   const channelConfig = (params.cfg.channels as Record<string, unknown> | undefined)?.[
     params.plugin.id
   ];
-  if (
-    channelConfig &&
-    typeof channelConfig === "object" &&
-    !Array.isArray(channelConfig) &&
-    (channelConfig as { enabled?: unknown }).enabled === false
-  ) {
+  if (!Array.isArray(channelConfig) && !isAccountEnabled(channelConfig)) {
     return false;
   }
   if (isConfiguredChannel(params.cfg, params.plugin.id)) {

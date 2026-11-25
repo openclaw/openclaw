@@ -1,8 +1,7 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type { NodeWorkerCleanupBinding } from "./node-worker-launch-receipt.js";
 import { readNodeWorkerLaunchReceipt } from "./node-worker-launch-store.kernel.js";
 import {
@@ -11,7 +10,7 @@ import {
 } from "./node-worker-process-identity.js";
 
 const COMPLETION_SCHEMA = ["node_worker_launches", "node_worker_launch_cleanup"]
-  .map((table) => extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table))
+  .map((table) => getOpenClawStateFeatureSchemaSql(table))
   .join("\n");
 
 /** The anchor records root exit and positive lineage EOF before extinguishing its own group. */
@@ -85,8 +84,7 @@ function recordCompletion(
       schemaSql:
         COMPLETION_SCHEMA +
         (completion === "descendants"
-          ? "\n" +
-            extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "node_worker_launch_process_scopes")
+          ? "\n" + getOpenClawStateFeatureSchemaSql("node_worker_launch_process_scopes")
           : ""),
       operationLabel: "node-worker-launch." + completion + "-settled",
     },
