@@ -75,6 +75,44 @@ it("prints calendar event previews", async () => {
   cli.expectText(output(), "meet events: 1", "* Project sync", MEET_URL);
 });
 
+it("selects the first current Meet when another event ends at the same instant", async () => {
+  const noon = new Date(2026, 10, 25, 12);
+  const at = (minutes: number) => ({
+    dateTime: new Date(noon.getTime() + minutes * 60_000).toISOString(),
+  });
+  const ending = {
+    start: at(-30),
+    end: at(0),
+    hangoutLink: "https://meet.google.com/aaa-aaaa-aaa",
+  };
+  const starting = { start: at(0), end: at(30), hangoutLink: MEET_URL };
+  const tied = { ...starting, hangoutLink: "https://meet.google.com/ccc-cccc-ccc" };
+  const events = [ending, starting, tied];
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    const min = url.searchParams.get("timeMin");
+    return cli.jsonResponse({ items: events.filter((event) => !min || event.end.dateTime > min) });
+  });
+
+  vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(noon);
+  try {
+    for (const { args, visible } of [
+      { args: ["--today"], visible: events },
+      { args: [], visible: [starting, tied] },
+    ]) {
+      await runApiCommand("calendar-events", [...args, "--json"]);
+      expect(json()).toMatchObject({
+        events: visible.map(({ hangoutLink }) => ({
+          meetingUri: hangoutLink,
+          selected: hangoutLink === MEET_URL,
+        })),
+      });
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("ends an active conference for a Meet space", async () => {
   const endUrl = "https://meet.googleapis.com/v2/spaces/space-resource-123:endActiveConference";
   const fetchMock = cli.stubJsonRoutes({
