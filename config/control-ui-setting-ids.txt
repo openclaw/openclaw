@@ -1,12 +1,15 @@
 advanced.setupWizard
 agent.decisionModel
+agent.fastModeDefault
 agent.identity
 agent.model.fallbacks
 agent.model.primary
 agent.skills.*
+agent.subagents.model
 agent.thinkingDefault
 agent.tools.access.*
 agent.tools.profile
+agent.utilityModel.fallbacks
 agent.utilityModel.primary
 agents.defaults.decisionModel
 agents.defaults.experimental.decisionAssistance
@@ -14,6 +17,7 @@ agents.defaults.experimental.usageRankedToolIndex
 agents.defaults.fastModeDefault
 agents.defaults.model.fallbacks
 agents.defaults.model.primary
+agents.defaults.subagents.model
 agents.defaults.thinkingDefault
 agents.defaults.utilityModel.fallbacks
 agents.defaults.utilityModel.primary
@@ -26,6 +30,7 @@ agentsPage.dreamingWaiting
 agentsPage.dreamingWiki
 agentsPage.memoryImport
 agentsPage.memorySettings
+agentsPage.moreModels
 aiAgents.sessionStorageAdvanced
 aiAgents.sessionStorageByAgent
 aiAgents.sessionStorageRunNow

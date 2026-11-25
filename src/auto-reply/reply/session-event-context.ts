@@ -25,7 +25,6 @@ import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { CRON_EXECUTION_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
-import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
@@ -318,10 +317,8 @@ export function buildSessionEventContext(params: {
   if (
     operatorAuthority &&
     (automation?.automationAdmin ||
-      (options.source === "restart"
-        ? operatorAuthority.scopes.includes("operator.admin")
-        : readSessionEventTargetOwnerContinuation(target) &&
-          operatorScopeSatisfied("operator.admin", operatorAuthority.scopes)))
+      ((options.source === "restart" || readSessionEventTargetOwnerContinuation(target)) &&
+        operatorAuthority.grant.owner))
   ) {
     // A tool handoff resumes the yielded turn: it continues that turn's own owner decision
     // under the same live operator source, retaining internal provenance and the event

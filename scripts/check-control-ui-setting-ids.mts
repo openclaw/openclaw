@@ -22,6 +22,7 @@ import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 /** Sources that draw Settings pages. */
 const SETTINGS_SOURCES = [
   "ui/src/components/mcp-servers-card.tsx",
+  "ui/src/components/solid/model-settings-rows.tsx",
   "ui/src/features/github-connections/",
   "ui/src/pages/about/",
   "ui/src/pages/agents/",

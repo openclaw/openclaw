@@ -12,6 +12,10 @@ export const MODELS_SETTINGS = defineSettingsPage({
       label: "Fallback model",
       within: "modelProviders.moreSettings",
     },
+    "agents.defaults.subagents.model": {
+      label: "Subagent model",
+      within: "modelProviders.moreSettings",
+    },
     "agents.defaults.utilityModel.primary": {
       label: "Utility model",
       within: "modelProviders.moreSettings",

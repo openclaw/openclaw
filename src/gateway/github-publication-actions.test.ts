@@ -195,7 +195,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
         admission.authorization!.assertCurrent();
         await expect(
           f.invoke("guest", { ...args, action }, SESSION_KEY, { client }),
-        ).rejects.toThrow("The original GitHub publication requester is no longer authorized.");
+        ).rejects.toThrow("This requester is not authorized to publish from this conversation.");
         expect(f.writes).toEqual([]);
         expect(f.state.draft).toBe(true);
       } finally {

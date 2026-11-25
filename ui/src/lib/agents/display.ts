@@ -49,7 +49,9 @@ type AgentConfigEntry = Pick<
   | "agentDir"
   | "decisionModel"
   | "utilityModel"
+  | "subagents"
   | "skills"
+  | "fastModeDefault"
   | "thinkingDefault"
 > & {
   model?: unknown;
@@ -61,7 +63,14 @@ type ConfigSnapshot = {
   agents?: {
     defaults?: Pick<
       AgentConfigEntry,
-      "workspace" | "model" | "decisionModel" | "utilityModel" | "models" | "skills"
+      | "workspace"
+      | "model"
+      | "decisionModel"
+      | "utilityModel"
+      | "subagents"
+      | "models"
+      | "skills"
+      | "fastModeDefault"
     >;
     entries?: Record<string, AgentConfigEntry>;
   };
@@ -222,7 +231,7 @@ export function resolveModelFallbacks(model?: unknown): string[] | null {
   return fallbacks ? fallbacks.filter((entry): entry is string => typeof entry === "string") : null;
 }
 
-export function resolveEffectiveModelFallbacks(
+function resolveEffectiveModelFallbacks(
   entryModel?: unknown,
   defaultModel?: unknown,
 ): string[] | null {

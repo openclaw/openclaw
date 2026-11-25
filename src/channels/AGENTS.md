@@ -5,6 +5,7 @@
 ## Ownership
 
 - Core owns shared message tools, action vocabulary, dispatch; channels own account, security, conversation, transport contracts. Keep typed command/approval/URL/action distinctions until encoding; never infer commands from raw strings.
+- A message tool field that only one channel reads belongs in that channel plugin's `describeMessageTool` schema, tied to the actions that use it. Core field groups hold only fields several channels share (#204742).
 
 ## Public Contracts
 

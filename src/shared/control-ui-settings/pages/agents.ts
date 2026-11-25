@@ -7,11 +7,18 @@ export const AGENT_OVERVIEW_SETTINGS = defineSettingsPage({
   agent: true,
   settings: {
     "agent.identity": { label: "Identity" },
+    "agentsPage.moreModels": { label: "More settings" },
+    "agent.fastModeDefault": { label: "Speed" },
+    "agent.subagents.model": { label: "Subagent model", within: "agentsPage.moreModels" },
+    "agent.utilityModel.fallbacks": {
+      label: "Utility fallback model",
+      within: "agentsPage.moreModels",
+    },
     "agent.model.primary": { label: "Primary model" },
-    "agent.model.fallbacks": { label: "Fallbacks" },
+    "agent.model.fallbacks": { label: "Fallbacks", within: "agentsPage.moreModels" },
     "agent.thinkingDefault": { label: "Thinking default" },
-    "agent.utilityModel.primary": { label: "Utility model" },
-    "agent.decisionModel": { label: "Decision model" },
+    "agent.utilityModel.primary": { label: "Utility model", within: "agentsPage.moreModels" },
+    "agent.decisionModel": { label: "Decision model", within: "agentsPage.moreModels" },
     "agentsPage.defaults": { label: "Agent defaults" },
   },
 });
