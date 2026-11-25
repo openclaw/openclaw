@@ -344,6 +344,15 @@ function createSessionMemberMutationHandler(
       const managed = access.target;
       let addActor: SharingActorFacts | undefined;
       if (action === "add") {
+        if ("access" in params && params.access !== undefined) {
+          // Access levels are stored but not yet enforced; refuse rather than grant full membership.
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "member access levels are not supported",
+          );
+          return;
+        }
         const projection = requireSessionRowProjection(context);
         do {
           await projection.prepareSelection({ metadataOnly: true });

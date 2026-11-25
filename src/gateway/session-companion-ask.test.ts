@@ -182,7 +182,6 @@ function operatorFor(cfg: OpenClawConfig, allow: string[], deny?: string[]) {
   return createTestOperatorAuthority({
     profileId: "companion-reader",
     scopes: ["operator.read"],
-    assertCurrent() {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg,
       policy: { sourceAgent: "main", allow, ...(deny ? { deny } : {}) },

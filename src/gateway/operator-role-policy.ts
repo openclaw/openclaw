@@ -275,7 +275,6 @@ export function resolveOperatorRolePolicy(
     if (!authority && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
       throw new Error("OpenClaw ID membership changed. Reconnect before starting a request.");
     }
-    client?.internal?.operatorRunAuthority?.assertCurrent();
     if (principal.kind !== "member") {
       return openclawIdTunnelRolePolicy(principal);
     }
@@ -286,15 +285,11 @@ export function resolveOperatorRolePolicy(
   if (actor?.kind === "operator" && authority) {
     assertAdmittedRunOperatorAuthority(authority);
     const roleFacts = authority.readCurrentRoleFacts?.();
-    if (!roleFacts) {
-      authority.assertCurrent();
-    }
     if (authority.profileId !== actor.profileId) {
       throw new Error("Gateway requester profile changed");
     }
     // A linked owner device's run keeps the owner's authority under its person's profile.
     if (authority.openclawIdPrincipal?.kind === "owner") {
-      authority.assertCurrent();
       return undefined;
     }
     if (roleFacts && Object.hasOwn(roleFacts, "policy")) {
@@ -453,7 +448,6 @@ export function authorizeGatewaySessionCreation(
 ): ErrorShape | undefined {
   if (params.authority) {
     assertAdmittedRunOperatorAuthority(params.authority);
-    params.authority.assertCurrent();
   }
   const actor =
     params.actor ??

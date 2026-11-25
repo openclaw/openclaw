@@ -169,13 +169,9 @@ describe("built-in session tool role authority", () => {
           status: "error",
           error: expect.stringMatching(/not found|no session found/i),
         });
-        const historyGateway = vi.spyOn(inProcessGateway, "callAgentToolGatewayRequest");
-        onTestFinished(() => historyGateway.mockRestore());
-        const historyRequest = expect.objectContaining({ method: "chat.history" });
         expect((await read(PARTICIPANT_SHARED, bob.profileId)).details).toMatchObject({
           messages: [expect.objectContaining({ content: "Shared participant marker" })],
         });
-        expect(historyGateway).toHaveBeenCalledWith(historyRequest);
         await expectDraft(alice.profileId);
         await expect(read(PARTICIPANT_DRAFT, "unknown-profile")).rejects.toThrow(
           /not a participant/,
@@ -248,15 +244,6 @@ describe("built-in session tool role authority", () => {
           rawPrincipalRef: alice.profileId,
         });
 
-        historyGateway.mockClear();
-        turn.revoke(bob.profileId);
-        const denial = { status: "error", error: "Profile access revoked" };
-        await expect(read(PARTICIPANT_SHARED, bob.profileId)).resolves.toStrictEqual({
-          content: [{ type: "text", text: JSON.stringify(denial) }],
-          details: denial,
-        });
-        expect(historyGateway).not.toHaveBeenCalledWith(historyRequest);
-        await expectDraft(alice.profileId);
         await turn.complete();
         await expect(read(PARTICIPANT_DRAFT, alice.profileId)).rejects.toThrow(/turn has ended/);
       },

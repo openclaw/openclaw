@@ -66,11 +66,12 @@ function expectStarted(response: Awaited<ReturnType<Fixture["send"]>>) {
   );
 }
 
-async function createFixture() {
+async function createFixture(sessionKey?: string) {
   const profile = ensureProfileForEmail("queued-metadata-author@example.test");
   setDisplayName(profile.id, "Queued author");
   const fixture = await createBrowserFollowupFixture({
     preserveContent: true,
+    sessionKey,
     createdActor: { type: "human", source: "profile", id: profile.id },
   });
   setClientProfile(fixture.client, { ...profile, updatedAt: 1 }, "Queued author");
@@ -150,7 +151,6 @@ it("retains each accepted input's scope ceiling when the same person sends throu
   dispatchInboundMessageMock.mockImplementation(async (input) => {
     const authority = input.replyOptions?.operatorAuthority;
     expect(authority).toBeDefined();
-    authority?.assertCurrent();
     dispatchedScopes.push([...(authority?.scopes ?? [])]);
     await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
     return {};

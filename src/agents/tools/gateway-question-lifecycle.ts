@@ -6,6 +6,7 @@ import {
   type QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createAbortError } from "../../infra/abort-signal.js";
+import { QUESTION_COMPOSER_REPLACEMENT } from "../../shared/question-composer-replacement.js";
 import type { callGatewayTool } from "./gateway.js";
 
 /** Grace added to Gateway RPC deadlines so the question's own timeout wins. */
@@ -108,4 +109,20 @@ export function createGatewayQuestionCanceller(params: {
       }
     })());
   };
+}
+
+/** Keep the status-only waiter contract; the terminal record owns the cancellation reason. */
+export async function wasQuestionReplacedByComposer(
+  gatewayCall: GatewayQuestionCall,
+  questionId: string,
+): Promise<boolean> {
+  try {
+    const result = await gatewayCall("question.get", { timeoutMs: 1_000 }, { id: questionId });
+    const question = asNullableRecord(asNullableRecord(result)?.question);
+    return (
+      question?.status === "cancelled" && question.resolvedBy === QUESTION_COMPOSER_REPLACEMENT
+    );
+  } catch {
+    return false;
+  }
 }

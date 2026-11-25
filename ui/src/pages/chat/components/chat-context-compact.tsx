@@ -1,4 +1,4 @@
-import { Show, action, createOptimistic } from "solid-js";
+import { Show, createSignal } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { CompactionStatus } from "../tool-stream-contract.ts";
@@ -23,19 +23,24 @@ export type ContextCompactProps = {
  * owns its request's busy state; the pane's compaction status covers the rest.
  */
 export function ContextCompactButton(props: ContextCompactProps) {
-  const [requesting, setRequesting] = createOptimistic(false);
+  const [requesting, setRequesting] = createSignal(false);
   const compacting = () =>
     requesting() ||
     props.compactionStatus?.phase === "active" ||
     props.compactionStatus?.phase === "retrying";
   const disabled = () => !props.connected || props.busy || props.runActive || compacting();
-  const compact = action(function* () {
+  // Live operation events must paint while the RPC is pending, not join a held action frame.
+  const compact = async () => {
     if (disabled()) {
       return;
     }
     setRequesting(true);
-    yield props.onCompact?.();
-  });
+    try {
+      await props.onCompact?.();
+    } finally {
+      setRequesting(false);
+    }
+  };
   return (
     <Show when={props.onCompact}>
       <button

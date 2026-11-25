@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, vi } from "vitest";
 import * as openclawRoot from "../infra/openclaw-root.js";
+import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 
 const exec = promisify(execFile);
@@ -46,6 +47,7 @@ beforeEach(async () => {
   vi.spyOn(openclawRoot, "resolveOpenClawPackageRootsSync").mockReturnValue([]);
 });
 afterEach(async () => {
+  await closeDefaultRetainedNativeWorkerSource();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await fs.rm(root, { recursive: true, force: true });
@@ -94,11 +96,11 @@ export async function repository(
     path.join(source, "build.cjs"),
     failBuild
       ? "process.stderr.write('\\x1b[33mwarning: build notice\\x1b[0m\\n'.repeat(400) + '\\x1b[31mfixture build failed\\x1b[0m\\n'); process.exit(42);"
-      : "const fs=require('node:fs'); fs.mkdirSync('dist'); fs.writeFileSync('dist/build-info.json', JSON.stringify({buildId:'fixture-build'}));",
+      : "const fs=require('node:fs'); fs.mkdirSync('dist'); fs.writeFileSync('dist/build-info.json', JSON.stringify({buildId:'fixture-build'})); require('./ui.cjs');",
   );
   await fs.writeFile(
     path.join(source, "ui.cjs"),
-    "require('node:fs').writeFileSync('dist/ui-built', 'ready');",
+    "const fs=require('node:fs'); fs.appendFileSync('ui-builds.txt', 'ui\\n'); fs.writeFileSync('dist/ui-built', 'ready');",
   );
   await git("add", ".");
   await git("commit", "-m", "fixture");

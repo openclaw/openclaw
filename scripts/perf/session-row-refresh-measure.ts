@@ -14,6 +14,8 @@
  * counts owner work in a separate process. --replica-base overlays the saved original
  * session-actor-replica.ts without swapping the checkout or dependency installation.
  * --changed uses three agents and replaces no-op events with changed-row events.
+ * --child-labels --sessions 2000 warms four stores, then commits one label-only
+ * child update per operation. Compare refresh attempts, rebuilt rows and digests.
  * --owner also replays 10,000 metadata changes through captured real row inputs.
  * --source-base overlays the changed owner modules saved by basename from the
  * baseline revision. It leaves the benchmark and dependency installation identical.
@@ -38,6 +40,7 @@ const { values } = parseArgs({
     allocation: { type: "boolean", default: false },
     mixed: { type: "boolean", default: false },
     changed: { type: "boolean", default: false },
+    "child-labels": { type: "boolean", default: false },
     owner: { type: "boolean", default: false },
     "source-base": { type: "string" },
     instrument: { type: "boolean", default: false },
@@ -64,10 +67,16 @@ const iterations = parseStrictIntegerOption({
 });
 // Mixed owner proof: 500 resident rows, real metadata/transcript writes, no-op refreshes,
 // and archive demotion/re-promotion. Instrumentation is separate from timing/allocation.
-const residentRows = values.mixed || values.changed ? 500 : 64;
-const agentIds = values.changed ? ["main", "research", "ops"] : ["main"];
+const childLabels = values["child-labels"];
+const residentRows = childLabels ? sessions : values.mixed || values.changed ? 500 : 64;
+const agentIds = childLabels
+  ? ["main", "research", "ops", "support"]
+  : values.changed
+    ? ["main", "research", "ops"]
+    : ["main"];
+const parents = agentIds.length * 8;
 const agentFor = (index: number) => agentIds[index % agentIds.length]!;
-const changedSources = [
+const refreshSources = [
   "src/agents/agent-scope-config.ts",
   "src/agents/agent-roster.ts",
   "src/agents/fast-mode.ts",
@@ -76,6 +85,16 @@ const changedSources = [
   "src/gateway/session-row-identity.ts",
   "src/gateway/session-row-presentation.ts",
 ];
+const childLabelSources = [
+  "src/gateway/session-row-projection.ts",
+  "src/gateway/session-row-projection-archive.ts",
+  "src/gateway/session-row-projection-context.ts",
+  "src/gateway/session-row-projection-publication.ts",
+  "src/gateway/session-row-projection-record.ts",
+  "src/gateway/session-row-projection-revisions.ts",
+  "src/gateway/session-utils-projection.ts",
+];
+const changedSources = childLabels ? childLabelSources : refreshSources;
 assert(sessions >= residentRows);
 const work = {
   inputs: 0,
@@ -215,20 +234,23 @@ export function readSessionRowInputs(...args: Parameters<typeof readSessionRowIn
   },
 });
 const sources = Object.fromEntries(
-  [
-    "gateway/session-row-projection",
-    "gateway/session-row-projection-materialize",
-    "config/sessions/session-actor-replica",
-    ...changedSources.map((file) => file.slice(4, -3)),
-  ].map((name) => {
-    const file =
-      name.endsWith("/session-actor-replica") && values["replica-base"]
-        ? values["replica-base"]
-        : values["source-base"] && changedSources.includes(`src/${name}.ts`)
-          ? path.join(values["source-base"], path.basename(`${name}.ts`))
-          : path.resolve("src", `${name}.ts`);
-    return [name, createHash("sha256").update(readFileSync(file)).digest("hex")];
-  }),
+  Array.from(
+    new Set([
+      "gateway/session-row-projection",
+      "gateway/session-row-projection-materialize",
+      "config/sessions/session-actor-replica",
+      ...changedSources.map((file) => file.slice(4, -3)),
+    ]),
+    (name) => {
+      const file =
+        name.endsWith("/session-actor-replica") && values["replica-base"]
+          ? values["replica-base"]
+          : values["source-base"] && changedSources.includes(`src/${name}.ts`)
+            ? path.join(values["source-base"], path.basename(`${name}.ts`))
+            : path.resolve("src", `${name}.ts`);
+      return [name, createHash("sha256").update(readFileSync(file)).digest("hex")];
+    },
+  ),
 );
 const [
   { withOpenClawTestState },
@@ -246,6 +268,7 @@ const [
   { sessionChanges },
   { getSessionRowSelectionMetrics },
   { patchSessionEntryCore },
+  { replaceSessionEntrySync },
   { persistSessionTranscriptTurn },
   { readSessionActorRowFacts },
   { openOpenClawAgentDatabase },
@@ -265,6 +288,7 @@ const [
   import("../../src/sessions/session-row-changes.js"),
   import("../../src/infra/gateway-work-metrics.js"),
   import("../../src/config/sessions/session-accessor.sqlite-entry.js"),
+  import("../../src/config/sessions/session-accessor.sqlite-entry-replace.js"),
   import("../../src/config/sessions/session-accessor.transcript-turn.js"),
   import("../../src/config/sessions/session-actor-replica.js"),
   import("../../src/state/openclaw-agent-db.js"),
@@ -284,7 +308,14 @@ function freezeNativeBytes(node: HeapProfiler.SamplingHeapProfileNode, freezing 
 const sampledAllocation = (node: HeapProfiler.SamplingHeapProfileNode) => ({
   allocatedBytes: sampledBytes(node),
   freezeNativeBytes: freezeNativeBytes(node),
+  acceptBytes: acceptBytes(node),
 });
+function acceptBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
+  const { functionName, url } = node.callFrame;
+  return functionName === "accept" && url.endsWith("/session-row-projection-materialize.ts")
+    ? sampledBytes(node)
+    : node.children.reduce((total, child) => total + acceptBytes(child), 0);
+}
 try {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg: OpenClawConfig = {
@@ -292,7 +323,7 @@ try {
         entries: Object.fromEntries(
           agentIds.map((id, index) => [
             id,
-            values.changed
+            values.changed || childLabels
               ? {
                   workspace: path.join(root, "workspace", id),
                   reasoningDefault: index === 1 ? "on" : "off",
@@ -353,6 +384,9 @@ try {
               providerOverride: "fixture",
               modelOverride: `model-${index % entries.length}`,
               toolOverrides: { mcpToolsDeny: { synthetic: ["unchanged"] } },
+              ...(childLabels && index >= parents
+                ? { parentSessionKey: key(index % parents), spawnedBy: key(index % parents) }
+                : {}),
               ...(index >= residentRows ? { archivedAt: anchor - 1 } : {}),
             });
           }
@@ -390,6 +424,20 @@ try {
       );
       async function run(count: number) {
         for (let index = 0; index < count; index++) {
+          if (childLabels) {
+            const turn = sequence++;
+            const query = queries[parents + (turn % (queries.length - parents))]!;
+            const entry = projection.capture(query)?.storedEntry;
+            assert(entry);
+            const at = performance.now();
+            replaceSessionEntrySync(
+              { agentId: query.agentId, sessionKey: query.key },
+              { ...entry, label: `Synthetic label ${turn}` },
+            );
+            await projection.ensureMaterialized();
+            durations.push(performance.now() - at);
+            continue;
+          }
           if (values.mixed || values.changed) {
             const turn = sequence++;
             const rowIndex = (turn * 37 + Math.floor(turn / queries.length)) % queries.length;
@@ -507,6 +555,9 @@ try {
       }
       if (values["cpu-profile"]) {
         await inspector.post("Profiler.enable");
+        if (childLabels) {
+          await inspector.post("Profiler.setSamplingInterval", { interval: 100 });
+        }
         await inspector.post("Profiler.start");
       }
       const before = getSessionRowSelectionMetrics().materialization;
@@ -514,10 +565,12 @@ try {
       const memoryBefore = process.memoryUsage();
       const hostLoadBefore = loadavg();
       const cpu = process.threadCpuUsage();
+      const processCpu = process.cpuUsage();
       const start = performance.now();
       await run(iterations);
       const elapsedMs = performance.now() - start;
       const used = process.threadCpuUsage(cpu);
+      const processUsed = process.cpuUsage(processCpu);
       const memoryAfter = process.memoryUsage();
       const after = getSessionRowSelectionMetrics().materialization;
       const allocation = values.allocation
@@ -637,6 +690,7 @@ try {
         residentRows: queries.length,
         mixed: values.mixed,
         changed: values.changed,
+        childLabels,
         agents: agentIds.length,
         instrumented: values.instrument,
         work: values.instrument ? measuredWork : undefined,
@@ -667,9 +721,11 @@ try {
         ),
         elapsedMs,
         threadCpuMs: (used.user + used.system) / 1000,
+        processCpuMs: (processUsed.user + processUsed.system) / 1000,
         cpuUsPerOperation: (used.user + used.system) / iterations,
         allocatedBytes,
         freezeNativeBytes: allocation?.freezeNativeBytes,
+        acceptAllocatedBytes: allocation?.acceptBytes,
         allocatedBytesPerOperation:
           allocatedBytes === undefined ? undefined : allocatedBytes / iterations,
         memoryBefore,

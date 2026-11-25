@@ -173,6 +173,7 @@ function createFleet(
     }
   });
   mocks.journal.mockResolvedValue("absent");
+  mocks.integrityCheck.mockResolvedValue(undefined);
   mocks.refreshModels.mockResolvedValue(undefined);
   mocks.retireModels.mockResolvedValue(undefined);
   mocks.modelSnapshot.mockReturnValue({});

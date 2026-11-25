@@ -1,5 +1,5 @@
 import {
-  OPENAI_RESPONSES_APIS,
+  isOpenAIResponsesApi,
   readOpenAIResponsesCompactionWindow,
 } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
@@ -87,12 +87,8 @@ function isOpenAIReplayContextHash(value: unknown): value is string {
   return typeof value === "string" && OPENAI_REPLAY_CONTEXT_HASH_RE.test(value);
 }
 
-function isOpenAIResponsesApi(api: string): boolean {
-  return OPENAI_RESPONSES_APIS.has(api);
-}
-
 function isOpenAIResponsesRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return typeof route?.api === "string" && isOpenAIResponsesApi(route.api);
+  return isOpenAIResponsesApi(route?.api);
 }
 
 function isGoogleReasoningRoute(route: TranscriptAssistantRoute | undefined): boolean {
