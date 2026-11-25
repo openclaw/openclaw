@@ -412,6 +412,27 @@ it("retries loopback close errors in --follow mode instead of tailing fallback f
   expect(stdout).not.toContain("local fallback line");
 });
 
+it("reuses one Gateway connection for every --follow poll", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(logPage(["second poll"], 2))
+    .mockRejectedValueOnce(new Error("stop after reuse"));
+  callGatewayFromCli.mockImplementationOnce(async (_method, _opts, _params, extra) => {
+    await extra.onResponse(request, new AbortController().signal, logPage(["first poll"], 1));
+  });
+
+  const { stdout } = await runFailure(follow);
+
+  expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+  expect(request).toHaveBeenNthCalledWith(
+    1,
+    "logs.tail",
+    expect.objectContaining({ cursor: 1 }),
+    expect.any(Object),
+  );
+  expectText(stdout, ["first poll", "second poll"]);
+});
+
 it.each(["text", "json"])("redacts Gateway URLs in %s errors", async (mode) => {
   const rawUrl =
     "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed";
