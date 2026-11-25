@@ -4,9 +4,12 @@ import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { stableStringify } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { createJwt } from "../../packages/ai/src/providers/openai-chatgpt-responses.test-helpers.js";
 import {
   assertStableProviderPrefix,
+  omitResponsesReplayEnvelopes,
   snapshotProviderPrefix,
 } from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
@@ -17,8 +20,10 @@ import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcri
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import { bindSessionMcpRuntimeTestScheduler } from "./agent-bundle-mcp-manager.test-support.js";
+import { upsertAuthProfileAsync } from "./auth-profiles/profiles.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
-import { cacheRunnerConfig, omitWireFields } from "./embedded-agent-runner.wire.test-support.js";
+import { cacheRunnerConfig, providerResponse } from "./embedded-agent-runner.wire.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
 import { prepareInternalSessionEffectsSession } from "./internal-session-effects.js";
 import { writeTempPlugin } from "./test-helpers/temp-plugin-extension-fixtures.js";
@@ -161,19 +166,15 @@ it.each([
               { status: 400 },
             );
           }
-          const comparable = effectiveInput.map((value) => {
-            const item = value as Record<string, unknown>;
-            // Provider item IDs render no tokens; cold replay omits unverifiable ones.
-            return item.type === "function_call" ||
-              item.type === "reasoning" ||
-              (item.type === "message" && item.role === "assistant")
-              ? omitWireFields(item, ["id", "status"])
-              : item;
-          });
           prefixes.push(
             snapshotProviderPrefix(
               "openai-responses",
-              JSON.parse(stableStringify({ ...payload, input: comparable })),
+              JSON.parse(
+                stableStringify({
+                  ...payload,
+                  input: omitResponsesReplayEnvelopes(effectiveInput),
+                }),
+              ),
             ),
           );
           const id = "response_" + requests.length;
@@ -377,4 +378,169 @@ it.each([
     });
   },
   120000,
+);
+
+it.each([
+  {
+    api: "openai-chatgpt-responses",
+    provider: "openai",
+    baseUrl: "https://chatgpt.com/backend-api",
+    // ChatGPT sign-in authenticates through an OAuth profile, not a provider key.
+    apiKey: undefined,
+  },
+  {
+    api: "azure-openai-responses",
+    provider: "azure-openai-responses",
+    baseUrl: "https://synthetic.openai.azure.com/openai/v1",
+    apiKey: "synthetic-azure-key", // pragma: allowlist secret
+  },
+] as const)(
+  "sends one cache identity across two $api turns",
+  async ({ api, provider, baseUrl, apiKey }) => {
+    await withOpenClawTestState({ label: `responses-family-${api}` }, async (state) => {
+      await bindSessionMcpRuntimeTestScheduler();
+      const sessionId = `responses-family-${api}`;
+      const model = "gpt-5.5";
+      if (!apiKey) {
+        await upsertAuthProfileAsync({
+          profileId: "openai:chatgpt",
+          credential: {
+            type: "oauth",
+            provider: "openai",
+            access: createJwt(),
+            refresh: "synthetic-refresh",
+            expires: Date.now() + 3_600_000,
+            accountId: "acct-1",
+          },
+          agentDir: state.agentDir(),
+        });
+      }
+      writeTempPlugin({
+        dir: state.path("plugins"),
+        id: "cache-proof",
+        filename: "index.cjs",
+        manifest: { activation: { onStartup: true } },
+        body: 'module.exports = { id: "cache-proof", register() {} };',
+      });
+      const config = cacheRunnerConfig({
+        api: api as never,
+        provider,
+        model,
+        workspaceDir: state.workspaceDir,
+        pluginId: "cache-proof",
+        pluginDir: state.path("plugins", "cache-proof"),
+        apiKey: apiKey ?? "",
+        input: ["text"],
+        tools: [],
+        modelSettings: { params: { transport: "sse", cacheRetention: "short" } },
+        contextWindow: 131_072,
+      });
+      const providerConfig = config.models!.providers![provider]!;
+      providerConfig.baseUrl = baseUrl;
+      if (!apiKey) {
+        delete providerConfig.apiKey;
+      }
+      config.plugins!.allow = ["openai", "cache-proof"];
+      await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
+      await loadAndActivateRootPluginRegistry({
+        config,
+        workspaceDir: state.workspaceDir,
+        throwOnLoadError: true,
+      });
+      const target = {
+        agentId: "main",
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+        storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+      const host = getAiTransportHost();
+      const requests: Array<Record<string, unknown>> = [];
+      const prefixes: ReturnType<typeof snapshotProviderPrefix>[] = [];
+      const history = new Map<string, unknown[]>();
+      configureAiTransportHost({
+        ...host,
+        requiresManagedTransport: () => true,
+        buildModelFetch: () => async (input, init) => {
+          const payload: unknown = await new Request(input, init).json();
+          assert(isRecord(payload) && Array.isArray(payload.input));
+          requests.push(payload);
+          const inherited =
+            typeof payload.previous_response_id === "string"
+              ? history.get(payload.previous_response_id)
+              : [];
+          assert(inherited);
+          const effectiveInput = [...inherited, ...payload.input];
+          prefixes.push(
+            snapshotProviderPrefix(
+              "openai-responses",
+              JSON.parse(
+                stableStringify({
+                  ...payload,
+                  input: omitResponsesReplayEnvelopes(effectiveInput),
+                }),
+              ),
+            ),
+          );
+          const id = `response_${requests.length}`;
+          const { response, output } = providerResponse({
+            api: "openai-responses",
+            model,
+            id,
+            messageId: `msg_${requests.length}`,
+            text: `answer ${requests.length}`,
+            calls: [],
+          });
+          history.set(id, [...effectiveInput, ...output]);
+          return response;
+        },
+      });
+      try {
+        for (const turn of [1, 2]) {
+          const runId = `${sessionId}-${turn}`;
+          const admission = prepareSystemAgentRunAdmission(config, runId, "main", "cache-proof");
+          try {
+            const result = await runEmbeddedAgent({
+              userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+                target: { ...target, sessionEntry: undefined },
+                input: { text: `turn ${turn}`, timestamp: turn, idempotencyKey: `${runId}:user` },
+              }),
+              preparedRunAdmission: admission,
+              agentId: "main",
+              sessionId,
+              sessionKey: target.sessionKey,
+              sessionTarget: target,
+              agentDir: state.agentDir(),
+              workspaceDir: state.workspaceDir,
+              config,
+              provider,
+              model,
+              agentHarnessRuntimeOverride: "openclaw",
+              modelSelectionLocked: true,
+              codeModeOverride: false,
+              thinkLevel: "off",
+              runId,
+              timeoutMs: 60_000,
+              prompt: `turn ${turn}`,
+            });
+            expect(result.meta.error).toBeUndefined();
+          } finally {
+            admission.close();
+          }
+        }
+        // ChatGPT sign-in keys its cache by session. An Azure host is not a native OpenAI
+        // endpoint, so it sends no prompt_cache_key unless compat.supportsPromptCacheKey is set.
+        const cacheKey = api === "azure-openai-responses" ? undefined : `${sessionId}:0`;
+        expect(requests.map((request) => request.prompt_cache_key)).toEqual([cacheKey, cacheKey]);
+        assertStableProviderPrefix(prefixes[0]!, prefixes[1]!, { label: `${api} turn 2` });
+      } finally {
+        configureAiTransportHost(host);
+        cleanupSessionResources(sessionId);
+        clearEmbeddedSessionPromptStates([sessionId]);
+        await clearActivePluginRegistry();
+      }
+    });
+  },
+  120_000,
 );

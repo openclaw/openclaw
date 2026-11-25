@@ -1,10 +1,11 @@
 import type { SessionsCatalogContinueResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import {
   announceCatalogSessionContinued,
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
-import { catalogMethod } from "../../lib/sessions/catalog-read-method.ts";
+import { readCatalogRoute } from "../../lib/sessions/catalog-read-method.ts";
 import type { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearPaneSessionHandoff, preparePaneSessionHandoff } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -37,10 +38,17 @@ export async function continueCapturedCatalogSession({
   if (!isCurrent()) {
     return;
   }
-  const result = await client.request<SessionsCatalogContinueResult>(
-    catalogMethod(state, key.catalogId, "continue"),
-    { ...key, agentId },
-  );
+  const route = await readCatalogRoute(client, state, { catalogId: key.catalogId });
+  if (!isCurrent()) {
+    return;
+  }
+  if (!route?.methods.continue) {
+    throw new Error(t("chat.sessionRoute.catalogShareUnavailable"));
+  }
+  const result = await client.request<SessionsCatalogContinueResult>(route.methods.continue, {
+    ...key,
+    agentId,
+  });
   if (!isCurrent()) {
     return;
   }

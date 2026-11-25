@@ -7,6 +7,7 @@ import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { assertCompletedUpdate } from "../../../lib/update-receipt.mjs";
 import {
   UPGRADE_SURVIVOR_ASSERTION_SCENARIOS,
   usesCronOwnerAtBaseline,
@@ -500,7 +501,8 @@ function assertConfigSurvived() {
     const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
     const mode = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE ?? "current";
     assert(mode === "current" || mode === "preserve", "Unknown skill library migration contract");
-    const preserve = baseline || mode === "preserve";
+    const alreadySplit = coverage.baselineSkillLibraryToolSplit === true;
+    const preserve = baseline || alreadySplit || mode === "preserve";
     assert(
       JSON.stringify(config.tools?.allow) ===
         JSON.stringify(
@@ -509,10 +511,9 @@ function assertConfigSurvived() {
       "Pre-split skill_workshop allowlist did not keep covering skill_library exactly once",
     );
     assert(
-      baseline ||
-        (mode === "preserve"
-          ? config.meta?.migrations?.skillLibraryToolSplit === undefined
-          : config.meta?.migrations?.skillLibraryToolSplit === true),
+      (baseline && coverage.baselineSkillLibraryToolSplit === undefined) ||
+        config.meta?.migrations?.skillLibraryToolSplit ===
+          (alreadySplit || (!baseline && mode === "current") ? true : undefined),
       "Skill library split migration marker was not recorded",
     );
   }
@@ -1865,14 +1866,29 @@ function assertExpectedMissingCodexOutcomes(result, expectedVersion) {
   return failures;
 }
 
-function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
+function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot, verifyRestart]) {
   let result;
   let outcome = "failed";
   let message;
   try {
     assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
     result = readUpdateJson(file);
-    assertSuccessfulUpdateResult(result, expectedVersion);
+    const lifecycle = assertSuccessfulUpdateResult(result, expectedVersion);
+    if (lifecycle && verifyRestart === "1") {
+      assertStrict.equal(result.target?.version, expectedVersion);
+      assertStrict.equal(result.verification?.runningVersion, expectedVersion);
+      assertStrict.equal(result.verification?.runningBuildId, result.after?.buildId);
+      assert(result.after?.buildId, "serving Gateway did not report an activated build");
+      assert(
+        result.verification.booted &&
+          result.verification.serviceRunning &&
+          result.verification.coreReady &&
+          result.verification.versionMatch &&
+          result.steps.some(({ step, status }) => step === "activating" && status === "completed"),
+        "update did not verify activation of the serving Gateway",
+      );
+      process.stdout.write("resident");
+    }
     outcome = "passed";
   } catch (error) {
     message = error instanceof Error ? error.message : String(error);
@@ -1888,7 +1904,13 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
 
 function assertSuccessfulUpdateResult(result, expectedVersion) {
   const plugins = result?.postUpdate?.plugins;
-  assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+  const lifecycle = assertCompletedUpdate(result);
+  if (lifecycle) {
+    assert(
+      result.steps?.every((step) => step.status === "completed" || step.status === "skipped"),
+      "successful update contained an unfinished step",
+    );
+  }
   if (["projects-doctor", "projects-startup-migration"].includes(getScenario())) {
     assertStrict.equal(
       result.before?.version,
@@ -1918,6 +1940,9 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
     result?.after?.version === expectedVersion,
     `successful update version changed: ${String(result?.after?.version)}`,
   );
+  if (lifecycle) {
+    return true;
+  }
   const rejectedStepIndex = Array.isArray(result?.steps)
     ? result.steps.findIndex(
         (step) =>
@@ -1990,6 +2015,7 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
     Array.isArray(result?.steps) && rejectedStepIndex === -1,
     `successful update contained a failed core step${rejectedStepContext}`,
   );
+  return false;
 }
 
 function assertRepairJson([file]) {

@@ -109,9 +109,7 @@ function EmptyState(props: { model: PortalsModel; mobile?: boolean }) {
               </>
             }
           >
-            <div class="portals-empty__note">
-              {t("sessionsView.actionRequiresScope", { scope: "operator.read" })}
-            </div>
+            <div class="portals-empty__note">{t("portalsPage.readPermissionDenied")}</div>
           </Show>
         </section>
       }

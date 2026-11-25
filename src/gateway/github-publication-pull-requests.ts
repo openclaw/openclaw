@@ -214,6 +214,7 @@ export async function findGitHubPublicationPullRequest(
   params: GitHubPublicationPullRequestLookup & {
     headCommit: string;
     recordObserved?: (url: string) => void | Promise<void>;
+    assertReuse?: (url: string) => Promise<void>;
   },
 ): Promise<string | undefined> {
   const { identity, candidates } = await loadGitHubPublicationPullRequests(params);
@@ -222,6 +223,22 @@ export async function findGitHubPublicationPullRequest(
       code: "github_rejected",
       nextAction: "Inspect the original pull request before requesting another publication.",
     });
+  }
+  const occupied = candidates.find(
+    (candidate) =>
+      candidate.state === "open" &&
+      candidate.headRef === params.branch &&
+      candidate.baseRef === params.baseBranch,
+  );
+  if (!params.pullRequest && occupied && occupied.userId !== identity.account.accountId) {
+    throw new GitHubPublicationKnownFailure("GitHub pull request is owned by another account.", {
+      code: "github_rejected",
+      nextAction: "Check pull-request permission for the effective account, then retry.",
+    });
+  }
+  if (occupied && !occupied.body.includes(params.marker)) {
+    await params.assertReuse?.(occupied.url);
+    params.assertCurrent();
   }
   const exact = matchingGitHubPublicationHeads(params, { identity, candidates });
   const found =
@@ -242,18 +259,6 @@ export async function findGitHubPublicationPullRequest(
         },
       );
     }
-  }
-  const occupied = candidates.find(
-    (candidate) =>
-      candidate.state === "open" &&
-      candidate.headRef === params.branch &&
-      candidate.baseRef === params.baseBranch,
-  );
-  if (!params.pullRequest && occupied && occupied.userId !== identity.account.accountId) {
-    throw new GitHubPublicationKnownFailure("GitHub pull request is owned by another account.", {
-      code: "github_rejected",
-      nextAction: "Check pull-request permission for the effective account, then retry.",
-    });
   }
   // A matching accepted result settles its receipt; later actions still check authority.
   if (found) {

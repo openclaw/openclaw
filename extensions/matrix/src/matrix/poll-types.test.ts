@@ -113,6 +113,30 @@ it("counts only the latest valid response from each sender", () => {
 });
 
 it.each([
+  { name: "an opaque ID with no trimmed match", second: "b ", latest: ["b "] },
+  {
+    name: "canonical IDs with a one-selection cap",
+    second: "answer2",
+    latest: ["answer2", "answer1"],
+  },
+])("counts one voter's latest choice for $name", ({ second, latest }) => {
+  const summary = buildPollResultsSummary({
+    sender: "@alice:example.org",
+    poll: {
+      ...parsedPoll,
+      answers: [
+        { id: "answer1", text: "Pizza" },
+        { id: second, text: "Sushi" },
+      ],
+    },
+    relationEvents: [vote("@bob:example.org", 2, latest), vote("@bob:example.org", 1, ["answer1"])],
+  });
+
+  expect(summary.entries.map((answer) => answer.votes)).toEqual([0, 1]);
+  expect(summary.totalVotes).toBe(1);
+});
+
+it.each([
   { name: "nonfinite closing times", endTimes: [Number.NaN], closed: false },
   { name: "the earliest finite closing time", endTimes: [1, -0], closed: true },
 ])("preserves vote ordering with $name", ({ endTimes, closed }) => {

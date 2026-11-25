@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as devUpdateTarget from "../../infra/update-dev-target.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import { resolvePrefix } from "../../update/store.js";
 import { invokeUpdateCli } from "../update-cli-invocation.test-support.js";
 import { registerUpdateCli } from "../update-cli.js";
 import {
@@ -92,5 +93,26 @@ describe("update command admission with fresh state", () => {
       downgradeRisk: true,
     });
     expectFreshStatePreserved(fixture);
+  });
+
+  it("previews a converted installation without changing its release ownership", async () => {
+    const prefix = resolvePrefix();
+    const selected = path.join(prefix, "releases", "selected", "openclaw");
+    fs.mkdirSync(selected, { recursive: true });
+    const manifest = writeFreshJson(path.join(selected, "package.json"), {
+      name: "openclaw",
+      version: "2026.9.3",
+    });
+    const bytes = fs.readFileSync(manifest);
+    const slot = path.join(prefix, "openclaw");
+    fs.symlinkSync(selected, slot, "junction");
+
+    await updateCommand({ tag: "2026.9.2", dryRun: true, json: true, restart: false });
+
+    expectJson({ dryRun: true, currentVersion: "2026.9.3", targetVersion: "2026.9.2" });
+    expectFreshStatePreserved(fixture);
+    expect(fs.readlinkSync(slot)).toBe(selected);
+    expect(fs.readFileSync(manifest)).toEqual(bytes);
+    expect(fs.existsSync(path.join(prefix, "releases", ".trial"))).toBe(false);
   });
 });

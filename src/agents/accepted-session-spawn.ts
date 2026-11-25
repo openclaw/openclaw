@@ -41,7 +41,7 @@ export function mergeAcceptedSessionSpawnsForRun(
   return receipts ? [...receipts.values()] : [];
 }
 
-/** A confirmed cancellation preserves acceptance but ends its owed completion. */
+/** Confirmed settlement preserves acceptance but ends its owed completion. */
 export function retireAcceptedSessionSpawnCompletionForRun(
   instance: OperationalRunInstanceRef,
   spawn: Pick<AcceptedSessionSpawn, "runId" | "childSessionKey">,

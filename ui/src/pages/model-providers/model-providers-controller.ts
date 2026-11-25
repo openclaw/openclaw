@@ -37,10 +37,11 @@ import { createModelProviderDiscovery } from "./discovery-controller.tsx";
 import { createInstalledAgents } from "./installed-agents.tsx";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import { createModelProviderLogin } from "./login-controller.ts";
+import { connectAction, pendingModelConnection } from "./login-providers.ts";
 import type { ModelProvidersState } from "./page-state.ts";
 import { createModelProviderProfileActions } from "./profile-actions-controller.ts";
 import { updateRecordEntry } from "./record-state.ts";
-import { modelConnectAction, type ModelProvidersRouteData } from "./route.ts";
+import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
 
 export function createModelProviders(
@@ -78,7 +79,7 @@ export function createModelProviders(
     mutationBlockedReason() === null && !modelProviderConfigBusy(context);
   let loaderPending = false;
   let connected = false;
-  let pendingConnection: string | null = null;
+  let pendingConnection: ModelProvidersRouteData | null = null;
   let pendingCredentialInvalidation = false;
   let profilesVisible = false;
   let readAccess = false;
@@ -257,22 +258,18 @@ export function createModelProviders(
     refresh: (providerId) => refresh("replacement", providerId),
   });
   let previousRouteData: ModelProvidersRouteData | undefined;
-  let previousLoaderPending: boolean | undefined;
 
   function synchronizeRoute(data: ModelProvidersRouteData | undefined, pending: boolean) {
+    const loaderChanged = pending !== loaderPending;
     loaderPending = pending;
     if (!connected) {
       return;
     }
     const previous = previousRouteData;
     const routeChanged = data !== previous;
-    const loaderChanged = pending !== previousLoaderPending;
     previousRouteData = data;
-    previousLoaderPending = pending;
     if (routeChanged && data) {
-      if (data.connect !== previous?.connect || data.pluginId !== previous?.pluginId) {
-        pendingConnection = data.connect ? (data.pluginId ?? "") : null;
-      }
+      pendingConnection = pendingModelConnection(data, previous, pendingConnection);
       // Revalidation must not replace a search edited after navigation.
       if (data.provider !== previous?.provider) {
         setProviderQuery(canonicalModelAuthProviderId(data.provider ?? ""));
@@ -332,7 +329,12 @@ export function createModelProviders(
         return;
       }
       syncConfig();
-      const connect = modelConnectAction(pendingConnection, loginBusy, login.open, catalogSearch);
+      const connect = connectAction(
+        pendingConnection,
+        login,
+        catalogSearch,
+        state.data?.authStatus,
+      );
       if (connect && state.data && canMutate() && !core.loading) {
         pendingConnection = null;
         connect();

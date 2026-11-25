@@ -61,6 +61,7 @@ function createDispatchRepository(root: string, options: DispatchRepositoryOptio
   runGit(checkout, ["config", "user.name", "OpenClaw Release Test"]);
   // Historical diagnostics use root-only sources; candidate qualification includes AI.
   write("package.json", '{"version":"2026.7.9"}\n');
+  write("config/test-mock-exports-baseline.txt", "# No grandfathered factories.\n");
   write("CHANGELOG.md", "## 2026.8.1\n\nRelease notes for the selected candidate.\n");
   write(workflowPath, LEGACY_WORKFLOW_SOURCE);
   write(

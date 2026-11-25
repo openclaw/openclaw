@@ -155,8 +155,6 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       return nonOwner;
     }
   }
-  const assertOwnerCurrent = params.command.assertOwnerCurrent;
-
   const channelId =
     normalizeChatChannelId(parsed.channel) ??
     params.command.channelId ??
@@ -318,7 +316,6 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       channel: channelId,
       entry: parsed.entry,
       accountId,
-      ...(assertOwnerCurrent ? { assertCurrent: assertOwnerCurrent } : {}),
     };
     const mutate =
       parsed.action === "add" ? addChannelAllowFromStoreEntry : removeChannelAllowFromStoreEntry;
@@ -376,7 +373,6 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
           action: parsed.action,
           entry: parsed.entry,
           applyConfigEdit,
-          assertCurrent: assertOwnerCurrent,
         });
       } catch (error) {
         if (error instanceof AutoReplyConfigMutationError) {

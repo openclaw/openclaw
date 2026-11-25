@@ -5,6 +5,24 @@ import { i18n, t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  buildPendingInputQueueItems,
+  buildPendingInputItems,
+} from "./chat-pending-input-presentation.ts";
+import {
+  makeChatPageHost,
+  input,
+  sessionKey,
+  sessionId,
+} from "./chat-pending-inputs.test-support.ts";
+import {
+  applyChatPendingInputs,
+  getChatPendingInputs,
+  loadOwnCancelledInputs,
+  mutateChatPendingInput,
+  requestPendingInputPage,
+} from "./chat-pending-inputs.ts";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 
 type QueueProps = Parameters<typeof renderChatQueueSolid>[0];
@@ -367,4 +385,89 @@ describe("chat composer queue reordering", () => {
 
     expect(onQueueMove.mock.calls).toEqual([["c", "a"]]);
   });
+});
+
+it("keeps a revoked author’s queued text Not sent with copy and remove, without send permission", async () => {
+  const revoked = { ...input, endCause: "revoked" as const };
+  const originalText = "Original input, not its preview. ".repeat(500);
+  const own = vi
+    .fn()
+    .mockResolvedValueOnce({ sessionId, pendingInputs: { items: [revoked], total: 1 } })
+    .mockResolvedValueOnce({ text: originalText })
+    .mockResolvedValueOnce({ pendingInputs: { items: [], total: 0 } });
+  const host = makeChatPageHost({
+    sessionKey,
+    currentSessionId: null,
+    agentsSelectedId: "main",
+    requestHandlers: { "chat.pendingInputs.own": own },
+  });
+  await loadOwnCancelledInputs(host);
+  const pending = () => getChatPendingInputs(host)!.page.items;
+  const props = () => ({
+    queue: [],
+    displayQueue: buildPendingInputQueueItems(pending()),
+    connected: true,
+    canRemoveServerQueued: false,
+    onQueueRemove: host.removeQueuedMessage,
+    onQueueCopy: (id: string) =>
+      void mutateChatPendingInput(host, {
+        kind: "copy",
+        inputId: id.slice("pending-input:".length),
+      }),
+  });
+  const container = renderQueue(props());
+  expect(container.textContent).toContain("Keep my accepted input");
+  expect(container.textContent).toContain("Not sent");
+  expect(buildPendingInputItems(pending())).toEqual([]);
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  container.querySelector<HTMLButtonElement>('[aria-label="Copy"]')!.click();
+  await waitForSolid(() => expect(writeText).toHaveBeenCalledWith(originalText));
+  const remove = container.querySelector<HTMLButtonElement>(".chat-queue__remove")!;
+  expect(remove.disabled).toBe(false);
+  remove.click();
+  await waitForSolid(() => expect(pending()).toEqual([]));
+  expect(own).toHaveBeenLastCalledWith(expect.objectContaining({ inputIds: [input.id] }));
+  renderQueue(props(), container);
+  expect(container.textContent).not.toContain("Keep my accepted input");
+});
+
+it("replaces paginated live custody after revocation and resumes normal reads after restored access", async () => {
+  const queued = Array.from({ length: 21 }, (_, index) => ({
+    ...input,
+    id: `input-${index}`,
+    state: "queued" as const,
+    queued: true as const,
+  }));
+  const ownItems = queued.slice(1).map((item) =>
+    Object.assign({}, item, {
+      queued: undefined,
+      state: "cancelled" as const,
+      endCause: "revoked" as const,
+    }),
+  );
+  const history = vi
+    .fn()
+    .mockResolvedValue({ sessionId, pendingInputs: { items: [input], total: 1 } });
+  const host = makeChatPageHost({
+    sessionKey,
+    currentSessionId: sessionId,
+    agentsSelectedId: "main",
+    requestHandlers: {
+      "chat.pendingInputs.own": {
+        sessionId,
+        pendingInputs: { items: ownItems, total: 21, nextBefore: 2 },
+      },
+      "chat.history": history,
+    },
+  });
+  applyChatPendingInputs(host, { items: queued, total: 21, queuedCount: 21 });
+  await loadOwnCancelledInputs(host);
+  expect(getChatPendingInputs(host)?.queuedInputs).toEqual([]);
+  expect(buildPendingInputQueueItems(getChatPendingInputs(host)!.page.items)).toHaveLength(20);
+  expect(getChatPendingInputs(host)?.ownOnly).toBe(true);
+  applyChatPendingInputs(host, { items: [input], total: 2, nextBefore: 1 });
+  expect(getChatPendingInputs(host)?.ownOnly).toBeUndefined();
+  await requestPendingInputPage(host, 1, "navigation");
+  expect(history).toHaveBeenCalledOnce();
 });

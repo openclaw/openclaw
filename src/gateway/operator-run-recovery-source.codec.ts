@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { boundSessionParticipationSchema } from "../config/sessions/session-participation-source.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import { GatewayOperatorRoleDefinitionSchema } from "../config/zod-schema.gateway-roles.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { userChannelAuthorizationReferenceSchema } from "../state/user-channel-authorization-reference.js";
@@ -10,13 +12,18 @@ const refs = z.strictObject({
   exact: z.array(boundedString).max(4096),
   wildcards: z.array(boundedString).max(256),
 });
+type RecoveryRolePolicy = Omit<GatewayOperatorRoleDefinition, "modelPolicy">;
+const recoveryRolePolicySchema: z.ZodType<RecoveryRolePolicy, RecoveryRolePolicy> =
+  GatewayOperatorRoleDefinitionSchema.omit({ modelPolicy: true });
 const handshakeRecoverySnapshotSchema = z.strictObject({
   profileId: boundedString,
+  version: z.literal(2).optional(),
+  participationCeiling: boundSessionParticipationSchema.optional(),
   openclawIdPrincipal: openClawIdRecoveryPrincipalSchema.optional(),
   scopes: z.array(boundedString).max(64),
   assignedRole: boundedString.nullable(),
   githubLogin: boundedString.nullable(),
-  rolePolicy: GatewayOperatorRoleDefinitionSchema.omit({ modelPolicy: true }).optional(),
+  rolePolicy: recoveryRolePolicySchema.optional(),
   modelPolicy: z
     .strictObject({
       models: z.array(z.strictObject({ provider: boundedString, model: boundedString })).max(4096),
@@ -67,10 +74,16 @@ const principalRecoverySnapshotSchema = handshakeRecoverySnapshotSchema.extend({
   controlUiAdmin: z.literal(false),
   localOperator: z.literal(false),
 });
-const operatorRunRecoverySnapshotSchema = z.discriminatedUnion("sourceIngress", [
-  handshakeRecoverySnapshotSchema,
-  principalRecoverySnapshotSchema,
-]);
+const operatorRunRecoverySnapshotSchema = z
+  .discriminatedUnion("sourceIngress", [
+    handshakeRecoverySnapshotSchema,
+    principalRecoverySnapshotSchema,
+  ])
+  .refine((snapshot) =>
+    snapshot.participationCeiling
+      ? snapshot.version === 2 && snapshot.profileId === snapshot.participationCeiling.profileId
+      : snapshot.version === undefined,
+  );
 const parentSourceSchema = z.strictObject({
   kind: z.undefined().optional(),
   version: z.literal(1),
@@ -84,16 +97,22 @@ const parentSourceSchema = z.strictObject({
 });
 
 // Existing parent-bound sources retain their stored shape. Device-backed jobs need no parent.
-const sourceSchema = z.union([
-  parentSourceSchema,
-  z.strictObject({
-    version: z.literal(1),
-    kind: z.literal("gateway"),
-    agentId: boundedString,
-    sourceRunId: boundedString,
-    snapshot: operatorRunRecoverySnapshotSchema,
-  }),
-]);
+const sourceSchema = z
+  .union([
+    parentSourceSchema,
+    z.strictObject({
+      version: z.literal(1),
+      kind: z.literal("gateway"),
+      agentId: boundedString,
+      sourceRunId: boundedString,
+      snapshot: operatorRunRecoverySnapshotSchema,
+    }),
+  ])
+  .refine(
+    (source) =>
+      !source.snapshot.participationCeiling ||
+      source.agentId === source.snapshot.participationCeiling.source.agentId,
+  );
 
 const channelSnapshotSchema = z.strictObject({
   reference: userChannelAuthorizationReferenceSchema,
@@ -118,6 +137,15 @@ export type OperatorRecoveryUnavailableReason = z.infer<typeof recoveryUnavailab
 const queuedSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("gateway"), snapshot: operatorRunRecoverySnapshotSchema }),
   z.strictObject({ kind: z.literal("channel"), snapshot: channelSnapshotSchema }),
+  // A configured channel owner: only the sender, admitted again from current config.
+  z.strictObject({
+    kind: z.literal("channel-owner"),
+    sender: z.strictObject({
+      channelId: boundedString,
+      accountId: boundedString,
+      senderId: boundedString,
+    }),
+  }),
   z.strictObject({
     kind: z.literal("unavailable"),
     reason: recoveryUnavailableReasonSchema.optional(),

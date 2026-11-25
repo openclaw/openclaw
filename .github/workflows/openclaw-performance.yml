@@ -15,6 +15,9 @@ on:
         options:
           - kova
           - vitest-pair
+          - node-cache-diagnostics
+          - node-cache-workload-qualification
+          - node-cache-qualified-measurement
           - gateway-concurrency
           - gateway-memory-caps
           - gateway-cold-turn-calibration
@@ -88,13 +91,13 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  OCM_VERSION: v0.2.48
-  OCM_LINUX_X64_SHA256: d0bdb49d69fa8bf3c3487ff04f4be82126828876f81690afdc002c427e22c1ac
+  OCM_VERSION: v0.3.10
+  OCM_LINUX_X64_SHA256: 78700755a592aeaf74915ad31addff60fd4a606d767d38b7ddc90411444c3479
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: 7c162a3276a31fbbb60c362d94124b6cad5187ca
+  KOVA_CANONICAL_CONFIG_REF: 5f1ac692af2058217c793aa06af9e28dbf46c1bd
   KOVA_LEGACY_LIST_CONFIG_REF: d69b2209905195bea06980721a92ad8b70808c5d
   KOVA_COLD_TURN_CALIBRATION_REF: 113b6b6f13689457f8ef47cb7c36ad73e5cc4ba7
-  KOVA_TRUSTED_LIVE_REF: 7c162a3276a31fbbb60c362d94124b6cad5187ca
+  KOVA_TRUSTED_LIVE_REF: 5f1ac692af2058217c793aa06af9e28dbf46c1bd
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -102,7 +105,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') }}
+    if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'node-cache-diagnostics' && inputs.mode != 'node-cache-workload-qualification' && inputs.mode != 'node-cache-qualified-measurement')) }}
     runs-on: &linux_runner_ubuntu >-
       ${{ inputs.mode == 'gateway-cold-turn-calibration' && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
       'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
@@ -791,6 +794,19 @@ jobs:
           fi
           if [[ "$missing" != "0" ]]; then
             exit 1
+          fi
+
+      # npm writes its own stack for "Exit handler never called!" only to its debug log,
+      # which stays on the runner (#204375). Keep it with the lane report.
+      - name: Keep npm debug logs with the Kova report
+        if: ${{ always() && steps.lane.outputs.run == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          logs="$HOME/.npm/_logs"
+          if compgen -G "$logs/*-debug-0.log" > /dev/null; then
+            mkdir -p "$REPORT_DIR/npm-logs"
+            cp "$logs"/*-debug-0.log "$REPORT_DIR/npm-logs/"
           fi
 
       - name: Upload Kova artifacts
@@ -1783,6 +1799,328 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  node_cache_workload:
+    name: Prepared workload Node cache controls
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'node-cache-workload-qualification' || inputs.mode == 'node-cache-qualified-measurement') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.mode == 'node-cache-qualified-measurement' && 240 || 75 }}
+    permissions:
+      contents: read
+    env:
+      NODE_CACHE_HARNESS: ${{ github.workspace }}/node-cache-harness
+      NODE_CACHE_WORKLOAD: ${{ github.workspace }}/node-cache-workload
+      NODE_CACHE_HARNESS_SHA: ${{ github.sha }}
+      NODE_CACHE_MODE: ${{ inputs.mode }}
+    steps:
+      - name: Validate workload control request
+        timeout-minutes: 1
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          first_owned_step_started_at="$(date +%s)"
+          if [[ "$GITHUB_RUN_ATTEMPT" != "1" || ! "$NODE_CACHE_HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Workload controls require a fresh run and exact harness SHA."
+            exit 1
+          fi
+          if [[ -n "$TARGET_REF" && "$TARGET_REF" != "$NODE_CACHE_HARNESS_SHA" ]]; then
+            echo "::error::target_ref must be empty or equal the workflow event SHA for workload controls."
+            exit 1
+          fi
+          printf 'NODE_CACHE_PREPARATION=%s\nNODE_CACHE_OUTPUT=%s\nNODE_CACHE_SCRATCH=%s\nPNPM_CONFIG_STORE_DIR=%s\nPNPM_CONFIG_CACHE_DIR=%s\n' \
+            "$RUNNER_TEMP/node-cache-preparation" "$RUNNER_TEMP/node-cache-workload-results" \
+            "$RUNNER_TEMP/node-cache-workload-scratch" "$RUNNER_TEMP/node-cache-preparation/store" \
+            "$RUNNER_TEMP/node-cache-preparation/cache" >> "$GITHUB_ENV"
+          if [[ "${NODE_CACHE_MODE:-}" == "node-cache-qualified-measurement" ]]; then
+            # This is the first owned step, not the runner's job-start timestamp.
+            preparation_deadline=$((first_owned_step_started_at + 40 * 60))
+            work_deadline=$((first_owned_step_started_at + 230 * 60))
+            printf 'NODE_CACHE_PREPARATION_DEADLINE=%s\nNODE_CACHE_WORK_DEADLINE=%s\nNODE_CACHE_MEASUREMENT_OUTPUT=%s\nNODE_CACHE_MEASUREMENT_SCRATCH=%s\n' \
+              "$preparation_deadline" "$work_deadline" "$RUNNER_TEMP/node-cache-measurement-results" \
+              "$RUNNER_TEMP/node-cache-measurement-scratch" >> "$GITHUB_ENV"
+            mkdir -p "$RUNNER_TEMP/node-cache-preparation"
+            printf '{"anchor":"first-owned-step","startedAtEpochSeconds":%s,"preparationDeadlineEpochSeconds":%s,"workDeadlineEpochSeconds":%s}\n' \
+              "$first_owned_step_started_at" "$preparation_deadline" "$work_deadline" \
+              > "$RUNNER_TEMP/node-cache-preparation/workflow-clock.json"
+          fi
+
+      - name: Checkout workload control harness
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: node-cache-harness
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout fixed Node cache workload
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 8cfbac51a27a1195176a3564f6d7cfd7d6994c85
+          path: node-cache-workload
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up workload control Node
+        timeout-minutes: 5
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Record and verify workload control runtime
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$NODE_CACHE_PREPARATION"
+          node --input-type=module - \
+            "$NODE_CACHE_HARNESS/scripts/node-cache-workload-definition.json" \
+            "$NODE_CACHE_PREPARATION/runtime.json" \
+            > "$NODE_CACHE_PREPARATION/runtime.log" 2>&1 <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          const expected = JSON.parse(readFileSync(process.argv[2], "utf8")).runtime;
+          const actual = {
+            node: process.version,
+            v8: process.versions.v8,
+            platform: process.platform,
+            architecture: process.arch,
+            executableSha256: createHash("sha256").update(readFileSync(process.execPath)).digest("hex"),
+          };
+          writeFileSync(process.argv[3], JSON.stringify(actual, null, 2) + "\n");
+          console.log(JSON.stringify(actual));
+          if (Object.entries(actual).some(([key, value]) => expected[key] !== value)) {
+            throw new Error("Hosted Node runtime differs from the fixed workload definition");
+          }
+          NODE
+
+      - name: Set up fixed workload pnpm
+        timeout-minutes: 5
+        uses: ./node-cache-workload/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: node-cache-workload/package.json
+          lockfile-path: node-cache-workload/pnpm-lock.yaml
+          node-version: 24.22.1
+          cache-mode: "off"
+
+      - name: Prepare fixed workload dependencies and generated types
+        shell: bash
+        run: |
+          set -euo pipefail
+          preparation_seconds=2400
+          if [[ "${NODE_CACHE_MODE:-}" == "node-cache-qualified-measurement" ]]; then
+            now="$(date +%s)"
+            preparation_seconds=$((NODE_CACHE_PREPARATION_DEADLINE - now))
+            work_seconds=$((NODE_CACHE_WORK_DEADLINE - now))
+            if (( work_seconds < preparation_seconds )); then preparation_seconds="$work_seconds"; fi
+          fi
+          # Keep timeout's TERM/KILL settlement inside the preparation ceiling.
+          preparation_seconds=$((preparation_seconds - 30))
+          if (( preparation_seconds <= 0 )); then
+            echo "::error::Node cache preparation budget exhausted."
+            exit 1
+          fi
+          [[ "$(git -C "$NODE_CACHE_HARNESS" rev-parse HEAD)" == "$NODE_CACHE_HARNESS_SHA" ]]
+          [[ "$(git -C "$NODE_CACHE_WORKLOAD" rev-parse HEAD)" == "8cfbac51a27a1195176a3564f6d7cfd7d6994c85" ]]
+          pnpm_bin="$COREPACK_HOME/v1/pnpm/12.15.0/node_modules/@pnpm/exe.linux-x64/pnpm"
+          node_bin="$(dirname "$(command -v node)")"
+          [[ -x "$pnpm_bin" && -f "$pnpm_bin" && ! -L "$pnpm_bin" ]]
+          mkdir -p "$NODE_CACHE_PREPARATION"/{home,tmp,pnpm,npm-cache}
+          preparation_env=(env -i
+            "PATH=$(dirname "$pnpm_bin"):$node_bin:$PATH"
+            "HOME=$NODE_CACHE_PREPARATION/home"
+            "TMPDIR=$NODE_CACHE_PREPARATION/tmp"
+            "PNPM_HOME=$NODE_CACHE_PREPARATION/pnpm"
+            "PNPM_CONFIG_STORE_DIR=$PNPM_CONFIG_STORE_DIR"
+            "PNPM_CONFIG_CACHE_DIR=$PNPM_CONFIG_CACHE_DIR"
+            "npm_config_cache=$NODE_CACHE_PREPARATION/npm-cache"
+            "NODE_BIN=$node_bin" "NODE_DISABLE_COMPILE_CACHE=1"
+            "CI=true" "LANG=C.UTF-8" "LC_ALL=C.UTF-8"
+            "GITHUB_WORKSPACE=$NODE_CACHE_WORKLOAD" "GITHUB_ENV=$GITHUB_ENV"
+            "DEPENDENCY_CACHE=false" "DEPENDENCY_CACHE_HIT=false"
+            "FROZEN_LOCKFILE=true" "PNPM_CONFIG_FROZEN_LOCKFILE=true"
+            "pnpm_config_manage_package_manager_versions=false")
+          cd "$NODE_CACHE_WORKLOAD"
+          {
+            # Preparation may download; the later controls cannot reconcile dependencies.
+            timeout --signal=TERM --kill-after=30s "${preparation_seconds}s" "${preparation_env[@]}" \
+              bash -euc 'bash .github/actions/setup-node-env/install-dependencies.sh
+              node scripts/generate-kysely-types.mts'
+          } > "$NODE_CACHE_PREPARATION/install.log" 2>&1
+          if [[ "${NODE_CACHE_MODE:-}" == "node-cache-qualified-measurement" ]]; then
+            now="$(date +%s)"
+            if (( now >= NODE_CACHE_PREPARATION_DEADLINE || now >= NODE_CACHE_WORK_DEADLINE )); then
+              echo "::error::Node cache preparation budget exhausted after installation."
+              exit 1
+            fi
+          fi
+          printf 'NODE_CACHE_PNPM=%s\n' "$pnpm_bin" >> "$GITHUB_ENV"
+
+      - name: Qualify prepared workload Node cache controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout_ms=1800000
+          if [[ "${NODE_CACHE_MODE:-}" == "node-cache-qualified-measurement" ]]; then
+            remaining_ms=$(((NODE_CACHE_WORK_DEADLINE - $(date +%s) - 1) * 1000))
+            if (( remaining_ms < timeout_ms )); then timeout_ms="$remaining_ms"; fi
+          fi
+          if (( timeout_ms <= 0 )); then
+            echo "::error::Node cache control budget exhausted."
+            exit 1
+          fi
+          node "$NODE_CACHE_HARNESS/scripts/vitest-pair-benchmark.mts" \
+            --mode node-cache-workload-qualification \
+            --definition "$NODE_CACHE_HARNESS/scripts/node-cache-workload-definition.json" \
+            --workload "$NODE_CACHE_WORKLOAD" \
+            --harness-sha "$NODE_CACHE_HARNESS_SHA" \
+            --pnpm-bin "$NODE_CACHE_PNPM" \
+            --output "$NODE_CACHE_OUTPUT" --scratch "$NODE_CACHE_SCRATCH" \
+            --timeout-ms "$timeout_ms" --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Measure qualified workload Node cache pairs
+        if: ${{ success() && inputs.mode == 'node-cache-qualified-measurement' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout_ms=9000000
+          remaining_ms=$(((NODE_CACHE_WORK_DEADLINE - $(date +%s) - 1) * 1000))
+          if (( remaining_ms < timeout_ms )); then timeout_ms="$remaining_ms"; fi
+          if (( timeout_ms <= 0 )); then
+            echo "::error::Node cache measurement budget exhausted."
+            exit 1
+          fi
+          node "$NODE_CACHE_HARNESS/scripts/vitest-pair-benchmark.mts" \
+            --mode node-cache-qualified-measurement \
+            --definition "$NODE_CACHE_HARNESS/scripts/node-cache-workload-definition.json" \
+            --workload "$NODE_CACHE_WORKLOAD" --qualification "$NODE_CACHE_OUTPUT" \
+            --harness-sha "$NODE_CACHE_HARNESS_SHA" --pnpm-bin "$NODE_CACHE_PNPM" \
+            --output "$NODE_CACHE_MEASUREMENT_OUTPUT" --scratch "$NODE_CACHE_MEASUREMENT_SCRATCH" \
+            --timeout-ms "$timeout_ms" --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Finalize workload control artifact
+        if: ${{ always() }}
+        env:
+          NODE_CACHE_PREPARATION: ${{ runner.temp }}/node-cache-preparation
+          NODE_CACHE_OUTPUT: ${{ runner.temp }}/node-cache-workload-results
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$NODE_CACHE_OUTPUT"
+          if [[ ! -f "$NODE_CACHE_OUTPUT/terminal-manifest.json" ]]; then
+            printf '{"version":1,"status":"failure","phase":"workflow","jobStatus":"%s"}\n' \
+              "$JOB_STATUS" > "$NODE_CACHE_OUTPUT/terminal-manifest.json"
+          fi
+          if [[ -f "$NODE_CACHE_PREPARATION/install.log" ]]; then
+            cp "$NODE_CACHE_PREPARATION/install.log" "$NODE_CACHE_OUTPUT/preparation.log"
+          fi
+          for artifact in runtime.json runtime.log workflow-clock.json; do
+            if [[ -f "$NODE_CACHE_PREPARATION/$artifact" ]]; then
+              cp "$NODE_CACHE_PREPARATION/$artifact" "$NODE_CACHE_OUTPUT/$artifact"
+            fi
+          done
+
+      - name: Upload workload control artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node-cache-workload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/node-cache-workload-results
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Finalize workload measurement artifact
+        if: ${{ always() && inputs.mode == 'node-cache-qualified-measurement' }}
+        env:
+          NODE_CACHE_MEASUREMENT_OUTPUT: ${{ runner.temp }}/node-cache-measurement-results
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$NODE_CACHE_MEASUREMENT_OUTPUT"
+          if [[ ! -f "$NODE_CACHE_MEASUREMENT_OUTPUT/terminal-manifest.json" ]]; then
+            printf '{"version":1,"status":"failure","phase":"workflow","jobStatus":"%s"}\n' \
+              "$JOB_STATUS" > "$NODE_CACHE_MEASUREMENT_OUTPUT/terminal-manifest.json"
+          fi
+
+      - name: Upload workload measurement artifact
+        if: ${{ always() && inputs.mode == 'node-cache-qualified-measurement' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node-cache-measurement-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/node-cache-measurement-results
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+  node_cache_diagnostics:
+    name: Node cache diagnostic qualification
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'node-cache-diagnostics' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout diagnostic helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up diagnostic Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Qualify native Node cache diagnostics
+        env:
+          NODE_CACHE_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/node-cache-diagnostics
+          TARGET_REF: ${{ inputs.target_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET_REF" != "$WORKFLOW_SHA" || "$(git rev-parse HEAD)" != "$WORKFLOW_SHA" ]]; then
+            echo "::error::Node cache diagnostics requires the exact workflow checkout and target_ref."
+            exit 1
+          fi
+          node scripts/vitest-pair-benchmark.mts \
+            --mode node-cache-diagnostics \
+            --output "$NODE_CACHE_DIAGNOSTIC_OUTPUT" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Finalize diagnostic artifact
+        if: ${{ always() }}
+        env:
+          NODE_CACHE_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/node-cache-diagnostics
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$NODE_CACHE_DIAGNOSTIC_OUTPUT"
+          if [[ ! -f "$NODE_CACHE_DIAGNOSTIC_OUTPUT/terminal-manifest.json" ]]; then
+            printf '{"version":1,"status":"failure","phase":"workflow","jobStatus":"%s"}\n' \
+              "$JOB_STATUS" > "$NODE_CACHE_DIAGNOSTIC_OUTPUT/terminal-manifest.json"
+          fi
+
+      - name: Upload diagnostic artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node-cache-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/node-cache-diagnostics
+          if-no-files-found: error
+          retention-days: 30
+
   vitest_pair:
     name: Vitest paired benchmark
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'vitest-pair' }}
@@ -1949,7 +2287,7 @@ jobs:
       - gateway_concurrency
       - vitest_pair
       - vitest_pair_guard
-    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.mode != 'gateway-cold-turn-calibration' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.mode != 'gateway-cold-turn-calibration' && inputs.mode != 'node-cache-diagnostics' && inputs.mode != 'node-cache-workload-qualification' && inputs.mode != 'node-cache-qualified-measurement' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
     permissions:
       contents: read
       actions: read

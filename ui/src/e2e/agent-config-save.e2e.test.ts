@@ -14,6 +14,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openMoreModelSettings } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent config save",
@@ -66,9 +67,7 @@ suite.define(() => {
       await gateway.waitForRequest("agents.list");
       await gateway.waitForRequest("config.get");
       const agentsPage = page.locator("openclaw-agents-page");
-      const primary = agentsPage.locator(
-        'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
-      );
+      const primary = agentsPage.locator("openclaw-select-picker:has(#agent-primary-model)");
       const decision = agentsPage.locator("openclaw-select-picker:has(#agent-decision-model)");
       const trigger = primary.locator(".picker-select__trigger");
       const error = agentsPage
@@ -88,6 +87,7 @@ suite.define(() => {
       await expect.poll(() => error.count()).toBe(0);
       await expect.poll(() => trigger.getAttribute("disabled")).toBeNull();
 
+      await openMoreModelSettings(agentsPage);
       expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
       const indicator = page.locator("openclaw-settings-save-indicator");
       const writesBeforeReconnect = (await gateway.getRequests("config.set")).length;
@@ -153,6 +153,7 @@ suite.define(() => {
         hash: "saved-agent-config",
       });
       await expect.poll(() => pickerValue(primary)).toBe("openai/after-reload");
+      await openMoreModelSettings(agentsPage);
       expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
       await expect.poll(() => indicator.textContent()).toContain("Apply changes");
     });
@@ -238,15 +239,24 @@ suite.define(() => {
     },
   );
 
-  it("config.set stages skill changes from the inherited allowlist", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const config = { agents: { defaults: { skills: ["github"] }, entries: { main: {} } } };
-      const skill = (name: string, blockedByAgentFilter: boolean) =>
+  it.each(["switch", "phone name"])("edits inherited skills via %s", async (target) => {
+    const options = createControlUiE2eContextOptions();
+    const context =
+      target === "switch"
+        ? options
+        : { ...options, viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true };
+    await suite.withPage(context, async ({ page }) => {
+      const name =
+        target === "phone name"
+          ? "internationalcoastalsurveyobservationsandfieldworkhandoff"
+          : "github";
+      const config = { agents: { defaults: { skills: [name] }, entries: { main: {} } } };
+      const skill = (skillName: string, blockedByAgentFilter: boolean) =>
         createSkill({
-          name,
-          description: `${name} skill`,
+          name: skillName,
+          description: `${skillName} skill`,
           source: "openclaw-managed",
-          skillKey: name,
+          skillKey: skillName,
           blockedByAgentFilter,
         });
       const gateway = await installMockGateway(page, {
@@ -263,10 +273,10 @@ suite.define(() => {
           "config.get": configResponse(config),
           "skills.status": {
             agentId: "main",
-            agentSkillFilter: ["github"],
+            agentSkillFilter: [name],
             workspaceDir: "/tmp/workspace",
             managedSkillsDir: "/tmp/skills",
-            skills: [skill("github", false), skill("weather", true)],
+            skills: [skill(name, false), skill("weather", true)],
           },
         },
       });
@@ -277,14 +287,34 @@ suite.define(() => {
       await gateway.waitForRequest("skills.status");
 
       await gateway.deferNext("config.set");
-      await page
-        .locator(".agent-skill-row", { hasText: "github skill" })
-        .getByRole("switch")
-        .click();
+      const row = page.locator(".agent-skill-row", { hasText: `${name} skill` });
+      const toggle = row.getByRole("switch", { name, exact: true });
+      if (target === "phone name") {
+        const title = row.locator(".settings-row__title");
+        await title.scrollIntoViewIfNeeded();
+        const [text, control] = await Promise.all([title.boundingBox(), toggle.boundingBox()]);
+        if (!text || !control) {
+          throw new Error("Expected the skill name and switch to be visible");
+        }
+        expect(control.x).toBeGreaterThanOrEqual(text.x + text.width);
+        expect(control.x + control.width).toBeLessThanOrEqual(390);
+        expect(Math.abs(control.y + control.height / 2 - text.y - text.height / 2)).toBeLessThan(1);
+        expect(await title.getAttribute("title")).toBe(name);
+        const line = await title.evaluate((element) =>
+          Number.parseFloat(getComputedStyle(element).lineHeight),
+        );
+        expect(Math.abs(text.height - line)).toBeLessThan(1);
+        expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
+          true,
+        );
+        await title.tap();
+      } else {
+        await toggle.click();
+      }
 
       const params = await saveParams(gateway);
       expect(JSON.parse(String(params.raw))).toEqual({
-        agents: { defaults: { skills: ["github"] }, entries: { main: { skills: [] } } },
+        agents: { defaults: { skills: [name] }, entries: { main: { skills: [] } } },
       });
       expect(params.baseHash).toBe("agent-config-hash-1");
       await gateway.resolveDeferred("config.set", {

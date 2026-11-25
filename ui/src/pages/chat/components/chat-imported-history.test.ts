@@ -21,6 +21,7 @@ import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts"
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { MessageActions, resolveMessageActionDetails } from "./chat-message-markdown-view.tsx";
 import { ChatToolOutput } from "./chat-tool-output-view.tsx";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 const importKey = "example-catalog:thread:item";
 const wrap = (text: string) =>
@@ -114,6 +115,7 @@ it("localizes retained message copy labels, catalog truncation, and the open out
     ],
     { container },
   );
+  await settleToolBridges(container);
   const button = container.querySelector<HTMLButtonElement>(".chat-copy-btn")!;
   try {
     for (const [locale, notice, copyLabel] of [

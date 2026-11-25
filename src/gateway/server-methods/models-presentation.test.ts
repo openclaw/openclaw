@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { listModels } from "./models-list.test-support.js";
 
@@ -90,6 +91,42 @@ describe("models.list provider presentation", () => {
         expect(filtered.mock.calls[0]?.[0]).toBe(true);
         expect(filtered.mock.calls[0]?.[1]).not.toHaveProperty("providerPresentations");
       }
+    });
+  });
+
+  it("names a plugin provider with its declared label unless the user named it", async () => {
+    await withOpenClawTestState({ prefix: "models-presentation-", scenario: "empty" }, async () => {
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.providers.push({
+        pluginId: "acme",
+        source: "/tmp/acme/index.js",
+        provider: { id: "acme", label: "Acme Cloud Plan", auth: [] },
+      });
+      const loadGatewayModelCatalog = vi.fn(async () => [
+        { id: "acme-large", name: "Acme Large", provider: "acme" },
+      ]);
+
+      const declared = await listModels({ view: "all", loadGatewayModelCatalog, pluginRegistry });
+      expect(declared.mock.calls[0]?.[1]).toMatchObject({
+        models: [{ provider: "acme", providerName: "Acme Cloud Plan" }],
+        providerPresentations: { acme: { providerName: "Acme Cloud Plan" } },
+      });
+
+      const named = await listModels({
+        view: "all",
+        loadGatewayModelCatalog,
+        pluginRegistry,
+        runtimeConfig: {
+          models: {
+            providers: {
+              acme: { baseUrl: "https://acme.example.test/v1", models: [], name: "My Acme" },
+            },
+          },
+        },
+      });
+      expect(named.mock.calls[0]?.[1]).toMatchObject({
+        providerPresentations: { acme: { providerName: "My Acme" } },
+      });
     });
   });
 });

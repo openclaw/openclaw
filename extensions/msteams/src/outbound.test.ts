@@ -10,19 +10,12 @@ const mocks = vi.hoisted(() => ({
   sendAdaptiveCardMSTeams: vi.fn(),
   sendMessageMSTeams: vi.fn(),
   sendPollMSTeams: vi.fn(),
-  createPoll: vi.fn(),
-  createMSTeamsPollStoreState: vi.fn(),
 }));
 
 vi.mock("./send.js", () => ({
   sendAdaptiveCardMSTeams: mocks.sendAdaptiveCardMSTeams,
   sendMessageMSTeams: mocks.sendMessageMSTeams,
   sendPollMSTeams: mocks.sendPollMSTeams,
-}));
-
-// mock-isolation: outbound tests assert selected-account poll persistence without opening a plugin-state database.
-vi.mock("./polls.js", () => ({
-  createMSTeamsPollStoreState: mocks.createMSTeamsPollStoreState,
 }));
 
 import { msteamsPlugin } from "./channel.js";
@@ -56,15 +49,12 @@ describe("msteamsOutbound cfg threading", () => {
     mocks.sendMessageMSTeams.mockReset();
     mocks.sendAdaptiveCardMSTeams.mockReset();
     mocks.sendPollMSTeams.mockReset();
-    mocks.createPoll.mockReset();
-    mocks.createMSTeamsPollStoreState.mockReset().mockReturnValue({ createPoll: mocks.createPoll });
     mocks.sendMessageMSTeams.mockResolvedValue(sendResult("msg-1"));
     mocks.sendPollMSTeams.mockResolvedValue({
       pollId: "poll-1",
       ...sendResult("msg-poll-1"),
     });
     mocks.sendAdaptiveCardMSTeams.mockResolvedValue(sendResult("msg-card-1", "conv-card-1"));
-    mocks.createPoll.mockResolvedValue(undefined);
   });
 
   it("caps lightweight and runtime outbound at 4000 characters", () => {
@@ -344,7 +334,7 @@ describe("msteamsOutbound cfg threading", () => {
 
   it("forwards resolved channel thread ids to poll sends", async () => {
     const accountCfg = accountConfig("support-team");
-    await sendPoll({
+    const result = await sendPoll({
       cfg: accountCfg,
       accountId: "Support Team",
       to: "conversation:19:channel@thread.tacv2",
@@ -362,13 +352,11 @@ describe("msteamsOutbound cfg threading", () => {
       assertDirectAdapterHandoff: undefined,
       onPlatformSendDispatch: undefined,
     });
-    expect(mocks.createMSTeamsPollStoreState).toHaveBeenCalledWith({ accountId: "support-team" });
-    expect(mocks.createPoll).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "poll-1",
-        conversationId: "conv-1",
-        messageId: "msg-poll-1",
-      }),
-    );
+    expect(result).toMatchObject({
+      channel: "msteams",
+      pollId: "poll-1",
+      conversationId: "conv-1",
+      messageId: "msg-poll-1",
+    });
   });
 });

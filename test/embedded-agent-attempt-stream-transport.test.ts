@@ -606,7 +606,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
         expect(payload).not.toHaveProperty("context_management");
       } else {
         expect(payload.context_management).toEqual([
-          { type: "compaction", compact_threshold: 140_000 },
+          { type: "compaction", compact_threshold: 170_000 },
         ]);
       }
     }
@@ -717,6 +717,13 @@ describe("prepareEmbeddedAttemptTransport", () => {
     {
       label: "client-tool fork",
       toolExecutionAllow: ["skill_workshop"],
+      expectedSearch: true,
+      codeMode: true,
+    },
+    {
+      label: "capped non-fork run",
+      toolExecutionAllow: ["openclaw"],
+      fork: false,
       expectedSearch: false,
       codeMode: true,
     },
@@ -732,7 +739,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
     input.attempt.modelId = input.attempt.model.id;
     input.attempt.provider = input.attempt.model.provider;
     input.attempt.toolExecutionAllow = testCase.toolExecutionAllow;
-    if (testCase.toolExecutionAllow !== undefined) {
+    if (testCase.toolExecutionAllow !== undefined && testCase.fork !== false) {
       input.attempt.sessionForkRequest = { ownOutputLimit: false };
     }
     input.attempt.config = {

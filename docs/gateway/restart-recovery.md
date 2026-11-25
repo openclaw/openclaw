@@ -234,7 +234,8 @@ regain current authority before they can execute.
 
 Crash recovery uses the nonterminal run marker committed with accepted plain
 chat input, before dispatch hooks or runtime start. The same commit records its
-writer identity; terminal settlement clears the run marker. Recovery is bounded
+writer identity; terminal settlement clears the run marker. Queued input records
+the run marker and its writer identity when its run starts. Recovery is bounded
 by the recorded crash intervals. Command persistence
 records activity only; commands gain recovery markers when their runs start.
 Commands that become runs, such as `/goal` or skill rewrites, remain unprotected
@@ -756,6 +757,18 @@ keeps one requester authority, including when a paused child continues in a new
 turn. Normal delivery records the receipt so another restart cannot deliver it
 again. Archived, replaced, reset, or unauthorized requesters cannot acquire this
 custody.
+
+When the requester's access has ended (its saved grant or access record is gone,
+or its profile was deleted), startup settles that child's delivery once instead of
+retrying it at every restart. The run record keeps
+the result with the delivery marked discarded. The requesting chat, and no other,
+gets one notice: "I did not deliver a background task's result. The access of the
+person who started it has ended. Ask them or a Gateway admin to restore that access,
+then start the task again." Results whose latest recorded time (result capture,
+end, or delivery attempt; creation time only when nothing later exists) is more
+than 7 days old settle without a notice; the Gateway logs one count per recovery
+pass. Any other failure, including other refusals, an unavailable access policy or
+a busy database, leaves the delivery pending for the next restart.
 
 If shutdown interrupts the requester after a captured child result was committed
 to its transcript, that result is already delivered. The Gateway resumes the
