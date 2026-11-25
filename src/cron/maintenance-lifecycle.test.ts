@@ -128,6 +128,27 @@ it("wakes keep-warm once after start and again when an interactive session's tra
   await vi.waitFor(() => expect(mocks.keepWarm).toHaveBeenCalledTimes(2));
 });
 
+// A `global` transcript receipt names no agent. Keep-warm noting it must not fail the commit's
+// fact installation, which invalidates every reader of that session (a member's turn then failed).
+it("installs a global session's transcript facts without invalidating other readers", async () => {
+  start();
+  const seen: { sessionKey?: string; factsInvalidated?: boolean }[] = [];
+  const stop = sessionChanges.subscribeFacts((change) => {
+    seen.push(change as (typeof seen)[number]);
+  });
+  try {
+    sessionChanges.emit({
+      sessionKey: "global",
+      storePath: "/synthetic/agents/main.sqlite",
+      scope: "transcript",
+    });
+  } finally {
+    stop();
+  }
+  expect(seen).toEqual([expect.objectContaining({ sessionKey: "global" })]);
+  expect(seen[0]?.factsInvalidated).toBeUndefined();
+});
+
 it("keeps pending database admission private when its publisher wakes retention", async () => {
   const ownerContext = new AsyncLocalStorage<string>();
   ownerContext.run("gateway", () => start());

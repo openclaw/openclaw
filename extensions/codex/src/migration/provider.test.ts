@@ -739,6 +739,12 @@ describe("buildCodexMigrationProvider", () => {
       reason: "codex_subscription_required",
     },
     {
+      name: "Google Cloud account",
+      account: { account: { type: "gcp" }, requiresOpenaiAuth: false },
+      verify: false,
+      reason: "codex_subscription_required",
+    },
+    {
       name: "missing account",
       account: { account: null, requiresOpenaiAuth: true },
       verify: false,

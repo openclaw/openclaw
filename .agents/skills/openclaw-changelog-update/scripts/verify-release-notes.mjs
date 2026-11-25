@@ -368,6 +368,7 @@ function fetchGithubApi(args) {
       const response = JSON.parse(error.stdout.replace(ansiEscapePattern, ""));
       // gh exits 1 for GraphQL NOT_FOUND as well as real command failures.
       // Only a structured GraphQL error response may reach call-specific admission.
+      // gh prefixes only the first line of a batch of GraphQL error messages.
       if (
         error.status === 1 &&
         !error.signal &&
@@ -383,7 +384,8 @@ function fetchGithubApi(args) {
               response.errors.some(
                 (entry) =>
                   line === "error: GraphQL request failed" ||
-                  (typeof entry.message === "string" && line === "gh: " + entry.message),
+                  (typeof entry.message === "string" &&
+                    (line === entry.message || line === "gh: " + entry.message)),
               ),
           )
       ) {

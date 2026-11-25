@@ -188,7 +188,7 @@ describe("assertCodexModelListResponse", () => {
 });
 
 describe("prepareCodexServerNotification", () => {
-  it.each(["modelNotFound", "policyCapacityUnavailable", "inferenceHookDenied"])(
+  it.each(["modelNotFound", "policyCapacityUnavailable", "inferenceHookDenied", "bioPolicy"])(
     "retains failed turns and error notifications for %s",
     (codexErrorInfo) => {
       const error = { message: "The requested model could not run.", codexErrorInfo };
