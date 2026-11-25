@@ -252,7 +252,6 @@ type HistoricalCorpusManifest = {
   surfaces: Record<string, { expected?: Record<string, unknown> }> & {
     channelPairing: { expected: { request: { code: string } } };
   };
-  databases: Array<{ db: string; tables: Record<string, unknown> }>;
   sidecars: unknown;
   verification: Record<string, Array<{ value: string }>>;
   corruption?: unknown;
@@ -263,12 +262,12 @@ const STATE_CORPUS_MANIFEST_ROOT = new URL(
   import.meta.url,
 );
 const HISTORICAL_CORPUS_MANIFEST_SHA256 = new Map([
-  ["2026.7.1", "51631a0297696bda78cf9a5f0ddb3939a5f1276333d2b942f1a2b24bbf99c3fd"],
-  ["2026.7.1-blob", "c87243f0e48a84640eaa8a2c3eb1bb35606998143e97046e3e151d95a024b2ad"],
-  ["2026.7.35", "69e1acb92480b0a4b4660a59885d85df2b95cdd9d3271ce5c738e4fa2e438572"],
-  ["2026.8.35", "df067b3f7bedcdf11b4fcd30a829e0f9d756c680a3675d934d78e6e8f0333232"],
-  ["2026.9.37", "110f83c8f1fd8b375d7e297559434c3de8daf39c86356107feff08fc2d17c6e8"],
-  ["2026.10.10", "4ea26ccd2014902eb43b1a94bf485c15c6116ca8e0356b2896005ac6f099d87f"],
+  ["2026.7.1", "b179c8492f81109704b1ef3dcf4f046c1c6133d5443221aab4f561603c390b62"],
+  ["2026.7.1-blob", "38dd92fe8446c42a9059a567744af6686fb149bb0ba803ef1c26bd0a631702c1"],
+  ["2026.7.35", "47c1ad3776f0a655b9f095c528f6a6a0a73f83f6dfb85573db0531e7dbf47b2e"],
+  ["2026.8.35", "9f36749348a297f0547c8fee91853c0e352d929b191311eb6fbf98949f40eda3"],
+  ["2026.9.37", "0600ea2e9dc1a559efd3fe2af2811918c2f720ac0a6ae9eade1309ccf70d582f"],
+  ["2026.10.10", "7c3e9ddd12f8adec0d965cacf60864c0b0446c051a724119dd1652b5eb25ff55"],
 ]);
 
 function convertedText(converted_values: number, columns_converted: number) {
@@ -310,21 +309,6 @@ function restoreArchivedFacts(manifest: HistoricalCorpusManifest, release: strin
   surfaces.taskRun!.expected!.taskId = "42cd1fec-114d-415d-b260-9cacac392401";
   surfaces.channelPairing.expected.request.code = "78VUXM33";
   verification.deviceIdentity![0]!.value = String(surfaces.deviceIdentity!.expected!.deviceId);
-
-  const database = manifest.databases.find(({ db }) => db === "state/openclaw.sqlite")!;
-  database.tables.config_revision_keys = {
-    rows: 0,
-    strict: false,
-    virtual: false,
-    shadow: false,
-    source_of_truth: true,
-  };
-  // The archive records tables in ASCII order.
-  database.tables = Object.fromEntries(
-    Object.keys(database.tables)
-      .toSorted()
-      .map((name) => [name, database.tables[name]]),
-  );
 }
 
 export function readHistoricalStateCorpusManifest(release: string): string {
@@ -341,7 +325,7 @@ export function readHistoricalStateCorpusManifest(release: string): string {
     return bytes;
   }
 
-  // The anchor hash fixes the schema, values and row order before historical edits.
+  // The anchor hash fixes retained provenance and values before historical edits.
   const manifest = JSON.parse(bytes) as HistoricalCorpusManifest;
   restoreArchivedFacts(manifest, release);
   return checkedFrozenText(
