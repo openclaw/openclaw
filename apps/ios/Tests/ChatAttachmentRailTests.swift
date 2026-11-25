@@ -99,7 +99,7 @@ struct ChatAttachmentRailTests {
 
         #expect(model.attachments.map(\.id) == [ids[0]])
         #expect(model.preparingAttachments.map(\.id) == [ids[1]])
-        #expect(model.preparingAttachments.first?.failure == "Could not attach: gone.pdf")
+        #expect(model.preparingAttachments.first?.failure == "Couldn’t attach gone.pdf")
         #expect(model.preparingAttachments.first?.retry != nil)
         #expect(model.errorText == nil)
 

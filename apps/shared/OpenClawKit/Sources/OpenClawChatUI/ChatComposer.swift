@@ -1536,7 +1536,7 @@ extension OpenClawChatComposer {
             else { return }
             guard let data else {
                 viewModel.reportAttachmentFailure(
-                    String(format: String(localized: "Could not attach: %@"), fileName),
+                    OpenClawChatViewModel.couldNotAttachMessage(fileName, preparation: preparation),
                     preparation: preparation)
                 return
             }

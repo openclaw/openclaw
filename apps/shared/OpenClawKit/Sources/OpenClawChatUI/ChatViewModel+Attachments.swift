@@ -118,6 +118,19 @@ extension OpenClawChatViewModel {
         }
     }
 
+    /// The iPhone tile says what failed with the file's name first; without a tile the chat error keeps its wording.
+    static func couldNotAttachMessage(_ fileName: String, preparation: UUID?) -> String {
+        preparation == nil
+            ? String(format: String(localized: "Could not attach: %@"), fileName)
+            : String(format: String(localized: "Couldn’t attach %@"), fileName)
+    }
+
+    static func tooLargeMessage(_ fileName: String, preparation: UUID?) -> String {
+        preparation == nil
+            ? String(format: String(localized: "Too large to send: %@"), fileName)
+            : String(format: String(localized: "%@ is too large to send."), fileName)
+    }
+
     func isAttachmentPreparationRemoved(_ id: UUID?) -> Bool {
         guard let id else { return false }
         return !self.preparingAttachments.contains { $0.id == id }
@@ -158,7 +171,7 @@ extension OpenClawChatViewModel {
         for attachment in candidates {
             guard attachment.data.count <= remaining else {
                 self.reportAttachmentFailure(
-                    String(format: String(localized: "Too large to send: %@"), attachment.fileName),
+                    Self.tooLargeMessage(attachment.fileName, preparation: preparation),
                     preparation: preparation)
                 return false
             }
@@ -322,7 +335,7 @@ extension OpenClawChatViewModel {
             } catch ChatAttachmentReadError.tooLarge {
                 if preparation != nil {
                     self.reportAttachmentFailure(
-                        String(format: String(localized: "Too large to send: %@"), url.lastPathComponent),
+                        Self.tooLargeMessage(url.lastPathComponent, preparation: preparation),
                         preparation: preparation)
                 } else {
                     oversized.append(url.lastPathComponent)
@@ -330,7 +343,7 @@ extension OpenClawChatViewModel {
             } catch {
                 if preparation != nil {
                     self.reportAttachmentFailure(
-                        String(format: String(localized: "Could not attach: %@"), url.lastPathComponent),
+                        Self.couldNotAttachMessage(url.lastPathComponent, preparation: preparation),
                         preparation: preparation,
                         transient: true)
                 } else {
@@ -373,14 +386,14 @@ extension OpenClawChatViewModel {
         guard self.ownsAttachmentSession(expectedSession) else { return nil }
         guard !data.isEmpty else {
             self.reportAttachmentFailure(
-                String(format: String(localized: "Could not attach: %@"), fileName),
+                Self.couldNotAttachMessage(fileName, preparation: preparation),
                 preparation: preparation,
                 transient: true)
             return .unreadable
         }
         if data.count > Self.maxImageSourceBytes {
             self.reportAttachmentFailure(
-                String(format: String(localized: "Too large to send: %@"), fileName),
+                Self.tooLargeMessage(fileName, preparation: preparation),
                 preparation: preparation)
             return .tooLarge
         }
@@ -418,7 +431,7 @@ extension OpenClawChatViewModel {
         guard self.ownsAttachmentSession(expectedSession) else { return nil }
         if processed.count > limits.maxImageBytes {
             self.reportAttachmentFailure(
-                String(format: String(localized: "Too large to send: %@"), fileName),
+                Self.tooLargeMessage(fileName, preparation: preparation),
                 preparation: preparation)
             return .tooLarge
         }
@@ -461,12 +474,12 @@ extension OpenClawChatViewModel {
         } catch ChatAttachmentReadError.tooLarge {
             guard self.ownsAttachmentSession(expectedSession) else { return }
             self.reportAttachmentFailure(
-                String(format: String(localized: "Too large to send: %@"), fileName),
+                Self.tooLargeMessage(fileName, preparation: preparation),
                 preparation: preparation)
         } catch {
             guard self.ownsAttachmentSession(expectedSession) else { return }
             self.reportAttachmentFailure(
-                String(format: String(localized: "Could not attach: %@"), fileName),
+                Self.couldNotAttachMessage(fileName, preparation: preparation),
                 preparation: preparation,
                 transient: true)
         }

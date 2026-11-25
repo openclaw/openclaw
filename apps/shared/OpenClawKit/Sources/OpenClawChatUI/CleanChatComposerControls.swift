@@ -437,8 +437,8 @@ enum ChatAttachmentRailMetrics {
     /// How far the badge's touch target reaches past the tile; the rail keeps that much room inside its clip.
     static let badgeOverhang: CGFloat = badgeHitSize / 2 - badgeCenterInset
     static let fileIconSize: CGFloat = 40
-    /// The retry or reason mark on a failed tile, drawn inside a full touch target.
-    static let failureMarkSize: CGFloat = 28
+    /// The retry or reason glyph on a failed tile, drawn inside a full touch target.
+    static let failureGlyphSize: CGFloat = 18
     /// Claude's ring is about a third of its tile wide.
     static let spinnerSize: CGFloat = 20
     static let spinnerLineWidth: CGFloat = 2.5
@@ -618,7 +618,7 @@ struct ChatAttachmentTile: View {
         switch self.tile.status {
         case .ready: Text(verbatim: self.name)
         case .preparing: Text(String(format: String(localized: "Preparing %@"), self.name))
-        case .failed: Text(String(format: String(localized: "Could not attach: %@"), self.name))
+        case .failed: Text(String(format: String(localized: "Couldn’t attach %@"), self.name))
         }
     }
 
@@ -627,9 +627,8 @@ struct ChatAttachmentTile: View {
         case .ready: Text(verbatim: self.isImage ? "" : self.detail)
         case .preparing: Text(verbatim: "")
         case let .failed(message, _):
-            // "Could not attach: <name>" is already the label.
-            Text(verbatim: message == String(format: String(localized: "Could not attach: %@"), self.name) ? "" :
-                message)
+            // "Couldn’t attach <name>" is already the label.
+            Text(verbatim: message == String(format: String(localized: "Couldn’t attach %@"), self.name) ? "" : message)
         }
     }
 
@@ -728,11 +727,12 @@ struct ChatAttachmentTile: View {
             Button {
                 if let retry { retry() } else { self.showsFailure = true }
             } label: {
-                Image(systemName: retry == nil ? "exclamationmark" : "arrow.clockwise")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: metrics.failureMarkSize, height: metrics.failureMarkSize)
-                    .background(OpenClawChatTheme.danger, in: Circle())
+                // Ink, not red: the glyph and the missing thumbnail say this one did not attach. White over a
+                // darkened photo, the text color on a plain tile, as the spinner it replaces.
+                Image(systemName: retry == nil ? "exclamationmark.circle" : "arrow.clockwise")
+                    .font(.system(size: metrics.failureGlyphSize, weight: .semibold))
+                    .foregroundStyle(self.tile.preview != nil && self.isImage ? .white : OpenClawChatTheme
+                        .assistantText)
                     .frame(width: metrics.badgeHitSize, height: metrics.badgeHitSize)
                     .contentShape(Rectangle())
             }
@@ -740,7 +740,7 @@ struct ChatAttachmentTile: View {
             // Centered on the square, or on the icon slot of a card.
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: self.isImage ? .center : .leading)
             .padding(.leading, self.isImage ? 0 : 7 + (metrics.fileIconSize - metrics.badgeHitSize) / 2)
-            .accessibilityLabel(String(localized: "Retry"))
+            .accessibilityLabel(String(localized: "Try again"))
             .accessibilityHidden(retry == nil)
             .popover(isPresented: self.$showsFailure) {
                 Text(message)
