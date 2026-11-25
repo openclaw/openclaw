@@ -65,6 +65,7 @@ function makeCatalog(
     archived?: boolean;
     sourceHomeId?: string;
     sessionKey?: string;
+    previewImageDigest?: string;
     shareRoute?: typeof SHARE_ROUTE;
   } = {},
 ) {
@@ -122,6 +123,7 @@ suite.define(() => {
                 { hostId: "gateway", label: "Beamed sessions", kind: "gateway" },
                 {
                   shareRoute: SHARE_ROUTE,
+                  previewImageDigest: "sha256:" + "0".repeat(64),
                   canContinue: false,
                   continuationUnavailableReason: handoffReason,
                 },
@@ -134,6 +136,12 @@ suite.define(() => {
           },
           "beam.owned.resolve": { sessionKey: "agent:main:publisher-continuation" },
           "beam.owned.read": {
+            previewImage: {
+              name: "diagram.png",
+              mimeType: "image/png",
+              digest: "sha256:" + "0".repeat(64),
+              data: "iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGNQCGiAIwZkDgBemgeBLDSLhAAAAABJRU5ErkJggg==",
+            },
             hostId: "gateway",
             label: "Owned synthetic Beam",
             threadId: fullId,
@@ -145,6 +153,18 @@ suite.define(() => {
         },
       });
       await page.goto(new URL("beam/owned-synthetic-beam-aaaaaaaaaaaa", suite.server.baseUrl).href);
+      const imageLink = page.getByRole("link", { name: "diagram.png" });
+      await imageLink.waitFor();
+      expect(await imageLink.getAttribute("download")).toBe("diagram.png");
+      expect(
+        await imageLink.locator("img").evaluate(async (img) => {
+          if (!(img instanceof HTMLImageElement)) {
+            throw new Error("Expected a screenshot image");
+          }
+          await img.decode();
+          return img.naturalWidth;
+        }),
+      ).toBe(4);
       await exactText(page, "My owned Beam is readable without operator.read.").waitFor();
       await exactText(page, handoffReason).waitFor();
       expect(await page.locator(`${visiblePane} textarea`).isDisabled()).toBe(true);

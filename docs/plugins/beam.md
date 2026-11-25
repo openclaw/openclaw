@@ -323,6 +323,17 @@ The mirror shares sessions from this Gateway’s machine. The v2 poller rotates 
 
 When browsing Claude sessions on paired nodes, update those nodes alongside the Gateway. Older node builds without block-resume metadata report an update-required error when a mixed row spans pages.
 
+## Share a screenshot
+
+With a Beam CLI that supports screenshot publishing, send a reviewed v2 packet and one PNG through the same Gateway link:
+
+```sh
+beam bundle create task.beam.json --attach screenshot.png --out task.beam.zip
+beam share task.beam.zip --to https://gateway.example
+```
+
+Open the returned snapshot link to view or download the image. The Gateway advertises `publishScreenshot` only to callers with publishing access. Each PNG can contain up to 512 KiB and 16,777,216 pixels. The screenshot is part of the reviewed publication and retains its original metadata. Its visibility and seven-day lifetime follow the snapshot. The original packet stays text-only for pull and continuation.
+
 ## Troubleshooting
 
 **`404 Not Found`** The Beam plugin is disabled, runtime application failed, or the request is reaching another Gateway. Check the enablement result and [inspect the plugin](/plugins/manage-plugins#apply-changes-and-inspect).
