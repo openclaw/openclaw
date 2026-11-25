@@ -554,6 +554,13 @@ export function parseArgs(argv: string[]) {
   if (!RERUN_GROUPS.has(args.inputs.rerun_group)) {
     throw new Error(`rerun_group must be one of: ${[...RERUN_GROUPS].join(", ")}`);
   }
+  // Build-only admission rejects reused evidence; do not inherit the reuse default.
+  if (args.inputs.rerun_group === "build-only") {
+    if (args.specifiedInputs.includes("reuse_evidence") && args.inputs.reuse_evidence !== "false") {
+      throw new Error("rerun_group=build-only requires fresh qualification; omit reuse_evidence");
+    }
+    args.inputs.reuse_evidence = "false";
+  }
   if (Object.hasOwn(args.inputs, "ref")) {
     throw new Error("SHA-pinned release validation reserves the ref input for --sha");
   }

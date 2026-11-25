@@ -6901,6 +6901,19 @@ jobs:
           console.log(`OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=${scenario}`);
           NODE
 
+      - name: Pin previous schema reader source
+        if: github.event_name == 'pull_request' && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor ')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          fork="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${PR_BASE}...${PR_HEAD}" --jq .merge_base_commit.sha)"
+          [[ "$fork" =~ ^[0-9a-f]{40}$ ]]
+          git -c credential.helper= fetch --no-tags --depth=1 origin "$fork"
+          printf 'OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA=%s\n' "$fork" >> "$GITHUB_ENV"
+
       # Smoke packages include declarations for every public entrypoint.
       - name: Prepare Docker smoke package
         if: github.event_name == 'pull_request' || (inputs.release_gate && needs.preflight.outputs.ci_qualification != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && github.repository == 'openclaw/openclaw')
@@ -6949,6 +6962,7 @@ jobs:
             .artifacts/upgrade-survivor/release-update-survivor/healthy/trial.json
             .artifacts/upgrade-survivor/release-update-survivor/healthy/rows-before.json
             .artifacts/upgrade-survivor/release-update-survivor/healthy/rows-after.json
+            .artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read.json
             .artifacts/upgrade-survivor/release-update-survivor/healthy/update-runs.json
             .artifacts/upgrade-survivor/release-update-survivor/healthy/gateway-launcher.log
             .artifacts/upgrade-survivor/release-update-survivor/crash/summary.json
@@ -6958,6 +6972,9 @@ jobs:
             .artifacts/upgrade-survivor/release-update-survivor/crash/crash-after-migration.json
             .artifacts/upgrade-survivor/release-update-survivor/crash/update-runs.json
             .artifacts/upgrade-survivor/release-update-survivor/crash/gateway-launcher.log
+            .artifacts/upgrade-survivor/release-update-survivor/downgrade/downgrade-source.json
+            .artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.json
+            .artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.log
           include-hidden-files: true
           if-no-files-found: warn
 

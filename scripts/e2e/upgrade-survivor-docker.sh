@@ -582,16 +582,29 @@ if [ "$SCENARIO" = "release-update" ]; then
   mkdir -p "$ARTIFACT_DIR"
   chmod a+rwx "$ARTIFACT_DIR"
   UPGRADE_SCENARIO_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-fixtures.XXXXXX")"
-  node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/release-fixture.mjs" \
-    "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE"
+  if [ "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" != downgrade ]; then
+    node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/release-fixture.mjs" \
+      "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE"
+  fi
+  node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/schema-downgrade-source.mjs" \
+    "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE" "${OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA:-}"
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
   case "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" in
     "") release_cases=(healthy crash) ;;
-    healthy|crash) release_cases=("$OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE") ;;
+    healthy|crash|downgrade) release_cases=("$OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE") ;;
     *) echo "Unknown release survivor case" >&2; exit 1 ;;
   esac
+  downgrade_selected="$(node -p "require(process.argv[1]).selected" "$UPGRADE_SCENARIO_STAGE/downgrade-source.json")"
+  if [ -z "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" ] && [ "$downgrade_selected" = true ]; then
+    release_cases+=(downgrade)
+  fi
   for release_case in "${release_cases[@]}"; do
     mkdir -p "$ARTIFACT_DIR/$release_case"
+    release_runner=release-update.mjs
+    if [ "$release_case" = downgrade ]; then
+      [ "$downgrade_selected" = true ] || { echo "Downgrade requires a schema/migration change and pinned fork." >&2; exit 1; }
+      release_runner=schema-downgrade-run.mjs
+    fi
     docker_e2e_run_with_harness \
       --init \
       --user root \
@@ -602,7 +615,7 @@ if [ "$SCENARIO" = "release-update" ]; then
       "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
       "$IMAGE_NAME" \
       timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
-      node scripts/e2e/lib/upgrade-survivor/release-update.mjs
+      node "scripts/e2e/lib/upgrade-survivor/$release_runner"
   done
   run_completed="1"
   exit 0
