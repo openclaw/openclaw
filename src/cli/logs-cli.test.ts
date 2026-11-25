@@ -443,6 +443,20 @@ it("reuses one Gateway connection for --follow polls and keeps the --timeout dea
   expectText(stderr, ["stop after reconnect"]);
 });
 
+it("stops --follow when the reused connection closes for auth", async () => {
+  const message = "gateway closed (4001): client invalidated";
+  const request = vi.fn().mockRejectedValueOnce(new Error(message));
+  callGatewayFromCli.mockImplementationOnce(async (_method, _opts, _params, extra) => {
+    await extra.onResponse(request, new AbortController().signal, logPage(["first poll"], 1));
+    throw createGatewayCloseError({ code: 4001, reason: "client invalidated", message });
+  });
+
+  const { stderr } = await runFailure(follow);
+
+  expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+  expectText(stderr, [message], ["gateway disconnected"]);
+});
+
 it.each(["text", "json"])("redacts Gateway URLs in %s errors", async (mode) => {
   const rawUrl =
     "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed";

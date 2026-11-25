@@ -54,13 +54,18 @@ export async function requestLogsTail(
         return connection.promise;
       },
     });
-    follow.closed = call.catch(() => undefined);
+    follow.closed = call.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
     return await Promise.race([firstResult.promise, call]);
   } catch (error) {
-    // A failed poll retires the connection; the follow retry path reconnects.
+    // A failed poll retires the connection; the follow retry path reconnects. A dropped
+    // connection reports its typed close, so auth and policy closes stay terminal.
     follow.close?.();
+    const closeError = await follow.closed;
     throw deadline.aborted && !extra.signal?.aborted
       ? new Error(`gateway timeout after ${timeoutMs}ms`)
-      : error;
+      : (closeError ?? error);
   }
 }
