@@ -2772,6 +2772,7 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaImageAttachment.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.d6d77aa107e5c0c8","source":"Image unavailable"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaImageAttachment.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.7c904d10b3fa3bec","source":"Loading image…"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaImageAttachment.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.538d25a03f60a2aa","source":"Opens image preview"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaImageAttachment.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.812df118c67f31ea","source":"Retry"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/GatewayNodeApproval.kt","kind":"ui-call","surface":"android","id":"native.android.a6a7888ce3a46fdc","source":"Could not check phone access. Try again."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/GatewayNodeApproval.kt","kind":"ui-call","surface":"android","id":"native.android.7bea18d882ea3cd4","source":"Could not verify phone access. Check approval again."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/GatewayNodeApproval.kt","kind":"ui-call","surface":"android","id":"native.android.b4e8739f7aa858ec","source":"Phone access changed. Review the request and try again."},

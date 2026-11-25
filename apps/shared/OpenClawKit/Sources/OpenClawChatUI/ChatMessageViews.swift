@@ -872,6 +872,8 @@ private struct AttachmentRow: View {
                 ChatMediaImageAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
+                    width: self.att.width,
+                    height: self.att.height,
                     resolverReady: resolverReady,
                     load: { try await self.loadMedia($0, .image, nil) })
             case .audio:
