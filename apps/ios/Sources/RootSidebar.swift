@@ -170,15 +170,6 @@ struct RootSidebar: View {
     private func agentSelectorLabel(_ agent: AgentSummary, showsPicker: Bool) -> some View {
         HStack(spacing: 9) {
             self.agentAvatarBadge(agent, size: 36)
-                .overlay(alignment: .topTrailing) {
-                    if self.appModel.isOperatorGatewayConnected {
-                        Circle()
-                            .fill(OpenClawBrand.ok)
-                            .frame(width: 11, height: 11)
-                            .overlay(Circle().strokeBorder(OpenClawSidebarPalette.background, lineWidth: 2))
-                            .accessibilityHidden(true)
-                    }
-                }
             Text(verbatim: Self.agentDisplayName(agent))
                 .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(OpenClawSidebarPalette.textStrong)
