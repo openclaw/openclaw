@@ -52,7 +52,7 @@ describe("buildSlackInteractiveBlocks", () => {
 
     expect(sections.join("")).toBe("y".repeat(3_100));
     expect(sections.every((section) => section.length <= 3_000)).toBe(true);
-    expect((selectBlock.elements?.[0]?.placeholder?.text ?? "").length).toBeLessThanOrEqual(75);
+    expect(selectBlock.elements?.[0]?.placeholder?.text?.length).toBeLessThanOrEqual(75);
     expect(buttonBlock.elements?.[0]?.value).toBe(long);
   });
 

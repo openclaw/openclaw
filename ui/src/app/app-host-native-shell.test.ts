@@ -41,7 +41,10 @@ function nativeSessionContext(
 
 function navigationShell(context: Partial<ApplicationContext> = {}) {
   const shell = createShellOwner();
-  shell.runtime = { context: { navigate, ...context } } as ApplicationRuntime;
+  shell.runtime = {
+    context: { ...nativeSessionContext("main"), ...context },
+  } as ApplicationRuntime;
+  shell.routeState = { routeId: "chat" };
   return shell;
 }
 
@@ -84,6 +87,7 @@ it("focuses the navigation drawer without a tooltip claiming Escape", async () =
   onTestFinished(() => runtime.stop());
   const shell = createShellOwner();
   shell.runtime = runtime;
+  shell.routeState = { routeId: "chat" };
   const drawer = document.createElement("nav");
   drawer.className = "shell-nav";
   shell.navDrawerElement = drawer;
@@ -199,6 +203,23 @@ it.each(["none", "keyboardShortcuts", "approvalOverlay"] as const)(
     });
   },
 );
+
+it.each([
+  ["ai-agents", "/settings/ai-agents", "agents", "/settings/agents"],
+  ["lobsterdex", "/settings/lobsterdex", "appearance", "/settings/appearance"],
+  ["plugin-settings", "/settings/plugins/fixture", "plugin-settings", "/settings/plugins"],
+] as const)("goes up one level when Escape is pressed on %s", (routeId, pathname, parent, path) => {
+  const shell = settingsShell();
+  shell.routeState = { routeId, location: { pathname, search: "", hash: "" } };
+
+  document.dispatchEvent(keydown({ key: "Escape" }));
+
+  expect(navigate).toHaveBeenCalledExactlyOnceWith(parent, {
+    pathname: path,
+    search: "",
+    hash: "",
+  });
+});
 
 it("keeps the raw config editor unchanged when Escape is pressed", () => {
   settingsShell();

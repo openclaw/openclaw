@@ -299,7 +299,9 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
         await sessionMutationHandlers["sessions.patch"]!({
           params: { key: targetKey, ...patch },
           respond,
-          context: createSessionMutationContext(),
+          context: createSessionMutationContext({
+            agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } },
+          }),
           client: humanClient(),
         } as never);
         expect(historyLane.pool.getSnapshot().workersCreated).toBe(historyWorkers.workersCreated);

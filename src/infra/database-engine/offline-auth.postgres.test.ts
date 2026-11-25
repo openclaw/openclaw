@@ -15,7 +15,7 @@ import { prepareCliDatabaseEngine } from "../../cli/database-engine-selection.js
 import { registerModelsCli } from "../../cli/models-cli.js";
 import { ensureConfigReady } from "../../cli/program/config-guard.js";
 import { agentsDeleteCommand } from "../../commands/agents.commands.delete.js";
-import { assertCronStateSchemaSupported } from "../../commands/doctor/cron/schema-safety.js";
+import { assertCronStateSchemaSupportedAsync } from "../../commands/doctor/cron/schema-safety.js";
 import { inspectCronOwnerRowsForDoctor } from "../../commands/doctor/cron/store-inventory.js";
 import { saveModelProviderApiKey } from "../../commands/models/auth-api-key.js";
 import { runStartupConfigPreflight } from "../../commands/startup-config-preflight.js";
@@ -262,8 +262,8 @@ describe.skipIf(!connection)("PostgreSQL cron read-only owner", () => {
         };
         await saveCronJobsStore(storePath, store);
         await closeStateDatabaseForTest();
+        await assertCronStateSchemaSupportedAsync(state.env);
         const ownerRows = withEngineStoreAdmission(() => {
-          assertCronStateSchemaSupported(state.env);
           return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
             ({ db }) => inspectCronOwnerRowsForDoctor(db, cronStoreKey(storePath)),
             { env: state.env },

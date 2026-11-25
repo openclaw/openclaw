@@ -12,6 +12,17 @@ export function isSyntheticGatewayCaller(client: GatewayClient | null): boolean 
   );
 }
 
+/** Creation-only defaults require a direct profiled operator, not a delegated transport. */
+export function isAttendedSessionCreator(client: GatewayClient | null): boolean {
+  return Boolean(
+    client?.authenticatedUserProfile?.profileId &&
+    client.connect.role === "operator" &&
+    !client.internal?.remoteIngressPrincipal &&
+    !client.internal?.sessionCreation?.requesterSessionKey &&
+    !isSyntheticGatewayCaller(client),
+  );
+}
+
 /** Handshake-attested person identity; callers still own current request and target authority. */
 export function resolveAuthenticatedPersonalGatewayProfileId(
   client: GatewayClient | null,
@@ -22,6 +33,23 @@ export function resolveAuthenticatedPersonalGatewayProfileId(
     !isSyntheticGatewayCaller(client) &&
     profileId &&
     profileId !== GATEWAY_OWNER_PROFILE_ID
+    ? profileId
+    : undefined;
+}
+
+/** A named display profile alone cannot establish a plugin publisher's individual identity. */
+export function resolvePluginRequestPersonProfileId(client: GatewayClient): string | undefined {
+  const profileId = resolveAuthenticatedPersonalGatewayProfileId(client);
+  if (!profileId) {
+    return undefined;
+  }
+  const ingress = client.internal?.remoteIngressPrincipal?.principal;
+  if (ingress) {
+    return ingress.kind !== "owner" && ingress.profileId === profileId ? profileId : undefined;
+  }
+  // Owner-device enrollment authenticates the owner's OpenClaw ID account.
+  // Shared secrets and unlinked devices have no individual login or linked owner profile.
+  return client.authenticatedUserId || client.internal?.openclawIdPrincipal?.kind === "owner"
     ? profileId
     : undefined;
 }

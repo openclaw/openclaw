@@ -657,15 +657,25 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     }
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
-        let res = try await gateway.request(OpenClawChatGatewayRequests.health(timeoutMs: timeoutMs))
+        // Health probes must not spend their request budget waiting for a reconnect.
+        // The session owns reconnects; a later probe can use its new live route.
+        guard let route = await gateway.currentRoute() else { throw CancellationError() }
+        let res = try await gateway.request(
+            OpenClawChatGatewayRequests.health(timeoutMs: timeoutMs),
+            ifCurrentRoute: route)
         return (try? JSONDecoder().decode(OpenClawGatewayHealthOK.self, from: res))?.ok ?? true
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
         AsyncStream { continuation in
             let task = Task {
-                let stream = await self.gateway.subscribeServerEvents()
-                for await evt in stream {
+                let subscription = await self.gateway.makeServerEventSubscription(
+                    matching: { OpenClawChatGatewayPayloadCodec.acceptsEvent($0) })
+                defer {
+                    subscription.cancel()
+                    continuation.finish()
+                }
+                for await evt in subscription.events {
                     if Task.isCancelled {
                         return
                     }

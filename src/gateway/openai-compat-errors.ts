@@ -1,3 +1,4 @@
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentStreamParams } from "../agents/command/shared-types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
@@ -5,6 +6,10 @@ import type { FailoverReason } from "../agents/failover/signal.js";
 import { TLS_CERTIFICATE_ERROR_USER_TEXT } from "../agents/failover/user-copy.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { SessionWorkStartError } from "../config/sessions/session-work-start.js";
+import {
+  SESSION_WORK_START_CHANGED_ERROR_CODE,
+  type SessionWorkStartChangedError,
+} from "../config/sessions/work-start-error.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
 export type OpenAiCompatError = {
@@ -24,6 +29,7 @@ const ERROR_TYPE_BY_REASON = {
   overloaded: "api_error",
   billing: "insufficient_quota",
   server_error: "api_error",
+  route_unavailable: "api_error",
   timeout: "api_error",
   tls_certificate: "api_error",
   context_overflow: "invalid_request_error",
@@ -47,6 +53,22 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
   }
   if (err instanceof ToolAuthorizationError) {
     return { status: 403, error: { message: err.message, type: "permission_error" } };
+  }
+  const conflict = collectNestedErrorCandidates(err).find(
+    (error): error is Pick<SessionWorkStartChangedError, "code" | "message"> =>
+      isRecord(error) &&
+      error.code === SESSION_WORK_START_CHANGED_ERROR_CODE &&
+      typeof error.message === "string",
+  );
+  if (conflict) {
+    return {
+      status: 409,
+      error: {
+        message: conflict.message,
+        type: "invalid_request_error",
+        code: conflict.code,
+      },
+    };
   }
   const described = describeFailoverError(err);
   const reason = described.reason;

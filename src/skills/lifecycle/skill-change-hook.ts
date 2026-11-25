@@ -165,6 +165,7 @@ export async function dispatchCommittedSkillChangeBestEffort(
       {
         action: params.action,
         source: params.source,
+        ...(params.pluginId ? { pluginId: params.pluginId } : {}),
         occurredAt: new Date().toISOString(),
         ...(params.before ? { before: params.before } : {}),
         ...(params.after ? { after: params.after } : {}),

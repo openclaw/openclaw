@@ -30,6 +30,7 @@ import { abortChatRunById, registerChatAbortController } from "../chat-abort.js"
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
@@ -85,7 +86,7 @@ function mockReferencedStoreSnapshot() {
   });
 }
 
-async function sharingFixture(others: "none" | "suggest" = "none") {
+async function sharingFixture(others: "none" | "suggest" | "invited" = "none") {
   const owner = ensureProfileForEmail("owner@example.test");
   const guest = ensureProfileForEmail("guest@example.test");
   const cfg: OpenClawConfig = {
@@ -117,7 +118,7 @@ async function sharingFixture(others: "none" | "suggest" = "none") {
     updatedAt: user.updatedAt,
   });
   const client = {
-    connect: { scopes: ["operator.questions"] },
+    connect: { scopes: ["operator.questions"], client: { id: "test" } },
     authenticatedUserProfile: profile(guest),
   } as GatewayClient;
   return { owner, guest, cfg, client, profile };
@@ -171,7 +172,12 @@ it("requires membership to resolve a suggest-capped guest question", async () =>
   });
 });
 
-it.each([{ others: "none", member: false, revoke: false }] as const)(
+it.each([
+  { others: "none", member: false, revoke: false },
+  { others: "invited", member: false, revoke: false },
+  { others: "invited", member: true, revoke: false },
+  { others: "invited", member: true, revoke: true },
+] as const)(
   "scopes question reads and events to current membership ($others, member: $member, revoke: $revoke)",
   async ({ others, member, revoke }) => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
@@ -194,10 +200,7 @@ it.each([{ others: "none", member: false, revoke: false }] as const)(
         const socket = { bufferedAmount: 0, close: vi.fn(), readyState: 1, send: vi.fn() };
         const client: GatewayWsClient = {
           socket: socket as unknown as GatewayWsClient["socket"],
-          connect: {
-            role: "operator",
-            scopes: ["operator.questions"],
-          } as GatewayWsClient["connect"],
+          connect: gatewayConnect(["operator.questions"]),
           connId,
           usesSharedGatewayAuth: false,
           authenticatedUserProfile: userProfile(profile),
@@ -523,7 +526,7 @@ it.each(["release", "replacement", "rotation", "abort"] as const)(
         await manager.drain();
         expect(broadcast).toHaveBeenCalledWith(
           "question.resolved",
-          { id, status: "cancelled" },
+          { id, status: "cancelled", resolvedBy: "requester-inactive" },
           publicationOptions,
         );
         expect(
@@ -616,7 +619,7 @@ it("diverts operator-entered credentials into the store and exposes only a store
     await manager.drain();
     expect(broadcast).toHaveBeenCalledWith(
       "question.resolved",
-      { id, status: "answered", answers: safeAnswers },
+      { id, status: "answered", answers: safeAnswers, resolvedBy: "control-ui" },
       publicationOptions,
     );
     expect(JSON.stringify([resolved, manager.get(id), broadcast.mock.calls])).not.toContain(value);
@@ -703,11 +706,10 @@ it("rejects masked env requests while preserving ordinary question host validati
     ).toMatchObject(invalidRequest);
     expect(manager.get(ordinaryId)?.status).toBe("pending");
     const id = await requestSecretQuestion();
-    expect(await call("question.resolve", { id, cancel: true })).toEqual([
-      true,
-      { status: "cancelled" },
-      undefined,
-    ]);
+    expect(
+      await call("question.resolve", { id, cancel: true, resolvedBy: "chat-composer-replacement" }),
+    ).toEqual([true, { status: "cancelled" }, undefined]);
+    expect(manager.get(id)).not.toHaveProperty("resolvedBy");
   });
 });
 

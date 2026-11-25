@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
+import { dirname } from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
+import type { GatewayConfig } from "../config/types.gateway.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -23,10 +26,12 @@ import {
   prepareUserProfileRoleAuthority,
   prepareUserProfileRolePolicyAuthority,
   prepareUserProfileSelectionAuthority,
+  publishCanonicalUserChannelPolicy,
 } from "./user-channel-identity-operations.js";
 import { readProfileAuthority } from "./user-profile-authority.js";
 import {
   captureUserProfileAuthorityRead,
+  onUserProfilesChanged,
   readUserProfileAliasRevision,
 } from "./user-profile-events.js";
 import {
@@ -93,6 +98,38 @@ const identity: UserChannelIdentity = {
   accountId: "team-bot",
   senderId: "100000000000000001",
 };
+it("retains profile observers when a config reload republishes unchanged channel policy", async () => {
+  const policyOptions = stateOptions("state/openclaw.sqlite");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: dirname(dirname(policyOptions.path)) }, async () => {
+    const profile = ensureProfileForEmail("policy@example.test", policyOptions);
+    await changeCanonicalUserChannelIdentity("link", profile.id, identity, policyOptions);
+    const gateway: GatewayConfig = {
+      auth: { identityScopes: { "policy@example.test": ["operator.read"] } },
+    };
+    await publishCanonicalUserChannelPolicy(gateway, [identity.senderId]);
+    const authority = await prepareUserChannelIdentityAuthority(identity, policyOptions);
+    const revision = readUserProfileAliasRevision();
+    const changed = vi.fn();
+    const stop = onUserProfilesChanged(changed);
+    try {
+      await publishCanonicalUserChannelPolicy(structuredClone(gateway), [identity.senderId]);
+      expect(changed).not.toHaveBeenCalled();
+      expect(readUserProfileAliasRevision()).toBe(revision);
+      expect(authority?.isCurrent()).toBe(true);
+
+      const next: GatewayConfig = {
+        auth: { identityScopes: { "policy@example.test": ["operator.write"] } },
+      };
+      await publishCanonicalUserChannelPolicy(next, [identity.senderId]);
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect(authority?.isCurrent()).toBe(false);
+      await publishCanonicalUserChannelPolicy(next, ["another-owner"]);
+      expect(changed).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+    }
+  });
+});
 it.each(["email binding", "stale role reply"] as const)(
   "keeps revoked authority retired after an ABA change to %s",
   async (change) => {

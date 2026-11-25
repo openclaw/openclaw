@@ -155,7 +155,10 @@ capabilities. Local sessions without channel bindings and scheduled runs retain
 configured-channel discovery. This reduces prompt overhead without a new setting;
 bindings select what the schema advertises, while normal delivery permissions
 still govern execution. Unchanged bindings and capabilities produce stable schema
-bytes regardless of plugin registration order.
+bytes regardless of plugin registration order. Channel-specific parameters, such
+as Discord guild and role fields, come from the owning channel plugin, so a turn
+carries them only when that channel is in scope and advertises an action that
+reads them.
 
 Completion and settle turns with a source-bound `message` grant may send text,
 `media`, or `attachments`, including media-only replies, the optional `caption`,

@@ -28,6 +28,11 @@ export type PickerParams<Option extends PickerOption> = {
   variant?: "submenu";
   /** Show the choices as a page of the enclosing sheet instead of a floating popup. */
   sheet?: boolean;
+  /**
+   * Show the choices as a bottom sheet at phone width. Defaults to lists long enough to search,
+   * where an anchored popup leaves a few rows above the keyboard.
+   */
+  phoneSheet?: boolean;
   /** `true` searches long lists; `"always"` keeps the field for short lists too. */
   searchable?: boolean | "always";
   /** Supply intrinsic-width content for large flat catalogs; undefined declines windowing. */

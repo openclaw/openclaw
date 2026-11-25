@@ -10,7 +10,7 @@ import {
 import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import { normalizeToolPolicyName, readToolAllowlistIntersection } from "./tool-policy-shared.js";
-import type { ToolSearchConfig } from "./tool-search-types.js";
+import type { ToolSearchConfig } from "./tool-search-protocol.js";
 import {
   applyToolSchemaDirectoryCatalog,
   applyToolSearchCatalog,

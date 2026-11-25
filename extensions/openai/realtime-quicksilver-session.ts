@@ -246,9 +246,8 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
         timer: setTimeout(
           () => expirePendingOffer(token, offer),
           OPENAI_QUICKSILVER_PENDING_TTL_MS,
-        ),
+        ).unref(),
       };
-      offer.timer.unref?.();
       pendingOffers.set(token, offer);
       reservations.add(token);
       return {

@@ -3,6 +3,7 @@ import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatSelectedEntry } from "../plugins/reload-entry-guidance.js";
 import { defaultRuntime } from "../runtime.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
 
@@ -15,7 +16,7 @@ export async function runPluginsReloadCommand(
   const pluginIds = [...new Set(ids)];
   const gateway = await resolvePluginLifecycleGateway();
   if (!gateway) {
-    throw new Error("The Gateway is not running. Start it before reloading a plugin.");
+    throwExpectedCliError("The Gateway is not running. Start it before reloading a plugin.");
   }
   const consent = resolvePluginCapabilityConsentCliOptions({
     ...opts,

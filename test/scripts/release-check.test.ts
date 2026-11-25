@@ -10,11 +10,11 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { create } from "tar";
+import { create } from "tar/raw";
 import { describe, expect, vi } from "vitest";
 import { parse } from "yaml";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveNodeCompilerArgs } from "../../scripts/lib/vitest-node-args.mts";
 import {
   checkPackedTargetBootstrap as checkTarget,
   createPackedTarballInstallArgs as installArgs,
@@ -67,7 +67,7 @@ const packageManifest = { name: "openclaw", version: "2026.9.1", files: ["dist"]
 const nodeArgs = (toolingRoot: string) =>
   process.versions.bun
     ? []
-    : [...resolveVitestNodeArgs(), "--import", join(toolingRoot, "scripts/tsx.mjs")];
+    : [...resolveNodeCompilerArgs(), "--import", join(toolingRoot, "scripts/tsx.mjs")];
 const nodeEnv = (root: string) => ({
   ...process.env,
   TSX_TSCONFIG_PATH: join(root, "tsconfig.json"),

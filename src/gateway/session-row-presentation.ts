@@ -1,5 +1,7 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import { prepareRunningBackgroundProcessCount } from "../agents/bash-process-observation.js";
+import { intersectSessionPermissionModes } from "../agents/session-permission-mode.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -27,6 +29,8 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "./session-request-agent.js";
 import {
+  definedSessionRowFields,
+  freezeSessionRow,
   sessionRowId,
   sessionRowsRevision,
   type SessionRowGeneration,
@@ -50,26 +54,23 @@ import {
 } from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
-  authorizeSessionAgentRun,
   resolveSessionVisibility,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
 import { sessionTitleRequests } from "./session-title-state.js";
-import {
-  matchesSessionArchiveFilter,
-  resolveGatewaySessionBackgroundProcessCount,
-  resolveSessionChildOwners,
-} from "./session-utils-core.js";
+import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
 import {
   applyGatewaySessionRowMode,
   projectGatewaySessionActiveRun,
 } from "./session-utils-display.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
-import { authorizeSessionWorkspaceRead } from "./session-workspace-read-policy.js";
 
 type PresentationOptions = Readonly<
-  Omit<records.SnapshotOptions, "now" | "active" | "subagentRuns" | "preparedFacts"> & {
+  Omit<
+    records.SnapshotOptions,
+    "now" | "active" | "subagentRuns" | "preparedFacts" | "preparedRunState"
+  > & {
     includeActivitySummary?: boolean;
     rowMode?: SessionsListParams["rowMode"];
     omitSentinelChildren?: boolean;
@@ -78,6 +79,8 @@ type PresentationOptions = Readonly<
 >;
 
 const DEFAULT_PRESENTATION_OPTIONS: PresentationOptions = {};
+
+type ActiveRunStates = Map<records.Row["generation"], ReturnType<VisibleActiveSessionRunProjector>>;
 
 function sameFacts(previous: readonly unknown[] | undefined, current: readonly unknown[]) {
   if (previous?.length !== current.length) {
@@ -155,6 +158,8 @@ export function prepareSessionRowPublication(
   read: SessionRowReadView = projection,
 ) {
   const view = prepareSessionRowPublicationView(projection);
+  let activeRuns: Map<VisibleActiveSessionRunProjector, ActiveRunStates> | undefined;
+  let subagentRuns: SessionRowReadView["state"]["rowContext"]["subagentRuns"] | undefined;
   return (client?: GatewayClient | null, projectRun?: VisibleActiveSessionRunProjector) => {
     const recipient = prepareSessionRowRecipient(read, client, view);
     let presentation: ReturnType<typeof prepareProjectedSessionPresentation> | undefined;
@@ -165,12 +170,22 @@ export function prepareSessionRowPublication(
       },
       // Event fanout needs display structures only on an audience miss, after live authority.
       getPresentation() {
+        if (subagentRuns?.revision !== recipient.rowContext.subagentRuns.revision) {
+          subagentRuns = recipient.rowContext.subagentRuns.atTime(now);
+        }
+        let runStates = projectRun && activeRuns?.get(projectRun);
+        if (projectRun && !runStates) {
+          runStates = new Map();
+          (activeRuns ??= new Map()).set(projectRun, runStates);
+        }
         return (presentation ??= prepareProjectedSessionPresentation(
           read,
           client,
           now,
           projectRun,
           recipient,
+          runStates,
+          subagentRuns,
         ));
       },
     };
@@ -188,14 +203,10 @@ function prepareSessionRowRecipient(
   const sharing = prepareProjectedSessionSharing({
     cfg: policyConfig,
     client: client ?? null,
-    isMember: (value, identityId) =>
-      projection
-        .readMembership({
-          agentId: value.agentId,
-          key: value.storeKey,
-          storePath: value.storePath,
-        })
-        ?.has(identityId) ?? false,
+    memberAccess: (value, id) => projection.memberAccess(value.storePath, value.storeKey, id),
+    isMember: ({ agentId, storePath, storeKey }, identityId) =>
+      projection.describe({ agentId, storePath, key: storeKey })?.membership.has(identityId) ??
+      false,
   });
   return { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing };
 }
@@ -207,7 +218,10 @@ export function prepareProjectedSessionPresentation(
   now = Date.now(),
   projectRun?: VisibleActiveSessionRunProjector,
   recipient = prepareSessionRowRecipient(projection, client),
+  sharedActiveRuns?: ActiveRunStates,
+  subagentRuns = recipient.rowContext.subagentRuns.atTime(now),
 ) {
+  let activeRuns = sharedActiveRuns;
   const { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing } = recipient;
   const entryFilter = client === undefined ? undefined : sharing.entryFilter;
   const models =
@@ -215,16 +229,27 @@ export function prepareProjectedSessionPresentation(
       ? undefined
       : prepareOperatorModelPresentation({ cfg, policyConfig, client });
   const publicationRows = publicationState?.rows;
-  const subagentRuns = rowContext.subagentRuns.atTime(now);
+  const countBackgroundProcesses = prepareRunningBackgroundProcessCount();
   const preparedRowContext = { ...rowContext, subagentRuns };
   const runState = (
     key: string,
     source: Pick<records.MaterializedRow["materialized"]["source"], "entry" | "parsedKey">,
   ) => projectPreparedSessionRunState(key, source, now, preparedRowContext);
   const active = (
-    record: Pick<records.MaterializedRow, "key" | "entry" | "agentId" | "storeTarget">,
-  ) =>
-    projectRun?.({
+    record: Pick<
+      records.MaterializedRow,
+      "key" | "entry" | "agentId" | "storeTarget" | "generation"
+    >,
+  ) => {
+    if (!projectRun) {
+      return undefined;
+    }
+    const previous = activeRuns?.get(record.generation);
+    if (previous) {
+      return previous;
+    }
+    // A row generation owns its exact store/agent/incarnation; display facts share one publication.
+    const state = projectRun({
       storePath: record.storeTarget.storePath,
       requestedKey: record.key,
       canonicalKey: record.key,
@@ -232,6 +257,9 @@ export function prepareProjectedSessionPresentation(
       agentId: record.agentId,
       defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, record.key),
     });
+    (activeRuns ??= new Map()).set(record.generation, state);
+    return state;
+  };
   const target = (query: records.Lookup) => {
     const record = projection.describe(query);
     return record ? toProjectedSessionSharingTarget(record) : null;
@@ -244,7 +272,7 @@ export function prepareProjectedSessionPresentation(
   const canReadLinkedEntry = prepareLinkedSessionEntryFilter(
     projection,
     sharing.entryFilter,
-    sharing.identity?.id,
+    sharing.sessionCap === "invited" ? sharing.identity?.id : undefined,
   );
   const listView = (opts: SessionsListParams, selection = false): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
@@ -279,25 +307,32 @@ export function prepareProjectedSessionPresentation(
           ).get(profileId)?.hidden ?? false)
         : undefined;
     viewerFacts.sharingRole = sharingRole;
+    const access = sharing.accessForTarget(value);
+    viewerFacts.invitedAccess =
+      access.invitedAccessCeiling &&
+      (access.access === "read" || access.access === "suggest" || access.access === "send")
+        ? access.access
+        : undefined;
+    viewerFacts.invitedPermission =
+      viewerFacts.invitedAccess === "send"
+        ? intersectSessionPermissionModes(
+            sharing.invitedPermission,
+            value.entry.permissionMode ?? "full",
+          )
+        : undefined;
     // Summary modes omit this diagnostic; their disclosure still uses current sharing facts.
     viewerFacts.sendDisabledReason =
       rowMode === "sidebar" || rowMode === "dashboard"
         ? undefined
-        : (authorizeSessionAgentRun(
-            { cfg: policyConfig, client: client ?? null, target: value },
-            { policy: sharing.policy },
-          )?.message ??
-          sharing.authorizeTarget(value, sharingRole)?.message ??
+        : (sharing.authorizeRun(value, true)?.message ??
+          sharing.authorizeTarget(value, sharingRole, true)?.message ??
           (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
             ? "send blocked by session policy"
             : null));
     viewerFacts.workspaceReadDisabledReason =
       rowMode === "sidebar" || rowMode === "dashboard"
         ? undefined
-        : (authorizeSessionWorkspaceRead(
-            { cfg: policyConfig, client: client ?? null, target: value, unscopedHostRoot },
-            { policy: sharing.policy },
-          )?.message ?? null);
+        : (sharing.authorizeWorkspaceRead(value, unscopedHostRoot)?.message ?? null);
     return viewerFacts;
   };
   const projectModels = (row: GatewaySessionRow, view?: SessionRowView) =>
@@ -327,6 +362,9 @@ export function prepareProjectedSessionPresentation(
     record: records.MaterializedRow,
     options: PresentationOptions,
   ): GatewaySessionRow | null => {
+    const backgroundProcessCount = countBackgroundProcesses(
+      record.materialized.source.backgroundProcessScope,
+    );
     const run = active(record);
     const preparedFacts = record.facts?.present();
     const childOwnerSessionKeys = resolveSessionChildOwners({
@@ -394,14 +432,14 @@ export function prepareProjectedSessionPresentation(
     );
     // Writers replace materialized facts; only live run, placement and clock facts need
     // comparison here. These witnesses never grant disclosure to another recipient.
+    const temporal = runState(record.key, record.materialized.source);
     let published = publicationRows?.get(record.materialized);
-    if (publicationRows) {
+    if (publicationState) {
       const liveModel = resolveProjectedAgentRunModel({
         agentId: record.agentId,
         sessionId: record.entry.sessionId,
         index: rowContext.projectedAgentRuns,
       });
-      const temporal = runState(record.key, record.materialized.source);
       // Overwrite before truncating: clearing length first discards V8's backing storage.
       facts[0] = record.fallbackModel;
       facts[1] = liveModel?.provider;
@@ -422,12 +460,11 @@ export function prepareProjectedSessionPresentation(
       facts[15] = run?.active;
       facts[16] = run?.status;
       facts[17] = preparedFacts;
-      facts[18] =
-        sessionTitleRequests.get({
-          storePath: record.storeTarget.storePath,
-          sessionKey: record.key,
-          sessionId: record.entry.sessionId,
-        }) !== undefined;
+      facts[18] = sessionTitleRequests.isPending({
+        storePath: record.storeTarget.storePath,
+        sessionKey: record.key,
+        sessionId: record.entry.sessionId,
+      });
       facts[19] = resolveActiveSessionAgentStatus(record.entry.agentStatus, now);
       // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
       facts[20] =
@@ -437,12 +474,7 @@ export function prepareProjectedSessionPresentation(
       facts[21] = run?.runIds?.length;
       // A changed child fact retires timestamped views even when the aggregate stays equal.
       facts[22] = childActivity.revision;
-      facts[23] = resolveGatewaySessionBackgroundProcessCount({
-        cfg,
-        key: record.key,
-        agentId: record.agentId,
-        sessionId: record.entry.sessionId,
-      });
+      facts[23] = backgroundProcessCount;
       facts.length = 24;
       if (run?.runIds) {
         for (const id of run.runIds) {
@@ -450,8 +482,22 @@ export function prepareProjectedSessionPresentation(
         }
       }
       if (!sameFacts(published?.facts, facts)) {
-        published = { facts, views: new Map(), target: toProjectedSessionSharingTarget(record) };
-        publicationRows.set(record.materialized, published);
+        // Prior views may supply immutable fields, but must not keep retired row graphs alive.
+        // Reusing audience variants is best effort across garbage collection.
+        const previousViews = publicationState.previousViews.get(
+          record.materialized.publicationIdentity,
+        );
+        published = {
+          facts,
+          views: new Map(),
+          previousViews,
+          target: toProjectedSessionSharingTarget(record),
+        };
+        publicationState.rows.set(record.materialized, published);
+        publicationState.previousViews.set(
+          record.materialized.publicationIdentity,
+          new WeakRef(published.views),
+        );
         facts = [];
       }
     }
@@ -468,7 +514,7 @@ export function prepareProjectedSessionPresentation(
             client: client ?? null,
             sessionKey: value.canonicalKey,
             target: value,
-          }) && !sharing.authorizeTarget(value, recipientView?.sharingRole)
+          }) && !sharing.authorizeTarget(value, recipientView?.sharingRole, true)
         : undefined;
     const signature = views && optionKey(options);
     recipientFacts[0] = recipientView?.visibility;
@@ -483,15 +529,21 @@ export function prepareProjectedSessionPresentation(
       ? visibility.swarmKey
       : excludedSwarmKeys && JSON.stringify([...excludedSwarmKeys]);
     recipientFacts[7] = recipientView?.workspaceReadDisabledReason;
-    recipientFacts.length = 8;
+    recipientFacts[8] = recipientView?.invitedAccess;
+    recipientFacts[9] = recipientView?.invitedPermission;
+    recipientFacts.length = 10;
     const variants = signature === undefined ? undefined : views?.get(signature);
-    if (variants) {
-      for (const cached of variants) {
-        if (sameFacts(cached.facts, recipientFacts)) {
-          return projectModels(cached.row, cached);
-        }
-      }
+    const current = variants?.find((cached) => sameFacts(cached.facts, recipientFacts));
+    if (current) {
+      return projectModels(current.row, current);
     }
+    const previous =
+      signature === undefined
+        ? undefined
+        : published?.previousViews
+            ?.deref()
+            ?.get(signature)
+            ?.find((cached) => sameFacts(cached.facts, recipientFacts));
     const row = projection.present(record, {
       ...options,
       now,
@@ -500,6 +552,8 @@ export function prepareProjectedSessionPresentation(
       excludedChildKeys,
       childActivity,
       preparedFacts,
+      preparedRunState: temporal,
+      backgroundProcessCount,
     });
     row.childOwnerSessionKeys = [...childOwnerSessionKeys];
     row.fastMode = presentFastMode(row.fastMode);
@@ -551,7 +605,7 @@ export function prepareProjectedSessionPresentation(
     }
     if (signature !== undefined) {
       // Shared-fact replies never send this raw row; encode only at the wire boundary.
-      const snapshot = freezeTrustedJsonSnapshot(row);
+      const snapshot = freezeSessionRow(definedSessionRowFields(row), previous?.row);
       const view = { facts: recipientFacts, row: snapshot };
       if (variants) {
         variants.push(view);
@@ -577,11 +631,14 @@ export function prepareProjectedSessionPresentation(
     },
     select(
       opts: SessionsListParams,
-      select: (retained?: WeakMap<object, SessionListFilteredEntries>) => SessionEntrySelection,
+      select: (
+        retained?: Map<object, SessionListFilteredEntries>,
+        invited?: boolean,
+      ) => SessionEntrySelection,
     ) {
-      // Membership, clocks, and transient runs are not owned by metadata partitions.
+      // Clocks and transient runs are not owned by metadata or membership publications.
       const live = opts.activeOnly || opts.activityPulseBoundaries;
-      if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
+      if (opts.search || opts.spawnedBy || live) {
         return select();
       }
       const view = listView(opts, true);
@@ -594,8 +651,10 @@ export function prepareProjectedSessionPresentation(
         view.partitions = undefined;
       }
       if (!view.selection) {
+        view.invited = entryFilter !== undefined && sharing.sessionCap === "invited";
         const { entries, ownerSessionProfiles, ...facets } = select(
           publicationState?.lists.partitions(view),
+          view.invited,
         );
         Object.freeze(entries);
         view.selection = Object.freeze({

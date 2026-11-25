@@ -28,12 +28,12 @@ import type { CronStoredJob } from "./types.js";
 
 type ScheduledIngress = "webhook" | "plugin-hook" | "channel-join";
 
-type ScheduledParentRef = Readonly<{
-  agentId: string;
-  sessionKey: string;
-  sessionId: string;
-  lifecycleRevision?: string;
-}>;
+/** A stored automation link names its parent conversation by key alone. */
+type ScheduledParentLink = Readonly<{ agentId: string; sessionKey: string }>;
+
+/** The parent's current incarnation, read for this occurrence. */
+type ScheduledParentRef = ScheduledParentLink &
+  Readonly<{ sessionId: string; lifecycleRevision?: string }>;
 
 export type ScheduledRequesterRef =
   | Readonly<{ kind: "operator-source"; source: RestartRecoveryOperatorSource }>
@@ -41,12 +41,20 @@ export type ScheduledRequesterRef =
   | Readonly<{ kind: "profile"; profileId: string }>
   | Readonly<{ kind: "unknown" }>;
 
+type ParentlessScheduledPrincipal =
+  /** A parent key without a link. Every decision equals the legacy one until bound. */
+  | Readonly<{ kind: "unbound-parent"; parentSessionKey: string }>
+  | Readonly<{ kind: "operator"; basis: "trusted-policy" | "unlinked-legacy" | "operator-source" }>
+  | Readonly<{ kind: "ingress"; ingress: ScheduledIngress }>;
+
 type ScheduledPrincipal =
   | Readonly<{ kind: "parent"; parent: ScheduledParentRef; requester: ScheduledRequesterRef }>
-  /** A parent key without its incarnation. Every decision equals the legacy one until bound. */
-  | Readonly<{ kind: "unbound-parent"; parentSessionKey: string }>
-  | Readonly<{ kind: "operator"; basis: "trusted-policy" | "unlinked-legacy" }>
-  | Readonly<{ kind: "ingress"; ingress: ScheduledIngress }>;
+  | ParentlessScheduledPrincipal;
+
+/** The principal a stored job names, before its parent row is read. */
+type StoredScheduledPrincipal =
+  | Readonly<{ kind: "parent"; parent: ScheduledParentLink; requester: ScheduledRequesterRef }>
+  | ParentlessScheduledPrincipal;
 
 type ScheduledPlacement = "child" | "in-session" | "detached";
 
@@ -122,18 +130,18 @@ export type ScheduledExecutionFacts = Readonly<{
 }>;
 
 /** Parent row as read by the caller on the read-only worker. */
-type ScheduledParentRowFacts =
-  | Readonly<{ missing: true }>
-  | Readonly<{
-      missing?: false;
-      sessionId: string;
-      lifecycleRevision?: string;
-      archived: boolean;
-      workspaceDir?: string;
-      cwd?: string;
-      worktree?: Readonly<{ path: string; exists: boolean }>;
-      sandboxRequired: boolean;
-    }>;
+type ScheduledParentRowFacts = Readonly<{ missing: true }> | LiveScheduledParentRow;
+
+type LiveScheduledParentRow = Readonly<{
+  missing?: false;
+  sessionId: string;
+  lifecycleRevision?: string;
+  archived: boolean;
+  workspaceDir?: string;
+  cwd?: string;
+  worktree?: Readonly<{ path: string; exists: boolean }>;
+  sandboxRequired: boolean;
+}>;
 
 export type ScheduledAdmissionFacts = Readonly<{
   trigger: "cron" | "event";
@@ -214,7 +222,7 @@ function profileIdOf(actor: SessionCreatedActor | undefined) {
 export function resolveScheduledPrincipal(
   job: BuilderJob,
   facts: Pick<ScheduledAdmissionFacts, "trigger" | "ingress" | "agentId">,
-): ScheduledPrincipal | { error: string } {
+): StoredScheduledPrincipal | { error: string } {
   if (facts.trigger === "event") {
     return facts.ingress
       ? { kind: "ingress", ingress: facts.ingress }
@@ -227,14 +235,13 @@ export function resolveScheduledPrincipal(
     } catch {
       return { error: "stored operator source is invalid" };
     }
+    const parent = source.kind === "gateway" ? job.sourceConversation : source;
+    if (!parent) {
+      return { kind: "operator", basis: "operator-source" };
+    }
     return {
       kind: "parent",
-      parent: {
-        agentId: source.agentId,
-        sessionKey: source.sessionKey,
-        sessionId: source.sessionId,
-        ...(source.lifecycleRevision ? { lifecycleRevision: source.lifecycleRevision } : {}),
-      },
+      parent: { agentId: source.agentId, sessionKey: parent.sessionKey },
       requester: { kind: "operator-source", source },
     };
   }
@@ -242,12 +249,7 @@ export function resolveScheduledPrincipal(
   if (source) {
     return {
       kind: "parent",
-      parent: {
-        agentId: facts.agentId,
-        sessionKey: source.sessionKey,
-        sessionId: source.sessionId,
-        ...(source.lifecycleRevision ? { lifecycleRevision: source.lifecycleRevision } : {}),
-      },
+      parent: { agentId: facts.agentId, sessionKey: source.sessionKey },
       requester: resolveScheduledRequester(job),
     };
   }
@@ -263,27 +265,18 @@ export function resolveScheduledPrincipal(
   };
 }
 
+/**
+ * A parent link names its conversation by key, so edits, branch switches and resets keep
+ * it current; its stored session id and lifecycle revision are ignored. Archive or
+ * deletion pauses the automation.
+ */
 export function classifyScheduledParent(
-  parent: ScheduledParentRef,
-  row: ScheduledParentRowFacts | undefined,
-): ScheduledParentUnavailableReason | "reset" | "current" | "unread" {
-  if (!row) {
-    return "unread";
-  }
+  row: ScheduledParentRowFacts,
+): "removed" | "archived" | LiveScheduledParentRow {
   if (row.missing) {
     return "removed";
   }
-  if (row.archived) {
-    return "archived";
-  }
-  // A link stored without a lifecycle revision can only prove the session id.
-  if (
-    row.sessionId !== parent.sessionId ||
-    (parent.lifecycleRevision !== undefined && row.lifecycleRevision !== parent.lifecycleRevision)
-  ) {
-    return "reset";
-  }
-  return "current";
+  return row.archived ? "archived" : row;
 }
 
 function resolveAuthority(
@@ -297,6 +290,10 @@ function resolveAuthority(
     basis,
     ...(admissionSource ? { admissionSource } : {}),
   });
+  // Resetting resource lineage must not turn a retained non-owner grant into a legacy owner.
+  if (facts.trigger === "cron" && job.operatorSource) {
+    return withSource(facts.requesterCheck?.owner === true, "operator-source");
+  }
   if (facts.trigger === "cron" && hasTransferredCronOwner(job) && !job.operatorSource) {
     const owner = facts.requesterCheck?.owner === true;
     return withSource(owner, owner ? "profile-role" : "none");
@@ -370,6 +367,31 @@ function resolveInference(job: BuilderJob): ScheduledInferenceAccount {
   return { kind: "none" };
 }
 
+/** Binds a stored parent link to the parent's current transcript and incarnation. */
+function bindScheduledParent(
+  resolved: StoredScheduledPrincipal,
+  row: ScheduledParentRowFacts | undefined,
+):
+  | { principal: ScheduledPrincipal; liveRow?: LiveScheduledParentRow }
+  | Extract<ScheduledExecutionContextResult, { status: "fail" | "pause" }> {
+  if (resolved.kind !== "parent") {
+    return { principal: resolved };
+  }
+  if (!row) {
+    return { status: "fail", error: "parent session facts are required for a parent-linked job" };
+  }
+  const live = classifyScheduledParent(row);
+  if (typeof live === "string") {
+    return { status: "pause", reason: live, parentSessionKey: resolved.parent.sessionKey };
+  }
+  const parent = {
+    ...resolved.parent,
+    sessionId: live.sessionId,
+    ...(live.lifecycleRevision ? { lifecycleRevision: live.lifecycleRevision } : {}),
+  };
+  return { principal: { ...resolved, parent }, liveRow: live };
+}
+
 /** Builds the execution facts for one occurrence from stored fields and admission facts. */
 export function buildScheduledExecutionContext(
   job: BuilderJob,
@@ -379,24 +401,11 @@ export function buildScheduledExecutionContext(
   if ("error" in resolved) {
     return { status: "fail", error: resolved.error };
   }
-  const state =
-    resolved.kind === "parent"
-      ? classifyScheduledParent(resolved.parent, facts.parentRow)
-      : "current";
-  if (state === "unread") {
-    return { status: "fail", error: "parent session facts are required for a parent-linked job" };
+  const bound = bindScheduledParent(resolved, facts.parentRow);
+  if ("status" in bound) {
+    return bound;
   }
-  if (resolved.kind === "parent" && state !== "current" && state !== "reset") {
-    return { status: "pause", reason: state, parentSessionKey: resolved.parent.sessionKey };
-  }
-  // A reset keeps the automation running, but nothing carries into the new
-  // incarnation: this occurrence takes the legacy decisions until rebound.
-  const principal: ScheduledPrincipal =
-    resolved.kind === "parent" && state === "reset"
-      ? { kind: "unbound-parent", parentSessionKey: resolved.parent.sessionKey }
-      : resolved;
-  const parentRow = principal.kind === "parent" ? facts.parentRow : undefined;
-  const liveRow = parentRow && !parentRow.missing ? parentRow : undefined;
+  const { principal, liveRow } = bound;
   if (liveRow?.worktree && !liveRow.worktree.exists && principal.kind === "parent") {
     return {
       status: "pause",

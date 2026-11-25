@@ -218,7 +218,7 @@ export function registerCronRunWaitTests({
       const scope = createCronCreatorAuthorityRunScope(
         identity.operationalRunInstance.runId,
         { kind: "local" },
-        { source: "control-ui-admin" },
+        { source: "operator" },
       );
       const context = createCronTestContext(
         createCronJob({

@@ -22,6 +22,7 @@ import {
   RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
   type RuntimeDependencyOwnership,
 } from "../src/infra/runtime-dependency-ownership.js";
+import { managedHandoffRuntimeEntrypoint } from "../src/infra/update-managed-service-handoff-runtime-assets.js";
 import {
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
@@ -29,7 +30,7 @@ import {
 } from "../src/shared/worker-bundle-hash.js";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
-import { formatErrorMessage } from "./lib/error-format.mts";
+import { formatErrorMessage, formatErrorMessageWithCauses } from "./lib/error-format.mts";
 import { verifyNpmRegistrySignatures } from "./lib/npm-registry-signatures.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
@@ -82,13 +83,14 @@ const MAX_INSTALLED_ROOT_DIST_JS_FILES = 20_000;
 const MAX_INSTALLED_WORKER_DIST_JS_FILES = 10_000;
 const MAX_INSTALLED_BUNDLED_PLUGIN_FILES = 20_000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
-// Self-contained bundles (the ~69 MB worker, the ~66 MB sealed package-update recovery helper)
+// Self-contained workers and sealed update recovery helpers
 // need extra headroom, but synchronous read/parse stays bounded.
 const SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS = new Set([
   `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
   `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
   `worker/${WORKER_BUNDLE_SQLITE_STORE_PATH}`,
   packageActivationRuntimeEntrypoint.distWorkerPath,
+  managedHandoffRuntimeEntrypoint.distWorkerPath,
 ]);
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // Optional A2UI markdown renderer. Main no longer builds Canvas A2UI, but main's
@@ -719,7 +721,7 @@ function extractJavaScriptImportSpecifiers(
                 regions.push({ ...previous, end: start });
               }
               const extensionId = /^extensions\/([a-z0-9][a-z0-9-]*)\//u.exec(marker[1] ?? "")?.[1];
-              stack.push({ start: end, extensionId, flat: marker[0].startsWith("// ") });
+              stack.push({ start: end, extensionId, flat: !marker[0].startsWith("//#region ") });
             } else if (text.trim() === "#endregion") {
               const region = stack.pop();
               if (region) {
@@ -1203,15 +1205,22 @@ export function buildPublishedInstallCommandArgs(prefixDir: string, spec: string
   return ["install", "-g", "--prefix", prefixDir, spec, "--no-fund", "--no-audit"];
 }
 
+class NpmRegistryReadError extends Error {
+  constructor(url: string, cause: unknown) {
+    super(`npm registry read failed: ${url}: ${formatErrorMessage(cause)}`, { cause });
+  }
+}
+
 export async function fetchRegistryJson(
   url: string,
   options: FetchRegistryJsonOptions = {},
 ): Promise<unknown> {
+  const diagnosticUrl = url.replace(/^(https?:[/][/])[^/]*@/u, "$1");
   const timeoutMs = options.timeoutMs ?? NPM_REGISTRY_REQUEST_TIMEOUT_MS;
   const maxBodyBytes = options.maxBodyBytes ?? NPM_REGISTRY_RESPONSE_BODY_MAX_BYTES;
   const controller = new AbortController();
   const timeoutError = Object.assign(
-    new Error(`npm registry request timed out after ${timeoutMs}ms: ${url}`),
+    new Error(`npm registry request timed out after ${timeoutMs}ms: ${diagnosticUrl}`),
     { code: "ETIMEDOUT" },
   );
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -1234,21 +1243,25 @@ export async function fetchRegistryJson(
       timeoutPromise,
     ]);
     if (!response.ok) {
-      throw new Error(`npm registry request failed (${response.status}): ${url}`);
+      throw new Error(`npm registry request failed (${response.status}): ${diagnosticUrl}`);
     }
     return JSON.parse(
-      await readBoundedResponseText(response, `npm registry ${url}`, maxBodyBytes, {
+      await readBoundedResponseText(response, `npm registry ${diagnosticUrl}`, maxBodyBytes, {
         signal: controller.signal,
         timeoutPromise,
       }),
     );
+  } catch (error) {
+    throw new NpmRegistryReadError(diagnosticUrl, error);
   } finally {
     clearTimeout(timeout);
   }
 }
 
 function isRetryableRegistryProvenanceError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  // Endpoint text is diagnostic context, not a reason to retry a terminal failure.
+  const failure = error instanceof NpmRegistryReadError ? error.cause : error;
+  const message = failure instanceof Error ? failure.message : String(failure);
   if (
     message.includes("npm provenance attestation") ||
     message.includes("npm registry signature") ||
@@ -1457,7 +1470,7 @@ if (entrypoint !== null && import.meta.url === entrypoint) {
   try {
     await main();
   } catch (error) {
-    console.error(`openclaw-npm-postpublish-verify: ${formatErrorMessage(error)}`);
+    console.error(`openclaw-npm-postpublish-verify: ${formatErrorMessageWithCauses(error)}`);
     process.exitCode = 1;
   }
 }

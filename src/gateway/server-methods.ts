@@ -1,7 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
-import { resolveChannelMessageActionFacts } from "../channels/plugins/message-action-names.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { withDiagnosticsTimelineObserver } from "../infra/diagnostics-timeline.js";
@@ -13,13 +11,17 @@ import {
   getPluginRuntimeGatewayNodeAuthorities,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import {
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
-import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import {
+  withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "../state/artifact-preserving-state-reads.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import {
   consumeControlPlaneWriteBudget,
@@ -45,19 +47,18 @@ import {
   coreGatewayHandlers,
   gatewayRouterUploadPolicyError,
 } from "./server-methods/core-handlers.js";
-import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import { prepareGatewayRequestHandler } from "./server-methods/lazy-core-handlers.js";
 import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
-  captureGatewayRequestOperatorGuard,
   readGatewayRequestMutationAuthority,
   withSessionMutationCommitGuard,
 } from "./server-methods/session-mutation-guards.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
+  GatewayRequestHandlerOptions,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
 import type { GatewayRequestEntry } from "./server-request-entry.js";
@@ -121,6 +122,7 @@ type GatewayRequestEnvelopeOptions<T> = Pick<
   GatewayRequestOptions,
   "context" | "isWebchatConnect" | "signal" | "hasCurrentClientAuthority"
 > & {
+  parentHttpRequestAuthority?: PluginRuntimeGatewayRequestScope["parentHttpRequestAuthority"];
   methodRegistry: GatewayMethodRegistryView;
   requestParams?: unknown;
   admission?: "continuation";
@@ -217,10 +219,16 @@ export async function runWithGatewayRequestEnvelope<T>(
       return await options.reject(postAdmissionRateLimitError);
     }
     const releaseForegroundWork = retainSessionListForegroundWork();
+    let interactiveStateRead =
+      client?.internal?.authenticatedControlUi === true &&
+      !client.internal.agentRuntimeIdentity &&
+      !client.internal.syntheticClient &&
+      (method === "themes.list" || method === "users.prefs.get" || method === "agents.list");
     try {
+      const parentScope = getPluginRuntimeGatewayRequestScope();
       const pluginRegistry =
         (options.methodRegistry.pluginRegistry as PluginRegistry | undefined) ??
-        getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+        parentScope?.pluginRegistry ??
         getActivePluginRegistry() ??
         undefined;
       return await withPluginRuntimeGatewayRequestScope(
@@ -229,6 +237,10 @@ export async function runWithGatewayRequestEnvelope<T>(
           // Detached turn admission needs the live instance resolver, not a captured request context.
           resolveGatewayContext: options.context.resolveGatewayContext,
           client,
+          parentHttpRequestAuthority: options.parentHttpRequestAuthority,
+          ...(interactiveStateRead
+            ? { canUseInteractiveStateReadCapacity: () => interactiveStateRead }
+            : {}),
           signal: options.signal,
           hasCurrentClientAuthority: options.hasCurrentClientAuthority,
           isWebchatConnect: options.isWebchatConnect,
@@ -248,6 +260,7 @@ export async function runWithGatewayRequestEnvelope<T>(
       }
       throw error;
     } finally {
+      interactiveStateRead = false;
       releaseForegroundWork();
     }
   }
@@ -264,9 +277,11 @@ export async function runWithGatewayRequestEnvelope<T>(
 /** Authorizes and dispatches one gateway JSON-RPC-style request. */
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & {
+    parentHttpRequestAuthority?: PluginRuntimeGatewayRequestScope["parentHttpRequestAuthority"];
     extraHandlers?: GatewayRequestHandlers;
     admission?: "continuation";
     requestEntry?: GatewayRequestEntry;
+    onHandlerStart?: () => void;
   },
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
@@ -319,8 +334,7 @@ export async function handleGatewayRequest(
             "setup",
           )
         : undefined;
-    const runtimeAuthority = resolveSessionRuntimeAuthorityRequest(opts);
-    if (runtimeAuthority === null) {
+    if (!resolveSessionRuntimeAuthorityRequest(opts)) {
       return;
     }
     const profileBinding =
@@ -337,32 +351,7 @@ export async function handleGatewayRequest(
       profileBinding && !opts.expectedProfileBinding
         ? profileBinding.guardResponse(opts.respond)
         : opts.respond;
-    const messageActionFacts =
-      req.method === "message.action" && isRecord(req.params)
-        ? resolveChannelMessageActionFacts(req.params.action)
-        : undefined;
-    // The message-operation owner fences new effects and preserves accepted write receipts.
-    // Reads still require current authority when their contents are released.
-    const preserveMessageWriteOutcome =
-      req.method === "send" || (messageActionFacts !== undefined && !messageActionFacts.readOnly);
-    let acceptedAgentRun = false;
-    const respondUnobserved: GatewayRequestOptions["respond"] = runtimeAuthority
-      ? (ok, ...response) => {
-          if (ok && !preserveMessageWriteOutcome && !acceptedAgentRun) {
-            runtimeAuthority.assertCurrent();
-          }
-          profileRespond(ok, ...response);
-          // Accepted execution owns its final outcome after the submitting turn closes.
-          if (
-            req.method === "agent" &&
-            ok &&
-            isRecord(response[0]) &&
-            response[0].status === "accepted"
-          ) {
-            acceptedAgentRun = true;
-          }
-        }
-      : profileRespond;
+    const respondUnobserved = profileRespond;
     respondCancelled = respondUnobserved;
     const respond: GatewayRequestOptions["respond"] = observation
       ? (...response) => {
@@ -378,13 +367,6 @@ export async function handleGatewayRequest(
     try {
       entry?.assertOpen();
       const requestMutationAuthority = readGatewayRequestMutationAuthority(opts);
-      // Post-hello hydration may supply the first profile. Once selected, the same
-      // caller must survive every awaited row read and authorization retry.
-      let capturedOperatorGuard = isGatewayClientProfilePending(client)
-        ? undefined
-        : captureGatewayRequestOperatorGuard(opts);
-      const assertOperatorCurrent = () =>
-        (capturedOperatorGuard ??= captureGatewayRequestOperatorGuard(opts))();
       const requestFacts = {
         method: req.method,
         requestParams: req.params,
@@ -399,15 +381,11 @@ export async function handleGatewayRequest(
         hasCurrentClientAuthority,
         markSessionSubscribePhase: subscribeDiagnostics?.mark ?? workboardDiagnostics?.mark,
         assertInvocationCurrent: () => {
-          runtimeAuthority?.assertCurrent();
           profileBinding?.assertCurrent();
-          assertOperatorCurrent();
           requestMutationAuthority.assertCurrent();
         },
         assertPreparationCurrent: () => {
-          runtimeAuthority?.assertCurrent();
           profileBinding?.assertCurrent();
-          assertOperatorCurrent();
           requestMutationAuthority.assertPreparationCurrent();
         },
       });
@@ -440,14 +418,11 @@ export async function handleGatewayRequest(
           methodRegistry,
           expectedProfileBinding: profileBinding,
           hasCurrentClientAuthority,
+          admitted: true,
           assertInvocationCurrent: () => {
-            runtimeAuthority?.assertCurrent();
-            assertOperatorCurrent();
             requestMutationAuthority.assertCurrent();
           },
           assertPreparationCurrent: () => {
-            runtimeAuthority?.assertCurrent();
-            assertOperatorCurrent();
             requestMutationAuthority.assertPreparationCurrent();
           },
           consumeSessionTurn: {
@@ -469,18 +444,9 @@ export async function handleGatewayRequest(
       }
       const sessionMutationAuthorization = withSessionMutationCommitGuard(
         authorization.sessionMutationAuthorization,
-        composeSessionSourceAssertion([
-          runtimeAuthority?.assertCurrent,
-          assertOperatorCurrent,
-          requestMutationAuthority.assertCurrent,
-        ]),
+        composeSessionSourceAssertion([requestMutationAuthority.assertCurrent]),
         profileBinding?.assertCurrent,
-        requestMutationAuthority.assertAdmittedInputCurrent
-          ? () => {
-              assertOperatorCurrent();
-              requestMutationAuthority.assertAdmittedInputCurrent?.();
-            }
-          : undefined,
+        requestMutationAuthority.assertAdmittedInputCurrent,
       );
       const respondAuthorized: GatewayRequestOptions["respond"] =
         authorization.sessionScope === "operator.sessions.read"
@@ -510,40 +476,72 @@ export async function handleGatewayRequest(
           respond(false, undefined, uploadError);
           return;
         }
-        const handlerOptions = bindGatewayRequestHandlerMutationAuthority(
-          opts,
-          {
-            req,
-            params: (req.params ?? {}) as Record<string, unknown>,
-            client,
-            isWebchatConnect,
-            respond: respondAuthorized,
-            acceptsSerializedJson: opts.acceptsSerializedJson,
-            acceptsDeflatedSegments: opts.acceptsDeflatedSegments,
-            context,
-            signal,
-            ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
-            sessionMutationCommitGuard: opts.sessionMutationCommitGuard,
-            sessionMutationAuthorization,
-            withSessionTurnAuthority,
-            markSessionSubscribePhase: subscribeDiagnostics?.mark,
-            diffTiming,
-            ...(authorization.sessionAccessAuthority
-              ? { sessionAccessAuthority: authorization.sessionAccessAuthority }
-              : {}),
-          },
-          profileBinding,
-          authorization.sessionScope,
-          profileBinding || runtimeAuthority
-            ? composeSessionSourceAssertion([
-                profileBinding?.assertCurrent,
-                runtimeAuthority?.assertCurrent,
-              ])
-            : undefined,
-        );
+        const handlerOptions: GatewayRequestHandlerOptions =
+          bindGatewayRequestHandlerMutationAuthority(
+            opts,
+            {
+              req,
+              params: (req.params ?? {}) as Record<string, unknown>,
+              client,
+              isWebchatConnect,
+              respond: respondAuthorized,
+              acceptsSerializedJson: opts.acceptsSerializedJson,
+              acceptsDeflatedSegments: opts.acceptsDeflatedSegments,
+              context,
+              signal,
+              ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
+              sessionMutationCommitGuard: opts.sessionMutationCommitGuard,
+              sessionMutationAuthorization,
+              withSessionTurnAuthority,
+              markSessionSubscribePhase: subscribeDiagnostics?.mark,
+              diffTiming,
+              ...(authorization.sessionAccessAuthority
+                ? { sessionAccessAuthority: authorization.sessionAccessAuthority }
+                : {}),
+            },
+            profileBinding,
+            authorization.sessionScope,
+            profileBinding?.assertCurrent,
+          );
+        handlerOptions.copySessionCatalogToGateway = async (source) => {
+          if (!sessionMutationAuthorization) {
+            throw new Error("Session mutation authority is unavailable");
+          }
+          const assertCurrent = () => {
+            handlerOptions.sessionMutationCommitGuard?.();
+            sessionMutationAuthorization.assertCurrent();
+            signal?.throwIfAborted();
+            source.assertCurrent();
+          };
+          assertCurrent();
+          const {
+            createSessionCatalogGatewayCopyHandler,
+            resolveSessionCatalogGatewayConversation,
+          } = await import("./server-methods/session-catalog-gateway-copy.js");
+          assertCurrent();
+          if (source.resolveOnly) {
+            const result = await resolveSessionCatalogGatewayConversation({
+              provider: source.provider,
+              request: source.request,
+              client,
+              context,
+              assertCurrent,
+            });
+            if (result.ok) {
+              handlerOptions.respond(true, result.destination);
+            } else {
+              handlerOptions.respond(false, undefined, result.error);
+            }
+            return;
+          }
+          await createSessionCatalogGatewayCopyHandler(source.provider)({
+            ...handlerOptions,
+            params: source.request,
+            sessionMutationCommitGuard: assertCurrent,
+          });
+        };
         bindChatSendDiagnostics(handlerOptions, chatSendDiagnostics);
         handlerOptions.sessionMutationCommitGuard?.();
-        assertOperatorCurrent();
         authorization.sessionAccessAuthority?.assertCurrent();
         entry?.assertOpen();
         observationSignal?.throwIfAborted();
@@ -564,18 +562,20 @@ export async function handleGatewayRequest(
         }
         return GatewayRpcDiagnostics.runHandler(
           req.method,
-          () =>
-            sharing
-              ? dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {
-                  runtimeAuthority?.assertCurrent();
-                  profileBinding?.assertCurrent();
-                  assertOperatorCurrent();
-                  requestMutationAuthority.assertCurrent();
-                  authorization.sessionAccessAuthority?.assertCurrent();
-                  sessionMutationAuthorization?.assertCurrent();
-                  signal?.throwIfAborted();
-                })
-              : preparedHandler(handlerOptions),
+          () => {
+            if (sharing) {
+              // Shared reads cannot commit a write; their failed delivery stays retryable.
+              return dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {
+                profileBinding?.assertCurrent();
+                requestMutationAuthority.assertCurrent();
+                authorization.sessionAccessAuthority?.assertCurrent();
+                sessionMutationAuthorization?.assertCurrent();
+                signal?.throwIfAborted();
+              });
+            }
+            opts.onHandlerStart?.();
+            return preparedHandler(handlerOptions);
+          },
           diagnostics,
         );
       };
@@ -589,6 +589,7 @@ export async function handleGatewayRequest(
         isWebchatConnect,
         signal,
         hasCurrentClientAuthority,
+        parentHttpRequestAuthority: opts.parentHttpRequestAuthority,
         methodRegistry,
         requestParams: req.params,
         admission: opts.admission,
@@ -614,19 +615,20 @@ export async function handleGatewayRequest(
       }
     }
   };
+  const dispatchLive = (retainRoot?: () => void) => withLiveStateReads(() => dispatch(retainRoot));
   const dispatchObserved = workboardDiagnostics
     ? (retainRoot?: () => void) =>
         withDiagnosticsTimelineObserver(workboardDiagnostics.observeSpan, () =>
-          dispatch(retainRoot),
+          dispatchLive(retainRoot),
         )
-    : dispatch;
+    : dispatchLive;
   if (!observation) {
     return await dispatchObserved();
   }
   await runWithGatewayObservationScope(
     req.method,
     req.method === "sessions.github.readiness"
-      ? (retainRoot) => withArtifactPreservingStateReads(() => dispatch(retainRoot))
+      ? (retainRoot) => withArtifactPreservingStateReads(() => dispatchObserved(retainRoot))
       : dispatchObserved,
     [signal, client?.connectionSignal],
     (error) => {

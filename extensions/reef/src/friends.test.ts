@@ -124,18 +124,6 @@ describe("ReefFriendManager pairing", () => {
   });
   afterEach(() => cleanupStateTestDirectory(stateDir));
 
-  it.each([false, true])("reads pairing once per lifecycle tick (pending=%s)", async (pending) => {
-    const { relay, pairing, manager } = pairingFixture();
-    if (!pending) {
-      relay.listFriends.mockResolvedValue({ friendships: [] });
-    }
-    const issue = vi.fn(async () => {});
-    await manager.reconcile(undefined, issue);
-    expect(issue).toHaveBeenCalledTimes(pending ? 1 : 0);
-    expect(relay.listFriends).toHaveBeenCalledTimes(2);
-    expect(pairing.list).toHaveBeenCalledOnce();
-  });
-
   it("surfaces an inbound request and consumes pairing approval into durable peer trust", async () => {
     const { friend: pending, relay, store, pairing, manager } = pairingFixture();
     const issue = vi.fn(async () => {});

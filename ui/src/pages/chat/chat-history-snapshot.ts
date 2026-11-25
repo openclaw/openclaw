@@ -1,4 +1,5 @@
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChatInputReceipts,
@@ -11,7 +12,6 @@ import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types
 import { t } from "../../i18n/index.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
 import {
-  nativeHistoryMessageIdentity,
   nativeHistoryMessageSourceIdentity,
   oldestNativeHistoryMessage,
 } from "../../lib/chat/history-message-identity.ts";
@@ -57,6 +57,7 @@ export type ChatHistoryResult = {
   inFlightRun?: {
     runId: string;
     text?: string;
+    textFromMessage?: number | number[];
     startedAt?: number;
     sessionAbortable?: boolean;
     events?: AgentEventPayload[];
@@ -100,6 +101,32 @@ export function isHistoryCursor(
   return "kind" in result;
 }
 
+export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
+  if (isHistoryCursor(result) && result.kind === "reset") {
+    return result;
+  }
+  if (!result.activity || !result.messages) {
+    return result;
+  }
+  const byId = new Map(result.activity.map((entry) => [entry.messageId, entry.items]));
+  const withActivity = (message: unknown) => {
+    const record = asOptionalRecord(message);
+    const id = record?.messageId ?? asOptionalRecord(record?.["__openclaw"])?.id;
+    const activity = typeof id === "string" ? byId.get(id) : undefined;
+    return record && activity ? { ...record, activity } : message;
+  };
+  return {
+    ...result,
+    messages: result.messages.map((entry) => {
+      if (!isHistoryCursor(result)) {
+        return withActivity(entry);
+      }
+      const envelope = asOptionalRecord(entry);
+      return envelope ? { ...envelope, message: withActivity(envelope.message) } : entry;
+    }),
+  };
+}
+
 export function resolveChatHistoryPagination(
   result: ChatHistoryResult | undefined,
   totalMessages?: number,
@@ -127,99 +154,6 @@ export function historySessionId(result: ChatHistoryResult): string | null {
     normalizeNullableString(result.sessionInfo?.sessionId) ??
     normalizeNullableString(result.sessionId)
   );
-}
-
-function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {
-  const totalMessages = asSafeIntegerInRange(pagination.totalMessages, { min: 0 });
-  if (totalMessages === undefined) {
-    return null;
-  }
-  const retainedDepth = pagination.hasMore ? pagination.nextOffset : totalMessages;
-  if (retainedDepth === undefined) {
-    return null;
-  }
-  const start = totalMessages - retainedDepth + 1;
-  return asSafeIntegerInRange(start, { min: 1 }) ?? null;
-}
-
-export function reconcileHistoryTail(options: {
-  nextMessages: unknown[];
-  nextPagination: ChatHistoryPagination;
-  nextSessionId: string | null;
-  previousMessages: unknown[];
-  previousPagination: ChatHistoryPagination;
-  previousSessionId: string | null;
-}): { messages: unknown[]; pagination: ChatHistoryPagination } | null {
-  if (!options.previousSessionId || options.previousSessionId !== options.nextSessionId) {
-    return null;
-  }
-  const previousByIdentity = new Map<string, unknown[]>();
-  for (const message of options.previousMessages) {
-    const identity = nativeHistoryMessageIdentity(message);
-    if (identity) {
-      const matches = previousByIdentity.get(identity) ?? [];
-      matches.push(message);
-      previousByIdentity.set(identity, matches);
-    }
-  }
-  // Identical history rows keep their render identity, including projected siblings.
-  const messages = options.nextMessages.map((message) => {
-    const identity = nativeHistoryMessageIdentity(message);
-    return (identity ? previousByIdentity.get(identity)?.shift() : undefined) ?? message;
-  });
-  const reconciled = { messages, pagination: options.nextPagination };
-  if (!options.nextPagination.hasMore) {
-    return reconciled;
-  }
-  const previousTotal = options.previousPagination.totalMessages;
-  const nextTotal = options.nextPagination.totalMessages;
-  if (previousTotal !== undefined && nextTotal !== undefined && nextTotal < previousTotal) {
-    return reconciled;
-  }
-  const nextStart = retainedRawHistoryStart(options.nextPagination);
-  const firstSource = nativeHistoryMessageSourceIdentity(messages[0]);
-  const overlap = firstSource
-    ? options.previousMessages.findIndex(
-        (message) => nativeHistoryMessageSourceIdentity(message) === firstSource,
-      )
-    : options.previousMessages.indexOf(messages[0]);
-  // Matching source IDs prove overlap without interpreting native sequences as
-  // CLI ordinals. An empty visible window needs authoritative raw coverage;
-  // a hidden page still advances the admitted oldest edge.
-  const adjoining =
-    typeof previousTotal === "number" &&
-    nextStart !== null &&
-    (options.previousMessages.length === 0
-      ? nextStart <= previousTotal + 1
-      : nextStart === previousTotal + 1);
-  if (overlap < 0 && !adjoining) {
-    return reconciled;
-  }
-  const prefix =
-    overlap >= 0 ? options.previousMessages.slice(0, overlap) : options.previousMessages;
-  const unavailable =
-    options.previousPagination.hasMore &&
-    !options.previousPagination.olderCursor &&
-    !options.previousPagination.needsBoundary;
-  // A missing edge never certified traversal. A fresh edge covers this tail
-  // only; any older held prefix must reopen its own source boundary.
-  if (unavailable && prefix.length === 0) {
-    return reconciled;
-  }
-  const previousStart = retainedRawHistoryStart(options.previousPagination);
-  const nextOffset =
-    previousStart !== null && typeof nextTotal === "number"
-      ? nextTotal - previousStart + 1
-      : undefined;
-  return {
-    messages: [...prefix, ...messages],
-    pagination: {
-      ...options.previousPagination,
-      ...(unavailable ? { needsBoundary: true as const } : {}),
-      ...(nextTotal !== undefined ? { totalMessages: nextTotal } : {}),
-      ...(options.previousPagination.hasMore && nextOffset !== undefined ? { nextOffset } : {}),
-    },
-  };
 }
 
 export function reopenChatHistoryBoundary(

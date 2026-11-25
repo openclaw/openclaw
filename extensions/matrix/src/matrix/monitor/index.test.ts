@@ -126,7 +126,6 @@ describe("monitorMatrixProvider", () => {
     hoisted.client.bindSyncIngress.mockClear();
     hoisted.ingress.start.mockClear();
     hoisted.ingress.stop.mockClear();
-    hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
     hoisted.createMatrixIngressMonitor.mockClear();
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
     hoisted.registerChannelRuntimeContext.mockReset();
@@ -310,7 +309,41 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(
       expect.objectContaining({ mode: "stop" }),
     );
-    expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
+  });
+
+  it("publishes ready only after startup maintenance completes", async () => {
+    const abortController = new AbortController();
+    let finishMaintenance: (() => void) | undefined;
+    hoisted.runMatrixStartupMaintenance.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishMaintenance = resolve;
+        }),
+    );
+    const isReady = () =>
+      hoisted.setStatus.mock.calls.some(
+        ([status]) => (status as Record<string, unknown>).lifecycle === "ready",
+      );
+
+    const monitorPromise = monitorMatrixProvider({
+      abortSignal: abortController.signal,
+      setStatus: hoisted.setStatus,
+    });
+    await flushUntil(
+      () => hoisted.runMatrixStartupMaintenance.mock.calls.length === 1,
+      "expected startup maintenance to run",
+    );
+
+    hoisted.client.emit("sync.state", "SYNCING", "PREPARED", undefined);
+    expectLastStatusFields({ connected: false, lifecycle: "starting" });
+    expect(isReady()).toBe(false);
+
+    finishMaintenance?.();
+    await flushUntil(isReady, "expected ready status after startup maintenance");
+    expectLastStatusFields({ connected: true, lifecycle: "ready", healthState: "healthy" });
+
+    abortController.abort();
+    await expect(monitorPromise).resolves.toBeUndefined();
   });
 
   it("aborts during startup maintenance and releases the shared client without persist", async () => {
@@ -335,7 +368,6 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(
       expect.objectContaining({ mode: "stop" }),
     );
-    expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
     await expect(
       registeredRoomMessageHandler()("!room:example.org", { event_id: "$late" }),
     ).rejects.toThrow("Matrix monitor is stopped");
@@ -477,16 +509,12 @@ describe("monitorMatrixProvider", () => {
         hoisted.callOrder.push(`handler-done:${eventId}`);
       }),
     );
-    hoisted.client.drainPendingDecryptions.mockImplementation(async () => {
-      hoisted.callOrder.push("drain-decrypts");
-    });
     hoisted.stopThreadBindingManager.mockImplementation(async () => {
       hoisted.callOrder.push("stop-manager");
       await managerDone.promise;
       hoisted.callOrder.push("manager-stopped");
     });
     hoisted.releaseSharedClientInstance.mockImplementation(async () => {
-      await hoisted.client.drainPendingDecryptions();
       await hoisted.runRegisteredMonitorRetirement();
       hoisted.callOrder.push("release-client");
     });
@@ -514,9 +542,6 @@ describe("monitorMatrixProvider", () => {
     managerDone.resolve();
     await monitorPromise;
 
-    expect(hoisted.callOrder.indexOf("drain-decrypts")).toBeLessThan(
-      hoisted.callOrder.indexOf("dispose-auto-join"),
-    );
     expect(hoisted.callOrder.indexOf("dispose-auto-join")).toBeLessThan(
       hoisted.callOrder.indexOf("handler-done:$event"),
     );
@@ -561,7 +586,6 @@ describe("monitorMatrixProvider", () => {
     abortController.abort();
     await waitForCallOrderEntry("dispose-monitor-events");
 
-    expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
     expect(hoisted.callOrder).not.toContain("release-retained");
 
     handlerDone.resolve();

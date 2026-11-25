@@ -1,11 +1,11 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
-import { pluginFallbackGradient, pluginMonogram } from "../../pages/plugins/presentation.ts";
+import { pluginFallbackGradient, pluginMonogram } from "../../pages/plugins/presentation.tsx";
 import "../../styles/channels.css";
 
 export function ChannelIcon(props: {
   channelId: string;
   label: string;
-  variant: "tile" | "cover" | "picker";
+  variant: "tile" | "picker";
   pluginIconUrl?: string;
 }) {
   const source = createMemo(() => props.pluginIconUrl);
@@ -16,11 +16,9 @@ export function ChannelIcon(props: {
     active = false;
   });
   const appearance = createMemo(() => {
-    const variant = props.variant === "picker" ? "tile" : props.variant;
     const [from, to] = art() ? ["", ""] : pluginFallbackGradient(props.channelId);
-    const coverClass = props.variant === "cover" && props.pluginIconUrl && "channels-cover--icon";
     return {
-      class: [`channels-${variant}`, coverClass, !art() && `channels-${variant}--fallback`],
+      class: ["channels-tile", !art() && "channels-tile--fallback"],
       style: `${props.variant === "picker" ? "--channels-art-size:24px;" : ""}${art() ? "" : `--channels-art-a:${from};--channels-art-b:${to}`}`,
     };
   });

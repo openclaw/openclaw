@@ -25,15 +25,14 @@ export type ChatSessionAbortParams = {
   defaultAgentId?: string;
   abortOrigin: ChatAbortOrigin;
   stopReason?: string;
+  userInitiated?: boolean;
   stopSource: SessionStopSource;
   hookContext?: SessionStopHookContext;
   controllerTargets?: readonly SessionTarget[];
   requester: ChatAbortRequester;
   assertCurrent?: () => void;
-  /** Prepare persisted request facts immediately before the synchronous cancellation effects. */
-  beforeAbort?: () => Promise<void>;
-  /** Explicit user Stop also cancels and suppresses Workshop Experience Review for the stopped runs. */
-  cancelExperienceReview?: true;
+  /** Explicit user Stop: announce the stopped runs through `notifySessionRunStopped`. */
+  announceRunStopped?: true;
   preserveSideRuns?: boolean;
   cascadeDescendants?: true;
   /** Current session lifecycle owner; reporting only, never descendant selection. */
@@ -53,4 +52,15 @@ export type ChatSessionAbortResult = {
   error?: ErrorShape;
   warning?: string;
   descendants?: Awaited<ReturnType<typeof abortControlledSubagents>>;
+};
+
+export type ChatAbortLifecycle = {
+  /** Internal composition may advance only after this exact run was cancelled. */
+  onExactRunAborted?: (runId: string) => void;
+  onDescendantsCancelled?: (
+    result: NonNullable<Awaited<ReturnType<typeof abortControlledSubagents>>>,
+  ) => void;
+  cascadeDescendants?: true;
+  yieldedRequesterRunId?: string;
+  hookContext?: SessionStopHookContext;
 };

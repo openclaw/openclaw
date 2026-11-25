@@ -337,6 +337,7 @@ describe("worker transcript commit application", () => {
         onUserTurnMediaPersisted,
         runId,
         client: null,
+        senderIsOwner: false,
         context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
       });
 
@@ -380,8 +381,8 @@ describe("worker transcript commit application", () => {
         entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : [],
       ),
     ).toEqual(["First input", "Second input"]);
-    first.recorder?.finishPendingInput?.("interrupted");
-    second.recorder?.finishPendingInput?.("interrupted");
+    first.recorder?.finishPendingInput?.("interrupted", "failed");
+    second.recorder?.finishPendingInput?.("interrupted", "failed");
   });
 
   it("rejects a commit when lifecycle ownership changes in the writer queue", async () => {

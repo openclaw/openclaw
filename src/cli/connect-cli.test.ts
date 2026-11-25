@@ -12,6 +12,7 @@ import { registerConnectCli } from "./connect-cli.js";
 
 const mocks = vi.hoisted(() => ({
   runNodeHost: vi.fn(),
+  runNodeJoin: vi.fn(),
   loadResumableNodeHostGateway: vi.fn<() => Promise<NodeHostGatewayConfig | undefined>>(
     async () => undefined,
   ),
@@ -29,6 +30,8 @@ vi.mock("../node-host/runner.js", () => ({
   loadResumableNodeHostGateway: mocks.loadResumableNodeHostGateway,
   runNodeHost: mocks.runNodeHost,
 }));
+// mock-isolation: Node enrollment is owned separately; never redeem real invitations here.
+vi.mock("../node-host/openclaw-id-join.js", () => ({ runNodeJoin: mocks.runNodeJoin }));
 vi.mock("../node-host/config.js", () => ({ loadNodeHostConfig: mocks.loadNodeHostConfig }));
 // mock-isolation: Connect fixtures capture config mutations without reading or writing operator state.
 vi.mock("../config/config.js", () => ({
@@ -69,6 +72,7 @@ function joinResponse(contentType = "application/json", finalUrl?: string) {
 }
 
 function expectFailure(message: unknown) {
+  expect(mocks.runNodeJoin).not.toHaveBeenCalled();
   expect(mocks.runtime.error).toHaveBeenCalledWith(message);
   expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   expect(mocks.runNodeHost).not.toHaveBeenCalled();
@@ -114,6 +118,68 @@ describe("connect cli", () => {
     mocks.runNodeDaemonInstall.mockResolvedValue(undefined);
     mocks.mutateConfigFileWithRetry.mockResolvedValue(undefined);
     mocks.runtime.exit.mockImplementation(() => {});
+  });
+
+  it.each([
+    [[], false, undefined, undefined],
+    [
+      ["--service", "--commands", "fixture.read,fixture.list"],
+      true,
+      ["fixture.list", "fixture.read"],
+      undefined,
+    ],
+    [["--all-commands"], false, undefined, true],
+  ] as const)(
+    "routes node invitations with flags %j",
+    async (flags, service, commands, allCommands) => {
+      const link = "openclaw-node://join#synthetic-invitation";
+      await runConnect([
+        link,
+        ...flags,
+        "--discovery-url",
+        "https://discovery.example",
+        "--display-name",
+        "Build Node",
+      ]);
+      expect(mocks.runNodeJoin).toHaveBeenCalledWith(link, {
+        service,
+        discoveryUrl: "https://discovery.example",
+        displayName: "Build Node",
+        commands,
+        allCommands,
+      });
+      expect(mocks.loadNodeHostConfig).not.toHaveBeenCalled();
+      expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+      expect(mocks.runNodeHost).not.toHaveBeenCalled();
+      expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["--ephemeral", "--session-host"])("rejects node invitation %s", async (flag) => {
+    await runConnect(["openclaw-node://join#synthetic-invitation", flag]);
+    expectFailure("OpenClaw ID node invitations do not support --ephemeral or --session-host.");
+  });
+
+  it("rejects conflicting command selections before redeeming a node invitation", async () => {
+    await expect(
+      runConnect(["openclaw-node://join", "--commands", "fixture.read", "--all-commands"]),
+    ).rejects.toThrow(/--all-commands.*--commands/);
+    expect(mocks.runNodeJoin).not.toHaveBeenCalled();
+  });
+
+  it("reports node enrollment errors without falling back to bootstrap pairing", async () => {
+    mocks.runNodeJoin.mockRejectedValueOnce(new Error("Node invitation expired."));
+    await runConnect(["openclaw-node://join#synthetic-invitation"]);
+    expect(mocks.runtime.error).toHaveBeenCalledWith("Node invitation expired.");
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runNodeHost).not.toHaveBeenCalled();
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
+  it("rejects Discovery routing on legacy setup targets", async () => {
+    await runConnect([setupCode(), "--discovery-url", "https://discovery.example"]);
+    expectFailure("--discovery-url requires an openclaw-node invitation link.");
   });
 
   it.each(["text/html", "application/json-seq"])(

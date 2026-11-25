@@ -113,6 +113,7 @@ const stepIds = new Map<string, string>([
     "package-rollback-not-needed",
     "repair-continuation",
     "repair-takeover",
+    "repaired-run",
     "exit",
   ].map((phase): [string, string] => [
     `finalize:${phase}`,

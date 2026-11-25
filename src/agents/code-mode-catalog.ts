@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { tokTypes } from "acorn";
-import type { CatalogSource } from "./tool-search-types.js";
+import type { CatalogSource } from "./tool-search-protocol.js";
 
 type CompactCatalogEntry = {
   id: string;

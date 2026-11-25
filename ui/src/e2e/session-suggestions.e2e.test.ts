@@ -275,7 +275,10 @@ suite.define(() => {
         const geometry = await caretTextGeometry(preview);
         const line = draft.slice(0, cursor).split("\n").length - 1;
         expect(geometry.height).toBeCloseTo(geometry.textHeight, 1);
-        expect(geometry.top).toBeCloseTo(geometry.textTop + line * geometry.lineHeight, 1);
+        // Each rendered line may round its fractional height to a layout unit.
+        expect(
+          Math.abs(geometry.top - (geometry.textTop + line * geometry.lineHeight)),
+        ).toBeLessThanOrEqual(0.5);
       }
     }
     for (const empty of ["", "\n\n"]) {
@@ -329,8 +332,46 @@ suite.define(() => {
       sessionKey: "agent:main:main",
       text: "Try the focused change",
     });
-    await expect(page.locator(".session-suggestion__state")).toHaveText("Pending");
+    await expect(page.locator(".session-suggestion__state")).toHaveText("Awaiting approval");
     await expect(page.locator(".session-suggestion__text")).toHaveText("Try the focused change");
+  });
+
+  it("keeps a long guest suggestion and its approval state on one line", async () => {
+    const prompt =
+      "Compare the two approaches in the release notes and explain which one keeps the migration simple for teams that already have a working setup.";
+    const { page } = await openSuggestions("viewer", {
+      methodResponses: {
+        "session.suggestions.list": {
+          suggestions: [pendingSuggestion("guest", prompt, 1)],
+          role: "viewer",
+        },
+      },
+    });
+    const row = page.locator(".session-suggestion");
+    const text = row.locator(".session-suggestion__text");
+    const state = row.locator(".session-suggestion__state");
+    await expect(text).toHaveText(prompt);
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      const frame = await takeControlUiScreenshotFrame(page, row, [text, state], {
+        animations: "disabled",
+        elements: [row, state],
+      });
+      await writeFile(path.join(suite.artifactDir, "guest.png"), frame.png);
+      await writeFile(
+        path.join(suite.artifactDir, "guest-bounds.json"),
+        JSON.stringify(frame.elements.map((item) => item.bounds)),
+      );
+      console.info("Guest suggestion proof:", suite.artifactDir);
+    }
+    await expect(state).toHaveText("Awaiting approval");
+    for (const width of [1180, 400]) {
+      await page.setViewportSize({ width, height: 760 });
+      await expect(text).toHaveCSS("text-overflow", "ellipsis");
+      expect(await text.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+      const [promptBox, stateBox] = await Promise.all([bounds(text), bounds(state)]);
+      expect(promptBox.y + promptBox.height / 2).toBeGreaterThan(stateBox.y);
+      expect(promptBox.y + promptBox.height / 2).toBeLessThan(stateBox.y + stateBox.height);
+    }
   });
 
   it("does not offer live-session commands in a viewer suggestion composer", async () => {
@@ -378,6 +419,7 @@ suite.define(() => {
       );
       const typingRow = page.locator('[data-virtual-row-key="presence:typing"]');
       const previewBubble = typingRow.locator(".agent-chat__typing-preview-text");
+      const caret = previewBubble.locator(".agent-chat__typing-caret");
 
       await page.clock.install();
       const ownerTyping = (preview?: string) => typingEvent(gateway, preview ? { preview } : {});
@@ -388,7 +430,11 @@ suite.define(() => {
       const typingAvatar = typingRow.locator(
         ".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot)",
       );
-      await expect(typingAvatar).toBeVisible();
+      const typingInitials = typingRow.locator(
+        ".chat-message-avatar-anchor .chat-avatar--sender-initials",
+      );
+      await expect(typingInitials).toBeVisible();
+      await expect(typingInitials).toHaveText("O");
       await expect(typingAvatar).toHaveCSS("position", "absolute");
 
       const draft = "yea, cool. Live drafts stream into the bubble now.";
@@ -399,15 +445,16 @@ suite.define(() => {
         await expect(previewBubble).toHaveText(visible);
       }
       await expect(typingRow.locator(".agent-chat__typing-preview-label")).toHaveText("Owner");
-      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing...");
+      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing…");
       await expect(typingRow.locator(".agent-chat__typing-bubble")).toHaveCount(0);
+      expect(await afterAnimation(caret)).not.toBe("none");
       const activeBox = await previewBubble.boundingBox();
       await page.clock.runFor(10_000);
       await expect(previewBubble).toHaveText(draft);
       await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Draft");
       await expect(typingRow.locator(".sr-only")).toBeEmpty();
       expect(await previewBubble.boundingBox()).toEqual(activeBox);
-      expect(await afterAnimation(previewBubble)).toBe("none");
+      expect(await afterAnimation(caret)).toBe("none");
 
       await typingEvent(gateway, {
         actor: { type: "human", id: "zoe", label: "Zoe" },
@@ -447,10 +494,11 @@ suite.define(() => {
           await previewBubble.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
       }
+      expect(await afterAnimation(caret)).not.toBe("none");
       await page.emulateMedia({ reducedMotion: "reduce" });
       await ownerTyping("مسودة لم ترسل بعد 👋");
       await expect(previewBubble).toHaveCSS("direction", "rtl");
-      expect(await afterAnimation(previewBubble)).toBe("none");
+      expect(await afterAnimation(caret)).toBe("none");
       await page.setViewportSize({ width: 1180, height: 760 });
       await page.evaluate(() => {
         document.documentElement.dataset.theme = "light";

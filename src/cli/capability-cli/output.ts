@@ -1,18 +1,4 @@
-import { writeRuntimeJson, type RuntimeEnv } from "../../runtime.js";
-import type { CapabilityEnvelope } from "./metadata.js";
-
-export function emitJsonOrText<T>(
-  runtime: RuntimeEnv,
-  json: boolean | undefined,
-  value: T,
-  textFormatter: (value: T) => string,
-) {
-  if (json) {
-    writeRuntimeJson(runtime, value);
-    return;
-  }
-  runtime.log(textFormatter(value));
-}
+import type { CapabilityEnvelope } from "./result-types.js";
 
 export function formatEnvelopeForText(envelope: CapabilityEnvelope): string {
   if (!envelope.ok) {

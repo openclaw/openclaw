@@ -469,7 +469,7 @@ function createLspPositionTool(params: {
       );
       const text =
         result !== null && result !== undefined
-          ? JSON.stringify(result, null, 2)
+          ? JSON.stringify(result)
           : `No ${params.method} result from ${params.session.serverName}`;
       return {
         content: [{ type: "text", text }],

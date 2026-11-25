@@ -10,6 +10,7 @@ import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-databas
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
 import { withSqliteSourceReadDatabase } from "../infra/sqlite-source-handle.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import { readAgentDatabaseSchemaVersion } from "./openclaw-agent-db-schema-read.js";
@@ -62,6 +63,13 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
           { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
         );
         readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
+      } else if (input.purpose === "runtime") {
+        inspection = withSqliteSourceReadDatabase(
+          input.pathname,
+          "source",
+          (database) => runSqliteReadSnapshotSync(database, () => inspect(database)),
+          { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, waitForAdmission: true },
+        );
       } else {
         inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect)?.value;
       }
@@ -93,11 +101,18 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
       const inspected = withDatabaseEngineSelection(request.databaseEngineSelection, () =>
         withEngineStoreAdmission(() =>
           withFreshOpenClawAgentDatabaseReadOnly(
-            ({ db }) => ({
-              version: readAgentDatabaseSchemaVersion(db),
-              integrityGateOutcome: "healthy" as const,
-              agentSchemaMeta: readExistingAgentSchemaMeta(db),
-            }),
+            ({ db }) => {
+              const metadata = readExistingAgentSchemaMeta(db);
+              const version = readAgentDatabaseSchemaVersion(db);
+              const minReader =
+                metadata?.minReader ?? Math.max(metadata?.schemaVersion ?? 0, version);
+              return {
+                version,
+                ...(minReader !== version ? { minReader } : {}),
+                integrityGateOutcome: "healthy" as const,
+                agentSchemaMeta: metadata,
+              };
+            },
             { agentId, path: input.pathname, env: input.env },
           ),
         ),
@@ -137,7 +152,8 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
       readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
     } else {
       inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect, {
-        allowClosedWal: readVerification() !== undefined,
+        allowClosedWal: input.allowClosedWal || readVerification() !== undefined,
+        preserveSourceArtifacts: input.preserveSourceArtifacts,
       })?.value;
     }
     send({

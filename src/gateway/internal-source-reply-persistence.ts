@@ -97,7 +97,7 @@ async function completePersistedInternalSourceReply(params: {
             entry.lifecycleRevision !== (expected.expectedLifecycleRevision ?? undefined)) ||
           (expected.expectedWriterRunId !== undefined &&
             entry.activeWriterRunId !== expected.expectedWriterRunId) ||
-          !["exact", "ancestor"].includes(facts.activePathRelation ?? "")
+          facts.onActivePath !== true
         ) {
           throw new Error("Internal source reply no longer owns the active transcript");
         }

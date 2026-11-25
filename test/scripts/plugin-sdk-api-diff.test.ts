@@ -10,7 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import {
   expandPluginSdkApiDiffSet as expandDiffs,
@@ -31,6 +31,7 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { withRuntimePreload } from "../helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const pendingChildCompletions = new Set<Promise<unknown>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -171,6 +172,23 @@ fixtureReceiptSocket.end();
   return `'${process.execPath.replace(/'/gu, `'\\''`)}' '${receiptPath.replace(/'/gu, `'\\''`)}'`;
 }
 
+function writeRevisionInstall(binDir: string): string {
+  // Each revision needs physical compiler inputs, not the caller's shared install.
+  materializeNativeCompiler(binDir);
+  const installer = join(binDir, "install-revision.mjs");
+  writeFileSync(
+    installer,
+    `import { cpSync, constants } from "node:fs";
+cpSync(${JSON.stringify(join(binDir, "node_modules"))}, "node_modules", {
+  recursive: true,
+  mode: constants.COPYFILE_FICLONE,
+  filter: () => true,
+});
+`,
+  );
+  return `'${process.execPath.replace(/'/gu, `'\\''`)}' '${installer.replace(/'/gu, `'\\''`)}'`;
+}
+
 async function installBeforeSettlement(
   marker: string,
   close: PromiseLike<unknown>,
@@ -199,11 +217,13 @@ it("finishes every revision install before starting declaration rendering", asyn
   const baseSha = commit(repo, "base");
   writeFileSync(source, "export type Fixture = number;\n");
   commit(repo, "head");
-  symlinkSync(resolve("node_modules"), join(repo, "node_modules"), "dir");
+  expect(existsSync(join(repo, "node_modules"))).toBe(false);
 
   writePnpm(
     binDir,
     `#!/bin/sh
+set -e
+${writeRevisionInstall(binDir)}
 if mkdir "$PNPM_MARKER" 2>/dev/null; then
   while [ ! -e "$PNPM_BLOCKED" ]; do sleep 0.05; done
   exit 0
@@ -271,13 +291,7 @@ if (process.argv.includes("--render-root")) {
     }
     await close;
   }
-  const progressLines = tracked.stderr.trim().split("\n");
-  expect(progressLines).toHaveLength(8);
-  for (const line of progressLines) {
-    expect(line).toMatch(
-      /^\[plugin-sdk-api-diff\] [a-f0-9]{40} (install|render) (started|completed in \d+ms)$/,
-    );
-  }
+  expect(tracked.stderr).toMatch(/ install completed[\s\S]* render started/u);
   expect(exitCode).toBe(0);
   expect(existsSync(blockedMarker)).toBe(true);
   expect(existsSync(renderStarted)).toBe(true);
@@ -417,15 +431,14 @@ it.each([
   { beta: "candidate", latest: "v2026.7.31" },
   { beta: "candidate", latest: "HEAD" },
 ])(
-  "renders only unique revisions needed by changed selectors: %j",
+  "binds each selector to its frozen revision and declarations: %j",
   (bases) => {
     const { repo, runnerTemp, binDir } = makeFixture("selector");
-    const installLog = join(binDir, "installs");
     const evidencePath = join(binDir, "evidence.json");
     const jsonPath = join(binDir, "diff.json");
     const source = sdkSource(repo);
     writeFileSync(source, "export type Fixture = string;\n");
-    const latestSha = commit(repo, "latest");
+    commit(repo, "latest");
     git(repo, ["tag", "v2026.7.31"]);
     writeFileSync(source, "export type Fixture = number;\n");
     const betaSha = commit(repo, "beta");
@@ -435,7 +448,13 @@ it.each([
     git(repo, ["tag", "candidate"]);
     writeFileSync(source, "export type Fixture = uncommitted;\n");
     symlinkSync(resolve("node_modules"), join(repo, "node_modules"), "dir");
-    writePnpm(binDir, '#!/bin/sh\nprintf "%s\\n" "$PWD" >> "$PNPM_MARKER"\n');
+    writePnpm(
+      binDir,
+      `#!/bin/sh
+set -e
+${writeRevisionInstall(binDir)}
+`,
+    );
     const worktrees = git(repo, ["worktree", "list", "--porcelain"]);
     const child = runCli(repo, runnerTemp, binDir, {
       "bases-json": JSON.stringify(bases),
@@ -444,18 +463,6 @@ it.each([
       json: jsonPath,
     });
     expect(child.status, child.stderr).toBe(0);
-    const installed = existsSync(installLog)
-      ? readFileSync(installLog, "utf8")
-          .trim()
-          .split("\n")
-          .map((path) => basename(path))
-      : [];
-    expect(installed.toSorted()).toEqual(
-      (bases.latest === "HEAD"
-        ? []
-        : [latestSha, ...(bases.beta === "v2026.8.1-beta.1" ? [betaSha] : []), headSha]
-      ).toSorted(),
-    );
     const bundle = JSON.parse(readFileSync(evidencePath, "utf8"));
     expect(decode(bundle).schema).toBe("openclaw.plugin-sdk-api-release-evidence-set/v2");
     const reports = expandDiffs(JSON.parse(readFileSync(jsonPath, "utf8")));

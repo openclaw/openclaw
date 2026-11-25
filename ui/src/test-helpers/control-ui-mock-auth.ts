@@ -10,6 +10,8 @@ export type ControlUiMockAuth = {
   roleAllowsAdmin?: boolean;
   /** Role-limited access to other people's sessions, as reported by the Gateway. */
   operatorSessionCap?: HelloOk["auth"]["sessionCap"] | null;
+  /** Canonical current-role person-timeline restriction from the authenticated hello. */
+  profileActivityViewerId?: string | null;
   /** Simulate a legacy Gateway whose connect hello predates the auth projection. */
   omitConnectHelloAuth?: boolean;
 };
@@ -23,7 +25,16 @@ export function normalizeControlUiMockAuth(scenario: ControlUiMockAuth) {
     authMode: scenario.authMode ?? null,
     omitConnectHelloAuth: scenario.omitConnectHelloAuth ?? false,
     operatorSessionCap: scenario.operatorSessionCap ?? null,
+    profileActivityViewerId: scenario.profileActivityViewerId,
     roleAllowsAdmin: scenario.roleAllowsAdmin ?? true,
+    // Role presentation is fixed for this hello; socket scopes remain independently mutable.
+    operatorRolePolicy: {
+      roleAllowsAdmin: scenario.roleAllowsAdmin ?? true,
+      ...(scenario.operatorSessionCap ? { sessionCap: scenario.operatorSessionCap } : {}),
+      ...(scenario.profileActivityViewerId !== undefined
+        ? { profileActivityViewerId: scenario.profileActivityViewerId }
+        : {}),
+    },
     operatorScopes: scenario.operatorScopes ?? [
       "operator.admin",
       "operator.read",

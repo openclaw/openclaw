@@ -4,14 +4,14 @@ import { readPluginNoticeData } from "./plugin-notice.js";
 // Data of the plugin notice a background skill review posts after changing learned skills.
 // The row's text serves every client; the data lets the Control UI render it natively.
 
-export const SKILL_WORKSHOP_PLUGIN_ID = "skill-workshop";
-export const SKILL_WORKSHOP_CHANGE_NOTICE_TYPE = "skills-changed";
+const SKILL_WORKSHOP_PLUGIN_ID = "skill-workshop";
+const SKILL_WORKSHOP_CHANGE_NOTICE_TYPE = "skills-changed";
 
 const NOTICE_ACTIONS = ["created", "updated", "archived", "restored"] as const;
 
-export type SkillWorkshopNoticeAction = (typeof NOTICE_ACTIONS)[number];
+type SkillWorkshopNoticeAction = (typeof NOTICE_ACTIONS)[number];
 
-export type SkillWorkshopChangeNoticeSkill = {
+type SkillWorkshopChangeNoticeSkill = {
   name: string;
   action: SkillWorkshopNoticeAction;
   summary?: string;

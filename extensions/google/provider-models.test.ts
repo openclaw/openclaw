@@ -267,6 +267,7 @@ it.each([
 it("keeps non-chat Gemini surfaces out of text discovery and forward compatibility", () => {
   for (const modelId of [
     "gemini-3.1-flash-image",
+    "gemini-nano-banana-2.1",
     "gemini-3.1-flash-tts-preview",
     "gemini-3.1-flash-live-preview",
     "gemini-2.5-flash-preview-native-audio-dialog",

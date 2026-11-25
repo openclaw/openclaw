@@ -504,17 +504,26 @@ describe("findTailscaleBinary", () => {
     expect(runExecMock).toHaveBeenCalledExactlyOnceWith(binary, ["version"], { timeoutMs: 3000 });
   });
 
-  it("rejects a PATH candidate whose version command fails", async () => {
-    const binary = installPathBinary("openclaw-tailscale-invalid-");
-    runExecMock.mockImplementation(async (command: string) => {
-      if (command === "locate") {
-        return { stdout: "", stderr: "" };
-      }
-      throw new Error("CLI cannot run");
-    });
+  it.each([
+    ["linux", 0],
+    ["win32", 0],
+    ["darwin", 1],
+  ] as const)(
+    "rejects an invalid CLI and limits app lookup on %s",
+    async (platform, locateCalls) => {
+      const binary = installPathBinary("openclaw-tailscale-invalid-");
+      runExecMock.mockImplementation(async (command: string) => {
+        if (command === "locate") {
+          return { stdout: "", stderr: "" };
+        }
+        throw new Error("CLI cannot run");
+      });
 
-    await expect(findTailscaleBinary()).resolves.toBeNull();
-    expect(runExecMock).toHaveBeenCalledWith(binary, ["version"], { timeoutMs: 3000 });
-    expect(runExecMock.mock.calls.some(([command]) => command === "which")).toBe(false);
-  });
+      await expect(findTailscaleBinary(platform)).resolves.toBeNull();
+      expect(runExecMock).toHaveBeenCalledWith(binary, ["version"], { timeoutMs: 3000 });
+      expect(runExecMock.mock.calls.filter(([command]) => command === "locate")).toHaveLength(
+        locateCalls,
+      );
+    },
+  );
 });

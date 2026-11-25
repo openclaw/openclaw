@@ -3,7 +3,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import * as authStore from "../agents/auth-profiles/store-runtime.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import * as modelSelection from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -468,7 +468,7 @@ describe("gateway sessions patch", () => {
     expect(read.agentStatus).toBeUndefined();
   });
 
-  test("commits a read acknowledgement without ageing the session row", async () => {
+  test("commits read and unread marks without ageing the session row", async () => {
     const store = mainStoreEntry({
       markedUnreadAt: 40,
       agentStatus: { note: "Waiting", attention: "hand", expiresAt: Date.now() + 60_000 },
@@ -481,7 +481,7 @@ describe("gateway sessions patch", () => {
     expect(read.agentStatus).toBeUndefined();
 
     const marked = await patchOk({ store, unread: true });
-    expect(marked.updatedAt).toBeGreaterThan(1);
+    expect(marked.updatedAt).toBe(1);
     expect(marked.markedUnreadAt).toEqual(expect.any(Number));
 
     const pinned = await patchOk({

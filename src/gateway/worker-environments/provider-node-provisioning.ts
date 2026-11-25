@@ -220,6 +220,9 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       get installation() {
         return pendingInstallation ?? preparedInstallation;
       },
+      get setupId() {
+        return enrollment?.mode === "connect" ? enrollment.setupId : undefined;
+      },
       prepareRuntime: prepareNodeRuntime
         ? async () => {
             assertCurrent();

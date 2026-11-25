@@ -182,12 +182,54 @@ it("reads ISO-bounded channel history through the lookup client and preserves ta
   expect(result.hasMore).toBe(false);
 });
 
-it("rejects invalid history bounds before Slack API work", async () => {
+it.each([
+  ["1700000000.000200", "1700000000.000100", "1700000000.000200", "1700000000.000100"],
+  [' "1700000000.000200" ', '"1700000000.000100"', "1700000000.000200", "1700000000.000100"],
+  [
+    '"2024-04-05T12:34:56+03:00"',
+    '"2024-04-05T12:34:56.789+03:00"',
+    "1712309696",
+    "1712309696.789",
+  ],
+])("applies read bounds %s / %s to history and threads", async (before, after, latest, oldest) => {
+  for (const threadId of [undefined, "1699999999.000000"]) {
+    const client = createClient();
+    const api = threadId ? client.conversations.replies : client.conversations.history;
+    api.mockResolvedValueOnce({ messages: [], has_more: false });
+    await expect(readSlackMessages("C1", { client, before, after, threadId })).resolves.toEqual({
+      messages: [],
+      hasMore: false,
+    });
+    expect(api).toHaveBeenCalledExactlyOnceWith({
+      channel: "C1",
+      limit: undefined,
+      latest,
+      oldest,
+      ...(threadId ? { ts: threadId } : {}),
+    });
+  }
+});
+
+it.each([
+  "2024-02-30T00:00:00.000Z",
+  '"2024-02-30T00:00:00.000Z"',
+  '""',
+  '"   "',
+  '"not-a-timestamp"',
+  '"1700000000.000100',
+  '1700000000.000100"',
+  '""1700000000.000100""',
+  "'1700000000.000100'",
+  '"1700000000.000100junk"',
+])("rejects invalid read bound %s before Slack API work", async (bound) => {
   const client = createClient();
-  await expect(
-    readSlackMessages("C1", { client, before: "2024-02-30T00:00:00.000Z" }),
-  ).rejects.toThrow(
-    'Invalid Slack read before timestamp "2024-02-30T00:00:00.000Z": expected a Slack timestamp or ISO-8601 date string',
-  );
+  for (const field of ["before", "after"] as const) {
+    for (const threadId of [undefined, "1699999999.000000"]) {
+      await expect(readSlackMessages("C1", { client, [field]: bound, threadId })).rejects.toThrow(
+        `Invalid Slack read ${field} timestamp`,
+      );
+    }
+  }
   expect(client.conversations.history).not.toHaveBeenCalled();
+  expect(client.conversations.replies).not.toHaveBeenCalled();
 });

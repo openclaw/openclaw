@@ -15,7 +15,6 @@ import {
   matcher,
   normalize,
   normalizeTextDeltas,
-  parseSplitCall,
   resolveTestFenceRanges,
   streamTextDelta as textEvent,
   textContent,
@@ -239,17 +238,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     const events = await normalize([finish("length", ...blocks)]);
     expect(events.at(-1)?.message).toMatchObject({ content: [] });
     expectHidden(events, "[read]");
-  });
-
-  it.each([
-    [
-      "<function=read><parameter=path> ",
-      "/tmp</parameter><parameter=content>literal </function> tail</parameter></function>",
-      { path: " \n/tmp", content: "literal </function> tail" },
-    ],
-    ["[read]", '  {"path":"/tmp"}[/read]', { path: "/tmp" }],
-  ])("repairs a boundary inside leading horizontal whitespace", (first, second, args) => {
-    expect(parseSplitCall([first, second])?.[0]).toMatchObject({ name: "read", arguments: args });
   });
 
   it.each([
@@ -576,6 +564,24 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     expectLiteral(events, text, textContent(text));
   });
   const chunked = (text: string, size: number) => cumulativeDeltas(...chunksOf(text, size));
+
+  it("does not parse Markdown for replayed non-call prose", async () => {
+    const text = "[read is a literal `example`, with no call payload.\n\n".repeat(32);
+    const resolveRanges = vi.fn(resolveTestFenceRanges);
+    const events = await protectedDeltas(streamDeltas(...chunksOf(text, 16)), resolveRanges);
+    expect(textDeltas(events).join("")).toBe(text);
+    const parsed = resolveRanges.mock.calls.filter(([source]) => /[`~\t]| {4}/u.test(source));
+    expect(parsed).toEqual([]);
+  });
+
+  it("shares ownership when classifying a call followed by an unfinished marker", async () => {
+    const text = leading + "`visible`\n<funct";
+    const resolveRanges = vi.fn(resolveTestFenceRanges);
+    const events = await protectedDeltas([textEvent(text)], resolveRanges);
+    expect(textDeltas(events).join("")).toBe("`visible`\n<funct");
+    // Admission and classification each own one scan; the trailing-marker search shares it.
+    expect(resolveRanges.mock.calls.filter(([source]) => source === text).length).toBe(2);
+  });
 
   it.each([40, 960, 1920])("bounds snapshot parsing for %i fenced examples", (count) => {
     const resolveRanges = vi.fn(resolveTestFenceRanges);

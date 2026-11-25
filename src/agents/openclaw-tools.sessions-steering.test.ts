@@ -152,13 +152,15 @@ it.each(["missing", "different", "different account"] as const)(
 );
 
 it.each([
-  [undefined, false, false, false, false],
-  ["steer", true, false, true, false],
-  ["steer", false, true, false, false],
-  [undefined, false, false, false, true],
+  [undefined, false, false, false, false, false],
+  ["steer", true, false, true, false, false],
+  ["steer", false, true, false, false, false],
+  [undefined, false, false, false, true, false],
+  // A parent's ordinary reply-waiting send must still reach its busy child's current run.
+  [undefined, false, false, false, true, true],
 ] as const)(
-  "persists steering provenance: mode=%s alternateStore=%s hiddenRun=%s refreshedDisplay=%s ownChild=%s",
-  async (mode, alternateStore, hiddenRun, refreshedDisplay, ownChild) => {
+  "persists steering provenance: mode=%s alternateStore=%s hiddenRun=%s refreshedDisplay=%s ownChild=%s defaultTimeout=%s",
+  async (mode, alternateStore, hiddenRun, refreshedDisplay, ownChild, defaultTimeout) => {
     const runId = "hidden-sessions-send-steering-run";
     const sessionKey = ownChild
       ? "agent:leasing-ops:subagent:active-child"
@@ -186,12 +188,6 @@ it.each([
     let responding = false;
     let closing = false;
     const initialResponseStarted = createDeferred();
-    const queued = createDeferred();
-    const unsubscribe = session.subscribe((event) => {
-      if (event.type === "queue_update") {
-        queued.resolve();
-      }
-    });
     streamMocks.streamSimple.mockImplementation((model) => {
       if (responding || closing) {
         return createAssistantResultStream(createAssistant(model, "received"));
@@ -259,25 +255,18 @@ it.each([
           mode,
           sessionKey,
           message: "[TASK-COMPLETE] re-portal occupancy ready",
-          timeoutSeconds: 0,
+          ...(defaultTimeout ? {} : { timeoutSeconds: 0 }),
         }),
       );
-      let acknowledged = false;
-      void send.then(() => {
-        acknowledged = true;
-      });
       pending.push(send);
-      await Promise.race([queued.promise, send, prompt]);
-      expect(session.pendingMessageCount).toBe(1);
-      // Reply waiting cannot acknowledge volatile input or withdraw it before
-      // the independent durable-admission deadline and receiver consumption.
-      await vi.advanceTimersByTimeAsync(30_000);
-      vi.useRealTimers();
-      expect(acknowledged).toBe(false);
+      // The receipt returns at acceptance, with no time passing, while the
+      // receiver still holds the input for its next model boundary.
+      const result = await send;
       expect(session.pendingMessageCount).toBe(1);
       expect(userEntries(scope, dir)).toHaveLength(1);
+      vi.useRealTimers();
       held.release();
-      const [result] = await Promise.all([send, prompt]);
+      await prompt;
 
       expect(result.details).toMatchObject({
         status: "accepted",
@@ -286,7 +275,7 @@ it.each([
         delivery: { status: "skipped" },
       });
       expect(queueMessage).toHaveBeenCalledOnce();
-      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(true);
+      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(false);
       expect(queueMessage.mock.calls[0]?.[1]?.deliveryTimeoutMs).toBeUndefined();
       expect(queueMessage.mock.calls[0]?.[1]).not.toHaveProperty("sourceReplyDeliveryMode");
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();
@@ -322,7 +311,6 @@ it.each([
       vi.useRealTimers();
       // Release even a late provider callback, then join work before fixture teardown.
       closing = true;
-      unsubscribe();
       held.release();
       await session.abort();
       await Promise.allSettled(pending);

@@ -1,10 +1,27 @@
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
-import { resolveUpdateRunVerifiedServingVersion } from "./update-run-report.js";
 
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type NoticeRun = Pick<UpdateRunRecord, "status" | "reason"> &
   Partial<Pick<UpdateRunRecord, "before" | "verification" | "steps" | "origin">>;
+
+/** Serving observation is independent of permission to restart or roll back. */
+export function resolveUpdateRunVerifiedServingVersion(
+  verification: UpdateRunRecord["verification"],
+  observation: Pick<UpdateRunRecord["steps"][number], "failureFacts" | "exitCode"> | undefined,
+): string | undefined {
+  if (observation?.exitCode !== 0 || observation.failureFacts?.length) {
+    return undefined;
+  }
+  const { recovery } = verification;
+  return recovery?.serviceRestartSafe && recovery.service === "healthy"
+    ? recovery.version
+    : verification.versionMatch &&
+        (verification.coreReady ?? verification.readyz) &&
+        verification.settled
+      ? verification.runningVersion
+      : undefined;
+}
 
 const UPDATE_RUN_HEADLINES = new Map<UpdateRunRecord["status"], string>([
   ["succeeded", "✅ OpenClaw updated."],
@@ -44,8 +61,8 @@ export function renderUpdateRunSummary(
       ? UPDATE_RUN_HEADLINES.get(run.status)
       : (SKIPPED_UPDATE_RUN_HEADLINES.get(run.reason) ?? "ℹ️ OpenClaw wasn't updated.");
   const nextStep = options.manualCommand
-    ? `Open Settings → Updates in the Control UI for details. To continue, run \`${options.manualCommand}\` in your terminal.`
-    : "For details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.";
+    ? `Open Settings → Updates in the OpenClaw app for details. To continue, run \`${options.manualCommand}\` in your terminal.`
+    : "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.";
   if (run.status === "failed" && run.steps) {
     const phase =
       run.steps.findLast(
@@ -108,12 +125,18 @@ export function isUpdateRunTerminalNoticeText(text: string): boolean {
       return true;
     }
   }
+  // Previously stored completion notices keep their original wording on replay.
+  const currentText = text.replace(
+    "\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+    "\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
+  );
   return (
     [...UPDATE_RUN_HEADLINES.keys()].some(
-      (status) => status !== "running" && text === renderUpdateRunSummary({ status, reason: null }),
+      (status) =>
+        status !== "running" && currentText === renderUpdateRunSummary({ status, reason: null }),
     ) ||
     [null, ...SKIPPED_UPDATE_RUN_HEADLINES.keys()].some(
-      (reason) => text === renderUpdateRunSummary({ status: "skipped", reason }),
+      (reason) => currentText === renderUpdateRunSummary({ status: "skipped", reason }),
     )
   );
 }

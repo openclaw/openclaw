@@ -21,10 +21,10 @@ export function prepareExecApprovalConsumption<TPayload>(params: {
   consumerId: string;
   kind: OperatorApprovalKind;
   persistence: ExecApprovalManagerOptions<TPayload>["persistence"];
-  isCurrent: () => boolean;
+  isBindingCurrent: () => boolean;
   resolvedGraceAnchorMs: (nowMs: number) => number | null;
 }): ExecApprovalPreparedConsumption | null {
-  if (!params.isCurrent() || params.record.consumedDecision !== undefined) {
+  if (!params.isBindingCurrent() || params.record.consumedDecision !== undefined) {
     return null;
   }
   const nowMs = Date.now();
@@ -57,12 +57,14 @@ export function prepareExecApprovalConsumption<TPayload>(params: {
       const currentNowMs = Date.now();
       const currentGraceAnchorMs = params.resolvedGraceAnchorMs(currentNowMs);
       if (
-        !params.isCurrent() ||
+        !params.isBindingCurrent() ||
         params.record.consumedDecision !== undefined ||
         currentGraceAnchorMs === null ||
         currentNowMs - currentGraceAnchorMs >= EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS
       ) {
-        throw new ApprovalMutationRefusedError("approval authority is no longer active");
+        throw new ApprovalMutationRefusedError(
+          "This approval is no longer available. Start a new turn to request approval again.",
+        );
       }
     },
     markCommitted: (record) => {

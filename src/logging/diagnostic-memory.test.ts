@@ -5,12 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import * as workerMemory from "../infra/worker-cpu.js";
 import * as workerMessages from "../infra/worker-message-metrics.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   emitDiagnosticMemorySample,
   createDiagnosticMemorySampler,
@@ -80,6 +82,7 @@ describe("diagnostic memory", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.spyOn(process, "availableMemory").mockReturnValue(Number.MAX_SAFE_INTEGER);
     vi.setSystemTime(new Date("2026-04-22T12:00:00.000Z"));
     resetDiagnosticEventsForTest();
     events = [];
@@ -92,6 +95,7 @@ describe("diagnostic memory", () => {
     // Cumulative Worker history survives earlier test files even when no Worker remains alive.
     vi.spyOn(workerMemory, "sampleTrackedWorkerMemory").mockReturnValue({
       workerCount: 0,
+      sqliteReaderMetrics: [],
       postgresBridgeCount: 0,
       postgresPoolSelfRootCount: 0,
       workerHeapSampledCount: 0,
@@ -148,6 +152,36 @@ describe("diagnostic memory", () => {
       expect(sample).toBeDefined();
       expect(sample?.memory).not.toHaveProperty("anonymousRssBytes");
       expect(sample?.memory).not.toHaveProperty("anonymousSwapBytes");
+    }
+  });
+
+  it("publishes a clone-free memory snapshot isolated across listeners", () => {
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const mutate = vi.fn((event: DiagnosticEventPayload) => {
+      if (event.type === "diagnostic.memory.sample") {
+        return Reflect.set(event.memory.workerLifecycle![0]!.retired[0]!, "count", 0);
+      }
+      return undefined;
+    });
+    const read = vi.fn();
+    const filter = { include: ["diagnostic.memory.sample"] } as const;
+    const stopMutation = onInternalDiagnosticEvent(mutate, filter);
+    const stopRead = onTrustedInternalDiagnosticEvent(read, filter, { includePrivateData: false });
+    try {
+      emitDiagnosticMemorySample({ memoryUsage: memoryUsage({}) });
+      expect(mutate).toHaveReturnedWith(false);
+      expect(read).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          type: "diagnostic.memory.sample",
+          memory: expect.objectContaining({ workerLifecycle }),
+        }),
+        { internal: true, trusted: false },
+        {},
+      );
+      expect(clone).not.toHaveBeenCalled();
+    } finally {
+      stopRead();
+      stopMutation();
     }
   });
 
@@ -230,43 +264,6 @@ describe("diagnostic memory", () => {
     expect(events).toEqual([]);
   });
 
-  it("defers the default heap probe until a sample needs it and then reuses it", async () => {
-    vi.resetModules();
-    const getHeapStatistics = vi.fn(() => ({ heap_size_limit: 4 * 1024 ** 3 }));
-    const getHeapSpaceStatistics = vi.fn(() => []);
-    vi.doMock("node:v8", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("node:v8")>()),
-      getHeapStatistics,
-      getHeapSpaceStatistics,
-    }));
-    try {
-      const { emitDiagnosticMemorySample: sample } = await import("./diagnostic-memory.js");
-      expect(getHeapStatistics).not.toHaveBeenCalled();
-
-      const options = { memoryUsage: memoryUsage({}), emitSample: false, isBunRuntime: false };
-      sample({ ...options, isBunRuntime: true });
-      expect(getHeapStatistics).not.toHaveBeenCalled();
-      for (const heapSizeLimitBytes of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-        sample({ ...options, heapSizeLimitBytes });
-      }
-      expect(getHeapStatistics).not.toHaveBeenCalled();
-
-      sample(options);
-      expect(getHeapStatistics).toHaveBeenCalledTimes(1);
-      expect(getHeapSpaceStatistics).not.toHaveBeenCalled();
-      sample({ ...options, emitSample: true });
-      expect(getHeapSpaceStatistics).toHaveBeenCalledTimes(process.versions.bun ? 0 : 1);
-      sample(options);
-      expect(getHeapSpaceStatistics).toHaveBeenCalledTimes(process.versions.bun ? 0 : 1);
-      sample({ ...options, heapSizeLimitBytes: 8 * 1024 ** 3 });
-      sample(options);
-      expect(getHeapStatistics).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.doUnmock("node:v8");
-      vi.resetModules();
-    }
-  });
-
   it.each([
     [3000, 2000, "critical"],
     [1000, 500, "warning"],
@@ -299,52 +296,182 @@ describe("diagnostic memory", () => {
     );
   });
 
-  it("keeps rss_threshold retirement silent without consuming the report throttle", async () => {
-    setLoggerOverride({ level: "info", consoleLevel: "silent" });
-    stopEvents();
-    const stopInternal = onInternalDiagnosticEvent((event) => events.push(event));
-    const pressure = channel("openclaw.memory.critical");
-    const retireIdle = vi.fn();
-    pressure.subscribe(retireIdle);
-    const thresholds = {
-      rssWarningBytes: 10_000,
-      rssCriticalBytes: 3000,
-      pressureRepeatMs: 60_000,
-    };
-    try {
-      for (const now of [1000, 6000]) {
-        emitDiagnosticMemorySample(
-          { now, memoryUsage: memoryUsage({ rss: 4000 }), thresholds },
-          false,
-        );
-      }
-      await flushDiagnosticEvents();
-      expect(retireIdle).toHaveBeenCalledTimes(2);
-      expect(workerMemory.sampleTrackedWorkerMemory).not.toHaveBeenCalled();
-      expect(workerMessages.getWorkerMessageMetrics).not.toHaveBeenCalled();
-      expect(events).toEqual([]);
+  it.each(["rss_threshold", "process_memory_threshold"] as const)(
+    "keeps %s retirement silent without consuming the report throttle",
+    async (reason) => {
+      setLoggerOverride({ level: "info", consoleLevel: "silent" });
+      stopEvents();
+      const stopInternal = onInternalDiagnosticEvent((event) => events.push(event));
+      const pressure = channel("openclaw.memory.critical");
+      const retireIdle = vi.fn();
+      pressure.subscribe(retireIdle);
+      mockProcessPlatform("linux");
+      const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(69_865_472);
+      const options =
+        reason === "process_memory_threshold"
+          ? {
+              memoryUsage: memoryUsage({ rss: 700_194_816 }),
+              processMemoryLimitBytes: 805_306_368,
+              physicalMemoryBytes: 4 * 1024 ** 3,
+              heapSizeLimitBytes: 512 * 1024 ** 2,
+              isBunRuntime: false,
+              thresholds: { pressureRepeatMs: 60_000 },
+            }
+          : {
+              memoryUsage: memoryUsage({ rss: 4000 }),
+              thresholds: {
+                rssWarningBytes: 10_000,
+                rssCriticalBytes: 3000,
+                pressureRepeatMs: 60_000,
+              },
+            };
+      try {
+        if (reason === "process_memory_threshold") {
+          availableMemory.mockReturnValue(805_306_368);
+          emitDiagnosticMemorySample(options, false);
+          expect(retireIdle).not.toHaveBeenCalled();
+          availableMemory.mockReturnValue(69_865_472);
+        }
+        for (const now of [1000, 6000]) {
+          emitDiagnosticMemorySample({ now, ...options }, false);
+        }
+        await flushDiagnosticEvents();
+        expect(retireIdle).toHaveBeenCalledTimes(2);
+        expect(workerMemory.sampleTrackedWorkerMemory).not.toHaveBeenCalled();
+        expect(workerMessages.getWorkerMessageMetrics).not.toHaveBeenCalled();
+        expect(events).toEqual([]);
 
-      // Silent samples must not suppress the first diagnostic warning after re-enable.
-      for (const now of [11_000, 16_000]) {
-        emitDiagnosticMemorySample({ now, memoryUsage: memoryUsage({ rss: 4000 }), thresholds });
+        // Silent samples must not suppress the first diagnostic warning after re-enable.
+        for (const now of [11_000, 16_000]) {
+          emitDiagnosticMemorySample({ now, ...options });
+        }
+        await flushDiagnosticEvents();
+        expect(retireIdle).toHaveBeenCalledTimes(4);
+        expect(events.filter((event) => event.type === "diagnostic.memory.pressure")).toEqual([
+          expect.objectContaining({
+            level: "critical",
+            reason,
+            ...(reason === "process_memory_threshold"
+              ? { usedBytes: 735_440_896, limitBytes: 805_306_368, thresholdBytes: 724_775_731 }
+              : {}),
+          }),
+        ]);
+        expect(events.filter((event) => event.type === "log.record")).toEqual([
+          expect.objectContaining({
+            level: "WARN",
+            message: expect.stringContaining(`memory pressure: level=critical reason=${reason}`),
+            attributes: expect.objectContaining({ subsystem: "gateway/diagnostics/memory" }),
+          }),
+        ]);
+      } finally {
+        pressure.unsubscribe(retireIdle);
+        stopInternal();
       }
-      await flushDiagnosticEvents();
-      expect(retireIdle).toHaveBeenCalledTimes(4);
-      expect(events.filter((event) => event.type === "diagnostic.memory.pressure")).toEqual([
-        expect.objectContaining({ level: "critical", reason: "rss_threshold" }),
-      ]);
-      expect(events.filter((event) => event.type === "log.record")).toEqual([
-        expect.objectContaining({
-          level: "WARN",
-          message: expect.stringContaining("memory pressure: level=critical reason=rss_threshold"),
-          attributes: expect.objectContaining({ subsystem: "gateway/diagnostics/memory" }),
-        }),
-      ]);
-    } finally {
-      pressure.unsubscribe(retireIdle);
-      stopInternal();
-    }
+    },
+  );
+
+  it.each([
+    [0, "critical"],
+    [100, "critical"],
+    [200, "warning"],
+    [500, null],
+    [-1, null],
+    [Number.NaN, null],
+    [Number.POSITIVE_INFINITY, null],
+    [1001, null],
+  ] as const)("classifies constrained available memory %s as %s", (available, level) => {
+    mockProcessPlatform("linux");
+    vi.spyOn(process, "availableMemory").mockReturnValue(available);
+    emitDiagnosticMemorySample({
+      emitSample: false,
+      isBunRuntime: false,
+      processMemoryLimitBytes: 1000,
+      physicalMemoryBytes: 4000,
+      heapSizeLimitBytes: 8000,
+      memoryUsage: memoryUsage({}),
+    });
+    expect(events).toEqual(
+      level
+        ? [
+            expect.objectContaining({
+              level,
+              reason: "process_memory_threshold",
+              limitBytes: 1000,
+              usedBytes: 1000 - available,
+              thresholdBytes: level === "critical" ? 900 : 800,
+            }),
+          ]
+        : [],
+    );
   });
+
+  it.each([
+    [1000, 210, false, false],
+    [1000, 200, true, false],
+    [1000, 100, true, true],
+    [4000, 200, false, false],
+  ] as const)(
+    "reclaims constrained process headroom despite a heap warning: limit=%i available=%i reclaim=%s",
+    (processMemoryLimitBytes, available, reclaim, critical) => {
+      mockProcessPlatform("linux");
+      vi.spyOn(process, "availableMemory").mockReturnValue(available);
+      const pressure = channel("openclaw.memory.critical");
+      const retireIdle = vi.fn();
+      pressure.subscribe(retireIdle);
+      try {
+        const options = {
+          emitSample: false,
+          isBunRuntime: false,
+          processMemoryLimitBytes,
+          physicalMemoryBytes: 4000,
+          heapSizeLimitBytes: 1000,
+          memoryUsage: memoryUsage({ heapUsed: 850 }),
+        };
+        emitDiagnosticMemorySample(options, false);
+        expect(retireIdle).toHaveBeenCalledTimes(reclaim ? 1 : 0);
+        if (reclaim) {
+          expect(retireIdle.mock.calls[0]?.[0]).toBe(critical);
+        }
+        expect(events).toEqual([]);
+        emitDiagnosticMemorySample(options);
+        expect(retireIdle).toHaveBeenCalledTimes(reclaim ? 2 : 0);
+        expect(events).toEqual([
+          expect.objectContaining({
+            level: critical ? "critical" : "warning",
+            reason: critical ? "process_memory_threshold" : "heap_threshold",
+          }),
+        ]);
+      } finally {
+        pressure.unsubscribe(retireIdle);
+      }
+    },
+  );
+
+  it.each([
+    ["linux", false, 0, 4000],
+    ["linux", false, 4000, 4000],
+    ["linux", false, 8000, 4000],
+    ["linux", false, 1000, Number.NaN],
+    ["linux", true, 1000, 4000],
+    ["darwin", false, 1000, 4000],
+    ["win32", false, 1000, 4000],
+  ] as const)(
+    "ignores unrelated host availability on %s Bun=%s limit=%s host=%s",
+    (platform, isBunRuntime, processMemoryLimitBytes, physicalMemoryBytes) => {
+      mockProcessPlatform(platform);
+      const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(0);
+      emitDiagnosticMemorySample({
+        emitSample: false,
+        isBunRuntime,
+        processMemoryLimitBytes,
+        physicalMemoryBytes,
+        heapSizeLimitBytes: 8000,
+        memoryUsage: memoryUsage({}),
+      });
+      expect(availableMemory).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+    },
+  );
 
   it.each([1, 16])("measures main heap pressure against a %i GiB V8 limit", (heapGiB) => {
     const limitBytes = heapGiB * 1024 ** 3;

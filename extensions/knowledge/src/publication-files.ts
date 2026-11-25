@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import path from "node:path";
+import { syncKnowledgeDirectory } from "./directory-sync.js";
 import { RECORD_MAX_BYTES, AUXILIARY_MAX_BYTES } from "./limits.js";
 import { digest, MAX_ENTRIES } from "./scan-primitives.js";
 import { SOURCE_DESCRIPTOR_MAX_BYTES } from "./source-descriptors.js";
@@ -153,12 +154,7 @@ export class PublicationFiles {
     }
   }
   sync(directory: string) {
-    const fd = fs.openSync(directory, fs.constants.O_RDONLY);
-    try {
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
+    syncKnowledgeDirectory(directory);
   }
   exclusive(relative: string, raw: string, role = publicationRole(relative)) {
     if (Buffer.byteLength(raw) > byteLimit(role)) {

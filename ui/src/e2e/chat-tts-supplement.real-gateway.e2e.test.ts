@@ -480,7 +480,7 @@ suite.define(() => {
                 provider.release(index);
                 await assertSpeech(text, index + 1);
                 await page
-                  .getByRole("button", { name: "Stop generating", exact: true })
+                  .getByRole("button", { name: "Stop", exact: true })
                   .waitFor({ state: "detached" });
                 await page.reload();
                 await waitForControlUiGatewayReady(page);
@@ -491,7 +491,7 @@ suite.define(() => {
               await send("Please give a text-only answer.");
               await expect.poll(() => answer(replies[2]).count()).toBe(1);
               await page
-                .getByRole("button", { name: "Stop generating", exact: true })
+                .getByRole("button", { name: "Stop", exact: true })
                 .waitFor({ state: "detached" });
               await expect.poll(() => answer(replies[2]).count()).toBe(1);
               await answer(replies[2]).waitFor();

@@ -31,6 +31,8 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   let attempted = false;
   let pending: Promise<boolean> | undefined;
   let snapshot: WorkboardSessionsBoardRead | undefined;
+  // Board metadata survives people-filter changes; session emptiness needs its own accepted read.
+  let sessionsLoaded = false;
   let revision: WorkboardSessionsBoardRevision | undefined;
   let error: string | undefined;
   let busy = false;
@@ -161,6 +163,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
         if (!more) {
           revision = result.revision;
         }
+        sessionsLoaded = true;
         error = undefined;
         return true;
       } catch (cause) {
@@ -227,6 +230,9 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     get snapshot() {
       return snapshot;
     },
+    get sessionsLoaded() {
+      return sessionsLoaded;
+    },
     get peopleFilter() {
       return peopleFilter;
     },
@@ -248,6 +254,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       }
       invalidate();
       snapshot = snapshot ? { ...snapshot, sessions: [], nextCursor: undefined } : undefined;
+      sessionsLoaded = false;
       error = undefined;
       void read();
     },
@@ -281,6 +288,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
           restoredBoardId = undefined;
           peopleFilter = "everyone";
           snapshot = undefined;
+          sessionsLoaded = false;
           error = undefined;
         }
         if (enabled && !active) {

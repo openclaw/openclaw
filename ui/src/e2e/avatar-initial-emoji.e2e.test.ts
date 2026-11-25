@@ -35,7 +35,13 @@ suite.define(() => {
       const hydratedEmojiAgent = { id: "emoji", identity: { name: "Rocket" }, name: "Rocket" };
       const gateway = await installMockGateway(page, {
         defaultAgentId: "main",
-        featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agent.identity.get",
+          "agents.list",
+          "agents.update",
+          "config.get",
+        ],
         methodResponses: {
           "agents.update": { ok: true },
           "agent.identity.get": {

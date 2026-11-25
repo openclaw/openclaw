@@ -3,9 +3,19 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { downloadClawHubPackageArchive } from "../infra/clawhub-artifacts.js";
+import { normalizeClawHubSha256Hex } from "../infra/clawhub-integrity.js";
+import type {
+  fetchClawHubPackageArtifact,
+  ClawHubPackageArtifactSummary,
+  ClawHubResolvedArtifact,
+} from "../infra/clawhub-packages.js";
 import { readTemplateManifestFile } from "./reader.js";
-import type { TemplateReadResult } from "./types.js";
+import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
+import type { TemplateDiagnostic, TemplateReadResult } from "./types.js";
 
 const TEMPLATE_SOURCE_CACHE_DIR = "templates/sources";
 export const CLAWHUB_TIMEOUT_MS = 30_000;
@@ -20,6 +30,111 @@ export class ClawHubSourceError extends Error {
   ) {
     super(message);
     this.name = "ClawHubSourceError";
+  }
+}
+
+export function requireTemplateName(packageName: string): void {
+  if (!isCanonicalClawHubPackageName(packageName)) {
+    throw new ClawHubSourceError(
+      "clawhub_package_name_invalid",
+      "Select a canonical ClawHub package name without a version selector.",
+    );
+  }
+}
+
+export function requireExactVersion(version: string): void {
+  if (!isExactSemVer(version)) {
+    throw new ClawHubSourceError(
+      "clawhub_version_unavailable",
+      "Select an exact published Template version.",
+    );
+  }
+}
+
+export type TemplateArtifactResponse = Pick<
+  Awaited<ReturnType<typeof fetchClawHubPackageArtifact>>,
+  "package" | "version"
+> & { artifact?: ClawHubPackageArtifactSummary | ClawHubResolvedArtifact | null };
+
+export function readExactTemplateArtifact(
+  response: TemplateArtifactResponse,
+  coordinate: { packageName: string; version: string },
+) {
+  const artifactVersion =
+    typeof response.version === "string" ? response.version : response.version?.version;
+  if (
+    response.package?.name !== coordinate.packageName ||
+    response.package.family !== "template" ||
+    artifactVersion !== coordinate.version
+  ) {
+    throw new ClawHubSourceError(
+      "clawhub_identity_mismatch",
+      "ClawHub artifact identity does not match the selected release.",
+    );
+  }
+  const value: unknown = response.artifact;
+  if (!isJsonObject(value)) {
+    throw new ClawHubSourceError(
+      "clawhub_artifact_unavailable",
+      "ClawHub returned no Template artifact.",
+    );
+  }
+  const kind = value.kind ?? value.artifactKind;
+  if (
+    kind !== "npm-pack" ||
+    (value.kind !== undefined &&
+      value.artifactKind !== undefined &&
+      value.kind !== value.artifactKind) ||
+    (value.source !== undefined && value.source !== "clawhub") ||
+    (value.packageName !== undefined && value.packageName !== coordinate.packageName) ||
+    (value.version !== undefined && value.version !== coordinate.version)
+  ) {
+    throw new ClawHubSourceError(
+      "clawhub_identity_mismatch",
+      "ClawHub artifact identity does not match the selected release.",
+    );
+  }
+  const modernSha256 =
+    typeof value.sha256 === "string" ? normalizeClawHubSha256Hex(value.sha256) : null;
+  const legacySha256 =
+    typeof value.artifactSha256 === "string"
+      ? normalizeClawHubSha256Hex(value.artifactSha256)
+      : null;
+  const sha256 = modernSha256 ?? legacySha256;
+  if (
+    !sha256 ||
+    (value.sha256 !== undefined && !modernSha256) ||
+    (value.artifactSha256 !== undefined && !legacySha256) ||
+    (modernSha256 && legacySha256 && modernSha256 !== legacySha256) ||
+    typeof value.npmIntegrity !== "string" ||
+    !value.npmIntegrity.trim()
+  ) {
+    throw new ClawHubSourceError(
+      "clawhub_artifact_unavailable",
+      "ClawHub did not return valid immutable Template artifact integrity.",
+    );
+  }
+  return {
+    sha256,
+    npmIntegrity: value.npmIntegrity,
+    ...(typeof value.npmShasum === "string" ? { npmShasum: value.npmShasum } : {}),
+  };
+}
+
+export function assertClawHubDownloadIntegrity(
+  download: Awaited<ReturnType<typeof downloadClawHubPackageArchive>>,
+  expected: ReturnType<typeof readExactTemplateArtifact>,
+): void {
+  if (
+    download.artifact !== "clawpack" ||
+    download.sha256Hex !== expected.sha256 ||
+    download.npmIntegrity !== expected.npmIntegrity ||
+    (expected.npmShasum !== undefined && download.npmShasum !== expected.npmShasum)
+  ) {
+    throw new ClawHubSourceError(
+      "clawhub_artifact_integrity_mismatch",
+      "ClawHub artifact integrity changed during download.",
+    );
   }
 }
 
@@ -139,6 +254,29 @@ export async function persistExtractedSource(params: {
   }
 }
 
+const MAX_REPORTED_MANIFEST_DIAGNOSTICS = 3;
+
+// Without the reason, a publisher or user cannot tell a retired format from a broken release.
+// Reader messages name files by their Gateway cache path; clients only need the package path.
+async function describeManifestDiagnostics(
+  sourceRoot: string,
+  diagnostics: readonly TemplateDiagnostic[],
+): Promise<string> {
+  const canonicalRoot = await fs.realpath(sourceRoot).catch(() => sourceRoot);
+  // Longest first: a realpath such as /private/tmp/x contains its link path /tmp/x.
+  const roots = [...new Set([canonicalRoot, sourceRoot])].toSorted((a, b) => b.length - a.length);
+  const reported = diagnostics.slice(0, MAX_REPORTED_MANIFEST_DIAGNOSTICS).map((diagnostic) => {
+    let message = diagnostic.message;
+    for (const root of roots) {
+      message = message.replaceAll(`${root}${path.sep}`, "").replaceAll(root, ".");
+    }
+    // Diagnostics quote publisher text; Gateway RPC clients print this message verbatim.
+    return sanitizeTerminalText(`${diagnostic.code} at ${diagnostic.path}: ${message}`);
+  });
+  const remaining = diagnostics.length - reported.length;
+  return ` ${reported.join("; ")}${remaining > 0 ? ` (${remaining} more)` : ""}`;
+}
+
 export async function readVerifiedArtifactSource(params: {
   sourceRoot: string;
   packageName: string;
@@ -146,13 +284,11 @@ export async function readVerifiedArtifactSource(params: {
   artifactSha256: string;
   artifactByteLength: number;
 }): Promise<ResolvedClawHubSource> {
-  const loaded = await readTemplateManifestFile(params.sourceRoot, {
-    allowPublishedLegacyClawSelector: true,
-  });
+  const loaded = await readTemplateManifestFile(params.sourceRoot);
   if (!loaded.ok) {
     throw new ClawHubSourceError(
       "clawhub_manifest_invalid",
-      "Downloaded Template package manifest is invalid.",
+      `Downloaded Template package manifest is invalid.${await describeManifestDiagnostics(params.sourceRoot, loaded.diagnostics)}`,
     );
   }
   if (

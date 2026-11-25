@@ -7,11 +7,7 @@ describe("Claude CLI execution environment", () => {
     ["off", { MAX_THINKING_TOKENS: "0" }],
     ["adaptive", undefined],
   ] as const)("maps %s thinking to Claude Code's process environment", (level, expected) => {
-    expect(resolveClaudeCliThinkingEnv(level, "claude-opus-4-8")).toEqual(expected);
-  });
-
-  it("leaves mandatory-adaptive Fable thinking to Claude Code effort args", () => {
-    expect(resolveClaudeCliThinkingEnv("high", "claude-fable-5")).toBeUndefined();
+    expect(resolveClaudeCliThinkingEnv(level)).toEqual(expected);
   });
 });
 

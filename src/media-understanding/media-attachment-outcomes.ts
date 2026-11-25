@@ -1,52 +1,27 @@
-import type {
-  MediaAttachmentDisposition,
-  MediaUnderstandingCapability,
-} from "../../packages/media-understanding-common/src/types.js";
+import { readTransportDiagnosticLabel } from "../../packages/ai/src/utils/provider-error.js";
+import type { MediaAttachmentDisposition } from "../../packages/media-understanding-common/src/types.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
+import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
+import { ProviderHttpError } from "../agents/provider-http-errors.js";
+import { signInNeedsApiKeyForVoice } from "../agents/voice-sign-in-policy.js";
 
-const MAX_SKIPPED_FILE_MARKERS = 5;
-
-// Reason-neutral because the shared overflow can mix file and media outcomes.
-function renderSkippedFileOverflowSummary(count: number): string {
-  return `[${count} more attachment${count === 1 ? "" : "s"} skipped]`;
+/** Only an actual audio attempt rejected during credential selection can report this cause. */
+export async function readAudioApiKeyFailure(error: unknown, agentDir: string | undefined) {
+  if (!agentDir || !isProviderAuthError(error)) {
+    return undefined;
+  }
+  const store = await loadAuthProfileStoreForRuntimeAsync(agentDir, {
+    readOnly: true,
+    allowKeychainPrompt: false,
+  }).catch(() => undefined);
+  return store && signInNeedsApiKeyForVoice(store, error.provider) ? error.provider : undefined;
 }
 
-export function renderMediaAttachmentDisposition(
-  capability: MediaUnderstandingCapability,
-  disposition: MediaAttachmentDisposition,
-): string | null {
-  const label = `${capability[0]?.toUpperCase()}${capability.slice(1)}`;
-  switch (disposition.kind) {
-    case "handled":
-    case "handed-to-native-vision":
-      return null;
-    case "not-selected":
-      return `[${label} attachment not processed: attachment limit reached]`;
-    case "capability-disabled":
-      return `[${label} attachment not analyzed: ${capability} understanding is disabled]`;
-    case "no-model":
-      return `[${label} attachment not analyzed: no ${capability}-understanding model is configured]`;
-    case "scope-denied":
-      return `[${label} attachment not analyzed in this chat]`;
-    case "failed":
-      return `[${label} attachment could not be analyzed]`;
-    default:
-      return disposition satisfies never;
+/** Keeps a provider HTTP failure's own status and code; other errors stay unannotated. */
+export function failedAttachmentDisposition(error: unknown): MediaAttachmentDisposition {
+  if (!(error instanceof ProviderHttpError)) {
+    return { kind: "failed" };
   }
-}
-
-export type AttachmentContextBlock = { text: string; consumesMarkerBudget: boolean };
-
-export function applyAttachmentMarkerBudget(blocks: AttachmentContextBlock[]): string[] {
-  const rendered: string[] = [];
-  let markers = 0;
-  let overflow = 0;
-  for (const block of blocks) {
-    if (block.consumesMarkerBudget && markers >= MAX_SKIPPED_FILE_MARKERS) {
-      overflow += 1;
-      continue;
-    }
-    markers += Number(block.consumesMarkerBudget);
-    rendered.push(block.text);
-  }
-  return overflow > 0 ? [...rendered, renderSkippedFileOverflowSummary(overflow)] : rendered;
+  const code = readTransportDiagnosticLabel(error.code);
+  return { kind: "failed", status: error.status, ...(typeof code === "string" ? { code } : {}) };
 }

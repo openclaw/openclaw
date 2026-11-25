@@ -5,6 +5,7 @@ import {
   buildAgentRunTerminalOutcomeFromAttempt,
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
+import { withAgentTerminalSnapshot } from "../../agent-terminal-snapshot.js";
 import { parseImageSizeError } from "../../embedded-agent-helpers/image-errors.js";
 import { pickFallbackThinkingLevel } from "../../embedded-agent-helpers/thinking.js";
 import {
@@ -314,16 +315,19 @@ export async function handleEmbeddedPromptFailure(input: {
     const fallbackReason = failoverDecision.reason;
     const status = resolveFailoverStatus(fallbackReason, promptErrorDetails.code);
     recordFailoverDecision("fallback_model", fallbackReason, status);
-    throw (
+    throw withAgentTerminalSnapshot(
       retryExhaustionFailure ??
-      (normalizedPromptFailover?.reason === fallbackReason ? normalizedPromptFailover : null) ??
-      new FailoverError(errorText, {
-        ...failoverContext,
-        reason: fallbackReason,
-        provider: preparedRuntime.provider,
-        model: preparedRuntime.modelId,
-        status,
-      })
+        (normalizedPromptFailover?.reason === fallbackReason ? normalizedPromptFailover : null) ??
+        new FailoverError(errorText, {
+          ...failoverContext,
+          reason: fallbackReason,
+          provider: preparedRuntime.provider,
+          model: preparedRuntime.modelId,
+          status,
+        }),
+      terminalOutcome.status === "error" && terminal.promptErrorSource === "prompt"
+        ? normalizedAttempt.attempt.agentTerminal
+        : undefined,
     );
   }
   if (failoverDecision.action === "surface_error") {
@@ -339,7 +343,12 @@ export async function handleEmbeddedPromptFailure(input: {
       })
     );
   }
-  throw retryExhaustionFailure ?? toErrorObject(terminal.promptError, "Prompt failed");
+  throw withAgentTerminalSnapshot(
+    retryExhaustionFailure ?? toErrorObject(terminal.promptError, "Prompt failed"),
+    terminalOutcome.status === "error" && terminal.promptErrorSource === "prompt"
+      ? normalizedAttempt.attempt.agentTerminal
+      : undefined,
+  );
 }
 
 function resolveBlockedPromptResult(

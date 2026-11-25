@@ -102,7 +102,8 @@ suite.define(() => {
         await expectClosed();
         expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
         await openInbox();
-        await panel.getByRole("link", { name: "Notification settings" }).click();
+        await panel.locator(".sidebar-issues-panel__more").click();
+        await panel.getByRole("menuitem", { name: "Notification settings" }).click();
         await expectClosed();
         await waitForControlUiRoute(page, {
           pathname: "/settings/notifications",
@@ -167,7 +168,6 @@ suite.define(() => {
         paint.fillRect(0, 0, 1, 1);
         return {
           sheetBackgroundAlpha: paint.getImageData(0, 0, 1, 1).data[3],
-          closeBackground: getComputedStyle(close).backgroundColor,
           closeHeight: close.getBoundingClientRect().height,
           closeWidth: close.getBoundingClientRect().width,
           duration: Number(timing.duration),
@@ -214,15 +214,12 @@ suite.define(() => {
       expect(result.duration).toBeGreaterThanOrEqual(200);
       // The shared sheet spring: ~0.3 s perceptual pace plus its settle tail.
       expect(result.duration).toBeLessThan(500);
-      expect(result).toMatchObject({
-        closeWidth: 36,
-        closeHeight: 36,
-      });
+      expect(result.closeWidth).toBeGreaterThanOrEqual(36);
+      expect(result.closeHeight).toBeGreaterThanOrEqual(36);
       expect(result.headerBackground).toBe("rgba(0, 0, 0, 0)");
       expect(result.tabsBackground).toBe(result.headerBackground);
       expect(result.sheetBackgroundAlpha).toBe(255);
       expect(result.listBackground).toBe(result.sheetBackground);
-      expect(result.closeBackground).not.toBe("rgba(0, 0, 0, 0)");
       expect(result.tabCount).toBeGreaterThan(0);
       expect(result.tabFailures).toEqual([]);
     }

@@ -215,18 +215,14 @@ test.each([false, true])(
 );
 
 test.each([
-  ["revoked", "agent tool caller authority is no longer active"],
   ["aborted", "Inventory read cancelled"],
   ["replaced", "Gateway instance unavailable for sessions.list"],
 ] as const)("does not disclose title reads after the caller is %s", async (change, error) => {
   await withInventory(async ({ cfg, context, asReader }) => {
     const controller = new AbortController();
-    let current = true;
     let currentGateway: typeof context | undefined = context;
     interceptTitles(() => {
-      if (change === "revoked") {
-        current = false;
-      } else if (change === "aborted") {
+      if (change === "aborted") {
         controller.abort(new Error("Inventory read cancelled"));
       } else {
         currentGateway = undefined;
@@ -236,7 +232,7 @@ test.each([
       agentId: "main",
       sessionKey: "agent:main:requester",
       operationalRunInstance: { instanceId: "inventory-instance", runId: "inventory-run" },
-      receiptAuthority: () => current,
+      receiptAuthority: () => true,
     };
     const invoke = () => list(cfg, { includeLastMessage: true }, {}, controller.signal);
     const pending = asReader(() =>
@@ -258,7 +254,7 @@ test.each([
   { stage: "chat.history", change: "metadata", policy: "named role" },
   { stage: "chat.history", change: "lifecycle", policy: "embedded" },
 ] as const)(
-  "rechecks $policy enrichment after a $change change during $stage",
+  "applies $policy enrichment policy after a $change change during $stage",
   async ({ stage, change, policy }) => {
     await withInventory(async ({ cfg, viewerId, context, asReader, setConfig }) => {
       const embedded = policy === "embedded";
@@ -325,9 +321,12 @@ test.each([
         const invoke = () => list(cfg, args, options);
         const pending = embedded ? invoke() : asReader(invoke);
         if (change === "role") {
-          await expect(pending).rejects.toThrow(
-            "Your operator role changed; reconnect before continuing.",
-          );
+          const admitted = await pending;
+          expect(admitted.details).toMatchObject({
+            count: 2,
+            sessions: [{ key: first.sessionKey }, { key: second.sessionKey }],
+          });
+          expect(JSON.stringify(admitted)).toContain(bufferedText);
           expect(changed).toBe(true);
         }
         const result =

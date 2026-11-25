@@ -12,6 +12,7 @@ import {
   installQueueTestPlugin,
   useOutboundRuntime,
 } from "../../infra/outbound/deliver.custody.test-support.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sendCronAnnouncePayloadStrict } from "../delivery.js";
@@ -153,7 +154,7 @@ it.each(["cli", "descendant"] as const)(
 );
 
 it.each(["original", "reset"])(
-  "checks the %s session generation before admitted reasoning reaches the transport",
+  "delivers admitted reasoning to the %s conversation by its key",
   async (revision) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { common, send } = fixture();
@@ -161,13 +162,7 @@ it.each(["original", "reset"])(
       const sessionKey = "agent:main:structured-report";
       const entry = { sessionId: "structured-report", lifecycleRevision: "original", updatedAt: 1 };
       writeSessionEntry(database, sessionKey, entry);
-      const sessionGeneration = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey,
-        sessionId: entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-      };
+      const sessionGeneration = chatRef({ agentId: "main", storePath: database.path, sessionKey });
       replaceSessionEntrySync(
         { agentId: "main", storePath: database.path, sessionKey },
         { ...entry, lifecycleRevision: revision, updatedAt: 2 },
@@ -178,15 +173,8 @@ it.each(["original", "reset"])(
         admittedReasoning: true,
         sessionGeneration,
       });
-      if (revision === "original") {
-        await expect(operation).resolves.toMatchObject({ status: "sent" });
-        expect(send.mock.calls.map(([, text]) => text)).toEqual(["Admitted reasoning"]);
-      } else {
-        await expect(operation).rejects.toThrow(
-          "The original session generation no longer accepts this delivery.",
-        );
-        expect(send).not.toHaveBeenCalled();
-      }
+      await expect(operation).resolves.toMatchObject({ status: "sent" });
+      expect(send.mock.calls.map(([, text]) => text)).toEqual(["Admitted reasoning"]);
     });
   },
 );

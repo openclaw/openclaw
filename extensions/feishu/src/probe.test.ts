@@ -69,6 +69,7 @@ describe("probeFeishu", () => {
     const request = setupClient(response);
     const expected = { ok: false, appId: "cli_123", error };
     await expect(probeFeishu(DEFAULT_CREDS)).resolves.toEqual(expected);
+    vi.setSystemTime(Date.now() + 20 * 60_000);
     await expect(probeFeishu(DEFAULT_CREDS)).resolves.toEqual(expected);
     expect(request).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(60_001);

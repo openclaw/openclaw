@@ -717,7 +717,8 @@ it("finally trims a raw tool interaction only at its atomic boundary", async () 
     content: `preserved-${index}-${"p".repeat(600)}`,
     timestamp: index + 1,
   })) as AgentMessage[];
-  const toolCalls = Array.from({ length: 12 }, (_, index) => ({
+  // Enough results that the atomic interaction overflows even with excerpted tool output.
+  const toolCalls = Array.from({ length: 80 }, (_, index) => ({
     type: "toolCall",
     id: `finalizer_call_${index}`,
     name: "read",
@@ -731,7 +732,7 @@ it("finally trims a raw tool interaction only at its atomic boundary", async () 
         timestamp: index + 102,
       }),
     ),
-    textReply("raw terminal answer survives", 114),
+    textReply("raw terminal answer survives", 200),
   ];
   const event = historyEvent(messagesToSummarize, {
     turnPrefixMessages,
@@ -744,6 +745,48 @@ it("finally trims a raw tool interaction only at its atomic boundary", async () 
   expect(summary).not.toContain("finalizer-tool-output-");
   expect(summary).not.toContain("- Tool result (read):");
   expect(summary).toContain("## Recent turns preserved verbatim");
+});
+
+it("keeps a generated summary whole when verbatim preserved turns overflow the cap", async () => {
+  const body = `BODY-START${"b".repeat(10_000)}BODY-END`;
+  const session = providerSession("body-priority-provider", body, 6);
+  const messagesToSummarize = Array.from({ length: 12 }, (_, index) => ({
+    role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+    content: `preserved-${index}-${"p".repeat(580)}`,
+    timestamp: index + 1,
+  })) as AgentMessage[];
+  const { summary } = await runSummary(session, historyEvent(messagesToSummarize), {
+    apiKey: null,
+  });
+  expect(summary.length).toBeLessThanOrEqual(SUMMARY_LIMIT);
+  expect(summary).toContain(body);
+  expect(summary).not.toContain(SUMMARY_TRUNCATED_MARKER);
+  expect(summary).toContain(`BODY-END\n\n## Recent turns preserved verbatim`);
+  expect(summary).toContain("preserved-11-");
+  expect(summary).not.toContain("preserved-0-");
+});
+
+it("keeps only a head excerpt of preserved tool output", async () => {
+  const session = providerSession("tool-excerpt-provider", "provider body", 1);
+  const output = `tool-head-${"o".repeat(150)}tool-tail-${"t".repeat(400)}`;
+  const event = historyEvent(toolTurn("excerpt_call", "read the file", output, 1));
+  const { summary } = await runSummary(session, event, { apiKey: null });
+  expect(summary).toContain("- Tool result (read): tool-head-");
+  expect(summary).toContain(`[${output.length - 160} more chars omitted at compaction]`);
+  expect(summary).not.toContain("tool-tail-");
+});
+
+it("redacts credentials in preserved turns and the latest request context", async () => {
+  const pem = "-----BEGIN PRIVATE KEY-----\nMIIEFAKEpem\n-----END PRIVATE KEY-----";
+  const secrets = `token=FAKEtok12345 sk-FAKEsk1234567890ab ghp_FAKEghp1234567890ab ${pem}`;
+  summarize.mockResolvedValue(structuredSummary());
+  const session = qualitySession({ recentTurnsPreserve: 1 });
+  const event = historyEvent(recentConversation(`deploy with ${secrets}`));
+  const { summary } = await runSummary(session, event);
+  const redacted = "deploy with [redacted] [redacted] [redacted] [redacted]";
+  expect(summary).toContain(`Latest user request context:\n"${redacted}"`);
+  expect(summary).toContain(`## Recent turns preserved verbatim\n- User: ${redacted}`);
+  expect(summary).not.toMatch(/FAKE|PRIVATE KEY/);
 });
 
 it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {

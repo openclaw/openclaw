@@ -322,7 +322,7 @@ async function executeAdmittedSessionPlacementTurn(
       // Setup waits retain the ingress and execution owners through worker preparation.
       assertSources();
       if (params.admittedRunContext && !assertAdmittedRunCurrent) {
-        throw createAbortError("admitted run authority is no longer active");
+        throw createAbortError("This agent run is no longer active. Start a new turn to retry.");
       }
       assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       if (state.provider !== provider) {
@@ -455,7 +455,9 @@ export async function withLocalSessionPlacementTurnSettlement(
             assertCurrent();
             options.preparedRunAdmission?.assertSourceCurrent();
             if (options.admittedRunContext && !assertAdmittedRunCurrent) {
-              throw createAbortError("admitted run authority is no longer active");
+              throw createAbortError(
+                "This agent run is no longer active. Start a new turn to retry.",
+              );
             }
             assertAdmittedRunCurrent?.();
             if (operation) {

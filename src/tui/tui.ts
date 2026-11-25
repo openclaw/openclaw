@@ -21,7 +21,6 @@ import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-a
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
-import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
@@ -465,40 +464,20 @@ export function createTuiConnectionLineage() {
   };
 }
 
-function formatActiveGatewayTuiRefusal(identity: GatewayLockIdentity): string {
-  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Run without --local to use it, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
-}
-
-/** Hold canonical state ownership for the complete lifetime of a local TUI. */
-export async function withEmbeddedTuiStateLock<T>(
-  run: (signal: AbortSignal) => Promise<T>,
-): Promise<T> {
-  const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
-    await import("../infra/embedded-state-lock.js");
-  const signalBridge = createEmbeddedStateSignalBridge();
-  let stateLock: Awaited<ReturnType<typeof acquireEmbeddedStateLock>> | undefined;
-  try {
-    stateLock = await acquireEmbeddedStateLock({
-      signal: signalBridge.signal,
-      formatActiveGatewayRefusal: formatActiveGatewayTuiRefusal,
-    });
-    return await run(signalBridge.signal);
-  } finally {
-    try {
-      await stateLock?.release();
-    } finally {
-      signalBridge.dispose();
-    }
-  }
-}
-
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const previousConsoleSubsystemFilter = loggingState.consoleSubsystemFilter;
   return await withConsoleSubsystemsSuppressed(async () => {
     if (opts.local === true && opts.backend === undefined) {
-      return await withEmbeddedTuiStateLock(
-        async () => await runTuiUnlocked(opts, previousConsoleSubsystemFilter),
-      );
+      // A local TUI holds canonical state ownership for its complete lifetime.
+      const { runWithLocalStateOwner } = await import("../cli/local-state-owner.js");
+      return await runWithLocalStateOwner({
+        method: "tui --local",
+        params: {},
+        target: "agent state",
+        onForeignOwner: "refuse",
+        onlineAlternative: "Omit --local to connect to the Gateway.",
+        runLocal: () => runTuiUnlocked(opts, previousConsoleSubsystemFilter),
+      });
     }
     return await runTuiUnlocked(opts, previousConsoleSubsystemFilter);
   });

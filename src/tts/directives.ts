@@ -5,14 +5,14 @@ import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { extractTtsDirectiveFacts } from "./directive-facts.js";
 import { compareSpeechProviderOrder } from "./provider-registry-core.js";
 import { listSpeechProviders } from "./provider-registry.js";
+import type { SpeechModelOverridePolicy } from "./provider-types.js";
 import type {
   SpeechDirectiveTokenParseResult,
-  SpeechModelOverridePolicy,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   TtsDirectiveOverrides,
   TtsDirectiveParseResult,
-} from "./provider-types.js";
+} from "./tts-runtime-types.js";
 
 type ParseTtsDirectiveOptions = {
   cfg?: OpenClawConfig;

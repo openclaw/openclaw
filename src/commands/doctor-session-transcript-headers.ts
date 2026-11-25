@@ -30,7 +30,7 @@ import {
 } from "./doctor-session-transcript-scan.js";
 import { countLabel } from "./doctor-state-integrity-format.js";
 
-const NOTE_TITLE = "Session transcript headers";
+const NOTE_TITLE = "Chat history headers";
 
 type HeaderRepairContext = {
   sessionKey: string;
@@ -131,15 +131,15 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   let repaired = 0;
   const preserved = new Set<string>();
 
-  scanDoctorSessionTranscripts(
+  await scanDoctorSessionTranscripts(
     {
       cfg: params.cfg,
       env,
       title: NOTE_TITLE,
-      failureLabel: "Failed to inspect transcript headers",
+      failureLabel: "Failed to inspect chat history headers",
       selectSessionIds: (reader, reportError) => reader.headerlessSessionIds(reportError),
     },
-    ({ reader, target, databaseOptions, reportError, sessionId }) => {
+    async ({ reader, target, databaseOptions, reportError, sessionId }) => {
       const sqlitePath = target.sqlitePath;
       const parser = createCanonicalHeaderlessEventParser(sessionId);
       const snapshot = reader.headerlessSnapshot(
@@ -169,6 +169,11 @@ export async function noteSessionTranscriptHeaderHealth(params: {
       const logicalAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId ?? target.agentId;
       const workspaceCwd = resolveAgentWorkspaceDir(params.cfg, logicalAgentId, env);
       try {
+        if (!preserved.has(sqlitePath)) {
+          const backup = await backupDoctorSqliteRepair(sqlitePath, "transcript-headers");
+          preserved.add(sqlitePath);
+          note(`- Saved pre-repair SQLite backup: ${backup}`, NOTE_TITLE);
+        }
         runOpenClawAgentWriteTransaction(
           (database) => {
             const currentRows = readTranscriptStorageRows(database, sessionId);
@@ -188,11 +193,6 @@ export async function noteSessionTranscriptHeaderHealth(params: {
               sessionId,
               timestamp: headerTimestamp,
             });
-            if (!preserved.has(sqlitePath)) {
-              const backup = backupDoctorSqliteRepair(sqlitePath, "transcript-headers");
-              preserved.add(sqlitePath);
-              note(`- Saved pre-repair SQLite backup: ${backup}`, NOTE_TITLE);
-            }
             replaceSqliteTranscriptEventsInTransaction(
               database,
               {
@@ -241,13 +241,13 @@ export async function noteSessionTranscriptHeaderHealth(params: {
 
   if (params.shouldRepair && repaired > 0) {
     note(
-      `- Prepended missing headers to ${countLabel(repaired, "session transcript")}.`,
+      `- Prepended missing headers to ${countLabel(repaired, "chat history file")}.`,
       NOTE_TITLE,
     );
   } else if (!params.shouldRepair && found > 0) {
     note(
       [
-        `- Found ${countLabel(found, "stored session transcript")} without a header.`,
+        `- Found ${countLabel(found, "stored chat history file")} without a header.`,
         `- Run "openclaw doctor --fix" to repair ${found === 1 ? "it" : "them"} before resuming the session.`,
       ].join("\n"),
       NOTE_TITLE,
