@@ -166,13 +166,17 @@ struct ChatMessageRelativeTimestamp: View {
     @Environment(\.timeZone) private var timeZone
 
     var body: some View {
-        if let time = ChatMessageTimestampPresentation.make(
-            timestamp: self.timestamp, locale: self.locale, timeZone: self.timeZone)
-        {
-            Text(time.label)
-                .font(OpenClawChatTypography.caption2)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
+        // A relative label ages with the clock, not with the row: only this text redraws each minute.
+        TimelineView(.everyMinute) { context in
+            if let time = ChatMessageTimestampPresentation.make(
+                timestamp: self.timestamp, now: context.date, locale: self.locale, timeZone: self.timeZone)
+            {
+                Text(time.label)
+                    .font(OpenClawChatTypography.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(Text(verbatim: time.exact))
+            }
         }
     }
 }
