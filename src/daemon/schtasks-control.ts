@@ -198,12 +198,7 @@ export async function runScheduledTaskOrThrow(params: {
     return "scheduled-task";
   }
   if (params.allowFallback !== false && !shouldManageGatewayListenerPort(params.env)) {
-    await launchFallbackTaskScript(
-      params.env,
-      command,
-      params.assertCurrent,
-      params.beforeEffect,
-    );
+    await launchFallbackTaskScript(params.env, command, params.assertCurrent, params.beforeEffect);
     return "direct-fallback";
   }
   throw new Error(
