@@ -9,7 +9,6 @@ import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy
 import { settleCliSessionResult } from "../../agents/cli-session-store.js";
 import {
   applyCliSessionBindingResult,
-  hasCliSessionReuseMetadata,
   assertCliSessionBindingResultCommitAllowed,
 } from "../../agents/cli-session.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -31,6 +30,7 @@ import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveDeferredLifecycleTerminal } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
+import { hasCliSessionReuseMetadata } from "../../config/sessions/cli-session-binding.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { registerCronRunExecSource } from "../../infra/cron-run-exec-source.js";
 import {

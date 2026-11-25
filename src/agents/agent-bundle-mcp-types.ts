@@ -4,11 +4,11 @@ import type {
   ListResourceTemplatesResult,
   ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { SessionMcpStoreSource } from "../config/sessions/session-mcp-store-admission.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
 import type { McpToolCatalog, McpToolCatalogDiagnostic } from "./agent-bundle-mcp-catalog.types.js";
-import type { SessionMcpStoreSource } from "./agent-bundle-mcp-store-owner.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export type SessionMcpConfigReload = {

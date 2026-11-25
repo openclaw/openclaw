@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { bindSessionMcpStoreOwner } from "../config/sessions/session-mcp-store-admission.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
@@ -9,7 +10,6 @@ import {
 } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.js";
-import { bindSessionMcpStoreOwner } from "./agent-bundle-mcp-store-owner.js";
 import type { SessionMcpRuntime, SessionMcpRuntimeLease } from "./agent-bundle-mcp-types.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 

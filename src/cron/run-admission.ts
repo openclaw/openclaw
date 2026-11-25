@@ -5,13 +5,13 @@ import {
   prepareAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../agents/admitted-run-context.js";
-import {
-  bindSessionMcpStoreOwner,
-  inheritSessionMcpStoreOwner,
-} from "../agents/agent-bundle-mcp-store-owner.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
+import {
+  bindSessionMcpStoreOwner,
+  inheritSessionMcpStoreOwner,
+} from "../config/sessions/session-mcp-store-admission.js";
 import {
   composeSessionSourceAssertion,
   prepareSessionSourceAuthority,

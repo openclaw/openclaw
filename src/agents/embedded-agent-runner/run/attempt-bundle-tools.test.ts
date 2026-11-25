@@ -6,6 +6,7 @@ import {
 import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { gateAgentToolExecution } from "../../agent-tool-availability.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
@@ -68,6 +69,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     return {
       agentDir: "/tmp/agent",
       attempt: {
+        admittedRunContext: createTestAdmittedRunContext("run"),
         config: {},
         model: {},
         modelId: "model",

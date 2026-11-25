@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   bindSessionMcpStoreOwner,
-  createSessionMcpStoreClaims,
   inheritSessionMcpStoreOwner,
   readSessionMcpStoreOwner,
-} from "./agent-bundle-mcp-store-owner.js";
+} from "../config/sessions/session-mcp-store-admission.js";
+import { createSessionMcpStoreClaims } from "./agent-bundle-mcp-store-owner.js";
 
 const target = { agentId: "agent", sessionId: "id", sessionKey: "agent:agent:key" };
 const source = { agentId: target.agentId, databaseIdentity: "physical", databaseBirthtime: "1" };
@@ -13,7 +13,7 @@ function setup() {
   const admission = {};
   bindSessionMcpStoreOwner(admission, { ...source, ...target });
   const key = readSessionMcpStoreOwner(admission, target)!;
-  return { admission, claims: createSessionMcpStoreClaims(), key };
+  return { admission, claims: createSessionMcpStoreClaims(2), key };
 }
 
 describe("MCP session store admission", () => {
@@ -55,6 +55,17 @@ describe("MCP session store admission", () => {
     expect(ready()).toBe(true);
     claims.prune(new Set(), new Set());
     expect(ready()).toBe(false);
+  });
+
+  it("invalidates a captured store when closing but preserves its pending install", () => {
+    const { claims, key } = setup();
+    const installed = claims.begin(target.sessionId, key);
+    const previous = claims.capture(target.sessionId)!;
+    claims.forget(target.sessionId);
+    installed(true);
+    expect(previous(source)).toBe(false);
+    expect(claims.capture(target.sessionId)!(source)).toBe(true);
+    expect(claims.ready(target.sessionId)?.()).toBe(true);
   });
 
   it("discards a failed acquisition without poisoning later store ownership", () => {

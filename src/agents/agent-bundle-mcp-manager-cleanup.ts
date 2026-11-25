@@ -1,8 +1,8 @@
 /** Cleanup consumes the existing manager without loading its construction graph. */
+import type { SessionMcpStoreSource } from "../config/sessions/session-mcp-store-admission.js";
 import { logWarn } from "../logger.js";
 import type { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
-import type { SessionMcpStoreSource } from "./agent-bundle-mcp-store-owner.js";
 import type { SessionMcpRuntime, SessionMcpRuntimeLease } from "./agent-bundle-mcp-types.js";
 
 export function peekSessionMcpRuntimeManager():
@@ -47,7 +47,9 @@ export function captureSessionMaintenanceMcpRuntimes(sessionIds: readonly string
     ? {
         sessionIds: [...captured.keys()],
         async retire(ids: readonly string[], source: SessionMcpStoreSource) {
-          const results = await Promise.allSettled(ids.map((id) => captured.get(id)?.(source)));
+          const results = await Promise.allSettled(
+            ids.flatMap((id) => captured.get(id)?.(source) ?? []),
+          );
           const failures = results.filter((r) => r.status === "rejected");
           if (failures.length) {
             throw new AggregateError(

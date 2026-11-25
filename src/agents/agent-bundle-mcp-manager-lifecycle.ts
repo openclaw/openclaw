@@ -88,7 +88,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
   const catalogs = createSessionMcpCatalogStore(runtimesBySessionId, () => store.scheduler.now());
   const store: SessionMcpRuntimeManagerStore = {
     ...catalogs.store,
-    storeClaims: createSessionMcpStoreClaims(),
+    storeClaims: createSessionMcpStoreClaims(SESSION_MCP_MAX_LIVE_RUNTIMES),
     // Keys are bare sessionId for static runtimes, or requester composite JSON keys.
     runtimesBySessionId,
     sessionIdBySessionKey: new Map<string, string>(),

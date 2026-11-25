@@ -3,10 +3,6 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  bindSessionMcpStoreOwner,
-  readSessionMcpStoreOwner,
-} from "../../agents/agent-bundle-mcp-store-owner.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -16,6 +12,10 @@ import {
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { projectCronSessionEntry } from "../../config/sessions/session-entry-patch-operation.js";
+import {
+  bindSessionMcpStoreOwner,
+  readSessionMcpStoreOwner,
+} from "../../config/sessions/session-mcp-store-admission.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
@@ -157,7 +157,7 @@ describe("createPersistCronSessionEntry", () => {
         storage === "memory"
           ? memorySessionActorOwners.get({ agentId: target.agentId, path: storePath })
           : undefined;
-      using _cleanup = {
+      using cleanup = {
         [Symbol.dispose]: () => {
           if (memory) {
             memorySessionActorOwners.closeDatabase({ agentId: target.agentId, path: storePath });

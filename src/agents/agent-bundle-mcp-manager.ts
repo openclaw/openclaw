@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readSessionMcpStoreOwner } from "../config/sessions/session-mcp-store-admission.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   hasAgentRunContextExecutionOwner,
@@ -22,7 +23,6 @@ import {
   resolveSessionMcpRuntimeIdleTtlMs,
   type CreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
-import { readSessionMcpStoreOwner } from "./agent-bundle-mcp-store-owner.js";
 import type {
   SessionMcpRuntime,
   SessionMcpRuntimeLease,
@@ -135,7 +135,9 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
     if (!receipts.length) {
       return undefined;
     }
-    const pending = Promise.allSettled(new Set(receipts.flatMap(({ pending }) => [...pending])));
+    const pending = Promise.allSettled(
+      new Set(receipts.flatMap((receipt) => [...receipt.pending])),
+    );
     const failure = receipts.find((receipt) => receipt.failure)?.failure;
     return async () => {
       const outcomes = await pending;

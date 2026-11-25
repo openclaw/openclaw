@@ -222,11 +222,8 @@ export function createPersistCronSessionEntry(params: {
   workspaceDir: string;
   persistSessionEntry: CronSessionRowWriter;
 }): PersistCronSessionEntry {
-  return async (
-    assertCommitAllowed,
-    liveEntry = params.cronSession.sessionEntry,
-    storeAdmission,
-  ) => {
+  return async (assertCommitAllowed, entry, storeAdmission) => {
+    const liveEntry = entry ?? params.cronSession.sessionEntry;
     const resetBoundaryPending = params.cronSession.resetBoundaryPending !== undefined;
     // Reset admission completes before a CLI turn can own settlement.
     if (assertCommitAllowed && resetBoundaryPending) {

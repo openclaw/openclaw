@@ -2,8 +2,14 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+  withTestTimeout,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { bindSessionMcpStoreOwner } from "../config/sessions/session-mcp-store-admission.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -15,7 +21,6 @@ import {
   makeManagerRuntime,
   unopenedMcpConfig,
 } from "./agent-bundle-mcp-manager.test-support.js";
-import { bindSessionMcpStoreOwner } from "./agent-bundle-mcp-store-owner.js";
 
 const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
 type RuntimeParams = Parameters<ReturnType<typeof createSessionMcpRuntimeManager>["acquire"]>[0];
@@ -124,7 +129,7 @@ it.for(["idle sweep", "captured retirement", "store retirement"] as const)(
 
 it.for(["success", "failure"] as const)(
   "joins the physical close during replacement (%s)",
-  async (outcome) => {
+  async (outcome, { signal }) => {
     const original = { started: createDeferred(), finish: createDeferred() };
     const successor = { started: createDeferred(), finish: createDeferred() };
     let current = original;
@@ -157,7 +162,14 @@ it.for(["success", "failure"] as const)(
           mcp: { servers: { fixture: { command: process.execPath, args: ["--version"] } } },
         },
       });
-      await withTestTimeout(original.started.promise, 2_000, "original cleanup did not start");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          original.started.promise,
+          replacing,
+          "replacement skipped original cleanup",
+        ),
+        signal,
+      );
       const captured = expectDefined(manager.captureSessionRetirement(params), "original disposal");
       let joined = false;
       const retirement = captured
@@ -181,12 +193,18 @@ it.for(["success", "failure"] as const)(
       original.finish.resolve();
       await Promise.all([retirement, replacing]);
       const secondClose = manager.disposeSession(params.sessionId);
-      await withTestTimeout(successor.started.promise, 2_000, "successor cleanup did not start");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          successor.started.promise,
+          secondClose,
+          "successor cleanup was skipped",
+        ),
+        signal,
+      );
       // The old handle must finish while the new generation's close is still blocked.
-      await withTestTimeout(
+      await withinTest(
         captured.retire(() => {}),
-        2_000,
-        "joined the successor's disposal",
+        signal,
       );
       successor.finish.resolve();
       await secondClose;

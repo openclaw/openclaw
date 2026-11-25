@@ -311,7 +311,7 @@ function captureMaintenanceMcpRetirement(entries: SessionEntryMaintenancePlan["e
   let committed: SessionMaintenanceMcpRelease | undefined;
   return {
     sessionIds: captured.sessionIds,
-    record(release: SessionMaintenanceMcpRelease) {
+    record(this: void, release: SessionMaintenanceMcpRelease) {
       committed = release;
     },
     async drain() {

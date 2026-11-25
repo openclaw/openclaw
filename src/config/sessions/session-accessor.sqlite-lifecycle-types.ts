@@ -38,6 +38,7 @@ import type {
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionCreationOperation } from "./session-creation-operation.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionMcpStoreSource } from "./session-mcp-store-admission.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -250,7 +251,7 @@ export type SessionMaintenanceMetadataResult =
 /** An exact committed storage generation whose final current entry was removed. */
 export type SessionMaintenanceMcpRelease = {
   sessionIds: string[];
-  source: { agentId: string; databaseIdentity: string; databaseBirthtime?: string };
+  source: SessionMcpStoreSource;
 };
 
 export type SqliteSessionReclamationPlan =

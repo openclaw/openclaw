@@ -1,4 +1,8 @@
 import {
+  bindSessionMcpStoreOwner,
+  inheritSessionMcpStoreOwner,
+} from "../../config/sessions/session-mcp-store-admission.js";
+import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -15,10 +19,6 @@ import {
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
-import {
-  bindSessionMcpStoreOwner,
-  inheritSessionMcpStoreOwner,
-} from "../agent-bundle-mcp-store-owner.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { requiresOperatorModelExecutionPolicy } from "../operator-access-program.js";
 import type { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";

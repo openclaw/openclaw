@@ -1,9 +1,9 @@
 /** Lazy preparation runtimes and session lifecycle helpers for cron runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { bindSessionMcpStoreOwner } from "../../agents/agent-bundle-mcp-store-owner.js";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { resolveBundledCliBackendAuthPolicy } from "../../agents/cli-runner/cli-backend-auth-policy.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
+import { bindSessionMcpStoreOwner } from "../../config/sessions/session-mcp-store-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
