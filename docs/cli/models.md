@@ -331,6 +331,8 @@ openclaw models fallbacks clear
 
 Manages `agents.defaults.model.fallbacks`. `openclaw models image-fallbacks list|add|remove|clear` manages the parallel `agents.defaults.imageModel.fallbacks` list with the same subcommand shape.
 
+`list` reads the global `agents.defaults` entry and, like `add`, `remove`, and `clear`, rejects an inherited `--agent` selector with an explanation instead of printing another scope's fallbacks.
+
 ## Personal model accounts
 
 Use `models accounts` for accounts owned by your signed-in person on the selected Gateway. The CLI and **Settings → Profile → Connected accounts** use the same Gateway account store, including when the server is shared.
