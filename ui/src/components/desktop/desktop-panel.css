@@ -1,13 +1,15 @@
 /* A customizable select sizes to its selected option. Reserve the widest translated
    choice without moving the other controls when the operator changes modes. */
-:is(.systems-desktop .desktop-toolbar, openclaw-desktop-panel .desktop-touch-toolbar) select.desktop-sizing {
+:is(.systems-desktop .desktop-toolbar, openclaw-desktop-panel .desktop-touch-toolbar)
+  select.desktop-sizing {
   display: inline-block;
   width: max-content;
   min-width: 88px;
   max-width: 100%;
   white-space: nowrap;
 }
-:is(.systems-desktop .desktop-toolbar, openclaw-desktop-panel .desktop-touch-toolbar) .desktop-sizing::after {
+:is(.systems-desktop .desktop-toolbar, openclaw-desktop-panel .desktop-touch-toolbar)
+  .desktop-sizing::after {
   display: block;
   height: 0;
   visibility: hidden;
