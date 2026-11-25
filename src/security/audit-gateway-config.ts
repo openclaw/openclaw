@@ -47,15 +47,17 @@ export function collectGatewayConfigFindings(
     gateway: { ...cfg.gateway, auth: { ...cfg.gateway?.auth, mode: auth.mode } },
   };
   let publishedPort: number | undefined;
+  let invalidPublishedPort = false;
   try {
     publishedPort = resolveContainerPublishedGatewayPort(env);
   } catch {
+    invalidPublishedPort = true;
     findings.push({
       checkId: "gateway.container_published_port_invalid",
       severity: "warn",
       title: "Container published-port launch metadata is invalid",
       detail:
-        "Gateway startup rejects the malformed port; no browser origins were derived from it.",
+        "The audit cannot derive browser origins from inherited metadata. A valid explicit --published-port takes precedence at startup; its effective value is not available to this audit.",
       remediation: "Check the Docker/Podman published port or explicit --published-port (1–65535).",
     });
   }
@@ -187,13 +189,20 @@ export function collectGatewayConfigFindings(
     cfg.gateway?.controlUi?.allowedOrigins?.length !== 0 &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
+    const unknownLaunchOrigins =
+      invalidPublishedPort &&
+      cfg.gateway?.controlUi?.allowedOrigins === undefined &&
+      auth.mode !== "trusted-proxy";
     findings.push({
       checkId: "gateway.control_ui.allowed_origins_required",
-      severity: "critical",
-      title: "Non-loopback Control UI missing allowed origins",
-      detail:
-        "Control UI is enabled on a non-loopback bind without an effective browser-origin allowlist. " +
-        "Set explicit allowed origins, or omit the list to use gateway.publicOrigin.",
+      severity: unknownLaunchOrigins ? "warn" : "critical",
+      title: unknownLaunchOrigins
+        ? "Non-loopback Control UI browser origins could not be determined"
+        : "Non-loopback Control UI missing allowed origins",
+      detail: unknownLaunchOrigins
+        ? "No browser-origin allowlist is established by the audit inputs. Check the effective --published-port override before changing saved origin policy."
+        : "Control UI is enabled on a non-loopback bind without an effective browser-origin allowlist. " +
+          "Set explicit allowed origins, or omit the list to use gateway.publicOrigin.",
       remediation:
         "Set gateway.publicOrigin with gateway.controlUi.allowedOrigins omitted, or configure a list of full trusted origins (for example https://control.example.com). Current container images can inherit the published loopback origins when the list is omitted.",
     });

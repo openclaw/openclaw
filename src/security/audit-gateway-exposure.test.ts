@@ -106,13 +106,13 @@ describe("security audit gateway exposure findings", () => {
     const findings = collectGatewayConfigFindings(cfg, cfg, {
       OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: "not-a-port",
     });
-    expect(findings.map((finding) => finding.checkId)).toEqual(
-      expect.arrayContaining([
-        "gateway.container_published_port_invalid",
-        "gateway.bind_no_auth",
-        "gateway.control_ui.allowed_origins_required",
-      ]),
-    );
+    const finding = (id: string) => findings.find((entry) => entry.checkId === `gateway.${id}`);
+    expect(finding("container_published_port_invalid")).toMatchObject({
+      severity: "warn",
+      detail: expect.stringContaining("--published-port"),
+    });
+    expect(finding("bind_no_auth")?.severity).toBe("critical");
+    expect(finding("control_ui.allowed_origins_required")?.severity).toBe("warn");
   });
 
   it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", () => {

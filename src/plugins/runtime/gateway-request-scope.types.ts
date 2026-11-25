@@ -29,7 +29,7 @@ export type PluginRuntimeGatewayRequestScope = {
   publishedPort?: number;
   /** Serving request policy paired with that launch fact, never plugin-provided config. */
   browserOriginConfig?: OpenClawConfig;
-  browserOriginRequest?: IncomingMessage;
+  browserOriginRequest?: WeakRef<IncomingMessage>;
   readRequestAuthority?: (
     client: PluginRuntimeGatewayRequestScope["client"],
   ) => GatewayRequestAuthorityV1 | undefined;

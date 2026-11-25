@@ -226,7 +226,7 @@ function createPluginRouteRuntimeScope(params: {
       ? {
           publishedPort: params.publishedPort,
           browserOriginConfig: params.browserOriginConfig,
-          browserOriginRequest: params.req,
+          browserOriginRequest: new WeakRef(params.req),
         }
       : {}),
     ...(ingress ? { revalidate: async () => assertRemoteControlUiIngressCurrent(ingress) } : {}),
