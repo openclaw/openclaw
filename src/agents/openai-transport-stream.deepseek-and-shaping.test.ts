@@ -686,12 +686,7 @@ describe("openai transport stream", () => {
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
-    expectRecordFields(reasoningItem, {
-      type: "reasoning",
-      summary: [],
-    });
-    expect(reasoningItem?.id).toBeUndefined();
-    expect(reasoningItem).not.toHaveProperty("encrypted_content");
+    expect(reasoningItem).toBeUndefined();
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
     );

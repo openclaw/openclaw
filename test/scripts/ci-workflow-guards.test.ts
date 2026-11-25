@@ -3891,14 +3891,14 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       "#!/bin/sh",
       'printf "%s\\n" "$*" >> "$GRADLE_LOG"',
     ]);
-    const buildContexts = (["", "github", "blacksmith", "hybrid"] as const).flatMap(
+    const buildContexts = (["", "github", "blacksmith", "hybrid", "boat"] as const).flatMap(
       (runnerBackend) => [
         {
           runnerBackend,
           eventName: "push" as const,
           mainShape: false,
           runAttempt: 1,
-          expectedCommands: runnerBackend === "github" ? 3 : 1,
+          expectedCommands: runnerBackend === "github" || runnerBackend === "boat" ? 3 : 1,
         },
         {
           runnerBackend,
@@ -3986,9 +3986,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(source.match(/check_name: "android-build-play"/gu)).toHaveLength(1);
     expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
     expect(androidJob.name).toBe("${{ matrix.check_name || 'android' }}");
-    expect(runStep.env.CI_RUNNER_BACKEND).toContain(
-      "contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1",
-    );
+
     expect(nativeResourcesSetup.uses).toBe("./.ci-harness/.github/actions/setup-node-env");
     expect(nativeResourcesSetup.if).toBe(
       "needs.preflight.outputs.use_compatible_android_ci != 'true'",
@@ -4431,6 +4429,7 @@ setImmediate(() => {
       const expression = jobs[jobName]?.["runs-on"];
       for (const [label, overrides, expectedRunner] of [
         ["github backend", { runnerBackend: "github" }, hostedRunner],
+        ["legacy Boat fallback", { runnerBackend: "boat", runnerProfile: "github" }, hostedRunner],
         [
           "hybrid first attempt",
           { runnerBackend: "hybrid" },
@@ -4715,6 +4714,7 @@ setImmediate(() => {
     for (const [jobName, hostedTimeout] of Object.entries(expectedHostedTimeouts)) {
       for (const [overrides, expectedTimeout] of [
         [{ runnerBackend: "github" }, hostedTimeout],
+        [{ runnerBackend: "boat", runnerProfile: "github" }, hostedTimeout],
         [{ runnerBackend: "blacksmith" }, 20],
         [{ runnerBackend: "hybrid" }, 20],
         [{ runnerBackend: "hybrid", runAttempt: 2 }, hostedTimeout],
@@ -4723,9 +4723,16 @@ setImmediate(() => {
           expectedTimeout,
         );
       }
-      expect(jobs[jobName]?.["timeout-minutes"], jobName).toContain(
-        "(needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github'",
-      );
+    }
+    for (const jobName of ["build-artifacts", "checks-ui"]) {
+      for (const overrides of [
+        { eventName: "workflow_dispatch" },
+        { headRepository: "contributor/openclaw" },
+      ] as const) {
+        expect(evaluateTimeout(jobName, { ...canonicalPullRequest, ...overrides }), jobName).toBe(
+          35,
+        );
+      }
     }
     expect(routeDependentTimeoutJobs).toEqual(Object.keys(expectedHostedTimeouts).toSorted());
 
@@ -4738,6 +4745,8 @@ setImmediate(() => {
     const androidRunEnv = expectDefined(androidRunStep.env, "Android task environment");
     const androidRoutes = [
       ["GitHub override", { runnerBackend: "github" }, "ubuntu-24.04"],
+      ["Boat fallback", { runnerBackend: "boat" }, "ubuntu-24.04"],
+      ["Boat retry", { runnerBackend: "boat", runAttempt: 2 }, "ubuntu-24.04"],
       ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, "ubuntu-24.04"],
       ["manual dispatch", { eventName: "workflow_dispatch" }, "ubuntu-24.04"],
       ["non-canonical repository", { repository: "contributor/openclaw" }, "ubuntu-24.04"],
@@ -4793,7 +4802,7 @@ setImmediate(() => {
     for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
       for (const repository of ["openclaw/openclaw", "contributor/openclaw"]) {
         for (const authorAssociation of ["CONTRIBUTOR", "NONE"]) {
-          for (const runnerBackend of ["", "blacksmith", "github", "hybrid"] as const) {
+          for (const runnerBackend of ["", "blacksmith", "github", "hybrid", "boat"] as const) {
             for (const runAttempt of [1, 2]) {
               const context = {
                 ...canonicalPullRequest,
@@ -5245,12 +5254,26 @@ setImmediate(() => {
         "install-bun": "false",
       },
     });
-    expect(preflightRestore?.step.if).toContain("github.ref == 'refs/heads/main'");
-    expect(preflightRestore?.step.if).toContain("github.event_name == 'pull_request'");
-    expect(preflightRestore?.step.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
-    expect(preflightRestore?.step.if).toContain(
-      '!contains(fromJSON(\'["hybrid","runson"]\'), vars.OPENCLAW_CI_RUNNER_BACKEND)',
-    );
+    for (const runnerBackend of ["blacksmith", "github", "boat", "hybrid", "runson"] as const) {
+      for (const [eventName, ref, headRepository, eligible] of [
+        ["push", "refs/heads/main", "openclaw/openclaw", true],
+        ["push", "refs/heads/feature", "openclaw/openclaw", false],
+        ["pull_request", "refs/pull/1/merge", "openclaw/openclaw", true],
+        ["pull_request", "refs/pull/1/merge", "contributor/openclaw", false],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(`\${{ ${preflightRestore?.step.if} }}`, {
+            eventName,
+            ref,
+            headRepository,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            runnerBackend,
+            steps: { manifest: { outputs: { run_node: "true" } } },
+          }),
+        ).toBe(eligible && runnerBackend === "blacksmith");
+      }
+    }
     const consumers = dependencySetups.filter(({ jobName }) => jobName !== "preflight");
     expect(consumers.map(({ jobName }) => jobName).toSorted()).toEqual([
       "build-artifacts",
@@ -5306,7 +5329,7 @@ setImmediate(() => {
         { eventName: "workflow_dispatch", trusted: false },
         { eventName: "push", repository: "contributor/openclaw", trusted: false },
       ] as const;
-      for (const runnerBackend of ["", "blacksmith", "github", "hybrid"] as const) {
+      for (const runnerBackend of ["", "blacksmith", "github", "hybrid", "boat"] as const) {
         for (const runAttempt of [1, 2]) {
           for (const { trusted, ...scenario } of scenarios) {
             const context = { ...canonical, ...scenario, runnerBackend, runAttempt };
@@ -7070,10 +7093,21 @@ server.listen(0, "127.0.0.1", () => {
     // minted a backing disk per PR/bump until Blacksmith's installation-wide
     // budget 429-failed every mount fleet-wide.
     expect(mountWith.key).toBe("${{ github.repository }}-gradle-v2-${{ matrix.task }}");
-    expect(androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.if).toContain(
-      "vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'",
-    );
-    expect(pointStep.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
+    for (const step of [
+      androidSteps.find((entry) => entry.name === "Mount Gradle sticky disk"),
+      pointStep,
+    ]) {
+      for (const runnerBackend of ["blacksmith", "github", "boat"] as const) {
+        expect(
+          evaluateWorkflowExpression(`\${{ ${step?.if} }}`, {
+            eventName: "push",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            runnerBackend,
+          }),
+        ).toBe(runnerBackend === "blacksmith");
+      }
+    }
     // Single semantic writer: protected pushes commit explicitly (on-change's
     // allocated-byte heuristic can miss a same-size refresh); PR clones stay read-only.
     expect(mountWith.commit).toBe(

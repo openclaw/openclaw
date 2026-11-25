@@ -4677,6 +4677,11 @@ describe("ci workflow guards", () => {
       },
       {
         expected: "github",
+        name: "legacy workflow falls back to hosted for unsupported Boat",
+        options: { configuredProfile: "boat", eventName: "push", targetSupportsContract: true },
+      },
+      {
+        expected: "github",
         name: "canonical trusted push keeps configured GitHub",
         options: {
           configuredProfile: "github",
@@ -4934,7 +4939,7 @@ describe("ci workflow guards", () => {
 
   it("resolves admitted main qualification profiles without changing ordinary main routing", () => {
     for (const [configuredProfile, backend] of (
-      ["", "github", "blacksmith", "hybrid"] as const
+      ["", "github", "blacksmith", "hybrid", "boat"] as const
     ).flatMap((configured) =>
       (["hybrid", "runson"] as const).map((requested) => [configured, requested] as const),
     )) {
@@ -5361,6 +5366,7 @@ describe("ci workflow guards", () => {
       }
       for (const override of [
         { runnerBackend: "github" },
+        { runnerBackend: "boat", runnerProfile: "github" },
         { runnerBackend: "hybrid", runAttempt: 2 },
         { eventName: "workflow_dispatch" },
         { eventName: "pull_request", authorAssociation: "NONE", headRepository: "fork/openclaw" },
@@ -5370,9 +5376,7 @@ describe("ci workflow guards", () => {
         );
       }
     }
-    expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
-      "${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
-    );
+
     // PR events validate the artifact build on hosted runners (landing gate
     // stays satisfiable during Blacksmith outages); Testbox leases are
     // dispatch-only, mirroring ci-check-testbox.yml.
@@ -5485,8 +5489,28 @@ describe("ci workflow guards", () => {
     );
     expect(boundaryMount.with.key).toBe("${{ github.repository }}-ext-boundary-v2");
     expect(lintMount.with.key).toBe(boundaryMount.with.key);
-    for (const gate of [boundaryMount, lintMount]) {
-      expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
+    const stickyContext = {
+      eventName: "push",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      steps: {
+        "extension-boundary-inputs": { outputs: { enabled: "true" } },
+        "boundary-sticky-restore": { outputs: { restored: "false" } },
+      },
+    } as const;
+    for (const [gate, matrix] of [
+      [boundaryMount, { group: "extension-package-boundary" }],
+      [lintMount, { task: "lint" }],
+    ] as const) {
+      for (const runnerBackend of ["blacksmith", "github", "boat", "hybrid"] as const) {
+        expect(
+          evaluateWorkflowExpression(`\${{ ${gate.if} }}`, {
+            ...stickyContext,
+            matrix,
+            runnerBackend,
+          }),
+        ).toBe(runnerBackend === "blacksmith");
+      }
     }
     expect(hostedLintCache.if).toBe(
       "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && steps.extension-boundary-inputs.outputs.enabled == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid')",
@@ -5720,12 +5744,24 @@ describe("ci workflow guards", () => {
     const seedStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Seed extension boundary sticky disk",
     );
-    for (const gate of [restoreStep, lintRestoreStep, seedStep]) {
+    for (const [gate, matrix] of [
+      [restoreStep, { group: "extension-package-boundary" }],
+      [lintRestoreStep, { task: "lint" }],
+      [seedStep, { group: "extension-package-boundary" }],
+    ] as const) {
       expect(gate.run).toContain(fingerprintReference);
       expect(gate.run).toContain(".source-fingerprint");
       expect(gate.run).not.toContain("git rev-parse HEAD:");
       expect(gate.run).not.toContain("BOUNDARY_CONFIG_HASH");
-      expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
+      for (const runnerBackend of ["blacksmith", "github", "boat", "hybrid"] as const) {
+        expect(
+          evaluateWorkflowExpression(`\${{ ${gate.if} }}`, {
+            ...stickyContext,
+            matrix,
+            runnerBackend,
+          }),
+        ).toBe(runnerBackend === "blacksmith");
+      }
     }
     // Seeding is writer-only work: PR mounts never commit, so seeding there
     // would burn wall clock on a discarded clone.
