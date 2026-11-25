@@ -154,7 +154,7 @@ it.each(["read", "write"] as const)(
       const archive = () => upsertSessionEntryCore(scope(invited), { archivedAt: Date.now() });
       const read = preferences.getCanonicalUserPreferences;
       const write = preferences.setCanonicalUserPreferences;
-      using _intercept =
+      using intercept =
         stage === "read"
           ? vi
               .spyOn(preferences, "getCanonicalUserPreferences")
@@ -173,6 +173,7 @@ it.each(["read", "write"] as const)(
         targets: [{ key: invited }, { key: own }],
         patch: { pinned: true },
       });
+      expect(intercept).toHaveBeenCalled();
       expect(result).toMatchObject({
         outcomes: [
           { key: invited, ok: false, error: { code: "INVALID_REQUEST" } },
