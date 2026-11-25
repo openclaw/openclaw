@@ -98,6 +98,7 @@ type PreflightTarballs = Partial<Record<"corePackageTarballs" | "dependencyTarba
 type RequiredCandidateFlag = { flag: string; value: string; reason: string };
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
+const CANDIDATE_PARALLELS_PROVIDER = "openai";
 const DEFAULT_MODE = "both";
 const DEFAULT_NPM_DIST_TAG = "beta";
 const DEFAULT_PLUGIN_SCOPE = "all-publishable";
@@ -180,7 +181,7 @@ Options:
   --windows-node-tag <tag>            Optional exact Windows Node tag for postpublish asset promotion.
   --skip-dispatch                    Require an admitted Full Release Validation run.
   --skip-local-generated-check        Do not run local generated release baseline checks.
-  --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
+  --run-parallels                    Force local Parallels smoke with an early host preflight; beta defaults to postpublish release:beta-smoke.
   --skip-parallels                   Force-skip candidate Parallels smoke; stable/full run by default.
   --parallels-registry-package-artifact <dir>
                                       Add a verified plugin npm preflight artifact directory. Repeatable.
@@ -1710,6 +1711,8 @@ export function candidateParallelsArgs(
     "exec",
     "tsx",
     join(candidateRoot, "scripts/e2e/parallels/npm-update-smoke.ts"),
+    "--provider",
+    CANDIDATE_PARALLELS_PROVIDER,
     "--target-tarball",
     tarballPath,
     ...dependencyTarballPaths.flatMap((dependency) => ["--dependency-tarball", dependency]),
@@ -1722,6 +1725,46 @@ export function candidateParallelsArgs(
   ];
 }
 
+function candidateParallelsLoginPrefix() {
+  // Login shells can replace the invoking Node and load the smoke credentials.
+  return [
+    'set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a;',
+    `export PATH=${shellQuote(dirname(process.execPath))}:"$PATH";`,
+  ];
+}
+
+function preflightCandidateParallels() {
+  // P can check the host before FRV identifies Q. Q still selects the exact
+  // guests and snapshots and performs the actual smoke against C's tarballs.
+  const check = `
+import { detectParallelsHostIp } from './scripts/e2e/parallels/host-server.ts';
+import { listVmNames } from './scripts/e2e/parallels/parallels-vm.ts';
+import { resolveProviderAuth } from './scripts/e2e/parallels/provider-auth.ts';
+if (listVmNames().length === 0) throw new Error('no Parallels guests are registered');
+if (!detectParallelsHostIp()) throw new Error('failed to detect Parallels host IP');
+resolveProviderAuth({ provider: '${CANDIDATE_PARALLELS_PROVIDER}' });
+`;
+  const command = [
+    ...candidateParallelsLoginPrefix(),
+    "exec",
+    ...[process.execPath, "--import", "./scripts/tsx.mjs", "--input-type=module", "-e", check].map(
+      shellQuote,
+    ),
+  ].join(" ");
+  const result = spawnSync("bash", ["-lc", command], {
+    cwd: TOOLING_ROOT,
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  if (result.status !== 0) {
+    const reason =
+      result.stderr?.trim() || result.error?.message || `exit ${result.status ?? result.signal}`;
+    throw new Error(
+      `Candidate Parallels preflight failed: ${reason}. Run from a configured Parallels host with smoke credentials, or, if the local smoke has been explicitly waived, rerun with --skip-parallels. Required hosted validation is unchanged.`,
+    );
+  }
+}
+
 export function candidateParallelsShellCommand(
   tarballPath: string,
   timeoutBin: string,
@@ -1730,12 +1773,8 @@ export function candidateParallelsShellCommand(
   macosSnapshotHint = "",
   candidateRoot = process.cwd(),
 ) {
-  // Login shells can replace the candidate's supported Node with ambient host Node.
-  // Keep the invoking Node first so pnpm and npm use the validated runtime.
-  const nodeBinDir = dirname(process.execPath);
   return [
-    'set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a;',
-    `export PATH=${shellQuote(nodeBinDir)}:"$PATH";`,
+    ...candidateParallelsLoginPrefix(),
     "exec",
     shellQuote(timeoutBin),
     "--foreground",
@@ -2005,6 +2044,9 @@ async function main() {
     toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT),
     workflowRef: options.workflowRef,
   });
+  if (!options.skipParallels) {
+    preflightCandidateParallels();
+  }
   // Publication may use repaired tooling while the prepared tarball retains its original producer.
   const statePath = join(options.outputDir, RELEASE_CANDIDATE_STATE_FILE);
   const hasRetainedRequest = existsSync(join(options.outputDir, "frv-request.json"));

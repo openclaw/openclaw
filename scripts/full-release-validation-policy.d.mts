@@ -211,7 +211,10 @@ export function selectReleaseStateArtifacts(
   drainCandidates: Array<{ name: string; payload: unknown }>,
   expected?: Record<string, unknown>,
 ): ReturnType<typeof verifyReleaseStateArtifacts>;
-export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
+export function formatReleaseStateOutcome(
+  payload: ReleaseRecord,
+  options?: { observedDrainStatus?: string },
+): string;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],
   blockers: ReleaseRecord[],
@@ -229,4 +232,5 @@ export function qualificationChildDispatchInputs(
   admission: import("./release-qualification-admission.mjs").QualificationAdmission,
   binding: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateBinding,
   workflowSource: string,
+  parentWorkflowSource?: string,
 ): Record<string, string>;

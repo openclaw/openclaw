@@ -68,7 +68,7 @@ describe("schema-header native reader lifetime", () => {
     const pathname = path.join(root, "source.sqlite");
     const writer = new (requireNodeSqlite().DatabaseSync)(pathname);
     writer.exec(
-      "CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT); INSERT INTO schema_meta VALUES('primary','committed'); PRAGMA user_version=7;",
+      "CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT, role TEXT, schema_version INTEGER, agent_id TEXT); INSERT INTO schema_meta VALUES('primary','committed','agent',7,'main'); PRAGMA user_version=7;",
     );
     writer.exec(
       "BEGIN IMMEDIATE; PRAGMA user_version=8; UPDATE schema_meta SET app_version='uncommitted';",
@@ -109,8 +109,8 @@ describe("schema-header native reader lifetime", () => {
       const pathname = path.join(root, "source.sqlite");
       const database = new (requireNodeSqlite().DatabaseSync)(pathname);
       database.exec(`
-      CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT);
-      INSERT INTO schema_meta VALUES('primary','committed');
+      CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT, role TEXT, schema_version INTEGER, agent_id TEXT);
+      INSERT INTO schema_meta VALUES('primary','committed','agent',7,'main');
       PRAGMA user_version=7;
     `);
       database.close();
@@ -140,7 +140,7 @@ describe("schema-header native reader lifetime", () => {
       const writer = new (requireNodeSqlite().DatabaseSync)(writerPath);
       try {
         writer.exec(
-          "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT); INSERT INTO schema_meta VALUES('primary','from-wal'); PRAGMA user_version=9;",
+          "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT, role TEXT, schema_version INTEGER, agent_id TEXT); INSERT INTO schema_meta VALUES('primary','from-wal','agent',9,'main'); PRAGMA user_version=9;",
         );
         fs.copyFileSync(writerPath, pathname);
         fs.copyFileSync(writerPath + "-wal", pathname + "-wal");
@@ -340,7 +340,11 @@ describe("schema-header native reader lifetime", () => {
             await expect(operation).resolves.toEqual({
               version: 7,
               ...(reader !== "agent-shape" ? { writerAppVersion: "writer-7" } : {}),
-              agentSchemaMeta: { role: "agent", agentId: "owner-7", schemaVersion: 7 },
+              agentSchemaMeta: {
+                role: "agent",
+                agentId: "owner-7",
+                schemaVersion: 7,
+              },
             });
           }
         }

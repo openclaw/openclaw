@@ -900,17 +900,17 @@ async function runCliWithPreparedOutputMode(
     ).createPluginCliLoadSession(getPluginCache());
     return pluginCliSession;
   };
-  const isolateProxyConfigEnv = isGatewayRunInvocation;
-  const bestEffortConfigStartupPolicy = resolveCliStartupPolicyForArgv({
+  const { primary: cliRoot } = normalizedInvocation;
+  const commandPrimary = !isHelpOrVersionInvocation && !bareSessionInvocation && cliRoot;
+  const builtInCommand = commandPrimary && findBuiltInCommandDescriptor(commandPrimary);
+  const proxyStartupPolicy = resolveCliStartupPolicyForArgv({
     argv: normalizedArgv,
     commandPath: normalizedInvocation.commandPath,
     jsonOutputMode: options.builtInMachineOutput || hasJsonOutputFlag(normalizedArgv),
     env: process.env,
   });
   const useSourceOnlyBestEffortConfig =
-    !(await isCurrentRuntimeSupported()) ||
-    normalizedInvocation.primary === "update" ||
-    normalizedInvocation.primary === "doctor";
+    !(await isCurrentRuntimeSupported()) || cliRoot === "update" || cliRoot === "doctor";
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then(async (configIo) => {
@@ -920,8 +920,9 @@ async function runCliWithPreparedOutputMode(
         const readOptions: Parameters<typeof configIo.readBestEffortConfig>[0] = {
           // Routing must not create state before Doctor decides whether migrations are needed.
           observe: false,
-          ...(isolateProxyConfigEnv ? { isolateEnv: true } : {}),
-          ...(bestEffortConfigStartupPolicy.validateConfigOnly || isGatewayRunInvocation
+          ...(isGatewayRunInvocation ? { isolateEnv: true } : {}),
+          // Built-in proxy routing needs core config. Command admission owns plugin validation.
+          ...(builtInCommand || proxyStartupPolicy.validateConfigOnly || isGatewayRunInvocation
             ? { pluginValidation: "core-only" }
             : { skipPluginValidation: true }),
         };
@@ -1008,12 +1009,7 @@ async function runCliWithPreparedOutputMode(
         isGatewayRunInvocation ? readBestEffortCliConfig : undefined,
       );
     }
-    if (
-      !isHelpOrVersionInvocation &&
-      !bareSessionInvocation &&
-      normalizedInvocation.primary &&
-      !findBuiltInCommandDescriptor(normalizedInvocation.primary)
-    ) {
+    if (commandPrimary && !builtInCommand) {
       const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
       if (
         await withConsoleLogsRoutedToStderr(() =>

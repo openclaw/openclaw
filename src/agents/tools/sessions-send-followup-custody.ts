@@ -32,7 +32,9 @@ export async function prepareSessionsSendFollowup(params: {
   ) {
     throw new Error("Followup result requester differs from its admitted tool caller.");
   }
-  const captured = await captureOperatorToolGatewayContinuationContext();
+  const captured = await captureOperatorToolGatewayContinuationContext(undefined, {
+    retainRequester: true,
+  });
   if (!captured) {
     throw new Error("Followup completion requires in-process caller custody.");
   }
@@ -168,6 +170,12 @@ export async function prepareSessionsSendFollowup(params: {
         run<T>(work: () => T): T {
           assertCurrent();
           return captured.run(work);
+        },
+        runWithRequester<T>(work: () => Promise<T>): Promise<T> {
+          assertCurrent();
+          return captured.requesterOrigin
+            ? captured.runWithRequester(work, params.requesterAgentId)
+            : captured.run(work);
         },
       },
     };

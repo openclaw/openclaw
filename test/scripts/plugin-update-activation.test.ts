@@ -29,5 +29,6 @@ it("waits for the requested run's plugin step, not an unrelated completed run", 
   );
   expect(result.receipt.runId).toBe("selected");
   expect(result.pluginStep.status).toBe("completed");
+  expect(result.receipt.steps).toContainEqual({ step: "plugins", status: "completed" });
   expect(JSON.parse(readFileSync(output, "utf8"))).toEqual(result.receipt);
 });

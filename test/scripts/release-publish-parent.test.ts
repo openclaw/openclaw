@@ -84,7 +84,7 @@ type Fixture = {
   capped?: boolean;
   completedBeforeSweep?: boolean;
   registry?: (Record<string, unknown> | null)[];
-  ledger?: { status: string; conclusion?: string }[];
+  ledger?: ({ status: string; conclusion?: string } | number)[];
   dispatchFails?: boolean;
   dispatchFailAt?: number;
   dispatchResponse?: Record<string, unknown> | string;
@@ -212,7 +212,9 @@ elif '/actions/runs/' in endpoint:
     run_id = endpoint.split('/')[-1]
     if run_id in config.get('runs', {}): emit(config['runs'][run_id][0])
     elif endpoint.startswith('repos/openclaw/releases/'):
-        emit(advance('ledger', config.get('ledger', [dict(status='completed', conclusion='success')])))
+        response = advance('ledger', config.get('ledger', [dict(status='completed', conclusion='success')]))
+        if isinstance(response, int): fail('gh: read failed (HTTP ' + str(response) + ')')
+        emit(response)
     else:
         run = next((run for run in children if str(run['id']) == run_id), None)
         if run is None: emit(dict(status='waiting') if run_id == '92' and state.get('dispatched') else parent(run_id))
@@ -720,6 +722,7 @@ it.each(["in_progress", "completed"])(
 );
 
 const visible = { versions: { "2026.9.6": {} }, "dist-tags": { latest: "2026.9.6" } };
+const ledgerRunUrl = "https://github.com/openclaw/releases/actions/runs/92";
 it.each<[string, Fixture, number]>([
   ["failed dispatch", { dispatchFails: true }, 1],
   ["failed sync", { ledger: ledgerStates("failure") }, 2],
@@ -741,6 +744,22 @@ it("does not sync non-latest channels", () => {
     RELEASE_LEDGER_TOKEN: "fixture-ledger",
   });
   expect(result).toMatchObject({ status: 0, calls: [], summary: "" });
+});
+
+it.each([
+  { error: 404, reads: 4 },
+  { error: 403, reads: 1 },
+])("stops publication when an accepted sync stays unreadable (HTTP $error)", ({ error, reads }) => {
+  const result = fixture({ ledger: [error], dispatchResponse: { workflow_run_id: 92 } }).run(
+    `${source}sync_npm_beta_floor`,
+    { RELEASE_LEDGER_TOKEN: "fixture-ledger" },
+  );
+  expect(result.status).toBe(1);
+  expect(result.calls.filter(isDispatch)).toHaveLength(1);
+  expect(
+    result.calls.filter((call) => call.args.includes("repos/openclaw/releases/actions/runs/92")),
+  ).toHaveLength(reads);
+  expect(result.summary).toContain(ledgerRunUrl);
 });
 
 it.each([
@@ -769,7 +788,11 @@ verify_published_release() {
       ledger:
         sync === "timeout"
           ? ledgerStates("in_progress")
-          : ledgerStates("queued", "in_progress", "in_progress", "in_progress", "success"),
+          : [
+              404,
+              502,
+              ...ledgerStates("queued", "in_progress", "in_progress", "in_progress", "success"),
+            ],
     }).run(step("Complete publish workflows").run!, {
       DEFER_CLAWHUB: String(resume),
       CHILD_PLUGIN_NPM_RUN_ID: "90",
@@ -793,7 +816,9 @@ verify_published_release() {
     expect(registryReads).toHaveLength(transientRegistry ? 4 : 1);
     expect(registryReads[0]?.args).toContain("Cache-Control: no-cache");
     if (sync === "timeout") {
-      expect(result.stderr).toContain(`parent's own sync run is still in progress (${url(92)})`);
+      expect(result.stderr).toContain(
+        `parent's own sync run is still in progress (${ledgerRunUrl})`,
+      );
       expect(result.summary).toContain("verification was not judged against it");
       expect(result.summary).not.toContain("VERIFIED");
     } else if (isVisible) {
@@ -806,6 +831,7 @@ verify_published_release() {
           call.args.some((arg) => arg.startsWith("repos/openclaw/releases/")),
         );
         expect(ledgerCalls.every((call) => call.ledgerToken)).toBe(true);
+        expect(ledgerCalls.filter(isDispatch)).toHaveLength(1);
         expect(JSON.parse(ledgerCalls[0]!.body!)).toEqual({
           ref: "main",
           inputs: { mode: "sync_beta_to_stable" },

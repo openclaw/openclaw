@@ -311,7 +311,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       );
       const outputDir = join(root, "evidence");
       const loader = pathToFileURL(join(toolingRoot, "scripts/tsx.mjs")).href;
-      const invoke = (npmRun: string) =>
+      const invoke = (npmRun: string, skipParallels = true, output = outputDir) =>
         spawnSync(
           process.execPath,
           [
@@ -328,16 +328,21 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
               "plugin-sdk-api-acknowledgement": "deadbeef",
               "skip-dispatch": true,
               "skip-local-generated-check": true,
-              "skip-parallels": true,
+              "skip-parallels": skipParallels,
               "skip-telegram": true,
-              "output-dir": outputDir,
+              "output-dir": output,
             }),
           ],
           {
             cwd: root,
             encoding: "utf8",
             timeout: 20_000,
-            env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+            env: {
+              ...process.env,
+              HOME: root,
+              OPENAI_API_KEY: "",
+              PATH: `${bin}:${process.env.PATH}`,
+            },
           },
         );
       const rejected = invoke("222");
@@ -357,6 +362,24 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       const changed = invoke("444");
       expect(changed.stderr).toContain("state mismatch for npmPreflightRunId");
       expect(JSON.parse(readFileSync(statePath, "utf8")).npmPreflightRunId).toBe("111");
+
+      // Keep discovery in the real preflight but provide deterministic host tools,
+      // and replace login startup so it cannot overwrite this fixture's PATH.
+      for (const [name, command] of Object.entries({
+        bash: 'exec /bin/bash -c "$2"',
+        prlctl: `printf '%s\n' '[{"name":"fixture-guest"}]'`,
+        prlsrvctl: "exit 1",
+        ifconfig: "exit 1",
+      })) {
+        writeFileSync(join(bin, name), `#!/bin/sh\n${command}\n`, { mode: 0o755 });
+      }
+      const localOutput = join(root, "local-evidence");
+      const blocked = invoke("111", false, localOutput);
+      expect(blocked.status).toBe(1);
+      expect(blocked.stderr).toContain("failed to detect Parallels host IP");
+      expect(blocked.stderr).toContain("--skip-parallels");
+      expect(blocked.stderr).not.toContain("fixture artifact download reached");
+      expect(existsSync(localOutput)).toBe(false);
     },
   );
 
