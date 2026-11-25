@@ -83,6 +83,8 @@ extension OpenClawChatViewModel {
         self.composerDraftAttachmentPositions = [:]
         self.composerDraftSync.insertingAttachmentIDs = []
         self.composerDraftKey = nil
+        // A tile still preparing or failed belongs to the chat being left; its read is dropped.
+        self.preparingAttachments = []
         self.applyComposerDraft(text: "", attachments: [])
     }
 

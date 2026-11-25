@@ -17,6 +17,7 @@ extension OpenClawChatViewModel {
             !isSubmittingDraft &&
             !isSending &&
             self.attachmentStagingCount == 0 &&
+            self.preparingAttachments.isEmpty &&
             !self.isSwitchingSessionBranch &&
             (!self.hasBlockingRunActivity || self.canSendDuringRun) &&
             self.composerModelAvailabilityMessage == nil &&

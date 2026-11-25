@@ -1309,7 +1309,7 @@ public struct OpenClawGatewayHealthOK: Codable, Sendable {
 }
 
 public struct OpenClawPendingAttachment: Identifiable {
-    public let id = UUID()
+    public let id: UUID
     public let url: URL?
     public let data: Data
     public let fileName: String
@@ -1325,8 +1325,10 @@ public struct OpenClawPendingAttachment: Identifiable {
         mimeType: String,
         type: String = "file",
         preview: OpenClawPlatformImage?,
-        durationSeconds: Double? = nil)
+        durationSeconds: Double? = nil,
+        id: UUID = UUID())
     {
+        self.id = id
         self.url = url
         self.data = data
         self.fileName = fileName
@@ -1334,6 +1336,26 @@ public struct OpenClawPendingAttachment: Identifiable {
         self.type = type
         self.preview = preview
         self.durationSeconds = durationSeconds
+    }
+}
+
+/// A picked item the composer is still reading or processing. Its tile shows a spinner until the staged
+/// attachment, which takes the same id, replaces it in place; a failure stays on the tile until it is
+/// retried or removed.
+public struct OpenClawPreparingAttachment: Identifiable {
+    public let id: UUID
+    public let fileName: String
+    public let mimeType: String
+    public let preview: OpenClawPlatformImage?
+    public let durationSeconds: Double?
+    public internal(set) var failure: String?
+    var failureIsTransient = false
+    var reload: (@MainActor () -> Void)?
+
+    /// Reads the source again after a failure a second read can fix, such as an iCloud download or a file
+    /// that could not be opened. Nil when the source cannot be read again or the failure would repeat.
+    public var retry: (@MainActor () -> Void)? {
+        self.failure != nil && self.failureIsTransient ? self.reload : nil
     }
 }
 

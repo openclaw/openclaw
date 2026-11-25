@@ -18,29 +18,6 @@ import UIKit
 private struct OpenClawSendableCameraImage: @unchecked Sendable {
     let value: UIImage
 }
-
-private struct OpenClawVideoTransfer: Sendable, Transferable {
-    let url: URL
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .movie) { video in
-            SentTransferredFile(video.url)
-        } importing: { received in
-            let fileExtension = received.file.pathExtension
-            let destination = FileManager.default.temporaryDirectory
-                .appendingPathComponent("openclaw-picker-video-\(UUID().uuidString)")
-                .appendingPathExtension(fileExtension.isEmpty ? "mov" : fileExtension)
-            try FileManager.default.copyItem(at: received.file, to: destination)
-            return OpenClawVideoTransfer(url: destination)
-        }
-    }
-}
-
-private struct OpenClawPickerTransferUnavailable: LocalizedError {
-    var errorDescription: String? {
-        String(localized: "Could not load this attachment. Try selecting it again.")
-    }
-}
 #endif
 #endif
 
@@ -407,7 +384,7 @@ struct OpenClawChatComposer: View {
                     self.composerToolbar
                 }
 
-                if self.style == .standard, !self.viewModel.attachments.isEmpty {
+                if self.showsAttachmentsStrip {
                     self.attachmentsStrip
                 }
 
@@ -444,9 +421,8 @@ struct OpenClawChatComposer: View {
         }
 
         #if os(iOS)
-        if self.viewModel.attachmentStagingCount > 0 {
-            ChatAttachmentActivityRow(title: "Preparing attachments…")
-        } else if self.viewModel.isSendingAttachmentDraft {
+        // A picked item shows its own spinner on its tile while it is prepared.
+        if self.viewModel.isSendingAttachmentDraft {
             ChatAttachmentActivityRow(title: "Sending attachments…")
         } else if self.viewModel.isSubmittingDraft, !self.viewModel.attachments.isEmpty {
             ChatAttachmentActivityRow(title: "Preparing message…")
@@ -625,7 +601,13 @@ struct OpenClawChatComposer: View {
     private var attachmentsStrip: some View {
         OpenClawChatAttachmentsStrip(
             attachments: self.viewModel.attachments,
+            preparing: self.viewModel.preparingAttachments,
             onRemove: { self.viewModel.removeAttachment($0) })
+    }
+
+    private var showsAttachmentsStrip: Bool {
+        self.style == .standard
+            && (!self.viewModel.attachments.isEmpty || !self.viewModel.preparingAttachments.isEmpty)
     }
 
     private var editor: some View {
@@ -708,7 +690,7 @@ struct OpenClawChatComposer: View {
             #endif
 
             VStack(alignment: .leading, spacing: OpenClawChatAttachmentsStrip.spacingToDraft) {
-                if self.style == .standard, !self.viewModel.attachments.isEmpty {
+                if self.showsAttachmentsStrip {
                     self.attachmentsStrip
                 }
 
@@ -1536,25 +1518,34 @@ extension OpenClawChatComposer {
         let fileName = "camera-\(UUID().uuidString.prefix(8)).jpg"
         let viewModel = owner.viewModel
         let session = owner.session
+        // The photo is already in hand, so its tile shows it dimmed under the spinner while it encodes.
+        let preparation = viewModel.beginAttachmentPreparation(
+            fileName: fileName,
+            mimeType: "image/jpeg",
+            preview: image)
         // Pin routing before JPEG encoding suspends so an external agent or
         // session update cannot adopt this camera result under a new owner.
-        viewModel.beginAttachmentStaging()
-        self.cameraEncodingTask = Task { @MainActor in
-            defer { viewModel.endAttachmentStaging() }
+        self.cameraEncodingTask = viewModel.runAttachmentPreparation([preparation]) { @MainActor in
             let data = await Task.detached(priority: .userInitiated) {
                 sendableImage.value.jpegData(compressionQuality: 0.92)
             }.value
             guard !Task.isCancelled,
                   self.viewModel === viewModel,
                   viewModel.isCurrentSession(session),
-                  self.isAttachmentInputEnabled,
-                  let data
+                  self.isAttachmentInputEnabled
             else { return }
+            guard let data else {
+                viewModel.reportAttachmentFailure(
+                    String(format: String(localized: "Could not attach: %@"), fileName),
+                    preparation: preparation)
+                return
+            }
             await viewModel.addImageAttachment(
                 data: data,
                 fileName: fileName,
                 mimeType: "image/jpeg",
-                for: session)
+                for: session,
+                preparation: preparation)
         }
     }
     #endif
@@ -1590,61 +1581,31 @@ extension OpenClawChatComposer {
             self.pickerItems = []
             return
         }
-        owner.viewModel.beginAttachmentStaging()
-        Task { @MainActor in
-            defer { owner.viewModel.endAttachmentStaging() }
-            await self.loadPhotosPickerItems(items, owner: owner)
-        }
-    }
-
-    private func loadPhotosPickerItems(
-        _ items: [PhotosPickerItem],
-        owner: OpenClawChatAttachmentCaptureOwner) async
-    {
-        guard self.isAttachmentInputEnabled else {
-            self.pickerItems = []
-            return
-        }
-        for item in items {
-            do {
-                guard self.viewModel === owner.viewModel,
-                      owner.viewModel.isCurrentSession(owner.session)
-                else { break }
-                let type = item.supportedContentTypes.first(where: {
-                    $0.conforms(to: .movie) || $0.conforms(to: .image)
-                }) ?? item.supportedContentTypes.first ?? .image
-                if type.conforms(to: .movie) {
-                    guard let transfer = try await item.loadTransferable(type: OpenClawVideoTransfer.self)
-                    else { throw OpenClawPickerTransferUnavailable() }
-                    defer { try? FileManager.default.removeItem(at: transfer.url) }
-                    let metadata = OpenClawChatPickerAttachmentMetadata.resolve(
-                        contentType: type,
-                        transferredFileURL: transfer.url)
-                    let name = "video-\(UUID().uuidString.prefix(8)).\(metadata.fileExtension)"
-                    await owner.viewModel.addVideoAttachment(
-                        url: transfer.url,
-                        fileName: name,
-                        mimeType: metadata.mimeType,
-                        expectedSession: owner.session)
-                } else {
-                    guard let data = try await item.loadTransferable(type: Data.self)
-                    else { throw OpenClawPickerTransferUnavailable() }
-                    let metadata = OpenClawChatPickerAttachmentMetadata.resolve(contentType: type)
-                    let name = "photo-\(UUID().uuidString.prefix(8)).\(metadata.fileExtension)"
-                    await owner.viewModel.addImageAttachment(
-                        data: data,
-                        fileName: name,
-                        mimeType: metadata.mimeType,
-                        for: owner.session)
-                }
-            } catch {
-                guard self.viewModel === owner.viewModel,
-                      owner.viewModel.isCurrentSession(owner.session)
-                else { break }
-                owner.viewModel.errorText = error.localizedDescription
+        let viewModel = owner.viewModel
+        // Every pick gets its tile now, before the Photos library hands over any data.
+        let picks = items.map { item in
+            let type = item.supportedContentTypes.first(where: {
+                $0.conforms(to: .movie) || $0.conforms(to: .image)
+            }) ?? item.supportedContentTypes.first ?? .image
+            let metadata = OpenClawChatPickerAttachmentMetadata.resolve(contentType: type)
+            let baseName = "\(type.conforms(to: .movie) ? "video" : "photo")-\(UUID().uuidString.prefix(8))"
+            let preparation = viewModel.beginAttachmentPreparation(
+                fileName: "\(baseName).\(metadata.fileExtension)",
+                mimeType: metadata.mimeType)
+            let pick = OpenClawPhotosPick(item: item, type: type, baseName: baseName, preparation: preparation)
+            viewModel.setAttachmentPreparationReload(preparation) {
+                await pick.load(owner: owner)
             }
+            return pick
         }
-        self.pickerItems = []
+        viewModel.runAttachmentPreparation(picks.map(\.preparation)) { @MainActor in
+            for pick in picks {
+                guard self.viewModel === viewModel, viewModel.isCurrentSession(owner.session) else { break }
+                guard !viewModel.isAttachmentPreparationRemoved(pick.preparation) else { continue }
+                await pick.load(owner: owner)
+            }
+            self.pickerItems = []
+        }
     }
     #endif
 

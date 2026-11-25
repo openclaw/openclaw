@@ -340,6 +340,8 @@ public struct OpenClawChatContextUsageMenuItems: View {
 
 struct OpenClawChatAttachmentsStrip: View {
     let attachments: [OpenClawPendingAttachment]
+    /// Picked items still being read; iPhone draws them as tiles after the staged ones.
+    var preparing: [OpenClawPreparingAttachment] = []
     let onRemove: @MainActor (OpenClawPendingAttachment.ID) -> Void
 
     /// On iPhone the tiles sit straight on the draft, whose own top inset is the gap below them.
@@ -353,7 +355,10 @@ struct OpenClawChatAttachmentsStrip: View {
 
     var body: some View {
         #if os(iOS)
-        ChatAttachmentThumbnailRail(attachments: self.attachments, onRemove: self.onRemove)
+        ChatAttachmentThumbnailRail(
+            tiles: self.attachments.map(ChatAttachmentTileModel.init)
+                + self.preparing.map(ChatAttachmentTileModel.init),
+            onRemove: self.onRemove)
         #else
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
@@ -432,13 +437,18 @@ enum ChatAttachmentRailMetrics {
     /// How far the badge's touch target reaches past the tile; the rail keeps that much room inside its clip.
     static let badgeOverhang: CGFloat = badgeHitSize / 2 - badgeCenterInset
     static let fileIconSize: CGFloat = 40
+    /// The retry or reason mark on a failed tile, drawn inside a full touch target.
+    static let failureMarkSize: CGFloat = 28
+    /// Claude's ring is about a third of its tile wide.
+    static let spinnerSize: CGFloat = 20
+    static let spinnerLineWidth: CGFloat = 2.5
     static let fileCardMinWidth: CGFloat = 168
     static let fileCardMaxWidth: CGFloat = 216
     static let edgeFade: CGFloat = 48
 }
 
 private struct ChatAttachmentThumbnailRail: View {
-    let attachments: [OpenClawPendingAttachment]
+    let tiles: [ChatAttachmentTileModel]
     let onRemove: @MainActor (OpenClawPendingAttachment.ID) -> Void
     @State private var scroll = ChatAttachmentRailScroll()
 
@@ -446,16 +456,17 @@ private struct ChatAttachmentThumbnailRail: View {
         let metrics = ChatAttachmentRailMetrics.self
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: metrics.gap) {
-                ForEach(self.attachments, id: \OpenClawPendingAttachment.id) { attachment in
+                // A prepared attachment keeps its tile's id, so the spinner gives way to it in place.
+                ForEach(self.tiles) { tile in
                     ChatAttachmentTile(
-                        attachment: attachment,
+                        tile: tile,
                         maxCardWidth: self.scroll.viewportWidth > 0
                             ? max(
                                 metrics.fileCardMinWidth,
                                 self.scroll.viewportWidth - 2 * CleanChatComposerMetrics.editorInlineInset)
                             : .infinity)
                     {
-                        self.onRemove(attachment.id)
+                        self.onRemove(tile.id)
                     }
                 }
             }
@@ -513,19 +524,76 @@ private struct ChatAttachmentRailScroll: Equatable {
     var clipsTrailing = false
 }
 
+/// What one tile draws: a staged attachment, or a picked item still preparing or failed.
+struct ChatAttachmentTileModel: Identifiable {
+    enum Status {
+        case ready
+        case preparing
+        case failed(String, retry: (@MainActor () -> Void)?)
+    }
+
+    let id: UUID
+    let fileName: String
+    let mimeType: String
+    let preview: OpenClawPlatformImage?
+    let durationSeconds: Double?
+    /// Unknown until the file is read.
+    let byteCount: Int?
+    let status: Status
+
+    init(_ attachment: OpenClawPendingAttachment) {
+        self.id = attachment.id
+        self.fileName = attachment.fileName
+        self.mimeType = attachment.mimeType
+        self.preview = attachment.preview
+        self.durationSeconds = attachment.durationSeconds
+        self.byteCount = attachment.data.count
+        self.status = .ready
+    }
+
+    init(_ preparing: OpenClawPreparingAttachment) {
+        self.id = preparing.id
+        self.fileName = preparing.fileName
+        self.mimeType = preparing.mimeType
+        self.preview = preparing.preview
+        self.durationSeconds = preparing.durationSeconds
+        self.byteCount = nil
+        self.status = preparing.failure.map { .failed($0, retry: preparing.retry) } ?? .preparing
+    }
+
+    /// An image is a square from the pick on, whether or not its pixels are in hand yet.
+    var isImage: Bool {
+        self.mimeType.hasPrefix("image/") && (self.preview != nil || !self.isReady)
+    }
+
+    var isVoiceNote: Bool {
+        self.mimeType.hasPrefix("audio/") && self.durationSeconds != nil
+    }
+
+    var isReady: Bool {
+        if case .ready = self.status { return true }
+        return false
+    }
+}
+
 struct ChatAttachmentTile: View {
-    let attachment: OpenClawPendingAttachment
+    let tile: ChatAttachmentTileModel
     let maxCardWidth: CGFloat
     let onRemove: @MainActor () -> Void
     @ScaledMetric(relativeTo: .caption) private var cardMinWidth = ChatAttachmentRailMetrics.fileCardMinWidth
     @ScaledMetric(relativeTo: .caption) private var cardMaxWidth = ChatAttachmentRailMetrics.fileCardMaxWidth
+    @State private var showsFailure = false
 
     private var isImage: Bool {
-        self.attachment.mimeType.hasPrefix("image/") && self.attachment.preview != nil
+        self.tile.isImage
     }
 
     private var isVoiceNote: Bool {
-        self.attachment.mimeType.hasPrefix("audio/") && self.attachment.durationSeconds != nil
+        self.tile.isVoiceNote
+    }
+
+    private var name: String {
+        self.isVoiceNote ? String(localized: "Voice note") : self.tile.fileName
     }
 
     var body: some View {
@@ -537,26 +605,63 @@ struct ChatAttachmentTile: View {
             // The tile, not the overflowing fill of a wide photo, is the VoiceOver frame.
             .contentShape(.accessibility, shape)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(self.isVoiceNote ? Text("Voice note") : Text(verbatim: self.attachment.fileName))
-            .accessibilityValue(self.isImage ? Text(verbatim: "") : Text(verbatim: self.detail))
-            .accessibilityAddTraits(self.isImage ? .isImage : [])
+            .accessibilityLabel(self.accessibilityLabel)
+            .accessibilityValue(self.accessibilityValue)
+            .accessibilityAddTraits(self.isImage && self.tile.isReady ? .isImage : [])
+            .overlay { self.failureControl }
             .overlay(alignment: .topTrailing) { self.removeButton }
-            .help(self.attachment.fileName)
+            .animation(.easeOut(duration: 0.2), value: self.tile.isReady)
+            .help(self.tile.fileName)
+    }
+
+    private var accessibilityLabel: Text {
+        switch self.tile.status {
+        case .ready: Text(verbatim: self.name)
+        case .preparing: Text(String(format: String(localized: "Preparing %@"), self.name))
+        case .failed: Text(String(format: String(localized: "Could not attach: %@"), self.name))
+        }
+    }
+
+    private var accessibilityValue: Text {
+        switch self.tile.status {
+        case .ready: Text(verbatim: self.isImage ? "" : self.detail)
+        case .preparing: Text(verbatim: "")
+        case let .failed(message, _):
+            // "Could not attach: <name>" is already the label.
+            Text(verbatim: message == String(format: String(localized: "Could not attach: %@"), self.name) ? "" :
+                message)
+        }
     }
 
     @ViewBuilder
     private var content: some View {
         let metrics = ChatAttachmentRailMetrics.self
-        if self.isImage, let preview = self.attachment.preview {
-            OpenClawPlatformImageFactory.image(preview)
-                .resizable()
-                .scaledToFill()
-                .frame(width: metrics.tileSize, height: metrics.tileSize)
+        if self.isImage {
+            ZStack {
+                if let preview = self.tile.preview {
+                    OpenClawPlatformImageFactory.image(preview)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: metrics.tileSize, height: metrics.tileSize)
+                } else {
+                    OpenClawChatTheme.muted.opacity(0.12)
+                }
+                if !self.tile.isReady {
+                    // A photo in hand dims under the spinner; otherwise the spinner sits on a plain fill.
+                    if self.tile.preview != nil {
+                        Color.black.opacity(0.5)
+                    }
+                    if case .preparing = self.tile.status {
+                        ChatAttachmentSpinner(onPhoto: self.tile.preview != nil)
+                    }
+                }
+            }
+            .frame(width: metrics.tileSize, height: metrics.tileSize)
         } else {
             HStack(spacing: 10) {
                 self.fileIcon
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(self.isVoiceNote ? String(localized: "Voice note") : self.attachment.fileName)
+                    Text(self.name)
                         .font(OpenClawChatTypography.caption.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -583,7 +688,16 @@ struct ChatAttachmentTile: View {
     private var fileIcon: some View {
         let metrics = ChatAttachmentRailMetrics.self
         let iconShape = RoundedRectangle(cornerRadius: metrics.tileRadius - 8, style: .continuous)
-        if self.attachment.mimeType.hasPrefix("video/"), let poster = self.attachment.preview {
+        if !self.tile.isReady {
+            // The spinner, or the failure control drawn over the tile, takes the icon's slot.
+            ZStack {
+                if case .preparing = self.tile.status {
+                    ChatAttachmentSpinner(onPhoto: false)
+                }
+            }
+            .frame(width: metrics.fileIconSize, height: metrics.fileIconSize)
+            .background(OpenClawChatTheme.muted.opacity(0.12), in: iconShape)
+        } else if self.tile.mimeType.hasPrefix("video/"), let poster = self.tile.preview {
             OpenClawPlatformImageFactory.image(poster)
                 .resizable()
                 .scaledToFill()
@@ -598,25 +712,67 @@ struct ChatAttachmentTile: View {
                 }
         } else {
             Image(systemName: OpenClawChatPickerAttachmentMetadata.fileIcon(
-                mimeType: self.attachment.mimeType,
-                fileName: self.attachment.fileName))
+                mimeType: self.tile.mimeType,
+                fileName: self.tile.fileName))
                 .font(.system(size: 16))
                 .foregroundStyle(OpenClawChatTheme.muted)
                 .frame(width: metrics.fileIconSize, height: metrics.fileIconSize)
         }
     }
 
+    /// A failed tile keeps its size: a retry where reading again can help, otherwise a mark that shows why.
+    @ViewBuilder
+    private var failureControl: some View {
+        if case let .failed(message, retry) = self.tile.status {
+            let metrics = ChatAttachmentRailMetrics.self
+            Button {
+                if let retry { retry() } else { self.showsFailure = true }
+            } label: {
+                Image(systemName: retry == nil ? "exclamationmark" : "arrow.clockwise")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: metrics.failureMarkSize, height: metrics.failureMarkSize)
+                    .background(OpenClawChatTheme.danger, in: Circle())
+                    .frame(width: metrics.badgeHitSize, height: metrics.badgeHitSize)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // Centered on the square, or on the icon slot of a card.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: self.isImage ? .center : .leading)
+            .padding(.leading, self.isImage ? 0 : 7 + (metrics.fileIconSize - metrics.badgeHitSize) / 2)
+            .accessibilityLabel(String(localized: "Retry"))
+            .accessibilityHidden(retry == nil)
+            .popover(isPresented: self.$showsFailure) {
+                Text(message)
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(OpenClawChatTheme.assistantText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 260, alignment: .leading)
+                    .padding(12)
+                    .presentationCompactAdaptation(.popover)
+            }
+        }
+    }
+
     private var detail: String {
-        Self.detail(for: self.attachment)
+        Self.detail(for: self.tile)
+    }
+
+    static func detail(for attachment: OpenClawPendingAttachment) -> String {
+        self.detail(for: ChatAttachmentTileModel(attachment))
     }
 
     /// The type as the Control UI labels it (the extension in capitals) and the size; a voice note's length.
-    static func detail(for attachment: OpenClawPendingAttachment) -> String {
-        if attachment.mimeType.hasPrefix("audio/"), let duration = attachment.durationSeconds {
+    /// Before the file is read only the type is known.
+    static func detail(for tile: ChatAttachmentTileModel) -> String {
+        if tile.mimeType.hasPrefix("audio/"), let duration = tile.durationSeconds {
             return openClawVoiceNoteDurationLabel(duration)
         }
-        let size = ByteCountFormatter.string(fromByteCount: Int64(attachment.data.count), countStyle: .file)
-        let fileExtension = (attachment.fileName as NSString).pathExtension.uppercased()
+        let fileExtension = (tile.fileName as NSString).pathExtension.uppercased()
+        guard let byteCount = tile.byteCount else {
+            return fileExtension.isEmpty ? (tile.mimeType as NSString).lastPathComponent.uppercased() : fileExtension
+        }
+        let size = ByteCountFormatter.string(fromByteCount: Int64(byteCount), countStyle: .file)
         return fileExtension.isEmpty ? size : "\(fileExtension) · \(size)"
     }
 
@@ -636,7 +792,30 @@ struct ChatAttachmentTile: View {
         .buttonStyle(.plain)
         .offset(x: metrics.badgeOverhang, y: -metrics.badgeOverhang)
         .accessibilityLabel(String(
-            format: String(localized: "Remove attachment: %@"), self.attachment.fileName))
+            format: String(localized: "Remove attachment: %@"), self.tile.fileName))
+    }
+}
+
+/// Claude's attachment spinner: a quarter arc turning once a second on a faint ring, white over a dimmed photo.
+private struct ChatAttachmentSpinner: View {
+    let onPhoto: Bool
+
+    var body: some View {
+        let metrics = ChatAttachmentRailMetrics.self
+        let ink = self.onPhoto ? Color.white : OpenClawChatTheme.muted
+        TimelineView(.animation) { context in
+            let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1)
+            ZStack {
+                Circle()
+                    .stroke(ink.opacity(0.3), lineWidth: metrics.spinnerLineWidth)
+                Circle()
+                    .trim(from: 0, to: 0.25)
+                    .stroke(ink, style: StrokeStyle(lineWidth: metrics.spinnerLineWidth, lineCap: .round))
+                    .rotationEffect(.degrees(turn * 360))
+            }
+        }
+        .frame(width: metrics.spinnerSize, height: metrics.spinnerSize)
+        .accessibilityHidden(true)
     }
 }
 #endif
