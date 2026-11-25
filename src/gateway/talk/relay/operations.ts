@@ -167,7 +167,16 @@ async function rejectRelaySessionClose(
   closing.reason = "error";
   closing.runTranscript = () => false;
   session.voiceTranscriptQueue.seal();
-  const accepted = (session.voiceSessionClose ??= session.voiceTranscriptQueue.flush());
+  // The flush below is local to this failure branch. Do NOT latch it into
+  // `session.voiceSessionClose`: the durable voice-session record is still
+  // open here, and a latched bare flush makes every later
+  // `closeRelayVoiceSession()` return early without calling
+  // `closeRelayVoiceSessionRecord()`, leaving the record open until the
+  // six-hour stale reaper while the relay already broadcast "closed"
+  // (#204615). Leave the latch unset so a later pass can run the real close
+  // once settlement authority is available; reuse a real close that was
+  // already latched elsewhere.
+  const accepted = session.voiceSessionClose ?? session.voiceTranscriptQueue.flush();
   try {
     await finish(() => accepted);
   } catch (cleanupError) {
