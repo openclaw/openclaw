@@ -72,6 +72,7 @@ function rowLabelContent(markdown: string, parser: MarkdownItParser, env: Env): 
     runs.every((run, i) => {
       const actual = wrapped[i];
       return (
+        actual !== undefined &&
         actual.bold &&
         actual.italic === run.italic &&
         actual.struck === run.struck &&
