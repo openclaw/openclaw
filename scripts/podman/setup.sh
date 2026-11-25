@@ -167,7 +167,11 @@ else
   fi
 fi
 
-openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" never >/dev/null
+GATEWAY_IMAGE_RESULT="$(openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" never)"
+IFS=$'\t' read -r GATEWAY_IMAGE_ID GATEWAY_COMMAND_MODE <<<"$GATEWAY_IMAGE_RESULT"
+if [[ "$GATEWAY_COMMAND_MODE" == "legacy" ]]; then
+  echo "Selected image predates mapped-port defaults; existing origin policy is unchanged. Upgrade the image or configure allowedOrigins for a custom published port." >&2
+fi
 
 ENV_FILE="$OPENCLAW_CONFIG_DIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -193,7 +197,12 @@ JSON
   )
   echo "Wrote minimal config to $CONFIG_JSON"
 fi
-ensure_local_gateway_mode "$CONFIG_JSON"
+LEGACY_ORIGIN_PORT=""
+if [[ "$GATEWAY_COMMAND_MODE" == "legacy" ]]; then
+  LEGACY_ORIGIN_PORT="$HOST_GATEWAY_PORT"
+  if [[ "$INSTALL_QUADLET" == true ]]; then LEGACY_ORIGIN_PORT=18789; fi
+fi
+ensure_local_gateway_mode "$CONFIG_JSON" "$LEGACY_ORIGIN_PORT"
 
 if [[ "$INSTALL_QUADLET" == true ]]; then
   QUADLET_DIR="$OPENCLAW_HOME/.config/containers/systemd"

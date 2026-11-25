@@ -96,14 +96,14 @@ esac`,
         });
         sandbox.run("scripts/run-openclaw-podman.sh", ["launch"]);
         let args = readFileSync(sandbox.log, "utf8").split("\n");
-        expect(args[args.indexOf("--published-port") + 1]).toBe("19123");
+        expect(args).toContain("OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT=19123");
         expect(args).toContain("127.0.0.1:19123:18789");
         config.gateway.publicOrigin = "https://new.example.com";
         const updated = JSON.stringify(config);
         writeFileSync(sandbox.file, updated);
         sandbox.run("scripts/run-openclaw-podman.sh", ["launch"], "20234");
         args = readFileSync(sandbox.log, "utf8").split("\n");
-        expect(args[args.indexOf("--published-port") + 1]).toBe("20234");
+        expect(args).toContain("OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT=20234");
         expect(args).toContain("127.0.0.1:20234:18789");
         expect(readFileSync(sandbox.file, "utf8")).toBe(updated);
         sandbox.run("scripts/run-openclaw-podman.sh", ["launch", "setup"]);
@@ -118,7 +118,7 @@ esac`,
       });
       const args = readFileSync(sandbox.log, "utf8").split("\n");
       expect(args).toContain("192.0.2.10:19123:18789");
-      expect(args).not.toContain("--published-port");
+      expect(args.join("\n")).not.toContain("OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT=");
     });
 
     it("preserves manual startup for an older selected image", () => {
@@ -134,19 +134,26 @@ esac`,
       expect(args).not.toContain("--published-port");
     });
 
-    it("rejects an older selected image before installing a new Quadlet service", () => {
-      const sandbox = fixture();
-      writeFileSync(join(sandbox.home, "dist", "index.js"), 'console.log("--port <port>");');
-      const before = readFileSync(sandbox.file, "utf8");
-      const envPath = join(sandbox.home, "config", ".env");
-      const envBefore = readFileSync(envPath, "utf8");
-      const result = sandbox.run("scripts/podman/setup.sh", ["--quadlet"], "19123", 1);
-      expect(result.stderr).toContain("Select a compatible image or build this checkout");
-      expect(existsSync(`${sandbox.log}-volume`)).toBe(false);
-      expect(readFileSync(sandbox.file, "utf8")).toBe(before);
-      expect(readFileSync(envPath, "utf8")).toBe(envBefore);
-      expect(readFileSync(sandbox.log, "utf8")).not.toContain("--replace");
-    });
+    it.each([{ origins: undefined }, { origins: [] }, { origins: ["https://authored.example"] }])(
+      "retains legacy custom-port setup and repeat policy (%j)",
+      ({ origins }) => {
+        const sandbox = fixture(origins);
+        writeFileSync(
+          sandbox.file,
+          JSON.stringify({ gateway: { controlUi: { allowedOrigins: origins } } }),
+        );
+        writeFileSync(join(sandbox.home, "dist", "index.js"), 'console.log("--port <port>");');
+        const result = sandbox.run("scripts/podman/setup.sh", ["--container"]);
+        expect(result.stderr).toContain("predates mapped-port defaults");
+        const saved = readFileSync(sandbox.file, "utf8");
+        expect(JSON.parse(saved).gateway.controlUi.allowedOrigins).toEqual(
+          origins ?? ["http://localhost:19123", "http://127.0.0.1:19123"],
+        );
+        sandbox.run("scripts/podman/setup.sh", ["--container"], "20234");
+        expect(readFileSync(sandbox.file, "utf8")).toBe(saved);
+        expect(existsSync(`${sandbox.log}-volume`)).toBe(false);
+      },
+    );
 
     it.each(["scripts/podman/setup.sh", "scripts/run-openclaw-podman.sh"])(
       "rejects a selected image missing the required gateway port option (%s)",
@@ -162,7 +169,7 @@ esac`,
           "19123",
           1,
         );
-        expect(result.stderr).toContain("--port and --published-port options");
+        expect(result.stderr).toContain("gateway --port option");
         expect(readFileSync(sandbox.log, "utf8")).not.toContain("--replace");
       },
     );
@@ -195,7 +202,8 @@ esac`,
       );
       expect(quadlet).toContain("Image=fixture:test");
       expect(quadlet).toContain("PublishPort=127.0.0.1:18789:18789");
-      expect(quadlet).toContain("--published-port 18789");
+      expect(quadlet).toContain("Environment=OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT=18789");
+      expect(quadlet).toContain("Exec=node dist/index.js gateway --bind lan --port 18789");
       expect(JSON.parse(readFileSync(sandbox.file, "utf8")).gateway.controlUi).toEqual({});
     });
   },

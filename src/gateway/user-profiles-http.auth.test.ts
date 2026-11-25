@@ -142,6 +142,35 @@ describe("personal avatar HTTP authentication", () => {
     return fetch(origin + avatarPath, { ...init, headers });
   }
 
+  it("does not extend proxy-authenticated image access to mapped origins", async () => {
+    const trustedProxy = { userHeader: "x-auth-user", allowLoopback: true };
+    auth = { mode: "trusted-proxy", trustedProxy, allowTailscale: false };
+    cfg = {
+      gateway: {
+        auth: { mode: "trusted-proxy", trustedProxy },
+        trustedProxies: ["127.0.0.1"],
+        publicOrigin: "https://proxy.example.test",
+      },
+    };
+    publishedPort = 25432;
+    const headers = {
+      "x-auth-user": "reader@example.test",
+      "x-forwarded-for": "203.0.113.10",
+      "x-forwarded-proto": "https",
+      host: "proxy.example.test",
+      origin: "https://proxy.example.test",
+    };
+    const accepted = await request(undefined, { headers });
+    expect(accepted.status).toBe(200);
+    expect(Buffer.from(await accepted.arrayBuffer())).toEqual(PNG);
+    const denied = await request(undefined, {
+      headers: { ...headers, origin: "http://localhost:25432" },
+    });
+    expect(denied.status).toBe(401);
+    expect(denied.headers.get("access-control-allow-origin")).toBeNull();
+    expect(await denied.text()).not.toContain(PNG.toString("base64"));
+  });
+
   it("lets a session reader load another person’s displayed avatar without directory access", async () => {
     const person = ensureProfileForEmail("teammate@example.test");
     expect(setAvatar(person.id, PNG, "image/png").ok).toBe(true);

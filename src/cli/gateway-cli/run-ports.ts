@@ -1,6 +1,7 @@
 // Keep listener and deployment port admission together before Gateway startup.
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveContainerPublishedGatewayPort } from "../../infra/container-environment.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import type { GatewayRunOpts } from "./run-options.js";
@@ -13,7 +14,10 @@ export function resolveGatewayRunPorts(
   if (opts.port !== undefined && portOverride === null) {
     return { error: formatInvalidPortOption("--port"), exitCode: 1 };
   }
-  const publishedPort = parseTcpPort(opts.publishedPort);
+  const publishedPort =
+    opts.publishedPort === undefined
+      ? (resolveContainerPublishedGatewayPort() ?? null)
+      : parseTcpPort(opts.publishedPort);
   if (opts.publishedPort !== undefined && publishedPort === null) {
     return { error: formatInvalidPortOption("--published-port"), exitCode: 1 };
   }

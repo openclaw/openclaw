@@ -133,9 +133,9 @@ PODMAN_RUN_TIMEOUT="${OPENCLAW_PODMAN_RUN_TIMEOUT:-600s}"
 HOST_GATEWAY_PORT="${OPENCLAW_PODMAN_GATEWAY_HOST_PORT:-${OPENCLAW_GATEWAY_PORT:-18789}}"
 HOST_BRIDGE_PORT="${OPENCLAW_PODMAN_BRIDGE_HOST_PORT:-${OPENCLAW_BRIDGE_PORT:-18790}}"
 PUBLISH_HOST="${OPENCLAW_PODMAN_PUBLISH_HOST:-127.0.0.1}"
-PUBLISHED_PORT_ARGS=()
+PUBLISHED_PORT_ENV=()
 if [[ "$PUBLISH_HOST" == "127.0.0.1" || "$PUBLISH_HOST" == "0.0.0.0" ]]; then
-  PUBLISHED_PORT_ARGS=(--published-port "$HOST_GATEWAY_PORT")
+  PUBLISHED_PORT_ENV=(-e "OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT=$HOST_GATEWAY_PORT")
 fi
 validate_mount_source_path "config directory" "$CONFIG_DIR"
 validate_mount_source_path "workspace directory" "$WORKSPACE_DIR"
@@ -156,11 +156,10 @@ fi
 
 if [[ "$RUN_SETUP" == false ]]; then
   GATEWAY_IMAGE_RESULT="$(
-    openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" "$PODMAN_PULL" allow-legacy
+    openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" "$PODMAN_PULL"
   )"
   IFS=$'\t' read -r GATEWAY_IMAGE_ID GATEWAY_COMMAND_MODE <<<"$GATEWAY_IMAGE_RESULT"
   if [[ "$GATEWAY_COMMAND_MODE" == "legacy" ]]; then
-    PUBLISHED_PORT_ARGS=()
     echo "Selected image predates mapped-port defaults. Starting it with the legacy Gateway command." >&2
   fi
 fi
@@ -226,7 +225,11 @@ JSON
   )
   echo "Created $CONFIG_JSON (minimal gateway.mode=local)." >&2
 fi
-ensure_local_gateway_mode "$CONFIG_JSON"
+LEGACY_ORIGIN_PORT=""
+if [[ "${GATEWAY_COMMAND_MODE:-}" == "legacy" && ${#PUBLISHED_PORT_ENV[@]} -gt 0 ]]; then
+  LEGACY_ORIGIN_PORT="$HOST_GATEWAY_PORT"
+fi
+ensure_local_gateway_mode "$CONFIG_JSON" "$LEGACY_ORIGIN_PORT"
 
 PODMAN_USERNS="${OPENCLAW_PODMAN_USERNS:-keep-id}"
 USERNS_ARGS=()
@@ -270,6 +273,7 @@ if [[ "$RUN_SETUP" == true ]]; then
     -e HOME=/home/node -e TERM=xterm-256color -e BROWSER=echo \
     -e NPM_CONFIG_CACHE=/home/node/.openclaw/.npm \
     -e OPENCLAW_NO_RESPAWN=1 \
+    ${PUBLISHED_PORT_ENV[@]+"${PUBLISHED_PORT_ENV[@]}"} \
     --env-file "$TOKEN_ENV_FILE" \
     -v "$CONFIG_DIR:/home/node/.openclaw:rw${SELINUX_MOUNT_OPTS}" \
     -v "$WORKSPACE_DIR:/home/node/.openclaw/workspace:rw${SELINUX_MOUNT_OPTS}" \
@@ -285,14 +289,14 @@ run_podman_detached --pull=never -d --replace \
   -e HOME=/home/node -e TERM=xterm-256color \
   -e NPM_CONFIG_CACHE=/home/node/.openclaw/.npm \
   -e OPENCLAW_NO_RESPAWN=1 \
+  ${PUBLISHED_PORT_ENV[@]+"${PUBLISHED_PORT_ENV[@]}"} \
   --env-file "$TOKEN_ENV_FILE" \
   -v "$CONFIG_DIR:/home/node/.openclaw:rw${SELINUX_MOUNT_OPTS}" \
   -v "$WORKSPACE_DIR:/home/node/.openclaw/workspace:rw${SELINUX_MOUNT_OPTS}" \
   -p "${PUBLISH_HOST}:${HOST_GATEWAY_PORT}:18789" \
   -p "${PUBLISH_HOST}:${HOST_BRIDGE_PORT}:18790" \
   "$GATEWAY_IMAGE_ID" \
-  node dist/index.js gateway --bind "$GATEWAY_BIND" --port 18789 \
-  ${PUBLISHED_PORT_ARGS[@]+"${PUBLISHED_PORT_ARGS[@]}"} >/dev/null
+  node dist/index.js gateway --bind "$GATEWAY_BIND" --port 18789 >/dev/null
 
 echo "Container $CONTAINER_NAME started: http://127.0.0.1:${HOST_GATEWAY_PORT}/"
 echo "podman exec -it $CONTAINER_NAME openclaw dashboard --no-open"

@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
+import { withEnv } from "../../../test-utils/env.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
 import {
@@ -676,6 +677,15 @@ describe("legacy bundled provider discovery migrate", () => {
 });
 
 describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
+  it("leaves container origins inherited across Doctor repair", () => {
+    withEnv({ OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: "25432" }, () => {
+      expect(migrate({ gateway: { bind: "lan", port: 18789 } })).toEqual({
+        config: null,
+        changes: [],
+      });
+    });
+  });
+
   it.each([
     {
       gateway: { bind: "custom", port: 9000, customBindHost: "192.168.1.100" },
@@ -704,6 +714,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
 
   it.each([
     { allowedOrigins: ["https://control.example.com"] },
+    { allowedOrigins: [] },
     { dangerouslyAllowHostHeaderOriginFallback: true },
   ])("preserves an explicit origin policy: %j", (controlUi) => {
     expect(migrate({ gateway: { bind: "lan", controlUi } })).toEqual({

@@ -85,7 +85,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/google/vertex-adc-refresh.test.ts",
   "extensions/google/transport-stream.test.ts",
   "extensions/openai/binary-transport.test.ts",
-  "extensions/openai/realtime-quicksilver-session-origin-policy.test.ts",
   "extensions/openai/embedding-provider.test.ts",
   "extensions/openai/realtime-voice-provider-routing.test.ts",
   "extensions/openai/tts.test.ts",

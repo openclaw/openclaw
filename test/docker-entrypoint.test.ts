@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect } from "vitest";
+import { parse } from "yaml";
 import { collectPackageRootModules } from "../scripts/lib/package-root-modules.mts";
+import { parseSystemdExecStart } from "../src/daemon/systemd-unit.js";
 import { createCommandTest, type CommandFixture } from "./helpers/command-fixture.js";
 
 const it = createCommandTest();
@@ -16,7 +18,7 @@ function fixture(command: CommandFixture) {
   const cli = String.raw`#!${process.execPath}
 import fs from 'node:fs';
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.RECORD, JSON.stringify({args, pid:process.pid, parentPid:process.ppid, marker:process.env.OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER})+'\n');
+fs.appendFileSync(process.env.RECORD, JSON.stringify({args, pid:process.pid, parentPid:process.ppid, marker:process.env.OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER, publishedPort:process.env.OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT})+'\n');
 if (args.includes('doctor')) {
   if (process.env.INTERRUPT_DOCTOR) {
     for (const signal of ['SIGTERM', 'SIGINT']) {
@@ -61,10 +63,44 @@ if (args.includes('doctor')) {
 }
 
 describe.skipIf(process.platform === "win32")("Docker image activation", () => {
+  it.for(["Compose", "Quadlet"])(
+    "keeps Doctor activation and launch metadata through %s",
+    async (format, { command }) => {
+      const compose = parse(fs.readFileSync("docker-compose.yml", "utf8")) as {
+        services: {
+          "openclaw-gateway": { command: string[]; environment: Record<string, string> };
+        };
+      };
+      const quadlet = fs.readFileSync("scripts/podman/openclaw.container.in", "utf8");
+      const exec = quadlet.split("\n").find((line) => line.startsWith("Exec="))!;
+      const service = compose.services["openclaw-gateway"];
+      const args: string[] =
+        format === "Compose" ? service.command : parseSystemdExecStart(exec.slice(5));
+      const port =
+        format === "Compose"
+          ? service.environment.OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT.replace(
+              "${OPENCLAW_GATEWAY_PORT:-18789}",
+              "25432",
+            )
+          : quadlet.match(/^Environment=OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT=(.+)$/m)![1];
+      const f = fixture(command);
+      const result = await f.run(
+        args.slice(1).map((arg) => arg.replace("${OPENCLAW_GATEWAY_BIND:-lan}", "lan")),
+        { OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: port },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const rows = f.read();
+      expect(rows.map((row) => row.args[0])).toEqual(["doctor", "gateway"]);
+      expect(rows.map((row) => row.publishedPort)).toEqual([port, port]);
+      expect(rows[1].pid).toBe(rows[0].parentPid);
+    },
+  );
+
   it.for([
     { args: ["openclaw.mjs", "gateway"], rootOptions: [] },
     { args: ["openclaw", "gateway"], rootOptions: [], installed: true },
     { args: ["dist/index.js", "gateway", "--bind", "lan", "--port", "18789"], rootOptions: [] },
+    { args: ["dist/index.js", "gateway", "--published-port", "25432"], rootOptions: [] },
     {
       args: ["openclaw.mjs", "--profile", "demo", "gateway", "run", "--no-color"],
       rootOptions: ["--profile", "demo", "--no-color"],

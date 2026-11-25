@@ -279,10 +279,7 @@ describe("CLI process harness cleanup", () => {
     };
     try {
       await runProcessEntry();
-      // Other CLI suites can initialize an unrelated scheduler in the same hosted
-      // worker. This test owns the injected scheduler's lifecycle, not the global
-      // constructor count.
-      expect(constructor).toHaveBeenCalled();
+      expect(constructor).toHaveBeenCalledOnce();
       expect(fs.existsSync(prior)).toBe(false);
       expect(scheduler.signal.aborted).toBe(true);
       expect(scheduler.nextWakeAtMs).toBeNull();

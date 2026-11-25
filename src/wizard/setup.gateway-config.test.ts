@@ -85,6 +85,19 @@ describe("configureGatewayForSetup", () => {
     });
   }
 
+  it("does not pin container listener origins during onboarding", async () => {
+    await withEnvAsync({ OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: "25432" }, async () => {
+      const result = await configure({
+        prompter: createPrompter({
+          selectQueue: ["lan", "off"],
+          textQueue: ["18789", "test-token"],
+        }),
+      });
+      expect(result.nextConfig.gateway?.bind).toBe("lan");
+      expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toBeUndefined();
+    });
+  });
+
   it("provisions a store ref when reference mode has no token to point at", async () => {
     await withEnvAsync(
       {

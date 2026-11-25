@@ -164,6 +164,7 @@ upsert_env_var() {
 # Keep local deployment mode initialization separate from operator-owned origins.
 ensure_local_gateway_mode() {
   local file="$1"
+  local legacy_port="${2:-}"
   local tmp=""
   ensure_safe_write_file_path "config file" "$file"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -171,11 +172,11 @@ ensure_local_gateway_mode() {
     return 0
   fi
   tmp="$(mktemp "$(dirname "$file")/.config.tmp.XXXXXX")"
-  if ! python3 - "$file" "$tmp" <<'PYTHON'
+  if ! python3 - "$file" "$tmp" "$legacy_port" <<'PYTHON'
 import json
 import sys
 
-path, tmp = sys.argv[1:]
+path, tmp, legacy_port = sys.argv[1:]
 try:
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
@@ -187,8 +188,16 @@ if not isinstance(data, dict):
 gateway = data.setdefault("gateway", {})
 if not isinstance(gateway, dict):
     raise SystemExit(f"{path}: expected gateway object")
-if "mode" not in gateway:
+changed = "mode" not in gateway
+if changed:
     gateway["mode"] = "local"
+# Stable images ignore launch metadata. Preserve their omitted-policy setup only.
+control_ui = gateway.get("controlUi", {})
+if legacy_port and not gateway.get("publicOrigin") and isinstance(control_ui, dict) and "allowedOrigins" not in control_ui:
+    control_ui["allowedOrigins"] = [f"http://localhost:{legacy_port}", f"http://127.0.0.1:{legacy_port}"]
+    gateway["controlUi"] = control_ui
+    changed = True
+if changed:
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2)
         fh.write("\n")

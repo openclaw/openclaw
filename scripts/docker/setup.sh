@@ -146,6 +146,16 @@ read_setup_env_value() {
 sync_gateway_config() {
   local batch_json=""
   batch_json="$(printf '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"%s"}]' "$OPENCLAW_GATEWAY_BIND")"
+  # Stable images cannot consume launch metadata. Retain their setup contract only
+  # for an omitted policy; never guess whether an existing list was generated.
+  if [[ "$GATEWAY_COMMAND_MODE" == "legacy" && "$OPENCLAW_GATEWAY_BIND" != "loopback" ]]; then
+    local origins public_origin
+    origins="$(run_prestart_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true)"
+    public_origin="$(run_prestart_cli config get gateway.publicOrigin 2>/dev/null || true)"
+    if [[ -z "$origins" || "$origins" == "null" ]] && [[ -z "$public_origin" || "$public_origin" == "null" ]]; then
+      batch_json="${batch_json%]}"',{"path":"gateway.controlUi.allowedOrigins","value":'"$(printf '["http://localhost:%s","http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT")"'}]'
+    fi
+  fi
   run_prestart_cli config set --batch-json "$batch_json" >/dev/null
   echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
 }
@@ -747,7 +757,11 @@ else
   fi
 fi
 
-GATEWAY_IMAGE_ID="$(openclaw_prepare_gateway_image docker "$IMAGE_NAME" never)"
+GATEWAY_IMAGE_RESULT="$(openclaw_prepare_gateway_image docker "$IMAGE_NAME" never)"
+IFS=$'\t' read -r GATEWAY_IMAGE_ID GATEWAY_COMMAND_MODE <<<"$GATEWAY_IMAGE_RESULT"
+if [[ "$GATEWAY_COMMAND_MODE" == "legacy" ]]; then
+  echo "Selected image predates mapped-port defaults; existing origin policy is unchanged. Upgrade the image or configure allowedOrigins for a custom published port." >&2
+fi
 
 upsert_env "$ENV_FILE" \
   OPENCLAW_CONFIG_DIR \

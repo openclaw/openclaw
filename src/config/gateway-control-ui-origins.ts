@@ -14,7 +14,8 @@ export function resolveControlUiAllowedOrigins(
   const origin = resolveGatewayPublicOrigin(config);
   const origins = origin ? [origin] : [];
   // Deployment metadata is supplied only by runtime callers, never config writers.
-  if (publishedPort === undefined) {
+  // Ambient proxy identity may authorize requests only from its configured browser origin.
+  if (publishedPort === undefined || config?.gateway?.auth?.mode === "trusted-proxy") {
     return origins;
   }
   if (!Number.isInteger(publishedPort) || publishedPort < 1 || publishedPort > 65535) {
@@ -50,7 +51,8 @@ export function hasConfiguredControlUiAllowedOrigins(params: {
       : params.allowedOrigins;
   return (
     Array.isArray(allowedOrigins) &&
-    allowedOrigins.some((origin) => typeof origin === "string" && origin.trim().length > 0)
+    (allowedOrigins.length === 0 ||
+      allowedOrigins.some((origin) => typeof origin === "string" && origin.trim().length > 0))
   );
 }
 

@@ -443,6 +443,7 @@ export function createGatewayHttpRequestHandler(
           (await getBrowserPairHttpModule()).handleBrowserPairHttpRequest({
             ...transferRequest,
             action: browserPairAction,
+            publishedPort: opts.publishedPort,
             config: configSnapshot,
           }),
         );

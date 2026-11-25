@@ -1,5 +1,6 @@
 // Share the command suite's startup mocks and reset lifecycle for port admission cases.
 import { expect, it, type Mock } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 export function registerGatewayPortOptionTests({
   runGatewayCli,
@@ -21,6 +22,22 @@ export function registerGatewayPortOptionTests({
       expect.objectContaining({ publishedPort: 19123 }),
     );
   });
+
+  it.each([
+    { input: "19123", args: [], expected: 19123 },
+    { input: "invalid", args: ["--published-port", "29123"], expected: 29123 },
+  ])(
+    "uses container port metadata unless explicitly overridden (%j)",
+    async ({ input, args, expected }) => {
+      await withEnvAsync({ OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: input }, async () => {
+        await runGatewayCli(["gateway", ...args, "--allow-unconfigured"]);
+        expect(startGatewayServer).toHaveBeenCalledWith(
+          18789,
+          expect.objectContaining({ publishedPort: expected }),
+        );
+      });
+    },
+  );
 
   it.each(["0", "65536", "19123junk"])(
     "rejects invalid published port %s before startup",

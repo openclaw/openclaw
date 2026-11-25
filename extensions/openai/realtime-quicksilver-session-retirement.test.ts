@@ -88,7 +88,7 @@ describe("GA Realtime call retirement", () => {
       const response = await offer(retained, reservation.clientSecret, "https://updated.example");
       expect(response.res.statusCode).toBe(201);
       expect(originalConfig).not.toHaveBeenCalled();
-      expect(nextConfig).toHaveBeenCalledTimes(2);
+      expect(nextConfig).toHaveBeenCalledOnce();
       expect(originalLogger.debug).not.toHaveBeenCalled();
       expect(nextLogger.debug).toHaveBeenCalledOnce();
       expect(originalHeaders).toHaveBeenCalledOnce();

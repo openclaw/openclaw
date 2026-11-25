@@ -12,6 +12,8 @@ Docker is **optional**. Use it for an isolated, throwaway Gateway environment or
 Container launch supplies the published Gateway port automatically. When
 `gateway.controlUi.allowedOrigins` is omitted, the Gateway allows `localhost`
 and `127.0.0.1` on that port alongside the current `gateway.publicOrigin`.
+Trusted-proxy authentication retains its configured origin policy and does not
+inherit those direct-container loopback grants.
 Changing the public origin updates the inherited origin without saving a copy
 in the allowlist. An explicit list, including `[]`, remains authoritative and
 is not changed by setup or launch; include any desired browser origins yourself.
@@ -22,18 +24,19 @@ the origins you intend to allow. To use the current public origin and mapped
 localhost defaults instead, remove the `gateway.controlUi.allowedOrigins`
 field from your configuration; setting it to `[]` disables those defaults.
 
-Setup checks that the selected image supports `gateway --published-port` before
-changing saved configuration or replacing the Gateway. If the image is too old,
-select a compatible image or build this checkout from source, then retry.
-Compatible custom images must provide `sh` and `node`; the startup compatibility
-check uses the shell before replacing the running Gateway.
-The check does not upgrade your selected image automatically. Docker setup
-keeps the selected image name in `.env` and uses the checked image ID for that
-invocation. Running `docker compose up` directly keeps the original Gateway
-command for older images whose help advertises `--port` but not
-`--published-port`. It reports that mapped-port origin defaults require a
-compatible image; saved origin policy stays unchanged. Images with the new flag
-receive the mapped port. Failed or malformed help checks stop startup.
+Setup checks the selected image before changing saved configuration or replacing
+the Gateway. Images with the existing `gateway --port` command remain supported;
+setup reports when an older image lacks runtime mapped-port defaults. For those
+images only, setup retains its legacy seed for an omitted origin policy with no
+public origin. Existing lists, including `[]`, are never inferred or rewritten.
+Upgrade the image to inherit launch defaults without saving origins. Setup
+does not upgrade your selected image or rewrite saved origin policy automatically.
+Custom images must provide `sh` and `node` for the isolated setup probe. Failed or
+malformed Gateway help stops setup before replacing the running Gateway.
+
+Container launch retains the image's direct Gateway command, including its normal
+Doctor activation. New images receive the published port as launch metadata; old
+images ignore it and retain their existing behavior. Docker setup keeps the selected image name in `.env` and uses the checked image ID for that invocation. Direct Compose launch keeps the selected image command.
 
 The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the Gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
