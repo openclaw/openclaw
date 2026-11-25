@@ -5,9 +5,13 @@ const mocks = vi.hoisted(() => ({
   config: vi.fn(async () => {}),
   plugins: vi.fn(),
 }));
+// mock-isolation: Keep configuration loading isolated so this passive-startup test cannot read host state.
 vi.mock("./config-guard.js", () => ({ ensureConfigReady: mocks.config }));
+// mock-isolation: Avoid loading installed plugins while verifying startup does not request them.
 vi.mock("../plugin-registry.js", () => ({ ensurePluginRegistryLoaded: mocks.plugins }));
+// mock-isolation: Suppress real terminal banner output in this command startup fixture.
 vi.mock("../banner.js", () => ({ emitCliBanner: vi.fn() }));
+// mock-isolation: Replace process exit and terminal writes with observations instead of affecting the test host.
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
     log: vi.fn(),
@@ -17,6 +21,7 @@ vi.mock("../../runtime.js", () => ({
     exit: vi.fn(),
   },
 }));
+// mock-isolation: Do not probe a real Gateway or host state directory in this startup fixture.
 vi.mock("../state-dir-gateway-check.js", () => ({
   checkCliGatewayStateDir: vi.fn(async () => ({ kind: "allow" })),
 }));
