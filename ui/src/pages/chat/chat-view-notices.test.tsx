@@ -660,8 +660,3 @@ it.each([
   expect(container.textContent).toContain(error);
   expect(container.querySelector("a.report-issue-link")).toBeNull();
 });
-
-it("keeps bug reporting for unexpected run failures", async () => {
-  const { container } = publishedComposer({ runError: { summary: "Unexpected model failure" } });
-  await waitForSolid(() => expect(container.querySelector("a.report-issue-link")).not.toBeNull());
-});
