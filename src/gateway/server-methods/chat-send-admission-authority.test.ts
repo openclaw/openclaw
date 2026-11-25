@@ -349,7 +349,7 @@ it.each(["revocation", "role change"] as const)(
         expect.objectContaining({
           code: "INVALID_REQUEST",
           message: expect.stringContaining(
-            change === "revocation" ? "caller authority" : "operator role changed",
+            change === "revocation" ? "Gateway request could not start" : "operator role changed",
           ),
         }),
       );

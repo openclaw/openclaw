@@ -130,7 +130,6 @@ export async function prepareReplySourceInput(
     await preparation;
     signal?.throwIfAborted();
   }
-  options?.operatorAuthority?.assertCurrent();
   const input = reserveSessionControllerSource(sessionKey, {
     sourceTurnId: readChannelSourceTurnId(ctx),
     protocolRunId: options?.runId,

@@ -68,7 +68,6 @@ it.each([
           operatorRunAuthority: createTestOperatorAuthority({
             profileId: profile.id,
             scopes,
-            assertCurrent() {},
           }),
         };
       }

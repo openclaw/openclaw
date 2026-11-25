@@ -659,6 +659,10 @@ describe("memory host SDK package internals", () => {
 
     const chunks = chunkMarkdown(content, { tokens: 400, overlap: 80 });
 
+    expect(chunks.map((chunk) => chunk.text)).toEqual([
+      `${"a".repeat(900)}\n${"b".repeat(100)}`,
+      `${"b".repeat(100)}\n${"c".repeat(1450)}`,
+    ]);
     for (const chunk of chunks) {
       expect(chunk.text.length).toBeLessThanOrEqual(1600);
     }

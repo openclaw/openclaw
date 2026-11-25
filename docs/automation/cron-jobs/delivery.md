@@ -21,6 +21,8 @@ Where a finished run sends its output, what happens when a run or a delivery fai
 
 A successful primary webhook run with no nonblank summary intentionally skips the POST and records `deliverySuppressionReason: "empty"`, matching announce delivery's optional-output contract. Execution errors still send the error event even without a summary.
 
+When a Gateway restart interrupts a running script before webhook delivery, OpenClaw sends the usual `finished` / `error` POST by default. Its error says that the Gateway restarted during the run and the script was not rerun. The run remains failed; the script is not replayed. This terminal notice has a five-second delivery budget during shutdown and uses the existing webhook destination and outbound policy. Operator cancellation does not send this notice, and a webhook already in progress is not resent. A hard process kill or an unavailable receiver can still prevent delivery; restart recovery does not retry the notice.
+
 Primary webhooks record delivery after an HTTP 2xx acknowledgment. An HTTP rejection
 records **Not delivered**. If the request may have reached the receiver but its
 response is lost or times out, delivery stays **Unknown**; the transport does not

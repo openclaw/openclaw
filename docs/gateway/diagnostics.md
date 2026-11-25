@@ -153,6 +153,14 @@ Unscoped launches use fixed classifications such as `unscoped.shell-command`,
 and paths never become labels. Linux OOM-protection exec wrappers report the
 logical target command, since the spawn broker can omit the wrapper shell.
 Counts represent successful admitted launches, not a census of grandchildren.
+Shared command launches also report a bounded `transport` label: `broker`,
+`native.no-broker`, `native.ipc`, `native.independent`, `native.descriptor`,
+`native.inherit`, or `native.stdio`. These distinguish missing broker context
+from the option class requiring in-process spawning; native-process API stdio
+fallbacks use `native.stdio`. `thread` is `main` or `worker`. The Prometheus
+`openclaw_child_process_spawn_total` counter retains these labels alongside the
+operation and command family above, without recording arguments or paths.
+This diagnostic does not change spawn routing.
 
 Gateway RPC diagnostics retain exact core and registered plugin method names,
 including `node.invoke.result` and `workboard.cards.list`; unregistered request

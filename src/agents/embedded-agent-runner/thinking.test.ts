@@ -1,7 +1,7 @@
 // Thinking sanitization tests cover reasoning-block retention, stripping, and
 // recovery behavior for provider transcripts and active assistant turns.
 import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -20,7 +20,6 @@ import {
   wrapAnthropicStreamWithRecovery,
 } from "./thinking.js";
 
-type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type ContentCase = [name: string, before: unknown[], after: unknown[]];
 const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 

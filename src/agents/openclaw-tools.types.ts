@@ -125,6 +125,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Host-owned admission policy, separate from model and tool-listing config. */
+  readDelegationConfig?: () => OpenClawConfig;
   /** Internal listing owner pins discovery changes or renders a read-only inventory. */
   githubPublicationConfigurationAware?: true;
   /** Internal inventory projection; the resulting GitHub tool cannot execute. */

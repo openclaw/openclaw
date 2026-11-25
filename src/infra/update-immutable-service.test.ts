@@ -194,6 +194,14 @@ describe("immutable activation service", () => {
       }
       return read(file, ...args);
     });
+    const lstat = fsSync.lstatSync;
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((file, ...args) => {
+      // The fake PID can coincide with an unrelated process on the test host.
+      if ([pid, currentPid].some((candidate) => String(file) === `/proc/${candidate}`)) {
+        return alive ? lstat(root, ...args) : undefined;
+      }
+      return lstat(file, ...args);
+    });
     const readlink = fsSync.readlinkSync;
     vi.spyOn(fsSync, "readlinkSync").mockImplementation((file, ...args) => {
       if ([pid, currentPid].some((candidate) => String(file) === `/proc/${candidate}/exe`)) {

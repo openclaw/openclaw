@@ -24,7 +24,6 @@ import {
   SessionMutationPreemptTimeoutError,
 } from "../../sessions/session-controller.lifecycle.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
-import { hasPreparedGatewayDeviceAuthority } from "../device-revocation.js";
 import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
@@ -71,10 +70,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     const requestedAgentId = requestedAgent.agentId;
     const compatibilityDefaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
     let capturedOperator: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
-    const assertRequestCurrent = () => {
-      requestAuthority.assertCurrent();
-      capturedOperator?.authority.assertCurrent();
-    };
+    const assertRequestCurrent = () => requestAuthority.assertCurrent();
     try {
       const target = await resolveGatewaySessionStoreTargetInWorker({
         cfg,
@@ -270,9 +266,6 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   requestAuthority.assertCurrent,
                 assertHostCurrent: () => {
                   signal?.throwIfAborted();
-                  if (!hasPreparedGatewayDeviceAuthority(client, hasCurrentClientAuthority)) {
-                    throw new Error("Gateway requester authority changed");
-                  }
                 },
                 expectedLifecycleRevision: lifecycleRevision,
                 expectedSource: target.capturedReadSource,

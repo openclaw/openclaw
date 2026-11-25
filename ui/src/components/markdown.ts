@@ -131,6 +131,7 @@ function decorateMarkdownAnchor(node: Element): void {
     if (url.origin === window.location.origin && isControlUiRoutePath(url.pathname)) {
       node.removeAttribute("rel");
       node.removeAttribute("target");
+      node.setAttribute("data-app-route", "");
       return;
     }
   } catch {

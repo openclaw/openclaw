@@ -1,7 +1,8 @@
 // Real transport -> accepted queue custody -> saved-source admission. No authority is manufactured.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import { afterAll, beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { TurnGrant } from "../agents/admitted-run-operator-authority.types.js";
 import type { LiveAdmissionKind, Mode, Row } from "./operator-admission.contracts.test-support.js";
 import { createFixture, runCase } from "./operator-admission.fixture.test-support.js";
 import type { AdmissionFixture } from "./operator-admission.table.test-support.js";
@@ -88,6 +89,40 @@ const modeFor = (row: Row): Mode =>
       ? "password"
       : "token";
 
+// Turn grant matrix: same principal, same answer. Each `after-start` row below also checks the
+// grant at fresh admission (accepted input) and at saved-source replay admission. OWNER is the
+// installation owner (shared secret, OpenClaw ID owner) and PERSON is operator@example.test; the
+// harness admits both with operator.read + operator.write. A linked channel sender gets its
+// profile's Control UI grant. Cron runs, restart and durable exec wakes, subagent completion and
+// HTTP columns join with the PRs that move them.
+const WRITER_GRANT: TurnGrant = {
+  owner: false,
+  skillAuthoring: true,
+  questionReplace: true,
+  commands: "none",
+};
+const MATRIX: Partial<Record<Kind, ["OWNER" | "PERSON", TurnGrant]>> = {
+  "token:control-ui": ["OWNER", WRITER_GRANT],
+  "password:control-ui": ["OWNER", WRITER_GRANT],
+  "ocid-owner": ["OWNER", WRITER_GRANT],
+  "token:internal": ["OWNER", WRITER_GRANT],
+  "tailscale:control-ui": ["PERSON", WRITER_GRANT],
+  "tailscale-device:control-ui": ["PERSON", WRITER_GRANT],
+  "trusted-proxy:control-ui": ["PERSON", WRITER_GRANT],
+  channel: ["PERSON", WRITER_GRANT],
+};
+// Unlinked Discord senders: a verified `commands.ownerAllowFrom` sender is the owner principal,
+// with the owner's full grant; an allowlisted non-owner (guest) gets no operator grant.
+const CHANNEL_SENDER_GRANT: Record<string, TurnGrant | undefined> = {
+  "owner-revoked-before-start": {
+    owner: true,
+    skillAuthoring: true,
+    questionReplace: true,
+    commands: "all",
+  },
+  "mixed-owner-group": undefined,
+};
+
 // Auth-mode transitions require a real Gateway restart (config-reload-plan.ts).
 // Three shared mode owners plus two restart sentinels cover all rows with five boots.
 describe.each(["token", "password", "trusted-proxy"] as const)("saved admission: %s", (mode) => {
@@ -136,15 +171,27 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
       ["channel", "mixed-owner-group"],
       ["channel", "owner-revoked-before-start"],
     ] as const)("%s: %s", { timeout: 90_000 }, async ([kind, scenario], { signal }) => {
-      await runCase(fixture, rows[kind], scenario, signal);
+      const c = await runCase(fixture, rows[kind], scenario, signal);
+      if (scenario in CHANNEL_SENDER_GRANT) {
+        expect(c.original?.operatorAuthority?.grant, `channel sender x ${scenario}`).toEqual(
+          CHANNEL_SENDER_GRANT[scenario],
+        );
+      }
     });
   }
   describe.each(Object.entries(rows).filter(([, row]) => modeFor(row) === mode))(
     "%s",
-    (_kind, row) => {
+    (kind, row) => {
       for (const scenario of ["before-start", "after-start", "stop"] as const) {
         it(scenario, { timeout: 90_000 }, async ({ signal }) => {
-          await runCase(fixture, row, scenario, signal);
+          const c = await runCase(fixture, row, scenario, signal);
+          const cell = MATRIX[kind as Kind];
+          if (scenario === "after-start" && cell) {
+            expect(
+              { fresh: c.original?.operatorAuthority?.grant, replay: c.replayGrants },
+              `${cell[0]} x ${kind}`,
+            ).toEqual({ fresh: cell[1], replay: [cell[1]] });
+          }
         });
       }
     },

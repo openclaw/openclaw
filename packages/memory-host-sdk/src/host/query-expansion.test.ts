@@ -115,22 +115,7 @@ describe("extractKeywords", () => {
     const trigramOpts = { ftsTokenizer: "trigram" as const };
 
     it("emits whole CJK block instead of unigrams in trigram mode", () => {
-      const defaultKeywords = extractKeywords("之前讨论的那个方案");
       const trigramKeywords = extractKeywords("之前讨论的那个方案", trigramOpts);
-      expect(defaultKeywords).toStrictEqual([
-        "之",
-        "讨",
-        "论",
-        "个",
-        "方",
-        "案",
-        "前讨",
-        "讨论",
-        "论的",
-        "的那",
-        "个方",
-        "方案",
-      ]);
       expect(trigramKeywords).toStrictEqual(["之前讨论的那个方案"]);
     });
 

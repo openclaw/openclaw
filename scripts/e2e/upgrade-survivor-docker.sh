@@ -577,6 +577,48 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
 fi
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
+if [ "$SCENARIO" = "release-update" ]; then
+  docker_e2e_package_mount_args "$PACKAGE_TGZ"
+  mkdir -p "$ARTIFACT_DIR"
+  chmod a+rwx "$ARTIFACT_DIR"
+  UPGRADE_SCENARIO_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-fixtures.XXXXXX")"
+  if [ "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" != downgrade ]; then
+    node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/release-fixture.mjs" \
+      "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE"
+  fi
+  node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/schema-downgrade-source.mjs" \
+    "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE" "${OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA:-}"
+  docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
+  case "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" in
+    "") release_cases=(healthy) ;;
+    healthy|downgrade) release_cases=("$OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE") ;;
+    *) echo "Unknown release survivor case" >&2; exit 1 ;;
+  esac
+  downgrade_selected="$(node -p "require(process.argv[1]).selected" "$UPGRADE_SCENARIO_STAGE/downgrade-source.json")"
+  if [ -z "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" ] && [ "$downgrade_selected" = true ]; then
+    release_cases+=(downgrade)
+  fi
+  for release_case in "${release_cases[@]}"; do
+    mkdir -p "$ARTIFACT_DIR/$release_case"
+    release_runner=release-update.mjs
+    if [ "$release_case" = downgrade ]; then
+      [ "$downgrade_selected" = true ] || { echo "Downgrade requires a schema/migration change and pinned fork." >&2; exit 1; }
+      release_runner=schema-downgrade-run.mjs
+    fi
+    docker_e2e_run_with_harness \
+      --init \
+      --user root \
+      -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
+      -v "$ARTIFACT_DIR/$release_case:/tmp/openclaw-upgrade-survivor-artifacts" \
+      -v "$UPGRADE_SCENARIO_STAGE:/tmp/openclaw-release-fixtures:ro" \
+      "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+      "$IMAGE_NAME" \
+      timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
+      node "scripts/e2e/lib/upgrade-survivor/$release_runner"
+  done
+  run_completed="1"
+  exit 0
+fi
 if [ "$SCENARIO" != "package-installed-recovery" ] && [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
   AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT="$(
     mktemp -d "${TMPDIR:-/tmp}/openclaw-upgrade-survivor-plugin-registry.XXXXXX"

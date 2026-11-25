@@ -4060,8 +4060,13 @@ export function loadInventorySources(root = defaultRoot, ref = "", staged = fals
       : [
           "--files",
           "--null",
-          "-g",
-          "*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          // Match Git membership: type filters keep ignore rules (a positive -g glob would list
+          // ignored build outputs), and tracked hidden stubs stay in the source set.
+          "--hidden",
+          "--type-add",
+          "inventory:*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          "--type",
+          "inventory",
           ...roots.filter((dir) => fs.existsSync(path.join(root, dir))),
         ],
     { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },

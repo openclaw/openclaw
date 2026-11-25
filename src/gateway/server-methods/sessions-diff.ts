@@ -178,9 +178,13 @@ export async function loadSessionDiff(
       if (!entry?.sessionId || !storePath || !agentId) {
         return empty("unknown_session");
       }
+      const cwd = loaded.diffCwd;
+      const hasLocalWorktreeBinding = Boolean(cwd && entry.worktree?.id);
       // The first turn captures the pre-session baseline before any workspace write.
       // A named commit does not use the baseline.
-      if (params.scope !== "commit" && entry.sessionDiffBaselineCapture?.status === "pending") {
+      const baselinePending =
+        params.scope !== "commit" && entry.sessionDiffBaselineCapture?.status === "pending";
+      if (baselinePending && !hasLocalWorktreeBinding) {
         return empty();
       }
       timing?.mark("repository");
@@ -210,13 +214,12 @@ export async function loadSessionDiff(
         delete result.root;
         return result;
       }
-      const cwd = loaded.diffCwd;
       const checkoutPending = Boolean(entry.pendingWorktree || entry.pendingProjectGitUrl);
       if (!cwd) {
         return empty(checkoutPending ? undefined : loaded.root ? "not_git" : "unknown_session");
       }
       timing?.mark("managedBase");
-      const managedBase = entry.worktree?.id
+      const managedBase = hasLocalWorktreeBinding
         ? await (
             await import("../worker-environments/local-workspace-review.js")
           ).readLocalWorkspaceReviewBase({
@@ -228,6 +231,10 @@ export async function loadSessionDiff(
           })
         : undefined;
       assertCurrent();
+      // A pending baseline hides changes, not the managed checkout's Restore guidance.
+      if (baselinePending) {
+        return empty();
+      }
       worktreeCount = 1;
       timing?.mark("git");
       if (diffTiming) {
