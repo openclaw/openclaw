@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { isSqliteSnapshotStagingName } from "../../src/infra/sqlite-snapshot-retirement.js";
 import { createVerifiedSqliteSnapshot } from "../../src/infra/sqlite-snapshot.js";
 import {
   assertSameReliabilityState,
@@ -35,9 +36,7 @@ function hashFile(filePath: string): string {
 function listCrashStagingEntries(scratchPath: string): string[] {
   return fs
     .readdirSync(scratchPath)
-    .filter(
-      (entry) => entry.startsWith(".sqlite-publish-") || entry.startsWith(".sqlite-snapshot-"),
-    );
+    .filter((entry) => entry.startsWith(".sqlite-publish-") || isSqliteSnapshotStagingName(entry));
 }
 
 async function waitForCrashPoint(params: {

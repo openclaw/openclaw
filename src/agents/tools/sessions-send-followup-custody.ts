@@ -1,9 +1,5 @@
 import { getRuntimeConfig } from "../../config/config.js";
-import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
-import {
-  resolveGatewayOperatorRoleActor,
-  resolveOperatorRolePolicyForAssignment,
-} from "../../gateway/operator-role-policy.js";
+import { resolveGatewayOperatorRoleActor } from "../../gateway/operator-role-policy.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
@@ -121,16 +117,11 @@ export async function prepareSessionsSendFollowup(params: {
           },
           currentFacts,
           {
+            // The role the sending turn was admitted with; a role change applies to its next turn.
             policy:
               actor.kind === "system"
                 ? undefined
-                : resolveOperatorRolePolicyForAssignment(
-                    actor.profileId,
-                    profile?.role ?? null,
-                    currentConfig,
-                    profile?.githubLogin ?? null,
-                    operatorRoleSubject(profile),
-                  ),
+                : client.internal?.operatorRunAuthority?.readCurrentRoleFacts?.().policy,
             aliases: new Set(profile?.aliases ?? []),
           },
         );

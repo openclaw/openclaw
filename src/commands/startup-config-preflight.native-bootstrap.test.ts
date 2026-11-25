@@ -21,7 +21,7 @@ import {
 } from "../infra/device-identity-material.js";
 import { StateDatabaseOfflineMaintenanceError } from "../infra/gateway-state-owner-record.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import { ExitError } from "../runtime.js";
 import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -182,7 +182,7 @@ it("admits the recoverable config before migrating native credentials", async ()
         .filter((name) => name.includes(".clobbered."));
       expect(clobbered).toHaveLength(1);
       expect(fs.readFileSync(state.statePath(clobbered[0]!), "utf8")).toBe(original);
-      expect(hasActiveStartupMigrationLease()).toBe(false);
+      expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
       await closeOpenClawStateDatabaseAsync();
       const database = new DatabaseSync(databasePath, { readOnly: true });
       try {
