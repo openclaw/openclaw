@@ -3,7 +3,7 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import type { PluginCohortRecoveryPair } from "./update-plugin-cohort-schema.js";
 import { withUpdateRunRead } from "./update-run-read-admission.js";
 import {

@@ -192,12 +192,12 @@ suite.define(() => {
     },
   );
 
-  it("resolves a collapsed source title and opens original receipts with one click or keyboard", async () => {
+  it.each([1440, 390])("keeps source updates compact and navigable at %ipx", async (width) => {
     const key = "agent:main:activity-reader";
     const sourceKey = "agent:main:activity-source";
     const label = "Verification session";
     await suite.withPage(
-      { viewport: { width: 390, height: 844 }, locale: "en-US", serviceWorkers: "block" },
+      { viewport: { width, height: 844 }, locale: "en-US", serviceWorkers: "block" },
       async ({ page }) => {
         const { activity, summary } = await openActivity(
           page,
@@ -214,6 +214,18 @@ suite.define(() => {
         );
         const exact = (text: string) => summary.getByText(text, { exact: true });
         await exact(label).waitFor();
+        expect(
+          await summary.evaluate((element) =>
+            [element, element.querySelector("a")!].map((node) => getComputedStyle(node).fontSize),
+          ),
+        ).toEqual(["12px", "12px"]);
+        expect(
+          await summary.evaluate(
+            (node) =>
+              node.getBoundingClientRect().width -
+              node.querySelector(".chat-reply-attribution")!.getBoundingClientRect().width,
+          ),
+        ).toBeLessThanOrEqual(40);
         expect([
           await activity.count(),
           await summary.locator("a[data-session-key]").count(),

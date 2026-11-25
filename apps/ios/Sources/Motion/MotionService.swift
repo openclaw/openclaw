@@ -91,9 +91,8 @@ final class MotionService: MotionServicing {
     }
 
     private static func resolveRange(startISO: String?, endISO: String?) -> (Date, Date) {
-        let formatter = ISO8601DateFormatter()
-        let start = startISO.flatMap { formatter.date(from: $0) } ?? Calendar.current.startOfDay(for: Date())
-        let end = endISO.flatMap { formatter.date(from: $0) } ?? Date()
+        let start = startISO.flatMap(OpenClawISO8601.date(from:)) ?? Calendar.current.startOfDay(for: Date())
+        let end = endISO.flatMap(OpenClawISO8601.date(from:)) ?? Date()
         return (start, end)
     }
 

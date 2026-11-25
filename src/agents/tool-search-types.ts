@@ -2,6 +2,7 @@ import type { TSchema } from "typebox";
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
@@ -28,6 +29,8 @@ export type ToolSearchCallOptions = CatalogVisibilityOptions &
 
 export type ToolSearchCatalogToolExecutor = (params: {
   tool: CatalogTool;
+  /** Stable catalog identity captured by the catalog owner before execution. */
+  toolId: string;
   toolName: string;
   source: CatalogSource;
   sourceName?: string;
@@ -45,6 +48,8 @@ export type ToolSearchCatalogToolExecutor = (params: {
 
 /** Per-run/session context used by Tool Search control tools. */
 export type ToolSearchToolContext = {
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority;
+  modelContextWindowTokens?: number;
   config?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
   agentId?: string;

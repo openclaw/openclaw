@@ -382,7 +382,11 @@ describe("question custody", () => {
         };
         expect(broker.get({ id: questionId }).question).toMatchObject(answered);
         await resumed;
-        expect(onResolved).toHaveBeenCalledExactlyOnceWith({ id: questionId, ...answered });
+        expect(onResolved).toHaveBeenCalledExactlyOnceWith({
+          id: questionId,
+          ...answered,
+          resolvedBy: "plain-text",
+        });
         expect(onResumed).toHaveBeenCalledOnce();
         expect(replyResolver).toHaveBeenCalledTimes(2);
         expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();

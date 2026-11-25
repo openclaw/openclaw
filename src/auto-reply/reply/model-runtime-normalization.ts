@@ -20,10 +20,7 @@ import {
   isManifestPluginAvailableForControlPlane,
   loadManifestMetadataSnapshot,
 } from "../../plugins/manifest-contract-eligibility.js";
-import {
-  applyModelRuntimeDirective,
-  resolveModelRuntimeDirective,
-} from "./directive-handling.model-runtime.js";
+import { resolveModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 
 export function normalizeRuntimeChoiceId(runtime: string | undefined): string {
   const normalized = normalizeLowercaseStringOrEmpty(runtime);
@@ -87,6 +84,7 @@ export async function prepareModelSelectionRuntime(params: {
   agentId: string;
   workspaceDir?: string;
   provider: string;
+  previousProvider?: string;
   model: string;
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
@@ -113,7 +111,12 @@ export async function prepareModelSelectionRuntime(params: {
     }
   | { status: "rejected"; reason: "invalid-runtime" | "unknown-provider"; message: string }
 > {
-  const sessionEntry = params.profileOverride
+  const runtimeSelection = resolveModelRuntimeDirective(params);
+  if (runtimeSelection.kind === "invalid") {
+    return { status: "rejected", reason: "invalid-runtime", message: runtimeSelection.errorText };
+  }
+  let runtime = runtimeSelection;
+  const accountEntry = params.profileOverride
     ? {
         ...params.sessionEntry,
         providerOverride: params.provider,
@@ -122,10 +125,8 @@ export async function prepareModelSelectionRuntime(params: {
         authProfileOverrideSource: "user" as const,
       }
     : params.sessionEntry;
-  let runtime = resolveModelRuntimeDirective(params);
-  if (runtime.kind === "invalid") {
-    return { status: "rejected", reason: "invalid-runtime", message: runtime.errorText };
-  }
+  const sessionEntry =
+    runtime.kind === "clear" ? { ...accountEntry, agentRuntimeOverride: undefined } : accountEntry;
   const selected = findSelectedCatalogEntry(params);
   if (!isKnownModelSelectionProvider(params)) {
     return {
@@ -152,7 +153,7 @@ export async function prepareModelSelectionRuntime(params: {
       cfg: params.cfg,
       sessionEntry,
     });
-    if (runtime.kind === "clear" || !sessionEntry?.agentRuntimeOverride) {
+    if (!sessionEntry?.agentRuntimeOverride) {
       inheritedCliRuntime = resolveCliRuntimeExecutionProvider({
         cfg: params.cfg,
         agentId: params.agentId,
@@ -207,15 +208,13 @@ export async function prepareModelSelectionRuntime(params: {
     harness = choice.harness;
     runtime = { kind: "set", runtime: choice.runtimeId };
   }
-  const runtimeEntry = { ...sessionEntry };
-  applyModelRuntimeDirective(runtimeEntry, runtime);
   const agentRuntime =
     runtime.kind === "set"
       ? runtime.runtime
       : resolveEffectiveAgentRuntime({
           cfg: params.cfg,
           ...runtimeFacts,
-          sessionEntry: runtimeEntry,
+          sessionEntry,
         });
   let hydratedSelection: ModelCatalogEntry | undefined;
   const needsThinkingObservation =

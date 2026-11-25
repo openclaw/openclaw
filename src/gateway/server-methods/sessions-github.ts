@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { ok } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
+  type ErrorShape,
   type GatewayCoreRequestParams,
   errorShape,
   validateSessionGitHubPublishParams,
@@ -32,11 +34,19 @@ import {
 import { refreshManagedWorkspaceBase } from "../github-publication-base-refresh.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { performSessionGitHubInspection } from "../github-publication-inspect.js";
+import { createSessionGitHubIssue } from "../github-publication-issue.js";
+import { readParticipantPublicationAuthority } from "../github-publication-participation.js";
 import { readGitHubPublicationReadiness } from "../github-publication-readiness.js";
 import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
-import { prepareGitHubPublicationRequesterV2 } from "../github-publication-requester.js";
+import {
+  prepareGitHubPublicationRequesterV2,
+  prepareGitHubPublicationTaskRequester,
+} from "../github-publication-requester.js";
 import type { PublicationSessionIdentity } from "../github-publication-session.types.js";
-import { adoptUnboundPullRequestWorkspace } from "../session-pr-workspace-adoption.js";
+import { readSharedGitHubPublication } from "../github-publication-shared-read.js";
+import { prepareGitHubPublicationTaskWorkspace } from "../github-publication-task-workspace.js";
+import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
+import { isParticipantPublicationMethod } from "../session-method-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -50,9 +60,13 @@ import { respondError } from "./response.js";
 import { prepareSessionCreateRequestedCwd } from "./session-create-root.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
+import { resolveWriteScopedManagedWorktree } from "./worktrees.js";
 
 type SessionGitHubMethod = Extract<keyof GatewayCoreRequestParams, `sessions.github.${string}`>;
 const GITHUB_OPTIONS_TIMEOUT_MS = 5_000;
+// Model-facing: a bare missing-scope refusal gives a tool caller that cannot gain admin no next step.
+const PUBLICATION_SOURCE_WITHOUT_ADMIN =
+  "Without it, workspacePath must be this conversation's own checkout, a folder inside an agent workspace, or a managed worktree of a registered project that is not owned by a session. Nothing was published.";
 class GitHubOptionsTimeoutError extends Error {
   constructor() {
     super("GitHub publication options timed out after 5 seconds; retry the request.");
@@ -79,6 +93,20 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
   ...[method, validate, handler]: Parameters<typeof defineValidatedGatewayMethod<Method>>
 ) {
   return defineValidatedGatewayMethod(method, validate, async (options) => {
+    const participant =
+      options.sessionMutationAuthorization?.participationCeiling ??
+      readParticipantPublicationAuthority(method, options.params)?.participationCeiling;
+    if (
+      participant &&
+      !isParticipantPublicationMethod(method, options.params) &&
+      !["sessions.github.readiness", "sessions.github.options", "sessions.github.status"].includes(
+        method,
+      )
+    ) {
+      throw new Error(
+        "Participation does not authorize this GitHub action or publisher selection.",
+      );
+    }
     const { agentId, sessionKey } = options.params;
     const key = sessionKey ?? getGatewayToolCallerIdentity()?.sessionKey;
     // Explicit public owners follow request admission, not private deleted-session remapping.
@@ -178,6 +206,13 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     "sessions.github.action",
     validateSessionGitHubActionParams,
     async (options) => {
+      if (options.params.action === "create_issue") {
+        options.respond(
+          true,
+          await createSessionGitHubIssue({ ...options, params: options.params }),
+        );
+        return;
+      }
       if (options.params.action === "prepare_pr") {
         await performSessionGitHubPreparation({ ...options, params: options.params });
         return;
@@ -286,7 +321,16 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         return;
       }
       const agentId = caller?.agentId ?? params.agentId;
-      if (params.selection?.source === "personal") {
+      const participant =
+        sessionMutationAuthorization?.participationCeiling ??
+        readParticipantPublicationAuthority("sessions.github.publish", params)
+          ?.participationCeiling;
+      if (participant && params.selection !== undefined) {
+        throw new Error(
+          "Participant publication uses the shared publisher; account selection is unavailable.",
+        );
+      }
+      if (!participant && params.selection?.source === "personal") {
         if (params.workspacePath !== undefined) {
           throw new Error("workspacePath requires the local agent publication handoff.");
         }
@@ -305,10 +349,29 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
 
         return;
       }
+      sessionMutationAuthorization?.assertCurrent();
       using selectedSession = await prepareGitHubPublicationSession(sessionKey, {
         agentId,
-        assertCurrent: () => sessionMutationAuthorization?.assertCurrent(),
-        projection: params.workspacePath === undefined ? undefined : ["skillsSnapshot"],
+        fields:
+          params.workspacePath === undefined
+            ? undefined
+            : [
+                "sessionId",
+                "lifecycleRevision",
+                "archivedAt",
+                "repositoryWorkspaceId",
+                "projectId",
+                "worktree",
+                "owner",
+                "createdActor",
+                "visibility",
+                "incognito",
+                "spawnDepth",
+                "inheritedToolAllow",
+                "inheritedToolDeny",
+                "delegatedToolPolicy",
+                "permissionMode",
+              ],
       });
       const loaded = selectedSession.loaded;
       if (!loaded.entry?.sessionId) {
@@ -319,7 +382,6 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      sessionMutationAuthorization?.assertCurrent();
       const session = {
         sessionKey: loaded.canonicalKey,
         agentId: caller?.agentId ?? loaded.agentId,
@@ -327,10 +389,22 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       const admitted = await prepareGitHubPublicationRequesterV2(options, session);
       using _ = { [Symbol.dispose]: () => admitted.release() };
 
+      if (params.workspacePath !== undefined && admitted.requester.snapshot.participation) {
+        const root = admitted.requester.snapshot.participation.ceiling.source.root;
+        const sourcePath = await fs.realpath(path.resolve(root, params.workspacePath));
+        if (sourcePath !== (await fs.realpath(root))) {
+          throw new Error(
+            "Participant publication must use this conversation's exact workspace root.",
+          );
+        }
+        admitted.requester.assertCurrent();
+      }
+      let task: { agentId: string; sessionKey: string } | undefined;
       if (params.workspacePath !== undefined) {
-        if (caller?.workspacePrAdoptionSessionId !== loaded.entry.sessionId) {
+        if (!caller || caller.workspacePrAdoptionSessionId !== loaded.entry.sessionId) {
           throw new Error("Local checkout publication requires an agent handoff.");
         }
+        let ownedCheckout = false;
         if (loaded.entry.worktree) {
           using owner = await resolveLocalWorkspaceOwner({
             ...session,
@@ -344,44 +418,98 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             ? await fs.realpath(params.workspacePath)
             : undefined;
           owner?.assertCurrent();
-          // Existing ownership admits this checkout, even outside the default workspace.
-          // canonicalWorkspaceDir is the skills/source workspace, not the owned checkout.
-          if (!owner || owner.worktree.path !== requestedPath) {
-            throw new Error(
-              "This session already publishes a different checkout. Publish from its current managed worktree, or use a separate session for the other checkout; no files were moved or published.",
-            );
-          }
-        } else {
-          const source = await prepareSessionCreateRequestedCwd({
-            cfg: context.getRuntimeConfig(),
-            requestedCwd: params.workspacePath,
-            clientPresent: true,
-            clientScopes: admitted.requester.snapshot.scopes,
-          });
+          // Existing custody admits this checkout without granting arbitrary host paths.
+          ownedCheckout = Boolean(owner && requestedPath && owner.worktree.path === requestedPath);
+        }
+        if (!ownedCheckout) {
+          const cfg = context.getRuntimeConfig();
+          const scopes = admitted.requester.snapshot.scopes;
+          // worktrees.create hands operator.write callers checkouts outside the agent
+          // workspace; refusing them here would leave that work unpublishable without admin.
+          const managedWorktree = authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, scopes)
+            .allowed
+            ? await resolveWriteScopedManagedWorktree(params.workspacePath, cfg)
+            : undefined;
+          const source = managedWorktree
+            ? ok<string, ErrorShape>(managedWorktree)
+            : await prepareSessionCreateRequestedCwd({
+                cfg,
+                requestedCwd: params.workspacePath,
+                clientPresent: true,
+                clientScopes: scopes,
+              });
           admitted.requester.assertCurrent();
           if (!source.ok) {
-            throw new Error(source.error.message);
+            const missingScope = source.error.code === ErrorCodes.FORBIDDEN;
+            throw new Error(
+              missingScope
+                ? `${source.error.message}. ${PUBLICATION_SOURCE_WITHOUT_ADMIN}`
+                : source.error.message,
+            );
           }
           const placements = context.workerSessionPlacementService;
           if (!placements?.withLocalWorkspaceReservation) {
             throw new Error("Workspace preparation is unavailable during Gateway startup.");
           }
-          await placements.withLocalWorkspaceReservation(
+          task = await placements.withLocalWorkspaceReservation(
             { ...session, sessionId: loaded.entry.sessionId },
             (assertOwned) =>
-              adoptUnboundPullRequestWorkspace({
-                context,
-                target: { ...session, storePath: loaded.storePath },
-                entry: loaded.entry!,
-                localSource: source.value,
-                signal: options.signal,
+              prepareGitHubPublicationTaskWorkspace({
+                options,
+                parent: { ...loaded, entry: loaded.entry! },
+                requester: admitted.requester,
+                operatorAuthority: admitted.authority,
+                source: source.value!,
+                idempotencyKey: params.idempotencyKey,
+                policy: caller.workspacePublicationPolicy,
                 assertCurrent: () => {
-                  admitted.requester.assertCurrent();
+                  selectedSession.readCurrent();
                   assertOwned();
                 },
               }),
           );
         }
+      } else {
+        const receipt = await readSharedGitHubPublication(
+          {
+            ...session,
+            sessionId: loaded.entry.sessionId,
+            lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
+          },
+          { idempotencyKey: params.idempotencyKey },
+          () => selectedSession.readCurrent(),
+        );
+        admitted.requester.assertCurrent();
+        if (receipt && receipt.session_key !== session.sessionKey) {
+          task = { agentId: receipt.agent_id, sessionKey: receipt.session_key };
+        }
+      }
+      if (task) {
+        const runId = caller?.workspacePublicationRunId ?? caller?.operationalRunInstance?.runId;
+        const taskRequester = await prepareGitHubPublicationTaskRequester(
+          admitted.requester,
+          task,
+          {
+            ...session,
+            sessionId: loaded.entry.sessionId,
+            lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
+            ...(runId ? { runId } : {}),
+          },
+          context.getCommittedRuntimeConfig ?? context.getRuntimeConfig,
+        );
+        using taskLifetime = {
+          requester: taskRequester.requester,
+          [Symbol.dispose]: taskRequester.release,
+        };
+        const result = await coordinator.requestForSessionV2({
+          ...params,
+          ...task,
+          requester: taskLifetime.requester,
+        });
+        admitted.requester.assertCurrent();
+        selectedSession.readCurrent();
+        respond(true, result);
+        return;
       }
       const result = await coordinator.requestForSessionV2({
         ...params,
@@ -391,7 +519,8 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           ? { expectedRunId: caller.operationalRunInstance.runId }
           : {}),
       });
-      sessionMutationAuthorization?.assertCurrent();
+      admitted.requester.assertCurrent();
+      selectedSession.readCurrent();
       respond(true, result);
     },
   ),
@@ -439,8 +568,8 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           const session = read.currentSession();
           const assertResponseCurrent = () => read.assertSessionUnchanged(session);
           let sharedUnavailableReason: SessionGitHubOptionsResult["sharedUnavailableReason"];
-          // Independent account and receipt owners can read concurrently. The response
-          // still revalidates the same session and personal authority after all awaits.
+          // Independent account and receipt owners can read concurrently. Target identity
+          // stays fenced after awaits; the admitted person's authority stays fixed.
           const [identity, personalSnapshot, pendingPersonal, latestShared] = await Promise.all([
             prepareCurrentGitHubPublicationOptionsIdentity(
               read.session.agentId,

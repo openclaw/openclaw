@@ -178,7 +178,12 @@ it.each([
       hook.afterMaterialize = undefined;
       if (cold) {
         closeCachedOpenClawAgentDatabase(database);
-        invalidateOpenClawAgentDatabaseValidation(database.path);
+        {
+          // Revocation is bounded; missing uniqueness still requires physical verification.
+          using schemaRepair = realOpen(database.path);
+          schemaRepair.exec("DROP INDEX idx_agent_transcript_message_idempotency");
+        }
+        invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
         revokeSqliteDatabaseAdmissionsForPath(database.path);
       }
       observingAdmission = true;

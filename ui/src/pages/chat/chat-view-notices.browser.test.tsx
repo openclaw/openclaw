@@ -1,9 +1,11 @@
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
+import { page } from "vitest/browser";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   ChatComposerNoticesContent,
+  ChatPlacementStartupNotice,
   ChatTopbarNoticesContent,
 } from "./chat-view-notices-content.tsx";
 import "../../styles.css";
@@ -80,33 +82,109 @@ it("keeps redacted diagnostics readable, stable across refreshes, and reset for 
   await waitForSolid(() => expect(view.container.querySelector("details")?.open).toBe(false));
 });
 
-it("keeps the recovery action beside the title with a visible dismiss", async () => {
-  const dismiss = vi.fn();
-  const view = mountSolid(() => (
-    <ChatComposerNoticesContent
-      sessionKey="agent:main:main"
-      connected
-      messages={[]}
-      runError={{
-        runId: "run-1",
-        summary: "Error: Restore failed.\nprovider reported lease destroyed",
-      }}
-      onRefresh={() => {}}
-      onDismissRunError={dismiss}
-    />
-  ));
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".chat-error__refresh")).not.toBeNull(),
-  );
-  const offset = () =>
-    box(view.container, ".chat-error__refresh").top -
-    box(view.container, ".app-toast__message").top;
-  const closed = offset();
-  expect(Math.abs(closed)).toBeLessThan(8);
-  view.container.querySelector("details")!.open = true;
-  await waitForSolid(() => expect(offset()).toBe(closed));
-  const close = view.container.querySelector<HTMLButtonElement>(".app-toast__dismiss")!;
-  expect(getComputedStyle(close).opacity).toBe("1");
-  close.click();
-  expect(dismiss).toHaveBeenCalledOnce();
+it.each([300, 500, 1280])(
+  "keeps full reply text ellipsized beside reachable recovery at %ipx",
+  async (width) => {
+    const previous = { width: window.innerWidth, height: window.innerHeight };
+    await page.viewport(width, previous.height);
+    const refresh = vi.fn();
+    const dismiss = vi.fn();
+    const diagnostic =
+      "The model provider interrupted the connection before the reply finished. The example gateway returned upstream status 502.\nRequest ID: example-7942.";
+    try {
+      const view = mountSolid(() => (
+        <ChatComposerNoticesContent
+          sessionKey="agent:main:main"
+          connected
+          messages={[]}
+          runError={{ runId: "synthetic-run", summary: diagnostic }}
+          onRefresh={refresh}
+          onDismissRunError={dismiss}
+        />
+      ));
+      await waitForSolid(() =>
+        expect(view.container.querySelector(".chat-error__refresh")).not.toBeNull(),
+      );
+      const notice = view.container.querySelector<HTMLElement>(".chat-error.chat-error--reply")!;
+      const message = notice.querySelector<HTMLElement>(".app-toast__message")!;
+      expect(notice.classList.contains("app-toast")).toBe(false);
+      expect(message.textContent).toBe(diagnostic);
+      expect(message.getAttribute("role")).toBe("alert");
+      expect(
+        notice.querySelector(
+          "details, summary, [aria-expanded], .lazy-view-error__chevron, .report-issue-link",
+        ),
+      ).toBeNull();
+      const style = getComputedStyle(message);
+      expect([style.whiteSpace, style.overflowX, style.textOverflow]).toEqual([
+        "nowrap",
+        "hidden",
+        "ellipsis",
+      ]);
+      expect(message.getBoundingClientRect().height).toBeLessThanOrEqual(
+        Number.parseFloat(style.lineHeight) + 1,
+      );
+      if (width === 300) {
+        expect(message.scrollWidth).toBeGreaterThan(message.clientWidth);
+      }
+      const recovery = notice.querySelector<HTMLButtonElement>(".chat-error__refresh")!;
+      const close = notice.querySelector<HTMLButtonElement>(
+        ".chat-error__dismiss.app-toast__dismiss",
+      )!;
+      const bounds = [message, recovery, close].map((node) => node.getBoundingClientRect());
+      const centers = bounds.map((rect) => rect.y + rect.height / 2);
+      expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1);
+      expect(bounds[0]!.right).toBeLessThanOrEqual(bounds[1]!.left);
+      expect(bounds[1]!.right).toBeLessThanOrEqual(bounds[2]!.left);
+      expect(bounds[2]!.right).toBeLessThanOrEqual(notice.getBoundingClientRect().right);
+      expect(notice.scrollWidth).toBeLessThanOrEqual(notice.clientWidth);
+      expect(getComputedStyle(close).opacity).toBe("1");
+      for (const target of [recovery, close]) {
+        const rect = target.getBoundingClientRect();
+        expect(
+          target.contains(
+            document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
+          ),
+        ).toBe(true);
+        target.click();
+      }
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(dismiss).toHaveBeenCalledOnce();
+    } finally {
+      await page.viewport(previous.width, previous.height);
+    }
+  },
+);
+
+it("keeps discard recovery below the full warning on mobile", async () => {
+  const previous = { width: window.innerWidth, height: window.innerHeight };
+  await page.viewport(300, previous.height);
+  const discard = vi.fn();
+  try {
+    const view = mountSolid(() => (
+      <ChatPlacementStartupNotice
+        messages={[]}
+        connected
+        status={{
+          sessionKey: "agent:main:main",
+          phase: "failed",
+          startedAt: 1,
+          error: "Recovery needs a reload. Unsaved starts will be lost.",
+          discardAndReload: discard,
+        }}
+      />
+    ));
+    await waitForSolid(() => {
+      const action = view.container.querySelector<HTMLElement>(".chat-error__discard")!;
+      const message = view.container.querySelector<HTMLElement>(".app-toast__message")!;
+      expect(action.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        message.getBoundingClientRect().bottom,
+      );
+      expect(message.getBoundingClientRect().width).toBeGreaterThan(200);
+    });
+    view.container.querySelector<HTMLButtonElement>(".chat-error__discard")!.click();
+    expect(discard).toHaveBeenCalledOnce();
+  } finally {
+    await page.viewport(previous.width, previous.height);
+  }
 });

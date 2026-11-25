@@ -14,6 +14,7 @@ import { isTerminalResponse } from "./inference-dispatch.js";
 import { createCodexInferenceProxy, type CodexInferenceProxy } from "./inference-proxy.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const transport = vi.hoisted(() => {
   const wsAgents: unknown[] = [];
@@ -376,6 +377,12 @@ describe("private inference HTTP relay", () => {
     for (const path of ["/models", "/responses/compact", "/responses?other=1"]) {
       expect((await post(proxy.baseUrl + path, body)).status).toBe(502);
     }
+    const catalog = await fetch(
+      `${proxy.baseUrl}/models?client_version=${CODEX_APP_SERVER_VERSION}`,
+    );
+    expect(catalog.status).toBe(502);
+    await catalog.text();
+    expect(transport.fetch).not.toHaveBeenCalled();
     expect(resolve).not.toHaveBeenCalled();
     const result = await post(proxy.baseUrl + "/responses", body, {
       authorization: "Bearer local-placeholder",

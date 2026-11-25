@@ -1,4 +1,6 @@
+import { isBuildOnlyNpmPreflight, SEALED_NPM_PREFLIGHT_SCHEMA } from "../npm-prepared-bundle.mjs";
 import {
+  isPluginSdkApiAcknowledgement,
   selectPluginSdkApiReleaseEvidence,
   validatePluginSdkApiReleaseEvidence,
 } from "../plugin-sdk-api-release-evidence.mjs";
@@ -33,7 +35,7 @@ function selectedPackages(manifest) {
 export function resolveReleasePublishInputs(manifest, overrides = {}) {
   const overrideAcknowledgement = (overrides.pluginSdkApiAcknowledgement ?? "").trim();
   requireValue(
-    overrideAcknowledgement === "" || /^[a-f0-9]{8}$/u.test(overrideAcknowledgement),
+    overrideAcknowledgement === "" || isPluginSdkApiAcknowledgement(overrideAcknowledgement),
     "SDK override",
   );
   const sealed = manifest?.publishInputs;
@@ -75,10 +77,17 @@ export function resolveReleasePublishInputs(manifest, overrides = {}) {
       (!overrides.npmDistTag || sealed.npmDistTag === overrides.npmDistTag),
     "npm dist-tag mismatch",
   );
+  const buildOnly =
+    manifest.rerunGroup === "build-only" &&
+    manifest.publicationArtifacts?.npmPreflight?.schema === SEALED_NPM_PREFLIGHT_SCHEMA;
   requireValue(
-    /^[a-f0-9]{64}$/u.test(sealed.pluginSdkApiEvidenceDigest) &&
-      (sealed.pluginSdkApiAcknowledgement === "" ||
-        sealed.pluginSdkApiAcknowledgement === sealed.pluginSdkApiEvidenceDigest.slice(0, 8)),
+    buildOnly
+      ? sealed.pluginSdkApiEvidenceDigest === null &&
+          sealed.pluginSdkApiAcknowledgement === "" &&
+          overrideAcknowledgement === ""
+      : /^[a-f0-9]{64}$/u.test(sealed.pluginSdkApiEvidenceDigest) &&
+          (sealed.pluginSdkApiAcknowledgement === "" ||
+            sealed.pluginSdkApiAcknowledgement === sealed.pluginSdkApiEvidenceDigest.slice(0, 8)),
     "SDK acknowledgement digest mismatch",
   );
   const packages = selectedPackages(manifest);
@@ -111,7 +120,10 @@ export function resolveReleasePublishInputs(manifest, overrides = {}) {
     );
   }
   const acknowledgement = overrideAcknowledgement || sealed.pluginSdkApiAcknowledgement;
-  requireValue(acknowledgement === "" || /^[a-f0-9]{8}$/u.test(acknowledgement), "SDK override");
+  requireValue(
+    acknowledgement === "" || isPluginSdkApiAcknowledgement(acknowledgement),
+    "SDK override",
+  );
   return {
     ...sealed,
     pluginSdkApiAcknowledgement: acknowledgement,
@@ -123,17 +135,30 @@ export async function createReleasePublishInputs({ manifest, npmManifest }) {
   const packages = selectedPackages(manifest);
   const npmDistTag = manifest.sourceAdmission.publicationSelection.npmDistTag;
   requireValue(npmManifest.releaseSha === manifest.targetSha, "npm artifact target mismatch");
-  const selected = selectPluginSdkApiReleaseEvidence({
-    evidence: npmManifest.pluginSdkApi,
-    npmDistTag,
-  });
-  const sdk = validatePluginSdkApiReleaseEvidence({
-    evidence: npmManifest.pluginSdkApi,
-    acknowledgement: selected?.digest?.slice(0, 8),
-    expectedHeadSha: manifest.targetSha,
-    expectedWorkflowSha: manifest.publicationArtifacts.npmPreflight.producer.workflowSha,
-    npmDistTag,
-  });
+  const buildOnly =
+    manifest.rerunGroup === "build-only" &&
+    manifest.publicationArtifacts?.npmPreflight?.schema === SEALED_NPM_PREFLIGHT_SCHEMA &&
+    isBuildOnlyNpmPreflight(npmManifest);
+  requireValue(npmManifest.version !== 4 || buildOnly, "build-only npm artifact binding");
+  requireValue(
+    !buildOnly || npmManifest.npmDistTag === npmDistTag,
+    "build-only npm channel mismatch",
+  );
+  const selected = buildOnly
+    ? undefined
+    : selectPluginSdkApiReleaseEvidence({
+        evidence: npmManifest.pluginSdkApi,
+        npmDistTag,
+      });
+  const sdk = buildOnly
+    ? undefined
+    : validatePluginSdkApiReleaseEvidence({
+        evidence: npmManifest.pluginSdkApi,
+        acknowledgement: selected?.digest?.slice(0, 8),
+        expectedHeadSha: manifest.targetSha,
+        expectedWorkflowSha: manifest.publicationArtifacts.npmPreflight.producer.workflowSha,
+        npmDistTag,
+      });
   const npmDecisions = [];
   // Bound concurrent registry requests independently of the selected plugin count.
   for (let offset = 0; offset < packages.length; offset += 8) {
@@ -202,7 +227,7 @@ export async function createReleasePublishInputs({ manifest, npmManifest }) {
       // The sealed digest is evidence only. SDK API changes still need an
       // operator-supplied acknowledgement at publication.
       pluginSdkApiAcknowledgement: "",
-      pluginSdkApiEvidenceDigest: sdk.digest,
+      pluginSdkApiEvidenceDigest: sdk?.digest ?? null,
       npmDecisions,
     },
   });

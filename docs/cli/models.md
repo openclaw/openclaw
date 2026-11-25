@@ -118,6 +118,8 @@ Options:
 | `--probe-max-tokens <n>`  | Optional output-token cap per check (best effort). Unset sends no cap, like chat.                             |
 | `--agent <id>`            | Configured agent id; overrides `OPENCLAW_AGENT_DIR`.                                                          |
 
+`--probe` needs exclusive ownership of the state directory. It refuses while a Gateway owns it; omit `--probe`, or stop the Gateway first.
+
 `--probe-timeout` requires a positive number; `--probe-concurrency` and `--probe-max-tokens` require positive integers. Omit `--probe-timeout` and `--probe-concurrency` to use their defaults (`8000` and `2`). Omit `--probe-max-tokens` to send no cap: reasoning models can spend a small cap on thinking and return no visible reply, which the check reports as `format`. Explicitly empty values are rejected.
 
 Check rows can come from auth profiles, env credentials, or `models.json`. Check status buckets: `ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`.
@@ -130,6 +132,7 @@ Check detail/reason codes to expect when a check never reaches a model call:
 
 - `excluded_by_auth_order`: a stored profile exists, but explicit `auth.order.<provider>` omitted it, so the check reports the exclusion instead of trying it.
 - `missing_credential`, `invalid_expires`, `expired`, `unresolved_ref`: profile is present but not eligible or resolvable.
+- `refresh_failed`: an OAuth refresh failed in a way OpenClaw cannot safely retry. Sign in again (Control UI **Models** → **Sign in again** on the account, or `openclaw models auth login --provider <id>`).
 - `ineligible_profile`: profile is incompatible with provider config for another reason.
 - `no_model`: provider auth exists, but OpenClaw could not resolve a model candidate that can be tested for that provider.
 
@@ -182,10 +185,13 @@ use `models list --refresh` to inspect a local refresh instead.
 
 A provider that rejects catalog authentication produces a separate CLI diagnostic
 with its provider and, when available, profile ID. Open **Models** in the Control
-UI to check sign-in and catalog access, then retry with `--refresh`. Catalog
+UI to check sign-in and catalog access, then run `openclaw models list --refresh`. Catalog
 rejection alone does not cause the generic refresh warning or prove that model
 requests will fail. Timeouts and other discovery failures still produce the
 refresh warning, even when another provider needs sign-in.
+`models status` reports the same rejected or unavailable discovery from the prepared
+Gateway catalog on stderr; Doctor's `core/doctor/model-references` check reports
+rejected discovery as a warning and unavailable discovery as info.
 
 Discovery diagnostics go to stderr in every output mode. JSON output also includes
 `providerOutcomes` when the Gateway or local catalog publishes them: each entry
@@ -253,7 +259,7 @@ The command requires the local Gateway to be stopped. Stop it through its
 service owner, run the refresh, then start it again. It takes exclusive offline
 ownership through download and write settlement, and refuses while a Gateway
 owns the state directory. A successful result describes the saved download;
-the next Gateway start loads compatible metadata. The running Gateway continues
+the next Gateway start and local `models list` load compatible metadata. The running Gateway continues
 to perform its own scheduled catalog refreshes.
 If `models.catalogRefresh.enabled` is `false`, the command reports that refresh
 is disabled.
@@ -340,7 +346,7 @@ To configure system/agent credentials for a remote server, run `models auth` on 
 openclaw models accounts list
 openclaw models accounts login
 openclaw models accounts login anthropic --method api-key
-openclaw models accounts login openai --method device-code
+openclaw models accounts login openai --method oauth
 openclaw models accounts login xai --method api-key
 openclaw models accounts use <account-id>
 openclaw models accounts clear-default <provider>
@@ -358,7 +364,7 @@ If no person is identified, the command stops before provider sign-in and explai
 
 `login`, `use`, and `clear-default` need `operator.write`. `login` requires an interactive terminal and offers the same provider and sign-in methods as **Add account** in the Control UI. Omit the provider to choose from the Gateway's catalog; use `--method <id>` to select a method directly. The catalog includes only methods enabled for personal accounts by their provider plugin, not every system/agent setup method.
 
-Anthropic uses an API key for personal setup, not a Claude subscription token. OpenAI offers API key, browser sign-in, and device-code methods; Grok (`xai`) offers API key and device sign-in. Follow the steps shown by the selected Gateway. Credentials and authorization codes go into protected inputs, never command arguments or chat. During browser sign-in, the CLI keeps checking for completion even while a redirect prompt is open.
+Anthropic uses an API key for personal setup, not a Claude subscription token. OpenAI offers API key, Codex login (device code), and Sign in with ChatGPT methods; Grok (`xai`) offers API key and device sign-in. Follow the steps shown by the selected Gateway. Credentials and authorization codes go into protected inputs, never command arguments or chat. During browser sign-in, the CLI keeps checking for completion even while a redirect prompt is open.
 
 Keep the command running until it reports a terminal result. Ctrl-C cancels that exact sign-in attempt and waits for the Gateway's acknowledgment; a closed connection must start a fresh attempt. Saving an account does not by itself prove that a model request will succeed.
 
@@ -463,9 +469,9 @@ openclaw models auth order clear --provider <id>
 
 `models auth add` is the interactive auth helper. It can launch a provider auth flow (OAuth/API key) or guide you into manual token paste, depending on the provider you choose.
 
-`models auth list` lists saved auth profiles for the selected agent without printing token, API-key, or OAuth secret material. Active cooldown and disable entries include their reason and recovery action. Active subscription blocks include their reason, source, expiry, and whether they apply to the whole profile or one model; expired blocks are omitted. Legacy Gemini CLI OAuth cooldowns direct you to the supported Google AI Studio API-key setup instead of offering an unavailable Gemini CLI login flow. Use `--provider <id>` to filter to one provider, such as `openai`, and `--json` for scripting.
+`models auth list` lists saved auth profiles for the selected agent without printing token, API-key, or OAuth secret material. Active cooldown and disable entries include their reason and recovery action. Active subscription blocks include their reason, source, expiry, and whether they apply to the whole profile or one model; expired blocks are omitted. Legacy Gemini CLI OAuth cooldowns direct you to the supported Gemini API key setup instead of offering an unavailable Gemini CLI login flow. Use `--provider <id>` to filter to one provider, such as `openai`, and `--json` for scripting.
 
-`models auth login` runs a provider plugin's auth flow (OAuth/API key). Use `openclaw plugins list` to see which providers are installed. `login` accepts `--profile-id <id>` for providers that support named profiles during login (use this to keep multiple logins for the same provider separate), `--method <id>` to pick a specific auth method, `--device-code` as a shortcut for `--method device-code`, `--set-default` to apply the provider's recommended default model, and `--force` to remove existing profiles for that provider first (use when a cached OAuth profile is stuck or you want to switch accounts).
+`models auth login` runs a provider plugin's auth flow (OAuth/API key). Use `openclaw plugins list` to see which providers are installed. `login` accepts `--profile-id <id>` for providers that support named profiles during login (use this to keep multiple logins for the same provider separate), `--method <id>` to pick a specific auth method, `--device-code` to pick the provider's device-code sign-in (method `device-code`, or the declared device-code sign-in such as OpenAI Codex login or xAI OAuth), `--set-default` to apply the provider's recommended default model, and `--force` to remove existing profiles for that provider first (use when a cached OAuth profile is stuck or you want to switch accounts).
 
 Saving credentials for a provider makes its models visible. When a model restriction (`modelPolicy.allow`) hides every model of that provider, OpenClaw adds `<provider>/*` to the restriction that governs the agent and reports "Added `<provider>/*` to allowed models." A restriction that already names some of the provider's models, by exact ref or a narrower wildcard, stays unchanged, and so does a configuration with no restriction. The CLI (`login`, `paste-api-key`, `paste-token`), private-chat login, and Control UI follow the same rule. Provider plugin setup defaults cannot change restrictions.
 
@@ -491,7 +497,7 @@ Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
 
 See [OpenAI authentication](/providers/openai/authentication) to compare Codex
-OAuth, device code, API keys, and Sign in with ChatGPT (Beta) (`--method siwc`),
+OAuth, device code, API keys, and Sign in with ChatGPT (`--method siwc`),
 including model access, hosted plugins, and shared versus personal setup.
 
 Examples:

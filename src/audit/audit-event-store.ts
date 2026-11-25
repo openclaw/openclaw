@@ -170,15 +170,21 @@ function pruneAfterInsert(
     pruned = true;
   }
   if (retention.rowCount > AUDIT_EVENT_MAX_ROWS) {
-    const overflowCutoff = kysely
+    const rowCount =
+      normalizeSqliteNumber(
+        executeSqliteQueryTakeFirstSync(
+          db,
+          kysely.selectFrom("audit_events").select((eb) => eb.fn.countAll<number>().as("count")),
+        )?.count ?? null,
+      ) ?? 0;
+    const overflowIds = kysely
       .selectFrom("audit_events")
       .select("sequence")
-      .orderBy("sequence", "desc")
-      .offset(AUDIT_EVENT_MAX_ROWS - AUDIT_EVENT_PRUNE_BATCH_ROWS)
-      .limit(1);
+      .orderBy("sequence", "asc")
+      .limit(Math.max(0, rowCount - (AUDIT_EVENT_MAX_ROWS - AUDIT_EVENT_PRUNE_BATCH_ROWS)));
     const overflow = executeSqliteQuerySync(
       db,
-      kysely.deleteFrom("audit_events").where("sequence", "<=", overflowCutoff),
+      kysely.deleteFrom("audit_events").where("sequence", "in", overflowIds),
     );
     const deleted = Number(overflow.numAffectedRows ?? 0n);
     if (deleted > 0) {

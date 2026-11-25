@@ -45,3 +45,43 @@ it("drains seeded transcript owners before fresh-process history measurements", 
     }),
   );
 }, 35_000);
+
+it("keeps the source benchmark JSON parseable across all history readers", () => {
+  // Keep the documented source CLI: compiled coverage misses its startup/shutdown boundary.
+  const result = spawnSync(
+    resolveTestNodeExecPath(),
+    [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/bench-session-history.ts",
+      "--profile",
+      "small",
+      "--samples",
+      "1",
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      // Exercise diagnostic routing rather than Vitest's default silent console.
+      env: { ...process.env, OPENCLAW_LOG_LEVEL: "info", TSX_DISABLE_CACHE: "1" },
+      // The three source readers start in separate Node processes, serially.
+      // Under CI contention, the final gateway-tail cold start can push the run past 60s.
+      timeout: 120_000,
+    },
+  );
+
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  const report: unknown = JSON.parse(result.stdout);
+  expect(report).toEqual(
+    expect.objectContaining({
+      results: ["recent", "page", "gateway-tail"].map((operation) =>
+        expect.objectContaining({
+          profile: "small",
+          operation,
+          result: { returned: 20, total: 80 },
+        }),
+      ),
+    }),
+  );
+}, 125_000);

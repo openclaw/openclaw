@@ -1,7 +1,6 @@
 /// <reference lib="es2026.typedarrays" />
 
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   DEVICE_AUTH_STORAGE_KEY_PREFIX,
   LEGACY_DEVICE_AUTH_STORAGE_KEY,
@@ -20,10 +19,6 @@ export type {
   PairedDevice,
   PendingDevice,
 } from "../../../../src/gateway/device-pairing-list.types.js";
-
-// Plain-HTTP origins lack crypto.subtle; load the pure-JS digest only when
-// fingerprinting an identity there. Secure contexts use the platform digest.
-const loadPureSha2 = () => import("@noble/hashes/sha2.js");
 
 type StoredIdentity = DeviceIdentity & {
   version: 1;
@@ -71,7 +66,15 @@ function parseDeviceAuthStore(raw: string | null): DeviceAuthStore | null {
   }
 }
 
+// Page-lifetime copies of stores the browser refused to persist, matching the
+// in-memory device identity: a credential this page received stays usable here.
+const unpersistedStores = new Map<string, DeviceAuthStore>();
+
 function readStore(gatewayUrl: string): DeviceAuthStore | null {
+  const unpersisted = unpersistedStores.get(deviceAuthStorageKey(gatewayUrl));
+  if (unpersisted) {
+    return unpersisted;
+  }
   try {
     const storage = getSafeLocalStorage();
     const scopedKey = deviceAuthStorageKey(gatewayUrl);
@@ -103,12 +106,18 @@ function readStore(gatewayUrl: string): DeviceAuthStore | null {
 }
 
 function writeStore(gatewayUrl: string, store: DeviceAuthStore) {
+  const key = deviceAuthStorageKey(gatewayUrl);
+  // Held in memory until the browser accepts the write.
+  unpersistedStores.set(key, store);
   try {
     const storage = getSafeLocalStorage();
-    storage?.setItem(deviceAuthStorageKey(gatewayUrl), JSON.stringify(store));
+    storage?.setItem(key, JSON.stringify(store));
+    if (storage) {
+      unpersistedStores.delete(key);
+    }
     removeLegacyDeviceAuthStore(storage);
   } catch {
-    // localStorage can be unavailable in private or embedded contexts.
+    // localStorage can be unavailable or full in private or embedded contexts.
   }
 }
 
@@ -220,7 +229,8 @@ async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
     const hash = await subtle.digest("SHA-256", publicKey.slice().buffer);
     return new Uint8Array(hash).toHex();
   }
-  return (await loadPureSha2()).sha256(publicKey).toHex();
+  const { sha256 } = await import("@noble/hashes/sha2.js");
+  return sha256(publicKey).toHex();
 }
 
 async function generateIdentity(): Promise<DeviceIdentity> {
@@ -238,32 +248,24 @@ async function generateIdentity(): Promise<DeviceIdentity> {
 }
 
 /**
- * Synchronous identity probe for render gating: reads the stored device id
- * without creating, repairing, or fingerprint-verifying an identity, so a
- * "do we hold credentials?" check stays side-effect free before connect().
+ * Synchronous identity probe for render gating: reports the device id this page's
+ * credentials belong to without creating, repairing, or fingerprint-verifying an
+ * identity, so a "do we hold credentials?" check stays side-effect free before
+ * connect(). Once loadOrCreateDeviceIdentity has run it reports exactly that
+ * identity, including a page-lifetime one minted because the stored identity was
+ * unusable and storage rejects writes; before that, the stored identity it would use.
  */
 export function peekStoredDeviceIdentityId(): string | null {
-  try {
-    const raw = getSafeLocalStorage()?.getItem(DEVICE_IDENTITY_STORAGE_KEY);
-    if (!raw) {
-      return null;
-    }
-    const parsed: unknown = JSON.parse(raw);
-    return isRecord(parsed) &&
-      parsed.version === 1 &&
-      typeof parsed.deviceId === "string" &&
-      parsed.deviceId
-      ? parsed.deviceId
-      : null;
-  } catch {
-    return null;
-  }
+  return (
+    activeDeviceIdentityId ?? readStoredDeviceIdentity(getSafeLocalStorage())?.deviceId ?? null
+  );
 }
 
 // Storage-blocked pages (for example private browsing) must still present one
 // stable device per page lifetime; minting a fresh key on every reconnect
 // would raise a new unpaired request each time and never retain approval.
 let sessionDeviceIdentity: DeviceIdentity | null = null;
+let activeDeviceIdentityId: string | null = null;
 
 function readStoredDeviceIdentity(storage: Storage | null): StoredIdentity | null {
   try {
@@ -286,6 +288,26 @@ function readStoredDeviceIdentity(storage: Storage | null): StoredIdentity | nul
 }
 
 export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
+  // The asynchronous key generation must not let fresh tabs publish different
+  // identities for the same browser. Storage policy can deny exposed locks too.
+  let started = false;
+  try {
+    const locks = globalThis.navigator?.locks;
+    if (locks) {
+      return await locks.request(DEVICE_IDENTITY_STORAGE_KEY, () => {
+        started = true;
+        return loadOrCreateDeviceIdentityUnlocked();
+      });
+    }
+  } catch (error) {
+    if (started) {
+      throw error;
+    }
+  }
+  return loadOrCreateDeviceIdentityUnlocked();
+}
+
+async function loadOrCreateDeviceIdentityUnlocked(): Promise<DeviceIdentity> {
   const storage = getSafeLocalStorage();
   const parsed = readStoredDeviceIdentity(storage);
   try {
@@ -298,6 +320,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
         };
         storage?.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(updated));
       }
+      activeDeviceIdentityId = derivedId;
       return {
         deviceId: derivedId,
         publicKey: parsed.publicKey,
@@ -309,6 +332,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
   }
 
   if (sessionDeviceIdentity) {
+    activeDeviceIdentityId = sessionDeviceIdentity.deviceId;
     return sessionDeviceIdentity;
   }
   const identity = await generateIdentity();
@@ -323,6 +347,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
     // A write-rejecting store still gets the in-memory identity below.
   }
   sessionDeviceIdentity = identity;
+  activeDeviceIdentityId = identity.deviceId;
   return identity;
 }
 

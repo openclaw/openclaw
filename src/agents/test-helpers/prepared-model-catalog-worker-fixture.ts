@@ -36,10 +36,7 @@ import type {
 } from "../prepared-model-catalog-worker.types.js";
 import { isPreparedModelCatalogFull } from "../prepared-model-runtime.full-catalog.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
-import type {
-  PreparedModelRuntimeOwner,
-  PreparedModelRuntimeSnapshot,
-} from "../prepared-model-runtime.types.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 
 export function writeCodexAuth(codexHome: string, marker: string): void {
   const authPath = path.join(codexHome, "auth.json");
@@ -341,67 +338,6 @@ export function readCatalogDiscoveryCaptures(root: string) {
     .map((line) => JSON.parse(line) as { threadId: number; filename: string });
 }
 
-export async function refreshNativeCatalogDuringBoundedRead(params: {
-  snapshot: PreparedModelRuntimeSnapshot;
-  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory">;
-  harnessId: string;
-}): Promise<ModelCatalogSnapshot> {
-  const { snapshot, inventoryOwner } = params;
-  const previous = await snapshot.loadFullModelCatalog!({ refresh: true });
-  const previousInventory = inventoryOwner.catalogInventory;
-  const previousProofId = "proof-refresh-1-sqlite-true-shared-true-unrelated-false";
-  const nextProofId = "proof-refresh-2-sqlite-true-shared-true-unrelated-false";
-  expect(previous.entries).toContainEqual(expect.objectContaining({ id: previousProofId }));
-  expect(previous.entries).toContainEqual(
-    expect.objectContaining({ nativeRuntime: params.harnessId }),
-  );
-  const nativeHarness = snapshot.pluginRegistry?.agentHarnesses.find(
-    ({ harness }) => harness.id === params.harnessId,
-  )?.harness;
-  if (!nativeHarness?.loadModelCatalog) {
-    throw new Error("expected native catalog fixture harness");
-  }
-  const started = createDeferredCore();
-  const release = createDeferredCore();
-  const loadNative = nativeHarness.loadModelCatalog.bind(nativeHarness);
-  nativeHarness.loadModelCatalog = async (context) => {
-    started.resolve();
-    await release.promise;
-    return loadNative(context);
-  };
-  const refresh = snapshot.loadFullModelCatalog!({ refresh: true });
-  try {
-    await started.promise;
-    // Provider completion publishes independently while the native source retains its last rows.
-    const held = await snapshot.loadFullModelCatalog!();
-    expect(held).not.toBe(previous);
-    expect(snapshot.readFullModelCatalog!()).toBe(held);
-    expect(inventoryOwner.catalogInventory).not.toBe(previousInventory);
-    expect(snapshot.readPublishedModels?.()).toBe(inventoryOwner.catalogInventory?.runtimeModels);
-    for (const key of ["entries", "routeVariants"] as const) {
-      expect(held[key]).toContainEqual(expect.objectContaining({ id: nextProofId }));
-      expect(held[key].some((entry) => entry.id === previousProofId)).toBe(false);
-      expect(held[key].filter((entry) => entry.nativeRuntime)).toEqual(
-        previous[key].filter((entry) => entry.nativeRuntime),
-      );
-      expect(inventoryOwner.catalogInventory?.catalog[key]).toContainEqual(
-        expect.objectContaining({ id: nextProofId }),
-      );
-    }
-    expect(held.nativeHostRows).toEqual(previous.nativeHostRows);
-  } finally {
-    release.resolve();
-    try {
-      await refresh;
-    } finally {
-      nativeHarness.loadModelCatalog = loadNative;
-    }
-  }
-  const completed = await refresh;
-  expect(completed).not.toBe(previous);
-  return completed;
-}
-
 /** Full-result assertions follow publication after the bounded foreground read returns. */
 export async function loadCompletedFullCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
@@ -468,6 +404,10 @@ export function writeCatalogFailureControl(
               models: [{ id: "Learned", name: "Fallback seed" }],
             } } : {},
             outcomes: [{ provider: ${JSON.stringify(providerId)}, status: "unavailable" }],
+          };
+          if (catalogControl === "auth-rejected") return {
+            providers: {},
+            outcomes: [{ provider: ${JSON.stringify(providerId)}, status: "auth-rejected" }],
           };
           if (catalogControl === "configured") return undefined;
           if (catalogControl === "empty") return { provider: { baseUrl: "https://worker-catalog.invalid/v1", api: "openai-completions", models: [] } };

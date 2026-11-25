@@ -14,6 +14,7 @@ import {
 } from "./chat-composer.test-support.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
+import { placeComposerDictation } from "./composer-dictation-session.ts";
 
 afterEach(() => resetComposerFixture());
 
@@ -205,6 +206,8 @@ describe("renderChatComposer controls", () => {
     const locked = vi.spyOn(dictation, "locksComposer", "get").mockReturnValue(true);
     vi.spyOn(dictation, "finalizing", "get").mockReturnValue(finalizing);
     const finishActive = vi.spyOn(dictation, "finishActive").mockResolvedValue(true);
+    // Commits arrive only after the capture module, which places transcripts, has loaded.
+    vi.spyOn(dictation, "placeTranscript").mockImplementation(placeComposerDictation);
     const update = vi.spyOn(dictation, "update");
     renderComposerInto(container, props);
     const commit = update.mock.lastCall?.[0].onCommit;
@@ -457,7 +460,9 @@ describe("renderChatComposer controls", () => {
       const tooltip = primaryButton(view.container).closest<HTMLElement & { content?: string }>(
         "openclaw-tooltip",
       );
-      expect(tooltip?.content).toBe(expected);
+      const text = tooltip?.querySelector('[slot="content"]')?.textContent ?? tooltip?.content;
+      expect(text).toContain(expected);
+      expect(text).not.toContain(" · ");
     }
   });
 

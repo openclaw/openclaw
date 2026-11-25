@@ -1,8 +1,8 @@
 // Native Node tooling imports this source without a TypeScript resolver.
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { runtimeProcessDependencyEntrypoints } from "./runtime-process-dependency-manifest.ts";
 import { resolveRuntimeDependencyEntrypointUrl } from "./runtime-process-dependency-url.ts";
-import { runtimeProcessDependencyEntrypoints } from "./runtime-process-manifest.ts";
 
 /** Runs the packaged npm CLI with the current JavaScript runtime. */
 export function resolveBundledNpmCommand(args: readonly string[]): [string, string, ...string[]] {

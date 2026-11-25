@@ -72,9 +72,9 @@ export function serializedJsonArrayBytes(values: readonly unknown[]): number {
   return serializedArrays.get(values)?.retainedBytes ?? 0;
 }
 
-function arrayBytes(value: unknown): Uint8Array | undefined {
+function arrayBytes(value: unknown): Uint8Array | readonly Uint8Array[] | undefined {
   if (value instanceof SerializedJsonArray) {
-    return value.bytes;
+    return value.segments;
   }
   const encoded = Array.isArray(value) ? serializedArrays.get(value) : undefined;
   if (encoded?.rows) {
@@ -94,9 +94,85 @@ function arrayBytes(value: unknown): Uint8Array | undefined {
   return encoded?.bytes;
 }
 
+/** Worker-produced ranges into the exact encoded page, never a policy decision. */
+export type SerializedJsonArrayIndex = {
+  byteLength: number;
+  rowCount: number;
+  ranges: number[];
+};
+
 /** The history worker owns these already-validated JSON array bytes. */
-export class SerializedJsonArray {
-  constructor(readonly bytes: Uint8Array) {}
+export class SerializedJsonArray extends SerializedGatewayFrame {
+  constructor(
+    bytes: Uint8Array | readonly Uint8Array[],
+    readonly rowIndex?: SerializedJsonArrayIndex,
+  ) {
+    super(bytes instanceof Uint8Array ? [bytes] : bytes);
+  }
+
+  get bytes(): Uint8Array {
+    return this.segments.length === 1 ? this.segments[0]! : this.toBuffer();
+  }
+
+  mapIndexedRows(project: (value: unknown) => unknown): SerializedJsonArray | unknown[] {
+    const index = this.rowIndex;
+    const bytes = this.bytes;
+    let previousOffset = 0;
+    // Old workers have no index. Reject malformed ranges before projecting any row.
+    if (
+      !index ||
+      index.byteLength !== bytes.byteLength ||
+      !Number.isSafeInteger(index.rowCount) ||
+      index.rowCount < 0 ||
+      index.rowCount > bytes.byteLength ||
+      !Array.isArray(index.ranges) ||
+      index.ranges.length % 2 !== 0 ||
+      index.ranges.length / 2 > index.rowCount ||
+      !index.ranges.every((offset) => {
+        const valid =
+          Number.isSafeInteger(offset) && offset > previousOffset && offset < bytes.byteLength;
+        previousOffset = offset;
+        return valid;
+      })
+    ) {
+      return this.materialize().map(project);
+    }
+    // When every row is indexed, one parse/encode avoids per-row Buffer overhead.
+    if (index.rowCount > 0 && index.ranges.length === index.rowCount * 2) {
+      const rows = this.materialize();
+      const projected = rows.map(project);
+      return projected.every((row, i) => row === rows[i])
+        ? this
+        : new SerializedJsonArray(encodeOwnedBuffer(JSON.stringify(projected)));
+    }
+    const chunks: Uint8Array[] = [];
+    let cursor = 0;
+    for (let i = 0; i < index.ranges.length; i += 2) {
+      const start = index.ranges[i]!;
+      const end = index.ranges[i + 1]!;
+      let row: unknown;
+      try {
+        row = JSON.parse(
+          Buffer.from(bytes.buffer, bytes.byteOffset + start, end - start).toString("utf8"),
+        );
+      } catch {
+        return this.materialize().map(project);
+      }
+      const projected = project(row);
+      if (projected !== row) {
+        chunks.push(
+          bytes.subarray(cursor, start),
+          encodeOwnedBuffer(JSON.stringify(projected) ?? "null"),
+        );
+        cursor = end;
+      }
+    }
+    if (chunks.length === 0) {
+      return this;
+    }
+    chunks.push(bytes.subarray(cursor));
+    return new SerializedJsonArray(chunks);
+  }
 
   materialize(): unknown[] {
     const { bytes } = this;
@@ -179,7 +255,12 @@ export function serializeGatewayFrame(value: unknown): string | SerializedGatewa
       json += `${separator}${encoded}`;
       separator = ",";
       if (rawArray) {
-        chunks.push(Buffer.from(json), rawArray);
+        chunks.push(Buffer.from(json));
+        if (rawArray instanceof Uint8Array) {
+          chunks.push(rawArray);
+        } else {
+          chunks.push(...rawArray);
+        }
         json = "";
       } else if (nestedPayload) {
         appendObject(nestedPayload);

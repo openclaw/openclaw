@@ -629,7 +629,6 @@ export class CodexToolTranscriptProjection {
         },
         undefined,
         signal,
-        this.params.contextTokenBudget,
       )) ?? []
     );
   }

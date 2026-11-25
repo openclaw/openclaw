@@ -6,14 +6,9 @@ import {
   formatSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
-import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { iterateSessionColdRecords } from "../config/sessions/session-cold-storage-chunks.js";
-import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
-import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import { formatErrorMessage } from "./errors.js";
-import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
   readSessionCostUsageRollupRowsInDatabase,
   readSessionCostUsageRollupBodyInDatabase,
@@ -39,6 +34,7 @@ import {
 } from "./session-cost-usage-quarters.worker.js";
 import {
   createUsageCostCollectionAccess,
+  matchesUsageCostSqliteMutation,
   usageRefreshInputs,
 } from "./session-cost-usage-refresh-inputs.worker.js";
 import {
@@ -60,6 +56,7 @@ import {
 } from "./session-cost-usage-worker-prune.js";
 import {
   createUsageCostWorkerPriceResolver,
+  createUsageCostTranscriptReader,
   scanUsageCostRollupInWorker,
 } from "./session-cost-usage-worker-refresh.js";
 import { projectUsageCostSessionsInWorker } from "./session-cost-usage-worker-report.js";
@@ -117,12 +114,21 @@ export async function executeUsageCostWorker(
     const database = target(agentId, storePath);
     return control.runNativeSection(() => readDatabase(database, read));
   };
+  const { yieldRead, readRows, settleReadPacing } = createUsageCostTranscriptReader({
+    target,
+    readStore,
+    readFacts: (marker) => readFacts(marker),
+    control,
+    env,
+    cooperativePacing: operation.kind === "refresh" && operation.background === true,
+  });
   const refreshInputs =
     operation.kind === "refresh" ? usageRefreshInputs(location.databasePath) : undefined;
-  const { access, readFacts, readFreshness, inventory } = createUsageCostCollectionAccess({
+  const { access, readFacts, readFreshness } = createUsageCostCollectionAccess({
     input,
     target,
     readStore,
+    yieldRead,
     readCheckpoint: (marker) => {
       if (operation.kind !== "refresh") {
         return undefined;
@@ -139,7 +145,6 @@ export async function executeUsageCostWorker(
       ...access,
       storePath: location.storePath,
       minMtimeMs: operation.minMtimeMs,
-      statistics: false,
     });
     return {
       kind: "inventory",
@@ -252,71 +257,6 @@ export async function executeUsageCostWorker(
 
   const resolveCosts = createUsageCostWorkerPriceResolver((pairs) => host("pricing", pairs));
   const readGeneration = async (marker: SqliteSessionFileMarker) => readFacts(marker)?.generation;
-  const readRows = async (
-    marker: SqliteSessionFileMarker,
-    afterSeq: number,
-    throughSeq: number,
-    consume: (seq: number, event: unknown) => void,
-  ): Promise<number> => {
-    if (throughSeq <= afterSeq) {
-      return afterSeq;
-    }
-    const database = target(marker.agentId, marker.storePath);
-    return readStore(marker.agentId, marker.storePath, () => {
-      const result = withOpenClawAgentDatabaseReadOnly(
-        (opened) => {
-          if (readFacts(marker)?.cold) {
-            const lastSeq = runSqliteReadSnapshotSync(opened.db, () => {
-              const archive = readSessionColdTranscript(opened.db, marker.sessionId);
-              if (!archive) {
-                return undefined;
-              }
-              let last = afterSeq;
-              // Exhaust every chunk before publishing; the decoder verifies totals at EOF.
-              for (const record of iterateSessionColdRecords(opened.db, database.path, archive)) {
-                control.throwIfCancelled();
-                if (
-                  record.kind === "event" &&
-                  record.row.seq > afterSeq &&
-                  record.row.seq <= throughSeq
-                ) {
-                  consume(record.row.seq, JSON.parse(record.row.event_json));
-                  last = record.row.seq;
-                }
-              }
-              return last;
-            });
-            if (lastSeq !== undefined) {
-              return lastSeq;
-            }
-          }
-          const query = getSessionKysely(opened.db)
-            .selectFrom("transcript_events")
-            .select(["seq", transcriptEventJsonSql(opened.db).as("event_json")])
-            .where("session_id", "=", marker.sessionId)
-            .where("seq", ">", afterSeq)
-            .where("seq", "<=", throughSeq)
-            .orderBy("seq", "asc")
-            .limit(1_024);
-          let lastSeq = afterSeq;
-          let bytes = 0;
-          // Bound each hot page; the consumer retains only usage and navigation fields.
-          for (const row of iterateSqliteQuerySync(opened.db, query)) {
-            const size = Buffer.byteLength(row.event_json);
-            if (lastSeq > afterSeq && bytes + size > 8 * 1024 * 1024) {
-              break;
-            }
-            consume(row.seq, JSON.parse(row.event_json));
-            lastSeq = row.seq;
-            bytes += size;
-          }
-          return lastSeq;
-        },
-        { ...database, env },
-      );
-      return result.found ? result.value : afterSeq;
-    });
-  };
   // A busy cache reads as not yet summarized; reports stay partial and refreshes retry.
   const readCacheOrEmpty = <T>(read: (db: EngineConnection) => T, empty: () => T): Promise<T> =>
     control.runNativeSection(() =>
@@ -335,7 +275,13 @@ export async function executeUsageCostWorker(
     return projectUsageCostQuartersInWorker({
       operation,
       access,
-      inventory,
+      inventory: async () =>
+        (
+          await listUsageCountedTranscriptSources(location.agentId, {
+            ...access,
+            storePath: location.storePath,
+          })
+        ).map((source) => ({ sessionFile: source.sourcePath, sessionId: source.sessionId })),
       readFreshness,
       readCache: readCacheOrEmpty,
       scan: {
@@ -380,7 +326,7 @@ export async function executeUsageCostWorker(
 
   const requestedFiles = selectedFiles.filter((file) => file !== undefined);
   if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
-    throw new WorkerTaskError("A requested usage transcript is unavailable", "unavailable");
+    throw new WorkerTaskError("Chat history for the requested usage is unavailable", "unavailable");
   }
   const sources = operation.sessionFiles
     ? []
@@ -388,7 +334,6 @@ export async function executeUsageCostWorker(
         ...access,
         storePath: location.storePath,
         sessionsDir: operation.sessionsDir,
-        statistics: false,
       });
   const sourcesByPath = new Map(
     sources.map((source) => [resolveUsageCostTranscriptSourcePath(source), source]),
@@ -403,10 +348,34 @@ export async function executeUsageCostWorker(
     () => new Set<string>(),
   );
   const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;
-  const selectedSources = [...sourcesByPath].filter(
-    ([filePath, source]) =>
-      !(minMtimeMs !== undefined && source.mtimeMs < minMtimeMs) || quarterGaps.has(filePath),
-  );
+  const maxFiles =
+    operation.maxFiles !== undefined &&
+    Number.isFinite(operation.maxFiles) &&
+    operation.maxFiles > 0
+      ? Math.floor(operation.maxFiles)
+      : undefined;
+  const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
+  const selectedSources = [...sourcesByPath].filter(([filePath, source]) => {
+    if (quarterGaps.has(filePath)) {
+      return true;
+    }
+    if (minMtimeMs !== undefined && source.mtimeMs < minMtimeMs) {
+      return false;
+    }
+    // Discovery already read these mutation facts and validated the rollup envelope.
+    // A fresh window neither consumes a batch slot nor needs a continuation.
+    const cached = byPath.get(filePath);
+    const checkpoint = cached?.envelope?.checkpoint;
+    return !(
+      source.kind === "sqlite" &&
+      checkpoint?.kind === "sqlite" &&
+      matchesUsageCostSqliteMutation(checkpoint, source) &&
+      cached?.envelope?.projection &&
+      cached.row.bodyBytes === cached.envelope.body.storedBytes &&
+      !rebuildByPath.has(filePath)
+    );
+  });
+  const deferredSources = maxFiles ? selectedSources.splice(maxFiles) : [];
   const files = operation.sessionFiles
     ? requestedFiles
     : await readUsageCostTranscriptSourceStats(
@@ -423,7 +392,10 @@ export async function executeUsageCostWorker(
   for (const file of files) {
     livePaths.add(file.filePath);
   }
-  const supersededArchiveKey = createSupersededArchiveKeyResolver(files);
+  const supersededArchiveKey = createSupersededArchiveKeyResolver([
+    ...files,
+    ...deferredSources.map(([filePath, source]) => ({ ...source, filePath })),
+  ]);
   const supersededArchiveRows: Array<{ row: SessionCostUsageRollupRow; current: string }> = [];
   const pruner = createUsageCostRollupPruner((batch) =>
     host(
@@ -455,7 +427,6 @@ export async function executeUsageCostWorker(
       ...collectSupersededArchiveRows(await readMetadata(true), supersededArchiveKey, byPath),
     );
   }
-  const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
   const unreadable = new Map<string, unknown>();
   // Undecodable archives with no usage to carry keep their superseded rows.
   const retainedArchiveKeys = new Set<string>();
@@ -486,12 +457,6 @@ export async function executeUsageCostWorker(
     }
   }
   stale.sort((a, b) => a.file.size - b.file.size || a.file.filePath.localeCompare(b.file.filePath));
-  const maxFiles =
-    operation.maxFiles !== undefined &&
-    Number.isFinite(operation.maxFiles) &&
-    operation.maxFiles > 0
-      ? Math.floor(operation.maxFiles)
-      : undefined;
   // Yield between whole-file publications so other agents do not spend their
   // worker timeout queued behind a large batch. One large transcript can exceed this quantum.
   const batchDeadline = maxFiles ? performance.now() + 10_000 : Infinity;
@@ -683,7 +648,10 @@ export async function executeUsageCostWorker(
   }
   // Refresh completion (including a yielded batch) promises committed totals.
   await flush();
-  const unscanned = new Set(stale.slice(completedFiles).map(({ file }) => file.filePath));
+  const unscanned = new Set([
+    ...stale.slice(completedFiles).map(({ file }) => file.filePath),
+    ...deferredSources.map(([filePath]) => filePath),
+  ]);
   for (const { row, current } of supersededArchiveRows) {
     if (!retainedArchiveKeys.has(current) && !unscanned.has(current)) {
       await pruner.prune(row);
@@ -691,6 +659,7 @@ export async function executeUsageCostWorker(
     }
   }
   await pruner.flush();
+  await settleReadPacing();
   const unreadableFiles = unreadable.size
     ? {
         unreadableFiles: [...unreadable].map(([sessionFile, error]) => ({
@@ -699,7 +668,7 @@ export async function executeUsageCostWorker(
         })),
       }
     : {};
-  if (stale.length === completedFiles) {
+  if (stale.length === completedFiles && deferredSources.length === 0) {
     return { kind: "refresh", changed, ...unreadableFiles };
   }
   const remaining = stale.slice(completedFiles).map(({ file }) => file);
@@ -709,13 +678,16 @@ export async function executeUsageCostWorker(
     changed,
     ...unreadableFiles,
     // Keep every requested alias pending even when scanning deduplicated physical keys.
-    remainingFiles: (operation.sessionFiles
-      ? requestedFiles.filter((file) => remainingPaths.has(file.filePath))
-      : remaining
-    ).map((file) => ({
-      sessionFile: file.sourcePath,
-      rollupId: file.filePath,
-    })),
+    remainingFiles: [
+      ...(operation.sessionFiles
+        ? requestedFiles.filter((file) => remainingPaths.has(file.filePath))
+        : remaining
+      ).map((file) => ({ sessionFile: file.sourcePath, rollupId: file.filePath })),
+      ...deferredSources.map(([rollupId, source]) => ({
+        sessionFile: source.sourcePath,
+        rollupId,
+      })),
+    ],
   };
 }
 

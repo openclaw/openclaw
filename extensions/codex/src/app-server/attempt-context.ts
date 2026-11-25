@@ -27,6 +27,7 @@ import {
   type CodexWorkspaceBootstrapContext,
 } from "./attempt-workspace-context.js";
 import type { CodexAgentsMdSnapshot, CodexNativeModelContext } from "./client-workspace-state.js";
+import { resolveGatewayOnlySkillDirs } from "./dynamic-tool-content.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -75,16 +76,10 @@ export async function readMirroredSessionHistoryMessages(
   params: CodexMirroredSessionHistoryTarget & {
     admission?: TranscriptTurnAdmission;
     signal?: AbortSignal;
-    contextTokenBudget?: number;
   },
 ): Promise<AgentMessage[] | undefined> {
-  const { admission, signal, contextTokenBudget, ...target } = params;
-  const messages = await readCodexMirroredSessionHistoryMessages(
-    target,
-    admission,
-    signal,
-    contextTokenBudget,
-  );
+  const { admission, signal, ...target } = params;
+  const messages = await readCodexMirroredSessionHistoryMessages(target, admission, signal);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       sessionFile: params.sessionFile,
@@ -447,10 +442,45 @@ export async function prepareCodexWatchedSessionsContext(params: {
   });
 }
 
+/** The catalog arrives rendered (with compacted paths), so entries are matched by name. */
+function withoutGatewayOnlySkillLocations(
+  prompt: string,
+  skills: readonly { name: string; source: string; filePath: string }[],
+  remoteRoot: string,
+  readable: boolean,
+): string {
+  const escape = (value: string) =>
+    value
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&apos;");
+  const names = new Set(
+    [...resolveGatewayOnlySkillDirs(skills, remoteRoot).keys()].map(
+      (name) => `    <name>${escape(name)}</name>`,
+    ),
+  );
+  const note = readable
+    ? "Stored on the Gateway: read it with skills_read by name."
+    : "Stored on the Gateway: its instructions cannot be read on this machine.";
+  return names.size === 0
+    ? prompt
+    : prompt.replace(/^ {2}<skill>\n[\s\S]*?\n {2}<\/skill>$/gmu, (block) =>
+        block.split("\n").some((line) => names.has(line))
+          ? block.replace(
+              /^ {4}<location>.*<\/location>$/mu,
+              `    <location_note>${note}</location_note>`,
+            )
+          : block,
+      );
+}
+
 export function renderCodexSkillsInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
   dynamicTools?: readonly CodexDynamicToolSpec[];
+  remoteWorkspaceRoot?: string;
 }): string | undefined {
   if (!shouldIncludeAgentHarnessRuntimeContext(params.attempt)) {
     return undefined;
@@ -460,9 +490,18 @@ export function renderCodexSkillsInstructions(params: {
       normalizeLowercaseStringOrEmpty(tool.name),
     ),
   );
-  const prompt = params.skillsPrompt?.trim();
   const search = names.has("skills_search");
   const read = names.has("skills_read");
+  const trimmed = params.skillsPrompt?.trim();
+  const prompt =
+    trimmed && params.remoteWorkspaceRoot
+      ? withoutGatewayOnlySkillLocations(
+          trimmed,
+          params.attempt.skillsSnapshot?.resolvedSkills ?? [],
+          params.remoteWorkspaceRoot,
+          read,
+        )
+      : trimmed;
   if (!prompt && !search) {
     return undefined;
   }
@@ -470,14 +509,10 @@ export function renderCodexSkillsInstructions(params: {
     "## OpenClaw Skills",
     ...(search
       ? [
-          "The directory is bounded. Use OpenClaw's skills_search tool to find relevant installed skills omitted from it. Search does not install skills.",
+          "The OpenClaw skills list may omit installed skills. Use OpenClaw's skills_search to discover relevant installed skills. Search does not install anything.",
         ]
       : []),
-    ...(read
-      ? [
-          "Use OpenClaw's skills_read tool with an exact name for complete instructions; a known name does not require search first.",
-        ]
-      : []),
+    ...(read ? ["Use OpenClaw's skills_read with a known exact name for full instructions."] : []),
     ...(prompt ? [prompt] : []),
   ].join("\n");
 }

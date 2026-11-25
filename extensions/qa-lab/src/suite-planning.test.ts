@@ -6,10 +6,7 @@ import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import {
   applyQaSuiteGatewayConfigPatches,
   collectQaSuiteGatewayConfigPatches,
-  collectQaSuiteGatewayRuntimeOptions,
-  collectQaSuitePluginIds,
   collectQaSuiteTransportPolicy,
-  normalizeQaSuiteScenarioChannel,
   resolveQaSuiteScenarioChannel,
   resolveQaSuiteScenarioChannels,
   resolveQaSuiteOutputDir,
@@ -41,11 +38,6 @@ const selectMock = (scenarios: Scenario[], scenarioIds: string[]) =>
   selectQaFlowSuiteScenarios({ ...mockLane, scenarios, scenarioIds });
 
 describe("qa suite planning helpers", () => {
-  it("normalizes blank scenario channels as unpinned", () => {
-    const scenarios = ["   ", " Matrix "].map((channel) => makeScenario("channel", { channel }));
-    expect(scenarios.map(normalizeQaSuiteScenarioChannel)).toEqual([undefined, "matrix"]);
-  });
-
   it("keeps programmatic suite output dirs within the repo root", async () => {
     const repoRoot = await makeRoot("qa-suite-existing-root-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "custom");
@@ -150,16 +142,6 @@ describe("qa suite planning helpers", () => {
     expect(collectQaSuiteTransportPolicy([scenario])).toEqual(transportPolicy);
   });
 
-  it("collects unique scenario-declared bundled plugins in encounter order", () => {
-    const scenarios = [
-      makeScenario("generic", { plugins: ["active-memory", "memory-wiki"] }),
-      makeScenario("other", { plugins: ["memory-wiki", "openai"] }),
-      makeScenario("plain"),
-    ];
-
-    expect(collectQaSuitePluginIds(scenarios)).toEqual(["active-memory", "memory-wiki", "openai"]);
-  });
-
   it("ignores prototype-mutating keys in scenario startup config patches", () => {
     const scenarios = [
       makeScenario("polluted", {
@@ -192,23 +174,6 @@ describe("qa suite planning helpers", () => {
     expect(
       applyPatches([readQaScenarioById("whatsapp-access-control-dm-open")], {}, "whatsapp-alt"),
     ).toEqual({ channels: { whatsapp: { accounts } } });
-  });
-
-  it("collects gateway runtime options across selected scenarios", () => {
-    const scenarios = [
-      makeScenario("plain"),
-      ...[
-        { forwardHostHome: true },
-        { preserveDebugArtifacts: true },
-        { allowUnhealthyStartup: true },
-      ].map((gatewayRuntime, index) => makeScenario(String(index), { gatewayRuntime })),
-    ];
-
-    expect(collectQaSuiteGatewayRuntimeOptions(scenarios)).toEqual({
-      allowUnhealthyStartup: true,
-      forwardHostHome: true,
-      preserveDebugArtifacts: true,
-    });
   });
 
   it.each([

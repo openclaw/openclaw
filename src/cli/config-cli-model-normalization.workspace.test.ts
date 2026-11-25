@@ -21,8 +21,10 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 function writeProviderPlugin(root: string, prefix: string) {
   const id = `${prefix}-normalizer`;
-  fs.mkdirSync(root, { recursive: true });
-  fs.writeFileSync(path.join(root, "index.js"), "throw new Error('metadata only');\n");
+  fs.mkdirSync(root, { recursive: true, mode: 0o755 });
+  fs.writeFileSync(path.join(root, "index.js"), "throw new Error('metadata only');\n", {
+    mode: 0o644,
+  });
   const files = {
     "package.json": { name: id, openclaw: { extensions: ["./index.js"] } },
     "openclaw.plugin.json": {
@@ -35,7 +37,7 @@ function writeProviderPlugin(root: string, prefix: string) {
     },
   };
   for (const [name, content] of Object.entries(files)) {
-    fs.writeFileSync(path.join(root, name), JSON.stringify(content));
+    fs.writeFileSync(path.join(root, name), JSON.stringify(content), { mode: 0o644 });
   }
 }
 

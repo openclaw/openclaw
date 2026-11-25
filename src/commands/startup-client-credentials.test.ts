@@ -28,12 +28,12 @@ import {
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
 import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
-import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import {
   acquireGatewayStateOwner,
   GatewayStateOwnerContentionError,
 } from "../infra/gateway-state-owner.js";
+import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
@@ -146,9 +146,9 @@ describe("automatic client credential preparation", () => {
       writeClientCredentialReceipt(owner.database, stored.receipt, phase ?? stored.phase),
     );
   }
-  function changeRecordedDevice(env: NodeJS.ProcessEnv) {
+  function changeRecordedFile(env: NodeJS.ProcessEnv, field: "dev" | "ino") {
     editReceipt(env, (receipt) => {
-      receipt.sharedFile!.dev = String(BigInt(receipt.sharedFile!.dev) + 1000n);
+      receipt.sharedFile![field] = String(BigInt(receipt.sharedFile![field]) + 1000n);
     });
   }
   function restoreLegacyBootstrapReceipt(env: NodeJS.ProcessEnv) {
@@ -176,7 +176,7 @@ describe("automatic client credential preparation", () => {
     { filename: "identity/node-device-auth.json", claim: "auth:node", kind: "auth" },
     { filename: "exec-approvals.json", claim: undefined, kind: "approvals" },
   ] as const)(
-    "preserves all files before refusing malformed required $kind",
+    "preserves malformed $kind without importing it",
     async ({ filename, claim, kind }) => {
       const fixture = await bootstrap();
       if (claim) {
@@ -192,11 +192,15 @@ describe("automatic client credential preparation", () => {
       fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
       fs.writeFileSync(sourcePath, '{"retiredCredential":"preserve for recovery"}');
       const before = snapshotFiles(fixture.root);
-      await expect(fixture.prepare({ config: {} })).rejects.toThrow(
-        kind === "approvals"
-          ? ExecApprovalsMigrationRequiredError
-          : ClientCredentialMigrationRequiredError,
-      );
+      if (kind === "approvals") {
+        await expect(fixture.prepare({ config: {} })).resolves.toBeUndefined();
+        expect(readStartupMigrationWarning()).toContain("legacy-exec-approvals-invalid");
+        expect(readStartupMigrationWarning()).not.toContain("preserve for recovery");
+      } else {
+        await expect(fixture.prepare({ config: {} })).rejects.toThrow(
+          ClientCredentialMigrationRequiredError,
+        );
+      }
       expect(snapshotFiles(fixture.root)).toEqual(before);
     },
   );
@@ -406,12 +410,12 @@ describe("automatic client credential preparation", () => {
     expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
   });
 
-  it("recovers a remounted fresh bootstrap without changing credentials or another root", async () => {
+  it("recovers a rebound fresh bootstrap without changing credentials or another root", async () => {
     const fixture = await bootstrap();
     const other = target();
     vi.stubEnv("OPENCLAW_STATE_DIR", other.root);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", other.env.OPENCLAW_CONFIG_PATH);
-    changeRecordedDevice(fixture.env);
+    changeRecordedFile(fixture.env, "ino");
     await fixture.prepare();
     await expectCredentials(fixture);
     expect(fs.readdirSync(other.root)).toEqual([]);
@@ -423,7 +427,7 @@ describe("automatic client credential preparation", () => {
 
   it("preserves the local credentials when the source generation does not match", async () => {
     const fixture = await bootstrap();
-    changeRecordedDevice(fixture.env);
+    changeRecordedFile(fixture.env, "ino");
     {
       using source = new DatabaseSync(fixture.shared);
       source
@@ -435,11 +439,20 @@ describe("automatic client credential preparation", () => {
     expect(fs.readFileSync(fixture.local)).toEqual(bytes);
   });
 
-  it("upgrades a healthy legacy bootstrap before its next filesystem remount", async () => {
+  it("stays ready without Doctor maintenance after the shared device is renumbered", async () => {
+    const fixture = await bootstrap();
+    changeRecordedFile(fixture.env, "dev");
+    const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance");
+    await fixture.prepare();
+    expect(maintenance).not.toHaveBeenCalled();
+    await expectCredentials(fixture);
+  });
+
+  it("upgrades a healthy legacy bootstrap before its shared file is next rebound", async () => {
     const fixture = await bootstrap();
     restoreLegacyBootstrapReceipt(fixture.env);
     await fixture.prepare();
-    changeRecordedDevice(fixture.env);
+    changeRecordedFile(fixture.env, "ino");
     await fixture.prepare();
     await expectCredentials(fixture);
   });
@@ -495,7 +508,7 @@ describe("automatic client credential preparation", () => {
           const originalConfig = fs.readFileSync(fixture.env.OPENCLAW_CONFIG_PATH);
           restoreLegacyBootstrapReceipt(fixture.env);
           if (required) {
-            changeRecordedDevice(fixture.env);
+            changeRecordedFile(fixture.env, "ino");
           }
           const before = fs.readFileSync(fixture.local);
           const error = vi.fn();
@@ -524,7 +537,7 @@ describe("automatic client credential preparation", () => {
     "preserves %s outcome after another startup completes migration",
     async (failureKind) => {
       const fixture = await bootstrap();
-      changeRecordedDevice(fixture.env);
+      changeRecordedFile(fixture.env, "ino");
       const contention = new GatewayStateOwnerContentionError(fixture.shared);
       const controller = new AbortController();
       const cleanup = new Error("Synthetic maintenance release failure");
@@ -564,7 +577,7 @@ describe("automatic client credential preparation", () => {
     });
     let refusedBytes: Buffer | undefined;
     vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockImplementationOnce(async () => {
-      changeRecordedDevice(fixture.env);
+      changeRecordedFile(fixture.env, "ino");
       refusedBytes = fs.readFileSync(fixture.local);
       throw refusal;
     });

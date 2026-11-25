@@ -158,7 +158,7 @@ it.each(["package", "staged", "git"] as const)(
       timeoutMs: params.updateStepTimeoutMs,
     });
     expect(mocks.serviceStopped).toBe(false);
-    expect(mocks.validateCanary).not.toHaveBeenCalled();
+    expect(mocks.checkCandidate).not.toHaveBeenCalled();
     // Known target support must not copy live stores merely to rediscover their engines.
     expect(engineReads).not.toHaveBeenCalled();
     expect(physicalEngineReads).not.toHaveBeenCalled();

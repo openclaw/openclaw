@@ -5,8 +5,13 @@ description: Correct or withdraw specific saved Knowledge claims, explicit relat
 
 # Correct saved knowledge through agent tools
 
-Read [shared conventions](references/conventions.md) and
-[publication](references/publication.md) before writes.
+Read [setup](references/setup.md) first. Read the rest only when a step needs
+it, and don't reread one after compaction unless you are about to use it:
+[assertions](references/assertions.md) for claim and relationship fields,
+[publish](references/publish.md) and [subject pages](references/profiles.md) for
+page prose, [sources](references/sources.md) for retaining a user's statement,
+[recovery](references/recovery.md) for any uncertain, rejected or conflicting
+write, and [verify](references/verify.md) for readback.
 
 ## Identify the owning record
 
@@ -20,7 +25,8 @@ when the requested target or correction remains materially ambiguous.
 Distinguish an erroneous saved assertion from an unsupported answer, conflicting
 source statements, and a fact that changed over time. Contradiction alone does
 not authorize supersession; the one non-user case is a standing statement its own
-holder explicitly replaced, per publication. Do not manufacture a stored “guard fact” when no
+holder explicitly replaced
+([assertions](references/assertions.md#before-creating-reuse-or-reconcile)). Do not manufacture a stored “guard fact” when no
 record exists or treat a retraction as evidence for its opposite.
 
 ## Apply the right operation
@@ -42,8 +48,11 @@ record exists or treat a retraction as evidence for its opposite.
   exact ID, revision/hash, reason and vault UUID. It accepts pages, claims and
   explicit relationships. An edge is identified by its own ID, not its endpoint
   pair. It preserves original evidence/history and is not file deletion.
-- **Page prose correction:** use ordinary revision-fenced `knowledge_save_page`,
-  preserving unrelated authored material and sources. Page corrections are
+- **Page prose correction:** use ordinary revision-fenced `knowledge_save_page`
+  or `knowledge_edit_body`, changing only the text the correction affects and
+  preserving unrelated authored material, sources and every other citation.
+  Rewrite the affected State topic so it reads as current; don't append a
+  dated correction section to an entity page. Page corrections are
   revisions, not replacement entity identities.
 - **Two pages for one entity:** call `knowledge_merge` with the surviving page,
   the duplicate, both pages' current revision/hash and a reason. Keep the page
@@ -81,8 +90,8 @@ does not independently verify that author's factual claims.
 
 Changes go through these tools, not manual Markdown edits, browser forms, SQL,
 or separate “create then withdraw” calls. No additional approval ritual applies
-to an unambiguous user-authorized correction. Follow publication retry/conflict
-handling; a receipt in accepted/conflict state is not a completed repair.
+to an unambiguous user-authorized correction. Follow
+[recovery](references/recovery.md) for retries and conflicts; a receipt in accepted/conflict state is not a completed repair.
 
 ## Inspect propagation and report honestly
 

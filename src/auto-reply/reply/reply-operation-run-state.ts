@@ -5,7 +5,6 @@ import type {
   ReplyOperationRunState,
   ReplyPreRunRejectionCode,
 } from "../../sessions/session-controller.contracts.js";
-import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 export type {
   ReplyOperationRunState,
@@ -56,9 +55,6 @@ export function recordReplyOperationAgentTurn(
       },
 ): void {
   for (const state of states ?? []) {
-    state.agentTurn = resolveAgentTurnExecutionStatus(
-      outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
-    );
     if (outcome?.kind === "settled") {
       state.messagingToolSentTargets = outcome.result.messagingToolSentTargets;
       state.backgroundWorkStarted = Boolean(

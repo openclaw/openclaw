@@ -20,7 +20,7 @@ import {
 } from "../../config/sessions/session-sharing-store.native.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
-import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { observeSqliteWalPeriodicWork } from "../../infra/sqlite-wal-scheduler.test-support.js";
 import {
@@ -97,7 +97,7 @@ async function seedIdeas(
   }
 }
 
-it.each(["policy", "profile", "disconnect", "session", "membership", "projection"] as const)(
+it.each(["policy", "session", "membership", "projection"] as const)(
   "rechecks %s after a delayed suggestion list reply",
   (change) =>
     withState(async () => {
@@ -113,8 +113,8 @@ it.each(["policy", "profile", "disconnect", "session", "membership", "projection
       const requester = client("alice", "Alice");
       const entered = createDeferred();
       const release = createDeferred();
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
-      vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
+      const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+      vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);
         if (
           reply.ok &&
@@ -138,10 +138,6 @@ it.each(["policy", "profile", "disconnect", "session", "membership", "projection
         );
         if (change === "policy") {
           committed = roleConfig("view");
-        } else if (change === "profile") {
-          requester.authenticatedUserProfile = client("bob", "Bob").authenticatedUserProfile;
-        } else if (change === "disconnect") {
-          requester.invalidated = true;
         } else if (change === "membership") {
           removeSessionMember({ agentId: "main", sessionKey }, "alice");
         } else if (change === "projection") {
@@ -158,9 +154,7 @@ it.each(["policy", "profile", "disconnect", "session", "membership", "projection
         } else {
           const result = await pending;
           expect(result.responses).toMatchObject([
-            change === "policy" || change === "membership"
-              ? [true, { role: "viewer", suggestions: [expect.objectContaining({ id: "alice" })] }]
-              : [false, undefined, { code: "FORBIDDEN" }],
+            [true, { role: "viewer", suggestions: [expect.objectContaining({ id: "alice" })] }],
           ]);
           if (change === "policy") {
             const request = (others: Parameters<typeof roleConfig>[0], list = false) => {
@@ -560,3 +554,49 @@ it.for(["add", "edit", "dismiss", "queue"] as const)(
       }
     }),
 );
+
+it("uses stored invited levels for suggestions and typing independent of public visibility", () =>
+  withState(async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              scopes: ["operator.read", "operator.write"],
+              agents: "*",
+              sessions: { others: "invited", maxInvitedAccess: "send" },
+            },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    for (const visibility of ["shared", "read-only", "suggest", "draft"] as const) {
+      for (const access of ["read", "suggest", "send"] as const) {
+        const key = `agent:main:levels-${visibility}-${access}`;
+        await upsertDefaultSuggestionSession({ visibility }, key);
+        addSessionMember(
+          { agentId: "main", sessionKey: key },
+          { identityId: "member", addedBy: "owner", access },
+        );
+        mocks.presence = ["owner", "member"].map((id) => ({
+          user: { id, identity: { type: "profile", id } },
+          watchedSessions: [key],
+        }));
+        const request = requests(key, client("member", "Member"), context(vi.fn(), cfg));
+        const allowed = visibility !== "draft" && access !== "read";
+        expect(
+          (await request("session.suggestions.add", { text: "Level-bound suggestion" }))
+            .responses[0]?.[0],
+          `${visibility}/${access}`,
+        ).toBe(allowed);
+        const typing = await request("session.typing", { sessionId: "session-main", typing: true });
+        if (visibility === "draft") {
+          expect(typing.responses[0]?.[0]).toBe(false);
+        } else {
+          expect(typing.responses[0]?.[1]).toMatchObject({ broadcast: allowed });
+        }
+      }
+    }
+  }));

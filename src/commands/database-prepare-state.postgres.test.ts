@@ -12,6 +12,7 @@ import { installDatabaseProcessRole } from "../infra/database-engine/admission-s
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -101,7 +102,7 @@ describe.skipIf(!connection)("database prepare-state against PostgreSQL", () => 
     expect(await run(storeId, namespace)).toMatchObject({
       ok: true,
       status: "prepared",
-      schemaVersion: 39,
+      schemaVersion: OPENCLAW_STATE_SCHEMA_VERSION,
       storeId,
       namespace,
     });
@@ -112,7 +113,7 @@ describe.skipIf(!connection)("database prepare-state against PostgreSQL", () => 
     expect(await run(storeId, namespace)).toMatchObject({
       ok: true,
       status: "ready",
-      schemaVersion: 39,
+      schemaVersion: OPENCLAW_STATE_SCHEMA_VERSION,
     });
     expect(
       (

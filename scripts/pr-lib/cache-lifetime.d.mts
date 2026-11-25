@@ -33,6 +33,12 @@ export declare function publishDependencyCache(
   entry: string,
   anchor: AnchorIdentity,
 ): void;
+export declare function stageDependencyCache(
+  lock: CacheLock,
+  entry: string,
+  anchor: AnchorIdentity,
+): string;
+export declare function sweepDependencyCaches(): void;
 export declare function assertDependencyTarget(target: string, destination: string): void;
 export declare function privateDependencyDonor(root: string, destination: string): boolean;
 export declare function collectUnusedDependencyCaches(lock: CacheLock, current?: string): string[];

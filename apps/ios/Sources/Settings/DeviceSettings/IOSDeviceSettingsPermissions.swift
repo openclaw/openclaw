@@ -49,7 +49,7 @@ final class IOSDeviceSettingsPermissions {
             }
         case .speechRecognition:
             _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
-                SFSpeechRecognizer.requestAuthorization { completion($0 == .authorized) }
+                SFSpeechRecognizer.requestAuthorization { @Sendable in completion($0 == .authorized) }
             }
         case .contacts:
             _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in

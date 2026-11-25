@@ -11,12 +11,15 @@ import {
 } from "../agents/github-host.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { decodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
+import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import {
   currentGitHubPublicationConfig,
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
+import { findGitHubPullRequestContributor } from "./github-publication-contributors.js";
 import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
 import { createGitHubPublicationJsonReader } from "./github-publication-json-read.js";
 import { matchesGitHubPublicationIdentityRow } from "./github-publication-receipt.js";
@@ -153,7 +156,9 @@ export async function inspectOwnGitHubPullRequest(params: {
   assertRequester();
   const actor = params.requester.snapshot.actor;
   if (!authority.operatorWrite && actor.kind !== "operator") {
-    throw new Error("Inspecting your PR requires your verified linked GitHub account.");
+    throw new Error(
+      "This channel cannot confirm who you are, so it cannot inspect PRs; use Control UI, Discord or Telegram for this. If you are not the Gateway owner, ask an admin to link your channel account to your Gateway profile first.",
+    );
   }
   // Updating an imported PR must not create guest author eligibility.
   const published = await readSharedGitHubPublication(params.session, {
@@ -182,6 +187,38 @@ export async function inspectOwnGitHubPullRequest(params: {
       authority.operatorWrite ? authority.assertOperatorWrite : undefined,
     ),
     assertCurrent: assertRequester,
+    requireAuthorship: Boolean(params.requester.snapshot.participation),
+    verifyPublication: params.requester.snapshot.participation
+      ? async (body, url) => {
+          // The creation marker identifies the original receipt; later updates cannot lend ownership.
+          for (const match of body.matchAll(/<!-- openclaw-publication:([a-f0-9-]{36}) -->/gu)) {
+            const created = await readSharedGitHubPublication(params.session, {
+              requestId: match[1]!,
+            });
+            assertRequester();
+            if (created?.status !== "published" || created.pull_request_url !== url) {
+              continue;
+            }
+            const original = decodeGitHubPublicationRequester(
+              "requester_authority_json" in created
+                ? created.requester_authority_json
+                : (
+                    await readGitHubPublicationSessionLifecycleInWorker({
+                      publicationKind: "shared",
+                      requestId: created.request_id,
+                    })
+                  )?.requester_authority_json,
+            );
+            assertRequester();
+            return (
+              original?.actor.kind === "operator" &&
+              actor.kind === "operator" &&
+              original.actor.profileId === actor.profileId
+            );
+          }
+          return false;
+        }
+      : undefined,
   });
   return {
     result: inspected.result,
@@ -195,12 +232,30 @@ export async function inspectOwnGitHubPullRequest(params: {
   };
 }
 
+/** Execution authorizes reuse before observing another request's PR as this request's result. */
+export async function assertParticipantPullRequestReuse(
+  requester: GitHubPublicationRequesterPolicyV2 | undefined,
+  pullRequestUrl: string,
+  assertCurrent: () => void,
+) {
+  if (requester?.snapshot.participation) {
+    await inspectOwnGitHubPullRequest({
+      pullRequestUrl,
+      session: requester.snapshot.participation.target,
+      requester,
+      assertCurrent,
+    });
+  }
+}
+
 /** Read-only consumers retain linked ownership unless the action owner supplies full-write authority. */
 export async function readOwnGitHubPullRequest(params: {
   pullRequestUrl: string;
   agentId: string;
   reader: ReturnType<typeof captureOwnGitHubPullRequestReader>;
   assertCurrent: () => void;
+  requireAuthorship?: boolean;
+  verifyPublication?: (body: string, url: string) => Promise<boolean>;
 }) {
   const { host, accountIds: admittedIds, publication, operatorWrite } = params.reader;
   const target = parsePullRequestUrl(params.pullRequestUrl, host);
@@ -220,20 +275,25 @@ export async function readOwnGitHubPullRequest(params: {
   const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(config);
   const hasReadEndpoint =
     host === "github.com" || Boolean(config.gateway?.github?.apiBaseUrl?.trim());
+  let checkedConfig = config;
   const assertIdentityCurrent = () => {
     params.reader.assertCurrent();
+    // Retained readers outlive config/secrets reloads; only an API base change revokes them.
+    const currentConfig = currentGitHubPublicationConfig();
     if (
       (identity.host ?? "github.com") !== host ||
-      resolveConfiguredGitHubApiBaseUrl(currentGitHubPublicationConfig()) !== apiBaseUrl ||
+      (currentConfig !== checkedConfig &&
+        resolveConfiguredGitHubApiBaseUrl(currentConfig) !== apiBaseUrl) ||
       !matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity }) ||
       (publicContinuation &&
         (!publication || !matchesGitHubPublicationIdentityRow(publication.publisher, identity)))
     ) {
       throw new Error("The GitHub publisher changed; retry inspection.");
     }
+    checkedConfig = currentConfig;
   };
   const assertCurrent = () => {
-    assertRequester();
+    params.assertCurrent();
     assertIdentityCurrent();
   };
   assertCurrent();
@@ -255,22 +315,22 @@ export async function readOwnGitHubPullRequest(params: {
       ["read", "triage", "write", "maintain", "admin"].includes(String(permission.permission))
     );
   };
+  const hasAccountAccess = async (repository: string, accountId: number) => {
+    const user = await read(`user/${accountId}`);
+    return (
+      isRecord(user) &&
+      user.id === accountId &&
+      typeof user.login === "string" &&
+      isGitHubLogin(user.login) &&
+      (await hasAccess(repository, accountId, user.login))
+    );
+  };
   const baseRepository = repositoryFacts(await read(`repos/${target.repository}`));
   // Shared reader access alone must never disclose a private PR's existence or author.
   const privateReaders = new Set<number>();
   if (baseRepository.private && !operatorWrite) {
     for (const accountId of admittedIds) {
-      const user = await read(`user/${accountId}`);
-      const login =
-        isRecord(user) && typeof user.login === "string" && isGitHubLogin(user.login)
-          ? user.login
-          : undefined;
-      if (
-        isRecord(user) &&
-        user.id === accountId &&
-        login &&
-        (await hasAccess(baseRepository.name, accountId, login))
-      ) {
+      if (await hasAccountAccess(baseRepository.name, accountId)) {
         privateReaders.add(accountId);
       }
     }
@@ -284,15 +344,13 @@ export async function readOwnGitHubPullRequest(params: {
     isRecord(pr) &&
     isRecord(pr.user) &&
     publication.url === pr.html_url &&
-    publication.publisher.identity_account_id === pr.user.id;
+    publication.publisher.identity_account_id === pr.user.id &&
+    (!params.verifyPublication ||
+      (typeof pr.body === "string" && (await params.verifyPublication(pr.body, publication.url))));
   if (
     !isRecord(pr) ||
     !isRecord(pr.user) ||
     typeof pr.user.id !== "number" ||
-    (baseRepository.private &&
-      !operatorWrite &&
-      !privateReaders.has(pr.user.id) &&
-      !ownPublication) ||
     typeof pr.user.login !== "string" ||
     !isGitHubLogin(pr.user.login) ||
     pr.number !== target.number ||
@@ -304,9 +362,37 @@ export async function readOwnGitHubPullRequest(params: {
   ) {
     throw unavailable();
   }
-  if (!operatorWrite && !admittedIds.includes(pr.user.id) && !ownPublication) {
+  const needsContribution = !operatorWrite && !admittedIds.includes(pr.user.id) && !ownPublication;
+  if (needsContribution && params.requireAuthorship) {
     throw new Error(
-      "This PR is not authored by a GitHub account linked to you. inspect_pr checks your PR authorship, not the managed publisher's credentials. For a new PR, use publish. A bot-authored PR from another session cannot be imported with inspect_pr or prepare_pr; continue it in the session that published it.",
+      "This PR is not authored by a GitHub account linked to you or your original shared publication.",
+    );
+  }
+  const contributorAccountId =
+    needsContribution &&
+    pr.user.id === identity.account.accountId &&
+    typeof pr.head.sha === "string" &&
+    commitPattern.test(pr.head.sha)
+      ? await findGitHubPullRequestContributor({
+          read,
+          repository: baseRepository.name,
+          number: target.number,
+          headCommit: pr.head.sha,
+          accountIds: baseRepository.private ? [...privateReaders] : admittedIds,
+        })
+      : undefined;
+  if (
+    baseRepository.private &&
+    !operatorWrite &&
+    !privateReaders.has(pr.user.id) &&
+    !ownPublication &&
+    contributorAccountId === undefined
+  ) {
+    throw unavailable();
+  }
+  if (needsContribution && contributorAccountId === undefined) {
+    throw new Error(
+      "This PR is not authored by a GitHub account linked to you, and no linked account was verified as a contributor to this publisher's PR. Continue in the original publication conversation or ask a full-write maintainer to assist.",
     );
   }
   const base = refFacts(pr.base, baseRepository);
@@ -324,7 +410,9 @@ export async function readOwnGitHubPullRequest(params: {
       (headRepository.private &&
         !operatorWrite &&
         headRepository.id !== baseRepository.id &&
-        !(await hasAccess(headRepository.name, pr.user.id, pr.user.login)))
+        !(contributorAccountId !== undefined
+          ? await hasAccountAccess(headRepository.name, contributorAccountId)
+          : await hasAccess(headRepository.name, pr.user.id, pr.user.login)))
     ) {
       throw unavailable();
     }

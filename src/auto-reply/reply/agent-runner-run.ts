@@ -4,7 +4,9 @@ import {
   isRequiredReplyExpectation,
   resolveReplyCompletion,
 } from "../../agents/reply-completion.js";
+import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
+import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { logVerbose } from "../../globals.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -60,6 +62,7 @@ import { refuseCollaborativeSteering } from "./queue/lifecycle.js";
 import { bindReplyOperationQueueDisposition, resolveFollowupAbortSignal } from "./queue/types.js";
 import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import { createReplyInputAdmission } from "./reply-input-admission.js";
+import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
 import * as replyRunState from "./reply-operation-run-state.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { enqueueReplySourceAdmission } from "./reply-source-admission.js";
@@ -120,7 +123,6 @@ export async function runReplyAgent(
   const preparationResources: { stopBlockReply?: () => void } = {};
   const inputGeneration = getAgentEventLifecycleGeneration();
   try {
-    followupRun.operatorAuthority?.assertCurrent();
     const resolveGatewayContext = providedReplyOperation
       ? getGatewayContextResolver(providedReplyOperation)
       : (readChannelContextGatewayContextResolver(sessionCtx) ??
@@ -305,10 +307,7 @@ export async function runReplyAgent(
         input: controllerInput,
         followupRun,
         runId,
-        assertCurrent: () => {
-          assertAgentRunLifecycleGenerationCurrent(inputGeneration);
-          followupRun.operatorAuthority?.assertCurrent();
-        },
+        assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(inputGeneration),
         enqueue: () =>
           enqueueFollowupRun(
             queueKey,
@@ -323,10 +322,16 @@ export async function runReplyAgent(
         diagnosticLogger.warn("steering rejected; applying follow-up policy", {
           reason:
             messageInjectionDisposition === "rejected"
-              ? "runtime_rejected"
+              ? (opts?.messageInjectionRejection?.reason ?? "runtime_rejected")
               : providedReplyOperation
                 ? "source-operation-pending"
                 : "reply-owner-ended",
+          ...(opts?.messageInjectionRejection?.runtimeReason
+            ? { runtimeReason: opts.messageInjectionRejection.runtimeReason }
+            : {}),
+          ...(opts?.messageInjectionRejection?.errorMessage
+            ? { error: opts.messageInjectionRejection.errorMessage.slice(0, 512) }
+            : {}),
           disposition: enqueued
             ? "followup-queued"
             : replyOperationRunState?.admission?.status === "skipped" &&
@@ -337,7 +342,7 @@ export async function runReplyAgent(
             followupRun.originatingChannel ??
             followupRun.run.messageProvider ??
             sessionCtx.Provider,
-          sessionId: activeReplyOperation?.sessionId ?? followupRun.run.sessionId,
+          sessionKey: sessionKey ?? followupRun.run.sessionKey,
           runId: opts?.runId,
         });
       }
@@ -537,6 +542,7 @@ export async function runReplyAgent(
     const { admitUserTurn, recordPendingDelivery } = createReplyInputAdmission({
       followupRun,
       replyOperation,
+      runId: turn.runId,
       sourceTurnId,
       sessionKey,
       storePath,
@@ -548,7 +554,8 @@ export async function runReplyAgent(
       },
     });
     try {
-      if (turn.preflightError) {
+      // Channel admission rethrows its memoized preflight failure in the execution handler.
+      if (turn.preflightError && !isChannelRunAuthorizationError(turn.preflightError)) {
         throw turn.preflightError;
       }
       await replyOperation.bindToolAuthoritySnapshotAsync(
@@ -600,7 +607,24 @@ export async function runReplyAgent(
         followupRun.replyOperationRunStates,
         replyOperation,
       );
+      if (
+        turn.preflightFailurePayload &&
+        (!replyOperation.abortSignal.aborted ||
+          (followupRun.operatorAuthority?.signal?.aborted &&
+            replyOperation.abortSignal.reason === followupRun.operatorAuthority.signal.reason &&
+            !isUserInitiatedAgentRunAbortReason(replyOperation.abortSignal.reason) &&
+            resolveReplyOperationAbortReason(replyOperation) === "user"))
+      ) {
+        // The prepared failure notice survives source revocation; it starts no new work.
+        replyOperation.fail("run_failed", error);
+        return prependCompactionNotices(
+          returnWithQueuedFollowupDrain(turn.preflightFailurePayload),
+          pendingCompactionNotices,
+          replyOperation,
+        );
+      }
       const result = await handleReplyAgentRunError(error, {
+        config: cfg,
         resolveVisibleReplyDelivery,
         userTurnAccepted: followupRun.userTurnTranscriptRecorder?.hasPersisted() === true,
         replyExpectation,

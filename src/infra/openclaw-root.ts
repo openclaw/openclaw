@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPluginCache } from "../plugins/plugin-cache.js";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";
+import { resolvePackageReleaseSlotForRootSync } from "./package-release-slot-path.js";
 import { runtimeProcessExternalPackageEntrypoints } from "./runtime-process-manifest.js";
 
 type PackageRootOptions = { cwd?: string; argv1?: string; moduleUrl?: string };
@@ -42,7 +43,9 @@ export function resolveOpenClawInstallationRootSync(
       // A missing or unrelated stable link cannot identify this installation.
     }
   }
-  return runningRoot;
+  // A start through the bin launcher reaches the release by its real path. The
+  // release link names this root only while it still selects this release.
+  return resolvePackageReleaseSlotForRootSync(runningRoot) ?? runningRoot;
 }
 
 function parsePackageName(raw: string): string | null {

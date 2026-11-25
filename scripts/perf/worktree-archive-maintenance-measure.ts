@@ -240,7 +240,9 @@ try {
     const fixture: Fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
     const prepareArchive = (record: ManagedWorktreeRecord) =>
       withLocalWorkspaceProjection(ownerFor(record), async (state) => {
-        await state.prepareArchive(fixture.snapshot);
+        await (
+          await state.prepareArchive()
+        )(fixture.snapshot);
         const current = state.current();
         assert.equal(current.pending_ref, null, "Tracked-only archive must need no overlay");
         return [record.id, current.baseline_ref, current.pending_ref];

@@ -10,6 +10,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
   setChannelConversationBindingMaxAgeBySessionKeyAsync,
@@ -207,7 +208,6 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/usage",
     match: (body) => matchCommandPrefix(body, "/usage"),
-    silentUnauthorized: true,
   },
   async (params, rawArgs) => {
     const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
@@ -252,10 +252,13 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
 );
 
 export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
-  { label: "/fast", match: (body) => matchCommandPrefix(body, "/fast"), silentUnauthorized: true },
+  { label: "/fast", match: (body) => matchCommandPrefix(body, "/fast") },
   async (params, rawArgs) => {
     const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
     if (!rawMode || rawMode === "status") {
+      if (!params.model) {
+        return sessionCommandReply(NO_MODEL_CONFIGURED_MESSAGE);
+      }
       const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
       const state = resolveFastModeState({
         cfg: params.cfg,
@@ -297,7 +300,6 @@ export const handleSessionCommand: CommandHandler = defineAuthorizedTextCommand(
     label: SESSION_COMMAND_PREFIX,
     match: (body) =>
       /^\/session(?:\s|$)/.test(body) ? body.slice(SESSION_COMMAND_PREFIX.length).trim() : null,
-    silentUnauthorized: true,
   },
   async (params, rest) => {
     const tokens = rest.split(/\s+/).filter(Boolean);
@@ -458,7 +460,6 @@ export const handleRestartCommand: CommandHandler = defineGatewayControlCommand(
         // pending session key to avoid cross-session overwrite (#86742).
         sessionKey: sentinelPayload?.sessionKey,
         emitHooks: {
-          assertCurrent: params.command.assertOwnerCurrent,
           beforeEmit: prepareSentinel,
           afterEmitRejected: clearSentinel,
         },

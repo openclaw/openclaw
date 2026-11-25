@@ -17,6 +17,7 @@ import {
   type AgentExecutionAuthBinding,
   type OpaqueRuntimeOwnerKind,
 } from "../agents/execution-auth-binding.js";
+import { resolveAvailableAgentHarnessPolicy } from "../agents/harness/availability.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import type {
   AgentHarnessRuntimeArtifactBinding,
@@ -26,6 +27,7 @@ import { resolveAgentHarnessOwnerPluginIds } from "../agents/harness/runtime-plu
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
@@ -289,16 +291,23 @@ function resolveRouteHarnessOwnerPluginIds(
   config: OpenClawConfig,
   route: SystemAgentConfiguredRoute,
 ): string[] {
-  if (
-    route.runner !== "embedded" ||
-    !route.agentHarnessRuntimeOverride ||
-    route.agentHarnessRuntimeOverride === "openclaw"
-  ) {
+  if (route.runner !== "embedded") {
+    return [];
+  }
+  const runtime =
+    route.agentHarnessRuntimeOverride ??
+    resolveAvailableAgentHarnessPolicy({
+      config,
+      provider: route.provider,
+      modelId: route.model,
+      agentId: route.agentId,
+    }).runtime;
+  if (runtime === "openclaw") {
     return [];
   }
   const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId, process.env);
   return resolveAgentHarnessOwnerPluginIds({
-    runtime: route.agentHarnessRuntimeOverride,
+    runtime,
     provider: route.provider,
     config,
     workspaceDir,
@@ -511,11 +520,10 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
   executionRoute: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
-  const runConfig = cloneConfigWithResolutionFacts(params.executionRoute.runConfig);
   const configuredExecution = {
     ...params.executionRoute,
     sourceConfig: cloneConfigWithResolutionFacts(params.executionRoute.sourceConfig),
-    runConfig,
+    runConfig: captureRuntimeConfig(params.executionRoute.runConfig),
   } as SystemAgentConfiguredRoute;
   const authProfileId = params.auth.authProfileId ?? configuredExecution.authProfileId;
   const modelId = params.auth.modelId?.trim();

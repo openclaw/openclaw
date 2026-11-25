@@ -29,13 +29,16 @@ describe("npm global install lifecycle policy", () => {
     ).not.toContain("--allow-scripts=openclaw");
   });
 
-  it("builds npm staged install argv with an explicit prefix", () => {
-    expect(globalInstallArgs("npm", "openclaw@latest", null, "/tmp/stage")).toEqual(
-      "npm i -g --allow-scripts=openclaw --prefix /tmp/stage openclaw@latest --no-fund --no-audit --loglevel=error --min-release-age=0".split(
-        " ",
-      ),
-    );
-  });
+  it.each(["allow-scripts-advisory", "allow-scripts"] as const)(
+    "keeps allow-scripts for npm global staged installs (%s)",
+    (policy) => {
+      expect(globalInstallArgs("npm", "openclaw@latest", null, "/tmp/stage", null, policy)).toEqual(
+        "npm i -g --allow-scripts=openclaw --prefix /tmp/stage openclaw@latest --no-fund --no-audit --loglevel=error --min-release-age=0".split(
+          " ",
+        ),
+      );
+    },
+  );
 
   const cwd = path.resolve("/tmp/openclaw-update-identity/work");
   const archive = path.resolve("/tmp/openclaw/a%2C#b.tar");

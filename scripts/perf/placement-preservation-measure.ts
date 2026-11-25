@@ -29,10 +29,11 @@ const { values } = parseArgs({
     "start-at": { type: "string", default: "0" },
     "owner-source": { type: "string" },
     "authority-state-dir": { type: "string" },
+    "local-publication": { type: "boolean", default: false },
     output: { type: "string" },
   },
 });
-const integer = (key: keyof typeof values, min: number) =>
+const integer = (key: Exclude<keyof typeof values, "local-publication">, min: number) =>
   parseStrictIntegerOption({ raw: values[key], label: `--${key}`, min, fallback: min });
 assert(["timing", "allocation", "counts"].includes(values.mode!));
 assert(
@@ -190,6 +191,10 @@ async function run(count: number, latencies?: number[]) {
         async () => baseline,
       ));
     try {
+      if (values["local-publication"]) {
+        // An unrelated local turn advances the owner without changing preservation membership.
+        owner.sequence++;
+      }
       for (let capture = 0; capture < captures; capture++) {
         let capturedRecords = 0;
         for (const placement of read.placements) {
@@ -300,6 +305,7 @@ const result = {
   protectedCount,
   operations,
   captures,
+  localPublication: values["local-publication"],
   returnedRecords,
   environmentEnumerations: values.mode === "counts" ? environmentEnumerations : undefined,
   environmentEnumerationsPerMinute:

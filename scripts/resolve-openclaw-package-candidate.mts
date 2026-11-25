@@ -286,7 +286,17 @@ export function resolveNpmPackageCandidatePackRunner(
     env: params.env,
     execPath: params.execPath,
     existsSync: params.existsSync,
-    npmArgs: ["pack", packageSpec, "--ignore-scripts", "--json", "--pack-destination", outputDir],
+    // Acceptance must inspect a just-published candidate. Exempt only this root
+    // package download, not dependencies or any later install.
+    npmArgs: [
+      "pack",
+      packageSpec,
+      "--ignore-scripts",
+      "--min-release-age-exclude=openclaw",
+      "--json",
+      "--pack-destination",
+      outputDir,
+    ],
     platform: params.platform,
   });
 }

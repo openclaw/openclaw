@@ -1,22 +1,35 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   formatIrohEndpointKey,
   randomBytes,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
-import { authorizeHttpGatewayConnect } from "../auth.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
+import { authorizeWsControlUiGatewayConnect, authorizeHttpGatewayConnect } from "../auth.js";
 import type { GatewayIngressAttribution } from "../ingress-attribution.js";
 import { createOpenClawIdAuthority } from "./authority.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import { linkedClaw } from "./openclaw-id.test-support.js";
+import { openClawIdRecoveryPrincipalSchema } from "./tunnel-principal-schema.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
-  openClawIdRecoveryPrincipalSchema,
+  prepareOpenClawIdTunnelPrincipal,
+  resolveOpenClawIdTunnelPrincipal,
   setOpenClawIdTunnelPrincipalLookup,
   openclawIdTunnelRolePolicy,
   openclawIdTunnelUser,
   setOpenClawIdTunnelPrincipalResolver,
 } from "./tunnel-principal.js";
 
+beforeEach(() =>
+  setRuntimeConfigSnapshot({ gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } } }),
+);
+
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   setOpenClawIdTunnelPrincipalResolver(undefined);
   setOpenClawIdTunnelPrincipalLookup(undefined);
 });
@@ -77,7 +90,7 @@ describe("OpenClaw ID tunnel principals", () => {
     expect(await claw.authority.resolvePeer(op)).toBeUndefined();
   });
 
-  it("caps members by role and leaves owners uncapped", () => {
+  it("leaves member policy to profiles and owner devices uncapped", () => {
     const owner = { kind: "owner" as const, peerKey: "iroh:a" };
     const operator = {
       kind: "member" as const,
@@ -89,12 +102,72 @@ describe("OpenClaw ID tunnel principals", () => {
     expect(openclawIdTunnelRolePolicy(owner)).toBeUndefined();
     expect(openclawIdTunnelUser(owner)).toBeUndefined();
     expect(openclawIdTunnelUser(operator)).toBe("openclaw-id:acct-op");
-    expect(openclawIdTunnelRolePolicy(operator)?.scopes).toEqual(
-      expect.arrayContaining(["operator.read", "operator.write"]),
-    );
-    expect(openclawIdTunnelRolePolicy(operator)?.scopes).not.toContain("operator.admin");
-    expect(openclawIdTunnelRolePolicy(operator)?.scopes).not.toContain("operator.pairing");
-    expect(openclawIdTunnelRolePolicy(viewer)?.scopes).toEqual(["operator.read"]);
+    expect(openclawIdTunnelRolePolicy(operator)).toBeUndefined();
+    expect(openclawIdTunnelRolePolicy(viewer)).toBeUndefined();
+  });
+
+  it("authenticates listed members independently of their role label", async () => {
+    const principal = {
+      kind: "member" as const,
+      peerKey: `iroh:${"ab".repeat(32)}`,
+      accountId: "acct-guest",
+      role: "unconfigured-role",
+      authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
+    };
+    setOpenClawIdTunnelPrincipalResolver(async () => principal);
+    setOpenClawIdTunnelPrincipalLookup(() => principal);
+    expect(openclawIdTunnelRolePolicy(principal)).toBeUndefined();
+    expect(await resolveOpenClawIdTunnelPrincipal(principal.peerKey)).toEqual(principal);
+    for (const authorize of [authorizeWsControlUiGatewayConnect, authorizeHttpGatewayConnect]) {
+      expect(
+        await authorize({
+          auth: { mode: "token", token: "secret", allowTailscale: false },
+          connectAuth: { token: "secret" },
+          ingressAttribution: tunnelAttribution(principal.peerKey),
+        }),
+      ).toMatchObject({ ok: true });
+    }
+    expect(isOpenClawIdTunnelPrincipalCurrent(principal)).toBe(true);
+    await expect(prepareOpenClawIdTunnelPrincipal(principal)).resolves.toBeUndefined();
+  });
+
+  it("retains opaque role labels in admitted device recovery records", async () => {
+    const principal = {
+      kind: "member",
+      peerKey: `iroh:${"ab".repeat(32)}`,
+      accountId: "acct-guest",
+      role: "unconfigured-role",
+      authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
+    };
+    expect(openClawIdRecoveryPrincipalSchema.parse(principal)).toEqual(principal);
+    for (const role of ["", "Guest", "2guest", "a".repeat(65), "guest\n"]) {
+      expect(openClawIdRecoveryPrincipalSchema.safeParse({ ...principal, role }).success).toBe(
+        false,
+      );
+    }
+    const claw = await linkedClaw();
+    const peer = formatIrohEndpointKey(randomBytes(32));
+    expect(
+      await claw.authority.submit(
+        await claw.sign({
+          op: "add",
+          account_id: "acct-guest",
+          role: "unconfigured-role",
+          peer_keys: [peer],
+          invite_id: null,
+        }),
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
+    const reloaded = createOpenClawIdAuthority(claw.store);
+    await reloaded.load();
+    setOpenClawIdTunnelPrincipalResolver((key) => reloaded.resolvePeer(key));
+    setOpenClawIdTunnelPrincipalLookup((key) => reloaded.currentPeer(key));
+    expect(reloaded.currentPeer(peer)).toMatchObject({ kind: "member", role: "unconfigured-role" });
+    expect(await resolveOpenClawIdTunnelPrincipal(peer)).toMatchObject({ kind: "member" });
+    const stored = openClawIdRecoveryPrincipalSchema.parse(reloaded.currentPeer(peer));
+    expect(isOpenClawIdTunnelPrincipalCurrent(stored)).toBe(true);
+    await expect(prepareOpenClawIdTunnelPrincipal(stored)).resolves.toBeUndefined();
   });
 
   it("authenticates admitted tunnel peers as trusted-proxy principals in token mode", async () => {
@@ -167,4 +240,30 @@ it("retains the original signed listing across authority reload, not a later app
   setOpenClawIdTunnelPrincipalLookup((key) => claw.authority.currentPeer(key));
   expect(isOpenClawIdTunnelPrincipalCurrent(admitted)).toBe(false);
   expect(isOpenClawIdTunnelPrincipalCurrent(owner)).toBe(true);
+});
+
+it("does not use edited or deleted role labels as device authority", async () => {
+  const principal = {
+    kind: "member" as const,
+    peerKey: "iroh:custom",
+    accountId: "custom",
+    role: "guest",
+  };
+  setOpenClawIdTunnelPrincipalResolver(async () => principal);
+  setOpenClawIdTunnelPrincipalLookup(() => principal);
+  const policy: GatewayOperatorRoleDefinition = {
+    sessions: { others: "none" as const },
+    agents: ["research"],
+    scopes: ["operator.admin"],
+  };
+  setRuntimeConfigSnapshot({
+    gateway: { roles: { definitions: { guest: policy, operator: policy } } },
+  });
+  expect(await resolveOpenClawIdTunnelPrincipal(principal.peerKey)).toEqual(principal);
+  expect(openclawIdTunnelRolePolicy(principal)).toBeUndefined();
+  expect(openclawIdTunnelRolePolicy({ ...principal, role: "operator" })).toBeUndefined();
+  expect(isOpenClawIdTunnelPrincipalCurrent(principal)).toBe(true);
+  setRuntimeConfigSnapshot({ gateway: { roles: { definitions: { operator: policy } } } });
+  expect(await resolveOpenClawIdTunnelPrincipal(principal.peerKey)).toEqual(principal);
+  expect(isOpenClawIdTunnelPrincipalCurrent(principal)).toBe(true);
 });

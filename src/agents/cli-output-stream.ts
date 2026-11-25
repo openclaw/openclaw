@@ -20,6 +20,7 @@ import {
 } from "./cli-output-events.js";
 import * as cliOutputLifecycle from "./cli-output-lifecycle.js";
 import {
+  claudeSnapshotEndsAtTool,
   decodeCliRecords,
   isClaudeStopHookFeedbackRecord,
   isClaudeStreamJsonDialect,
@@ -77,7 +78,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let parseErrorText = "";
   let rawChars = 0;
   let rawLines = 0;
-  let ordinaryClaudeLines = 0;
+  let countedClaudeFrames = 0;
   const texts: string[] = [];
   // The last item text is the final message only until a later message or tool
   // call begins; boundary flags set before that text must not blank it.
@@ -199,8 +200,8 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       ? ""
       : assistantText.slice(Math.max(currentMessageStart, flushedMessageStart)).trim());
 
-  const accountClaudeJsonlLine = (lineChars: number, partialMessage = false): boolean => {
-    if (!partialMessage && ++ordinaryClaudeLines > outputLimits.maxTurnLines) {
+  const accountClaudeJsonlLine = (lineChars: number, countsFrame = false): boolean => {
+    if (countsFrame && ++countedClaudeFrames > outputLimits.maxTurnLines) {
       parseErrorText = streamJsonOutputLimitErrorText("lines", outputLimits.maxTurnLines);
       lineBuffer.pending = "";
       return false;
@@ -493,6 +494,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           ? { text: "", errorText: stoppedTurnErrorText, terminalFailure: stoppedTurn }
           : {}),
         ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+        ...(output?.interimNativeReplies
+          ? { interimNativeReplies: output.interimNativeReplies }
+          : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),
       };
       // The result envelope carries the final message when present.
@@ -503,6 +507,13 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         !output.errorText &&
         !output.terminalFailure
       ) {
+        const finalText = output.rawFinalText ?? nextText;
+        if (sessionId && resumeCheckpointId && finalText) {
+          output.interimNativeReplies = [
+            ...(output.interimNativeReplies ?? []),
+            { text: finalText, cliSessionId: sessionId, externalId: resumeCheckpointId },
+          ];
+        }
         params.onCompletedReply?.(completedText, textParts.length - 1);
       }
       // An interim result commits its segment. Rebase boundary state so later
@@ -584,18 +595,29 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       params.onToolInputDelta ||
       params.onToolResult
     ) {
-      const onToolUseStart =
-        claudeStreamJson && parsed.type === "assistant"
-          ? (tool: Parameters<NonNullable<typeof params.onToolUseStart>>[0]) => {
-              sawToolUseSinceText = true;
-              finalItemText = undefined;
-              currentMessageHadToolUse = true;
-              if (classifyClaudeCommentary) {
-                flushPendingClaudeText("commentary");
-              }
-              params.onToolUseStart?.(tool);
-            }
-          : params.onToolUseStart;
+      const onToolUseStart = (tool: Parameters<NonNullable<typeof params.onToolUseStart>>[0]) => {
+        const snapshot =
+          claudeStreamJson && parsed.type === "assistant" && isRecord(parsed.message)
+            ? parsed.message
+            : undefined;
+        if (snapshot) {
+          sawToolUseSinceText = true;
+          finalItemText = undefined;
+          currentMessageHadToolUse = true;
+          if (classifyClaudeCommentary) {
+            flushPendingClaudeText("commentary");
+          }
+        }
+        // A snapshot can introduce a call and later text together. In that case the
+        // current wire offset is not the call's boundary; don't claim it.
+        const followsText =
+          claudeStreamJson &&
+          !classifyClaudeCommentary &&
+          !pendingMessageSeparator &&
+          currentClaudeMessageText &&
+          (!snapshot || claudeSnapshotEndsAtTool(snapshot.content, tool.toolCallId));
+        params.onToolUseStart?.(followsText ? { ...tool, followsAssistantText: true } : tool);
+      };
       dispatchClaudeCliStreamingToolEvent({
         backend: params.backend,
         providerId: params.providerId,
@@ -658,7 +680,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (claudeStreamJson) {
       const record = parsedRecords.length === 1 ? parsedRecords[0] : undefined;
       const charge = chargeClaudeStreamJsonLine(record, rawLine);
-      if (!accountClaudeJsonlLine(charge.chars, charge.partialMessage)) {
+      if (!accountClaudeJsonlLine(charge.chars, charge.countsFrame)) {
         return;
       }
     }

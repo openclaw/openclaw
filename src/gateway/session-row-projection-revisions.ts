@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { recordSessionRowSelectionReset } from "../infra/gateway-work-metrics.js";
 import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
@@ -38,7 +37,7 @@ export function createSessionRowProjectionRevisions(
       selection = undefined;
     }
   };
-  const publishSelection = (row?: Row, removed = false) => {
+  const publishSelection = (row?: Row, removed = false, factsChanged = true) => {
     if (!row || removed) {
       taskPublication = undefined;
     }
@@ -52,7 +51,9 @@ export function createSessionRowProjectionRevisions(
           id: identity(row),
           key: row.key,
           agentId: row.agentId,
+          storePath: row.storeTarget.storePath,
           row: removed ? undefined : selectionRow(row),
+          factsChanged,
           ...(changeScope === undefined ? {} : { scope: changeScope }),
         }
       : { kind: "reset" };
@@ -165,7 +166,7 @@ export function createSessionRowProjectionRevisions(
         previous.generation !== row.generation ||
         previous.entry?.sessionId !== row.entry?.sessionId ||
         previous.entry?.lifecycleRevision !== row.entry?.lifecycleRevision ||
-        !isDeepStrictEqual(previous.parents, row.parents)
+        previous.parents !== row.parents
       ) {
         taskPublication = undefined;
       }
@@ -174,10 +175,15 @@ export function createSessionRowProjectionRevisions(
         previous.generation !== row.generation ||
         previous.hasBoard !== row.hasBoard ||
         previous.entry !== row.entry;
-      invalidate(changed);
+      const factsChanged =
+        changed &&
+        (!previous ||
+          selectionRow(previous)?.selectionFactsRevision !==
+            selectionRow(row)?.selectionFactsRevision);
+      invalidate(factsChanged);
       publishFacts(row);
       if (changed) {
-        publishSelection(row);
+        publishSelection(row, false, factsChanged);
       }
     },
   };

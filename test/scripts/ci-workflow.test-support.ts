@@ -99,10 +99,16 @@ type Flags<K extends string> = Partial<Record<K, boolean>>;
 type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maintainerCommands"> &
   Strings<"dispatchId" | "headRepository" | "headSha" | "job" | "ref" | "sha"> &
   Strings<"preflightResult" | "failureReportResult" | "releaseScope"> &
-  Strings<"releaseRunnerGroup" | "releasePublishRunId" | "releasePriorityRun" | "runnerGroup"> &
+  Strings<
+    | "boatReleaseRunnerGroup"
+    | "releaseRunnerGroup"
+    | "releasePublishRunId"
+    | "releasePriorityRun"
+    | "runnerGroup"
+  > &
   Strings<"runnerTemp" | "ciOnPush" | "targetContextRef" | "targetRef"> &
   Strings<"testRuntimePolicy" | "workflow" | "workflowSha" | "workflowToken"> &
-  Strings<"windowsCiReplay" | "workspace"> &
+  Strings<"windowsCiReplay" | "workflowRef" | "workspace"> &
   Flags<"cancelled" | "draft" | "failed" | "frozenTarget" | "hostedRunnerProfileContract"> &
   Flags<"releaseGate" | "runCheck" | "runWindowsCi" | "includeAndroid"> &
   Flags<"skipDefenderExclusions" | "useGithubHostedRunners"> & {
@@ -137,11 +143,13 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     resolveTargetOutputs?: Record<string, string>;
     validationTier?: "full" | "main";
     repository: string;
-    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
+    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson" | "boat";
     requestedRunnerBackend?: "default" | "hybrid" | "runson" | "boat";
     ciShape?: "default" | "main";
     inputs?: Record<string, unknown>;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
+    runnerOs?: "" | "Linux" | "macOS" | "Windows";
+    runnerArch?: "X64" | "ARM64";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
     runId?: number;
@@ -173,6 +181,7 @@ export function evaluateWorkflowExpression(
       (token: string, property: string | undefined) =>
         property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
     );
+  const effectiveRunnerBackend = (context.runnerBackend ?? context.runnerProfile) || "blacksmith";
   const globals = {
     always: () => true,
     success: () => !context.failed && !context.cancelled,
@@ -209,6 +218,7 @@ export function evaluateWorkflowExpression(
       sha: context.sha,
       workflow: context.workflow,
       workflow_sha: context.workflowSha,
+      workflow_ref: context.workflowRef,
       workspace: context.workspace,
       token: context.workflowToken,
       event:
@@ -250,7 +260,12 @@ export function evaluateWorkflowExpression(
     env: context.env ?? {},
     secrets: context.secrets ?? {},
     matrix: context.matrix ?? {},
-    runner: { environment: context.runnerEnvironment ?? "", temp: context.runnerTemp ?? "" },
+    runner: {
+      os: context.runnerOs ?? "",
+      arch: context.runnerArch ?? "",
+      environment: context.runnerEnvironment ?? "",
+      temp: context.runnerTemp ?? "",
+    },
     steps: {
       runner_profile: { outputs: { node_runner_backend: "" } },
       qualification_dispatch: { outputs: { eligible: "false" } },
@@ -276,7 +291,10 @@ export function evaluateWorkflowExpression(
           },
         ]),
       ),
-      resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
+      resolve_target: {
+        result: context.jobResults?.resolve_target,
+        outputs: context.resolveTargetOutputs ?? {},
+      },
       "checks-baseline-ratchets": {
         result: context.jobResults?.["checks-baseline-ratchets"] ?? "success",
       },
@@ -286,6 +304,9 @@ export function evaluateWorkflowExpression(
           frozen_target: String(context.frozenTarget ?? false),
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
           run_check: String(context.runCheck ?? true),
+          effective_runner_backend: effectiveRunnerBackend,
+          placement_runner_backend:
+            effectiveRunnerBackend === "boat" ? "hybrid" : effectiveRunnerBackend,
           runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
           // Preflight defaults the Node planner backend to the logical profile.
           node_runner_backend: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
@@ -306,6 +327,7 @@ export function evaluateWorkflowExpression(
       MAINTAINER_COMMAND_REACTIONS: context.maintainerCommands ?? "",
       OPENCLAW_CI_RUNNER_BACKEND: context.runnerBackend ?? "",
       OPENCLAW_RELEASE_RUNNER_GROUP: context.releaseRunnerGroup ?? "",
+      BOAT_RELEASE_RUNNER_GROUP: context.boatReleaseRunnerGroup ?? "",
       OPENCLAW_CI_ON_PUSH: context.ciOnPush ?? "",
       OPENCLAW_RELEASE_PRIORITY_RUN: context.releasePriorityRun ?? "",
     },
@@ -397,8 +419,14 @@ export function runWorkflowShellScript(
     let moduleIndex = 0;
     const rewritten = script
       .replace(
-        /node (?:(--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\2(?=\n|$)/gu,
-        (_match, nodeOptions: string | undefined, _marker: string, body: string) => {
+        /node (?:(--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module( >>? (?:"[^"\n]*"|'[^'\n]*'|[^\s<>|;&]+))? <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\3(?=\n|$)/gu,
+        (
+          _match,
+          nodeOptions: string | undefined,
+          stdoutRedirection: string | undefined,
+          _marker: string,
+          body: string,
+        ) => {
           // Keep scratch outside the checkout's compiler namespace. File-backed stdin
           // avoids Bash heredoc deadlocks and preserves the workflow's cwd-based imports.
           const modulePath = path.join(root, `module-${moduleIndex}.mjs`);
@@ -408,7 +436,7 @@ export function runWorkflowShellScript(
             nodeOptions === "--import tsx "
               ? `--import ${quoteShell(TSX_IMPORT)} `
               : (nodeOptions ?? "");
-          return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module < ${quoteShell(modulePath)}`;
+          return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module${stdoutRedirection ?? ""} < ${quoteShell(modulePath)}`;
         },
       )
       .replace(
@@ -501,6 +529,23 @@ export function readWorkflowOutputs(outputPath: string): Record<string, string> 
     : {};
 }
 
+/** Resolve only the shared WebKit installer; this is not a general Actions runner. */
+export function readPlaywrightWebkitInstall(step: WorkflowStep, cwd: string): string {
+  const uses = expectDefined(step.uses, "WebKit installer action");
+  expect([
+    "./.ci-harness/.github/actions/setup-playwright-webkit",
+    "./.release-harness/.github/actions/setup-playwright-webkit",
+  ]).toContain(uses);
+  const action = readWorkflow(path.resolve(cwd, uses, "action.yml"));
+  expect(action.runs.using).toBe("composite");
+  expect(action.runs.steps).toHaveLength(1);
+  const install = action.runs.steps[0];
+  expect(Object.keys(install).toSorted()).toEqual(["name", "run", "shell"]);
+  expect(install.shell).toBe("bash");
+  expect(typeof install.run).toBe("string");
+  return install.run;
+}
+
 /** Execute the UI phases with Actions' output/env handoff and stop-on-failure behavior. */
 export function runControlUiE2eWorkflow(options: { cwd: string; env: NodeJS.ProcessEnv }) {
   const steps = readCiWorkflow().jobs["checks-ui-e2e"].steps as WorkflowStep[];
@@ -525,7 +570,8 @@ export function runControlUiE2eWorkflow(options: { cwd: string; env: NodeJS.Proc
       continue;
     }
     writeFileSync(outputFile, "");
-    result = runWorkflowShellScript(`set -e\n${step.run}`, { cwd: options.cwd, env });
+    const script = step.uses ? readPlaywrightWebkitInstall(step, options.cwd) : step.run;
+    result = runWorkflowShellScript(`set -e\n${script}`, { cwd: options.cwd, env });
     stdout += result.stdout;
     stderr += result.stderr;
     if (result.status !== 0) {

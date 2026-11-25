@@ -1,3 +1,0 @@
-# Join process exit and drain captured output when explicit IPC disconnect omits child close.
-# Exact net growth against 7b0216295799f6cd47d8cdcdc5bcf3df005f0851; existing handoff cases only.
-3

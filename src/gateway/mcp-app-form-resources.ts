@@ -276,9 +276,6 @@ export async function executeMcpAppFormResource(
       options.sessionMutationAuthorization?.assertCurrent();
       read?.assertCurrent();
       owner.assertCurrent();
-      if (options.context.getRuntimeConfig().mcp?.apps?.enabled !== true) {
-        throw new Error("MCP App runtime is unavailable");
-      }
       if (
         manager.get(record.id) !== record ||
         !observation.isCurrent() ||
@@ -344,13 +341,9 @@ export async function executeMcpAppFormResource(
       options,
       kind: restrictions.kind,
       files,
-      assertCurrent: () => {
-        assertCurrent();
-        assertUpload?.();
-      },
+      assertCurrent,
     });
     assertCurrent();
-    assertUpload?.();
     if (
       !resources.length ||
       resources.length > 64 ||
@@ -512,7 +505,7 @@ export function createMcpAppWorkspaceUploadProvider(params: {
           }
           const current = metadata ? metadata.readCurrent() : readEntry();
           if (!current || current.execNode || loaded.root !== params.workspaceDir) {
-            throw new Error("Form upload workspace authority changed");
+            throw new Error("Form upload workspace changed. Start a new request.");
           }
           loaded.fileWorkspace?.assertCurrent(request.options.context.getRuntimeConfig(), current);
         };

@@ -395,7 +395,7 @@ it("uses the creating conversation route without a public session key", () =>
     },
   ));
 
-it("batches creating-conversation reads while preserving each generation and refreshing next list", () =>
+it("batches creating-conversation reads and refreshes the next list", () =>
   withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job }) => {
     const jobs = Array.from({ length: 12 }, (_, index) => {
       const sessionKey = `agent:main:dashboard:source-${index}`;
@@ -418,10 +418,12 @@ it("batches creating-conversation reads while preserving each generation and ref
           inputs.some((input) => input.projection === "sharing"),
         ),
       ).toHaveLength(1);
+      // The stored transcript id is ignored: the link names its conversation by key.
       jobs[0]!.sourceConversation.sessionId = "superseded-session";
+      jobs[1]!.sessionKey = jobs[1]!.sourceConversation.sessionKey = "agent:main:dashboard:gone";
       const next = await resolveCronDeliveryPreviews({ cfg, jobs });
-      expect(next[jobs[0]!.id]).toMatchObject(blockedPreview("original session generation"));
-      expect(next[jobs[1]!.id]).toEqual(conversationPreview("creating conversation"));
+      expect(next[jobs[0]!.id]).toEqual(conversationPreview("creating conversation"));
+      expect(next[jobs[1]!.id]).toMatchObject(blockedPreview("original session generation"));
     } finally {
       reads.mockRestore();
     }
@@ -457,18 +459,16 @@ it.each(["file", "memory"] as const)(
         ),
       );
       const releases: Array<() => void> = [];
-      const prepare = sessionGenerations.prepareSessionGenerationFactsBatch;
-      vi.spyOn(sessionGenerations, "prepareSessionGenerationFactsBatch").mockImplementation(
-        async (inputs) => {
-          const generations = await prepare(inputs);
-          for (const generation of generations) {
-            if (generation.ok) {
-              releases.push(vi.spyOn(generation.value, "release"));
-            }
+      const prepare = sessionGenerations.prepareChatLeaseBatch;
+      vi.spyOn(sessionGenerations, "prepareChatLeaseBatch").mockImplementation(async (inputs) => {
+        const generations = await prepare(inputs);
+        for (const generation of generations) {
+          if (generation.ok) {
+            releases.push(vi.spyOn(generation.value, "release"));
           }
-          return generations;
-        },
-      );
+        }
+        return generations;
+      });
       try {
         expect(await resolveCronDeliveryPreviews({ cfg, jobs })).toEqual({
           first: conversationPreview("creating conversation"),
@@ -500,8 +500,10 @@ it("does not rebind implicit delivery when the public session key changes", () =
     expect(await preview()).toEqual(externalPreview("other-recipient"));
   }));
 
+// The creating conversation is linked by key: an edit (new session id) or reset (new revision)
+// keeps the automation's implicit route on that conversation.
 it.each(["replacement-session", "source-session"])(
-  "rejects a replacement conversation's external route with sessionId=%s",
+  "follows the creating conversation's current route after it changes to sessionId=%s",
   (sessionId) =>
     withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job, preview }) => {
       const sessionKey = job.sessionKey!;
@@ -514,6 +516,6 @@ it.each(["replacement-session", "source-session"])(
           lifecycleRevision: "replacement-generation",
         }),
       });
-      expect(await preview()).toMatchObject(blockedPreview("original session generation"));
+      expect(await preview()).toEqual(externalPreview("replacement-recipient"));
     }),
 );

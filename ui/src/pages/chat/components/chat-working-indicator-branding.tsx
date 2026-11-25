@@ -5,7 +5,10 @@ import { ThemeBrandIcon } from "../../../components/theme-brand-icon.tsx";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 
-export function WorkingBrandGlyph(props: { branding: ThemeBranding; claw: "claw" | "lobster" }) {
+export function WorkingBrandGlyph(props: {
+  branding: ThemeBranding;
+  claw: "workingClaw" | "lobster";
+}) {
   return (
     <Show
       when={props.branding.brandIcon === "claw" || props.branding.brandIcon === "mark"}

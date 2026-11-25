@@ -16,6 +16,21 @@ creating key to continue the same session.
 Model, environment, effective HTTP MCP configuration, and native web-search policy
 changes still require a session reset.
 
+Native startup has a 120-second first-event deadline, in addition to any shorter
+attempt deadline. It covers session creation or reasoning updates, saved-state
+reads, stream connection, and the first native event. HTTP acknowledgments and
+stream keepalives do not satisfy it. Once native events arrive, the existing turn
+progress and execution deadlines govern the attempt. Admitted work still goes
+through bounded cancellation and reconciliation before the attempt returns.
+
+When startup stalls, the error directs the operator to inspect the native session
+or use `/reset`. The saved binding is retained: automatically replacing it could
+abandon running work and lose hosted files that conversation replay cannot restore.
+Existing bindings need no migration. They can continue if the native service
+recovers; otherwise reset must settle the original work before clearing the binding.
+If reset cannot settle it, resolve the native service failure and retry reset.
+Attempt-start and binding logs include the native session ID for diagnosis.
+
 ### Upgrading saved sessions
 
 The plugin admits supported `authFingerprint` bindings (including `v2026.9.9`)

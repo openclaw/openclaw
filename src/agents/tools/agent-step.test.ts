@@ -383,7 +383,7 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
         requesterAgentId: "main",
         promptedAt: Date.now(),
         timeoutSeconds: 0,
-        timeoutMs: 10_000,
+        deadlineAtMs: Date.now() + 10_000,
         targetIsSubagent: false,
         isIsolatedCronRequester: false,
       });

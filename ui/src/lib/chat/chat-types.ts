@@ -86,7 +86,6 @@ export type DurableDraftModelSelection = {
   agentRuntime?: string;
   thinkingLevel: string;
   cyberAccessProgram?: CyberAccessProgram;
-  daybreakAccessProgram?: Exclude<CyberAccessProgram, "standard">;
 };
 
 export type DurableComposerDraft = {
@@ -163,7 +162,7 @@ export type ChatGuardianNotice = {
 
 export type { ToolApprovalReview } from "../../../../src/shared/tool-approval-reviews.js";
 
-export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true };
+export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true; removing?: boolean };
 
 export type ChatQueueItem = {
   id: string;
@@ -217,7 +216,22 @@ export type ChatQueueItem = {
   sender?: SenderIdentity;
 };
 
+export type ChatCompaction = {
+  kind: "compaction";
+  key: string;
+  compactionId?: string;
+  phase: "active" | "complete";
+  label: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  durationMs?: number;
+  timestamp: number;
+  /** An actual agent run, never the standalone manual operation ID. */
+  runId?: string;
+};
+
 export type ChatItem =
+  | ChatCompaction
   | {
       kind: "message";
       key: string;
@@ -243,6 +257,8 @@ export type ChatItem =
       showTimestamp?: true;
       /** Structural only: separates a handed-off run from its resumption. Never rendered. */
       handoffBoundary?: true;
+      /** Invisible narration boundary, consumed before rendered rows are built. */
+      activityBoundary?: true;
       /** A background skill review's changes; rendered as a native row instead of `text`. */
       skillChanges?: SkillWorkshopChangeNotice;
       runError?: RunFailureNotice;
@@ -255,8 +271,6 @@ export type ChatItem =
   | {
       kind: "divider";
       key: string;
-      compaction?: "active" | "complete";
-      compactionId?: string;
       systemEvent?: "info";
       label: string;
       icon?: IconName;
@@ -360,6 +374,10 @@ export function accumulatedStreamText(
 
 /** A group of consecutive messages from the same role (Slack-style layout) */
 export type MessageGroup = {
+  /** Presentation of a real compaction event; no synthetic message or model call. */
+  compaction?: ChatCompaction;
+  /** A hidden narrative message separates this activity from preceding tools. */
+  startsActivityGroup?: true;
   kind: "group";
   key: string;
   role: string;
@@ -405,7 +423,9 @@ export type MessageImageSource = {
 };
 
 export type MessageContentItem =
+  | import("./automation-creation-card.ts").AutomationCreationCardBlock
   | import("../../../../src/shared/plugin-inline-view.js").PluginInlineViewBlock
+  | import("../../../../src/shared/template-install-notice.js").TemplatePluginInstallNotice
   | ClawHubRecommendation
   | {
       type: "image";
@@ -497,6 +517,8 @@ export type ToolOutputMetadata = {
   captureTruncated?: true;
 };
 
+export type LiveToolOutput = { text: string; omittedChars: number };
+
 export type ToolCard = {
   id: string;
   callId?: string;
@@ -506,8 +528,12 @@ export type ToolCard = {
   args?: unknown;
   inputText?: string;
   outputText?: string;
+  /** Transient newest stdout after captured output fills; never transcript output. */
+  liveOutput?: LiveToolOutput;
   /** Result identity stays distinct from the assistant call after presentation grouping. */
   resultMessageId?: string;
+  /** agents_wait per-ID errors recorded before the output cap; they have no completion row. */
+  subagentCollectionErrors?: number;
   /** Gateway display projection omitted content; the durable result may still be complete. */
   outputTruncated?: boolean;
   /** Bounded external preview; does not authorize full-message recovery. */
@@ -519,6 +545,8 @@ export type ToolCard = {
   liveDiffStat?: { added: number; removed: number };
   /** Producer-reported process exit code, when the result supplies one. */
   exitCode?: number;
+  /** Code-mode receipt confirms dispatch began, even when the execution failed. */
+  bridgeDispatchStarted?: boolean;
   isError?: boolean;
   /** Prepared presentation facts; never replace the raw execution fields above. */
   activity?: AgentActivityItem;
@@ -531,9 +559,9 @@ export type ToolCard = {
   previewRevision?: string;
   /** Tab actions can identify a route without a previewable page URL. */
   browserTab?: BrowserTabTarget;
-  preview?:
-    | (NonNullable<ReturnType<typeof extractCanvasFromText>> & { surface: "assistant_message" })
-    | (BrowserTabTarget & { kind: "browser-tab"; url: string; title?: string });
+  preview?: NonNullable<ReturnType<typeof extractCanvasFromText>> & {
+    surface: "assistant_message";
+  };
 };
 
 export type ToolCardOutcome =

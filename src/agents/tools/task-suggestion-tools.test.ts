@@ -44,7 +44,7 @@ describe("task suggestion tools", () => {
       },
     );
     expect(result?.content).toEqual([
-      { type: "text", text: JSON.stringify({ task_id: "task_123" }, null, 2) },
+      { type: "text", text: JSON.stringify({ task_id: "task_123" }) },
     ]);
     expect(suggestTask?.description).toContain(
       "Nothing is spawned or started: this only records a card.",

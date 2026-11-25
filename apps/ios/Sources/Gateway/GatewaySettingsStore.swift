@@ -375,13 +375,6 @@ enum GatewaySettingsStore {
             instanceId: trimmedInstanceID)
     }
 
-    static func saveLegacyGatewayTokenForMigrationTest(_ token: String, instanceId: String) {
-        _ = GenericPasswordKeychainStore.saveString(
-            token,
-            service: self.gatewayService,
-            account: self.gatewayTokenAccount(instanceId: instanceId))
-    }
-
     private struct LegacyLastGatewayConnectionData: Codable {
         var kind: GatewayRegistryEntry.Kind
         var stableID: String
