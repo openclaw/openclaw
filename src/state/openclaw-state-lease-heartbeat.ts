@@ -42,6 +42,7 @@ import {
   type LeaseHeartbeatCleanup,
 } from "./openclaw-state-lease-heartbeat-cleanup.js";
 import {
+  createLeaseHeartbeatState,
   leaseHeartbeatState as state,
   leaseHeartbeatStartupPhase,
   LEASE_HEARTBEAT_START_TIMEOUT_MS,
@@ -235,11 +236,7 @@ export function startOpenClawStateLeaseHeartbeat(
   }
   const startedAt = performance.now();
   let onlineObserved = false;
-  const shared =
-    params.expiryObservation ??
-    new BigInt64Array(
-      new SharedArrayBuffer((state.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT),
-    );
+  const shared = params.expiryObservation ?? createLeaseHeartbeatState();
   Atomics.store(shared, state.expiresAt, BigInt(params.expiresAt));
   const ready = createDeferredCore();
   // Synchronous startup failures can occur before the caller receives ready.
@@ -270,7 +267,15 @@ export function startOpenClawStateLeaseHeartbeat(
     ready.reject(error);
     rejectPending(error);
   };
-  const lifecycle = createLeaseHeartbeatCleanup({ cancel: close });
+  const lifecycle = createLeaseHeartbeatCleanup({
+    cancel: close,
+    finish: () => databaseAdmission.finish(),
+    release: () => {
+      releaseAdmissionService();
+      lossPort.close();
+      workerLossPort.close();
+    },
+  });
   let lossReported = false;
   let workerLoss: LeaseHeartbeatLoss | undefined;
   const { port1: lossPort, port2: workerLossPort } = new MessageChannel();
@@ -501,12 +506,6 @@ export function startOpenClawStateLeaseHeartbeat(
   const releaseAdmissionService = retainSqliteWriteAdmissionService([databasePath], () =>
     databaseAdmission.service(),
   );
-  const finishAdmission = () => {
-    databaseAdmission.finish();
-    releaseAdmissionService();
-    lossPort.close();
-    workerLossPort.close();
-  };
   const stateAccess = captureStateDatabaseAccess(databasePath);
   void stateAccess.catch((error: unknown) =>
     fail(toErrorObject(error, "State lease heartbeat ownership capture failed")),
@@ -541,34 +540,34 @@ export function startOpenClawStateLeaseHeartbeat(
       shared: shared.buffer,
       renewalProgress: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
     } satisfies LeaseHeartbeatWorkerData;
-    worker = lifecycle.start(() =>
-      acquireLeaseHeartbeatCarrier({
-        key: JSON.stringify([databasePath, expectedIdentity, url.href, execArgv, sourceTsconfig]),
-        data,
-        createWorker: () =>
-          runInDetachedAsyncContext(() => {
-            const native = createCpuTrackedWorker(url, {
-              workerData: data,
-              transferList: [
-                databaseAdmission.port,
-                workerLossPort,
-                ...postgresPoolTransferList(data.postgresPool),
-              ],
-              env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
-              execArgv,
-              stdout: true,
-              stderr: true,
-            });
-            trackSqliteDatabaseAdmissionWorker(native);
-            return native;
-          }),
-      }),
+    worker = lifecycle.start(
+      () =>
+        acquireLeaseHeartbeatCarrier({
+          key: JSON.stringify([databasePath, expectedIdentity, url.href, execArgv, sourceTsconfig]),
+          data,
+          createWorker: () =>
+            runInDetachedAsyncContext(() => {
+              const native = createCpuTrackedWorker(url, {
+                workerData: data,
+                transferList: [
+                  databaseAdmission.port,
+                  workerLossPort,
+                  ...postgresPoolTransferList(data.postgresPool),
+                ],
+                env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
+                execArgv,
+                stdout: true,
+                stderr: true,
+              });
+              trackSqliteDatabaseAdmissionWorker(native);
+              return native;
+            }),
+        }),
+      fail,
     );
   } catch (error) {
-    finishAdmission();
-    return lifecycle.failStartup(error);
+    return lifecycle.failStartup(error, () => databaseAdmission.abortConstruction());
   }
-  void worker.closed.then(finishAdmission, finishAdmission);
   void worker.online.then(() => {
     onlineObserved = true;
   }, fail);
@@ -701,6 +700,7 @@ export function startOpenClawStateLeaseHeartbeat(
   };
   return {
     ready: ready.promise,
+    expiryObservation: shared,
     assertRunning,
     verify: () => request("verify"),
     renew: () => request("renew"),

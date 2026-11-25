@@ -245,12 +245,20 @@ final class GatewayProcessManager {
             do {
                 _ = try GatewayEndpointStore.localEndpoint(
                     hostingBesideRemotePrimary: self.hostsLocalGatewayWithRemotePrimary)
-            } catch {
+            } catch let error as GatewayEndpointStore.LocalPortConflict {
                 let conflict = error.localizedDescription
                 if self.desiredActive { self.stop() }
                 self.desiredActive = false
                 self.recordProfilePortConflict(conflict)
                 Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(conflict) }
+                return
+            } catch {
+                // Configuration can recover from a file edit. Only an ownership
+                // conflict may latch endpoint unavailability and withdraw activation intent.
+                if self.desiredActive { self.stop(preservingActivationIntent: true) }
+                self.desiredActive = true
+                self.fail(error.localizedDescription)
+                Task { await GatewayEndpointStore.shared.refresh() }
                 return
             }
         }
@@ -850,7 +858,9 @@ final class GatewayProcessManager {
     private func failProfilePortOwnership(port: Int, startGeneration: UInt64) async {
         guard self.isCurrentGatewayStart(startGeneration) else { return }
         let message = "Gateway port \(port) is already owned by another process or OpenClaw profile. " +
-            "Set gateway.port to a free port for profile \(AppProfile.current.name ?? "named")."
+            "To use a separately started Gateway, configure this app to connect in Remote mode. " +
+            "To start a local Gateway, set gateway.port to a free port for profile " +
+            "\(AppProfile.current.name ?? "named")."
         self.recordProfilePortConflict(message)
         await GatewayEndpointStore.shared.setLocalUnavailableReason(message)
     }

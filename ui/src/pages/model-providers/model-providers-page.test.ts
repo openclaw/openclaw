@@ -99,12 +99,30 @@ describe("ModelProvidersPage agent scope", () => {
     const { context } = createHarness("main");
     const page = appendPage(context);
     await waitForProviders(page);
+    publishRouteData(page, createApiKeyProviderData());
+    await page.updateComplete;
 
     [...page.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent === "View usage")
       ?.click();
 
     expect(context.navigate).toHaveBeenCalledExactlyOnceWith("usage");
+  });
+
+  it("opens a requested connection after an empty preload stops pending", async () => {
+    const { context } = createHarness("main");
+    const page = createPage(context);
+    page.routeData = { ...createEmptyModelProvidersRouteData(context), connect: true };
+    page.loaderPending = true;
+    mountPage(page);
+    await page.updateComplete;
+    expect(page.querySelector("[data-models-login-discover]")).toBeNull();
+
+    page.loaderPending = false;
+
+    await waitForSolid(() =>
+      expect(page.querySelector("[data-models-login-discover]")).not.toBeNull(),
+    );
   });
 
   it("does not readopt an old route snapshot when only loader pending changes", async () => {
@@ -156,9 +174,8 @@ describe("ModelProvidersPage agent scope", () => {
     page.view.props.onAddProviderKeyChange("synthetic-added-key");
     page.view.props.onOpenKeyEditor("openai");
     page.view.props.onKeyDraftChange("synthetic-unsaved-key");
-    await page.view.scope.onConnect();
     await page.updateComplete;
-    const search = page.querySelector<HTMLInputElement>("[data-models-login-search]")!;
+    const search = page.querySelector<HTMLInputElement>("[data-models-catalog-search]")!;
     search.value = "Draft provider search";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     const release = deferNextAuthStatus();
@@ -170,15 +187,14 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.view.props.keyDraft).toBe("synthetic-unsaved-key");
     expect(page.view.props.addProviderKey).toBe("synthetic-added-key");
     expect(page.view.props.defaultModels.primary).toBe("openai/draft-model");
-    expect(page.querySelector<HTMLInputElement>("[data-models-login-search]")?.value).toBe(
+    expect(page.querySelector<HTMLInputElement>("[data-models-catalog-search]")?.value).toBe(
       "Draft provider search",
     );
-    expect(search.disabled).toBe(false);
     search.value = "anthropic";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await page.updateComplete;
     const provider = page.querySelector<HTMLButtonElement>(
-      '[data-models-login-provider="anthropic"]',
+      '[data-models-catalog-provider="anthropic"] button',
     )!;
     expect(provider.disabled).toBe(true);
     const reads = request.mock.calls.length;
@@ -194,11 +210,8 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.view.props.keyEditorProvider).toBe("openai");
     expect(page.view.props.addProviderOpen).toBe(true);
     expect(page.view.props.defaultModels.primary).toBe("openai/draft-model");
-    expect(page.querySelector<HTMLInputElement>("[data-models-login-search]")?.value).toBe(
+    expect(page.querySelector<HTMLInputElement>("[data-models-catalog-search]")?.value).toBe(
       "anthropic",
-    );
-    expect(page.querySelector<HTMLInputElement>("[data-models-login-search]")?.disabled).toBe(
-      false,
     );
     await waitForSolid(() =>
       expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual({
@@ -284,7 +297,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.querySelector(".model-providers__profiles")).toBeNull();
     expect(page.renderRoot.textContent).not.toContain("owner@example.com");
     expect(page.querySelector(".model-providers__credentials")?.textContent).toContain(
-      "OAuth profiles: 1",
+      "Signed-in accounts: 1",
     );
   });
 
@@ -382,6 +395,11 @@ describe("ModelProvidersPage agent scope", () => {
       });
       const page = appendPage(context);
       await waitForProviders(page);
+      const moreSettings = page.querySelector<HTMLButtonElement>("[data-models-more-settings]")!;
+      if (moreSettings.getAttribute("aria-expanded") !== "true") {
+        moreSettings.click();
+        await page.updateComplete;
+      }
       runtimeConfig.patch.mockClear();
 
       await updatePickers(page.renderRoot);
@@ -412,7 +430,7 @@ describe("ModelProvidersPage agent scope", () => {
             },
           },
         },
-        note: "Update defaults from Control UI",
+        note: "Update defaults from the OpenClaw app",
         replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
       });
     },
@@ -439,7 +457,7 @@ describe("ModelProvidersPage agent scope", () => {
           },
         },
       },
-      note: "Update defaults from Control UI",
+      note: "Update defaults from the OpenClaw app",
       replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
     });
   });
@@ -474,6 +492,35 @@ describe("ModelProvidersPage agent scope", () => {
     await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
   });
 
+  it.each([
+    ["billing", "Check the provider’s billing or quota"],
+    ["auth", "Enter a different key."],
+  ] as const)("keeps saved-key recovery specific to %s", async (status, guidance) => {
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForProviders(page);
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) => {
+      if (method === "models.authSetApiKey") {
+        return { provider: "openai", profileId: "openai:key" };
+      }
+      if (method === "models.probe") {
+        return { provider: "openai", status, error: "Provider diagnostic.", results: [] };
+      }
+      return originalRequest(method);
+    });
+    await saveKey(page, "synthetic-replacement");
+    await waitForSolid(() => expect(page.view.props.messages.openai?.kind).toBe("error"));
+    const message = page.view.props.messages.openai?.text;
+    expect(message).toContain("API key saved");
+    expect(message).toContain("Provider diagnostic.");
+    expect(message).toContain(guidance);
+    expect(page.view.props.probeResults.openai?.status).toBe(status);
+    if (status === "billing") {
+      expect(message).not.toContain("Enter a different key");
+    }
+  });
+
   it("keeps saved-key warnings after providers failure", async () => {
     const { context, runtimeConfig, request } = createHarness("main");
     const page = appendPage(context);
@@ -495,7 +542,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.view.props.keyEditorProvider).toBeNull();
     expect(page.view.props.messages.openai).toEqual({
       kind: "success",
-      text: "Secret saved.",
+      text: "API key saved and verified.",
       warning: "Authentication refresh failed. Provider refresh failed.",
     });
     await page.updateComplete;
@@ -504,7 +551,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.querySelector(".model-providers__provider-list .provider-usage-error")).toBeNull();
   });
 
-  it("removes a provider only after confirmation and reports the Gateway warning", async () => {
+  it("removes saved provider access only after confirmation and reports the Gateway warning", async () => {
     const shell = document.body.appendChild(document.createElement("div"));
     shell.className = "shell";
     const toast = shell.appendChild(document.createElement("openclaw-toast-host"));
@@ -521,7 +568,7 @@ describe("ModelProvidersPage agent scope", () => {
     const row = await expandProvider(page, "openai");
     row.querySelector<HTMLButtonElement>(".provider-row__remove")!.click();
     const { modal } = await getRenderedModalDialog(document.body);
-    expect(modal.textContent).toContain("Remove OpenAI");
+    expect(modal.textContent).toContain("Remove saved access to OpenAI");
     expect(requestCount(request, "models.authLogout")).toBe(0);
     modal.querySelector<HTMLButtonElement>("button.danger")!.click();
     // The saved API-key profile is a provider-wide sign-out; nothing goes through config.
@@ -563,27 +610,34 @@ describe("ModelProvidersPage agent scope", () => {
     const form = page.querySelector("[data-models-key-dialog]");
     expect(
       [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
-    ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
+    ).toEqual(["Added anthropic. Access verified.", "config.get failed after provider add"]);
   });
 
   it.each([
     ["another provider fails", "ready", undefined],
-    ["the added provider fails", "unavailable", "More models could not be discovered."],
+    ["the added provider is pending", "pending", undefined],
+    ["the added provider fails", "unavailable", "Couldn’t load more models. Try again."],
+    ["the catalog request fails", "request-failed", "Catalog request failed."],
   ] as const)("provider-add feedback warns only when %s", async (_case, ownStatus, warning) => {
     const { context, runtimeConfig, request } = createHarness("main");
     const originalRequest = request.getMockImplementation()!;
-    request.mockImplementation(async (method) =>
-      method === "models.list"
-        ? {
-            models: [],
-            refreshFailed: true,
-            providerOutcomes: [
-              { provider: "anthropic", status: ownStatus },
-              { provider: "ollama", status: "unavailable" },
-            ],
-          }
-        : originalRequest(method),
-    );
+    request.mockImplementation(async (method) => {
+      if (method === "models.list") {
+        if (ownStatus === "request-failed") {
+          throw new Error("Catalog request failed.");
+        }
+        return {
+          models: [],
+          refreshFailed: true,
+          pendingProviders: ownStatus === "pending" ? ["anthropic"] : [],
+          providerOutcomes: [
+            ...(ownStatus === "pending" ? [] : [{ provider: "anthropic", status: ownStatus }]),
+            { provider: "ollama", status: "unavailable" },
+          ],
+        };
+      }
+      return originalRequest(method);
+    });
     const page = appendPage(context);
     await waitForProviders(page);
     await openApiKeyProvider(page, "anthropic");
@@ -595,9 +649,10 @@ describe("ModelProvidersPage agent scope", () => {
 
     expect(page.view.props.messages.add).toEqual({
       kind: "success",
-      text: "Provider anthropic added.",
+      text: "Added anthropic. Access verified.",
       ...(warning ? { warning } : {}),
     });
+    expect(page.view.props.addProviderOpen).toBe(Boolean(warning));
   });
 
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
@@ -771,7 +826,9 @@ describe("ModelProvidersPage agent scope", () => {
       }),
     );
     await vi.waitFor(() =>
-      expect(toast.toasts[0]?.options.message).toBe("Priority could not be saved"),
+      expect(toast.toasts[0]?.options.message).toBe(
+        "Couldn’t complete the request. Try again. Priority could not be saved",
+      ),
     );
     await toast.updateComplete;
     await vi.dynamicImportSettled();
@@ -851,6 +908,28 @@ describe("ModelProvidersPage agent scope", () => {
     );
   });
 
+  it("replaces a successful check when the next check request fails", async () => {
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForProviders(page);
+    page.view.props.onProbe("openai", ["openai"]);
+    await waitForSolid(() => expect(page.view.props.probeResults.openai?.status).toBe("ok"));
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) => {
+      if (method === "models.probe") {
+        throw new Error("Connection interrupted");
+      }
+      return originalRequest(method);
+    });
+    page.view.props.onProbe("openai", ["openai"]);
+    await waitForSolid(() => expect(page.view.props.busy["probe:openai"]).toBeUndefined());
+    expect(page.view.props.probeResults.openai).toMatchObject({
+      status: "unknown",
+      error: expect.stringContaining("Connection interrupted"),
+      results: [],
+    });
+  });
+
   it("stops queued provider probes after switching away from and back to the selected agent", async () => {
     const { settingsAgentSelection, context, notifySelection, request } = createHarness("main");
     const page = appendPage(context);
@@ -906,7 +985,6 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
     expect(selection.state.selectedId).toBeNull();
     expect(page.querySelector(".settings-loading-skeleton")).toBeNull();
     expect(page.renderRoot.textContent).toContain("No agents");
-    expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
 
     const groups = page.querySelectorAll(
       '.model-providers__defaults .settings-segmented[role="radiogroup"]',
@@ -934,7 +1012,7 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
           },
         },
       },
-      note: "Update defaults from Control UI",
+      note: "Update defaults from the OpenClaw app",
       replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
     });
     expect(request.mock.calls.some(([method]) => method.startsWith("models."))).toBe(false);
@@ -949,7 +1027,8 @@ it("applies provider navigation without replacing an edited search during revali
   const page = appendPage(context);
   const routeData = { ...createEmptyModelProvidersRouteData(context), provider: "openai" };
   page.routeData = routeData;
-  const search = () => page.querySelector<HTMLInputElement>(".model-providers__search input")!;
+  // Nothing is connected, so a provider link lands on the catalog search.
+  const search = () => page.querySelector<HTMLInputElement>("[data-models-catalog-search]")!;
   await waitForSolid(() => expect(search()?.value).toBe("openai"));
 
   search().value = "anthropic";
@@ -966,6 +1045,6 @@ it("applies provider navigation without replacing an edited search during revali
   page.routeData = { ...routeData, provider: "minimax-portal" };
   await waitForSolid(() => expect(search()?.value).toBe("minimax"));
   page.routeData = { ...routeData, provider: "" };
-  // Setup with nothing connected and nothing typed has no list to filter.
+  // A cleared link clears the search, too.
   await waitForSolid(() => expect(search()?.value ?? "").toBe(""));
 });

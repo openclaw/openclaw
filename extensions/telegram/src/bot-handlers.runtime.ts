@@ -11,6 +11,7 @@ import type {
   TelegramNativeCommandCallbackDispatcher,
   TelegramPluginCommandContinuation,
 } from "./bot-handlers.types.js";
+import { createTelegramWidgetQueryRouter } from "./widgets/widget-query-router.js";
 
 export const createTelegramHandlers = (
   params: Omit<RegisterTelegramHandlerParams, "nativeCommandCallbackDispatcher">,
@@ -49,6 +50,8 @@ export const createTelegramHandlers = (
       params.bot.on("callback_query", async (ctx) => {
         await callbackRouter.route(ctx);
       });
+      const widgetQueryRouter = createTelegramWidgetQueryRouter({ params, message, authorization });
+      params.bot.use((ctx, next) => widgetQueryRouter.route(ctx, next));
       eventBindings.registerMigration();
       registerTelegramInboundHandlers({ bot: params.bot, pipeline: inboundPipeline });
     },

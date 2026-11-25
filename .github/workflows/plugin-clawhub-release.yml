@@ -4,6 +4,10 @@ run-name: "plugin-clawhub-release.yml [${{ inputs.release_tag || inputs.ref }}] 
 on:
   workflow_dispatch:
     inputs:
+      fast_track_request:
+        description: Fast-track exception request JSON; approval uses the npm-release environment
+        required: false
+        type: string
       publish_scope:
         description: Publish the selected plugins or all ClawHub-publishable plugins from the workflow ref
         required: true
@@ -76,6 +80,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  FAST_TRACK_REQUEST_JSON: ${{ inputs.fast_track_request }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.22.1"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
@@ -689,6 +694,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PREPARED_ARTIFACT: ${{ inputs.prepared_artifact }}
           PACKAGE_ENTRY: ${{ toJson(matrix.plugin) }}
+          TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          PUBLISH_SCOPE: ${{ inputs.publish_scope }}
+          RELEASE_PLUGINS: ${{ inputs.plugins }}
         run: |
           set -euo pipefail
           printf '%s' "${PREPARED_ARTIFACT}" > "$RUNNER_TEMP/clawhub-prepared-descriptor.json"
@@ -873,6 +881,21 @@ jobs:
           RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
           EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: node scripts/release-approval-receipt.mjs wait-clawhub-authorization
+      - name: Recheck original packed publication absence
+        if: inputs.prepared_artifact != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARED_ARTIFACT: ${{ inputs.prepared_artifact }}
+          TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          PUBLISH_SCOPE: ${{ inputs.publish_scope }}
+          RELEASE_PLUGINS: ${{ inputs.plugins }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PREPARED_ARTIFACT" > "$RUNNER_TEMP/clawhub-prepared-descriptor.json"
+          if jq -e '.kind == "openclaw-clawhub-original-packed"' "$RUNNER_TEMP/clawhub-prepared-descriptor.json" >/dev/null; then
+            node scripts/clawhub-prepared-artifact.mjs check-absent \
+              --descriptor "$RUNNER_TEMP/clawhub-prepared-descriptor.json"
+          fi
       - name: Write recovery environment approval receipt
         if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
         env:

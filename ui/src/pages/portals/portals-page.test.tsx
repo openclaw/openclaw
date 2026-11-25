@@ -122,7 +122,7 @@ beforeEach(() => void probePortalReachable.mockReset().mockResolvedValue("reacha
 it.each(["portal", "environment"] as const)("retries initial %s read", async (kind) => {
   const isPortal = kind === "portal",
     method = isPortal ? "portal.list" : "environments.status";
-  const loading = isPortal ? "Loading" : "Starting your machine";
+  const loading = isPortal ? "Loading" : "Starting your device";
   const error = isPortal
     ? "Synthetic portal list unavailable"
     : "Synthetic environment unavailable";
@@ -143,10 +143,14 @@ it.each(["portal", "environment"] as const)("retries initial %s read", async (ki
   }
   first.reject(new Error(error));
   await waitForText(page, error);
+  if (!isPortal) {
+    expectText(page).toContain("Couldn’t check this device’s status.");
+    expectText(page).not.toContain("Couldn’t start this device");
+  }
   const retryButton = isPortal
     ? page.querySelector<HTMLButtonElement>('[role="alert"] button')!
-    : [...page.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
-  expect(retryButton.textContent).toBe("Retry");
+    : [...page.querySelectorAll("button")].find((button) => button.textContent === "Check again")!;
+  expect(retryButton.textContent).toBe(isPortal ? "Retry" : "Check again");
   retryButton.click();
   await waitForSolid(() => expect(callsTo(source, method)).toHaveLength(2));
   await waitForText(page, loading);
@@ -155,7 +159,7 @@ it.each(["portal", "environment"] as const)("retries initial %s read", async (ki
   if (isPortal) {
     await waitForFrame(page);
   } else {
-    await waitForText(page, "Waiting for your application");
+    await waitForText(page, "Waiting for your app");
     expect(frameOf(page)).toBeNull();
   }
 });
@@ -340,7 +344,7 @@ it.each([undefined, "pending-machine"])("retires unreadable state (%s)", async (
   expect(source.request).toHaveBeenCalledTimes(1);
   expectText(page).toContain("This action requires operator.read access.");
   expect(frameOf(page)).toBeNull();
-  expectText(page).not.toContain("Starting your machine");
+  expectText(page).not.toContain("Starting your device");
 });
 it("admits the initial pending environment for a lazy Solid portal", async () => {
   const environment = machine("pending-machine");
@@ -359,7 +363,7 @@ it("admits the initial pending environment for a lazy Solid portal", async () =>
   );
   try {
     await waitForRequest(source, "environments.status", { environmentId: environment.id });
-    expect(mounted.container.textContent).toContain("Starting your machine");
+    expect(mounted.container.textContent).toContain("Starting your device");
     expect(callsTo(source, "portal.list")).toHaveLength(0);
   } finally {
     mounted.unmount();
@@ -373,19 +377,40 @@ it("waits for machine startup and an explicitly opened app", async () => {
   );
   const { page } = await mountPage(source.context, undefined, environment.id);
   await waitForRequest(source, "environments.status", { environmentId: environment.id });
-  expectText(page).toContain("Starting your machine");
+  expectText(page).toContain("Starting your device");
   expect(frameOf(page)).toBeNull();
   expect(callsTo(source, "portal.list")).toHaveLength(0);
   environment = { ...environment, status: "available" };
   await vi.advanceTimersByTimeAsync(2_000);
   await page.updateComplete;
-  expectText(page).toContain("Waiting for your application");
+  expectText(page).toContain("Waiting for your app");
   await expectNoPolling(source);
   expect(frameOf(page)).toBeNull();
   toggle(page, { portalId: portal.id });
   await waitForTitle(page, "Seeded app");
   expect(page.requestedEnvironmentId).toBeNull();
 });
+it.each(["unavailable", "stopping", "error"] as const)(
+  "describes a reported %s device without promising a restart",
+  async (status) => {
+    const environment = machine("pending-machine", status);
+    const source = createContext(["environments.status"], async () => environment);
+    const { page } = await mountPage(source.context, undefined, environment.id);
+    await waitForText(
+      page,
+      status === "stopping" ? "This device is stopping." : "This device is unavailable.",
+    );
+    expectText(page).not.toContain("Couldn’t start this device");
+    const refresh = [...page.querySelectorAll("button")].find(
+      (button) => button.textContent === "Check again",
+    )!;
+    refresh.click();
+    await waitForSolid(() => expect(callsTo(source, "environments.status")).toHaveLength(2));
+    expect(source.request.mock.calls.every(([method]) => method === "environments.status")).toBe(
+      true,
+    );
+  },
+);
 it("pauses machine startup polling in a hidden browser tab and catches up on return", async () => {
   usePollingTimers();
   let environment = machine("pending-machine");
@@ -393,14 +418,14 @@ it("pauses machine startup polling in a hidden browser tab and catches up on ret
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
   const source = createContext(["environments.status"], async () => environment);
   const { page } = await mountPage(source.context, undefined, environment.id);
-  await waitForText(page, "Starting your machine");
+  await waitForText(page, "Starting your device");
   visibility = "hidden";
   document.dispatchEvent(new Event("visibilitychange"));
   await expectNoPolling(source);
   environment = { ...environment, status: "available" };
   visibility = "visible";
   document.dispatchEvent(new Event("visibilitychange"));
-  await waitForText(page, "Waiting for your application");
+  await waitForText(page, "Waiting for your app");
   expect(callsTo(source, "environments.status")).toHaveLength(2);
   await expectNoPolling(source);
   page.remove();
@@ -420,7 +445,7 @@ it("loads only the final environment from same-turn target writes", async () => 
     expect(source.request.mock.calls).toEqual([
       ["environments.status", { environmentId: environment.id }],
     ]);
-    expectText(page).toContain("Waiting for your application");
+    expectText(page).toContain("Waiting for your app");
     expect(frameOf(page)).toBeNull();
   });
 });
@@ -446,15 +471,15 @@ it.each(["success", "failure"] as const)("retired %s keeps current polling", asy
       environmentId: replacement.id,
     }),
   );
-  await waitForText(page, "Starting your machine");
+  await waitForText(page, "Starting your device");
   if (outcome === "success") {
     await updatePage(page, { presented: false });
     retired.resolve(machine("old-machine", "available"));
     await expectNoPolling(source);
-    expectText(page).toContain("Starting your machine");
+    expectText(page).toContain("Starting your device");
     replacement = { ...replacement, status: "error" };
     await updatePage(page, { presented: true });
-    await waitForText(page, "The machine could not start");
+    await waitForText(page, "This device is unavailable");
   } else {
     retired.reject(new Error("Previous machine failed"));
     await retired.promise.catch(() => undefined);
@@ -463,7 +488,7 @@ it.each(["success", "failure"] as const)("retired %s keeps current polling", asy
     replacement = { ...replacement, status: "available" };
     await vi.advanceTimersByTimeAsync(2_000);
     await page.updateComplete;
-    expectText(page).toContain("Waiting for your application");
+    expectText(page).toContain("Waiting for your app");
   }
   expect(frameOf(page)).toBeNull();
   page.remove();
@@ -535,7 +560,7 @@ it("requires write access instead of opening a portal without credentials", asyn
     ["operator.read"],
   );
   const { page } = await mountPage(source.context);
-  await waitForText(page, "This portal requires an operator with write access.");
+  await waitForText(page, "You need write access to view this portal.");
   expect(frameOf(page)).toBeNull();
   expect(page.querySelector(".portals-preview__url")).toBeNull();
   expect(probePortalReachable).not.toHaveBeenCalled();
@@ -545,7 +570,7 @@ it("shows an unreachable notice without mounting the iframe and retries", async 
   probePortalReachable.mockResolvedValueOnce("unreachable").mockReturnValueOnce(pending.promise);
   const source = closeContext({ closed: true });
   const { page } = await mountPage(source.context);
-  await waitForText(page, "Portal not reachable from this browser");
+  await waitForText(page, "Portal isn’t reachable");
   expect(frameOf(page)).toBeNull();
   page.querySelector<HTMLButtonElement>(".portals-preview__close")?.click();
   await waitForRequest(source, "portal.close", { id: portal.id });
@@ -555,7 +580,7 @@ it("shows an unreachable notice without mounting the iframe and retries", async 
   expect(retry).toBeDefined();
   retry?.click();
   await waitForText(page, "Loading portal");
-  expectText(page).not.toContain("Portal not reachable from this browser");
+  expectText(page).not.toContain("Portal isn’t reachable");
   expect(frameOf(page)).toBeNull();
   pending.resolve("reachable");
   await waitForFrame(page);
@@ -572,11 +597,11 @@ it("does not publish a late probe from the previous Gateway", async () => {
   const second = createContext(["portal.list"], async () => portalResponse());
   provider.setContext(second.context);
   await page.updateComplete;
-  await waitForText(page, "Portal not reachable from this browser");
+  await waitForText(page, "Portal isn’t reachable");
   oldProbe.resolve("reachable");
   await page.updateComplete;
   expect(frameOf(page)).toBeNull();
-  expectText(page).toContain("Portal not reachable from this browser");
+  expectText(page).toContain("Portal isn’t reachable");
   expect(probePortalReachable).toHaveBeenCalledTimes(2);
 });
 it.each([

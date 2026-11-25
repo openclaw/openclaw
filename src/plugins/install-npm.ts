@@ -1,12 +1,13 @@
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { withInstallActivity } from "../infra/install-progress.js";
-import { resolveNpmSpecMetadata, type NpmSpecResolution } from "../infra/install-source-utils.js";
+import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import { resolveManagedNpmRootDependencySpec } from "../infra/npm-managed-root.js";
 import {
   formatPrereleaseResolutionError,
   isPrereleaseResolutionAllowed,
   parseRegistryNpmSpecResult,
+  type NpmSpecResolution,
 } from "../infra/npm-registry-spec.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveUserPath } from "../utils.js";

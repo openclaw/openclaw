@@ -69,7 +69,7 @@ function mobileHeader(target = () => "sample-run") {
         disabled: false,
         pending: false,
         confirmation: {
-          title: "Stop worker",
+          title: "Stop",
           message: "Stop sample worker?",
           confirmLabel: "Stop",
           cancelLabel: "Cancel",

@@ -11,6 +11,7 @@ import {
   useLoadingFixture,
   captureWarningLogger,
 } from "./loading.test-support.js";
+import { loadWorkspaceSkillSourceEntries } from "./skill-root-loader.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
 vi.mock("./plugin-skills.js", async (importOriginal) => ({
@@ -230,6 +231,27 @@ describe("discoverSkillCandidates", () => {
 });
 
 describe.runIf(process.platform !== "win32")("symlink containment", () => {
+  it("loads plugin skill links when the state dir is reached through a symlinked ancestor", async () => {
+    const stateDir = await newDir();
+    const pluginRoot = await newDir();
+    await skill(path.join(pluginRoot, "canvas"), "canvas", "Canvas");
+    await link(path.join(pluginRoot, "canvas"), path.join(stateDir, "plugin-skills", "canvas"));
+    // Like macOS /tmp -> /private/tmp: an alias above the generated links, unrelated to the plugin.
+    const alias = await link(stateDir, path.join(await newDir(), "state-alias"));
+    const warn = captureWarningLogger();
+
+    const entries = loadWorkspaceSkillSourceEntries({
+      workspaceDir: alias,
+      roots: [],
+      pluginSkillsDir: path.join(alias, "plugin-skills"),
+      pluginSkillRoots: [{ dir: pluginRoot, rejectHardlinks: true }],
+      managedSkillsDir: path.join(alias, "managed"),
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toEqual(["canvas"]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("skips workspace skill paths that resolve outside the workspace root", async () => {
     const workspace = await newDir();
     const outside = await newDir();

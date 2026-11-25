@@ -17,6 +17,7 @@ import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
 import { retryClawHubRead } from "../../src/infra/clawhub-retry.ts";
 import { isRecoverableOpenClawNpmRegistryReadbackFailure } from "../openclaw-npm-resume-run.mts";
+import { authenticateFullReleaseValidationEvidence } from "../validate-full-release-validation-evidence.mjs";
 import {
   compareCodeUnits,
   readPublicationArtifactArchive,
@@ -76,8 +77,9 @@ type ReleaseVerifyBetaArgs = {
   };
 };
 
-type WorkflowRunSummary = ReturnType<typeof verifyWorkflowRun> &
-  Partial<Pick<ReturnType<typeof validateClawHubBootstrapEvidence>, "bootstrapEvidence">>;
+type WorkflowRunSummary = ReturnType<typeof verifyWorkflowRun> & { conclusion?: string } & Partial<
+    Pick<ReturnType<typeof validateClawHubBootstrapEvidence>, "bootstrapEvidence">
+  >;
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_CLAWHUB_REGISTRY = "https://clawhub.ai";
@@ -471,7 +473,7 @@ function recordReleasePublishDiagnostics(event: string): void {
     args.releaseSha = env.TARGET_SHA;
     args.pluginSelection = parsePluginReleaseSelection(env.PLUGINS);
     args.workflowRef = env.CHILD_WORKFLOW_REF;
-    args.skipClawHub = env.WAIT_FOR_CLAWHUB === "false";
+    args.skipClawHub = true;
     args.workflowRuns = {
       openclawNpm: env.CHILD_OPENCLAW_NPM_RUN_ID,
       pluginNpm: env.CHILD_PLUGIN_NPM_RUN_ID,
@@ -1723,12 +1725,14 @@ export async function verifyBetaRelease(
   options: {
     rootDir?: string;
     pluginNpmReadback?: {
-      // Resolves to an informational note for a superseded published version.
       verify: (
         packageName: string,
         version: string,
         distTag: string,
-      ) => Promise<string | undefined>;
+      ) => Promise<{
+        disposition: "published" | "deferred-auth";
+        note?: string;
+      }>;
       evidence: Record<string, unknown>[];
     };
   } = {},
@@ -1811,29 +1815,33 @@ export async function verifyBetaRelease(
     });
     for (const plugin of npmPlugins) {
       diagnostic.package("pluginNpm", plugin.packageName, "started");
+      let deferredAuth = false;
       // Full publication owns tarball readback, including prior-parent publishes.
       // Only standalone health checks retain metadata verification.
       if (options.pluginNpmReadback) {
-        const note = await options.pluginNpmReadback.verify(
+        const readback = await options.pluginNpmReadback.verify(
           plugin.packageName,
           args.version,
           args.distTag,
         );
-        if (note !== undefined) {
-          lines.push(`plugin npm WARN: ${note}`);
+        deferredAuth = readback.disposition === "deferred-auth";
+        if (readback.note !== undefined) {
+          lines.push(`plugin npm WARN: ${readback.note}`);
         }
       } else {
         await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
       }
       const scope: NpmDiagnosticScope = { stage: "pluginNpm", packageName: plugin.packageName };
-      diagnostic.observeNpmPublication(scope);
-      const betaFloorError = await readNpmBetaFloorError(plugin.packageName, args.version);
-      if (betaFloorError !== undefined) {
-        betaFloorErrors.push({ scope, message: betaFloorError });
-        diagnostic.fail(createNpmBetaFloorError([betaFloorError]));
-      } else {
-        diagnostic.package("pluginNpm", plugin.packageName, "success");
+      if (!deferredAuth) {
+        diagnostic.observeNpmPublication(scope);
+        const betaFloorError = await readNpmBetaFloorError(plugin.packageName, args.version);
+        if (betaFloorError !== undefined) {
+          betaFloorErrors.push({ scope, message: betaFloorError });
+          diagnostic.fail(createNpmBetaFloorError([betaFloorError]));
+          continue;
+        }
       }
+      diagnostic.package("pluginNpm", plugin.packageName, "success");
     }
     if (!betaFloorErrors.some(({ scope }) => scope.stage === "pluginNpm")) {
       diagnostic.success("pluginNpm");
@@ -1907,9 +1915,64 @@ export async function verifyBetaRelease(
     const allowedReleaseWorkflowHeadBranches = args.workflowRef
       ? ["main", args.workflowRef]
       : ["main"];
-    verifyChild("fullReleaseValidation", "Full Release Validation", () => ({
-      allowedHeadBranches: allowedReleaseWorkflowHeadBranches,
-    }));
+    if (process.env.FAST_TRACK_REQUEST_JSON && args.workflowRuns.fullReleaseValidation) {
+      const stage = diagnostic.workflowStage("fullReleaseValidation");
+      diagnostic.start(stage);
+      const id = args.workflowRuns.fullReleaseValidation;
+      const attempt = requirePositiveIntegerString(
+        process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
+        "fast-track FRV attempt",
+      );
+      const run = parseJson(
+        runReleaseVerifierCommand("gh", [
+          "api",
+          `repos/${args.repo}/actions/runs/${id}/attempts/${attempt}`,
+        ]),
+        "fast-track original FRV run",
+      );
+      const authenticated = await authenticateFullReleaseValidationEvidence({
+        run,
+        expectedRepository: args.repo,
+        expectedRunId: id,
+        expectedRunAttempt: attempt,
+        expectedTargetSha: requireCommitSha(args.releaseSha, "release SHA"),
+        expectedReleaseTag: args.tag,
+        expectedTrustedWorkflowFullRef: process.env.GITHUB_REF,
+        expectedTrustedWorkflowSha: process.env.GITHUB_WORKFLOW_SHA,
+        verifierSourceSha: process.env.GITHUB_WORKFLOW_SHA,
+        expectedCoreNpmPublication: { npmDistTag: args.distTag },
+      });
+      const current = authenticated.evidence.current;
+      const fastTrack = authenticated.evidence.fastTrack;
+      if (!fastTrack) {
+        throw new Error("Expected authenticated fast-track publication evidence.");
+      }
+      diagnostic.observeRun(
+        "fullReleaseValidation",
+        {
+          databaseId: Number(id),
+          attempt: current.runAttempt,
+          headSha: current.workflowSha,
+          status: current.status,
+          conclusion: current.conclusion,
+          url: current.url,
+        },
+        fastTrack.snapshot.summary.failed,
+      );
+      workflowRuns.push({
+        id,
+        runAttempt: current.runAttempt,
+        label: "Full Release Validation",
+        url: current.url,
+        durationSeconds: undefined,
+        conclusion: current.conclusion,
+      });
+      diagnostic.success(stage);
+    } else {
+      verifyChild("fullReleaseValidation", "Full Release Validation", () => ({
+        allowedHeadBranches: allowedReleaseWorkflowHeadBranches,
+      }));
+    }
     verifyChild("pluginNpm", "Plugin NPM Release", () => ({
       expectedHeadBranch: args.workflowRef,
     }));
@@ -1969,8 +2032,12 @@ export async function verifyBetaRelease(
       allowedHeadBranches: allowedReleaseWorkflowHeadBranches,
     }));
     for (const run of workflowRuns) {
+      const outcome =
+        run.label === "Full Release Validation" && process.env.FAST_TRACK_REQUEST_JSON
+          ? `validation skipped by approved fast-track (original result: ${run.conclusion})`
+          : "OK";
       lines.push(
-        `${run.label} OK: ${run.id} (${formatDuration(run.durationSeconds)})${run.url ? ` ${run.url}` : ""}`,
+        `${run.label} ${outcome}: ${run.id} (${formatDuration(run.durationSeconds)})${run.url ? ` ${run.url}` : ""}`,
       );
     }
 

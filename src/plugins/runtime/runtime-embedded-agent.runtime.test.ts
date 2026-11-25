@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
+import { resolveSettledTurnFinalizationRequest } from "../../agents/embedded-agent-runner/run/incomplete-turn-recovery.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "../../agents/embedded-agent-runner/run/terminal-outcome.js";
-import { resolveSettledTurnFinalizationRequest } from "../../agents/embedded-agent-runner/run/terminal-resolution.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,

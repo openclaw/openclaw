@@ -100,7 +100,7 @@ export type PluginControlUiDescriptor = {
   linkReader?: ControlUiLinkReaderMetadata;
   label: string;
   description?: string;
-  /** Bundled plugins may claim their matching native route as `route:<pluginId>`. */
+  /** `settings` places a tab in Settings instead of Pages. Bundled plugins may claim their matching native route as `route:<pluginId>`. */
   placement?: string;
   /** Optional single-segment Control UI address for a tab; does not register an HTTP route. */
   slug?: string;
@@ -346,12 +346,6 @@ export function buildPluginAgentTurnPrepareContext(params: {
   const prepend: string[] = [];
   const append: string[] = [];
   params.queuedInjections.forEach((entry) => {
-    if (
-      (entry.placement !== "prepend_context" && entry.placement !== "append_context") ||
-      typeof entry.text !== "string"
-    ) {
-      return;
-    }
     const text = entry.text.trim();
     if (text) {
       (entry.placement === "prepend_context" ? prepend : append).push(text);

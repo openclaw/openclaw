@@ -350,9 +350,9 @@ describe("config appearance preferences", () => {
     );
     const followUpRow = settingsRow(container, "Follow-ups while the agent is working");
 
-    expect(themeDescription.textContent).toContain("Waiting to sync through the gateway");
+    expect(themeDescription.textContent).toContain("Waiting to sync.");
     expect(themeDescription.textContent).not.toContain("Synced across your devices");
-    expect(followUpRow?.textContent).toContain("Waiting to sync through the gateway");
+    expect(followUpRow?.textContent).toContain("Waiting to sync.");
     expect(followUpRow?.textContent).not.toContain("Synced across your devices");
   });
 

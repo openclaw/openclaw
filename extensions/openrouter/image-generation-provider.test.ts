@@ -180,6 +180,34 @@ describe("openrouter image generation provider", () => {
     });
   });
 
+  it("forwards aspect ratio but not resolution for non-Gemini canonical requests", async () => {
+    respond({ data: [{ b64_json: "cG5nLW9uZQ==" }] });
+
+    await generateImage({
+      model: "bytedance-seed/seedream-5-5",
+      inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
+      aspectRatio: "16:9",
+      resolution: "4K",
+    });
+
+    const request = postRequest();
+    expect(request.url).toBe("https://openrouter.ai/api/v1/images");
+    expect(request.body).toEqual({
+      model: "bytedance-seed/seedream-5-5",
+      prompt: "draw a sticker",
+      n: 1,
+      aspect_ratio: "16:9",
+      input_references: [
+        {
+          type: "image_url",
+          image_url: {
+            url: `data:image/png;base64,${Buffer.from("source-image").toString("base64")}`,
+          },
+        },
+      ],
+    });
+  });
+
   it.each([
     { name: "without references", inputImages: undefined, inputReferences: undefined },
     {

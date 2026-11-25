@@ -8,7 +8,7 @@ import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js
 import { requireNativeDatabaseFile } from "./database-engine/physical-facts.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { mediaRowsNeedMigration } from "./state-migrations.media-persistence-database.js";
 import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
 import { transcriptDirectiveArchivesNeedMigration } from "./state-migrations.transcript-directives-archives.js";

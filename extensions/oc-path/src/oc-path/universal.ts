@@ -139,7 +139,7 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
       if (p.section === undefined) {
         return { kind: "insertion-point", container: "md-file", line: 1 };
       }
-      if (p.section === "[frontmatter]") {
+      if (p.section === "[frontmatter]" && p.item === undefined && p.field === undefined) {
         return { kind: "insertion-point", container: "md-frontmatter", line: 1 };
       }
       if (p.item === undefined && p.field === undefined) {
@@ -408,7 +408,10 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
     if (info.marker !== "+") {
       throw new OcPathEditError("not-writable", "md file-level insertion uses bare `+`");
     }
-    const gap = ast.raw.replace(/^\uFEFF/, "").length > 0 && !/\n\r?\n$/.test(ast.raw) ? "\n" : "";
+    const gap =
+      ast.raw.replace(/^\uFEFF/, "").length > 0 && !ast.raw.replace(/\r\n?/g, "\n").endsWith("\n\n")
+        ? "\n"
+        : "";
     return insertMdSource(ast, ast.raw.length, `${gap}## ${value}`, (shifted, line) => ({
       ...shifted,
       blocks: [
@@ -424,7 +427,7 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
     }));
   }
 
-  if (p.section === "[frontmatter]") {
+  if (p.section === "[frontmatter]" && p.item === undefined && p.field === undefined) {
     if (typeof info.marker !== "object" || info.marker.kind !== "keyed") {
       throw new OcPathEditError("not-writable", "md frontmatter insertion requires +key");
     }
@@ -493,6 +496,7 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
                   text: value,
                   slug: slugify(kv?.key ?? value),
                   line,
+                  textLine: line,
                   ...(kv === undefined ? {} : { kv }),
                 },
               ],

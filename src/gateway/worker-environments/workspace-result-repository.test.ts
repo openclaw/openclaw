@@ -48,6 +48,7 @@ import {
   SESSION_ID,
   sessionTarget,
 } from "./worker-turn-launcher.test-support.js";
+import { loadStagedWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   createWorkerWorkspaceRecoveryFixture,
   expectWorkspaceFiles,
@@ -59,7 +60,6 @@ import {
 import { useRepositoryWorkspaceResultFixture } from "./workspace-result-repository.test-support.js";
 import {
   hasWorkerWorkspaceResultRef,
-  readStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
@@ -263,7 +263,7 @@ describe("repository workspace result ownership", () => {
         const pausedCandidates = await candidates();
         expect(pausedCandidates).toHaveLength(boundary === "publication-metadata" ? 1 : 0);
         if (boundary === "publication-metadata") {
-          const raw = await readStagedWorkerWorkspaceResult(artifactRoot, pausedCandidates[0]!);
+          const raw = await loadStagedWorkspaceManifest(artifactRoot, pausedCandidates[0]!);
           expect(raw.current.baseCommit).toBe(before.baseCommit);
           expect(raw.changedEntries.map((entry) => entry.path)).toContain("editor.txt");
         }
@@ -301,7 +301,7 @@ describe("repository workspace result ownership", () => {
           await expect(fs.stat(importRoot)).rejects.toMatchObject({ code: "ENOENT" });
         }
         for (const call of fastImports()) {
-          expect(call[2]).toMatchObject({ stdinFileDescriptor: expect.any(Number) });
+          expect(call[2]).toMatchObject({ stdinFile: expect.any(Object) });
         }
         expect(importRoots).toHaveLength(1);
         expect(await candidates()).toEqual([]);

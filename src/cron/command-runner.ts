@@ -1,6 +1,7 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
+import { resolveShellCommandLaunch } from "../infra/node-shell.js";
 import { hasCommandProcessCleanupError, type SpawnResult } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -127,7 +128,9 @@ export async function runCronCommandJob(params: {
     let cleanupFailure: Error | undefined;
     try {
       result = await withCommandProcessScope(async () => {
-        produced.result = await runCommandWithTimeout(payload.argv, {
+        const launch = resolveShellCommandLaunch(payload.argv);
+        produced.result = await runCommandWithTimeout(launch.argv, {
+          ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
           timeoutMs: secondsToMs(payload.timeoutSeconds) ?? DEFAULT_COMMAND_TIMEOUT_MS,
           ...(payload.cwd ? { cwd: payload.cwd } : {}),
           ...(payload.input !== undefined ? { input: payload.input } : {}),

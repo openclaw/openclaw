@@ -5,10 +5,14 @@ import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { resolveGitMetadataPath } from "./git.js";
 import { retainWorktreeTemplate } from "./template-cache.js";
 import { readTemplateAsync } from "./template-registry-async.js";
-import type { WorktreeTemplateRecord, WorktreeWarmPoolRequest } from "./template-registry.js";
+import {
+  worktreeTemplateMutationKey,
+  type WorktreeTemplateRecord,
+  type WorktreeWarmPoolRequest,
+} from "./template-registry.js";
 
 export const selectWarmWorktree = (template: WorktreeTemplateRecord) => ({
-  cacheKey: `warm:${template.cacheKey}`,
+  cacheKey: `warm:${worktreeTemplateMutationKey(template.cacheKey)}`,
   contentKey: `${template.id}:${template.contentKey}`,
   backend: `warm-${template.backend}`,
 });
@@ -22,6 +26,7 @@ export async function isWarmWorktreeClean(
   const gitOptions = {
     signal: options.signal,
     beforeRun: options.commitGuard,
+    stateOwnerPath: options.workerAuthority?.stateOwnerPath,
     killProcessTree: true,
   };
   const output = await withWorktreeGitConfig(record.path, sourceOnly, gitOptions, async (git) => {
@@ -59,7 +64,13 @@ export async function takeWarmWorktree(
   options: WorktreeFilesystemOptions,
 ) {
   const wanted = selectWarmWorktree(request.template);
-  const record = await readTemplateAsync(env, wanted.cacheKey, options.commitGuard);
+  const record = await readTemplateAsync(
+    env,
+    wanted.cacheKey,
+    options.commitGuard,
+    undefined,
+    options.workerAuthority,
+  );
   if (
     !record ||
     record.status !== "ready" ||
@@ -70,7 +81,13 @@ export async function takeWarmWorktree(
   }
   // Unpublication is atomic with exclusive reader admission. A preparing slot
   // is never consumable, even if another request observed it before this claim.
-  const retained = await retainWorktreeTemplate(env, record, options.commitGuard, true);
+  const retained = await retainWorktreeTemplate(
+    env,
+    record,
+    options.commitGuard,
+    true,
+    options.workerAuthority,
+  );
   if (!retained) {
     return undefined;
   }
@@ -89,6 +106,7 @@ export async function takeWarmWorktree(
         sourceIndex: await resolveGitMetadataPath(retained.path, "index", {
           signal: options.signal,
           beforeRun: options.commitGuard,
+          stateOwnerPath: options.workerAuthority?.stateOwnerPath,
         }),
       };
     }

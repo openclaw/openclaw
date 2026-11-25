@@ -97,13 +97,20 @@ export async function runCoreContributionHealth(
 export async function runCoreHealthFindingNote(
   ctx: DoctorHealthFlowContext,
   checkId: string,
+  options?: HealthFindingNoteOptions,
 ): Promise<void> {
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
   await renderHealthFindingNote(
     ctx,
     CORE_HEALTH_CHECKS.find((candidate) => candidate.id === checkId),
+    options,
   );
 }
+
+type HealthFindingNoteOptions = {
+  /** Print info findings as a doctor note under this title; the summary only shows fix-now items. */
+  infoNoteTitle?: string;
+};
 
 /** Plain `openclaw doctor` note for one bundled plugin check (structured runs cover --lint/--fix). */
 export async function runBundledHealthFindingNote(
@@ -123,6 +130,7 @@ export async function runBundledHealthFindingNote(
 async function renderHealthFindingNote(
   ctx: DoctorHealthFlowContext,
   check: Pick<DoctorHealthCheck, "detect"> | undefined,
+  options?: HealthFindingNoteOptions,
 ): Promise<void> {
   if (!check) {
     return;
@@ -139,6 +147,18 @@ async function renderHealthFindingNote(
   }
   recordDoctorHealthWarnings(ctx, findings);
   renderStructuredHealthFindings(ctx, findings);
+  const infoFindings = findings.filter((finding) => finding.severity === "info");
+  if (options?.infoNoteTitle && infoFindings.length > 0) {
+    const { note } = await import("../../packages/terminal-core/src/note.js");
+    note(
+      infoFindings
+        .map((finding) =>
+          finding.fixHint ? `- ${finding.message}\n  ${finding.fixHint}` : `- ${finding.message}`,
+        )
+        .join("\n"),
+      options.infoNoteTitle,
+    );
+  }
   if (
     findings.some(
       (finding) =>

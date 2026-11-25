@@ -27,6 +27,8 @@ const loaders = {
     import("../agents/sandbox/persistent-exec-store.kernel.js").then(
       (m) => m.sandboxPersistentExecReadOperations,
     ),
+  sandboxRegistry: () =>
+    import("../agents/sandbox/registry.kernel.js").then((m) => m.sandboxRegistryReadOperations),
   worktrees: async () => {
     const [
       { worktreeReadOperations },
@@ -53,6 +55,8 @@ const loaders = {
     import("./github-publication.read.worker.js").then((m) => m.publicationReadOperations),
   userGitHubConnections: () =>
     import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionReadOperations),
+  userProfiles: () =>
+    import("./user-profile-openclaw-id.read.js").then((m) => m.openClawIdUserProfileReadOperations),
   stateBootstrap: () =>
     import("./state-bootstrap-read.worker.js").then((m) => m.stateBootstrapReadOperations),
   machineState: () =>
@@ -95,6 +99,10 @@ const loaders = {
   mentions: () => import("../gateway/mention-inbox.worker.js").then((m) => m.mentionReadOperations),
   skillLibrary: () =>
     import("../skills/library/read.kernel.js").then((m) => m.skillLibraryReadOperations),
+  templateClawHub: () =>
+    import("../secrets/store/secret-store-clawhub-template.worker.js").then(
+      (m) => m.templateClawHubReadOperations,
+    ),
   secrets: () =>
     import("../secrets/store/secret-store-metadata.kernel.js").then(
       (m) => m.secretStoreReadOperations,

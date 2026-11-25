@@ -20,6 +20,39 @@ openclaw gateway restart
 openclaw gateway uninstall
 ```
 
+When `openclaw gateway install` runs from `npx`, `pnpm dlx`, or another
+temporary copy, the service runs the same OpenClaw version from the `npm` folder
+of the state directory (`~/.openclaw/npm` by default) instead, because the
+temporary copy can be deleted. After the runtime and wrapper checks pass, npm
+stages that copy while any existing service keeps running; the copy is replaced
+only as the service definition is written. If another update replaces that copy
+while the install waits, the install stops without changing the copy or the
+service; rerun it. If the install fails after replacing the copy, the previous
+copy is restored only once the service manager's recovery has stopped the new
+service, just before it puts the previous service back. On any other
+failure, for example when the new service does not exit, the new copy stays in
+place with a backup of the previous copy, and the command warns you to check the
+service and rerun the install. A first install has no previous copy and keeps
+the new one.
+`openclaw update` updates that copy in place. An existing service that still
+points into a temporary copy is refreshed by the next `openclaw gateway install`.
+`openclaw doctor` run from a temporary copy never installs one: when the copy in
+the state directory is missing or does not match, it keeps the service's current
+OpenClaw and prints the install command to run.
+
+On macOS and Linux, a successful install can also create a managed terminal CLI in
+the profile’s `bin` directory. When no existing command or configured profile
+already owns the terminal default, the first installation makes it discoverable
+as `openclaw` in new Bash, zsh, fish, and POSIX sh shells. A fresh named-profile
+install supplies that profile as the launcher default; explicit `--profile` and
+`OPENCLAW_PROFILE` still win. Later installs preserve existing commands and
+configured profiles, including offline Gateways, rather than changing the
+terminal default. When selection is ambiguous or shell integration cannot be
+written, installation reports the contextual command or manual PATH step. Custom
+state/config paths retain their explicit environment setup. Additive shell setup
+respects `ZDOTDIR` and `XDG_CONFIG_HOME`. This does not follow
+the macOS app’s changing primary connection or migrate Gateway state.
+
 Queued native service commands use elapsed-time deadlines, so system-clock
 corrections do not prematurely expire or extend their admission budgets.
 
@@ -126,6 +159,7 @@ values. Then, from an external shell using the same account and profile:
 ```bash
 openclaw gateway uninstall
 openclaw gateway install
+openclaw gateway start
 openclaw gateway health
 ```
 

@@ -1,4 +1,10 @@
+import crypto from "node:crypto";
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { registerDiagnosticToolExecutionDeadline } from "../../infra/diagnostic-tool-execution-liveness.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   describeSessionsSendTool,
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
@@ -10,16 +16,24 @@ import {
   PLACED_SESSIONS_SEND_DESCRIPTION,
 } from "./sessions-placement-tool-contract.js";
 import { executeSessionsSend } from "./sessions-send-executor.js";
+import { sendFailure } from "./sessions-send-helpers.js";
 import { createSelfHeldSendRetainer } from "./sessions-send-self-hold.js";
 import { withSessionsSendRequesterSource } from "./sessions-send-session-source.js";
+import {
+  readSessionsSendMode,
+  readSessionsSendTimeout,
+  readSessionsSendTarget,
+} from "./sessions-send-tool.input.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
+const SESSIONS_SEND_ADMISSION_TIMEOUT_MS = 30_000;
+
 export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgentTool {
   const retain = createSelfHeldSendRetainer(opts, (options, args) =>
-    executeSessionsSend(options, "retained", args),
+    executeSessionsSendWithDeadline(options, "retained", args),
   );
-  const tool: AnyAgentTool = {
+  return {
     label: "Session Send",
     name: "sessions_send",
     displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
@@ -32,10 +46,75 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
     parameters: opts?.workerPlacement ? PlacedSessionsSendSchema : SessionsSendToolSchema,
     outputSchema: SessionsSendOutputSchema,
     execute: wrapGatewayPersonalToolExecution((toolCallId, args) =>
-      executeSessionsSend(opts, toolCallId, args, retain),
+      executeSessionsSendWithDeadline(opts, toolCallId, args, retain),
     ),
   };
-  const execute = tool.execute;
-  tool.execute = (...args) => withSessionsSendRequesterSource(opts, () => execute(...args));
-  return tool;
+}
+
+/** One send implementation, shared by direct execution and the one-shot retained replay. */
+async function executeSessionsSendWithDeadline(
+  opts: SessionsSendToolOptions | undefined,
+  toolCallId: string,
+  args: unknown,
+  retain?: ReturnType<typeof createSelfHeldSendRetainer>,
+) {
+  const params = isRecord(args) ? args : {};
+  const mode = readSessionsSendMode(params);
+  const timeoutSeconds = readSessionsSendTimeout(params, mode);
+  const timeoutMs =
+    SESSIONS_SEND_ADMISSION_TIMEOUT_MS +
+    (finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 0);
+  const runId = opts?.idempotencyKey ?? crypto.randomUUID();
+  const controller = new AbortController();
+  const signal = opts?.signal
+    ? AbortSignal.any([opts.signal, controller.signal])
+    : controller.signal;
+  const boundedOptions: SessionsSendToolOptions = {
+    ...opts,
+    idempotencyKey: runId,
+    signal,
+    assertSourceCurrent: () => {
+      signal.throwIfAborted();
+      opts?.assertSourceCurrent?.();
+    },
+  };
+  const admissionComplete = createDeferredCore();
+  const timeout = () => {
+    const error =
+      "sessions_send timed out; the message may have been accepted. Inspect the target before retrying.";
+    // Stop new sender effects without cancelling input already owned by the receiver.
+    controller.abort(new Error(error));
+    const target = readSessionsSendTarget(params);
+    return sendFailure("error", error, target.ok ? target.sessionKeyParam : undefined, runId);
+  };
+  const deadlineAtMs = Date.now() + timeoutMs;
+  const releaseDeadline = registerDiagnosticToolExecutionDeadline(deadlineAtMs);
+  try {
+    return await raceWithTimeout(
+      async () => {
+        const execution = withSessionsSendRequesterSource(boundedOptions, () =>
+          executeSessionsSend(
+            boundedOptions,
+            toolCallId,
+            { params, mode, timeoutSeconds, onAdmissionComplete: admissionComplete.resolve },
+            retain,
+          ),
+        );
+        const admissionExpired = await raceWithTimeout(
+          () =>
+            Promise.race([
+              execution.then(() => false),
+              admissionComplete.promise.then(() => false),
+            ]),
+          SESSIONS_SEND_ADMISSION_TIMEOUT_MS,
+          () => true,
+        );
+        return admissionExpired ? timeout() : await execution;
+      },
+      timeoutMs,
+      timeout,
+    );
+  } finally {
+    releaseDeadline?.();
+  }
 }

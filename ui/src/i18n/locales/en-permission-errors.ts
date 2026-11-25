@@ -3,12 +3,11 @@ import { en } from "./en.ts";
 
 const enPermissionErrors = {
   runtimeErrors: {
-    permissionDenied:
-      "You don't have permission to view {feature}. Ask the person who manages OpenClaw for access.",
+    permissionDenied: "Couldn’t view {feature}. Ask an admin to grant read access.",
     permissionFeatures: {
       "channel status": "channel status",
       "cron status": "cron status",
-      "existing chat history": "existing chat history",
+      "session history": "session history",
       logs: "logs",
       "model providers": "model providers",
       "scheduled tasks": "scheduled tasks",

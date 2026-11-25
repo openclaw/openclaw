@@ -96,9 +96,7 @@ it.each(["profile", "device-local"] as const)(
       },
     });
     await updatePickers(container);
-    expect(container.textContent).toContain(
-      `${missingTheme} is unavailable. Using Claw until the theme becomes available again.`,
-    );
+    expect(container.textContent).toContain(`${missingTheme} is unavailable. Using Claw for now.`);
     const claw = themeButton(container, "claw");
     expect(claw?.getAttribute("aria-pressed")).toBe("true");
     expect(container.querySelector('[data-accent-preset="default"]')?.classList).toContain(

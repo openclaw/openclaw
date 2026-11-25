@@ -162,14 +162,14 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand(
       "learn",
-      "Learn from recent work or named sources into skills or memory.",
+      "Save lessons from recent work or named sources to skills or memory.",
       "tools",
       "standard",
       freeformArgs("request", "Sources and what to learn from them"),
     ),
     defineBuiltinCommand(
       "loop",
-      "Loop a prompt: /loop [interval] <prompt> | /loop status | /loop stop [name]",
+      "Run and manage recurring prompts in this conversation.",
       "tools",
       "standard",
       {
@@ -206,7 +206,7 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand(
       "diagnostics",
-      "Explain Gateway diagnostics and Codex feedback upload options.",
+      "Request Gateway diagnostics and optional Codex feedback uploads.",
       "status",
       "standard",
       {
@@ -230,12 +230,18 @@ export function buildBuiltinChatCommands(
         acceptsArgs: true,
       },
     ),
-    defineBuiltinCommand("allowlist", "List/add/remove allowlist entries.", "management", "power", {
-      modelIndependent: "always",
-      nativeName: false,
-      acceptsArgs: true,
-    }),
-    defineBuiltinCommand("approve", "Approve or deny exec requests.", "management", "power", {
+    defineBuiltinCommand(
+      "allowlist",
+      "List, add, or remove allowlist entries.",
+      "management",
+      "power",
+      {
+        modelIndependent: "always",
+        nativeName: false,
+        acceptsArgs: true,
+      },
+    ),
+    defineBuiltinCommand("approve", "Approve or deny pending requests.", "management", "power", {
       acceptsArgs: true,
       activeRunSafe: true,
       modelIndependent: "always",
@@ -408,11 +414,11 @@ export function buildBuiltinChatCommands(
         }),
         defineCommandArgument("value", "Action arguments", { captureRemaining: true }),
       ],
-      argsMenu: "auto",
+      // ACP actions need free-form arguments; bare /acp must reach its help handler.
     }),
     defineBuiltinCommand(
       "agents",
-      "List thread-bound agents for this session.",
+      "List agents and conversation bindings for this session.",
       "management",
       "standard",
       { activeRunSafe: true, modelIndependent: "always" },
@@ -464,10 +470,16 @@ export function buildBuiltinChatCommands(
       "Debug path",
       "Value for set",
     ),
-    defineBuiltinCommand("usage", "Usage footer or cost summary.", "options", "standard", {
-      modelIndependent: "always",
-      ...choiceMenu("mode", "off, tokens, full, or cost", ["off", "tokens", "full", "cost"]),
-    }),
+    defineBuiltinCommand(
+      "usage",
+      "Set the usage footer or show a cost summary.",
+      "options",
+      "standard",
+      {
+        modelIndependent: "always",
+        ...choiceMenu("mode", "off, tokens, full, or cost", ["off", "tokens", "full", "cost"]),
+      },
+    ),
     defineBuiltinCommand("stop", "Stop the current run.", "session", "essential", {
       activeRunSafe: true,
       modelIndependent: "no-args",
@@ -482,10 +494,16 @@ export function buildBuiltinChatCommands(
       modelIndependent: (args) => parseActivationCommand(`/activation ${args}`).hasCommand,
       ...choiceMenu("mode", "mention or always", ["mention", "always"]),
     }),
-    defineBuiltinCommand("send", "Set send policy.", "management", "power", {
-      modelIndependent: (args) => parseSendPolicyCommandBody(`/send ${args}`).hasCommand,
-      ...choiceMenu("mode", "on, off, or inherit", ["on", "off", "inherit"]),
-    }),
+    defineBuiltinCommand(
+      "send",
+      "Control message delivery for this session.",
+      "management",
+      "power",
+      {
+        modelIndependent: (args) => parseSendPolicyCommandBody(`/send ${args}`).hasCommand,
+        ...choiceMenu("mode", "on, off, or inherit", ["on", "off", "inherit"]),
+      },
+    ),
     // Reset handlers must reach lifecycle cleanup before waiting on the work they interrupt.
     defineBuiltinCommand("reset", "Reset the current session.", "session", "essential", {
       activeRunSafe: true,
@@ -571,26 +589,26 @@ export function buildBuiltinChatCommands(
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.exec,
     }),
+    defineBuiltinCommand("model", "Show or set the model.", "options", "essential", {
+      modelIndependent: "directive",
+      args: [
+        defineCommandArgument(
+          "model",
+          "Model id; add -s for session, -a for agent, or -g for global scope",
+        ),
+      ],
+    }),
     defineBuiltinCommand(
-      "model",
-      "Show or set the model; use -s, -a, or -g to choose scope.",
+      "models",
+      "List model providers and their models.",
       "options",
-      "essential",
+      "standard",
       {
-        modelIndependent: "directive",
-        args: [
-          defineCommandArgument(
-            "model",
-            "Model id; add -s for session, -a for agent, or -g for global scope",
-          ),
-        ],
+        acceptsArgs: true,
+        activeRunSafe: true,
+        modelIndependent: "always",
       },
     ),
-    defineBuiltinCommand("models", "List model providers/models.", "options", "standard", {
-      acceptsArgs: true,
-      activeRunSafe: true,
-      modelIndependent: "always",
-    }),
     defineBuiltinCommand("queue", "Adjust queue settings.", "options", "power", {
       modelIndependent: "directive",
       args: [
@@ -604,7 +622,7 @@ export function buildBuiltinChatCommands(
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.queue,
     }),
-    defineBuiltinCommand("bash", "Run host shell commands (host-only).", "tools", "power", {
+    defineBuiltinCommand("bash", "Run shell commands on the host.", "tools", "power", {
       modelIndependent: "always",
       nativeName: false,
       ...freeformArgs("command", "Shell command"),

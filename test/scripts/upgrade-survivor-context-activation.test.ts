@@ -4,10 +4,34 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { AgentDefaultsSchema } from "../../src/config/zod-schema.agent-defaults.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("seeds sibling-plugin agent defaults accepted by the current schema", () => {
+  const root = fs.realpathSync(dirs.make("survivor-sibling-config-"));
+  const configPath = path.join(root, "state", "openclaw.json");
+  const seeded = spawnSync(
+    resolveTestNodeExecPath(),
+    [path.resolve("scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs"), "seed"],
+    {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        OPENCLAW_STATE_DIR: path.dirname(configPath),
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
+        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: path.join(root, "artifacts"),
+      },
+    },
+  );
+  expect(seeded.status, seeded.stderr).toBe(0);
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  expect(AgentDefaultsSchema.safeParse(config.agents.defaults).error).toBeUndefined();
+});
 
 it("requires selected activation cleanup while preserving another engine and process", () => {
   const root = fs.realpathSync(dirs.make("survivor-context-activation-"));

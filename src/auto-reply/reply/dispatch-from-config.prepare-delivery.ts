@@ -48,10 +48,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     sessionStoreEntry,
     turnLedger,
   } = state;
-  const assertPreparationCurrent = () => {
-    state.getPreDispatchAbortSignal()?.throwIfAborted();
-    state.params.replyOptions?.operatorAuthority?.assertCurrent();
-  };
+  const assertPreparationCurrent = () => state.getPreDispatchAbortSignal()?.throwIfAborted();
   // Delivery uses the current parent fields after gather's runtime preparation.
   // A session without a parent cannot need the ACP child-delivery restriction.
   const suppressAcpChildUserDelivery = sessionStoreEntry.sessionKey

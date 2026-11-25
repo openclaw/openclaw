@@ -343,6 +343,37 @@ describe("install runtime enforcement", () => {
     expectRejectedProbe({ pathEnv: entries.join(":") });
   });
 
+  it("allows packaged Bun postinstall to pass an unavailable Node sentinel", () => {
+    const run = vi.fn((command: string) =>
+      command === "/opt/sentinel/bin/node"
+        ? { status: 127, stdout: "" }
+        : runtimeReply(command, "24.3.0", "1.4.4"),
+    );
+    const runtime = probe({
+      pathEnv: [...lifecyclePrefix, "/opt/sentinel/bin"].join(":"),
+      env: { OPENCLAW_PACKAGE_BUN_LAUNCHER: "/opt/bun/bin/bun" },
+      allowUnavailableNodeFallback: true,
+      run,
+    });
+    expect(run.mock.calls.map(([command]) => command)).toEqual([
+      "/opt/sentinel/bin/node",
+      "/opt/bun/bin/bun",
+    ]);
+    expect(runtime?.bunVersion).toBe("1.4.4");
+  });
+
+  it("keeps preinstall fail-closed on an unavailable Node sentinel", () => {
+    const run = vi.fn(() => ({ status: 127, stdout: "" }));
+    expect(
+      probe({
+        pathEnv: [...lifecyclePrefix, "/opt/sentinel/bin"].join(":"),
+        env: { OPENCLAW_PACKAGE_BUN_LAUNCHER: "/opt/bun/bin/bun" },
+        run,
+      }),
+    ).toBeNull();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["."])("fails closed before a relative PATH component %j", (relativeEntry) => {
     expectRejectedProbe({
       pathEnv: [...lifecyclePrefix, relativeEntry, "/opt/node/bin"].join(":"),

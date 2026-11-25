@@ -159,7 +159,7 @@ export function UpdateRunView(props: {
             </Show>
             <details
               class="update-run-view__diagnostics"
-              open
+              open={!current().terminal}
               onToggle={(event) => event.currentTarget.open && logFollow.schedule(true)}
             >
               <summary>
@@ -184,7 +184,13 @@ export function UpdateRunView(props: {
               </pre>
             </details>
             <Show when={current().oracles.length}>
-              <ul class="update-run-view__oracles" aria-label={t("updates.run.verification")}>
+              <Show when={current().historicalVerificationLabel}>
+                {(label) => <strong>{label()}</strong>}
+              </Show>
+              <ul
+                class="update-run-view__oracles"
+                aria-label={current().historicalVerificationLabel ?? t("updates.run.verification")}
+              >
                 <For each={current().oracles}>
                   {(oracle) => (
                     <li

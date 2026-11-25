@@ -15,6 +15,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatDocsHelp } from "./help-format.js";
 import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 
@@ -87,14 +88,14 @@ export function registerWebhooksCli(program: Command) {
     .option("--push-endpoint <url>", "Explicit Pub/Sub push endpoint")
     .option("--json", "Output JSON summary", false)
     .action(async (opts) => {
+      const account = normalizeOptionalString(opts.account) ?? "";
+      if (!account) {
+        throwExpectedCliError(
+          `--account is required. Example: ${formatCliCommand("openclaw webhooks gmail setup --account default")}.`,
+        );
+      }
+      const common = parseGmailCommonOptions(opts);
       try {
-        const account = normalizeOptionalString(opts.account) ?? "";
-        if (!account) {
-          throw new Error(
-            `--account is required. Example: ${formatCliCommand("openclaw webhooks gmail setup --account default")}.`,
-          );
-        }
-        const common = parseGmailCommonOptions(opts);
         await runGmailSetup({
           account,
           project: normalizeOptionalString(opts.project),
@@ -115,6 +116,10 @@ export function registerWebhooksCli(program: Command) {
     gmail
       .command("run")
       .description("Run gog watch serve + auto-renew loop")
+      .addHelpText(
+        "after",
+        "\nGog v0.48.0 supports child-only token environment sources. Older Gog keeps working with a warning. Interactive setup/run can offer eligible Homebrew upgrades; restart existing watchers after upgrading.",
+      )
       .option("--account <email>", "Gmail account to watch")
       .option("--topic <topic>", "Pub/Sub topic path (projects/.../topics/..)"),
   ).action(async (opts) => {
@@ -163,5 +168,5 @@ function tailscaleModeOption(value: unknown): GmailRunOptions["tailscale"] {
   if (mode === "funnel" || mode === "serve" || mode === "off") {
     return mode;
   }
-  throw new Error("Invalid --tailscale (must be funnel, serve, or off).");
+  return throwExpectedCliError("Invalid --tailscale (must be funnel, serve, or off).");
 }

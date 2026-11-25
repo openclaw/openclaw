@@ -59,7 +59,9 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   const [gatewaySystemInfo, setGatewaySystemInfo] = createSignal<SystemInfoResult | null>(null, {
     ownedWrite: true,
   });
-  const [desktopEnvironments, setDesktopEnvironments] = createSignal<EnvironmentSummary[]>([], {
+  const [desktopEnvironments, setDesktopEnvironments] = createSignal<
+    EnvironmentSummary[] | undefined
+  >(undefined, {
     ownedWrite: true,
   });
   // Event admission compares against the latest delivery, before Solid's next flush.
@@ -160,7 +162,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
         setDesktopEnvironments(result.environments);
       }
     },
-    onError: () => setDesktopEnvironments([]),
+    onError: () => setDesktopEnvironments(undefined),
   });
   const systemInfoPolling = useVisiblePoll(60_000, refreshSystemInfo);
   const polling = useVisiblePoll(30_000, () => {
@@ -228,7 +230,6 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     publish: () => publishData(),
   });
   onSettled(() => {
-    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
     syncConfigCustody();
     // Config receipts record which connection owns the accepted policy draft.
     const stopConfig = configProjection.subscribe(syncConfigCustody);
@@ -258,6 +259,9 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
 
   function setRouteData(data: DevicesRouteData | undefined) {
     applyRouteData(data);
+    if (data && gatewayBinding.connected && gatewayBinding.isRouteDataCurrent(data)) {
+      void context.runtimeConfig.refresh({ background: true }).catch(() => undefined);
+    }
     ensureInitialData();
     publishData();
   }
@@ -325,7 +329,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     }
     if (connected && !canLoadDesktopEnvironments()) {
       environmentsTask.cancel();
-      setDesktopEnvironments([]);
+      setDesktopEnvironments(undefined);
     }
     if (
       routeDataInitialized &&
@@ -489,10 +493,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     if (canManagePairing && !pageState.devicesList && !pageState.devicesLoading) {
       void refreshDeviceInventory();
     }
-    const config = context.runtimeConfig.state;
-    if (!config.configSnapshot && !config.configLoading) {
-      void context.runtimeConfig.refresh();
-    }
+    // A shared display read after an offline mount still needs an editable draft.
+    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
     if (canAdmin && !pageState.execApprovalsSnapshot && !pageState.execApprovalsLoading) {
       refreshExecApprovals();
     }
@@ -562,7 +564,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     // Binding disposal also resets request state; only live snapshots publish samples.
     updatePresence([]);
     setGatewaySystemInfo(null);
-    setDesktopEnvironments([]);
+    setDesktopEnvironments(undefined);
   }
 
   // Confirm before discarding a target's dirty draft. Cancellation retains the target, form,

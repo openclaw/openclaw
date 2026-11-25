@@ -17,6 +17,7 @@ import {
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
 import { advanceAuthProfileCandidate } from "../../auth-profiles/advance.js";
+import { assertSettledAuthProfileAuthorization } from "../../auth-profiles/authorization-settle.js";
 import {
   captureAuthProfileAuthorization,
   type AuthProfileAuthorization,
@@ -553,35 +554,47 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
                 assertSelectionCurrent();
                 authorization.assertCurrent();
               };
-              assertCurrent();
               // Omit the attempt's captured store. Canonical resolution owns refresh/rotation.
               const current = await withAuthDeadline(
                 "credential resolution",
-                (credentialSignal) =>
-                  getApiKeyForModelCore({
-                    model: runtimeModel,
-                    cfg: params.config,
-                    profileId,
-                    lockedProfile: true,
-                    allowAuthProfileFallback: false,
-                    agentDir: params.agentDir,
-                    workspaceDir: params.workspaceDir,
-                    signal: credentialSignal,
-                    assertRefreshAdmission: assertCurrent,
-                    validateOAuthCredential: (credential) => {
-                      if (
-                        credential.provider !== selected.provider ||
-                        credential.authFlow !== selected.authFlow ||
-                        !isSafeToCopyOAuthIdentity(selected, credential) ||
-                        (!hasOAuthIdentity(selected) && credential.refresh !== selected.refresh)
-                      ) {
-                        throw new Error("Provider request credentials changed account identity.");
-                      }
-                    },
-                  }),
+                async (credentialSignal) => {
+                  await assertSettledAuthProfileAuthorization(assertCurrent, credentialSignal);
+                  while (true) {
+                    const resolved = await getApiKeyForModelCore({
+                      model: runtimeModel,
+                      cfg: params.config,
+                      profileId,
+                      lockedProfile: true,
+                      allowAuthProfileFallback: false,
+                      agentDir: params.agentDir,
+                      workspaceDir: params.workspaceDir,
+                      signal: credentialSignal,
+                      assertRefreshAdmission: assertCurrent,
+                      validateOAuthCredential: (credential) => {
+                        if (
+                          credential.provider !== selected.provider ||
+                          credential.authFlow !== selected.authFlow ||
+                          !isSafeToCopyOAuthIdentity(selected, credential) ||
+                          (!hasOAuthIdentity(selected) && credential.refresh !== selected.refresh)
+                        ) {
+                          throw new Error("Provider request credentials changed account identity.");
+                        }
+                      },
+                    });
+                    // A peer publication can begin as lookup completes. Settle it within the same
+                    // deadline, then resolve again so the request never carries the superseded token.
+                    if (
+                      !(await assertSettledAuthProfileAuthorization(
+                        assertCurrent,
+                        credentialSignal,
+                      ))
+                    ) {
+                      return resolved;
+                    }
+                  }
+                },
                 requestSignal,
               );
-              assertCurrent();
               if (current.profileId !== profileId || current.mode !== "oauth" || !current.apiKey) {
                 throw new Error(
                   "Provider request credentials no longer match the selected OAuth profile.",

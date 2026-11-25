@@ -12,6 +12,7 @@ import { isObservationPath } from "./lib/ci-test-observations.mjs";
 
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const MAX_MEMBER_BYTES = 8 * 1024 * 1024;
+const MAX_TREE_BYTES = 32 * 1024 * 1024;
 const SHA = /^[a-f0-9]{40}$/u;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const MEMBER = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}\/(?:observations|launch)\.json$/u;
@@ -20,13 +21,27 @@ const positive = (value) =>
   /^[1-9][0-9]*$/u.test(String(value)) && Number.isSafeInteger(Number(value));
 const time = (value) => typeof value === "string" && Number.isFinite(Date.parse(value));
 
-function requirePrior(condition, reason) {
-  if (!condition) {
-    throw new Error(reason);
+class PriorRestoreError extends Error {
+  constructor(reason, status = null) {
+    super(reason);
+    this.status = status;
   }
 }
 
-async function readJson(fetchImpl, token, repository, endpoint, deadline) {
+function requirePrior(condition, reason) {
+  if (!condition) {
+    throw new PriorRestoreError(reason);
+  }
+}
+
+async function readJson(
+  fetchImpl,
+  token,
+  repository,
+  endpoint,
+  deadline,
+  maxBytes = 2 * 1024 * 1024,
+) {
   const remaining = deadline - Date.now();
   requirePrior(remaining > 0, "deadline-exceeded");
   const response = await fetchImpl(`https://api.github.com/repos/${repository}/${endpoint}`, {
@@ -40,16 +55,67 @@ async function readJson(fetchImpl, token, repository, endpoint, deadline) {
   });
   if (!response.ok) {
     await response.body?.cancel();
-    throw new Error("metadata-unavailable");
+    throw new PriorRestoreError("metadata-unavailable", response.status);
   }
   const chunks = [];
   let size = 0;
   for await (const chunk of response.body) {
     size += chunk.length;
-    requirePrior(size <= 2 * 1024 * 1024, "metadata-too-large");
+    requirePrior(size <= maxBytes, "metadata-too-large");
     chunks.push(chunk);
   }
   return JSON.parse(new TextDecoder("utf8", { fatal: true }).decode(Buffer.concat(chunks)));
+}
+
+async function compareTrees(readTree, baseTree, headTree, root, deadline) {
+  const result = await readTree(baseTree);
+  requirePrior(
+    result.sha === baseTree && result.truncated === false && Array.isArray(result.tree),
+    "prior-tree-unavailable",
+  );
+  const prior = new Map();
+  const paths = new Set();
+  for (const entry of result.tree) {
+    requirePrior(
+      isObservationPath(entry.path) &&
+        !paths.has(entry.path) &&
+        SHA.test(entry.sha) &&
+        ((entry.type === "tree" && entry.mode === "040000") ||
+          (entry.type === "blob" && ["100644", "100755", "120000"].includes(entry.mode)) ||
+          (entry.type === "commit" && entry.mode === "160000")),
+      "invalid-prior-tree-entry",
+    );
+    paths.add(entry.path);
+    if (entry.type !== "tree") {
+      prior.set(entry.path, `${entry.mode} ${entry.type} ${entry.sha}`);
+    }
+  }
+  const remaining = deadline - Date.now();
+  requirePrior(remaining > 0, "deadline-exceeded");
+  const bytes = execFileSync("git", ["ls-tree", "-r", "-z", "--full-tree", headTree], {
+    cwd: root,
+    timeout: Math.min(1000, remaining),
+    maxBuffer: MAX_TREE_BYTES,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const changed = new Set();
+  for (const row of new TextDecoder("utf8", { fatal: true }).decode(bytes).split("\0")) {
+    if (!row) {
+      continue;
+    }
+    const separator = row.indexOf("\t");
+    const path = row.slice(separator + 1);
+    requirePrior(separator > 0 && isObservationPath(path), "invalid-head-tree-entry");
+    if (prior.get(path) !== row.slice(0, separator)) {
+      changed.add(path);
+    }
+    prior.delete(path);
+  }
+  for (const path of prior.keys()) {
+    changed.add(path);
+  }
+  requirePrior(Date.now() < deadline && changed.size < 600, "prior-tree-diff-unavailable");
+  return changed;
 }
 
 // Preflight owns network access. Consumers receive inert, immutable JSON only.
@@ -85,6 +151,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
     },
     candidates: [],
     fallbackReasons: [],
+    restoreFailure: null,
   };
   const token = env.GITHUB_TOKEN;
   if (
@@ -101,6 +168,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const read = (endpoint) => readJson(fetchImpl, token, repository, endpoint, deadline);
   const comparisons = new Map();
+  let stage = "consumer-run";
   try {
     const current = await read(
       `actions/runs/${bundle.consumer.runId}/attempts/${bundle.consumer.runAttempt}`,
@@ -117,6 +185,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
     );
     bundle.cutoffAt = current.created_at;
     const cutoff = Date.parse(current.created_at);
+    stage = "prior-run-list";
     const listing = await read(
       "actions/workflows/ci.yml/runs?event=schedule&branch=main&status=completed&per_page=5",
     );
@@ -142,6 +211,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
       ) {
         continue;
       }
+      stage = "prior-artifact-list";
       const artifacts = await read(`actions/runs/${run.id}/artifacts?per_page=100`);
       requirePrior(
         Array.isArray(artifacts.artifacts) && artifacts.total_count === artifacts.artifacts.length,
@@ -214,12 +284,30 @@ export async function restoreCiAdaptivePriors(options = {}) {
                 result.merge_base_commit?.sha === run.head_sha &&
                 ["ahead", "identical"].includes(result.status) &&
                 result.behind_by === 0 &&
-                Array.isArray(result.files) &&
-                result.files.length < 300,
+                Array.isArray(result.files),
               "prior-comparison-unavailable",
             );
-            const changedFiles = new Set();
-            for (const file of result.files) {
+            // Compare caps file lists at 300. A single bounded base-tree download
+            // plus the checked-out head avoids both that cap and per-directory API calls.
+            const changedFiles =
+              result.files.length >= 300
+                ? await compareTrees(
+                    (sha) =>
+                      readJson(
+                        fetchImpl,
+                        token,
+                        repository,
+                        `git/trees/${sha}?recursive=1`,
+                        deadline,
+                        MAX_TREE_BYTES,
+                      ),
+                    result.base_commit.commit.tree.sha,
+                    tree,
+                    root,
+                    deadline,
+                  )
+                : new Set();
+            for (const file of result.files.length >= 300 ? [] : result.files) {
               requirePrior(isObservationPath(file.filename), "invalid-comparison-path");
               changedFiles.add(file.filename);
               if (file.status === "renamed" || file.previous_filename !== undefined) {
@@ -301,8 +389,19 @@ export async function restoreCiAdaptivePriors(options = {}) {
     if (!bundle.candidates.length) {
       bundle.fallbackReasons.push("no-eligible-prior");
     }
-  } catch {
+  } catch (error) {
     bundle.fallbackReasons.push("restore-unavailable");
+    // Keep only our own reason codes and status, never remote bodies or transport messages.
+    bundle.restoreFailure = {
+      stage,
+      reason:
+        error instanceof PriorRestoreError
+          ? error.message
+          : error instanceof SyntaxError
+            ? "invalid-metadata"
+            : "request-failed",
+      status: error instanceof PriorRestoreError ? error.status : null,
+    };
   }
   bundle.restoredAt = new Date().toISOString();
   bundle.fallbackReasons = [...new Set(bundle.fallbackReasons)];
@@ -323,6 +422,9 @@ async function main() {
     writeFileSync(temporary, JSON.stringify(bundle), { flag: "wx", mode: 0o600 });
     renameSync(temporary, output);
     console.log(`[adaptive-ci] restored ${bundle.candidates.length} prior observations`);
+    if (bundle.restoreFailure) {
+      console.warn("[adaptive-ci] prior restore failed; tests unchanged:", bundle.restoreFailure);
+    }
   } finally {
     rmSync(temporary, { force: true });
   }

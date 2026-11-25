@@ -1,4 +1,6 @@
+import type { McpLoopbackToolCallStart } from "../../gateway/mcp-http.loopback-runtime.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import { extractMessagingToolSend } from "../embedded-agent-messaging-extraction.js";
 import { isMessagingToolTargetEvidenceAction } from "../embedded-agent-messaging.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
@@ -6,7 +8,7 @@ import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
 } from "../embedded-agent-tool-media.js";
-import { stripOpenClawMcpToolPrefix } from "./tool-policy.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 export const CLI_MESSAGING_EVIDENCE_MAX_CALLS = 64;
@@ -85,4 +87,34 @@ export function appendUniqueCliMessagingEvidence(
     }
     values.add(addition);
   }
+}
+
+export async function isPreparedCliInternalSourceReply(
+  context: PreparedCliRunContext,
+  call: McpLoopbackToolCallStart,
+): Promise<boolean> {
+  if (
+    context.params.sourceReplyDeliveryMode !== "message_tool_only" ||
+    stripOpenClawMcpToolPrefix(call.toolName) !== "message" ||
+    call.args.action !== "send" ||
+    !context.params.config
+  ) {
+    return false;
+  }
+  return await shouldUseInternalSourceReplySink(
+    {
+      cfg: context.params.config,
+      action: "send",
+      sessionKey: context.params.sessionKey,
+      sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
+      toolContext: {
+        currentChannelProvider: context.params.messageChannel ?? context.params.messageProvider,
+        currentChannelId: context.params.currentChannelId,
+        currentThreadTs: context.params.currentThreadTs,
+        currentMessageId: context.params.currentMessageId,
+        replyToMode: context.params.replyToMode,
+      },
+    },
+    call.args,
+  );
 }

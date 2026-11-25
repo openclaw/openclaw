@@ -240,7 +240,8 @@ export async function readLoadedSystemdServiceRuntime(
         state: active,
         subState: sub,
         pid: pid > 0 ? pid : undefined,
-        lastExitStatus: exitStatus,
+        // ExecMainCode stays 0 until the current main process exits; 0/0 is not an exit.
+        lastExitStatus: exitCode ? exitStatus : undefined,
         lastExitReason: [
           undefined,
           "exited",

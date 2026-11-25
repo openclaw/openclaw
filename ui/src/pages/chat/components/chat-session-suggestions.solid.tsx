@@ -4,7 +4,9 @@ import type {
   SessionSuggestion,
   SessionSuggestionResolution,
 } from "../../../../../packages/gateway-protocol/src/index.js";
-import { Icon, type IconName } from "../../../components/solid/icon.tsx";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
+import type { IconName } from "../../../components/solid/icon.tsx";
+import { PersonReferenceLabel } from "../../../components/solid/person-reference-label.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 
@@ -32,34 +34,48 @@ export function ChatSessionSuggestions(props: {
         <For each={props.suggestions} keyed={(suggestion) => suggestion.id}>
           {(suggestion) => {
             const author = () => suggestion().author.label ?? suggestion().author.id;
+            const awaitingApproval = () =>
+              (props.role === "viewer" || props.role === "member") &&
+              suggestion().state === "pending";
             return (
-              <article class="session-suggestion" data-suggestion-id={suggestion().id}>
-                <span class="session-suggestion__author">{author()}</span>
+              <article
+                class={["session-suggestion", { preview: awaitingApproval() }]}
+                data-suggestion-id={suggestion().id}
+              >
+                <b class="session-suggestion__author">
+                  <Show when={awaitingApproval()} fallback={author()}>
+                    <PersonReferenceLabel profileId={suggestion().author.id} label={author()} />
+                  </Show>
+                </b>
                 <span class="session-suggestion__text">{suggestion().text}</span>
                 <Show
                   when={canResolve() && suggestion().state === "pending"}
                   fallback={
-                    <span class="session-suggestion__state">
-                      {t(`chat.sessionSuggestions.state.${suggestion().state}`)}
-                    </span>
+                    <small class="session-suggestion__state">
+                      {awaitingApproval()
+                        ? t("chat.sessionSuggestions.awaitingApproval")
+                        : t(`chat.sessionSuggestions.state.${suggestion().state}`)}
+                    </small>
                   }
                 >
                   <div class="session-suggestion__actions">
                     <For each={actions}>
                       {(action) => (
                         <Show when={!props.archived || action[0] === "dismiss"}>
-                          <button
-                            class="btn btn--ghost btn--icon session-suggestion__action"
-                            type="button"
-                            disabled={props.busyIds.has(suggestion().id)}
-                            aria-label={t(`chat.sessionSuggestions.${action[1]}`, {
+                          <IconButton
+                            size={28}
+                            glyph="row"
+                            class="session-suggestion__action"
+                            icon={action[2]}
+                            label={t(`chat.sessionSuggestions.${action[1]}`, {
                               author: author(),
                             })}
-                            title={t(`chat.sessionSuggestions.${action[1]}`, { author: author() })}
+                            tooltip={t(`chat.sessionSuggestions.${action[1]}`, {
+                              author: author(),
+                            })}
+                            disabled={props.busyIds.has(suggestion().id)}
                             onClick={() => props.onResolve(suggestion(), action[0])}
-                          >
-                            <Icon name={action[2]} />
-                          </button>
+                          />
                         </Show>
                       )}
                     </For>

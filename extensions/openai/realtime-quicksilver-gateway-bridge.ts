@@ -521,8 +521,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         void this.teardown("completed");
       },
       Math.max(0, ttlMs),
-    );
-    this.timer.unref?.();
+    ).unref();
   }
 
   private fail(error: Error): void {

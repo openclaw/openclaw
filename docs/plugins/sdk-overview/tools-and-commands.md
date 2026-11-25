@@ -115,7 +115,7 @@ invocations:
 ```ts
 api.registerCommand({
   name: "pair",
-  description: "Pair a device",
+  description: "Connect a device",
   clientPresentation: {
     when: "no-arguments",
     action: { kind: "device-pairing" },

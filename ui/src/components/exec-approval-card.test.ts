@@ -429,7 +429,7 @@ describe("exec approval card", () => {
       }),
       "inline",
     );
-    expect(card?.textContent).toContain("gateway");
+    expect(card?.textContent).toContain("This computer");
     expect(card?.textContent).toContain("/workspace");
     expect(card?.textContent).toContain("/usr/bin/pnpm");
     expect(card?.textContent).toContain("allowlist");

@@ -235,7 +235,7 @@ public struct OpenClawChatWindowShell: View {
                 Button {
                     self.exportTranscript()
                 } label: {
-                    Text("Export Transcript")
+                    Text("Export Chat")
                         .font(OpenClawChatTypography.body)
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
@@ -482,7 +482,7 @@ public struct OpenClawChatWindowShell: View {
             Button {
                 self.exportTranscript()
             } label: {
-                chatWindowActionLabel("Export Transcript…", systemImage: "square.and.arrow.up")
+                chatWindowActionLabel("Export Chat…", systemImage: "square.and.arrow.up")
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(self.viewModel.messages.isEmpty)
@@ -528,7 +528,6 @@ public struct OpenClawChatWindowShell: View {
             }
         }
         .menuIndicator(.hidden)
-        .help("Thread actions")
     }
 
     private var commandPalette: some View {

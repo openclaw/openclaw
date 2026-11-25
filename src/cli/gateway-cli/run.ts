@@ -1,4 +1,3 @@
-import { asOptionalObjectRecord } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -8,9 +7,7 @@ import { rethrowStartupConfigFailure } from "../../commands/doctor-startup-migra
 import type {
   ConfigFileSnapshot,
   ConfigSnapshotReadOptions,
-  GatewayAuthMode,
   GatewayBindMode,
-  GatewayTailscaleMode,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
@@ -24,7 +21,6 @@ import { normalizeStateDirEnv, resolveGatewayPort } from "../../config/paths.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
-import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import {
   defaultGatewayBindMode,
   isContainerEnvironment,
@@ -32,18 +28,15 @@ import {
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
 import { installGatewayDatabaseEngine } from "../../gateway/server-database-engine.js";
-import { isGatewayEffectiveConfigConflictError } from "../../gateway/server-runtime-config.js";
-import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import { isChannelStartupSuppressedByEnvironment } from "../../gateway/server-sidecar-startup-mode.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
-import { isAbortError } from "../../infra/abort-signal.js";
-import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   beginGatewayBootLifecycle,
   completeGatewayBootLifecycle,
+  reportPreviousGatewayCrash,
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   formatGatewayCrashLoopManualChannelStartHint,
   type GatewayBootLifecycleCompletion,
@@ -58,7 +51,6 @@ import {
   formatGatewayPidList,
 } from "../../infra/gateway-processes.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
-import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -76,22 +68,40 @@ import {
 import { createGatewayCrashLoopRecovery } from "./crash-loop-recovery.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
 import { getGatewayStartGuardErrors } from "./pre-bootstrap.js";
+import {
+  GATEWAY_AUTH_MODES,
+  GATEWAY_BIND_MODES,
+  GATEWAY_TAILSCALE_MODES,
+  INVALID_AUTH,
+  INVALID_BIND,
+  INVALID_TAILSCALE,
+  INVALID_WS_LOG,
+} from "./run-flag-checks.js";
+import {
+  createConfiguredGatewayHealthProbe,
+  isGatewayHealthzResponse,
+} from "./run-health-probe.js";
 import { runGatewayLoop } from "./run-loop.js";
-import { resolveGatewayPasswordOption, toOptionString } from "./run-option-values.js";
+import {
+  extractGatewayMiskeys,
+  parseEnumOption,
+  resolveGatewayPasswordOption,
+  toOptionString,
+} from "./run-option-values.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import {
   handleGatewayLockFailure,
+  isGatewayLockError,
   resolveGatewayStartupFailureExitCode,
   resolveGatewayStartupMaintenanceReason,
 } from "./startup-maintenance.js";
+import { createGatewayStartupRecovery } from "./startup-recovery.js";
 import { createGatewayCliStartupTrace } from "./startup-trace.js";
-import { triageGatewayStartupFailure } from "./startup-triage.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
-const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
 
 type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">;
 
@@ -101,34 +111,6 @@ type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | 
  * restart storm that can render low-resource hosts unresponsive.
  */
 const EXIT_CONFIG_ERROR = 78;
-
-const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
-  "none",
-  "token",
-  "password",
-  "trusted-proxy",
-];
-const GATEWAY_TAILSCALE_MODES: readonly GatewayTailscaleMode[] = ["off", "serve", "funnel"];
-
-function extractGatewayMiskeys(parsed: unknown): {
-  hasGatewayToken: boolean;
-  hasRemoteToken: boolean;
-} {
-  // Detect common token misplacements before startup falls back to unauthenticated mode.
-  const gateway = asOptionalObjectRecord(asOptionalObjectRecord(parsed)?.gateway);
-  const remote = asOptionalObjectRecord(gateway?.remote);
-  return {
-    hasGatewayToken: gateway ? "token" in gateway : false,
-    hasRemoteToken: remote ? "token" in remote : false,
-  };
-}
-
-function parseEnumOption<T extends string>(
-  raw: string | undefined,
-  allowed: readonly T[],
-): T | null {
-  return raw ? (allowed.find((value) => value === raw) ?? null) : null;
-}
 
 async function readGatewayStartupConfig(
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>,
@@ -226,15 +208,6 @@ async function readGatewayStartupConfigWithShellEnv(params: {
   };
 }
 
-function isGatewayLockError(err: unknown): err is GatewayLockError {
-  return (
-    err instanceof GatewayLockError ||
-    (Boolean(err) &&
-      typeof err === "object" &&
-      (err as { name?: string }).name === "GatewayLockError")
-  );
-}
-
 function isGatewayRetryableLockError(err: unknown): boolean {
   if (!isGatewayLockError(err) || typeof err.message !== "string") {
     return false;
@@ -258,30 +231,6 @@ class SupervisedGatewayLockError extends GatewayLockError {
 
 function resolveGatewayLockErrorExitCode(err: unknown): number {
   return err instanceof SupervisedGatewayLockError ? err.exitCode : 1;
-}
-
-function isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean {
-  if (statusCode !== 200) {
-    return false;
-  }
-  try {
-    const payload = JSON.parse(body) as { ok?: unknown; status?: unknown };
-    return payload.ok === true && payload.status === "live";
-  } catch {
-    return false;
-  }
-}
-
-function createConfiguredGatewayHealthProbe(cfg: OpenClawConfig) {
-  const probe = createConfiguredGatewayLocalProbe(cfg);
-  return async (params: { host: string; port: number }): Promise<boolean> => {
-    const result = await probe.requestHttp({
-      ...params,
-      pathname: "/healthz",
-      timeoutMs: SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS,
-    });
-    return isGatewayHealthzResponse(result?.statusCode, result?.body ?? "");
-  };
 }
 
 async function runGatewayLoopWithSupervisedLockRecovery(params: {
@@ -394,7 +343,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     wsLogRaw !== "compact" &&
     wsLogRaw !== "full"
   ) {
-    defaultRuntime.error('Invalid --ws-log. Use "auto", "full", or "compact".');
+    defaultRuntime.error(INVALID_WS_LOG);
     defaultRuntime.exit(1);
   }
   setGatewayWsLogStyle(wsLogStyle);
@@ -530,12 +479,11 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   // Only capture the *explicit* bind value here.  The container-aware
   // default is deferred until after Tailscale mode is known (see below)
   // so that Tailscale's loopback constraint is respected.
-  const VALID_BIND_MODES = new Set<string>(["loopback", "lan", "auto", "custom", "tailnet"]);
   const bindExplicitRawStr = normalizeOptionalString(
     toOptionString(opts.bind) ?? cfg.gateway?.bind,
   );
-  if (bindExplicitRawStr !== undefined && !VALID_BIND_MODES.has(bindExplicitRawStr)) {
-    defaultRuntime.error('Invalid --bind. Use "loopback", "lan", "tailnet", "auto", or "custom".');
+  if (bindExplicitRawStr !== undefined && !GATEWAY_BIND_MODES.has(bindExplicitRawStr)) {
+    defaultRuntime.error(INVALID_BIND);
     defaultRuntime.exit(1);
     return;
   }
@@ -646,14 +594,14 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const authModeRaw = toOptionString(opts.auth);
   const authMode = parseEnumOption(authModeRaw, GATEWAY_AUTH_MODES);
   if (authModeRaw && !authMode) {
-    defaultRuntime.error('Invalid --auth. Use "none", "token", "password", or "trusted-proxy".');
+    defaultRuntime.error(INVALID_AUTH);
     defaultRuntime.exit(1);
     return;
   }
   const tailscaleRaw = toOptionString(opts.tailscale);
   const tailscaleMode = parseEnumOption(tailscaleRaw, GATEWAY_TAILSCALE_MODES);
   if (tailscaleRaw && !tailscaleMode) {
-    defaultRuntime.error('Invalid --tailscale. Use "off", "serve", or "funnel".');
+    defaultRuntime.error(INVALID_TAILSCALE);
     defaultRuntime.exit(1);
     return;
   }
@@ -785,39 +733,21 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     | undefined;
   let activeBootId: string | undefined;
   let bootRecorded = false;
-  let triageAttempted = false;
-  const triageStartupFailure = async (error: unknown, signal?: AbortSignal) => {
-    if (
-      triageAttempted ||
-      !bootRecorded ||
-      signal?.aborted ||
-      isAbortError(error) ||
-      isGatewayLockError(error) ||
-      isInvalidConfigError(error) ||
-      isTailscaleRouteOwnershipConflictError(error) ||
-      isGatewayEffectiveConfigConflictError(error) ||
-      collectNestedErrorCandidates(error).some(
-        (candidate) => candidate instanceof GatewayStartupCleanupError,
-      ) ||
-      resolveGatewayStartupMaintenanceReason(error)
-    ) {
-      return;
-    }
-    // Unconfirmed startup cleanup retains its generation; never overlap it with a fixer.
-    // Supervised retries reuse the persisted breaker transition to avoid agent storms.
-    if (
-      (supervisor || process.env.OPENCLAW_SERVICE_MARKER) &&
-      !boot?.decision.shouldWriteStabilityBundle
-    ) {
-      return;
-    }
-    triageAttempted = true;
-    return await triageGatewayStartupFailure(defaultRuntime, error, signal);
-  };
-  const beginBoot = async (startedAtMs: number) => {
+  const { triageStartupFailure, recoverStartupFailure } = createGatewayStartupRecovery({
+    getBootState: () => ({ recorded: bootRecorded, decision: boot?.decision }),
+    isSupervised: () => Boolean(supervisor || process.env.OPENCLAW_SERVICE_MARKER),
+    canRecoverTailscale: () =>
+      effectiveTailscaleMode === "serve" && Boolean(startupRecoverySupervisor),
+    logger: gatewayLog,
+    runtime: defaultRuntime,
+  });
+  const beginBoot = async (
+    startedAtMs: number,
+    previousOwner?: { pid: number; heartbeatAt?: number },
+  ) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
     // in-process restarts re-evaluate breaker state instead of reusing stale mode.
-    boot = await beginGatewayBootLifecycle(process.env, startedAtMs);
+    boot = await beginGatewayBootLifecycle(process.env, startedAtMs, previousOwner);
     const { decision: crashLoopDecision } = boot;
     activeBootId = boot.id;
     bootRecorded = activeBootId !== undefined;
@@ -860,36 +790,45 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       lockPort: port,
       lifecycleLockDeadlineMs,
       healthHost,
+      healthConfig: cfg,
       beginBoot,
       completeBoot,
+      onRestartStartupFailure: recoverStartupFailure,
       onProcessResourcesSettled: hooks.onProcessResourcesSettled,
-      onRestartStartupFailure: triageStartupFailure,
       start: async (startOptions = {}) => {
         const { requestHotReloadRecovery, ...startupOptions } = startOptions;
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
-        return await startGatewayServer(port, {
-          bind,
-          ...(opts.updateCanary ? { updateCanary: true } : {}),
-          ...(activeBootId ? { bootId: activeBootId } : {}),
-          restartResumeWindow: boot?.restartResumeWindow,
-          auth: authOverride,
-          tailscale: tailscaleOverride,
-          ...startupOptions,
-          ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
-          startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart,
-          ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
-          ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
-          ...(channelAutostartSuppression ? { tryRecoverChannelAutostartSuppression } : {}),
-          ambientEnvTriggers,
-        });
+        try {
+          return await startGatewayServer(port, {
+            bind,
+            ...(opts.updateCanary ? { updateCanary: true } : {}),
+            ...(activeBootId ? { bootId: activeBootId } : {}),
+            restartResumeWindows: boot?.restartResumeWindows,
+            auth: authOverride,
+            tailscale: tailscaleOverride,
+            ...startupOptions,
+            ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
+            startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart,
+            ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
+            ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
+            ...(channelAutostartSuppression ? { tryRecoverChannelAutostartSuppression } : {}),
+            ambientEnvTriggers,
+          });
+        } finally {
+          if (boot?.previousCrash) {
+            await reportPreviousGatewayCrash(boot.previousCrash, gatewayLog);
+          }
+        }
       },
     });
     requestExitAfterOneShotOutput(defaultRuntime, code);
   };
 
-  const { detectRespawnSupervisor } = await import("../../infra/supervisor-markers.js");
+  const { detectRespawnSupervisor, detectGatewayRespawnSupervisorIdentity } =
+    await import("../../infra/supervisor-markers.js");
   const supervisor = detectRespawnSupervisor(process.env);
+  const startupRecoverySupervisor = detectGatewayRespawnSupervisorIdentity();
   try {
     await runGatewayLoopWithSupervisedLockRecovery({
       startLoop,
@@ -924,11 +863,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
 
 /** Run foreground Gateway startup with one consent-gated invalid-config repair attempt. */
 export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {
-  if (opts.taskSupervisor) {
-    const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
-    await runWindowsGatewayTaskSupervisor();
-    return;
-  }
   try {
     await runGatewayCommandOnce(opts, hooks);
   } catch (error) {

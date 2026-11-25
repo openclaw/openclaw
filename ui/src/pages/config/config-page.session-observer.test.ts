@@ -16,7 +16,10 @@ import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import * as modelCatalogStore from "../../lib/model-catalog-store.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  missingReadScopeErrorFixture,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -441,7 +444,11 @@ describe("ConfigPage model catalog lifecycle", () => {
     ]);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(request).not.toHaveBeenCalled();
-    await waitForSolid(() => expect(observerModels(view)).toEqual([]));
+    await waitForSolid(() =>
+      expect(
+        view.page.querySelector("#settings-appearance-sidebar openclaw-select-picker"),
+      ).toBeNull(),
+    );
     source.publish({
       ...source.gateway.snapshot,
       hello: gatewayHelloForMethods(["system.info"]),
@@ -459,7 +466,11 @@ describe("ConfigPage model catalog lifecycle", () => {
     await waitForSolid(() =>
       expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(1),
     );
-    await waitForSolid(() => expect(observerModels(view)).toEqual([]));
+    await waitForSolid(() =>
+      expect(
+        view.page.querySelector("#settings-appearance-sidebar openclaw-select-picker"),
+      ).toBeNull(),
+    );
   });
 
   it.each(["visibility", "page"] as const)(
@@ -622,6 +633,21 @@ describe("ConfigPage model catalog lifecycle", () => {
     flush();
     await expectModels(remounted, fresh);
     expect(reads).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps a typed model denial terminal until connection authority changes", async () => {
+    const load = vi
+      .spyOn(modelCatalogStore, "loadModelCatalog")
+      .mockRejectedValueOnce(missingReadScopeErrorFixture())
+      .mockResolvedValue({ models: [] });
+    const { view, source } = await mount(createTestGatewayClient(vi.fn().mockResolvedValue({})));
+    await waitForSolid(() =>
+      expect(view.page.textContent).toContain("Explicit model catalog unavailable"),
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(load).toHaveBeenCalledOnce();
+    source.publish({ ...source.gateway.snapshot, hello: gatewayHelloForMethods(["system.info"]) });
+    await waitForSolid(() => expect(load).toHaveBeenCalledTimes(2));
   });
 
   it("recovers a rejected catalog on the next admitted poll without replacing other controls", async () => {

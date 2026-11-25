@@ -6,10 +6,14 @@ import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
-import { QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER } from "./providers/mock-openai/mock-openai-contracts.js";
+import {
+  QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
+  QA_RESTART_RESUME_PROMPT_RE,
+} from "./providers/mock-openai/mock-openai-contracts.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
 import { fetchOkJson } from "./providers/mock-openai/server.test-harness.js";
 import { readQaMockRequestCursor } from "./providers/shared/debug-request-cursor.js";
+import type { QaMockRequestSnapshot } from "./providers/shared/types.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
 import {
@@ -31,7 +35,7 @@ afterEach(async () => {
 });
 
 it.skipIf(process.platform === "win32")(
-  "leaves a killed run idle until a new user message arrives",
+  "resumes a killed run once and accepts fresh input after abort",
   async () => {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
@@ -108,9 +112,6 @@ it.skipIf(process.platform === "win32")(
         ? { entry, transcript }
         : undefined;
     });
-    const requestCursor = readQaMockRequestCursor(
-      await fetchOkJson(`${mock.baseUrl}/debug/request-cursor`),
-    );
     const sinceIndex = state
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound").length;
@@ -123,6 +124,9 @@ it.skipIf(process.platform === "win32")(
       30_000,
       25,
     );
+    const requestCursor = readQaMockRequestCursor(
+      await fetchOkJson(`${mock.baseUrl}/debug/request-cursor`),
+    );
     await gateway.restartAfterStateMutation(async () => {
       const entry = await readEntry();
       expect(entry).toMatchObject({
@@ -131,10 +135,43 @@ it.skipIf(process.platform === "win32")(
     });
     expect(gateway.pid).not.toBe(pid);
     await transport.waitReady({ gateway });
-    // SIGKILL cannot record graceful markers; the transcript remains available,
-    // and only a fresh input may launch another turn.
+    // Crash recovery sends one ordinary input; it does not replay the old prompt.
+    await poll(async () => {
+      const transcript = await readTranscript({
+        afterEventCursor: pending.transcript.eventCursor,
+        allowEmpty: true,
+        includeCodeModeControl: true,
+        pendingCodeModeExecNeedle: "CHECKPOINT-2",
+      });
+      return transcript.hasPendingCodeModeWait ? transcript : undefined;
+    });
+    expect((await readEntry())?.sessionId).toBe(pending.entry.sessionId);
+    const requests = await fetchOkJson<QaMockRequestSnapshot[]>(
+      `${mock.baseUrl}/debug/requests?after=${requestCursor}`,
+    );
+    const resumedInput = requests.at(-1)?.allInputText ?? "";
+    expect([...resumedInput.matchAll(new RegExp(QA_RESTART_RESUME_PROMPT_RE, "gu"))]).toHaveLength(
+      1,
+    );
+    expect(resumedInput.match(/KILL-RESTART-PROMPT/g)).toHaveLength(1);
     await transport.waitForNoOutbound({ sinceIndex });
-    expect(await fetchOkJson(`${mock.baseUrl}/debug/requests?after=${requestCursor}`)).toEqual([]);
+    // This fixture normally waits for three restarts; stop this test's resumed run.
+    expect(await gateway.call("chat.abort", { sessionKey: key })).toMatchObject({
+      ok: true,
+      aborted: true,
+    });
+    await poll(async () => {
+      const listed = await gateway.call("sessions.list", { agentId: "qa" });
+      const idle = expect.objectContaining({ key, hasActiveRun: false });
+      return isRecord(listed) &&
+        Array.isArray(listed.sessions) &&
+        listed.sessions.some((row) => idle.asymmetricMatch(row))
+        ? true
+        : undefined;
+    }, 30_000);
+    expect(
+      (await readTranscript({ afterEventCursor: pending.transcript.eventCursor })).userMessageCount,
+    ).toBe(1);
     const second = await send("repeated request queued reply gateway qa check");
     const reply = await transport.waitForOutbound({
       conversation,

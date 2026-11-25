@@ -302,31 +302,53 @@ describe("filtered sidebar session event refresh", () => {
     expect(bootstrap.foregroundReady).toBe(false);
   });
 
-  it("keeps an owner-filtered refresh pending when the catalog agent changes", async () => {
+  it("keeps the owner-filtered refresh pending for the selected agent when the previous agent settles", async () => {
     const { controller, context, list, selectMembership, selectAgent } =
       createFilteredSessionController("archived", 4, true);
     controller.connect();
-    const release = Promise.withResolvers<void>();
-    cleanups.unshift(() => release.resolve());
+    const main = Promise.withResolvers<void>();
+    const research = Promise.withResolvers<void>();
+    cleanups.unshift(() => {
+      main.resolve();
+      research.resolve();
+    });
     await selectMembership({ ownerId: "profile-ada", involvingMe: false });
-    const query = controller.sessionListQuery("main");
+    const mainQuery = controller.sessionListQuery("main");
+    const researchQuery = controller.sessionListQuery("research");
     const listRows = list.getMockImplementation()!;
-    list.mockImplementationOnce(async (options) => {
-      await release.promise;
+    const researchKey = "agent:research:owner-session";
+    list.mockImplementation(async (options) => {
+      if (options?.ownerId === "profile-ada") {
+        if (options.agentId === "research") {
+          await research.promise;
+          return { ...sessionPage([researchKey]), totalCount: 1, nextOffset: null, hasMore: false };
+        }
+        await main.promise;
+      }
       return listRows(options);
     });
-    const refreshing = controller.refreshSidebarSessions();
-    expect(context.sessions.listSnapshot(query).loading).toBe(true);
+    const refreshingMain = controller.refreshSidebarSessions();
+    expect(context.sessions.listSnapshot(mainQuery).loading).toBe(true);
     expect(controller.sessionsLoading).toBe(true);
 
     selectAgent("research");
-
-    expect(controller.sessionListQuery("research")).toEqual(query);
-    expect(context.sessions.listSnapshot(query).loading).toBe(true);
+    const refreshingResearch = controller.refreshSidebarSessions();
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "research", ownerId: "profile-ada" }),
+    );
+    expect(context.sessions.listSnapshot(mainQuery).loading).toBe(true);
+    expect(context.sessions.listSnapshot(researchQuery).loading).toBe(true);
     expect(controller.sessionsLoading).toBe(true);
-    release.resolve();
-    await refreshing;
+
+    main.resolve();
+    await refreshingMain;
+    expect(controller.sessionsLoading).toBe(true);
+    expect(controller.sessionsResult).toBeNull();
+
+    research.resolve();
+    await refreshingResearch;
     expect(controller.sessionsLoading).toBe(false);
+    expect(controller.sessionsResult?.sessions.map((row) => row.key)).toEqual([researchKey]);
   });
 
   it.each(["archived", "all"] as const)(

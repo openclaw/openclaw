@@ -1,10 +1,11 @@
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 
-const { inworldTTSMock, listInworldVoicesMock } = vi.hoisted(() => ({
-  inworldTTSMock: vi.fn(),
-  listInworldVoicesMock: vi.fn(),
-}));
+const [inworldTTSMock, listInworldVoicesMock] = vi.hoisted(() => [vi.fn(), vi.fn()] as const);
 
 vi.mock("./tts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./tts.js")>()),
@@ -12,7 +13,7 @@ vi.mock("./tts.js", async (importOriginal) => ({
   listInworldVoices: listInworldVoicesMock,
 }));
 
-import { buildInworldSpeechProvider } from "./speech-provider.js";
+import plugin from "./index.js";
 
 const request = {
   text: "Hello",
@@ -28,7 +29,9 @@ afterAll(() => {
   vi.resetModules();
 });
 
-const provider = buildInworldSpeechProvider();
+const registration = { plugin, id: "inworld", name: "Inworld" };
+const { speechProviders } = await registerProviderPlugin(registration);
+const provider = requireRegisteredProvider(speechProviders, registration.id);
 const resolveConfig = (inworld: Record<string, unknown>) =>
   provider.resolveConfig?.({ ...request, rawConfig: { providers: { inworld } } });
 const resolveTalk = (base: Record<string, unknown>, values: Record<string, unknown>) =>
@@ -50,6 +53,19 @@ afterEach(() => {
 });
 
 it("rejects blank API keys across every request entrypoint", async () => {
+  for (const [apiKey, envKey, expected] of [
+    [undefined, undefined, false],
+    [" \t ", "   ", false],
+    ["  padded-key  ", undefined, true],
+    ["configured-key", "environment-key", true],
+    [undefined, " environment-key ", true],
+    [undefined, undefined, false],
+  ] as const) {
+    vi.stubEnv("INWORLD_API_KEY", envKey);
+    const context = { providerConfig: apiKey === undefined ? {} : { apiKey }, timeoutMs: 30_000 };
+    expect(provider.isConfigured(context)).toBe(expected);
+    expect(await provider.isConfiguredAsync?.(context)).toBe(expected);
+  }
   vi.stubEnv("INWORLD_API_KEY", "   ");
   const blankRequest = { ...request, providerConfig: {}, timeoutMs: 5_000 };
   const rejectsMissingKey = (result: unknown) =>
@@ -178,6 +194,7 @@ it.each([
   ["OGG_OPUS voice-note", false],
   ["22050 Hz telephony PCM", true],
 ] as const)("synthesizes %s", async (_label, telephony) => {
+  vi.stubEnv("INWORLD_API_KEY", "environment-key");
   const audioBuffer = Buffer.from(telephony ? "pcm" : "opus");
   inworldTTSMock.mockResolvedValueOnce(audioBuffer);
   const req = {

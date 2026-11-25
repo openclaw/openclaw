@@ -207,6 +207,7 @@ export class PluginInstallRuntimeBatch {
       if (!current[pluginId] || hashStableJson(current[pluginId]) !== installHash) {
         throw new Error(`Plugin ${pluginId} changed during batch settlement`);
       }
+      await lease.assertOwned();
       targets.set(pluginId, { pluginId, installHash, sourceDigests: commit.sourceDigests });
     }
     await lease.assertOwned();

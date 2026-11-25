@@ -28,15 +28,23 @@ Setup-generated dependencies and build output survive into the session. Session 
 
 An empty committed workspace uses the profile's shared runtime image instead of a repository snapshot. With no prepared project, capture happens at eligible worker teardown. A failed detected dependency install skips capture and lets the session start cold; a failed declared recipe stops dispatch. Explicitly skipped setup has a separate snapshot identity.
 
+Before capture, scrubbing tolerates recorded node processes that have exited or whose process metadata is no longer accessible. A readable live process whose working directory, environment, or process group does not match the worker still blocks capture.
+
 Environment status reports `stopping` while teardown is pending. Stop cloud worker can finish after session shutdown and a claimed warm-image capture, while the environment remains `destroying`. Capture and confirmed lease release continue under the environment lifecycle owner; only confirmed release changes the environment to `destroyed`. Failures remain visible and retryable. If the Gateway exits mid-capture, Crabbox's idle timeout or TTL can reap the lease, and the next Gateway reconciles the retained cleanup request.
 
 ### Later sessions and refresh
 
-A matching ready worker skips provisioning. Otherwise, a compatible snapshot starts a new machine and New Session shows **Starting from snapshot…**. The fork updates its checkout to the requested commit and installs the current runtime when needed before enrollment. Profile setup is already captured; post-create/start commands run after session binding.
+A matching ready worker skips provisioning, even when the repository has advanced. Exact-commit workers are preferred; otherwise, OpenClaw refreshes the unbound workspace to the requested commit before session binding, using the same content preparation as snapshot forks. When no ready worker is available, a compatible snapshot starts a new machine and New Session shows **Starting from snapshot…**. The fork updates its checkout to the requested commit and installs the current runtime when needed before enrollment. Profile setup is already captured; post-create/start commands run after session binding.
+
+Workspace verification reuses content hashes saved with the snapshot when file identity, size, and timestamps still match. Registration and first binding still check the complete manifest, and changed files are hashed again. Missing or unreadable hash memos, or providers that change filesystem identities when restoring a snapshot, fall back to hashing. The memo contains filesystem metadata and hashes, not file contents or setup secrets. It shares the node's trusted OS/user boundary; it does not protect against code that can rewrite the node's own state.
 
 Snapshot compatibility covers the repository and source-access scope, backend, exact machine class, operating system, desktop setting, profile setup command, setup-secret names and store references, repository recipe, and whether setup was skipped. Linked worktrees of one local repository share snapshots; separate clones do not. Repository-only sources also bind their repository instance, agent and selected GitHub identity. A changed recipe, machine configuration, or source-access scope needs compatible preparation, usually a cold build. Secret values and temporary sentinels never participate in the key.
 
-The OpenClaw runtime is separate from snapshot compatibility. Gateway updates, runtime archives, enabled plugins, execution mode, profile names, lease durations, and reserve limits do not invalidate an otherwise compatible snapshot. Ready workers, however, must match the current runtime, profile, and commit before use.
+The OpenClaw runtime is separate from snapshot compatibility. Gateway updates, runtime archives, enabled plugins, execution mode, profile names, lease durations, and reserve limits do not invalidate an otherwise compatible snapshot. Ready workers must match the current runtime, profile, repository identity, and setup recipe. A different commit alone does not invalidate a ready worker.
+
+Content refresh reuses a pristine retained Git seed and transfers the changed objects. Public repositories combine inspection, transfer, and setup in one provider command; private repositories inspect first, then combine the uploaded pack and setup. Repository setup keeps the provisioning owner’s command budget and setup environment. It preserves unchanged files and reuses their verified hashes. A missing or unusable seed falls back to fresh preparation. Matching Node requirements and package-manager identity reuse the captured toolchain when its executable links are intact; older images prepare it once before reuse.
+
+Detected dependency installation is skipped when no package manifest, lockfile, package-manager configuration, tracked Yarn plugin or release, Node declaration, or `patches/` path changes, including nested packages. The preparation note records this skip. A root install lifecycle script that depends on other tracked content will not rerun for those content-only refreshes. Declared scripts and devcontainer content-update commands keep running as before. Devcontainer `onCreateCommand` outputs are retained; dependencies installed only there can remain stale unless `updateContentCommand` refreshes them. If a ready-worker refresh fails, OpenClaw retires that reserve, logs the cause, and provisions normally. Cancellation and revoked request authority still stop dispatch.
 
 A foreground fork can refresh a changed commit or top up its runtime without capturing a replacement just for that change. Background reserves and explicit builds can publish refreshed snapshots. Initial capture, interrupted capture recovery, required setup repair, and age refresh still use the capture boundary. Unpinned images become eligible for refresh after `refreshAfter` (24 hours by default); runtime-only images refresh at eligible teardown. Disabling reserves also disables automatic background refresh.
 
@@ -100,7 +108,7 @@ retirement unless pinned or still held by an allocation.
 
 ### Ready workers
 
-After a successful session activation, OpenClaw can prepare an unassigned worker in the background for the next matching session. Defaults are one worker per repository and profile, with a Gateway-wide cap of four. A ready worker is consumed once and then refilled. If none is ready, the session provisions normally, using a compatible snapshot when available. Paired devices do not use this pool.
+After a successful session activation, OpenClaw can prepare an unassigned worker in the background for the next matching session. Defaults are one worker per repository and profile, with a Gateway-wide cap of four. A ready worker is consumed once and then refilled. Repository updates alone do not retire compatible reserves: their checkout is refreshed before binding, without allocating another machine. Adoption logs report elapsed milliseconds and whether the hit was exact or refreshed; dispatch phase timings include `reserveExact` or `reserveRefresh`. If none is ready, the session provisions normally, using a compatible snapshot when available. Paired devices do not use this pool.
 
 When the repository integration prepares repository-specific capacity, an authorized Control UI browser also keeps the configured default repository's reserve target prepared. Read-only browsers do not allocate workers. After the last eligible browser disconnects, presence-driven refill stops and unused reserves retire after 15 minutes. Repository access and identity are checked again before reuse; changed visibility or lost access prevents reuse of earlier capacity.
 
@@ -119,6 +127,15 @@ An already-admitted capture can finish after reserve-demand expiry within its se
 ### Inspect snapshots in the Control UI
 
 Open **Settings → Connections → Cloud environments**. Each repository has one row showing **Ready**, **Building**, **Cold only**, or **Needs attention**. Select it to inspect its snapshots, recorded setup source, step timings, and failures. **Cloud device → Change** sets the repository's default profile. Inventory refreshes while builds, captures, or ready workers are present, and after deferred plugin activation.
+
+Preparation timings include retained Git identity and manifest checks, inspection, seed path preparation, object import,
+seed verification and checkout, seed manifests, workspace copy or Git update, toolchain preparation,
+recipe commands, and prepared-manifest capture. Skipped steps are absent; repeated steps are summed.
+These timings measure work inside the preparation scripts, excluding provider boot and transport
+round trips. Completed worker-owned Git stores are not scanned again with `git fsck`; incoming
+packs still require size, SHA-256, object and connectivity verification. Reuse still verifies the
+completed workspace manifest and its Git identity. Lazy snapshot storage must still read directory
+and file metadata, changed content, newly transferred objects, and files used by setup or tools.
 
 **Rebuild** prepares the recorded local project's committed `HEAD` without a session. It requires admin access, a local project root, an eligible profile, and pool capacity. Repository-only sources cannot use this action. Rebuild follows normal refresh policy and may reuse a matching build or reserve; it does not force snapshot replacement. Active builds offer **Cancel**, which opens **Cancel this snapshot build?** and waits for provider work and cloud device cleanup. Failed builds offer **Dismiss**, which opens **Dismiss this failed build?** and hides the row until reload while the terminal record remains retained. Orphaned builds still awaiting cleanup cannot be dismissed.
 

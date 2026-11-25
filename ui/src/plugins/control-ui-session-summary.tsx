@@ -189,6 +189,9 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
         return;
       }
       const changed = readSessionChangedEvent(event.payload);
+      if (event.event === "sessions.changed" && changed?.reason === "activity-summary") {
+        return;
+      }
       if (
         changed &&
         current() &&

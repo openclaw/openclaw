@@ -1,4 +1,5 @@
 import { Repeat } from "solid-js";
+import { SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderNativeModelSetupLoading } from "./native-model-setup.tsx";
@@ -11,15 +12,7 @@ function renderLoadingSection(
 ) {
   return (
     <section class={["settings-section", params.className]}>
-      <div class="settings-section__header">
-        <h2>{title}</h2>
-      </div>
-      {params.intro ? (
-        <>
-          {" "}
-          <p class="muted model-setup__loading-intro">{params.intro}</p>{" "}
-        </>
-      ) : undefined}
+      <SettingsSectionHeader title={title} description={params.intro} />
       <div class="model-setup__rows">
         <Repeat count={params.rows ?? 1}>
           {(index) => (
@@ -48,6 +41,14 @@ function renderLoadingSection(
   );
 }
 
+/** The detected-model slot while discovery runs, sized like one candidate row. */
+export function renderModelSetupCandidatesLoading(status?: string) {
+  return renderLoadingSection(t("modelSetup.candidates.title"), {
+    className: "model-setup__loading-section--candidates",
+    status,
+  });
+}
+
 export function renderModelSetupLoading(modelConfigured: boolean) {
   return (
     <div
@@ -64,15 +65,13 @@ export function renderModelSetupLoading(modelConfigured: boolean) {
             })
           : undefined}
         {renderNativeModelSetupLoading()}
-        {renderLoadingSection(t("modelSetup.candidates.title"), {
-          className: "model-setup__loading-section--candidates",
-          status: modelConfigured ? undefined : t("modelSetup.loading"),
-        })}
+        {renderModelSetupCandidatesLoading(modelConfigured ? undefined : t("modelSetup.loading"))}
         {renderLoadingSection(t("modelSetup.prepare.title"), {
           intro: t("modelSetup.prepare.intro"),
           rows: 2,
         })}
         {renderLoadingSection(t("modelSetup.signIn.title"), {
+          intro: t("modelSetup.signIn.description"),
           className: "model-setup__loading-section--sign-in",
         })}
         {renderLoadingSection(t("modelSetup.manual.title"))}

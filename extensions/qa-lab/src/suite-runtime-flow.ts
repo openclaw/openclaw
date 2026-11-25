@@ -243,6 +243,7 @@ export async function runQaSuiteScenarioDefinition(params: {
     throw new Error(`scenario missing flow: ${params.scenario.id}`);
   }
   const vars: Record<string, unknown> = {};
+  const runtimeParitySessionKeys = new Set<string>();
   const deadline = createQaScenarioDeadline(
     params.scenario.execution.timeoutMs,
     params.env.transport.whenUnhealthy,
@@ -299,6 +300,9 @@ export async function runQaSuiteScenarioDefinition(params: {
             ]
           : scenarioSteps;
       const result = await runQaSuiteScenarioSteps(name, preparedSteps);
+      if (runtimeParitySessionKeys.size > 0) {
+        result.runtimeParitySessionKeys = [...runtimeParitySessionKeys];
+      }
       return result.status === "fail"
         ? appendGatewayLogSentinelEvidence(result, env.gateway, gatewayLogMark)
         : result;
@@ -351,7 +355,15 @@ export async function runQaSuiteScenarioDefinition(params: {
         scanGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
       assertNoGatewayLogSentinels: (options?: Parameters<typeof assertNoGatewayLogSentinels>[1]) =>
         assertNoGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
-      runRuntimeToolFixture: runtimeToolFixture.runRuntimeToolFixture,
+      runRuntimeToolFixture: (
+        fixtureEnv: Parameters<typeof runtimeToolFixture.runRuntimeToolFixture>[0],
+        config: Parameters<typeof runtimeToolFixture.runRuntimeToolFixture>[1],
+      ) =>
+        runtimeToolFixture.runRuntimeToolFixture(fixtureEnv, config, (sessionKeys) => {
+          for (const sessionKey of sessionKeys) {
+            runtimeParitySessionKeys.add(sessionKey);
+          }
+        }),
       formatErrorMessage: formatQaErrorMessage,
       liveTurnTimeoutMs: resolveQaLiveTurnTimeoutMs,
       resolveQaLiveTurnTimeoutMs,

@@ -1,4 +1,5 @@
 import type { SqlBool } from "kysely";
+import type { GitCoauthorIdentity } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { GatewayConfig } from "../config/types.gateway.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
@@ -11,7 +12,13 @@ export type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[numb
 
 export type UserProfile = Omit<
   UserProfileListItem,
-  "emails" | "githubIdentity" | "hasAvatar" | "effectiveRole" | "roleSource"
+  | "emails"
+  | "githubIdentity"
+  | "gitCoauthorAvailable"
+  | "gitCoauthorIdentity"
+  | "hasAvatar"
+  | "effectiveRole"
+  | "roleSource"
 >;
 
 export type UserProfileOwnerErrorCode = "merge" | "role" | "repair-required";
@@ -22,6 +29,7 @@ export type UserProfileDisplay = Pick<UserProfileListItem, "id" | "displayName" 
 
 type UserProfileAuthority = {
   profileId: string;
+  openclawIdAccountIds?: readonly string[];
   role: string | null;
   githubLogin?: string | null;
   aliases: string[];
@@ -30,7 +38,7 @@ type UserProfileAuthority = {
 
 export type UserProfileRoleAuthority = Pick<
   UserProfileAuthority,
-  "profileId" | "role" | "githubLogin"
+  "profileId" | "role" | "githubLogin" | "openclawIdAccountIds"
 >;
 
 export type CachedGitHubIdentity = { profileId: string; updatedAt: number };
@@ -46,7 +54,13 @@ export type EnterpriseGitHubIdentity = StoredGitHubIdentity & {
 };
 export type UserProfileGitHubAttribution = Map<
   string,
-  StoredGitHubIdentity | EnterpriseGitHubIdentity | null
+  | StoredGitHubIdentity
+  | EnterpriseGitHubIdentity
+  | (GitCoauthorIdentity & {
+      accountId?: number;
+      githubLogin?: string;
+    })
+  | null
 >;
 
 export type UserProfileGitHubAttributionRead = {
@@ -71,6 +85,8 @@ export type UserChannelIdentitySelector =
   | { authorizationId: string; policy: UserChannelAuthorizationPolicy };
 export type UserChannelIdentityLink = { profileId: string; identity: UserChannelIdentity };
 export type UserChannelIdentityAuthorityFacts = {
+  identity: UserChannelIdentity;
+  openclawIdAccountIds?: readonly string[];
   authorization?: UserChannelAuthorization;
   profileId: string;
   displayName: string | null;
@@ -115,6 +131,9 @@ export type UserProfileEmailBinding = {
 
 export type UserProfileAccessFacts = Readonly<{
   profileId: string;
+  /** Provider identity only; never proof of current membership or role. */
+  hasOpenClawIdIdentity?: boolean;
+  openclawIdAccountIds?: readonly string[];
   emails: readonly string[];
   githubAccountIds?: readonly number[];
   enterpriseGitHubAccounts?: ReadonlyArray<Readonly<{ host: string; accountId: number }>>;
@@ -133,7 +152,10 @@ export type PreparedUserProfileIdentity = {
     this: void,
     requiredEmailBindingIds?: readonly string[],
     requiredGithubAccountIds?: readonly number[],
-  ): Pick<UserProfileAccessFacts, "profileId" | "assignedRole" | "githubLogin">;
+  ): Pick<
+    UserProfileAccessFacts,
+    "profileId" | "assignedRole" | "githubLogin" | "openclawIdAccountIds"
+  >;
   readonly emailBindingIds: readonly string[];
   readCurrentFacts(
     this: void,
@@ -182,6 +204,8 @@ export type ProfileDisplayRow = Pick<
   | "role"
 > & {
   has_avatar: SqlBool;
+  hasOpenClawIdIdentity?: boolean;
+  openclawIdAccountIds?: readonly string[];
   githubAccountIds?: readonly number[];
   /** The canonical Enterprise reader's proof-validated host/account pairs; aliases alone never set them. */
   enterpriseGitHubAccounts?: ReadonlyArray<Readonly<{ host: string; accountId: number }>>;

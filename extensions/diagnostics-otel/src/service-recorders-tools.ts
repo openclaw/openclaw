@@ -145,6 +145,9 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
         ...toolExecutionBaseAttrs(evt),
         ...runtime.paramsSummaryAttrs(evt.paramsSummary),
       };
+      // Stamp identity at span start: a shutdown or reload before the terminal
+      // event would otherwise export this span outside the conversation grouping.
+      runtime.addRunAttrs(spanAttrs, evt);
       assignOtelToolIdentityAttributes(spanAttrs, evt);
       runtime.trackInternalOrTrustedSpan(
         evt,

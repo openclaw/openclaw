@@ -1,4 +1,4 @@
-import { lstatSync, symlinkSync, unlinkSync, type Stats } from "node:fs";
+import { lstatSync, statSync, type Stats } from "node:fs";
 // Owns installed plugin host links and standalone build identity admission.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,6 +14,7 @@ import { ignoreMissingPath } from "../infra/errno.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { sameFsObject } from "../infra/path-case.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
 import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
@@ -165,6 +166,15 @@ export function openClawHostRootsMatch(currentRoot: string, expectedRoot: string
     return true;
   }
   try {
+    // Windows realpath keeps each junction's or launcher's spelling of one directory.
+    // Number inodes round on Windows, and libuv reports 0 when it cannot open a path.
+    const currentIdentity = statSync(current, { bigint: true });
+    if (
+      currentIdentity.ino !== 0n &&
+      sameFsObject(currentIdentity, statSync(expected, { bigint: true }))
+    ) {
+      return true;
+    }
     const left = readStandaloneRuntimeManifestForRoot(current);
     const right = readStandaloneRuntimeManifestForRoot(expected);
     // Version alone also matches upgrades; require the packaged code and sidecar identities.
@@ -344,14 +354,13 @@ async function linkOpenClawPeerDependency(params: {
   } catch (error) {
     return warn(error);
   }
-  // Await the initiating owner's effect gate, then revalidate synchronous
-  // mutation authority outside filesystem warning conversion before each effect.
+  // Admit each effect through its initiating owner before submitting filesystem work.
   if (existing) {
     await params.beforePersistentEffect?.();
     params.beforePersistentApply?.();
     try {
       if (existing.isSymbolicLink()) {
-        unlinkSync(linkPath);
+        await fs.unlink(linkPath);
       } else {
         await fs.rm(linkPath, { recursive: true, force: true });
       }
@@ -362,7 +371,7 @@ async function linkOpenClawPeerDependency(params: {
   await params.beforePersistentEffect?.();
   params.beforePersistentApply?.();
   try {
-    symlinkSync(params.hostRoot, linkPath, "junction");
+    await fs.symlink(params.hostRoot, linkPath, "junction");
     if (previousTarget) {
       params.logger.warn?.(
         `Repaired OpenClaw host link at ${linkPath}: ${previousTarget} -> ${expectedTarget}`,

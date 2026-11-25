@@ -1,4 +1,5 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { resolveAllowedModelRefCore as resolveAllowedModelRef } from "../../agents/model-selection-resolve.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -38,7 +39,7 @@ export function resolveAgentCatalogCreateTarget(
       cfg: params.config,
       catalog: [],
       raw: model,
-      defaultProvider: defaultModel.provider,
+      defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
       defaultModel,
       agentId,
     });

@@ -520,9 +520,10 @@ describe("exact-state retirement admission and recovery", () => {
       expect(getRegistryWorktree(env, f.record.id)).toBeDefined();
       expect(await refNames(result.snapshotRef!)).toBe("");
       expect(await refNames(receiptRef)).toBe("");
+      expect(await git(repo, "rev-parse", f.record.branch)).toBe(f.exactState.branchHead);
       expect((await service.gc()).snapshotsPruned).toBe(1);
       expect(getRegistryWorktree(env, f.record.id)).toBeUndefined();
-      expect(await git(repo, "rev-parse", f.record.branch)).toBe(f.exactState.branchHead);
+      expect(await refNames(`refs/heads/${f.record.branch}`)).toBe("");
     },
   );
 

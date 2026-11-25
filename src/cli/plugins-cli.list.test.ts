@@ -1,7 +1,9 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
+import * as lifecycleLease from "../plugins/plugin-lifecycle-lease.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistryStatusReport, PluginStatusReport } from "../plugins/status.js";
@@ -189,45 +191,12 @@ describe("plugins cli list", () => {
     },
   );
 
-  it("publishes Doctor output and exit status only after cleanup", async () => {
-    const entered = createDeferredCore();
-    const finish = createDeferredCore();
-    const notice = createCompatibilityNotice({ pluginId: "compatible-plugin", code: "hook-only" });
-    buildPluginCompatibilityNoticesMock.mockReturnValue([notice]);
+  it("does not publish success when Doctor compatibility report construction fails", async () => {
     process.exitCode = 7;
-    withDiagnostics.mockImplementation(async (_params, formatReport) => {
-      const text = formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted" });
-      entered.resolve();
-      await finish.promise;
-      return text;
+    const failure = new Error("Doctor compatibility report construction failed");
+    buildPluginCompatibilityNoticesMock.mockImplementation(() => {
+      throw failure;
     });
-    const command = plugins("doctor", "--json");
-    try {
-      await entered.promise;
-      expect(logs).toEqual([]);
-      expect(process.exitCode).toBe(7);
-    } finally {
-      finish.resolve();
-      await command;
-    }
-    expect(process.exitCode).toBe(0);
-    expect(logs).toHaveLength(1);
-    expect(JSON.parse(logs[0] ?? "null")).toMatchObject({ ok: true, compatibility: [notice] });
-  });
-
-  it.each(["format", "dispose"])("does not publish success when Doctor %s fails", async (phase) => {
-    process.exitCode = 7;
-    const failure = new Error(`Doctor ${phase} failed`);
-    if (phase === "format") {
-      buildPluginCompatibilityNoticesMock.mockImplementation(() => {
-        throw failure;
-      });
-    } else {
-      withDiagnostics.mockImplementation(async (_params, formatReport) => {
-        formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted" });
-        throw failure;
-      });
-    }
     await expect(plugins("doctor", "--json")).rejects.toBe(failure);
     expect(logs).toEqual([]);
     expect(process.exitCode).toBe(7);
@@ -237,14 +206,23 @@ describe("plugins cli list", () => {
     const compatibilityNotice = (code: "hook-only" | "removed-session-transcript-file-api") =>
       createCompatibilityNotice({ pluginId: "compatible-plugin", code });
 
-    for (const [code, exitCode] of [
-      ["hook-only", 0],
-      ["removed-session-transcript-file-api", 1],
-      ["hook-only", 0],
+    for (const [code, exitCode, json] of [
+      ["hook-only", 0, true],
+      ["removed-session-transcript-file-api", 1, false],
+      ["hook-only", 0, false],
     ] as const) {
       buildPluginCompatibilityNoticesMock.mockReturnValue([compatibilityNotice(code)]);
-      await plugins("doctor");
+      const before = logs.length;
+      await plugins("doctor", ...(json ? ["--json"] : []));
       expect(process.exitCode).toBe(exitCode);
+      if (json) {
+        expect(logs.slice(before)).toHaveLength(1);
+        expect(JSON.parse(logs[before] ?? "null")).toMatchObject({
+          ok: true,
+          compatibility: [compatibilityNotice(code)],
+        });
+        continue;
+      }
       const output = logs.at(-1);
       expect(output).toContain(compatibilityNotice(code).message);
       expect(output?.includes(cleanDoctorMessage)).toBe(exitCode === 0);
@@ -359,15 +337,15 @@ describe("plugins cli list", () => {
     "reports persisted replacement differences after stale refresh (json=%s)",
     async (json) => {
       refreshRegistry.mockResolvedValue({ plugins: [] });
-      const differences = mockRegistryInspection(
-        "/plugins/demo/index.js",
-        "/plugins/demo/dist/index.js",
-      );
+      const differences = mockRegistryInspection("/plugins/demo/old.js", "/plugins/demo/new.js");
       const command = plugins("registry", "--refresh", ...(json ? ["--json"] : []));
       if (!json) {
-        await expect(command).rejects.toThrow(
-          /demo: record changed; persisted \/plugins\/demo\/index\.js; derived \/plugins\/demo\/dist\/index\.js.*openclaw plugins registry --refresh/su,
-        );
+        await expect(command).rejects.toMatchObject({
+          name: "ExpectedCliError",
+          humanOutput: expect.stringMatching(
+            /demo: record changed; persisted \/plugins\/demo\/old\.js; derived \/plugins\/demo\/new\.js.*openclaw plugins registry --refresh/su,
+          ),
+        });
         return;
       }
       await expect(command).rejects.toThrow();
@@ -402,9 +380,10 @@ describe("plugins cli list", () => {
     });
   });
 
-  it("serializes registry rebuilds with other plugin lifecycle mutations", async () => {
+  it("serializes registry rebuilds with other plugin lifecycle mutations", async ({ signal }) => {
     const firstEntered = createDeferredCore();
     const releaseFirst = createDeferredCore();
+    const secondStarted = createDeferredCore();
     const entries: number[] = [];
     refreshRegistry.mockImplementation(async () => {
       const entry = entries.length + 1;
@@ -417,15 +396,35 @@ describe("plugins cli list", () => {
     });
 
     const first = plugins("registry", "--refresh", "--json");
-    await firstEntered.promise;
-    const second = plugins("registry", "--refresh", "--json");
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    expect(entries).toEqual([1]);
-
-    releaseFirst.resolve();
-    await Promise.all([first, second]);
+    const commands = [first];
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(firstEntered.promise, first, "First refresh did not enter"),
+        signal,
+      );
+      const acquire = lifecycleLease.withPluginLifecycleLease;
+      using admission = vi.spyOn(lifecycleLease, "withPluginLifecycleLease");
+      admission.mockImplementation((options, run) => {
+        const pending = acquire(options, run);
+        secondStarted.resolve();
+        return pending;
+      });
+      const second = plugins("registry", "--refresh", "--json");
+      commands.push(second);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          secondStarted.promise,
+          second,
+          "Second refresh skipped its lease",
+        ),
+        signal,
+      );
+      expect(lifecycleLease.hasPluginLifecycleLeaseDemand()).toBe(true);
+      expect(entries).toEqual([1]);
+    } finally {
+      releaseFirst.resolve();
+      await Promise.all(commands);
+    }
     expect(entries).toEqual([1, 2]);
   });
 });

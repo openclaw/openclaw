@@ -158,7 +158,7 @@ export function createCodexAppServerAgentHarness(
     options.pluginConfig;
   const resolveIsolatedCompletionRuntime: NonNullable<
     AgentHarnessV2["resolveIsolatedCompletionRuntime"]
-  > = ({ authorizationOwner }) => (authorizationOwner === "host" ? "openclaw" : "self");
+  > = () => "self";
   const assertOwnershipCurrent = (params: { assertCurrent: () => void }) => {
     params.assertCurrent();
     if (disposed) {
@@ -536,19 +536,10 @@ export function createCodexAppServerAgentHarness(
           "Native command auth currently requires an ordinary Codex session, not isolated completion.",
         );
       }
-      if (
-        resolveIsolatedCompletionRuntime({ authorizationOwner: params.authorization.owner }) ===
-        "openclaw"
-      ) {
-        const { runHostPreparedIsolatedCompletion } = await loadSimpleCompletionRuntime();
-        return runHostPreparedIsolatedCompletion(params);
-      }
       const { runCodexIsolatedCompletion } = await loadIsolatedCompletion();
       const { readCodexPluginConfig } = await loadConfigParsing();
       return runCodexIsolatedCompletion(params, {
-        pluginConfig: readCodexPluginConfig(
-          options.resolvePluginConfig?.() ?? options.pluginConfig,
-        ),
+        pluginConfig: readCodexPluginConfig(resolveAttemptPluginConfig(params.config)),
       });
     },
     runIsolatedCompletion: async (params) => {

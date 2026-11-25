@@ -7,7 +7,9 @@ type ConfigPath = Array<string | number>;
 function patchedCopy(source: unknown, path: ConfigPath, value: unknown): unknown {
   const patched = copyWithPathPatch(source, path, value);
   if (!patched.ok) {
-    throw new Error("This setting can't be saved at its current location.");
+    throw new Error(
+      "Couldn’t save this setting at its current location. Check its location in the config file.",
+    );
   }
   return patched.value;
 }

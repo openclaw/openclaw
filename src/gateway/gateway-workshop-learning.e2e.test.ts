@@ -2,10 +2,9 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,12 +17,13 @@ import { createExperienceReviewCandidate } from "../skills/test-support/workshop
 import { listWorkshopChanges } from "../skills/workshop-changes/changes.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
+import { createStartupGate } from "./server-startup-state.test-support.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type ProviderRequest = {
-  max_output_tokens?: number;
   tools?: Array<{ name?: string }>;
 };
 
@@ -58,11 +58,9 @@ const GATEWAY_ENV = {
 };
 
 /** Runs one review through the skill-workshop plugin the Gateway loaded, in its own call scope. */
-async function runLoadedWorkshopReview(candidate: {
-  config: OpenClawConfig;
-  ctx: { runId: string };
-  source: { agentId: string; sessionKey: string; sessionId: string; entryId: string };
-}): Promise<void> {
+async function runLoadedWorkshopReview(
+  candidate: Awaited<ReturnType<typeof createExperienceReviewCandidate>>,
+): Promise<void> {
   const registry = getActivePluginRegistry();
   const record = registry?.plugins.find((plugin) => plugin.id === "skill-workshop");
   const instance = record ? getPluginInstance(record) : undefined;
@@ -71,20 +69,9 @@ async function runLoadedWorkshopReview(candidate: {
   }
   // The plugin's public `api` artifact, loaded like core loads bundled public surfaces.
   const { runSkillExperienceReview } = loadBundledPluginPublicArtifactModuleSync<{
-    runSkillExperienceReview: (params: {
-      ctx: { runId: string };
-      config: OpenClawConfig;
-      source: { agentId: string; sessionKey: string; sessionId: string; entryId: string };
-    }) => Promise<void>;
+    runSkillExperienceReview: (params: typeof candidate) => Promise<void>;
   }>({ dirName: "skill-workshop", artifactBasename: "api.js" });
-  const { agentId, sessionKey, sessionId, entryId } = candidate.source;
-  await instance.runInRegistry(registry, () =>
-    runSkillExperienceReview({
-      ctx: { runId: candidate.ctx.runId },
-      config: candidate.config,
-      source: { agentId, sessionKey, sessionId, entryId },
-    }),
-  );
+  await instance.runInRegistry(registry, () => runSkillExperienceReview(candidate));
 }
 
 // The Gateway loads the bundled skill-workshop plugin; it must share this test's core.
@@ -92,7 +79,7 @@ beforeAll(shareCoreWithWorkshopPluginForTest);
 
 describe("Gateway automatic Workshop learning", () => {
   it(
-    "sends one bounded review request and stops on a provider TPM rate limit",
+    "sends one review request and stops on a provider TPM rate limit",
     { timeout: 60_000 },
     async () => {
       const state = await createOpenClawTestState({
@@ -101,12 +88,16 @@ describe("Gateway automatic Workshop learning", () => {
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       const requests: string[] = [];
-      const oldHistory = "OLD_HISTORY_NOT_NEEDED_FOR_REVIEW ".repeat(20_000);
-      const workspaceInstructions = "WORKSPACE_INSTRUCTIONS_NOT_NEEDED_FOR_REVIEW";
       const recentEvidence =
         "RECENT_VERIFIED_PROCEDURE: confirm the public generation matches the release.";
+      const startup = createStartupGate();
+      const recovery = await import("./session-restart-resume.js");
+      using recoverySpy = vi.spyOn(recovery, "resumeMarkedSessions");
+      recoverySpy.mockImplementation(async ({ onPrepared }) => {
+        await startup.run();
+        await onPrepared?.();
+      });
       try {
-        await fs.writeFile(path.join(state.workspaceDir, "AGENTS.md"), workspaceInstructions);
         await withResponsesProvider(
           (body, response) => {
             requests.push(body);
@@ -124,10 +115,7 @@ describe("Gateway automatic Workshop learning", () => {
           async (baseUrl, providerErrors) => {
             const candidate = await createExperienceReviewCandidate(
               "http-tpm-limit",
-              [
-                { role: "user", content: oldHistory, timestamp: 1 },
-                { role: "user", content: recentEvidence, timestamp: 2 },
-              ],
+              [{ role: "user", content: recentEvidence, timestamp: 1 }],
               {
                 workspaceDir: state.workspaceDir,
                 modelId: "gpt-workshop-rate-limit-test",
@@ -135,11 +123,9 @@ describe("Gateway automatic Workshop learning", () => {
                 apiKey: "synthetic-workshop-provider-key",
               },
             );
-            candidate.config.models!.providers!.openai!.models[0]!.maxTokens = 128_000;
             candidate.config.agents!.defaults!.models![
               "openai/gpt-workshop-rate-limit-test"
             ]!.params = {
-              maxTokens: 128_000,
               transport: "sse",
               openaiWsWarmup: false,
             };
@@ -152,31 +138,28 @@ describe("Gateway automatic Workshop learning", () => {
               slots: { memory: "none" },
             };
             candidate.config.meta = { migrations: { skillWorkshopPlugin: true } };
-            setRuntimeConfigSnapshot(candidate.config);
-            await state.writeConfig(candidate.config);
-            gateway = await startGatewayWithClient({
-              cfg: candidate.config,
-              configPath: state.configPath,
-              token,
-              scopes: ["operator.admin", "operator.read", "operator.write"],
+            const { kernel } = await captureGatewayKernel(async () => {
+              gateway = await startGatewayWithClient({
+                cfg: candidate.config,
+                configPath: state.configPath,
+                token,
+                scopes: ["operator.admin", "operator.read", "operator.write"],
+              });
             });
-
+            await startup.entered;
+            startup.release();
+            await kernel.startupMethodsReady;
             await expect(runLoadedWorkshopReview(candidate)).rejects.toThrow(/rate limit/i);
 
+            // The review sends the conversation as the session's own request (#200545) and
+            // makes no retry after the provider's rate limit.
             expect(providerErrors).toEqual([]);
             expect(requests).toHaveLength(1);
-            const serialized = requests[0]!;
-            expect(Buffer.byteLength(serialized)).toBeLessThan(64 * 1024);
-            expect(serialized).toContain(recentEvidence);
-            for (const excluded of ["OLD_HISTORY_NOT_NEEDED_FOR_REVIEW", workspaceInstructions]) {
-              expect(serialized).not.toContain(excluded);
-            }
-            const payload = JSON.parse(serialized) as ProviderRequest;
-            expect(payload.max_output_tokens).toBe(2_048);
-            expect(payload.tools?.map((tool) => tool.name)).toEqual(["skill_workshop"]);
+            expect(requests[0]).toContain(recentEvidence);
           },
         );
       } finally {
+        startup.release();
         if (gateway) {
           await disconnectGatewayClient(gateway.client);
           await gateway.server.close({ reason: "Workshop rate-limit proof cleanup" });
@@ -305,9 +288,11 @@ Retain the distinct rollback procedure after verifying the previous public gener
             await fs.writeFile(skillFile, originalSkill);
             await fs.writeFile(supportFile, originalSupport);
             const reason = "require the public generation to match the release";
+            // The review sends the session's tool list, where skill_workshop sits behind the
+            // tool catalog.
             const workshopCall = (action: string, args: Record<string, unknown> = {}) => ({
-              name: "skill_workshop",
-              args: { action, name: "map-publication", ...args },
+              name: "dispatch_action",
+              args: { id: "skill_workshop", args: { action, name: "map-publication", ...args } },
             });
             const patch = { old_text: oldRule, new_text: newRule, reason };
             reviewActions = [
@@ -315,14 +300,17 @@ Retain the distinct rollback procedure after verifying the previous public gener
               workshopCall("patch", patch),
               workshopCall("patch", { ...patch, file_path: "references/activation.md" }),
             ];
-            gateway = await startGatewayWithClient({
-              cfg: config,
-              configPath: state.configPath,
-              token,
-              scopes: ["operator.admin", "operator.read", "operator.write"],
+            const { kernel } = await captureGatewayKernel(async () => {
+              gateway = await startGatewayWithClient({
+                cfg: config,
+                configPath: state.configPath,
+                token,
+                scopes: ["operator.admin", "operator.read", "operator.write"],
+              });
             });
+            await kernel.startupMethodsReady;
             const sessionKey = "agent:main:workshop-learning-proof";
-            const accepted = await gateway.client.request<{ runId: string; status: string }>(
+            const accepted = await gateway!.client.request<{ runId: string; status: string }>(
               "agent",
               {
                 sessionKey,
@@ -333,7 +321,7 @@ Retain the distinct rollback procedure after verifying the previous public gener
               },
             );
             expect(accepted.status).toBe("accepted");
-            const completed = await gateway.client.request<{ status: string }>(
+            const completed = await gateway!.client.request<{ status: string }>(
               "agent.wait",
               { runId: accepted.runId, timeoutMs: 45_000 },
               { timeoutMs: 50_000 },

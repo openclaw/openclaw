@@ -11,7 +11,7 @@ import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortListener } from "../infra/ports-types.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
@@ -20,6 +20,7 @@ import { ignoreNonCleanupCommandError } from "../process/exec-result.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -369,17 +370,16 @@ export async function readBoundedScheduledTaskProcess(
       );
     });
     if (candidates.length > 0) {
-      const owner = await readGatewayOwnerLeaseAsync({
+      const timeoutMs = Math.max(1, Math.ceil(remaining()));
+      const owner = await readActiveGatewayLockIdentity({
         env: mergeGatewayServiceEnv(env, command),
-        signal: AbortSignal.timeout(Math.ceil(remaining())),
+        includeEmbedded: true,
+        requireInspection: true,
+        timeoutMs,
+        signal: AbortSignal.timeout(timeoutMs),
       });
       remaining();
-      if (
-        owner?.state !== "live" ||
-        owner.port !== port ||
-        owner.supervisor?.kind !== "schtasks" ||
-        owner.supervisor.name?.toLowerCase() !== resolveTaskName(env).toLowerCase()
-      ) {
+      if (!owner || owner.port !== port) {
         return null;
       }
       pid = candidates.some((entry) => getSnapshotProcessId(entry) === owner.pid)
@@ -418,7 +418,7 @@ export async function readBoundedScheduledTaskProcess(
 export async function terminateScheduledTaskNodeHost(
   env: GatewayServiceEnv,
   assertCurrent?: () => void,
-  beforeMutation?: () => Promise<void>,
+  beforeMutation?: () => void | Promise<void>,
 ): Promise<number[]> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
   const installedArguments = command?.programArguments;
@@ -451,7 +451,7 @@ export async function terminateScheduledTaskGatewayListeners(
   assertCurrent?: () => void,
   stop?: {
     end: () => Promise<void>;
-    beforeMutation?: () => Promise<void>;
+    beforeMutation?: () => void | Promise<void>;
     restart?: boolean;
     onStopped?: () => void;
     warn: (message: string) => void;
@@ -632,8 +632,8 @@ function probeWindowsTasklistProcessState(pid: number): "alive" | "missing" | "u
 
 async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
   const probe = process.platform === "win32" ? probeWindowsTasklistProcessState : probeProcessState;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = monotonicDeadlineAfter(timeoutMs);
+  while (remainingMonotonicMs(deadline) > 0) {
     if (probe(pid) === "missing") {
       return true;
     }

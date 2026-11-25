@@ -90,6 +90,7 @@ export const GitHubPublicationActionSchema = closedObject({
     Type.Literal("merge"),
     Type.Literal("close"),
   ]),
+  pullRequestUrl: Type.Optional(GitHubPullRequestInspectSchema.properties.pullRequestUrl),
   publishingSessionKey: Type.Optional(NonEmptyString),
   requestId: Type.Optional(PersonalGitHubGenerationSchema),
   expectedHeadCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}$" })),
@@ -166,6 +167,13 @@ export const SessionGitHubActionParamsSchema = Type.Union([
     ...GitHubBaseRefreshSchema.properties,
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    action: Type.Literal("create_issue"),
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    title: GitHubPublicationTitleSchema,
+    body: Type.Optional(GitHubPublicationBodySchema),
   }),
 ]);
 export const SessionGitHubBaseRefreshResultSchema = closedObject({

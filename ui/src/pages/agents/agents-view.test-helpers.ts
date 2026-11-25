@@ -1,8 +1,10 @@
 import type { CronJob } from "../../api/types.ts";
 import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
+import { resolveAgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { AgentFiles } from "./panels-files.tsx";
 import type { Agents } from "./view.tsx";
 
@@ -10,9 +12,7 @@ type AgentsViewProps = Parameters<typeof Agents>[0];
 type AgentFilesProps = Parameters<typeof AgentFiles>[0];
 
 export function primaryModelPicker(container: ParentNode) {
-  return container.querySelector<HTMLElement>(
-    'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
-  );
+  return container.querySelector<HTMLElement>("openclaw-select-picker:has(#agent-primary-model)");
 }
 
 export const inertAgentFileControls = {
@@ -61,6 +61,24 @@ export function createAgentViewTestProps(
       channelsLastSuccess: null,
     }),
     access: {
+      settings: resolveAgentSettingsAccess(
+        {
+          hello: gatewayHelloForMethods([
+            "agents.list",
+            "config.get",
+            "agents.files.list",
+            "agents.files.get",
+            "tools.catalog",
+            "skills.status",
+            "channels.status",
+            "cron.list",
+            "cron.status",
+            "doctor.memory.status",
+          ]),
+        },
+        true,
+      ),
+      canDeleteAgent: true,
       canCreateAgent: true,
       canPatchConfig: true,
       canUpdateConfig: true,
@@ -88,7 +106,7 @@ export function createAgentViewTestProps(
       onRefresh: () => undefined,
     },
     cron: {
-      read: () => ({ summary: null, jobs: null, refresh: null, command: null }),
+      read: () => ({ status: null, summary: null, jobs: null, refresh: null, command: null }),
       onRefresh: () => undefined,
       onLoadMore: () => undefined,
       onRunNow: () => undefined,
@@ -110,6 +128,11 @@ export function createAgentViewTestProps(
       modelSelectionPolicy: undefined,
       onModelChange: () => false,
       onDecisionModelChange: () => false,
+      onUtilityModelChange: () => false,
+      onSubagentModelChange: () => false,
+      onThinkingDefaultChange: () => false,
+      onFastModeDefaultChange: () => false,
+      onUtilityFallbacksChange: () => false,
       onModelFallbacksChange: () => false,
       onModelCatalogOpen: () => undefined,
       onIdentityFieldChange: () => undefined,
@@ -146,6 +169,7 @@ export function createAgentViewTestProps(
     onSelectPanel: () => undefined,
     onConfigRetry: () => undefined,
     onSetDefault: async () => undefined,
+    onDeleteAgent: () => undefined,
     onTogglePinnedAgent: () => undefined,
     onOpenMemoryImport: () => undefined,
     onOpenMemorySettings: () => undefined,
