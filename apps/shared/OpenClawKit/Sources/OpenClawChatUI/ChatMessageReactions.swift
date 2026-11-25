@@ -131,13 +131,17 @@ struct ChatReactionPill: View {
     }
 }
 
-/// One height for the single-emoji circle and the multi-emoji pill. The canvas ring separates the
-/// pill from the user bubble it overlaps; on the agent side it disappears into the canvas.
+/// One height for the single-emoji circle and the multi-emoji pill. On a user bubble the pill takes
+/// the bubble's own fill, and the canvas ring keeps it from melting into the bubble's edge; on the
+/// agent side the ring disappears into the canvas.
 struct ChatReactionPillLabel: View {
     static let ring: CGFloat = 2
 
     let summary: ChatReactionSummary
     @ScaledMetric(relativeTo: .footnote) private var height: CGFloat = 24
+    @Environment(\.openClawReactionPillOnUserBubble) private var onUserBubble
+    @Environment(\.openClawChatUserAccent) private var userAccent
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 2) {
@@ -156,13 +160,24 @@ struct ChatReactionPillLabel: View {
         .lineLimit(1)
         .padding(.horizontal, self.summary.total > 1 ? 7 : 0)
         .frame(minWidth: self.height, minHeight: self.height)
-        .background(OpenClawChatTheme.subtleCard, in: Capsule())
+        .background(self.fill, in: Capsule())
         .padding(Self.ring)
         .background { OpenClawChatTheme.background.clipShape(Capsule()) }
         .contentShape(Capsule())
         // A flexible frame takes the width it is offered; the pill never takes less than its faces.
         .fixedSize()
     }
+
+    private var fill: AnyShapeStyle {
+        self.onUserBubble
+            ? AnyShapeStyle(OpenClawChatTheme.userBubbleSurface(in: self.colorScheme, accent: self.userAccent))
+            : OpenClawChatTheme.subtleCard
+    }
+}
+
+extension EnvironmentValues {
+    /// Set by the user bubble for the reactions pill it anchors.
+    @Entry var openClawReactionPillOnUserBubble = false
 }
 
 /// Reaction errors stay under the message; the pill itself has no room for text.

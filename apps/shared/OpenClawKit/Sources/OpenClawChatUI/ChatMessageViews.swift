@@ -268,6 +268,7 @@ private struct ChatUserBubbleDecorations<Bubble: View>: View {
             .padding(.bottom, drop)
             .overlay(alignment: .bottomLeading) {
                 self.accessories.reactions()
+                    .environment(\.openClawReactionPillOnUserBubble, true)
                     .fixedSize()
                     .onGeometryChange(for: CGSize.self, of: \.size) { self.pill = $0 }
             }
