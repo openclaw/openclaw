@@ -9,37 +9,21 @@ extension OpenClawSnapshotUITests {
         let app = try XCTUnwrap(self.app)
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
-        let model = app.buttons["chat-composer-inline-model"]
+        // The model and effort chips show while the draft is focused.
+        let model = self.inlineModelChip(in: app)
         XCTAssertTrue(model.waitForExistence(timeout: 3))
-        XCTAssertEqual(model.value as? String, "gpt-5.6-sol")
+        XCTAssertEqual(model.value as? String, "GPT-5.6")
         self.assertMinimumTouchTarget(model)
         self.assertMinimumTouchTarget(app.buttons["chat-realtime-control"])
         self.assertMinimumTouchTarget(app.buttons["RootTabs.Sidebar.Show"])
         self.assertMinimumTouchTarget(app.buttons["Chat actions"])
         self.attachScreenshot(named: "accessibility-empty-composer-and-header")
         model.tap()
-        let alternative = app.buttons["anthropic/claude-opus-4-1"]
-        XCTAssertTrue(alternative.waitForExistence(timeout: 3))
-        // Native menus can open scrolled to the selected item at accessibility sizes.
-        // Navigate the actual menu before tapping; XCTest's implicit scroll can miss the row.
-        let menu = app.collectionViews.containing(.button, identifier: "anthropic/claude-opus-4-1").firstMatch
-        let visibleBounds = app.frame.insetBy(dx: 20, dy: 90)
-        for _ in 0..<4 {
-            print("MODEL_ROW_BOUNDS: \(alternative.frame), menu=\(menu.frame), hittable=\(alternative.isHittable)")
-            if alternative.frame.intersection(visibleBounds).height >= 44, alternative.isHittable { break }
-            let viewport = menu.frame.intersection(app.frame.insetBy(dx: 0, dy: 50))
-            let origin = app.coordinate(withNormalizedOffset: .zero)
-            let start = origin.withOffset(CGVector(dx: viewport.midX, dy: viewport.minY + 40))
-            let end = origin.withOffset(CGVector(dx: viewport.midX, dy: viewport.maxY - 40))
-            start.press(forDuration: 0.05, thenDragTo: end)
-        }
-        let visibleRow = alternative.frame.intersection(visibleBounds)
-        XCTAssertGreaterThanOrEqual(visibleRow.height, 44, alternative.debugDescription)
-        XCTAssertTrue(alternative.isHittable)
+        let alternative = self.pickerModelRow("anthropic/claude-opus-4-1", provider: "anthropic", in: app)
+        XCTAssertTrue(alternative.isEnabled)
         self.attachScreenshot(named: "accessibility-model-choice-visible")
-        app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: visibleRow.midX, dy: visibleRow.midY)).tap()
-        self.waitForValue("claude-opus-4-1", of: model)
+        alternative.tap()
+        self.waitForValue("Claude Opus 4.1", of: model)
         input.tap()
         input.typeText("Accessible draft")
         XCTAssertTrue((input.value as? String ?? "").contains("Accessible draft"))
