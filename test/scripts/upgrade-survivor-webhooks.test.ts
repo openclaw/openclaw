@@ -17,6 +17,7 @@ let configPath: string;
 let available: boolean;
 let retired: boolean;
 let workshopProperties: Record<string, unknown>;
+let workshopPath: string;
 const modeSchema = {
   anyOf: ["off", "propose", "auto"].map((mode) => ({ type: "string", const: mode })),
 };
@@ -49,6 +50,7 @@ beforeEach(() => {
   available = true;
   retired = false;
   workshopProperties = { mode: modeSchema };
+  workshopPath = "skills.workshop";
   save({ agents: { entries: { main: {}, ops: {} } } });
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   vi.stubEnv("OPENCLAW_TEST_WORKSPACE_DIR", root);
@@ -59,19 +61,16 @@ beforeEach(() => {
     let stdout = "";
     if (args[0] === "config" && args[1] === "schema") {
       expect(args).toEqual(["config", "schema"]);
-      stdout = JSON.stringify({
-        properties: {
-          skills: {
-            properties: {
-              workshop: { properties: { autonomous: { properties: workshopProperties } } },
-            },
-          },
-        },
-      });
+      let schema: object = { properties: { autonomous: { properties: workshopProperties } } };
+      for (const key of workshopPath.split(".").toReversed()) {
+        schema = { properties: { [key]: schema } };
+      }
+      stdout = JSON.stringify(schema);
     } else if (args[0] === "config" && args[1] === "set") {
       if (
-        args[2]!.startsWith("skills.workshop.autonomous.") &&
-        !Object.hasOwn(workshopProperties, args[2]!.split(".").at(-1)!)
+        args[2]!.includes(".autonomous.") &&
+        (!args[2]!.startsWith(`${workshopPath}.autonomous.`) ||
+          !Object.hasOwn(workshopProperties, args[2]!.split(".").at(-1)!))
       ) {
         return { status: 1, stdout: "", stderr: "Unrecognized Workshop autonomous key" };
       }
@@ -302,6 +301,33 @@ describe("legacy operator Webhooks retirement acceptance", () => {
     vi.stubEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION", "2026.9.2");
     workshopProperties = { mode: modeSchema };
     expect(() => seedLegacyOperatorState()).toThrow("must seed the published plugin");
+  });
+
+  it("keeps the 2026.11.10 operator opt-out in marked plugin config throughout upgrade", () => {
+    vi.stubEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION", "2026.11.10");
+    available = false;
+    workshopPath = "plugins.entries.skill-workshop.config";
+    workshopProperties = { mode: { type: "string", enum: ["off", "propose", "auto"] } };
+    save({ ...config(), meta: { migrations: { skillWorkshopPlugin: true } } });
+
+    seedLegacyOperatorState();
+    const seeded = config();
+    expect(seeded.skills?.workshop).toBeUndefined();
+    expect(seeded.plugins?.entries?.["skill-workshop"]).toEqual({
+      config: { autonomous: { mode: "off" } },
+    });
+    expect(() => assertLegacyOperatorConfig("baseline")).not.toThrow();
+    expect(() => assertLegacyOperatorConfig("survival")).not.toThrow();
+
+    save({ ...seeded, meta: {} });
+    expect(() => assertLegacyOperatorConfig("baseline")).toThrow(
+      "legacy operator Workshop migration marker missing",
+    );
+    delete seeded.plugins?.entries?.["skill-workshop"];
+    save({ ...seeded, skills: { workshop: { autonomous: { mode: "off" } } } });
+    expect(() => assertLegacyOperatorConfig("survival")).toThrow(
+      "legacy operator Workshop plugin placement changed",
+    );
   });
 
   it("rejects missing, ambiguous, or unsupported Workshop schemas before writing config", () => {
