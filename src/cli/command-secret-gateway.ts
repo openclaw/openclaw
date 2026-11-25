@@ -475,7 +475,13 @@ export async function resolveCommandSecretRefsViaGateway(
     !process.env.OPENCLAW_GATEWAY_URL?.trim() &&
     !process.env.OPENCLAW_GATEWAY_PORT?.trim()
   ) {
-    return resolveLocally();
+    try {
+      return await resolveLocally();
+    } catch {
+      throw new Error(
+        `${params.commandName}: failed to resolve command secrets locally. Check the configured secret sources, then retry.`,
+      );
+    }
   }
   const gatewayExecSecretRefCredentialPaths = resolutionPolicy.allowExecSecretRefs
     ? []

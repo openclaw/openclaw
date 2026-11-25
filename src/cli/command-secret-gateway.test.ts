@@ -391,14 +391,15 @@ it.each([undefined, true] as const)(
     callGateway.mockRejectedValueOnce(new Error("gateway closed"));
     const resolution = resolveTalkProviderApiKey({ envKey, localGatewayAbsent });
     if (localGatewayAbsent) {
-      await expect(resolution).rejects.toThrow(/is unresolved in the active runtime snapshot/i);
+      await expect(resolution).rejects.toThrow(/failed to resolve command secrets locally/i);
+      await expect(resolution).rejects.not.toThrow(/gateway|snapshot/i);
     } else {
       await expect(resolution).rejects.toThrow(
         /failed to resolve secrets from the active gateway snapshot/i,
       );
       await expect(resolution).rejects.toThrow(/local resolution also failed/i);
-      await expect(resolution).rejects.toThrow(/check the configured secret sources/i);
     }
+    await expect(resolution).rejects.toThrow(/check the configured secret sources.*retry/i);
     await expect(resolution).rejects.not.toThrow(envKey);
     expect(callGateway).toHaveBeenCalledTimes(localGatewayAbsent ? 0 : 1);
   },
