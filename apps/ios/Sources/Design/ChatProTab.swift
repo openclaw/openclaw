@@ -74,7 +74,10 @@ struct ChatProTab: View {
 
     private var content: some View {
         self.chatSurface
-            .scrollEdgeEffectStyle(.soft, for: .vertical)
+            .scrollEdgeEffectStyle(.soft, for: .bottom)
+            // A session title sits on bare content in the header bar, unlike the glass buttons and the main chat's
+            // glass name capsule; the soft edge let scrolled text run through it, so titled chats get the hard edge.
+            .scrollEdgeEffectStyle(self.isMainChat ? .soft : .hard, for: .top)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(self.usesSideToolbar ? .visible : .hidden, for: .navigationBar)
