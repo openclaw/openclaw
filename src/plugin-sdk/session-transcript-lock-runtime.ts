@@ -12,7 +12,7 @@ import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/se
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { assertLegacyTranscriptPreparation } from "../config/sessions/session-transcript-preparation.js";
 import {
-  SessionTranscriptWriterClaimReboundError,
+  assertOwnedTranscriptWriteCommit,
   withSessionTranscriptWriteAssertion,
 } from "../config/sessions/transcript-write-context.js";
 import { warnSessionTranscriptPreparationDeprecation } from "../plugins/compat/session-transcript-preparation-deprecation.js";
@@ -35,7 +35,8 @@ export type InternalSessionTranscriptTarget = {
 export type InternalSessionTranscriptWriteLockParams = SessionTranscriptReadParams & {
   config?: TranscriptMessageAppendOptions<unknown>["config"];
   /**
-   * Guards every commit. It is installed on the resolved target and prepared before the
+   * Guards every commit. Only the omitted agent is inferred; the original locator is retained.
+   * It is prepared before the
    * writer is reserved: its session-row reads cannot run while the write holds the store.
    */
   assertCurrent?: SessionSourceAssertion;
@@ -78,14 +79,6 @@ export async function withProjectedSessionTranscriptWriteLock<
     );
   }
   const storageTarget = await resolveSessionTranscriptRuntimeTarget(scope, scope.config);
-  // Resolving an omitted owner must not redirect a guard to a different admitted session.
-  if (
-    assertCurrent &&
-    (scope.sessionKey.trim() !== storageTarget.sessionKey.trim() ||
-      scope.sessionId.trim() !== storageTarget.sessionId.trim())
-  ) {
-    throw new SessionTranscriptWriterClaimReboundError();
-  }
   const agentId = normalizeAgentId(storageTarget.agentId);
   const target: InternalSessionTranscriptTarget = {
     agentId,
@@ -139,9 +132,10 @@ export async function withProjectedSessionTranscriptWriteLock<
   const writeMode = mode === "sequence" ? withTranscriptWriteSequence : withTranscriptWriteLock;
   const write: typeof writeMode = (writeScope, writeRun) =>
     assertCurrent
-      ? withSessionTranscriptWriteAssertion(writeScope, assertCurrent, () =>
-          writeMode(writeScope, writeRun),
-        )
+      ? withSessionTranscriptWriteAssertion({ ...scope, agentId }, assertCurrent, () => {
+          assertOwnedTranscriptWriteCommit(writeScope);
+          return writeMode(writeScope, writeRun);
+        })
       : writeMode(writeScope, writeRun);
   return await write(boundScope, async (locked) => {
     const result = await runOpen(

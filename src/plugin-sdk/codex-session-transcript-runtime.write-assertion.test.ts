@@ -76,6 +76,27 @@ describe("Codex mirror write assertion", () => {
     expect(await readTexts(target)).toEqual([]);
   });
 
+  it.each([undefined, "{agentId}/sessions.json"])(
+    "rejects a guarded store locator %s that resolves into the configured store",
+    async (storePath) => {
+      const target = await createUnresolvedTarget();
+      const write = vi.fn(() => {});
+      await expect(
+        withCodexSessionTranscriptMirrorWrite(
+          {
+            ...target,
+            storePath,
+            config: { session: { store: target.storePath } },
+            assertCurrent: () => {},
+          },
+          write,
+        ),
+      ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+      expect(write).not.toHaveBeenCalled();
+      expect(await readTexts(target)).toEqual([]);
+    },
+  );
+
   it("rejects authority revoked during awaited callback work before the row commits", async () => {
     const target = await createUnresolvedTarget();
     let revoked = false;
