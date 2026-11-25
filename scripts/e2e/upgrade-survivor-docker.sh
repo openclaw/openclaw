@@ -926,6 +926,22 @@ if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"
   pre_update_service_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE")"
   pre_update_systemctl_lines="$(wc -l <"$SYSTEMCTL_SHIM_LOG")"
+else
+  # This inline lane installs the candidate first and seeds deliberately retired
+  # config. Repair it before update: the installed preflight refuses invalid
+  # config, rather than starting a release trial to migrate it.
+  echo "Running non-interactive doctor repair for dirty-state config..."
+  CURRENT_PHASE="doctor"
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
+    echo "openclaw doctor failed" >&2
+    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
+    exit 1
+  fi
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate >>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
+    echo "post-doctor config validation failed" >&2
+    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
+    exit 1
+  fi
 fi
 
 echo "Running package update against the mounted tarball..."
@@ -952,19 +968,6 @@ if [ "$update_status" -ne 0 ]; then
 fi
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   echo "Skipping doctor repair until after restart proof."
-else
-  echo "Running non-interactive doctor repair..."
-  CURRENT_PHASE="doctor"
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
-    echo "openclaw doctor failed" >&2
-    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
-    exit 1
-  fi
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate >>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
-    echo "post-doctor config validation failed" >&2
-    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
-    exit 1
-  fi
 fi
 
 echo "Verifying config and state survived update..."
