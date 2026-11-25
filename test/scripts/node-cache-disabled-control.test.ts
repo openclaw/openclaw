@@ -100,6 +100,8 @@ describe("disabled control admission", () => {
 
 type FixtureMode =
   | "success"
+  | "flush"
+  | "unknown-diagnostic"
   | "mutation"
   | "wrong-oracle"
   | "cache-activity"
@@ -138,6 +140,12 @@ function fixture(mode: FixtureMode) {
     'for(const [k,v] of Object.entries({OPENCLAW_VITEST_RUNTIME:"node",OPENCLAW_VITEST_FS_MODULE_CACHE:"0",OPENCLAW_VITEST_WORKER_CACHE:"0",COREPACK_ENABLE_NETWORK:"0",npm_config_offline:"true",pnpm_config_manage_package_manager_versions:"false",pnpm_config_pm_on_fail:"error"})) assert.equal(process.env[k],v);',
     'const control=path.basename(path.dirname(process.env.NODE_COMPILE_CACHE)); assert.equal(process.env.NODE_DISABLE_COMPILE_CACHE,control==="disabled"?"1":undefined);',
     'assert.equal(process.env.NODE_OPTIONS,undefined); console.log("control pid="+process.pid);',
+    ...(mode === "flush" || mode === "controls-success"
+      ? ['if(control==="disabled") flushCompileCache();']
+      : []),
+    ...(mode === "unknown-diagnostic"
+      ? ['console.error("[compile cache] unexpected activity.");']
+      : []),
     ...(mode === "controls-deadline"
       ? ['if(control==="empty") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);']
       : []),
@@ -271,9 +279,11 @@ it
   )
   .each([
     ["success", null],
+    ["flush", null],
     ["mutation", "expected passed inventory"],
     ["wrong-oracle", "expected passed inventory"],
     ["cache-activity", "generated cache activity"],
+    ["unknown-diagnostic", "generated cache activity"],
     ["exit", "exited with status 7"],
   ] as const)(
   "retains %s disabled-control evidence",
@@ -306,7 +316,9 @@ it
       }
       if (mode === "wrong-oracle" || mode === "mutation")
         expect(record.checks.oracle.status).toBe("failed");
-      if (mode === "cache-activity") expect(record.checks.diagnostic.status).toBe("failed");
+      if (mode === "cache-activity" || mode === "unknown-diagnostic") {
+        expect(record.checks.diagnostic.status).toBe("failed");
+      }
       if (mode === "exit")
         expect(record.checks.oracle).toEqual({
           status: "unavailable",
@@ -316,6 +328,11 @@ it
       expect(result.exitCode, readFileSync(path.join(f.root, "cli.log"), "utf8")).toBe(0);
       expect(record.status).toBe("success");
       expect(record.execution.assertionCount).toBe(20);
+      if (mode === "flush") {
+        const trace = readFileSync(path.join(output, "disabled.log"), "utf8");
+        expect(trace).toContain("[compile cache] module.flushCompileCache() requested.");
+        expect(trace).toContain("[compile cache] module.flushCompileCache() finished.");
+      }
       expect(record.checks).toEqual({
         oracle: { status: "passed" },
         diagnostic: { status: "passed" },
