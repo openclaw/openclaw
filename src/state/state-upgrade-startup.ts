@@ -6,7 +6,10 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ExitError } from "../runtime.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "./openclaw-state-db-cache.js";
 import { isStateUpgradePending } from "./state-upgrade-databases.js";
 import { explainMachineFailure, upgradeStateDirectory } from "./state-upgrade.js";
 
@@ -37,7 +40,9 @@ export async function upgradeStateOnGatewayStart(
   let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
   try {
     // A read-only open on a full disk fails too (it cannot create the shared-memory file).
-    if (!(await isStateUpgradePending(env))) {
+    // Current-schema launcher trials still need an empty restore plan. Publish
+    // it through the same exclusive owner as a schema-changing swap.
+    if (!(await isStateUpgradePending(env)) && env.OPENCLAW_LAUNCHER_IPC !== "1") {
       return;
     }
     // File-only ownership: the old databases are not opened for writing.
@@ -46,15 +51,12 @@ export async function upgradeStateOnGatewayStart(
     throw explainMachineFailure(error, resolveStateDir(env));
   }
   try {
-    const statePath = path.join(resolveStateDir(env), "state", "openclaw.sqlite");
     const result = await upgradeStateDirectory({
       env,
       log,
-      // Selecting the environment read the config, which can leave a worker on a
-      // current shared database; it must reopen the swapped file, not the old one.
-      beforeSwap: async () => {
-        await closeOpenClawStateDatabaseByPathAsync(statePath);
-      },
+      // Retire all candidate-local registered consumers before checkpointing and
+      // linking original inodes; fresh opens must use the published generation.
+      beforeSwap: () => closeOpenClawStateDatabaseAsync(),
       // The start would still refuse an invalid config after the upgrade; publish
       // nothing, so the previous package keeps reading its own state (#141451).
       // Accepted edge case: plugin-owned config is validated later, at admission,

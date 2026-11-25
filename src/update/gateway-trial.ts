@@ -288,7 +288,29 @@ export async function announceReady(buildId: string | null): Promise<void> {
         reject(error);
       }
     });
-    await settleRunFromTrial((await promise) ?? (await readTrial()));
+    const confirmed = await promise;
+    await settleRunFromTrial(confirmed ?? (await readTrial()));
+    if (confirmed?.phase === "committed") {
+      try {
+        const { takeStateUpgradeRestoreCleanup } =
+          await import("../state/state-upgrade-restore.js");
+        const cleanup = takeStateUpgradeRestoreCleanup();
+        if (cleanup) {
+          for (const warning of cleanup()) {
+            log.warn(warning);
+            await recordUpdateRunStepAsync(confirmed.runId, {
+              step: "warning:restore-cleanup",
+              status: "completed",
+              detail: redactSensitiveText(warning, { mode: "tools" }).slice(0, 2000),
+            });
+          }
+        }
+      } catch (error) {
+        log.warn(
+          `Update recovery cleanup did not finish: ${String(error)}. Run openclaw triage to inspect update recovery.`,
+        );
+      }
+    }
   } finally {
     clearTimeout(timer);
     process.off("message", onMessage);
