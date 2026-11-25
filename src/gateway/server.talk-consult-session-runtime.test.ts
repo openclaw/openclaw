@@ -511,7 +511,6 @@ it.each([
                 supportsTranscriptCommitWait: true,
                 messageInjectionV2: createSteeredCliMessageInjection({
                   signal: params.abortSignal ?? new AbortController().signal,
-                  assertCurrent: () => params.abortSignal?.throwIfAborted(),
                   context: { params, backendResolved: { id: "claude-cli" } },
                   getInjection: () => ({
                     isAvailable: () => true,
