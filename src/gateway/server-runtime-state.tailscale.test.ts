@@ -101,6 +101,26 @@ describe("managed Tailscale gateway ingress", () => {
     expect(runtime.httpServer.listening).toBe(true);
   });
 
+  it.each(["serve", "funnel"] as const)(
+    "does not bind or claim managed %s ingress while validating an update",
+    async (tailscaleMode) => {
+      // The live Gateway still owns the route; the candidate must not race it for the claim.
+      const prepareManagedTailscaleIngress = vi.fn(async () => {});
+      const runtime = await createGatewayRuntimeStateForTest(undefined, {
+        tailscaleMode,
+        updateCanary: true,
+        prepareManagedTailscaleIngress,
+      });
+      openServers.push(runtime);
+
+      await runtime.startListening();
+
+      expect(prepareManagedTailscaleIngress).not.toHaveBeenCalled();
+      expect(runtime.getTailscaleIngressEndpoint()).toBeUndefined();
+      expect(runtime.httpServer.listening).toBe(true);
+    },
+  );
+
   it("binds a distinct private listener and rejects the same headers on the ordinary listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "serve",
