@@ -247,15 +247,13 @@ schema/config publication. Retries reuse their immutable originals rather than
 re-imaging changed state. A known no-upgrade trial records an empty plan.
 
 Under exclusive native-store custody, SQLite originals are checkpointed and
-closed before their main files are hard-linked as adjacent
-`*.pre-restore-<runId>` images. The checkpoint changes physical representation,
-not logical contents. The subsequent swap renames a different prepared inode
-over the live path, leaving the image immutable. WAL, SHM, journal and seal paths
-are explicit removals because committed frames are already in the main image.
-This hard-link rule is for rename-based publication, not in-place migration.
-Ordinary files and leaf symlinks retain their original contents and link targets.
-If the filesystem cannot create a hard link, preparation logs the byte-copy
-fallback and its cause; normal adjacent images need no additional database copy.
+closed before the candidate creates adjacent `*.pre-restore-<runId>` images.
+Each image has its own inode, so the previous Gateway can reopen the original
+database after legacy rollback. The candidate uses copy-on-write clones where
+supported. On other filesystems, allow space for a full additional copy of the
+images. WAL, SHM, journal and seal paths are explicit removals because the main
+image already contains the committed data. Ordinary files and leaf symlinks
+retain their original contents and link targets.
 
 Legacy `*.pre-<generation>` recovery remains unchanged while the launcher moves
 to the manifest reader. External-path restrictions above therefore still apply.

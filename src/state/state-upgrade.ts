@@ -695,13 +695,8 @@ export async function upgradeStateDirectory(params: {
     if (restore) {
       trialGenerations.add(restore.generation);
       params.log.info(
-        `Prepared update recovery manifest: ${recovery.linked} new hard links, ${recovery.copied.length} byte-copy fallbacks, ${recovery.symlinks} symlinks.`,
+        `Prepared update recovery manifest: ${recovery.files} new file images, ${recovery.symlinks} symlinks.`,
       );
-      if (recovery.copied.length > 0) {
-        params.log.warn(
-          `Recovery hard links were unavailable; copied ${recovery.copied.join(", ")}.`,
-        );
-      }
     }
     writePlan(workDir, { appVersion: generation(), ops });
     planWritten = true;

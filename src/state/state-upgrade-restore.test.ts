@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { ROLLBACK_SOURCE } from "../update/rollback-source.js";
 import { createTrialPending, resolvePrefix, writeTrial, type Trial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
@@ -99,12 +100,12 @@ it("isolates an old-preparer retry in its own prepared release without resetting
   const following = await prepareNextTrial(f, "retry-run", f.trial.previous);
   const restore = await beginStateUpgradeRestore(f.env);
   expect(restore?.existing).toBeUndefined();
-  expect(publishStateUpgradeRestore(restore, f.plan).linked).toBe(1);
+  expect(publishStateUpgradeRestore(restore, f.plan).files).toBe(1);
   expect(JSON.parse(fs.readFileSync(following.manifest, "utf8")).runId).toBe("retry-run");
   expect(fs.readFileSync(f.manifest, "utf8")).toBe(older);
 });
 
-it("folds a crashed writer's committed WAL into a hard-linked single-file image", async () => {
+it("folds a crashed writer's committed WAL into an independent single-file image", async () => {
   const f = await fixture();
   fs.rmSync(f.file);
   const crashed = spawnSync(process.execPath, [
@@ -125,11 +126,10 @@ it("folds a crashed writer's committed WAL into a hard-linked single-file image"
   const inode = fs.statSync(f.file).ino;
   const restore = await beginStateUpgradeRestore(f.env);
   expect(publishStateUpgradeRestore(restore, f.plan)).toEqual({
-    linked: 1,
-    copied: [],
+    files: 1,
     symlinks: 0,
   });
-  expect(fs.statSync(f.image).ino).toBe(inode);
+  expect(fs.statSync(f.image).ino).not.toBe(inode);
   expect(value(f.image)).toBe("committed-wal");
   expect(JSON.parse(fs.readFileSync(f.manifest, "utf8"))).toEqual({
     v: 1,
@@ -145,7 +145,7 @@ it("folds a crashed writer's committed WAL into a hard-linked single-file image"
   expect(fs.existsSync(`${f.file}-wal`)).toBe(false);
 });
 
-it("reuses immutable originals after a partial rename and preserves legacy rollback", async () => {
+it("reuses immutable originals and lets the previous Gateway open the legacy rollback", async () => {
   const f = await fixture();
   const restore = await beginStateUpgradeRestore(f.env);
   publishStateUpgradeRestore(restore, f.plan);
@@ -153,11 +153,7 @@ it("reuses immutable originals after a partial rename and preserves legacy rollb
   applyPlan(f.plan);
   expect(value(f.file)).toBe("candidate");
   const resumed = await beginStateUpgradeRestore(f.env);
-  expect(publishStateUpgradeRestore(resumed, f.plan, true)).toEqual({
-    linked: 0,
-    copied: [],
-    symlinks: 0,
-  });
+  publishStateUpgradeRestore(resumed, f.plan, true);
   expect(fs.statSync(f.image).ino).toBe(original.ino);
   expect(value(f.image)).toBe("original");
   const suffix = ".pre-candidate-build";
@@ -171,6 +167,16 @@ it("reuses immutable originals after a partial rename and preserves legacy rollb
     },
   ) as string[];
   expect([...preserved]).toEqual([f.file]);
+  const opened = openRootFileSync({
+    absolutePath: f.file,
+    rootPath: f.root,
+    boundaryLabel: "client credential store",
+    rejectSymlinks: true,
+  });
+  if (!opened.ok) {
+    throw opened.error;
+  }
+  fs.closeSync(opened.fd);
   expect(value(f.file)).toBe("original");
   expect(fs.existsSync(f.image)).toBe(true);
   expect(fs.existsSync(f.manifest)).toBe(true);
@@ -226,19 +232,18 @@ it("removes unpublished images when manifest publication fails, without applying
   expect(value(f.file)).toBe("original");
 });
 
-it("uses a byte copy only when the filesystem refuses a hard link", async () => {
+it("leaves the original and no partial image when the recovery copy runs out of space", async () => {
   const f = await fixture();
-  vi.spyOn(fs, "linkSync").mockImplementation(() => {
-    throw Object.assign(new Error("synthetic cross-device link"), { code: "EXDEV" });
+  vi.spyOn(fs, "copyFileSync").mockImplementationOnce((_source, destination) => {
+    fs.writeFileSync(destination, "partial image");
+    throw Object.assign(new Error("synthetic full filesystem"), { code: "ENOSPC" });
   });
   const restore = await beginStateUpgradeRestore(f.env);
-  expect(publishStateUpgradeRestore(restore, f.plan)).toEqual({
-    linked: 0,
-    copied: [`${f.file} (EXDEV)`],
-    symlinks: 0,
-  });
-  expect(fs.statSync(f.image).ino).not.toBe(fs.statSync(f.file).ino);
-  expect(value(f.image)).toBe("original");
+  expect(() => publishStateUpgradeRestore(restore, f.plan)).toThrow(/synthetic full filesystem/);
+  expect(fs.existsSync(f.manifest)).toBe(false);
+  expect(fs.existsSync(f.image)).toBe(false);
+  expect(fs.existsSync(`${f.image}.tmp`)).toBe(false);
+  expect(value(f.file)).toBe("original");
 });
 
 it("declares removal of a newly created SQLite file and every possible companion", async () => {
@@ -289,7 +294,7 @@ it("preserves leaf symlinks and external config without following their targets"
       { kind: "remove" as const, live: link },
     ],
   };
-  expect(publishStateUpgradeRestore(restore, plan)).toEqual({ linked: 1, copied: [], symlinks: 1 });
+  expect(publishStateUpgradeRestore(restore, plan)).toEqual({ files: 1, symlinks: 1 });
   expect(fs.readFileSync(`${config}.pre-restore-manifest-run`, "utf8")).toBe("original config");
   expect(fs.statSync(`${config}.pre-restore-manifest-run`).mode).toBe(fs.statSync(config).mode);
   expect(fs.readlinkSync(`${link}.pre-restore-manifest-run`)).toBe("missing-config-target");
