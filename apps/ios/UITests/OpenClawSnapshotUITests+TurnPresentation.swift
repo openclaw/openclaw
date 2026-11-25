@@ -18,8 +18,9 @@ extension OpenClawSnapshotUITests {
         let worked = app.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "chat-completed-work-", "Worked"))
         XCTAssertEqual(worked.count, 1, "Only the GPT turn folds")
-        XCTAssertFalse(app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS %@", "Checking the latest build log.")).firstMatch.exists,
+        XCTAssertFalse(
+            app.staticTexts.containing(
+                NSPredicate(format: "label CONTAINS %@", "Checking the latest build log.")).firstMatch.exists,
             "GPT's commentary sits inside Worked")
         self.attachScreenshot(named: "turn-presentation")
     }

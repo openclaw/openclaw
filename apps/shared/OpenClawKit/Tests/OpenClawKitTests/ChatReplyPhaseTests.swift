@@ -138,7 +138,8 @@ struct ChatReplyPhaseTests {
         #expect(Self.shape(Self.fold(mixed)) == ["user", "Checking", "tool", "Done"])
         var host = Self.text("Published the change.", at: 5)
         host.provider = "openclaw"
-        let withHost = mixed.enumerated().map { $0.offset == 2 ? $0.element.answered(by: "openai", model: "gpt-5.6") : $0.element }
+        let withHost = mixed.enumerated()
+            .map { $0.offset == 2 ? $0.element.answered(by: "openai", model: "gpt-5.6") : $0.element }
         #expect(Self.shape(Self.fold(withHost + [host])).prefix(2) == ["user", "work:2"])
     }
 
@@ -149,7 +150,12 @@ struct ChatReplyPhaseTests {
         content: [.init(type: "text", text: "Check it", mimeType: nil, fileName: nil, content: nil)],
         timestamp: 1)
 
-    private static func text(_ text: String, at time: Double, phase: String? = nil, stop: String? = nil) -> OpenClawChatMessage {
+    private static func text(
+        _ text: String,
+        at time: Double,
+        phase: String? = nil,
+        stop: String? = nil) -> OpenClawChatMessage
+    {
         OpenClawChatMessage(
             role: "assistant",
             content: [.init(type: "text", text: text, mimeType: nil, fileName: nil, content: nil)],
@@ -171,7 +177,8 @@ struct ChatReplyPhaseTests {
     }
 
     private static func collapse(
-        _ messages: [OpenClawChatMessage], provider: String, model: String, served: String? = nil) -> [ChatTranscriptRow]
+        _ messages: [OpenClawChatMessage], provider: String, model: String,
+        served: String? = nil) -> [ChatTranscriptRow]
     {
         self.fold(messages.map { $0.answered(by: provider, model: model, served: served) })
     }

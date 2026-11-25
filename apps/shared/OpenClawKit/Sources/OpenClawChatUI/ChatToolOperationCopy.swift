@@ -87,8 +87,9 @@ enum ChatToolOperationCopy {
         let verb: (String, String)? = if self.readTools.contains(name) {
             (self.pick(call.outcome, "reading", "read", failed ? "readFailed" : "read"), file ?? "")
         } else if self.searchTools.contains(name) {
-            (self.pick(call.outcome, "searching", "searched", failed ? "searchFailed" : "search"),
-             self.string(args["pattern"]) ?? self.string(args["query"]) ?? self.string(args["glob"]) ?? file ?? "")
+            (
+                self.pick(call.outcome, "searching", "searched", failed ? "searchFailed" : "search"),
+                self.string(args["pattern"]) ?? self.string(args["query"]) ?? self.string(args["glob"]) ?? file ?? "")
         } else if self.fetchTools.contains(name) {
             (
                 self.pick(call.outcome, "fetching", "fetched", failed ? "fetchFailed" : "fetch"),
