@@ -239,7 +239,8 @@ final class RootSearchModel {
         case let .success(found):
             self.messages = RootSearchRanking.messages(
                 hits: found.results,
-                sessions: (found.sessions ?? []).filter { !ChatSessionSidebarModel.isHiddenInternalSession($0.key) },
+                sessions: CommandCenterTab.listedSessions(found.sessions ?? [])
+                    .filter { !ChatSessionSidebarModel.isHiddenInternalSession($0.key) },
                 excluding: titleMatches().union(self.archived.map(\.key)))
             self.messagePhase = .done
         case .failure:
@@ -309,10 +310,15 @@ final class RootSearchModel {
             search: query,
             archived: true,
             agentID: agentID)
+        // The palette's search scope (`ui/src/lib/sessions/session-requests.ts:42`) leaves hidden runs out.
+        var params = request.params
+        params["excludeSubagents"] = AnyCodable(true)
         do {
             let data = try await session.request(
-                method: request.method, params: request.params, timeoutMs: request.timeoutMs)
-            return try await GatewayPayloadDecoding.decode(OpenClawChatSessionsListResponse.self, from: data).sessions
+                method: request.method, params: params, timeoutMs: request.timeoutMs)
+            let rows = try await GatewayPayloadDecoding.decode(OpenClawChatSessionsListResponse.self, from: data)
+                .sessions
+            return CommandCenterTab.listedSessions(rows)
         } catch {
             return nil
         }
@@ -325,9 +331,14 @@ final class RootSearchModel {
     {
         let request = OpenClawChatGatewayRequests.sidebarTranscriptSearch(
             query: OpenClawChatSidebarQuery(agentID: agentID, search: query))
+        var params = request.params
+        if var scope = params["scope"]?.value as? [String: AnyCodable] {
+            scope["excludeSubagents"] = AnyCodable(true)
+            params["scope"] = AnyCodable(scope)
+        }
         do {
             let data = try await session.request(
-                method: request.method, params: request.params, timeoutMs: request.timeoutMs)
+                method: request.method, params: params, timeoutMs: request.timeoutMs)
             return try .success(JSONDecoder().decode(TranscriptResult.self, from: data))
         } catch {
             return .failure(error)

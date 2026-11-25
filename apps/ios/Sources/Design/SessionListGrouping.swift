@@ -56,6 +56,12 @@ enum SessionRowActivityMark: Equatable {
 }
 
 enum SessionListGrouping {
+    /// The session's own run, or a hidden subagent run it owns (the Control UI's Home and rows read
+    /// `hasActiveSubagentRun` as the parent working: `app-sidebar-session-tree.ts:192`).
+    static func isWorking(_ session: OpenClawChatSessionEntry) -> Bool {
+        session.hasActiveRun == true || session.hasActiveSubagentRun == true
+    }
+
     /// Runs that ended badly and are not yet read: `status` from the session row, cleared by `unread`.
     static func isUnseenFailure(_ session: OpenClawChatSessionEntry) -> Bool {
         session.unread == true && ["failed", "timeout"].contains(session.status ?? "")
@@ -63,7 +69,7 @@ enum SessionListGrouping {
 
     static func group(_ session: OpenClawChatSessionEntry, needsApproval: Bool) -> SessionListGroup {
         if needsApproval || self.isUnseenFailure(session) { return .needsYou }
-        if session.hasActiveRun == true { return .working }
+        if self.isWorking(session) { return .working }
         return session.pinned == true ? .pinned : .recent
     }
 
@@ -74,7 +80,7 @@ enum SessionListGrouping {
     {
         if needsApproval { return .needsApproval }
         if self.isUnseenFailure(session) { return .failed }
-        switch SessionRowActivityMark(isWorking: session.hasActiveRun == true, isUnread: session.unread == true) {
+        switch SessionRowActivityMark(isWorking: self.isWorking(session), isUnread: session.unread == true) {
         case .working: return group == .working ? .none : .working
         case .unread: return .unread
         case .none: return .none

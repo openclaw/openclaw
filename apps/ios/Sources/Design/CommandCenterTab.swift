@@ -131,6 +131,68 @@ enum CommandCenterTab {
         return formatter.localizedString(for: date, relativeTo: now)
     }
 
+    /// Mirrors the Control UI's `isSubagentSessionKey` (`ui/src/lib/sessions/session-key.ts:446`): a key that
+    /// starts with `subagent:`, or whose part after `agent:<id>:` does, parsed as `parseAgentSessionKey` does
+    /// (trimmed, lowercased, empty segments folded when present). Subagent sessions are hidden runs: the
+    /// Control UI never shows them as rows (`navigation.ts:202`, `app-sidebar-session-tree.ts:142`).
+    nonisolated static func isSubagentSessionKey(_ key: String) -> Bool {
+        let raw = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if raw.hasPrefix("subagent:") { return true }
+        let folded = raw.hasPrefix(":") || raw.hasSuffix(":") || raw.contains("::")
+            ? raw.split(separator: ":").joined(separator: ":")
+            : raw
+        guard folded.hasPrefix("agent:") else { return false }
+        let tail = folded.dropFirst("agent:".count)
+        guard let colon = tail.firstIndex(of: ":") else { return false }
+        let agentID = tail[..<colon].trimmingCharacters(in: .whitespaces)
+        let rest = tail[tail.index(after: colon)...]
+        guard !agentID.isEmpty, !rest.isEmpty, !rest.hasPrefix(":") else { return false }
+        return rest.hasPrefix("subagent:")
+    }
+
+    /// Session lists show what a person can open. Hidden subagent runs are never rows; like the Control UI's
+    /// tree (`app-sidebar-session-tree.ts:142`, `summarizeChildren`), a running one folds into its nearest
+    /// listed ancestor, which then reads as working through `hasActiveSubagentRun`.
+    nonisolated static func listedSessions(_ rows: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry] {
+        func normalized(_ key: String) -> String {
+            key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        let byKey = Dictionary(rows.map { (normalized($0.key), $0) }, uniquingKeysWith: { first, _ in first })
+        var listedParent: [String: String] = [:]
+        for row in rows {
+            for child in row.childSessions ?? [] where listedParent[normalized(child)] == nil {
+                listedParent[normalized(child)] = normalized(row.key)
+            }
+        }
+        // `resolveUiSessionNavigationParentKey`: the child's own backref wins over the parent's list.
+        func parent(of key: String) -> String? {
+            let row = byKey[key]
+            return (row?.parentSessionKey?.trimmedNonEmpty ?? row?.spawnedBy?.trimmedNonEmpty)
+                .map(normalized) ?? listedParent[key]
+        }
+        var workingAncestors = Set<String>()
+        for row in rows where self.isSubagentSessionKey(row.key) &&
+            (row.hasActiveRun == true || row.hasActiveSubagentRun == true)
+        {
+            var cursor = parent(of: normalized(row.key))
+            var seen = Set<String>()
+            while let key = cursor, seen.insert(key).inserted {
+                if !self.isSubagentSessionKey(key) {
+                    workingAncestors.insert(key)
+                    break
+                }
+                cursor = parent(of: key)
+            }
+        }
+        return rows.compactMap { row in
+            guard !self.isSubagentSessionKey(row.key) else { return nil }
+            guard workingAncestors.contains(normalized(row.key)), row.hasActiveSubagentRun != true else { return row }
+            var folded = row
+            folded.hasActiveSubagentRun = true
+            return folded
+        }
+    }
+
     /// All Sessions includes the resolved main row alongside other visible sessions.
     /// Keep the configured base when an incomplete roster cannot resolve main.
     nonisolated static func isListedChatSession(
@@ -504,7 +566,9 @@ struct CommandSessionsScreen: View {
         let mark = SessionListGrouping.mark(session, needsApproval: needsApproval, in: group)
         let isUnread = session.unread == true
         // The bold title is part of the unread mark, so it follows the same one-mark rule.
-        let showsUnread = SessionRowActivityMark(isWorking: session.hasActiveRun == true, isUnread: isUnread) == .unread
+        let showsUnread = SessionRowActivityMark(
+            isWorking: SessionListGrouping.isWorking(session),
+            isUnread: isUnread) == .unread
         let mainSessionKey = self.resolvedMainSessionKey
         return Button {
             self.openSessionKey(session.key)
@@ -805,7 +869,7 @@ struct CommandSessionsScreen: View {
                 archived: true)
             guard !Task.isCancelled, self.statusScope == .archived,
                   self.appModel.chatTranscriptCacheGatewayID == sourceGatewayID else { return }
-            self.archived = roster.sessions
+            self.archived = CommandCenterTab.listedSessions(roster.sessions)
             self.partialLoadText = roster.incompleteLoadMessage
         } catch is CancellationError {
             return

@@ -406,7 +406,7 @@ struct RootSidebar: View {
                         .lineLimit(1)
                         .modifier(RootSidebarApprovalLabel(isVisible: needsApproval))
                     switch SessionRowActivityMark(
-                        isWorking: mainSession?.hasActiveRun == true,
+                        isWorking: mainSession.map(SessionListGrouping.isWorking) == true,
                         isUnread: mainSession?.unread == true)
                     {
                     case .working:

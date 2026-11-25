@@ -212,6 +212,8 @@ final class RootSidebarModel {
 
     /// The drawer asks for the selected and main keys once per row, and each answer scans the roster.
     @ObservationIgnored private var resolvedSessionKeys: [[String?]: String] = [:]
+    /// Last seen run state of hidden subagent sessions, so only their start and stop reload the roster.
+    @ObservationIgnored private var hiddenRunActivity: [String: Bool] = [:]
 
     func resolvedSessionKey(
         current: String,
@@ -532,12 +534,20 @@ final class RootSidebarModel {
         }
         switch event {
         case let .sessionsChanged(change):
-            if change.reason != "delete", let row = change.session,
-               row.key == change.sessionKey, row.sessionId != nil, row.kind != nil, !row.isArchived,
-               ChatSessionSidebarModel.isSessionInActiveAgentScope(
-                   key: row.key, agentID: row.agentId, activeAgentID: appModel.chatDeliveryAgentId),
-               let updated = ChatSessionSidebarModel.applying(
-                   sessionChange: change, to: self.sessions, activeAgentId: appModel.chatDeliveryAgentId)
+            if let key = change.session?.key ?? change.sessionKey, CommandCenterTab.isSubagentSessionKey(key) {
+                // A hidden run never becomes a row. When it starts or stops, reload so the parent's working
+                // state follows it; streaming updates in between change nothing on screen.
+                let running = change.session.map { $0.hasActiveRun == true || $0.hasActiveSubagentRun == true } ?? false
+                if change.reason == "delete" || running != (self.hiddenRunActivity[key] ?? false) {
+                    self.hiddenRunActivity[key] = running
+                    self.scheduleSessionRefresh(appModel: appModel)
+                }
+            } else if change.reason != "delete", let row = change.session,
+                      row.key == change.sessionKey, row.sessionId != nil, row.kind != nil, !row.isArchived,
+                      ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                          key: row.key, agentID: row.agentId, activeAgentID: appModel.chatDeliveryAgentId),
+                      let updated = ChatSessionSidebarModel.applying(
+                          sessionChange: change, to: self.sessions, activeAgentId: appModel.chatDeliveryAgentId)
             {
                 self.sessions = updated
                 // Replay rows received after an in-flight roster took its snapshot.
@@ -611,6 +621,13 @@ final class RootSidebarModel {
                 sessionChange: change, to: sessions, activeAgentId: activeAgentID) ?? sessions
         }
         self.sessionChangesDuringLoad = [:]
+        // The one roster owner for the sidebar, the Sessions list and search: hidden runs never list.
+        // Their run state seeds the baseline that decides when a later event needs a reload.
+        self.hiddenRunActivity = Dictionary(
+            sessions.filter { CommandCenterTab.isSubagentSessionKey($0.key) }
+                .map { ($0.key, $0.hasActiveRun == true || $0.hasActiveSubagentRun == true) },
+            uniquingKeysWith: { first, _ in first })
+        sessions = CommandCenterTab.listedSessions(sessions)
         let heldRows = Dictionary(self.sessions.map { ($0.key, $0) }, uniquingKeysWith: { _, latest in latest })
         self.sessions = sessions.map { row in
             guard row.sessionId != nil, row.kind != nil, let held = heldRows[row.key] else { return row }
