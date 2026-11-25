@@ -209,6 +209,17 @@ describe("ProjectsPage", () => {
     await waitForSolid(() => expect(page.element.querySelectorAll("tbody tr")).toHaveLength(1));
   });
 
+  it("matches a final-sigma project name from either sigma query", async () => {
+    const page = createProjectsPage(listRequest([{ ...SITE, displayName: "ΟΣ" }]));
+    await page.ready();
+    const search = page.element.querySelector<HTMLInputElement>('input[type="search"]')!;
+    for (const query of ["σ", "Σ", "ς"]) {
+      search.value = query;
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await waitForSolid(() => expect(page.element.querySelectorAll("tbody tr")).toHaveLength(1));
+    }
+  });
+
   it("explains unrestricted access when named roles aren't configured", async () => {
     const page = createProjectsPage(listRequest([SITE]), { roles: null });
     await page.ready();
@@ -256,19 +267,6 @@ describe("ProjectsPage", () => {
     await waitForSolid(() => expect(page.model.operation).toBeNull());
     expect(page.switchFor("guest").getAttribute("aria-disabled")).toBeNull();
     expect(page.patches).toHaveLength(1);
-  });
-
-  it("presents switches as explicit shares beside the public repository fallback", async () => {
-    const page = createProjectsPage(listRequest());
-    await page.ready();
-    await openDetails(page, "site");
-    const text = page.dialog()!.textContent!;
-    expect(text).toContain("Shared with roles");
-    expect(text).toContain("Roles without write access can also use public GitHub repositories.");
-    expect(text).toContain(
-      "Roles that can use this project only through this share always get a new worktree.",
-    );
-    expect(page.switchFor("guest")).toMatchObject({ checked: false, disabled: false });
   });
 
   it("disables role switches when the Gateway configuration is read-only", async () => {

@@ -1,5 +1,6 @@
 import { createMemo, Errored, For, latest, Loading, onSettled, Show } from "solid-js";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import "../../components/modal-dialog.tsx";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
@@ -112,12 +113,12 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
     return snapshot ? readConfiguredRoles(resolveEditableSnapshotConfig(snapshot)) : undefined;
   });
   const filtered = createMemo(() => {
-    const query = view().query.trim().toLowerCase().normalize("NFC");
+    const query = foldSearchCase(view().query.trim().normalize("NFC"));
     const records = view().records;
     return query
       ? records.filter((project) =>
           [project.displayName, project.repositoryIdentity, project.repoRoot].some((value) =>
-            value?.toLowerCase().normalize("NFC").includes(query),
+            value ? foldSearchCase(value.normalize("NFC")).includes(query) : false,
           ),
         )
       : records;
