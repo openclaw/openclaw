@@ -392,6 +392,7 @@ if (fs.existsSync(${JSON.stringify(path.join(root, "reject-verification"))})) pr
     "node_modules/npm/docs/output/commands/view.html",
     "<!doctype html><title>npm-view</title>\n",
   );
+  await packageFile("node_modules/npm/docs/content/commands/npm-install.md", "# npm-install\n");
   await packageFile("dist/control-ui/index.html", "<!doctype html>\n");
   await packageFile("nested/package.json", '{"os":["win32"]}');
   await cp(path.join(root, "dist/build-info.json"), path.join(packageRoot, "dist/build-info.json"));
@@ -608,9 +609,12 @@ describe.skipIf(process.platform !== "darwin")("Mac runtime materialization", ()
       }
       expect(existsSync(path.join(modules, ".bin"))).toBe(false);
       expect(readdirSync(path.join(modules, "npm/bin"))).toEqual(["npm-cli.js"]);
-      // npm's bundled docs are installation source only; the sealed runtime
-      // drops them so macOS QuickLook has nothing to thumbnail (#205153).
-      expect(existsSync(path.join(modules, "npm/docs"))).toBe(false);
+      // npm's rendered HTML docs are installation source only; the sealed
+      // runtime drops them so macOS QuickLook has nothing to thumbnail, while
+      // the Markdown help data (docs/content) stays for `npm help-search`
+      // (#205153).
+      expect(existsSync(path.join(modules, "npm/docs/output"))).toBe(false);
+      expect(existsSync(path.join(modules, "npm/docs/content/commands/npm-install.md"))).toBe(true);
       expect(readFileSync(path.join(modules, "../nested/package.json"), "utf8")).toBe(
         '{"os":["win32"]}',
       );
