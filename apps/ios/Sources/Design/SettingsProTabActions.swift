@@ -27,7 +27,7 @@ extension SettingsProTab {
             }
             let gateway = self.gatewayStatusPresentation
             SettingsDescriptionRow(
-                "Gateway link",
+                "Connection",
                 description: .verbatim(gateway.detail),
                 value: .verbatim(gateway.value))
             SettingsDescriptionRow(
@@ -41,11 +41,11 @@ extension SettingsProTab {
                 value: .verbatim(talkConfig.value))
             SettingsDescriptionRow(
                 "Notifications",
-                description: "Approval and event alert channel",
+                description: "Approval and event alerts",
                 value: .verbatim(self.notificationPresentation.text))
             SettingsDescriptionRow(
                 "Screen capture",
-                description: "Live foreground capture state",
+                description: "Screen recording while the app is open",
                 value: .verbatim(self.appModel.screenRecordActive
                     ? String(localized: "Live")
                     : String(localized: "Idle")))
@@ -104,7 +104,7 @@ extension SettingsProTab {
         self.pendingForgetGateway = nil
         guard await self.gatewayController.forgetGateway(stableID: entry.stableID) else {
             self.setupStatusText = String(
-                format: String(localized: "Could not forget %@."),
+                format: String(localized: "Couldn’t forget %@."),
                 entry.name)
             self.refreshGatewayRegistry()
             return
@@ -232,11 +232,11 @@ extension SettingsProTab {
         guard await self.applySetupCode(attemptID: attemptID) else { return }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.resolvedManualPort(host: host) != nil else {
-            self.setupStatusText = String(localized: "Failed: invalid port")
+            self.setupStatusText = String(localized: "Enter a valid port.")
             return
         }
         guard await self.preflightGateway(host: host) else { return }
-        self.setupStatusText = String(localized: "Setup code applied. Connecting...")
+        self.setupStatusText = String(localized: "Setup code applied. Connecting…")
         await self.connectManual(setupAttemptID: attemptID)
     }
 
@@ -279,7 +279,7 @@ extension SettingsProTab {
 
         guard let parsedLink = raw.isEmpty ? stagedLink : GatewayConnectDeepLink.fromSetupInput(raw) else {
             self.setupStatusText = String(
-                localized: "Setup code not recognized or uses an insecure ws:// gateway URL.")
+                localized: "This setup code isn’t valid, or it uses an insecure ws:// address.")
             return false
         }
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
@@ -331,14 +331,14 @@ extension SettingsProTab {
         pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
         scannerScanID = scannerResultHandoff.beginScan()
         connectingGateway = nil
-        setupStatusText = String(localized: "Opening QR scanner...")
+        setupStatusText = String(localized: "Opening QR scanner…")
         pairUsingCode = false
         showQRScanner = true
     }
 
     func queueScannedResult(_ result: QRScannerResult, scanID: UInt64) {
         guard self.scannerResultHandoff.queue(result, scanID: scanID) else { return }
-        self.setupStatusText = String(localized: "QR loaded. Closing scanner...")
+        self.setupStatusText = String(localized: "QR loaded. Closing scanner…")
         self.showQRScanner = false
     }
 
@@ -395,12 +395,12 @@ extension SettingsProTab {
         guard self.setupAttemptID == attemptID else { return }
         guard await self.applyGatewayLink(link) else { return }
         self.setupStatusText = String(
-            format: String(localized: "QR loaded. Connecting to %@:%@..."),
+            format: String(localized: "QR loaded. Connecting to %@:%@…"),
             link.host,
             link.port.formatted())
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.resolvedManualPort(host: host) != nil else {
-            self.setupStatusText = String(localized: "Failed: invalid port")
+            self.setupStatusText = String(localized: "Enter a valid port.")
             return
         }
         guard await self.preflightGateway(host: host) else { return }
@@ -422,11 +422,11 @@ extension SettingsProTab {
         }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty else {
-            self.setupStatusText = String(localized: "Failed: host required")
+            self.setupStatusText = String(localized: "Enter a host.")
             return
         }
         guard self.manualPortIsValid, let port = self.resolvedManualPort(host: host) else {
-            self.setupStatusText = String(localized: "Failed: invalid port")
+            self.setupStatusText = String(localized: "Enter a valid port.")
             return
         }
         self.connectingGateway = .manual
@@ -738,7 +738,7 @@ extension SettingsProTab {
         }
         if lower.contains("timed out") {
             return String(
-                localized: "Connection timed out. Check the gateway and your network, then try again.")
+                localized: "Connection timed out. Check your Gateway and network, then try again.")
         }
         if lower.contains("unauthorized role") {
             return String(
@@ -749,9 +749,9 @@ extension SettingsProTab {
 
     func isTransientSetupStatus(_ raw: String) -> Bool {
         let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let setupApplied = String(localized: "Setup code applied. Connecting...").lowercased()
-        let checkingReachability = String(localized: "Checking gateway reachability...").lowercased()
-        let qrFormat = String(localized: "QR loaded. Connecting to %@:%@...").lowercased()
+        let setupApplied = String(localized: "Setup code applied. Connecting…").lowercased()
+        let checkingReachability = String(localized: "Checking Gateway reachability…").lowercased()
+        let qrFormat = String(localized: "QR loaded. Connecting to %@:%@…").lowercased()
         return lower == setupApplied
             || Self.localizedFormat(qrFormat, matches: lower)
             || lower == checkingReachability
@@ -819,15 +819,15 @@ extension SettingsProTab {
 
     var approvalEmptyDetail: String {
         if self.appModel.isAppleReviewDemoModeEnabled {
-            return String(localized: "Live gateway requests are disabled in demo mode.")
+            return String(localized: "Live requests are off in demo mode.")
         }
         if self.notificationPresentation.needsAttention {
             return String(
                 localized: "Foreground approvals still appear while OpenClaw is connected.")
         }
         return self.gatewayConnected
-            ? String(localized: "Gateway requests will appear here.")
-            : String(localized: "Connect to the gateway.")
+            ? String(localized: "Approval requests will appear here.")
+            : String(localized: "Connect to OpenClaw.")
     }
 
     var gatewayTalkConfigPresentation: (detail: String, value: String) {
@@ -837,11 +837,11 @@ extension SettingsProTab {
         let loaded = self.appModel.talkMode.gatewayTalkConfigLoaded
         return (
             self.appModel.talkMode.gatewayTalkTransportLabel,
-            loaded ? String(localized: "Loaded") : String(localized: "Missing"))
+            loaded ? String(localized: "Loaded") : String(localized: "Not loaded"))
     }
 
     var gatewayAddress: String {
-        self.appModel.gatewayRemoteAddress ?? String(localized: "Waiting for gateway")
+        self.appModel.gatewayRemoteAddress ?? String(localized: "Waiting for Gateway")
     }
 
     var gatewayServer: String {
@@ -860,7 +860,7 @@ extension SettingsProTab {
     var approvalItems: [SettingsApprovalItem] {
         guard let pendingApproval = self.appModel.pendingExecApprovalPrompt else { return [] }
         let pendingTitle = pendingApproval.commandPreview.map(OpenClawTextValue.verbatim)
-            ?? OpenClawTextValue.localized("Review gateway action")
+            ?? OpenClawTextValue.localized("Review action")
         let agentDetail = String(
             format: String(localized: "Agent: %@"),
             self.appModel.activeAgentName)
@@ -880,7 +880,7 @@ extension SettingsProTab {
                 title: pendingApproval.allowsAllowAlways
                     ? .localized("Permission can be saved")
                     : .localized("One-time approval"),
-                detail: "Gateway request",
+                detail: "Approval request",
                 priority: pendingApproval.allowsAllowAlways
                     ? .localized("Medium")
                     : .localized("Review"),

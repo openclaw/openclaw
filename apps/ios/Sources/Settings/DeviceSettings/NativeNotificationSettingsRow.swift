@@ -47,7 +47,7 @@ struct NativeNotificationSettingsRow: View {
         guard SettingsNotificationStatus(authorization).allowsNotifications, self.enrollmentEnabled else {
             return nil
         }
-        if !self.appModel.gatewayConnected { return String(localized: "Waiting for Gateway") }
+        if !self.appModel.gatewayConnected { return String(localized: "Waiting for OpenClaw") }
         if !self.appModel.hasAPNsDeviceToken { return String(localized: "Waiting for Apple") }
         return nil
     }
@@ -150,7 +150,7 @@ struct NativeNotificationSettingsRow: View {
                 let opened = await IOSDeviceSettingsActions.openNotificationSettings()
                 if !opened {
                     self.resumesActivation = false
-                    self.errorText = String(localized: "Could not open iOS settings")
+                    self.errorText = String(localized: "Couldn’t open iOS Settings.")
                 }
                 return
             }
@@ -180,7 +180,7 @@ struct NativeNotificationSettingsRow: View {
         self.actionTask = Task { @MainActor in
             defer { self.actionTask = nil }
             if await !(IOSDeviceSettingsActions.openNotificationSettings()) {
-                self.errorText = String(localized: "Could not open iOS settings")
+                self.errorText = String(localized: "Couldn’t open iOS Settings.")
             }
         }
     }

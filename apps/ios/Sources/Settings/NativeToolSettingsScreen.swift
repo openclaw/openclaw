@@ -185,7 +185,7 @@ struct NativeToolSettingsScreen: View {
         guard let currentRoute = await gateway.currentRoute() else {
             guard self.inventory.loadID == loadID, !Task.isCancelled else { return }
             self.inventory.canEdit = false
-            self.inventory.failure = String(localized: "Connect to a Gateway to load these settings.")
+            self.inventory.failure = String(localized: "Connect to OpenClaw to load these settings.")
             return
         }
         do {
@@ -194,7 +194,7 @@ struct NativeToolSettingsScreen: View {
             guard !scopes.isDisjoint(with: ["operator.read", "operator.write", "operator.admin"]) else {
                 self.inventory.canEdit = false
                 self.inventory
-                    .failure = String(localized: "This connection does not have permission to read these settings.")
+                    .failure = String(localized: "This connection doesn’t have permission to read these settings.")
                 return
             }
             guard await gateway.supportsServerMethod(self.kind.readMethod, ifCurrentRoute: currentRoute) == true else {
@@ -202,7 +202,7 @@ struct NativeToolSettingsScreen: View {
                 self.inventory.canEdit = false
                 self.inventory
                     .failure =
-                    String(localized: "This Gateway does not support these settings. Update it and try again.")
+                    String(localized: "This version of OpenClaw doesn’t support these settings. Update it and try again.")
                 return
             }
             let params: [String: AnyCodable] = self.kind == .skills ? ["agentId": AnyCodable(self.agentID)] : [:]
@@ -266,7 +266,7 @@ struct NativeToolSettingsScreen: View {
                 let result = try JSONDecoder().decode(NativePluginUpdateResult.self, from: data)
                 var messages = result.warnings ?? []
                 if result.restartRequired {
-                    messages.insert(String(localized: "Saved. Restart the Gateway to apply this change."), at: 0)
+                    messages.insert(String(localized: "Saved. Restart OpenClaw to apply this change."), at: 0)
                 }
                 self.inventory.notice = messages.isEmpty ? nil : messages.joined(separator: "\n")
             }
@@ -310,7 +310,7 @@ struct NativeToolSettingsScreen: View {
             return String(localized: "Requires operating system: ") + missing.os.joined(separator: ", ")
         }
         if skill.platformIncompatible == true {
-            return String(localized: "Not supported on this Gateway’s operating system.")
+            return String(localized: "Not supported on this server’s operating system.")
         }
         if !missing.bins.isEmpty {
             return String(localized: "Missing programs: ") + missing.bins.joined(separator: ", ")
@@ -489,7 +489,7 @@ private struct NativeInstalledPlugin: Decodable, Identifiable {
         if !self.enabled { return String(localized: "Disabled") }
         if self.state == "needs-setup" { return String(localized: "Setup required") }
         if self.state == "error" || self.runtime?.error != nil || self.error != nil {
-            return String(localized: "Could not load plugin")
+            return String(localized: "Couldn’t load")
         }
         return self.runtime?.state == "active" ? nil : String(localized: "Enabled, not active")
     }

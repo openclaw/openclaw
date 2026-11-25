@@ -145,8 +145,8 @@ struct LocalDeviceSettingsScreen: View {
         } footer: {
             Text(
                 """
-                Voice requires a supported device and microphone access. \
-                Provider, voice, and speech language remain configured on the Gateway.
+                Voice needs a supported device and microphone access. \
+                Change the provider, voice, and speech language in OpenClaw.
                 """)
                 .font(SettingsType.footnote)
         }
@@ -265,7 +265,7 @@ struct LocalDeviceSettingsScreen: View {
             } catch is CancellationError {
                 // Leaving the native screen retires unfinished permission work.
             } catch {
-                self.errorText = String(localized: "Device settings could not be updated. Try again.")
+                self.errorText = String(localized: "Couldn’t update device settings. Try again.")
             }
         }
     }

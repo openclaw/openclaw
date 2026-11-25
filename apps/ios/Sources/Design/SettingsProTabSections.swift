@@ -165,8 +165,8 @@ extension SettingsProTab {
                 detail: .verbatim(self.notificationPresentation.needsAttention
                     ? String(localized: "Out-of-app approval alerts need notification permission.")
                     : (self.appModel.pendingExecApprovalCount == 0
-                        ? String(localized: "No gateway actions are waiting for review.")
-                        : String(localized: "Review pending gateway actions."))),
+                        ? String(localized: "No actions are waiting for review.")
+                        : String(localized: "Review pending actions."))),
                 value: self.notificationPresentation.needsAttention
                     ? .verbatim(String(localized: "Alerts Off"))
                     : (self.appModel.pendingExecApprovalCount == 0
@@ -190,7 +190,7 @@ extension SettingsProTab {
                     "Apple Watch",
                     description: .verbatim(watchStatus.appInstalled
                         ? String(
-                            localized: "Relay remains available; direct mode adds an independent Gateway node.")
+                            localized: "iPhone relay still works. Direct mode connects your watch straight to OpenClaw.")
                         : String(
                             localized: "Install the OpenClaw watch app before enabling direct mode.")),
                     value: .verbatim(
@@ -212,7 +212,7 @@ extension SettingsProTab {
                 SettingsDetailRow("Device", value: "Info and status")
                 SettingsDetailRow("Notifications", value: "While app is active")
             } header: {
-                SettingsSectionTitle("Direct node features")
+                SettingsSectionTitle("Direct mode")
             }
 
             Section {
@@ -233,10 +233,10 @@ extension SettingsProTab {
                     }
                     Text(
                         """
-                        The watch receives a one-time pairing code and its own device credentials. \
-                        Voice is included with read and Talk access, without admin access. \
-                        The microphone starts only when you tap Start on the watch. \
-                        A reachable secure Gateway URL is required away from the iPhone.
+                        Your watch gets a one-time pairing code and its own credentials, \
+                        with read and Talk access (no admin access). \
+                        The microphone only starts when you tap Start on the watch. \
+                        Away from your iPhone, OpenClaw needs a secure address the watch can reach.
                         """)
                         .font(SettingsType.footnote)
                 }
@@ -248,7 +248,7 @@ extension SettingsProTab {
         Section {
             SettingsDescriptionRow(
                 "Notifications are off",
-                description: "Enable Notifications to receive approval alerts while OpenClaw is not open.") {}
+                description: "Turn on notifications to get approval alerts when OpenClaw isn’t open.") {}
             Button {
                 self.openNotificationsRouteFromApprovals()
             } label: {
@@ -389,7 +389,7 @@ extension SettingsProTab {
                     Task { await self.runDiagnostics() }
                 }
             } footer: {
-                SettingsFootnote("Run app, permission, and gateway-adjacent checks without editing setup.")
+                SettingsFootnote("Checks connection, discovery, Talk, and notifications without changing your settings.")
             }
 
             Section {
@@ -422,7 +422,7 @@ extension SettingsProTab {
             ContentUnavailableView(
                 "No Licenses Bundled",
                 systemImage: "doc.text",
-                description: Text("License files are not available in this build."))
+                description: Text("License files aren’t available in this build."))
                 .font(OpenClawType.body)
         } else {
             Section {
@@ -512,7 +512,7 @@ extension SettingsProTab {
             } header: {
                 SettingsSectionTitle("Resources")
             } footer: {
-                SettingsFootnote("© 2026 OpenClaw Foundation — MIT License.")
+                SettingsFootnote("© 2026 OpenClaw Foundation. MIT License.")
             }
         }
     }
@@ -570,7 +570,7 @@ extension SettingsProTab {
     var pairedGatewaysCard: some View {
         Section {
             if self.gatewayRegistry.entries.isEmpty {
-                Text("Pair a gateway to make it available here.")
+                Text("Pair a Gateway to see it here.")
                     .font(SettingsType.label)
                     .foregroundStyle(SettingsInk.secondary)
             } else {
@@ -739,7 +739,7 @@ extension SettingsProTab {
             }
             .accessibilityIdentifier("SettingsHub.ManualConnect")
         } header: {
-            SettingsSectionTitle("Manual Gateway")
+            SettingsSectionTitle("Manual setup")
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 if let hostIssue = self.manualGatewayHostIssue {
@@ -838,7 +838,7 @@ extension SettingsProTab {
                 } label: {
                     Text("Sign out of Cloudflare Access").font(SettingsType.label)
                 }
-                Text("Signs out gateways using this host’s Access session. Your browser may stay signed in.")
+                Text("Signs out Gateways using this host’s Access session. Your browser may stay signed in.")
                     .font(SettingsType.description)
                     .foregroundStyle(SettingsInk.secondary)
             }

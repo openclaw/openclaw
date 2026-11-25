@@ -543,7 +543,7 @@ enum SettingsNotificationPresentation: Equatable {
         case .checking: String(localized: "Checking")
         case .enabled: String(localized: "Enabled")
         case .off: String(localized: "Off")
-        case .setup: String(localized: "Setup")
+        case .setup: String(localized: "Needs setup")
         case .denied: String(localized: "Denied")
         case .notSet: String(localized: "Not enabled")
         case .unknown: String(localized: "Unknown")

@@ -487,7 +487,7 @@ struct EmbeddedDashboardContent: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(
                     "This page requires a Gateway web app that supports native app sign-in. " +
-                        "If it cannot connect, update the Gateway. " +
+                        "If it can’t connect, update the Gateway. " +
                         "Native chat and settings remain available.")
                     .font(OpenClawType.footnote)
                     .accessibilityIdentifier("SettingsHub.NativeSignInGuidance")
@@ -522,14 +522,14 @@ struct EmbeddedDashboardContent: View {
             Button {
                 self.embedCompatibility?.reload()
             } label: {
-                Text("Reload")
+                Text("Try again")
                     .font(OpenClawType.subheadSemiBold)
             }
             .openClawProminentButton()
             .accessibilityIdentifier("SettingsHub.DashboardReload")
             if let openGateway {
                 Button(action: openGateway) {
-                    Text("Open Gateway")
+                    Text("Open Gateway settings")
                         .font(OpenClawType.subheadSemiBold)
                 }
             }
@@ -542,11 +542,11 @@ struct EmbeddedDashboardContent: View {
     @ViewBuilder private var gatewayUpgradeBanner: some View {
         if let openGateway, self.embedCompatibility?.needsGatewayUpgrade == true {
             VStack(alignment: .leading, spacing: 8) {
-                Text("This Gateway's web app is older than the app; update the Gateway to manage app settings here")
+                Text("This Gateway’s web app is older than this app. Update the Gateway to manage settings here.")
                     .font(OpenClawType.footnote)
                     .accessibilityIdentifier("SettingsHub.GatewayUpgradeWarning")
                 Button(action: openGateway) {
-                    Text("Open Gateway")
+                    Text("Open Gateway settings")
                         .font(OpenClawType.subheadSemiBold)
                 }
                 .accessibilityIdentifier("SettingsHub.UpgradeGateway")
@@ -591,7 +591,7 @@ private struct NativeStorageSettingsScreen: View {
                     Text(failure).font(SettingsType.label).foregroundStyle(SettingsInk.secondary)
                     if self.usage == nil {
                         Button { Task { await self.update() } } label: {
-                            Text("Retry").font(OpenClawType.body)
+                            Text("Try again").font(OpenClawType.body)
                         }
                     }
                 }
@@ -611,7 +611,12 @@ private struct NativeStorageSettingsScreen: View {
                 Text("Clear Cache").font(OpenClawType.body)
             }
         } message: {
-            Text("Removes saved copies of chats from this iPhone.").font(OpenClawType.body)
+            // Names the device the way the root's section title does.
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                Text("Removes saved copies of chats from this iPad.").font(OpenClawType.body)
+            } else {
+                Text("Removes saved copies of chats from this iPhone.").font(OpenClawType.body)
+            }
         }
     }
 
@@ -627,7 +632,7 @@ private struct NativeStorageSettingsScreen: View {
                 try await self.appModel.localChatCacheUsage()
             }
         } catch {
-            self.failure = clearing ? "Could not clear the cache." : "Could not read storage."
+            self.failure = clearing ? "Couldn’t clear the cache." : "Couldn’t read storage."
         }
     }
 }

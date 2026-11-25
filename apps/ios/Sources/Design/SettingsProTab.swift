@@ -275,7 +275,7 @@ struct SettingsProTab: View {
                         .font(OpenClawType.subheadSemiBold)
                 }
             } message: {
-                Text("This disconnects, clears saved gateway credentials, and reopens onboarding.")
+                Text("This disconnects, clears saved Gateway credentials, and restarts onboarding.")
                     .font(OpenClawType.subhead)
             }
             .alert(
@@ -298,7 +298,7 @@ struct SettingsProTab: View {
             .confirmationDialog(
                 String(
                     format: String(localized: "Forget %@?"),
-                    self.pendingForgetGateway?.name ?? String(localized: "gateway")),
+                    self.pendingForgetGateway?.name ?? String(localized: "Gateway")),
                 isPresented: Binding(
                     get: { self.pendingForgetGateway != nil },
                     set: {
@@ -327,7 +327,7 @@ struct SettingsProTab: View {
                 Text(
                     String(
                         localized:
-                        "This removes saved credentials, device access, TLS trust, and cached chats for this gateway."))
+                        "This removes saved credentials, device access, TLS trust, and cached chats for this Gateway."))
                     .font(OpenClawType.subhead)
             }
     }

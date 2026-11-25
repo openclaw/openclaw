@@ -39,7 +39,7 @@ struct GatewayCustomHeadersSettingsView: View {
                     Text(
                         String(
                             localized:
-                            "Sent over trusted TLS connections to this gateway, including Share extension delivery. Reconnect OpenClaw after changes to update Share access."))
+                            "Sent over trusted TLS connections to this Gateway, including Share extension delivery. Reconnect OpenClaw after changes to update Share access."))
                         .font(OpenClawType.caption)
                     // swiftlint:enable line_length
                 }
@@ -121,7 +121,7 @@ struct GatewayCustomHeadersSettingsView: View {
 
     private var addFooterText: String {
         if self.newNameIsReserved {
-            return String(localized: "This header is managed by the connection and cannot be overridden.")
+            return String(localized: "This header is managed by the connection and can’t be changed.")
         }
         if self.newNameIsDuplicate {
             return String(localized: "A header with this name already exists.")
@@ -136,7 +136,7 @@ struct GatewayCustomHeadersSettingsView: View {
             return String(localized: "This looks like a secret. Put it in Header value, not Header name.")
         }
         if self.newNameIsInvalidToken {
-            return "Header names cannot include spaces or other characters outside a single HTTP token."
+            return "Header names can’t include spaces or special characters."
         }
         return String(
             localized: "Sent only over secure connections. For a Cloudflare Access service token, add two headers: Header name CF-Access-Client-Id with your Client ID as Header value, then Header name CF-Access-Client-Secret with your Client Secret as Header value.")

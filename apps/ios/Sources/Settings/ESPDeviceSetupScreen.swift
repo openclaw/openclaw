@@ -300,7 +300,7 @@ struct ESPDeviceSetupScreen: View {
         self.preview = nil
     }
 
-    private func close(message: String = "Setup closed. Earlier saved changes are not rolled back.") {
+    private func close(message: String = "Setup closed. Earlier saved changes aren’t undone.") {
         self.clearDrafts()
         self.scanner.cancel()
         self.showScanner = false

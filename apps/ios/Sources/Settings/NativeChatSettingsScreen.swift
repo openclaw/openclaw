@@ -62,7 +62,7 @@ struct NativeChatSettingsScreen: View {
 
             Section {
                 Picker(selection: self.$followUpMode) {
-                    Text("Gateway default").font(OpenClawType.body).tag("")
+                    Text("Automatic").font(OpenClawType.body).tag("")
                     Text("Wait for reply").font(OpenClawType.body).tag("followup")
                     Text("Send now").font(OpenClawType.body).tag("steer")
                 } label: {
@@ -109,12 +109,12 @@ struct NativeChatSettingsScreen: View {
                         Button {
                             Task { await self.loadVerbosity() }
                         } label: {
-                            Text("Retry").font(SettingsType.label)
+                            Text("Try again").font(SettingsType.label)
                         }
                     }
                 }
             } header: {
-                SettingsSectionTitle("Gateway default")
+                SettingsSectionTitle("OpenClaw")
             } footer: {
                 if let status {
                     SettingsFootnote(verbatim: status)
@@ -131,11 +131,11 @@ struct NativeChatSettingsScreen: View {
         self.snapshot = nil
         self.status = nil
         guard self.appModel.isOperatorGatewayConnected else {
-            self.status = "Connect to a Gateway to change verbosity."
+            self.status = "Connect to OpenClaw to change verbosity."
             return
         }
         guard self.appModel.hasOperatorAdminScope else {
-            self.status = "Administrator access is required to change the Gateway default."
+            self.status = "Admin access is needed to change verbosity."
             return
         }
         let authority = self.appModel.operatorAuthorityGeneration
@@ -152,12 +152,12 @@ struct NativeChatSettingsScreen: View {
             else { return }
             let config = try JSONDecoder().decode(ConfigResponse.self, from: data)
             guard let hash = config.hash, !hash.isEmpty else {
-                self.status = "The Gateway did not return a configuration revision. Retry to load it again."
+                self.status = "Couldn’t read the current verbosity setting. Try again."
                 return
             }
             let value = config.config.agents?.defaults?.verboseDefault ?? "off"
             guard ["off", "on", "full"].contains(value) else {
-                self.status = "This Gateway uses an unsupported verbosity value."
+                self.status = "OpenClaw uses an unsupported verbosity setting."
                 return
             }
             self.snapshot = VerbositySnapshot(route: route, authority: authority, hash: hash, value: value)
@@ -166,7 +166,7 @@ struct NativeChatSettingsScreen: View {
             return
         } catch {
             guard authority == self.appModel.operatorAuthorityGeneration else { return }
-            self.status = "Could not load verbosity. \(error.localizedDescription)"
+            self.status = "Couldn’t load verbosity. \(error.localizedDescription)"
         }
     }
 
@@ -200,7 +200,7 @@ struct NativeChatSettingsScreen: View {
         } catch {
             guard snapshot.authority == self.appModel.operatorAuthorityGeneration else { return }
             self.snapshot = nil
-            self.status = "Could not save verbosity. Reload before trying again. \(error.localizedDescription)"
+            self.status = "Couldn’t save verbosity. Try again. \(error.localizedDescription)"
         }
     }
 }

@@ -89,7 +89,7 @@ private struct NativePersonalInstructionsScreen: View {
                 Section {
                     SettingsDescriptionRow(
                         .verbatim(self.agentName),
-                        description: "Instructions that this agent uses for you on this shared Gateway.") {}
+                        description: "Instructions this agent uses for you in this shared OpenClaw.") {}
                 }
                 if self.file != nil {
                     Section {
@@ -114,7 +114,7 @@ private struct NativePersonalInstructionsScreen: View {
                         Button {
                             Task { await self.load() }
                         } label: {
-                            Text("Reload")
+                            Text("Try again")
                                 .font(SettingsType.label)
                         }
                         .disabled(self.busy)
