@@ -43,10 +43,14 @@ export function createEmptyRuntimeChunksPlugin(): TsdownPlugin {
           ) {
             continue;
           }
-          const dependency = path.posix.join(
-            path.posix.dirname(chunk.fileName),
-            statement.source.value,
-          );
+          const source = statement.source.value;
+          if (!source.startsWith("./") && !source.startsWith("../")) {
+            // External specifiers share imports metadata with internal output names.
+            // Keep ambiguous names so package initialization is preserved.
+            removable.delete(source);
+            continue;
+          }
+          const dependency = path.posix.join(path.posix.dirname(chunk.fileName), source);
           if (!empty.has(dependency)) {
             continue;
           }
@@ -74,7 +78,10 @@ export function createEmptyRuntimeChunksPlugin(): TsdownPlugin {
             chunk.code.slice(statement.start, statement.end).replace(/[^\r\n\u2028\u2029]/g, " ") +
             chunk.code.slice(statement.end);
         }
-        chunk.imports = chunk.imports.filter((dependency) => !removable.has(dependency));
+        const dependencies = chunk.imports.filter((dependency) => !removable.has(dependency));
+        if (dependencies.length !== chunk.imports.length) {
+          chunk.imports = dependencies;
+        }
       }
       for (const fileName of removable) {
         const chunk = bundle[fileName];

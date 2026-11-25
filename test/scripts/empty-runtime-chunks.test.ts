@@ -15,10 +15,13 @@ it.each([
   { reference: "star", order: "after" },
   { reference: "namespace", order: "before" },
   { reference: "namespace", order: "after" },
+  { reference: "external", order: "before" },
+  { reference: "mixed", order: "before" },
 ])(
   "preserves async graph behavior with $reference references $order a bare import",
   async ({ reference, order }) => {
     const root = createTempDir("openclaw-empty-runtime-chunks-");
+    const externalCollision = reference === "external" || reference === "mixed";
     const sources = {
       "package.json": '{"type":"module"}',
       "a.ts": "export function a() { return 42; }",
@@ -36,6 +39,7 @@ it.each([
       "effect.ts": 'globalThis[Symbol.for("empty-chunk-effect")] = 1;',
       "empty.ts": "export {};",
       "lazy.ts": "export {};",
+      ...(externalCollision ? { "collision.ts": "export const collision = true;" } : {}),
     };
     for (const [name, source] of Object.entries(sources)) {
       fs.writeFileSync(path.join(root, name), source);
@@ -54,6 +58,7 @@ it.each([
         consumer: "consumer.ts",
         other: "other.ts",
         async: "async.ts",
+        ...(externalCollision ? { collision: "collision.ts" } : {}),
       },
       outDir: "dist",
       dts: false,
@@ -96,7 +101,30 @@ it.each([
             }
             const bareImport = importer.code.slice(statement.start, statement.end);
             expect(bareImport).toContain("🦊");
-            if (reference === "bare") {
+            if (externalCollision) {
+              expect(path.posix.basename(target.fileName)).toBe(target.fileName);
+              const collision = chunks.find((chunk) => chunk.fileName === "collision.js");
+              if (!collision) {
+                throw new Error("The real graph did not emit the collision entry");
+              }
+              const bare = `import ${JSON.stringify(target.fileName)};`;
+              const relative = `import ${JSON.stringify(`./${target.fileName}`)};`;
+              collision.code = bare + (reference === "mixed" ? relative : "") + collision.code;
+              collision.imports =
+                reference === "mixed" ? [target.fileName, target.fileName] : [target.fileName];
+              const packageDir = path.join(root, "node_modules", target.fileName);
+              fs.mkdirSync(packageDir, { recursive: true });
+              fs.writeFileSync(
+                path.join(packageDir, "package.json"),
+                JSON.stringify({ type: "module", exports: "./index.js" }),
+              );
+              fs.writeFileSync(
+                path.join(packageDir, "index.js"),
+                'globalThis[Symbol.for("empty-chunk-external")] = (globalThis[Symbol.for("empty-chunk-external")] ?? 0) + 1;',
+              );
+              observedFile = collision.fileName;
+              retainedFile = target.fileName;
+            } else if (reference === "bare") {
               // Exercise JS line terminators and a literal astral specifier at the real AST boundary.
               const multilineImport = bareImport.replace(/^import/u, "import\r\n\u2028\u2029");
               importer.code =
@@ -120,7 +148,9 @@ it.each([
               }
               retainedFile = target.fileName;
             }
-            observedFile = importer.fileName;
+            if (!externalCollision) {
+              observedFile = importer.fileName;
+            }
             beforeCleanup.push(
               ...chunks.map((chunk) => ({
                 fileName: chunk.fileName,
@@ -135,7 +165,9 @@ it.each([
       logLevel: "silent",
     });
     try {
-      const chunks = bundles.flatMap((bundle) => bundle.chunks);
+      const chunks = bundles
+        .flatMap((bundle) => bundle.chunks)
+        .filter((chunk) => chunk.type === "chunk");
       expect(emptyFiles.length).toBeGreaterThan(0);
       for (const { fileName, map } of emptyFiles) {
         const kept = fileName === retainedFile;
@@ -172,6 +204,15 @@ it.each([
         expect(observed.code).toBe(original.code);
         expect(observed.imports).toEqual(original.imports);
         expect(observed.imports).toContain(retainedFile);
+        if (externalCollision) {
+          for (const before of beforeCleanup.filter((chunk) =>
+            chunk.imports.includes(retainedFile),
+          )) {
+            expect(chunks.find((chunk) => chunk.fileName === before.fileName)?.imports).toContain(
+              retainedFile,
+            );
+          }
+        }
       }
       const result = execFileSync(
         resolveTestNodeExecPath(),
@@ -187,6 +228,7 @@ it.each([
             "keys: Object.keys(api), values: [api.a(), api.b(), value],",
             "empty: Object.keys(empty), lazy: Object.keys(await load()),",
             'effect: globalThis[Symbol.for("empty-chunk-effect")],',
+            'externalEffect: globalThis[Symbol.for("empty-chunk-external")] ?? null,',
             "namespace: observed.emptyNamespace ? Object.keys(observed.emptyNamespace) : null",
             "}));",
           ].join("\n"),
@@ -202,6 +244,7 @@ it.each([
         empty: [],
         lazy: [],
         effect: 1,
+        externalEffect: externalCollision ? 1 : null,
         namespace: reference === "namespace" ? [] : null,
       });
     } finally {
@@ -211,3 +254,41 @@ it.each([
     }
   },
 );
+
+it("leaves unaffected chunk imports untouched while removing an empty companion", () => {
+  const generateBundle = createEmptyRuntimeChunksPlugin().generateBundle;
+  if (typeof generateBundle !== "function") {
+    throw new Error("Expected a callable empty-chunk cleanup hook");
+  }
+  const empty = {
+    type: "chunk",
+    fileName: "empty.mjs",
+    code: "export{};",
+    isEntry: false,
+    isDynamicEntry: false,
+    imports: [],
+    dynamicImports: [],
+    exports: [],
+  };
+  const imports = ["external-package"];
+  let assignments = 0;
+  const entry = {
+    ...empty,
+    fileName: "entry.mjs",
+    code: "export const value = 1;",
+    isEntry: true,
+    exports: ["value"],
+    get imports() {
+      return imports;
+    },
+    set imports(_value: string[]) {
+      assignments++;
+    },
+  };
+  const bundle = { "empty.mjs": empty, "entry.mjs": entry };
+  Reflect.apply(generateBundle, {}, [{}, bundle, false]);
+  expect(Object.keys(bundle)).toEqual(["entry.mjs"]);
+  expect(assignments).toBe(0);
+  expect(entry.imports).toBe(imports);
+  expect(entry.code).toBe("export const value = 1;");
+});
