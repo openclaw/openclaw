@@ -9,12 +9,12 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
-  countActiveRunsForSessionFromRuns,
   listRunsForRequesterFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import { listSubagentRunsForRequester } from "./subagent-registry-read.js";
+import { countActiveSubagentRunsForSession as countActiveRunsForSessionFromRuns } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
@@ -442,6 +442,10 @@ describe("subagent registry query regressions", () => {
       .mockReturnValueOnce(capturedAt)
       .mockReturnValue(capturedAt + 1);
     expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(1);
+    vi.mocked(Date.now)
+      .mockReturnValueOnce(capturedAt)
+      .mockReturnValue(capturedAt + 1);
+    expect(countActiveRunsForSessionFromRuns(toRunMap([child]), parent.childSessionKey)).toBe(0);
   });
 
   it("preserves breadth-first cycle traversal and refreshes a cached tree after a generation moves", () => {

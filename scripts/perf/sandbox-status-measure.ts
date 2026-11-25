@@ -4,13 +4,17 @@
  *   --output .local/status-base.json --iterations 10000 --owner-dir .local/base
  * Repeat interleaved against current source without --owner-dir. Add --allocations
  * for a separate V8 sampling pass (includes collected objects, interval 1024 bytes).
- * --owner-dir contains captured src/agents/sandbox/{config,runtime-status}.ts;
+ * --owner-dir contains captured src/agents/sandbox/{config,runtime-status}.ts
+ * and src/gateway/session-workspace-roots.ts;
  * all other imports keep their real URLs. Receipts pin the measured source bytes.
  * Each iteration classifies one of 10,000 prepared synthetic sessions across four
  * agents, with 40 plugin entries and 160 sandbox tool patterns. No state database
  * or container is created. Both minimal and configured-container cases are run.
  * Acceptance: identical status digests, one tool-policy resolution per status,
  * reduced allocation/CPU. This is owner evidence, not handler or Gateway latency.
+ * --workspace measures the session-row workspace classification entry point.
+ * Acceptance for that flow: identical digests, zero unused tool-policy work,
+ * lower CPU/allocation in five interleaved pairs; A/A controls use the same owner.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -28,6 +32,8 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "10000" },
     "owner-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
+    workspace: { type: "boolean", default: false },
+    cpu: { type: "boolean", default: false },
   },
 });
 assert(values.output, "--output required");
@@ -35,8 +41,11 @@ const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 const receipts: Array<{ file: string; sha256: string }> = [];
 const overrides = new Map<string, string>();
-for (const file of ["config", "runtime-status"]) {
-  const relative = `src/agents/sandbox/${file}.ts`;
+for (const relative of [
+  "src/agents/sandbox/config.ts",
+  "src/agents/sandbox/runtime-status.ts",
+  "src/gateway/session-workspace-roots.ts",
+]) {
   const url = new URL(`../../${relative}`, import.meta.url);
   const source = readFileSync(
     values["owner-dir"] ? path.join(values["owner-dir"], relative) : url,
@@ -62,6 +71,8 @@ if (overrides.size) {
 }
 const { resolvePreparedSandboxRuntimeStatus } =
   await import("../../src/agents/sandbox/runtime-status.js");
+const { isUnscopedSessionHostWorkspace } =
+  await import("../../src/gateway/session-workspace-roots.js");
 const plugins = Object.fromEntries(
   Array.from({ length: 40 }, (_, i) => [`fixture-${i}`, { enabled: true }]),
 );
@@ -117,15 +128,30 @@ for (const { name, cfg } of configs) {
   const run = (i: number) => {
     const session = sessions[i % sessions.length];
     assert(session, "synthetic session fixture is missing");
-    return resolvePreparedSandboxRuntimeStatus({ cfg, ...session });
+    return values.workspace
+      ? {
+          sandboxed: !isUnscopedSessionHostWorkspace({
+            cfg,
+            agentId: session.agentId!,
+            sessionKey: session.sessionKey,
+            entry: { ...session.preparedSessionEntry, spawnedCwd: "/synthetic/workspace" },
+          }),
+        }
+      : resolvePreparedSandboxRuntimeStatus({ cfg, ...session });
   };
   const digest = createHash("sha256");
   for (let i = 0; i < sessions.length; i++) {
     digest.update(JSON.stringify(run(i)));
   }
   const inspector = new Session();
-  if (values.allocations) {
+  if (values.allocations || values.cpu) {
     inspector.connect();
+  }
+  if (values.cpu) {
+    await inspector.post("Profiler.enable");
+    await inspector.post("Profiler.start");
+  }
+  if (values.allocations) {
     await inspector.post("HeapProfiler.startSampling", {
       samplingInterval: 1024,
       includeObjectsCollectedByMajorGC: true,
@@ -147,11 +173,16 @@ for (const { name, cfg } of configs) {
   let sampledBytes: number | undefined;
   if (values.allocations) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
-    inspector.disconnect();
     sampledBytes = profile.samples.reduce((sum, sample) => sum + sample.size, 0);
     mkdirSync(path.dirname(values.output), { recursive: true });
     writeFileSync(`${values.output}.${name}.heapprofile`, JSON.stringify(profile));
   }
+  if (values.cpu) {
+    const { profile } = await inspector.post("Profiler.stop");
+    mkdirSync(path.dirname(values.output), { recursive: true });
+    writeFileSync(`${values.output}.${name}.cpuprofile`, JSON.stringify(profile));
+  }
+  inspector.disconnect();
   results.push({
     name,
     iterations,
@@ -164,6 +195,12 @@ for (const { name, cfg } of configs) {
   });
 }
 mkdirSync(path.dirname(values.output), { recursive: true });
-const result = { node: process.version, allocations: values.allocations, receipts, results };
+const result = {
+  node: process.version,
+  workspace: values.workspace,
+  allocations: values.allocations,
+  receipts,
+  results,
+};
 writeFileSync(values.output, `${JSON.stringify(result, null, 2)}\n`);
 console.log(JSON.stringify(result));

@@ -99,17 +99,184 @@ function osSelect(page: Element) {
   return page.querySelector<HTMLSelectElement>('select[aria-label="Operating system"]');
 }
 
+it("selects advertised classes for the draft OS and retains custom values across backend changes", async () => {
+  let config: Record<string, unknown> = {
+    cloudWorkers: { profiles: { worker: machineProfile() } },
+  };
+  let hash = "initial";
+  const patches: ConfigPatchParams[] = [];
+  const request = createGatewayRequestMock(async (method, params) => {
+    if (method === "config.get") {
+      return configSnapshot(config, hash);
+    }
+    if (method === "environments.list") {
+      return {
+        environments: [],
+        profiles: [
+          {
+            id: "worker",
+            providerId: "crabbox",
+            operatingSystems,
+            machines: [
+              { id: "standard", label: "Standard", os: "linux", default: true },
+              { id: "large", label: "Large", os: "linux" },
+              { id: "windows-build", label: "Windows build", os: "windows/wsl2" },
+            ],
+          },
+        ],
+      };
+    }
+    if (method !== "config.patch" || !validateConfigPatchParams(params)) {
+      throw new Error("Unexpected request " + method);
+    }
+    patches.push(params);
+    const merged = applyMergePatch(config, JSON.parse(params.raw));
+    if (!isRecord(merged)) {
+      throw new Error("Expected configuration");
+    }
+    config = merged;
+    hash = "saved";
+    return { ok: true, config, hash };
+  });
+  const { runtimeConfig, view, page } = mountProfiles(createTestGatewayClient(request));
+  try {
+    await waitForSolid(() =>
+      expect(profileRow(page, "worker").textContent).toContain("Advertised"),
+    );
+    click(profileRow(page, "worker"), "Edit");
+    await waitForSolid(() =>
+      expect(page.querySelector("#cloud-worker-machine-class")?.tagName).toBe("BUTTON"),
+    );
+    page.querySelector<HTMLButtonElement>("#cloud-worker-machine-class")!.click();
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="option"][data-value="large"]')).not.toBeNull(),
+    );
+    expect(page.querySelector('[role="option"][data-value="windows-build"]')).toBeNull();
+    page.querySelector<HTMLElement>('[role="option"][data-value="large"]')!.click();
+    flush();
+    change(osSelect(page)!, "windows/wsl2");
+    page.querySelector<HTMLButtonElement>("#cloud-worker-machine-class")!.click();
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="option"][data-value="windows-build"]')).not.toBeNull(),
+    );
+    page.querySelector<HTMLElement>('[role="option"][data-value="windows-build"]')!.click();
+    flush();
+    click(page, "Save");
+    await waitForSolid(() => expect(patches).toHaveLength(1));
+    expect(JSON.parse(patches[0]!.raw)).toMatchObject({
+      cloudWorkers: {
+        profiles: { worker: { settings: { class: "windows-build", target: "windows/wsl2" } } },
+      },
+    });
+    await waitText(() => page, "Profile saved");
+    click(profileRow(page, "worker"), "Edit");
+    await waitForSolid(() =>
+      expect(page.querySelector("#cloud-worker-machine-class")?.textContent).toContain(
+        "Windows build",
+      ),
+    );
+    page.querySelector<HTMLButtonElement>("#cloud-worker-machine-class")!.click();
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="option"][data-value="__custom_class__"]')).not.toBeNull(),
+    );
+    page.querySelector<HTMLElement>('[role="option"][data-value="__custom_class__"]')!.click();
+    const custom = await waitForSolid(() =>
+      expectDefined(
+        page.querySelector<HTMLInputElement>('input[aria-label="Device class"]'),
+        "Custom class",
+      ),
+    );
+    custom.focus();
+    change(custom, "provider-special");
+    change(
+      page.querySelector<HTMLInputElement>('input[aria-label="Crabbox backend"]')!,
+      "other-provider",
+    );
+    expect(page.querySelector('input[aria-label="Device class"]')).toBe(custom);
+    expect(custom.value).toBe("provider-special");
+    expect(page.querySelector("#cloud-worker-machine-class")).toBeNull();
+    expect(document.activeElement).toBe(custom);
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+  }
+});
+
+it("offers Linux machine classes when the applied target is unset and the catalog omits its single OS", async () => {
+  const config = {
+    cloudWorkers: { profiles: { worker: machineProfile("standard", { target: undefined }) } },
+  };
+  const request = createGatewayRequestMock(async (method) => {
+    if (method === "config.get") {
+      return configSnapshot(config, "initial");
+    }
+    if (method === "environments.list") {
+      return {
+        environments: [],
+        profiles: [
+          {
+            id: "worker",
+            providerId: "crabbox",
+            machines: [
+              { id: "standard", label: "Standard", os: "linux", default: true },
+              { id: "large", label: "Large", os: "linux" },
+            ],
+          },
+        ],
+      };
+    }
+    throw new Error(`Unexpected request ${method}`);
+  });
+  const { runtimeConfig, view, page } = mountProfiles(createTestGatewayClient(request));
+  try {
+    await waitForSolid(() =>
+      expect(profileRow(page, "worker").textContent).toContain("Advertised"),
+    );
+    const edit = await waitForSolid(() =>
+      expectDefined(
+        profileRow(page, "worker").querySelector<HTMLButtonElement>(
+          'button[aria-label="Edit: worker"]:enabled',
+        ),
+        "enabled Edit action",
+      ),
+    );
+    edit.click();
+    const picker = await waitForSolid(() =>
+      expectDefined(
+        page.querySelector<HTMLButtonElement>("#cloud-worker-machine-class"),
+        "device class picker for applied default OS",
+      ),
+    );
+    expect(osSelect(page)).toBeNull();
+    picker.click();
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="option"][data-value="large"]')).not.toBeNull(),
+    );
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+  }
+});
+
 it("keeps the profile draft and accepted catalog through refresh failure and retry", async () => {
   const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
   const catalog = {
     environments: [],
-    profiles: [{ id: "worker", providerId: "crabbox", operatingSystems }],
+    profiles: [
+      {
+        id: "worker",
+        providerId: "crabbox",
+        operatingSystems,
+        machines: [{ id: "standard", label: "Standard", os: "linux" }],
+      },
+    ],
   };
   let hash = "initial";
+  let appliedHash = hash;
   let response = Promise.resolve<EnvironmentsListResult>(catalog);
   const request = createGatewayRequestMock(async (method, params) => {
     if (method === "config.get") {
-      return configSnapshot(config, hash);
+      return { ...configSnapshot(config, hash), appliedConfigHash: `resolved:${appliedHash}` };
     }
     if (method === "environments.list") {
       return isRecord(params) && params.projection === "profiles" ? response : { environments: [] };
@@ -139,13 +306,29 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
     const refresh = async (nextHash: string) => {
       const pending = createDeferred<EnvironmentsListResult>();
       response = pending.promise;
-      hash = nextHash;
+      hash = appliedHash = nextHash;
       const before = catalogCalls();
       await runtimeConfig.refresh();
       await waitForSolid(() => expect(catalogCalls()).toBeGreaterThan(before));
       return pending;
     };
+    await waitForSolid(() =>
+      expect(page.querySelector("#cloud-worker-machine-class")).not.toBeNull(),
+    );
+    const callsBeforeUnappliedSave = catalogCalls();
+    hash = "saved-but-not-applied";
+    await runtimeConfig.refresh();
+    await waitForSolid(() => expect(page.querySelector("#cloud-worker-machine-class")).toBeNull());
+    expect(catalogCalls()).toBe(callsBeforeUnappliedSave);
+
     const pending = await refresh("second");
+    expect(page.querySelector("#cloud-worker-machine-class")).toBeNull();
+    const machine = expectDefined(
+      page.querySelector<HTMLInputElement>('input[aria-label="Device class"]'),
+      "Pending catalog class",
+    );
+    machine.focus();
+    change(machine, "vendor-refresh");
     expect(profileRow(page, "worker").textContent).toContain("Advertised");
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
     expect(lifetime.value).toBe("9h");
@@ -163,6 +346,9 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
     expect(profileRow(page, "worker").textContent).toContain("Advertised");
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
     expect(lifetime.value).toBe("9h");
+    expect(page.querySelector('input[aria-label="Device class"]')).toBe(machine);
+    expect(machine.value).toBe("vendor-refresh");
+    expect(document.activeElement).toBe(machine);
   } finally {
     view.unmount();
     runtimeConfig.dispose();
@@ -454,7 +640,9 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
       ),
     );
     change(lifetime, "9h");
-    click(page, "Save");
+    const save = actionButton(page, "Save");
+    save.click();
+    save.click();
     await waitForSolid(() => {
       expect(patches).toBe(1);
       expect(actionButton(page, "Saving…").disabled).toBe(true);
@@ -467,6 +655,16 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
     expect(lifetime.value).toBe("9h");
     await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
     expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(false);
+    gatewayHarness.publish(false, client, null);
+    gatewayHarness.publish(
+      true,
+      client,
+      gatewayHelloForMethods(["config.patch", "environments.list"]),
+    );
+    await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
+    expect(page.textContent).toContain("Synthetic profile save unavailable");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
 
     pending = createDeferred<unknown>();
     click(page, "Save");

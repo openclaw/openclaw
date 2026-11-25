@@ -199,7 +199,7 @@ export function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
-    const scheduledExecution = params.occurrence.mint({
+    const scheduledExecution = await params.occurrence.mint({
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
       runId,

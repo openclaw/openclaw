@@ -13,7 +13,7 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
 import { setGatewayDedupeEntries } from "../agent-turn/agent-dedupe.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE, hasGatewayAdminScope } from "../operator-scopes.js";
 import { resolveAgentRunSessionCreation } from "../session-creation-provenance.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
@@ -92,7 +92,7 @@ export async function runAgentResetPhase(params: {
     params.context.getRuntimeConfig,
     resolveAgentRunSessionCreation(params.client),
   );
-  const captured = await captureGatewayOperatorRunAuthority({
+  const captured = await prepareGatewayOperatorRunAuthority({
     client: params.client,
     context: params.context,
     invocationAuthority: { assertCurrent: () => params.assertAdmissionCurrent?.() },

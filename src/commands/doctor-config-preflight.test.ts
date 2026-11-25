@@ -24,7 +24,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as sqliteReadWorkers from "../infra/sqlite-readonly-worker.js";
-import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import { createUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -676,7 +676,7 @@ describe("runDoctorConfigPreflight", () => {
       });
       expect((await readConfigFileSnapshot()).valid).toBe(true);
       expect(await fs.readFile(`${configPath}.bak`, "utf-8")).toBe(original);
-      expect(hasActiveStartupMigrationLease()).toBe(false);
+      expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
       expect(noteMock).toHaveBeenCalledWith(
         expect.stringContaining("Moved session.idleMinutes"),
         "Doctor changes",

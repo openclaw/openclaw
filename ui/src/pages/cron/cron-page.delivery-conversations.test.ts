@@ -4,7 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { click, expectCalls, inputValue } from "./cron-assertions.test-support.ts";
+import { click, expectCalls, inputValue, waitForElement } from "./cron-assertions.test-support.ts";
 import {
   createContext,
   createGateway,
@@ -99,6 +99,8 @@ it("keeps primary account directory targets out of failure-alert suggestions", a
       failureAlert: { channel: "telegram", accountId: "personal", to: "-100personal" },
     }),
   );
+  // Delivery settings live in the automation's settings, opened from Edit.
+  (await waitForElement(page, '[data-test-id="cron-edit"]')).click();
   const optionsFor = (selector: string) => {
     const input = page.querySelector<HTMLInputElement>(selector);
     expect(input).not.toBeNull();
@@ -135,6 +137,37 @@ it("keeps account and topic routing operator-authored without rediscovering cach
   page.patchForm({ deliveryThreadId: "42" });
   page.patchForm({ deliveryTo: "-100new" });
   expect(page.cron.cronForm).toMatchObject(workRoute);
+});
+
+it("restores saved recipient suggestions when canceling an edit with a directory read pending", async () => {
+  const pending = pendingDirectory();
+  const request = directoryRequest((params) =>
+    (params as { agentId: string }).agentId === "temporary"
+      ? pending.promise
+      : directoryResult(conversationTarget("-100saved")),
+  );
+  const { page } = await mountPage(request, { render: true });
+  page.selectJob(
+    digestJob("saved-route", {
+      agentId: "writer",
+      delivery: { mode: "announce", channel: "telegram", to: "-100saved" },
+    }),
+  );
+  (await waitForElement(page, '[data-test-id="cron-edit"]')).click();
+  await waitForTargets(page, ["-100saved"]);
+
+  page.patchForm({ agentId: "temporary" });
+  expect(request).toHaveBeenCalledWith("conversations.list", {
+    agentId: "temporary",
+    channel: "telegram",
+    limit: 100,
+  });
+  (await waitForElement(page, '[data-test-id="cron-cancel"]')).click();
+  pending.resolve(directoryResult(conversationTarget("-100discarded")));
+
+  (await waitForElement(page, '[data-test-id="cron-edit"]')).click();
+  await waitForTargets(page, ["-100saved"]);
+  expect(inputValue(page, "#cron-delivery-to")).toBe("-100saved");
 });
 
 it("drops an in-flight directory response after administrator access is lost", async () => {

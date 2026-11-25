@@ -203,7 +203,7 @@ describe("grouped chat rendering", () => {
     expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
     renderActivityGroup(groups, { showReasoning: false, isToolMessageExpanded: () => true });
     await settleToolBridges(harness.view);
-    expect(elementText(".chat-activity-group__label")?.trim()).toBe("Ran commands, used tools");
+    expect(elementText(".chat-activity-group__label")?.trim()).toBe("Ran commands");
     expectCount(".chat-tool-row", 2);
   });
 
@@ -416,19 +416,78 @@ describe("grouped chat rendering", () => {
       for (const expanded of [false, true, false]) {
         await renderToolGroups(groups, { isToolMessageExpanded: () => expanded });
         if (order === "image only") {
-          expect(elementText(".chat-tool-msg-summary")?.trim()).toBe(
-            "Viewed image avatar-previews.png",
-          );
+          expect(elementText(".chat-tool-msg-summary")?.trim()).toBe("Viewed 3 images");
         }
         expectCount(".chat-group.assistant .chat-message-image", 3);
-        expectCount(".chat-tool-msg-body .chat-message-image", expanded ? 3 : 0);
+        expectCount(".chat-tool-msg-collapse .chat-message-image", expanded ? 3 : 0);
         if (expanded) {
-          expect(harness.view.textContent!.match(/Viewed image/g)).toHaveLength(1);
+          expect(
+            harness.view.textContent!.match(
+              order === "image only" ? /Viewed 3 images/g : /Viewed image/g,
+            ),
+          ).toHaveLength(1);
         }
         expectCount(".chat-message-image", expanded ? 6 : 3);
       }
     },
   );
+
+  it("keeps an image inspection waiting for approval outside command activity", async () => {
+    const messages = [
+      createAssistantMessage([createToolCall("command", "exec", { command: "ls preview.png" })]),
+      createToolResultMessage("command", "exec", "preview.png", { details: { exitCode: 0 } }),
+      createAssistantMessage([createToolCall("inspect", "view_image", { path: "preview.png" })]),
+      createToolResultMessage("inspect", "view_image", "Inspection awaits approval.", {
+        isError: true,
+        details: { status: "approval-pending", approvalId: "inspect-approval" },
+      }),
+    ];
+    const history = attachHistoryActivity(prepareChatHistoryFixture(messages));
+    renderActivityGroup(groupsOf(buildItems({ messages: history.messages })), {
+      showReasoning: false,
+    });
+    await settleToolBridges(harness.view);
+    const row = harness.view.querySelector(".chat-tool-msg-summary");
+    expect(row?.querySelector(".chat-tool-row__title")?.textContent).toBe("View image");
+    expect(row?.querySelector('[role="status"]')?.textContent).toBe("Blocked");
+  });
+
+  it("opens the matching result from a group of image inspections", async () => {
+    let timestamp = 0;
+    const inspect = (id: string) => [
+      createAssistantMessage([createToolCall(id, "view_image", { path: `/tmp/${id}.png` })], {
+        timestamp: ++timestamp,
+      }),
+      createToolResultMessage(
+        id,
+        "view_image",
+        [
+          { type: "text", text: "Inspection completed" },
+          { type: "image", data: "cG5n", mimeType: "image/png", alt: id },
+        ],
+        { timestamp: ++timestamp, isError: false },
+      ),
+    ];
+    const onOpenSidebar = vi.fn();
+    renderActivityGroup(
+      groupsOf(buildItems({ messages: [...inspect("first"), ...inspect("second")] })),
+      {
+        showReasoning: false,
+        isToolMessageExpanded: () => true,
+        onOpenSidebar,
+      },
+    );
+    await settleToolBridges(harness.view);
+    const detailButtons = harness.view.querySelectorAll<HTMLButtonElement>(
+      '.chat-activity-group__body [aria-label="Open tool details in side panel"]',
+    );
+    expect(detailButtons).toHaveLength(2);
+    detailButtons[1]!.click();
+    expect(onOpenSidebar.mock.calls[0]![0]).toMatchObject({
+      kind: "tool-output",
+      card: { args: { path: "/tmp/second.png" } },
+    });
+  });
 
   it.each([false, true])("names subagent lifecycle rows (tool search: %s)", async (dispatched) => {
     // Tool search records each call twice: the dispatch envelope and the nested call

@@ -35,7 +35,7 @@ const fixture = `
   <span id="processes" data-art="--spinner-mask-small" class="chat-details-processes__spinner"></span>
   <span id="subagents" data-art="--spinner-mask-small" class="chat-details-subagents__spinner"></span>
   <span class="session-worker-stop__button-state">
-    <span id="worker-stop" data-art="--spinner-mask" class="session-worker-stop__spinner"></span>
+    <span id="worker-stop" data-art="--spinner-mask" class="btn__spinner"></span>
   </span>
   <div id="approval" data-art="--spinner-mask-large" class="approval-page__spinner"></div>
   <span id="custodian" data-art="--spinner-mask" class="custodian__history-spinner"></span>

@@ -1,4 +1,3 @@
-import "../styles/sidebar-pages.css";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";

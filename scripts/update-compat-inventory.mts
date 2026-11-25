@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { extract as extractTar } from "tar";
+import { extract as extractTar } from "tar/raw";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveNpmJsonEntries, resolveNpmJsonString } from "./lib/npm-json-output.mts";
 import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";

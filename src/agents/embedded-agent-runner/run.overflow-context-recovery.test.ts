@@ -607,7 +607,7 @@ describe("recoverEmbeddedRunOverflow", () => {
       expect(mocks.truncateOversizedToolResults).toHaveBeenCalledWith(
         expect.objectContaining({
           projectionState: successorProjection,
-          protectTrailingToolResults: true,
+          preserveSentToolResults: true,
         }),
       );
       expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();

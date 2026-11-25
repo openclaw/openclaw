@@ -21,7 +21,6 @@ import { normalizeStateDirEnv, resolveGatewayPort } from "../../config/paths.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
-import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import {
   defaultGatewayBindMode,
   isContainerEnvironment,
@@ -78,6 +77,10 @@ import {
   INVALID_TAILSCALE,
   INVALID_WS_LOG,
 } from "./run-flag-checks.js";
+import {
+  createConfiguredGatewayHealthProbe,
+  isGatewayHealthzResponse,
+} from "./run-health-probe.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
   extractGatewayMiskeys,
@@ -99,7 +102,6 @@ import { createGatewayCliStartupTrace } from "./startup-trace.js";
 const gatewayLog = createSubsystemLogger("gateway");
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
-const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
 
 type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">;
 
@@ -229,30 +231,6 @@ class SupervisedGatewayLockError extends GatewayLockError {
 
 function resolveGatewayLockErrorExitCode(err: unknown): number {
   return err instanceof SupervisedGatewayLockError ? err.exitCode : 1;
-}
-
-function isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean {
-  if (statusCode !== 200) {
-    return false;
-  }
-  try {
-    const payload = JSON.parse(body) as { ok?: unknown; status?: unknown };
-    return payload.ok === true && payload.status === "live";
-  } catch {
-    return false;
-  }
-}
-
-function createConfiguredGatewayHealthProbe(cfg: OpenClawConfig) {
-  const probe = createConfiguredGatewayLocalProbe(cfg);
-  return async (params: { host: string; port: number }): Promise<boolean> => {
-    const result = await probe.requestHttp({
-      ...params,
-      pathname: "/healthz",
-      timeoutMs: SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS,
-    });
-    return isGatewayHealthzResponse(result?.statusCode, result?.body ?? "");
-  };
 }
 
 async function runGatewayLoopWithSupervisedLockRecovery(params: {
@@ -812,6 +790,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       lockPort: port,
       lifecycleLockDeadlineMs,
       healthHost,
+      healthConfig: cfg,
       beginBoot,
       completeBoot,
       onRestartStartupFailure: recoverStartupFailure,
@@ -884,11 +863,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
 
 /** Run foreground Gateway startup with one consent-gated invalid-config repair attempt. */
 export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {
-  if (opts.taskSupervisor) {
-    const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
-    await runWindowsGatewayTaskSupervisor();
-    return;
-  }
   try {
     await runGatewayCommandOnce(opts, hooks);
   } catch (error) {

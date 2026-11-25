@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Browser tool results without preview cards" });
@@ -24,6 +25,7 @@ const history = [
   visit("first-visit", "lightpanda", "first-run"),
   {
     role: "assistant",
+    ...openAiAuthor,
     content: "The pull request is published.",
     stopReason: "stop",
     __openclaw: { runId: "first-run" },
@@ -39,6 +41,7 @@ const history = [
   visit("third-visit", "chromium", "second-run"),
   {
     role: "assistant",
+    ...openAiAuthor,
     content: "Verified [PR #197528](" + url + "). The fix is ready for review.",
     stopReason: "stop",
     __openclaw: { runId: "second-run" },

@@ -3,9 +3,9 @@ import type { Command } from "commander";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
 import { collectOption } from "../program/helpers.js";
-import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
+import type { CapabilityEnvelope } from "./result-types.js";
 
 export function registerEmbeddingCapabilityCommands(capability: Command): void {
   const embeddingCommand = capability

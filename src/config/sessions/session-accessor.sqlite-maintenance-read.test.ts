@@ -155,7 +155,7 @@ it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"
                   ...transcriptScope,
                   sessionEntry: { sessionId: sessionKey, updatedAt },
                 }),
-              ).resolves.toEqual({ lastMessagePreview: preview });
+              ).resolves.toEqual({ hasMessages: true, lastMessagePreview: preview });
             } else if (overlap === "usage rollup") {
               await expect(
                 usage!.writeRollup([

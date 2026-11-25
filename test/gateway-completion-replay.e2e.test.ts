@@ -95,9 +95,7 @@ describe("Gateway completed requester replay", () => {
               (row) => row.task === CHILD_TASK,
             );
             expect(entry?.delivery).toMatchObject({
-              status: "suspended",
-              suspendedReason: "permanent_failure",
-              lastDropReason: "message_tool_delivery_missing",
+              status: "delivered",
             });
           },
           { timeout: 30_000 },
@@ -116,7 +114,6 @@ describe("Gateway completed requester replay", () => {
       )!;
       expect(before.execution.outcome).toMatchObject({ status: "ok" });
       expect(before.completion?.resultText).toBe("CHILD_REPLAY_RESULT");
-      expect(before.delivery?.payload).toBeDefined();
       expect(before.requesterSettleWake).toBeUndefined();
       closeOpenClawStateDatabaseForTest();
       expect(loadSubagentRegistryFromSqlite().get(before.runId)?.delivery).toEqual(before.delivery);

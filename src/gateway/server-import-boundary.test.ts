@@ -143,14 +143,15 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   }
   return resolved;
 }});
-const { listManualSetupInferenceOptions } = await import(${JSON.stringify(entry)});
-const result = await listManualSetupInferenceOptions("main");
+const { listManualSetupInferenceDetection } = await import(${JSON.stringify(entry)});
+const result = await listManualSetupInferenceDetection("main");
 console.log(JSON.stringify({ utilityModel: result.utilityModel, setupComplete: result.setupComplete }));
 `,
           ],
           { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...state.envVars },
           30_000,
         );
+        expect(result.error).toBeUndefined();
         expect(result.status, result.stderr).toBe(0);
         expect(JSON.parse(result.stdout)).toEqual({
           utilityModel: "fixture/utility",
@@ -192,6 +193,7 @@ console.log("prewarm-cold-selection-ok");`,
           { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...state.envVars },
           30_000,
         );
+        expect(result.error).toBeUndefined();
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain("prewarm-cold-selection-ok");
       },

@@ -14,6 +14,8 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 // Eight bound columns per row keep each statement within 1,024 parameters.
 const MAX_SUBAGENT_UPSERT_ROWS = 128;
+// RETURNING payloads are needed for removal receipts, but not all at once.
+const MAX_SUBAGENT_DELETE_ROWS = 16;
 
 export function hasParentStoreColumns(db: EngineConnection): boolean {
   const schema = getPostgresPhysicalFacts(db) ?? getAdmittedSqliteSchemaFacts(db);
@@ -56,12 +58,15 @@ export function writeSubagentRunValuesInDatabase(
         ),
     );
   }
-  if (deleteRunIds.length > 0) {
+  const now = Date.now();
+  for (let offset = 0; offset < deleteRunIds.length; offset += MAX_SUBAGENT_DELETE_ROWS) {
     const removed = executeSqliteQuerySync(
       db,
-      stateDb.deleteFrom("subagent_runs").where("run_id", "in", deleteRunIds).returningAll(),
+      stateDb
+        .deleteFrom("subagent_runs")
+        .where("run_id", "in", deleteRunIds.slice(offset, offset + MAX_SUBAGENT_DELETE_ROWS))
+        .returningAll(),
     ).rows;
-    const now = Date.now();
     // A removal and its terminal receipt commit together, including native completion retirement.
     recordSessionStateEventsInDatabase(
       db,

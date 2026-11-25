@@ -466,7 +466,9 @@ provision_pr_worktree() {
     # The trusted wrapper pins installed packages; caller module-dir overrides
     # must not redirect this source loader or reconcile its dependency links.
     unset PNPM_CONFIG_MODULES_DIR pnpm_config_modules_dir npm_config_modules_dir
-    TSX_TSCONFIG_PATH="$provisioner_dir/../../tsconfig.json" \
+    # Bind startup diagnostics and descendants as well as explicit store calls.
+    OPENCLAW_STATE_DIR="$root/.local/pr-state" \
+      TSX_TSCONFIG_PATH="$provisioner_dir/../../tsconfig.json" \
       node --import "$provisioner_dir/../tsx.mjs" "$provisioner_dir/worktree-provision.mts" \
         "$root" "$pr" "$seed_sha" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
   ) || return 1

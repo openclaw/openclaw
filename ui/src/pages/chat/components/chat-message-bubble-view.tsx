@@ -52,6 +52,7 @@ import {
   AssistantAttachments,
   ChatClawHubCard,
   ChatTemplatePluginCards,
+  AutomationCreationCard,
   MessageAttachment,
 } from "./chat-message-deferred.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
@@ -78,6 +79,9 @@ registerEnglishCatalog(registerChatSessionEnglish);
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
+const RecordingApiKeyNotice = lazy(() => import("./chat-read-aloud-status.tsx"), {
+  export: "RecordingApiKeyNotice",
+});
 const PluginInlineView = lazy(() => import("../../../plugins/control-ui-inline-view.tsx"), {
   export: "PluginInlineView",
 });
@@ -378,6 +382,13 @@ function MessageReasoning(props: Pick<ContentProps, "state" | "options" | "messa
 }
 
 function BubbleContents(props: ContentProps) {
+  const audioKeyRequired = () => {
+    const message = asNullableRecord(props.state().message);
+    const provider = asNullableRecord(message?.["__openclaw"])?.audioApiKeyRequired;
+    return props.state().normalizedRole === "user" && typeof provider === "string"
+      ? provider
+      : undefined;
+  };
   const images = () =>
     props.state().renderInOrder ? props.state().supplementalImages : props.state().images;
   const previewCount = createMemo(() => props.state().videoPreviews.length);
@@ -391,6 +402,9 @@ function BubbleContents(props: ContentProps) {
   return (
     <>
       <Show when={props.state().sourceRole === "assistant"}>
+        <Show when={props.state().automationPlan}>
+          {(plan) => <AutomationCreationCard plan={plan()} />}
+        </Show>
         <ChatTemplatePluginCards notices={props.state().templatePluginCards} />
         <For each={props.state().clawHubCards} keyed={(card) => card.id}>
           {(card) => <ChatClawHubCard recommendation={card()} agentId={props.options.agentId} />}
@@ -417,6 +431,13 @@ function BubbleContents(props: ContentProps) {
         inlinePlayback={props.state().normalizedRole === "assistant"}
         inlineComments={props.state().inlineComments}
       />
+      <Show when={audioKeyRequired()}>
+        {(provider) => (
+          <ChatLazyBoundary>
+            <RecordingApiKeyNotice provider={provider()} agentId={props.options.agentId} />
+          </ChatLazyBoundary>
+        )}
+      </Show>
       <Show
         when={props.state().isStandaloneToolMessage && props.state().assistantViewBlocks.length > 0}
       >

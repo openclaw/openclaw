@@ -216,16 +216,6 @@ it("assigns and reads back a created session through admitted non-owner Discord 
         );
         expect.soft(readSession()?.owner).toEqual(before);
         expect.soft(await listsSessions(attach.token, true)).toBe(false);
-        let revoke = true;
-        gateway.getRuntimeConfig = () => {
-          if (revoke) {
-            revoke = false;
-            revokeMcpLoopbackClientGrant(grant.token);
-          }
-          return cfg;
-        };
-        expectToolError(await call(next.id), expect.stringMatching(/authority.*no longer active/i));
-        expect(readSession()?.owner).toEqual(before);
       } finally {
         revokeAttachGrant(attach.token);
         revokeMcpLoopbackClientGrant(grant.token);

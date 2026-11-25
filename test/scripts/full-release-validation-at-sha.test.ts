@@ -46,6 +46,18 @@ function rejectArgs(args: string[], error: string) {
 }
 
 describe("full-release-validation-at-sha", () => {
+  it("continues candidate dispatch after a tooling comparison fails", () => {
+    const fixture = createDispatchFixture({
+      candidateOwned: true,
+      toolingLagComparisonFailure: true,
+    });
+    const result = fixture.run();
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("WARNING: candidate tooling lag is unavailable");
+    expect(fixture.dispatches()).toHaveLength(2);
+  });
+
   it("reports patch-inequivalent main FRV tooling without changing frozen Q", () => {
     const candidateSha = "a".repeat(40);
     const mainSha = "b".repeat(40);

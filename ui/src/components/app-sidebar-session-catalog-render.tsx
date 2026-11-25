@@ -5,6 +5,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import { normalizeCatalogTimestamp } from "../../../packages/gateway-protocol/src/public-session-catalog.ts";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { formatUiError } from "../lib/format-error.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
@@ -22,7 +23,6 @@ import {
 import {
   catalogErrorMessages,
   formatSidebarTimestamp,
-  normalizeCatalogTimestamp,
   type CatalogSessionMenuRequest,
   type CatalogRowControls,
   catalogSessionActivity,
@@ -114,9 +114,11 @@ function renderCatalogHostGroup(
     );
     const catalogMenu = createMemo<CatalogSessionMenuRequest>(() => ({
       key: catalogKey(),
+      originalUrl: readSession().originalUrl,
       agentId: params.snapshot.newSessionAgentId,
       routeId,
       navigation: target().options,
+      profileRelation: readHost().profileRelation,
       canOpenTerminal: readSession().canOpenTerminal === true,
       canDelete: readSession().canArchive && readCatalog().capabilities.archive,
       name: readSession().name ?? readSession().threadId,
@@ -206,6 +208,11 @@ function renderCatalogHostGroup(
                     params.snapshot.newSessionAgentId,
                   );
                 } else {
+                  params.host.prepareSessionNavigation(
+                    key(),
+                    target().options.pathname,
+                    readHost().profileRelation,
+                  );
                   params.host.onNavigate?.(routeId, target().options);
                 }
               })

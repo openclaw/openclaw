@@ -240,6 +240,7 @@ describe("Slack message tools", () => {
       "list-pins",
       "member-info",
       "emoji-list",
+      "channel-list",
     ]);
   });
 
@@ -261,6 +262,7 @@ describe("Slack message tools", () => {
             pins: false,
             memberInfo: false,
             emojiList: false,
+            channelInfo: false,
           },
         },
       },

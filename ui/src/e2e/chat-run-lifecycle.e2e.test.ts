@@ -7,6 +7,7 @@ import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixture
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 import { openMockAbortableRun } from "./chat-run-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -185,6 +186,7 @@ suite.define(() => {
       },
       {
         ...historyMessage("The release notes are ready for review.", startedAt + 22_000),
+        ...openAiAuthor,
         __openclaw: { id: "reply", runId, recordTimestampMs: startedAt + 34_000 },
       },
     ];
@@ -367,6 +369,7 @@ suite.define(() => {
     const reply = {
       // Creation precedes the long final request; the saved write marks its completion.
       ...historyMessage("Success after the earlier failure.", firstStartedAt + 983_000),
+      ...openAiAuthor,
       __openclaw: { id: "successful-reply", runId, recordTimestampMs: firstStartedAt + 994_000 },
     };
     messages.push(reply);
@@ -756,11 +759,13 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    const compaction = page.locator(".chat-compaction-activity");
+    await compaction.locator("summary").click();
     await page.getByText("saved 875.3k tokens (97.3%)", { exact: true }).waitFor();
     const frame = await takeControlUiScreenshotFrame(
       page,
       page.locator(".chat-thread"),
-      [page.locator(".chat-compaction")],
+      [compaction],
       { animations: "disabled" },
     );
     await writeFile(join(suite.artifactDir, "compaction-savings.png"), frame.png);

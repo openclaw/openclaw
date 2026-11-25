@@ -4,9 +4,14 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import type {
+  UsersListResult,
+  UsersSetRoleResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
+import { readOperatorToolRunAuthority } from "../../gateway/operator-invocation-authority.js";
 import {
   DEFAULT_UPDATE_TIMEOUT_MS,
   summarizeUpdateRunResponse,
@@ -74,11 +79,28 @@ function isConfigSchemaPathNotFoundError(error: unknown): boolean {
 }
 
 const MAINTENANCE_ACTIONS = ["update.run", "restart", "update.cleanup"] as const;
-const GATEWAY_ACTIONS = ["config.get", "config.schema.lookup", ...MAINTENANCE_ACTIONS] as const;
+const GATEWAY_ACTIONS = [
+  "config.get",
+  "config.schema.lookup",
+  "users.getRole",
+  "users.setRole",
+  ...MAINTENANCE_ACTIONS,
+] as const;
 
 const GatewayToolSchema = Type.Object({
   action: stringEnum(GATEWAY_ACTIONS),
   ...gatewayCallOptionSchemaProperties(),
+  profileId: Type.Optional(
+    Type.String({ description: "Canonical target profile ID for users.getRole or users.setRole." }),
+  ),
+  email: Type.Optional(
+    Type.String({ description: "users.getRole: exact email alias instead of profileId." }),
+  ),
+  role: Type.Optional(
+    Type.Union([Type.String({ minLength: 1 }), Type.Null()], {
+      description: "users.setRole: configured role name, or explicit null to clear the assignment.",
+    }),
+  ),
   note: Type.Optional(
     Type.String({ description: "Short human note for the update or post-restart notice." }),
   ),
@@ -99,19 +121,19 @@ const GatewayUpdateToolSchema = Type.Object({
 });
 
 export function createGatewayTool(options?: {
-  allowConfigReads?: boolean;
+  allowManagementActions?: boolean;
   senderIsOwner?: boolean;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   requesterSenderId?: string | null;
 }): AnyAgentTool {
-  const allowConfigReads = options?.allowConfigReads !== false;
+  const allowManagementActions = options?.allowManagementActions !== false;
   return {
     label: "Gateway",
     name: "gateway",
-    description: allowConfigReads
-      ? "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup. Use runtime-owned actions."
-      : "Owner request/operator schedule: update.run, restart, update.cleanup. Cleanup permanently retires eligible rollback copies; dryRun previews. Use runtime-owned actions.",
-    parameters: allowConfigReads ? GatewayToolSchema : GatewayUpdateToolSchema,
+    description: allowManagementActions
+      ? "Read Gateway config/schema. Local profile roles: users.getRole; users.setRole assigns or clears (admin). Owner request/operator schedule: update.run, restart, update.cleanup."
+      : "Owner request/operator schedule: update.run, restart, update.cleanup. Cleanup permanently retires eligible rollback copies; dryRun previews.",
+    parameters: allowManagementActions ? GatewayToolSchema : GatewayUpdateToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
@@ -234,8 +256,56 @@ export function createGatewayTool(options?: {
         );
         return jsonResult(summarizeUpdateRunResponse(result));
       }
-      if (!allowConfigReads) {
+      if (!allowManagementActions) {
         throw new ToolInputError(`Action not available: ${action}`);
+      }
+      if (action === "users.getRole" || action === "users.setRole") {
+        if (params.gatewayUrl != null || params.gatewayToken != null) {
+          throw new ToolInputError("Profile roles can only be managed on the current Gateway.");
+        }
+        if (!readOperatorToolRunAuthority()) {
+          throw new ToolInputError("Profile roles require an authenticated Gateway operator.");
+        }
+        const localGateway = { resolveGatewayContext: getInProcessGatewayToolContext, signal };
+        if (action === "users.getRole") {
+          const profileId = readToolStringParam(params, "profileId");
+          const email = readToolStringParam(params, "email")?.toLowerCase();
+          if (Boolean(profileId) === Boolean(email)) {
+            throw new ToolInputError("Specify exactly one profileId or email alias.");
+          }
+          const { profiles } = await callInProcessGatewayTool<UsersListResult>(
+            "users.list",
+            {},
+            localGateway,
+          );
+          const profile = profiles.find(
+            (entry) =>
+              !entry.mergedInto && (email ? entry.emails.includes(email) : entry.id === profileId),
+          );
+          if (!profile) {
+            throw new ToolInputError("No active profile matches that ID or email alias.");
+          }
+          return jsonResult({
+            profileId: profile.id,
+            role: profile.role ?? null,
+            effectiveRole: profile.effectiveRole ?? null,
+            roleSource: profile.roleSource ?? null,
+          });
+        }
+        if (params.email != null) {
+          throw new ToolInputError(
+            "Use users.getRole to resolve the email before assigning a role by profileId.",
+          );
+        }
+        const profileId = readToolStringParam(params, "profileId", { required: true });
+        const role =
+          params.role === null ? null : readToolStringParam(params, "role", { required: true });
+        const { profile } = await callInProcessGatewayTool<UsersSetRoleResult>(
+          "users.setRole",
+          { profileId, role },
+          localGateway,
+        );
+        return jsonResult({ profileId: profile.id, role: profile.role ?? null });
       }
       const gatewayOpts = readGatewayCallOptions(params);
       const callConfigGateway = (method: string, requestParams: Record<string, unknown>) =>

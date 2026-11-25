@@ -116,7 +116,14 @@ manual allowlist rules unchanged. Rerun affected workflows and choose
 Explicit repair stops the matching managed Gateway and checks Gateway, state,
 and agent-database ownership before taking read-only schema snapshots. It
 excludes other processes during repair, then restarts the same service once
-and verifies readiness. Policy refresh preserves the installed launcher and
+and verifies readiness. Doctor prints why it stopped the Gateway and, after the
+verified restart, how long it was stopped. While restoring the service, Doctor
+rechecks update admission at each restoration step, before each service-manager
+operation that changes the service (definition install, start or restart) and,
+on systemd, right before each start or restart command. It no longer rereads
+the update ledger at every read-only service-manager query; the service
+operation lock Doctor holds keeps other updaters from controlling the service
+meanwhile. Policy refresh preserves the installed launcher and
 environment. Separately, [eligible installation drift](/cli/doctor/recovery#gateway-service-recovery)
 in a previously running service is reconciled through the native installer.
 Automatic installation refresh covers installation-only drift; other operator
@@ -220,8 +227,9 @@ Update-time Doctor runs startup-required repairs before optional inspections.
 When the installed updater supports post-restart inspections, Doctor moves
 lint-backed, inspection-only checks out of the stopped Gateway window. The
 updater runs them after restart and saves their findings in the
-`post-activation doctor inspections` result step. Findings or an incomplete
-inspection remain advisory and do not fail an otherwise successful update.
+`post-activation doctor inspections` result step. Planned deferrals are progress,
+not warning findings. Findings or an incomplete inspection remain advisory and
+do not fail an otherwise successful update.
 Repairs, migrations, readiness gates, and checks without equivalent lint
 coverage keep their existing ordering. Older installed updaters keep the
 inspections in their original Doctor pass.

@@ -35,6 +35,7 @@ import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
 import { gitIsAncestor, validateCandidateChangelog } from "./lib/release-candidate-changelog.mts";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
+import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
 import { evaluateReleasePublishGates } from "./lib/release-publish-gates.mts";
 import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-evidence.mts";
 import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
@@ -52,6 +53,7 @@ import {
 import {
   PluginSdkApiAcknowledgementError,
   findPluginSdkApiReleaseNoteOmissions,
+  isPluginSdkApiAcknowledgement,
   validatePluginSdkApiReleaseEvidence,
 } from "./plugin-sdk-api-release-evidence.mjs";
 import { runReleasePublishPreflight } from "./release-publish-preflight.mts";
@@ -330,9 +332,11 @@ export function parseArgs(argv: string[]) {
   }
   if (
     options.pluginSdkApiAcknowledgement &&
-    !/^[a-f0-9]{8}$/u.test(options.pluginSdkApiAcknowledgement)
+    !isPluginSdkApiAcknowledgement(options.pluginSdkApiAcknowledgement)
   ) {
-    throw new Error("--plugin-sdk-api-acknowledgement must be an 8-character lowercase digest");
+    throw new Error(
+      "--plugin-sdk-api-acknowledgement must be an 8-character lowercase digest, optionally followed by @<qualified-predecessor-tag>",
+    );
   }
   options.workflowRef ||= "main";
   if (options.workflowRef !== "main") {
@@ -1461,14 +1465,37 @@ async function waitForSuccessfulRun(
       if (info.conclusion !== "success") {
         throw new Error(summarizeFailedRun(info));
       }
-      if (info.workflowName !== expected.workflowName) {
+      // Only these workflow paths can supply recovery candidates. The strict
+      // verifier below authenticates the exact recovery operation and producer.
+      const workflowPath =
+        typeof info.workflowPath === "string" ? info.workflowPath.split("@", 1)[0] : undefined;
+      const isFullReleaseValidation = expected.workflowName === "Full Release Validation";
+      const receiptRecovery =
+        isFullReleaseValidation &&
+        workflowPath === ".github/workflows/full-release-receipt-recovery.yml";
+      const sealedRecovery =
+        isFullReleaseValidation &&
+        workflowPath === ".github/workflows/openclaw-release-prepare.yml";
+      const protectedRecoveryTag =
+        sealedRecovery &&
+        PUBLISH_TOOLING_TAG_PATTERN.test(info.headBranch ?? "") &&
+        info.headBranch?.startsWith(`release-publish/${info.headSha.slice(0, 12)}-`);
+      if (
+        info.workflowName !== expected.workflowName &&
+        !receiptRecovery &&
+        !(sealedRecovery && (info.headBranch === "main" || protectedRecoveryTag))
+      ) {
         throw new Error(
           `run ${runId} workflow mismatch: expected ${expected.workflowName}, got ${info.workflowName}`,
         );
       }
       const acceptsPinnedWorkflow =
         expected.allowShaPinnedWorkflowRef && isShaPinnedReleaseValidationBranch(info.headBranch);
-      if (info.headBranch !== expected.workflowRef && !acceptsPinnedWorkflow) {
+      if (
+        info.headBranch !== expected.workflowRef &&
+        !acceptsPinnedWorkflow &&
+        !protectedRecoveryTag
+      ) {
         throw new Error(
           `run ${runId} branch mismatch: expected ${expected.workflowRef}, got ${info.headBranch}`,
         );
@@ -1554,7 +1581,6 @@ export function buildPrepareCommand(
     ["plugin_publish_scope", options.pluginPublishScope],
     ["publish_openclaw_npm", "true"],
     ["release_profile", "from-validation"],
-    ["wait_for_clawhub", "false"],
   ];
   if (options.npmTelegramRunId) {
     fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
@@ -1834,8 +1860,10 @@ async function runTelegramIfNeeded(
   if (coversPackageTelegram && options.telegramProviderMode === "mock-openai") {
     const waived = qualificationManifest.waivers?.some(
       (waiver: JsonRecord) =>
-        waiver.jobName ===
-        "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+        waiver.childRole === "releaseChecksCandidate" &&
+        (waiver.jobName === undefined ||
+          waiver.jobName ===
+            "Run package acceptance / Telegram package acceptance / Run package Telegram E2E"),
     );
     if (waived) {
       return { status: "waived", providerMode: "mock-openai" };
@@ -1913,6 +1941,14 @@ function checkCandidateAndroidVersion(targetSha: string, tag: string) {
   if (release?.channel !== "stable") {
     return undefined;
   }
+  const manifestPath = run(
+    "git",
+    ["ls-tree", "--name-only", targetSha, "--", "apps/android/version.json"],
+    { capture: true },
+  ).trim();
+  if (!manifestPath) {
+    return undefined;
+  }
   const manifest: unknown = JSON.parse(
     run("git", ["show", `${targetSha}:apps/android/version.json`], { capture: true }),
   );
@@ -1928,7 +1964,7 @@ function checkCandidateAndroidVersion(targetSha: string, tag: string) {
     targetVersion,
     message: matches
       ? `PASS: Android version ${androidVersion} matches release train ${targetVersion}.`
-      : `WARNING: Android version ${androidVersion} does not match release train ${targetVersion}; run node --import tsx scripts/android-pin-version.ts --version ${targetVersion} before tagging, or accept that Android will not ship for this release.`,
+      : `WARNING: Legacy Android version ${androidVersion} does not match release train ${targetVersion}; Android APK publication is skipped.`,
   };
 }
 
@@ -2189,7 +2225,10 @@ async function main() {
     runId: options.fullReleaseRunId,
     runAttempt: fullRun.runAttempt,
     sourceSha: targetSha,
-    toolingSha: fullRun.headSha,
+    toolingSha:
+      retainedPublicationArtifactSource(fullManifest)?.workflow.sha ??
+      fullValidationEvidence.qualification?.qualificationSha ??
+      fullRun.headSha,
     outputDir: npmDir,
     token: run("gh", ["auth", "token"], { capture: true }).trim(),
   });

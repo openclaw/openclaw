@@ -5,7 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { readImageMetadataFromHeader } from "../../media/image-ops.js";
+import { readImageMetadataFromHeader } from "../../media/image-header-metadata.js";
 import type {
   ComputerActResult,
   ComputerUseCapabilityDescriptor,

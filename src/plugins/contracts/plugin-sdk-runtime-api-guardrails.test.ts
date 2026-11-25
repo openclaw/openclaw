@@ -20,6 +20,9 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = (
 ).split(" ");
 
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
+  [runtimeApiPluginFile("amazon-bedrock")]: [
+    'export { createConverseStreamFn } from "./stream.runtime.js";',
+  ],
   [runtimeApiPluginFile("facetime")]: [
     'export { createFaceTimeRuntime, type FaceTimeRuntime } from "./src/runtime.js";',
   ],

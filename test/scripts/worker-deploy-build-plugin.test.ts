@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { encodePngRgba } from "rastermill";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { build } from "tsdown";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";

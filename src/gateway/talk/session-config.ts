@@ -189,6 +189,7 @@ export async function buildTalkTranscriptionConfig(
   requestedProvider?: string,
   requestedModel?: string,
   agentId?: string,
+  fileTranscription?: ReturnType<typeof resolveTalkFileTranscriptionConfig>,
 ) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
@@ -206,7 +207,7 @@ export async function buildTalkTranscriptionConfig(
     !voiceModelDefault &&
     !normalizeOptionalString(requestedModel) &&
     Object.keys(providerConfigs).length === 0
-      ? await resolveTalkFileTranscriptionConfig(config, agentId)
+      ? await (fileTranscription ?? resolveTalkFileTranscriptionConfig(config, agentId))
       : undefined;
   // A voice-note model nobody can run must not take Talk from a streaming
   // provider that can; it keeps the path only to report what is missing.
@@ -225,6 +226,17 @@ export async function buildTalkTranscriptionConfig(
     providers: providerConfigs,
     model: voiceModelDefault?.model,
     file,
+    // The path chosen above, reported by talk.catalog so clients need not
+    // re-derive this precedence from config. `streaming-auto`: nothing names a
+    // provider, so the runtime picks the first realtime provider with a key,
+    // whether or not the Voice Call config holds options for some of them.
+    source: file
+      ? ("media-understanding" as const)
+      : !provider && voiceModelDefault
+        ? ("voice-model" as const)
+        : provider
+          ? ("streaming" as const)
+          : ("streaming-auto" as const),
   };
 }
 

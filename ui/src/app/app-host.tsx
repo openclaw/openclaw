@@ -106,6 +106,7 @@ export class ShellOwner
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;
   custodianMinimizeRequestId = 0;
+  firstUse = false;
   lastConcreteRouteId: RouteId | undefined;
   lastLocalePrefSignature: string | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;
@@ -493,14 +494,10 @@ export class ShellOwner
       this.syncConnectionFeedback(state.gatewayStatus.kind);
       if ((!state.settingsTakeover || state.railAvailable) && !state.nativeEmbed) {
         Object.assign(this.navigationSidebar, state.sidebarProperties, {
-          gatewayStatus: state.gatewayStatus,
+          gatewayStatus: state.chromeGatewayStatus,
           connectionRecovery: this.connectionRecovery,
           connectionFlagVisible: this.connectionFlagVisible,
-          // The floating refresh notice speaks for the collapsed sidebar.
-          connectionFlagAllowed:
-            state.navCollapsed &&
-            !state.mobileNavLayout &&
-            !state.floatingUpdateCard.refreshRequired,
+          connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
         });
       }
       this.syncNavigationPresentation(state);

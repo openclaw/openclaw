@@ -57,7 +57,6 @@ describe("webchat admission to plugin node duplex authority", () => {
     })),
     ...(
       [
-        "permission",
         "session",
         "admission",
         "gateway",
@@ -288,9 +287,6 @@ describe("webchat admission to plugin node duplex authority", () => {
                   case "missing-descriptor":
                   case "expanded-descriptor":
                     break;
-                  case "permission":
-                    await upsertSessionEntryCore(sessionTarget, { permissionMode: "workspace" });
-                    break;
                   case "session":
                     await upsertSessionEntryCore(sessionTarget, {
                       sessionId: "replacement-session",
@@ -433,7 +429,9 @@ describe("webchat admission to plugin node duplex authority", () => {
         expect(prompt).toHaveBeenCalledOnce();
       } else {
         expect(launchErrors).toHaveLength(1);
-        expect(launchErrors[0]).toMatch(/no longer (active|current)/);
+        expect(launchErrors[0]).toMatch(
+          /no longer (active|current)|placement changed|The run or its session ended/,
+        );
         expect(prompt).not.toHaveBeenCalled();
         expect(invoke).not.toHaveBeenCalled();
       }

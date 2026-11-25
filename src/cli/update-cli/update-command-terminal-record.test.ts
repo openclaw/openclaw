@@ -3,8 +3,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as cleanup from "../../commands/update-automatic-cleanup.js";
 import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import { createRetainedCheckpointFixture } from "../../infra/update-retained-checkpoint.test-support.js";
 import {
@@ -170,7 +170,7 @@ describe("owned completed update publication", () => {
     expect(output).toHaveBeenCalledTimes(1);
   });
 
-  it("publishes the durable verified build when fresh-owned cleanup cannot snapshot changing history", async () => {
+  it("publishes the durable verified build when fresh-owned cleanup fails", async () => {
     const f = fixture();
     f.result.after = { ...after, sha: "a".repeat(40) };
     const captured = await f.capture();
@@ -178,12 +178,12 @@ describe("owned completed update publication", () => {
     expect(captured?.record.status).toBe("succeeded");
     const before = fs.readFileSync(f.databasePath);
     f.release();
-    const snapshotOwners: Array<string | undefined> = [];
-    const snapshotRead = vi
-      .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
+    const cleanupOwners: Array<string | undefined> = [];
+    const cleanupAttempt = vi
+      .spyOn(cleanup, "cleanupCompletedUpdateRecovery")
       .mockImplementation(() => {
-        snapshotOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
-        throw new Error("live database is changing");
+        cleanupOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
+        return Promise.reject(new Error("synthetic cleanup failure"));
       });
     const reportPath = path.join(root, "update-reports", `${f.run.runId}.md`);
     let savedAtPublication: string | undefined;
@@ -198,11 +198,10 @@ describe("owned completed update publication", () => {
     });
     expect(result.status).toBe("ok");
     expect(savedAtPublication).toContain(after.version);
-    // Publication still uses captured facts. Only independently acquired offline
-    // cleanup custody may attempt a new snapshot after the update executor closes.
-    expect(snapshotOwners.length).toBeGreaterThan(0);
-    expect(snapshotOwners.every((role) => role === "agent-embedded")).toBe(true);
-    expect(result.steps.at(-1)?.advisory?.message).toContain("live database is changing");
+    // Publication still uses captured facts when separately admitted cleanup fails.
+    expect(cleanupOwners.length).toBeGreaterThan(0);
+    expect(cleanupOwners.every((role) => role === "agent-embedded")).toBe(true);
+    expect(result.steps.at(-1)?.advisory?.message).toContain("synthetic cleanup failure");
     expect(fs.readFileSync(f.databasePath)).toEqual(before);
     expect(jsonOutput).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -213,7 +212,7 @@ describe("owned completed update publication", () => {
     );
     expect(jsonOutput.mock.calls[0]?.[0]).not.toHaveProperty("captured");
     // A historical report is not permission for the next update to skip admission.
-    snapshotRead.mockRestore();
+    cleanupAttempt.mockRestore();
     f.write(
       "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES(?, ?, ?)",
       `update.recovery.${f.run.runId}`,

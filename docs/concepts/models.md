@@ -61,6 +61,33 @@ the session.
   </Step>
 </Steps>
 
+### No model configured
+
+OpenClaw does not pick a model for you. When no primary is set and no
+configured provider lists a model, the agent has no model:
+
+- Agent turns stop before any model call and reply with how to choose one:
+  pick a model in **Settings → Models**, send `/model <provider/model>` in
+  chat, or run `openclaw models set <provider/model>`. Attachment
+  preprocessing, such as audio transcription with a configured or detected
+  media provider, runs earlier in the turn and can still run.
+- Chat commands that need no model, such as `/help`, `/status`, `/models`,
+  `/model` and `/new`, still run. `/status` shows the model as not configured.
+  Commands that change model settings, such as `/think` and `/fast`, reply with
+  the setup message.
+- `openclaw models status` and the Gateway startup log report the model as not
+  configured.
+- No utility model is derived and no provider catalog is loaded on behalf of
+  an unconfigured primary.
+
+Signing in to a provider during onboarding writes its default model as the
+primary. Releases through 2026.11.6 picked a model when none was configured:
+`openai/gpt-6-astra`, or the first configured provider model when OpenAI did
+not list it. On update from those releases, `openclaw doctor --fix` writes the
+model the install was running as `agents.defaults.model.primary`, so it keeps
+working unchanged. The OpenAI model is written only when OpenAI credentials are
+available.
+
 Related model-config surfaces:
 
 - `agents.defaults.models` stores aliases and per-model settings. After legacy-policy migration, adding an entry does not restrict model overrides.
@@ -151,10 +178,14 @@ model still updates the preference.
 
 The Gateway prepares one model catalog for the CLI, `/models`, the Control UI,
 and native apps. Chat and session metadata read published rows without starting
-provider discovery. Ordinary `models.list` requests reuse the published catalog;
-provider response-cache expiry alone does not rebuild it. Startup, changed
-configuration or credentials, plugin and hosted metadata updates, and explicit
-**Refresh** own provider catalog acquisition. Startup discovers provider inventory
+provider discovery. Ordinary `models.list` requests return the published catalog
+immediately. When a provider's live model list is older than 15 minutes and its
+response cache has expired, the request also lists that provider again in the
+background without marking it pending, so pickers show no loading state; newly
+launched provider models appear without a restart, and open pickers update when
+the new list is published. A provider that caches its list
+for longer than 15 minutes keeps that longer lifetime. Startup, changed configuration or credentials, plugin and hosted metadata
+updates, and explicit **Refresh** also acquire the provider catalog. Startup discovers provider inventory
 in the background; a later configuration or credential change rediscovers only
 the affected providers. Native harnesses such as Codex discover models and account
 readiness on demand for the selected agent: opening its model picker or catalog,
@@ -196,9 +227,10 @@ a background refresh. Hover, focus, or tap it to see which providers are refresh
 existing models stay usable, and the open picker updates when discovery completes.
 An empty picker shows “Loading models…” until its first models arrive.
 Gateway startup and credential changes
-also refresh the affected catalog. Use **Refresh** in Models or
-`openclaw models list --refresh` to request another refresh, including newly
-released models. **Retry** requests discovery again after a failure.
+also refresh the affected catalog, and opening a picker relists any provider list
+older than 15 minutes whose response cache has expired. Use **Refresh** in Models or
+`openclaw models list --refresh` to request a refresh right away. **Retry**
+requests discovery again after a failure.
 
 If a credential refresh loses its plugin generation, OpenClaw retries publication
 once against current plugins. If a newer publication supersedes that refresh,
@@ -359,6 +391,11 @@ configured `agentRuntime` remains the default:
   },
 }
 ```
+
+In **Settings → Models**, the **Model** and **Fallback model** menus show the
+available harness choices. Choosing one saves it as the global default for that
+specific model. Other models keep their own settings, and agent-specific
+overrides still take precedence. Choosing a harness in chat changes only that session.
 
 The Gateway keeps one underlying model and checks each additional runtime against
 the current account, route, and enabled harness. A choice does not grant access,
@@ -526,9 +563,11 @@ Gateway to publish the new prices.
 
 OpenClaw can refresh the model metadata shipped by installed provider plugins
 without waiting for a new OpenClaw release. The Gateway makes one background
-JSON `GET` at startup and then checks at most every six hours. The request sends
-no prompts, credentials, model usage, or configuration payload beyond the
-normal HTTP user agent and conditional cache headers.
+JSON `GET` at startup and then checks at most every six hours. Changing
+`models.catalogRefresh.url` or `models.catalogRefresh.enabled` on a running
+Gateway checks the new source at once. The request sends no prompts,
+credentials, model usage, or configuration payload beyond the normal HTTP user
+agent and conditional cache headers.
 
 On memory-constrained hosts, automatic checks wait while available memory is at
 or below 20% of the process limit and retry after one minute. The current catalog
@@ -562,7 +601,9 @@ rules.
 
 The Gateway owns catalog writes while it is running. `openclaw models refresh`
 requires exclusive offline ownership and reports the saved download; the next
-Gateway start loads compatible metadata. An explicit Gateway model-list refresh
+Gateway start loads compatible metadata. Without a running Gateway, local
+catalog reads such as `openclaw models list` describe listed models with the
+saved hosted metadata too. An explicit Gateway model-list refresh
 triggers adoption after returning the current rows; it does not wait for adoption
 or another agent's discovery. A corrupt saved bundle leaves the accepted
 generation serving.

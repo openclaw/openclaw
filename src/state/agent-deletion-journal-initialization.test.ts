@@ -159,13 +159,7 @@ it("ignores a reconstructed reindex-lock hold while still reporting a missing re
     targets: [expect.objectContaining({ agentId: "main", path: pathname })],
     unverifiedTargets: [],
     warnings: [`Skipped missing registered agent database ${missingPath}.`],
-    registryRemovals: [
-      {
-        agentId: "openclaw",
-        path: missingPath,
-        change: `Removed missing agent database registry entry ${missingPath}.`,
-      },
-    ],
+    registryRemovals: [],
   });
   expect(fs.existsSync(lockPath)).toBe(true);
 });

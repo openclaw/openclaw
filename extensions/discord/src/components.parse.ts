@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isDiscordAgentControlCustomId } from "./component-custom-id.js";
 import { DISCORD_COMPONENT_SELECT_TYPES } from "./components.types.js";
 import type {
   DiscordComponentBlock,
@@ -175,6 +176,13 @@ function parseSelectOptions(
   });
 }
 
+// Presentation sends reach this parser too, so it keeps their stateless agent-control ids.
+// Other internal ids (approvals, questions) stay builder-only.
+function readAgentControlCustomId(raw: unknown): string | undefined {
+  const customId = normalizeOptionalString(raw);
+  return isDiscordAgentControlCustomId(customId) ? customId : undefined;
+}
+
 function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpec {
   const obj = requireObject(raw, label);
   const style = normalizeOptionalString(obj.style) as DiscordComponentButtonStyle | undefined;
@@ -192,6 +200,7 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
     disabled: asBoolean(obj.disabled),
     reusable: asBoolean(obj.reusable),
     allowedUsers: readOptionalStringArray(obj.allowedUsers, `${label}.allowedUsers`),
+    internalCustomId: readAgentControlCustomId(obj.internalCustomId),
   };
 }
 
@@ -207,6 +216,7 @@ function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpe
     maxValues: readOptionalInteger(obj.maxValues, `${label}.maxValues`, { min: 1, max: 25 }),
     options: parseSelectOptions(obj.options, `${label}.options`),
     allowedUsers: readOptionalStringArray(obj.allowedUsers, `${label}.allowedUsers`),
+    internalCustomId: readAgentControlCustomId(obj.internalCustomId),
   };
 }
 

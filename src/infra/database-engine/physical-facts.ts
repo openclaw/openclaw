@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { EngineConnection, PostgresSqlConnection } from "../sql-connection.js";
+import { isPostgresSqlConnection } from "../sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   getOrLoadSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
 } from "../sqlite-database-admission.js";
+import { postgresReadSnapshots } from "../sqlite-schema-scope.js";
 import type { StoreSchema } from "./contract.js";
 import {
   postgresPhysicalFactsKey as admissionKey,
@@ -27,6 +29,13 @@ const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
 
 export function getPostgresPhysicalFacts(db: EngineConnection, options?: { refresh?: boolean }) {
+  if (isPostgresSqlConnection(db) && db.isTransaction && !options?.refresh) {
+    const snapshot = postgresReadSnapshots.get(db);
+    // Shared-state readers retain their live admission, deadline, and cancellation checks.
+    if (snapshot?.schema.store === "agent") {
+      return db.isOpen && db.anchor.isOpen ? snapshot.schema : undefined;
+    }
+  }
   return getSqliteDatabaseAdmission(db, admissionKey, options);
 }
 

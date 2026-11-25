@@ -30,8 +30,10 @@ import {
   mockCompactHooksPluginMetadata,
   resolveCompactHooksApiKeyMock,
   type CompactHooksQueuedCompaction,
+  wrapCompactHooksEntryPoints,
   type MockResolvedModel,
 } from "./compact.hooks.metadata.test-support.js";
+import { mockNonDurableCompactionRuntime } from "./compact.hooks.non-durable-mocks.test-support.js";
 import {
   mockCompactHooksSkills,
   mockCompactHooksTools,
@@ -122,7 +124,7 @@ export const resolveSessionAgentIdsMock = vi.fn<
 const resolveAgentConfigMock = vi.fn((_config?: unknown, _agentId?: string): unknown => undefined);
 let fixture: { workspaceDir: string; sessionId: string };
 export const resolveDefaultAgentDirMock = vi.fn<() => string>();
-export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
+const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
 function createSelectedAgentHarnessMock(params: {
   agentHarnessId?: string;
@@ -568,9 +570,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   }));
 
   if (!options.durableSession) {
-    vi.doMock("../sessions/model-registry-runtime.js", () => ({
-      getModelRegistryRuntime: getModelRegistryRuntimeMock,
-    }));
+    mockNonDurableCompactionRuntime(getModelRegistryRuntimeMock);
   }
 
   vi.doMock("../../hooks/internal-hooks.js", async () => {
@@ -661,7 +661,6 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       getApiKeyForModelMock(params),
     hasUsableCustomProviderApiKey: vi.fn(() => false),
     resolveProviderEntryApiKeyProfileReference: resolveProviderEntryApiKeyProfileReferenceMock,
-    resolveModelAuthModeAsync: vi.fn(() => "env"),
     shouldPreferExplicitConfigApiKeyAuth: shouldPreferExplicitConfigApiKeyAuthMock,
   }));
 
@@ -915,14 +914,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
 
   return {
     ...compactModule,
-    compactEmbeddedAgentSession: (params, host = {}) =>
-      compactQueuedModule.compactQueuedEmbeddedAgentSession(params, {
-        ...host,
-        sourceAuthority: host.sourceAuthority ?? {
-          assertActive: host.assertActive ?? (() => {}),
-          operatorAuthority: undefined,
-        },
-      }),
+    ...wrapCompactHooksEntryPoints(compactModule, compactQueuedModule),
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
   };
