@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -59,6 +60,8 @@ type Source = {
   sources?: WorkspaceSkillSources;
   fingerprint?: string;
   unavailable?: boolean;
+  /** A config refresh, unlike shutdown or eviction, permits one read retry. */
+  retiredByRefresh?: true;
 };
 type DiscoveryState = {
   sources: Map<string, Source>;
@@ -258,10 +261,28 @@ function readRegisteredSource({ key, source }: Awaited<ReturnType<typeof registe
   return source.sources;
 }
 
-async function publishRegisteredSource(registration: Awaited<ReturnType<typeof registerSource>>) {
+async function publishRegisteredSource(
+  registration: Awaited<ReturnType<typeof registerSource>>,
+  retried = false,
+): Promise<WorkspaceSkillSources> {
   const { source } = registration;
   if (source.dirty || !source.sources) {
-    await scanDirtySources();
+    await scanDirtySources().catch((error: unknown) => {
+      if (retried || !source.retiredByRefresh) {
+        throw error;
+      }
+    });
+  }
+  // Reload can remove a registration mid-scan. Retry its captured read, but
+  // never let an old read restore watching disabled by the active config.
+  if (!retried && source.retiredByRefresh) {
+    return publishRegisteredSource(
+      await registerSource(
+        source.selection,
+        source.watch && getRuntimeConfigSnapshot()?.skills?.load?.watch !== false,
+      ),
+      true,
+    );
   }
   return readRegisteredSource(registration);
 }
@@ -474,6 +495,11 @@ async function resetSkillsDiscoverySources(
   const activePool = retireWorker ? state.pool : undefined;
   if (retireWorker) {
     state.pool = undefined;
+  }
+  if (!retireWorker) {
+    for (const source of state.sources.values()) {
+      source.retiredByRefresh = true;
+    }
   }
   state.sources.clear();
   state.plans.clear();

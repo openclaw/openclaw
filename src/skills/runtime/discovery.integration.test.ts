@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.types.js";
@@ -316,6 +320,59 @@ it.each([false, true])(
     }
   },
 );
+
+function pauseNextDiscoveryScan() {
+  const scanning = createDeferred();
+  const release = createDeferred();
+  const run = vi.spyOn(WorkerTaskPool.prototype, "run");
+  run.mockImplementationOnce(async function (
+    this: WorkerTaskPool<unknown, unknown>,
+    ...args: Parameters<WorkerTaskPool<unknown, unknown>["run"]>
+  ) {
+    scanning.resolve();
+    await release.promise;
+    run.mockRestore();
+    return this.run(...args);
+  });
+  return { scanning: scanning.promise, release: () => release.resolve() };
+}
+
+it.each([true, false])(
+  "republishes a read retired by a config refresh (active watching: %s)",
+  async (watch) => {
+    await write("Current instructions");
+    const scan = pauseNextDiscoveryScan();
+    const read = descriptions();
+    await scan.scanning;
+    setRuntimeConfigSnapshot({ skills: { load: { watch } } });
+    const refresh = refreshSkillsDiscovery({ reason: "config-change" });
+    try {
+      scan.release();
+      await expect(read).resolves.toEqual(["Current instructions"]);
+      await refresh;
+      await write("Edited after reload");
+      await completePassiveScan();
+      expect(await descriptions(request(), watch)).toEqual([
+        watch ? "Edited after reload" : "Current instructions",
+      ]);
+    } finally {
+      await Promise.allSettled([read, refresh]);
+      clearRuntimeConfigSnapshot();
+    }
+  },
+);
+
+it("rejects a read retired by shutdown instead of republishing it", async () => {
+  await write("Current instructions");
+  const scan = pauseNextDiscoveryScan();
+  const read = descriptions();
+  await scan.scanning;
+  const closed = closeSkillsWatchers();
+  const outcome = expect(read).rejects.toThrow("worker task pool closed");
+  scan.release();
+  await outcome;
+  await closed;
+});
 
 it("keeps each source environment while refreshing a reused worker's plans and prompt paths", async () => {
   const firstHome = temporary.make("skills-first-home-");
