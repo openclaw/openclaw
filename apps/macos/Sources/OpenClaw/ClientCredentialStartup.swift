@@ -17,7 +17,7 @@ enum ClientCredentialStartup {
     nonisolated static func maintenanceBlockedRecovery(detail: String)
     -> (title: String, message: String, detail: String) {
         let message = [
-            "Credential maintenance is blocked by another OpenClaw process or an owner that could not be verified. The app did not stop or replace it.",
+            "Credential maintenance is blocked by another OpenClaw process, or the lock owner could not be verified. The app did not stop or replace it.",
             "Resolve the reported conflict, then choose Retry. Change versions only if the matching CLI identifies incompatibility.",
         ].joined(separator: "\n\n")
         return ("Local credential maintenance is blocked", message, detail)
