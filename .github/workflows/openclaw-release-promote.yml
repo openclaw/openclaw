@@ -3,6 +3,10 @@ name: OpenClaw Release Button
 on:
   workflow_dispatch:
     inputs:
+      fast_track_request:
+        description: Fast-track exception request JSON; approval uses the npm-release environment
+        required: false
+        type: string
       prepared_artifact:
         description: Exact readiness artifact JSON from a successful OpenClaw Release Prepare run
         required: true
@@ -16,6 +20,7 @@ permissions:
   contents: read
 
 env:
+  FAST_TRACK_REQUEST_JSON: ${{ inputs.fast_track_request }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
@@ -45,6 +50,16 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.22.1"
+
+      - name: Setup trusted readiness dependencies
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+      - name: Install trusted readiness dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
       - name: Dispatch existing protected publisher
         id: dispatch
         env:
@@ -72,7 +87,8 @@ jobs:
     needs: publish
     if: needs.publish.result == 'success' && needs.publish.outputs.request != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    # Covers the 330-minute publisher wait in openclaw-release-ready.mjs verify.
+    timeout-minutes: 350
     permissions:
       actions: read
       contents: read
@@ -84,6 +100,16 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.22.1"
+
+      - name: Setup trusted readiness dependencies
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+      - name: Install trusted readiness dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
       - name: Verify the original publication, without redispatching
         env:
           GH_TOKEN: ${{ github.token }}
@@ -156,6 +182,16 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.22.1"
+
+      - name: Setup trusted readiness dependencies
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+      - name: Install trusted readiness dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
       - name: Publish the verified draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -231,6 +267,22 @@ jobs:
           path: ${{ runner.temp }}/linux-updater-carry
           if-no-files-found: ignore
 
+  plugin_npm_trust_closeout:
+    name: Close out beta.1 plugin trust
+    needs: [publish, finalize]
+    if: ${{ !cancelled() && needs.finalize.result == 'success' && needs.publish.outputs.npm_dist_tag == 'beta' && endsWith(needs.publish.outputs.release_tag, '-beta.1') }}
+    permissions:
+      actions: write
+      contents: read
+    uses: ./.github/workflows/plugin-npm-trust-closeout.yml
+    with:
+      release_tag: ${{ needs.publish.outputs.release_tag }}
+      source_sha: ${{ needs.publish.outputs.source_sha }}
+      tooling_sha: ${{ fromJSON(needs.publish.outputs.request).tooling.sha }}
+      tooling_ref: ${{ fromJSON(needs.publish.outputs.request).tooling.ref }}
+      release_run_id: ${{ needs.publish.outputs.release_run_id }}
+      release_run_attempt: ${{ format('{0}', fromJSON(needs.publish.outputs.request).releaseRunAttempt) }}
+
   dispatch_linux_mirror:
     name: Dispatch legacy Linux mirror after activation
     needs: [publish, finalize]
@@ -251,6 +303,16 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.22.1"
+
+      - name: Setup trusted readiness dependencies
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+      - name: Install trusted readiness dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
       - name: Dispatch detached Linux mirror
         timeout-minutes: 3
         env:
@@ -303,6 +365,16 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.22.1"
+
+      - name: Setup trusted readiness dependencies
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+      - name: Install trusted readiness dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
       - name: Create Linux release request token
         id: linux_request_token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
@@ -408,6 +480,16 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.22.1"
+
+      - name: Setup trusted readiness dependencies
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+      - name: Install trusted readiness dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
       - name: Dispatch detached Windows promotion
         env:
           GH_TOKEN: ${{ github.token }}

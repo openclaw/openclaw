@@ -49,7 +49,7 @@ import type {
   SessionEventReceipt,
 } from "./session-event-contract.js";
 import { createSessionEventReplyDelivery } from "./session-event-delivery.js";
-import { narrowSessionEventSettings } from "./session-event-policy.js";
+import { narrowSessionEventSettings } from "./session-event-policy-inheritance.js";
 import {
   assertSessionEventTargetCurrent,
   assertSessionEventSettingsCurrent,
@@ -146,7 +146,6 @@ export function enqueueSessionEventForHost(
       throw new Error("Session event occurrence is settled");
     }
     signal.throwIfAborted();
-    capturedOperatorAuthority?.assertCurrent();
     if (!accepted) {
       acceptanceAssertion?.();
     }
@@ -180,7 +179,6 @@ export function enqueueSessionEventForHost(
   const captureSources = () =>
     composeSessionSourceAssertion(
       [
-        operatorAuthority?.assertCurrent,
         accepted ? undefined : acceptanceAssertion,
         options.assertCurrent,
         options.expectedTarget?.assertCurrent,

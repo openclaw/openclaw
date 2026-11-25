@@ -218,34 +218,3 @@ describe("live terminal continuity with pending collaborators", () => {
     },
   );
 });
-
-it("renders a completed compaction once when its persisted entry carries the live identity", () => {
-  const items = buildChatItems(
-    createProps({
-      messages: [
-        {
-          role: "system",
-          timestamp: 2_000,
-          __openclaw: {
-            kind: "compaction",
-            id: "compaction-entry",
-            runId: "run-1",
-            itemId: "ovf-1",
-            tokensBefore: 756_078,
-            tokensAfter: 80_609,
-          },
-        },
-      ],
-      compactionStatus: {
-        phase: "complete",
-        runId: "run-1",
-        itemId: "ovf-1",
-        startedAt: 1_500,
-        completedAt: 2_000,
-      },
-    }),
-  );
-  expect(items.filter((item) => item.kind === "divider")).toEqual([
-    expect.objectContaining({ label: "Context compacted", metric: "saved 675.5k tokens (89.3%)" }),
-  ]);
-});

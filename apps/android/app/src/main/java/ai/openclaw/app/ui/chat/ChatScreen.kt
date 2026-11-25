@@ -4420,7 +4420,7 @@ private fun ChatPermissionPicker(
             )
             if (!selectable) {
               Text(
-                text = nativeString("Full access requires operator.admin access."),
+                text = nativeString("You don’t have permission to turn on Full access."),
                 style = ClawTheme.type.caption,
                 color = ClawTheme.colors.warning,
               )

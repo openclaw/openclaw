@@ -250,6 +250,23 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     );
   });
 
+  it.each([
+    { chunks: ["~", "\n~~note"], expected: "~\n~~note" },
+    { chunks: ["~", "~", "~lang"], expected: "~~~lang" },
+    { chunks: ["~", "~", "note"], expected: "~\n~\nnote" },
+  ])(
+    "preserves fence line boundaries in final ACP speech: $chunks",
+    async ({ chunks, expected }) => {
+      const coordinator = await createCoordinator({
+        cfg: createAcpTestConfig({ tts: { enabled: true } }),
+      });
+      for (const text of chunks) {
+        await coordinator.deliver("block", { text }, { skipTts: true });
+      }
+      expect(coordinator.getAccumulatedBlockTtsText()).toBe(expected);
+    },
+  );
+
   it("keeps status notices out of ACP block TTS accumulation", async () => {
     const dispatcher = createDispatcher();
     const coordinator = await createCoordinator({

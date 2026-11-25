@@ -269,7 +269,9 @@ export function DashboardAuthorChip(props: {
               <>
                 <span class="dashboards-chip__prefix">{t("dashboardsPage.authorIs")}</span>
                 <SessionOwnerChip owner={picked()[0]!.avatar} size="row" />
-                <span>{authorDisplayName(picked()[0]!, props.selfId)}</span>
+                <span class="dashboards-chip__name">
+                  {authorDisplayName(picked()[0]!, props.selfId)}
+                </span>
               </>
             }
           >

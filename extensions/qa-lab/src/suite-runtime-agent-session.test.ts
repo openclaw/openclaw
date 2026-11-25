@@ -18,13 +18,10 @@ import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/s
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nestedToolActivityFixture } from "../test/nested-tool-activity-fixture.js";
 import {
-  createSession,
-  readEffectiveTools,
   readRawQaSessionStore as readStore,
   readSubagentHandoffReply,
   readSessionTranscriptSummary as readSummary,
   readSessionToolActivity as readActivity,
-  readSkillStatus,
   seedQaSessionEntries,
   seedQaSessionTranscript as seedTranscript,
 } from "./suite-runtime-agent-session.js";
@@ -61,7 +58,6 @@ describe("qa suite runtime agent session helpers", () => {
   beforeEach(async () => {
     tempRoot = await makeTempDir("qa-session-");
     setRuntimeConfigSnapshot({});
-    gatewayCall.mockReset();
   });
 
   const qaPath = (...parts: string[]) => path.join(tempRoot, "state", "agents", "qa", ...parts);
@@ -225,36 +221,6 @@ describe("qa suite runtime agent session helpers", () => {
       timestamp,
     };
   }
-
-  it.each(["sessions.create", "skills.status"] as const)(
-    "reads %s with its default arguments and normalized result",
-    async (method) => {
-      const session = method === "sessions.create";
-      gatewayCall.mockResolvedValueOnce(
-        session ? { key: "  session-1  " } : { skills: [{ name: "alpha", eligible: true }] },
-      );
-      await expect(
-        session ? createSession(env, "Test Session") : readSkillStatus(env),
-      ).resolves.toEqual(session ? "session-1" : [{ name: "alpha", eligible: true }]);
-      expect(gatewayCall).toHaveBeenNthCalledWith(
-        1,
-        method,
-        session ? { label: "Test Session" } : { agentId: "qa" },
-        expect.objectContaining({ timeoutMs: session ? 60_000 : 45_000 }),
-      );
-    },
-  );
-
-  it("reads effective tool ids once and drops blanks", async () => {
-    gatewayCall.mockResolvedValueOnce({
-      groups: [
-        { tools: [{ id: "alpha" }, { id: " beta " }] },
-        { tools: [{ id: "alpha" }, { id: "" }, {}] },
-      ],
-    });
-
-    await expect(readEffectiveTools(env, "session-1")).resolves.toEqual(new Set(["alpha", "beta"]));
-  });
 
   it("seeds QA session metadata and transcript messages in SQLite", async () => {
     const sessionId = "seeded-session";

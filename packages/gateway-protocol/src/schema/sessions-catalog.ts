@@ -48,6 +48,28 @@ export const SessionCatalogShareRouteSchema = closedObject({
   ambiguity: Type.Literal("multiple-results-or-next-cursor"),
 });
 
+const RouteSegment = SessionCatalogShareRouteSchema.properties.routeSegment;
+
+// Pretty links know the segment before they know the catalog. Canonical catalog links already have its ID.
+export const SessionsCatalogRouteParamsSchema = Type.Union([
+  closedObject({ routeSegment: RouteSegment }),
+  closedObject({ catalogId: NonEmptyString }),
+]);
+const RouteMethod = Type.Optional(NonEmptyString);
+export const SessionsCatalogRouteResultSchema = Type.Union([
+  closedObject({
+    catalogId: NonEmptyString,
+    routeSegment: RouteSegment,
+    methods: closedObject({
+      list: NonEmptyString,
+      read: NonEmptyString,
+      resolve: RouteMethod,
+      continue: RouteMethod,
+    }),
+  }),
+  Type.Null(),
+]);
+
 export const SessionCatalogDescriptorSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
@@ -66,9 +88,19 @@ export const SessionCatalogPullRequestSummarySchema = closedObject({
 });
 
 export const SessionCatalogSessionSchema = closedObject({
+  previewImageDigest: Type.Optional(Type.String({ pattern: "^sha256:[0-9a-f]{64}$" })),
   originalUrl: Type.Optional(Type.String({ maxLength: 4096 })),
   threadId: NonEmptyString,
   sourceHomeId: Type.Optional(NonEmptyString),
+  /** Producer-owned source provenance. An unclassified row permits explicit selection only. */
+  exportPolicy: Type.Optional(
+    closedObject({
+      origin: stringLiteralUnion(["native-local", "imported", "federated"]),
+      automatic: Type.Boolean(),
+      /** Host and thread retain one publication ID across restarts, and the provider binds the read to the selected backing source. */
+      stableHostThreadIdentity: Type.Optional(Type.Literal(true)),
+    }),
+  ),
   name: Type.Optional(Type.String()),
   /** Named tint imported from the source CLI session (SESSION_COLOR_IDS). */
   color: Type.Optional(Type.String()),
@@ -182,6 +214,7 @@ export const SessionCatalogTranscriptItemSchema = closedObject({
 });
 
 export const SessionsCatalogReadParamsSchema = closedObject({
+  includePreviewImage: Type.Optional(Type.Literal(true)),
   profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   ...SessionCatalogLocatorSchema.properties,
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -189,6 +222,16 @@ export const SessionsCatalogReadParamsSchema = closedObject({
 });
 
 export const SessionsCatalogReadResultSchema = closedObject({
+  /** Optional display-only media, requested by a viewer separately from transcript items. */
+  previewImage: Type.Optional(
+    closedObject({
+      name: Type.String({ minLength: 1, maxLength: 255 }),
+      mimeType: Type.Literal("image/png"),
+      digest: Type.String({ pattern: "^sha256:[0-9a-f]{64}$" }),
+      data: Type.String({ minLength: 4, maxLength: 699052 }),
+    }),
+  ),
+
   hostId: NonEmptyString,
   label: Type.Optional(Type.String()),
   threadId: NonEmptyString,
@@ -199,6 +242,11 @@ export const SessionsCatalogReadResultSchema = closedObject({
 export const SessionsCatalogContinueParamsSchema = SessionCatalogLocatorSchema;
 
 export const SessionsCatalogContinueResultSchema = closedObject({ sessionKey: NonEmptyString });
+
+export const SessionsCatalogResolveResultSchema = Type.Union([
+  closedObject({ sessionKey: NonEmptyString, sessionId: NonEmptyString }),
+  Type.Null(),
+]);
 
 export const SessionsCatalogImportParamsSchema = closedObject({
   profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
@@ -260,10 +308,14 @@ export type SessionsCatalogListParams = Static<typeof SessionsCatalogListParamsS
 export type SessionsCatalogListResult = Static<typeof SessionsCatalogListResultSchema>;
 export type SessionsCatalogHostEvent = Static<typeof SessionsCatalogHostEventSchema>;
 export type SessionCatalogTranscriptItem = Static<typeof SessionCatalogTranscriptItemSchema>;
+export type SessionsCatalogRouteParams = Static<typeof SessionsCatalogRouteParamsSchema>;
+export type SessionsCatalogRouteResult = Static<typeof SessionsCatalogRouteResultSchema>;
+export type SessionCatalogRouteMethods = NonNullable<SessionsCatalogRouteResult>["methods"];
 export type SessionsCatalogReadParams = Static<typeof SessionsCatalogReadParamsSchema>;
 export type SessionsCatalogReadResult = Static<typeof SessionsCatalogReadResultSchema>;
 export type SessionsCatalogContinueParams = Static<typeof SessionsCatalogContinueParamsSchema>;
 export type SessionsCatalogContinueResult = Static<typeof SessionsCatalogContinueResultSchema>;
+export type SessionsCatalogResolveResult = Static<typeof SessionsCatalogResolveResultSchema>;
 export type SessionsCatalogImportParams = Static<typeof SessionsCatalogImportParamsSchema>;
 export type SessionsCatalogImportResult = Static<typeof SessionsCatalogImportResultSchema>;
 export type SessionsCatalogArchiveParams = Static<typeof SessionsCatalogArchiveParamsSchema>;

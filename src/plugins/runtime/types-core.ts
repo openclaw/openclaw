@@ -154,7 +154,7 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
-    /** Admit a turn for this exact trusted channel plugin and its authenticated sender. */
+    /** Run a turn for this plugin's own channel; the host decides owner from `runContext.senderId`. */
     runCommandFromIngress: (
       opts: import("../../agents/command/types.js").AgentCommandIngressOpts,
       runtime: import("../../runtime.js").RuntimeEnv,

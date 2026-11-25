@@ -355,7 +355,9 @@ export function createGitHubPublishTool(
           onYield: options.onYield,
           signal,
           senderIsOwner: options.senderIsOwner,
-          ...(method === "sessions.github.action" ? { retainRequester: true as const } : {}),
+          ...(method === "sessions.github.action" || caller.operatorAuthority?.participationCeiling
+            ? { retainRequester: true as const }
+            : {}),
           fenceSuccessors: true,
           run: ({ assertCurrent, signal: handoffSignal }) =>
             withGatewayToolCallerIdentity(
@@ -642,7 +644,7 @@ export function createGitHubPublishTool(
         ...(input.draft !== undefined ? { draft: input.draft } : {}),
         ...(input.workspacePath !== undefined ? { workspacePath: input.workspacePath } : {}),
       };
-      if (input.workspacePath !== undefined) {
+      if (input.workspacePath !== undefined || caller.operatorAuthority?.participationCeiling) {
         return handoff("GitHub publication", "sessions.github.publish", publishParams);
       }
       const result = await callGateway<SessionGitHubPublicationResult>(

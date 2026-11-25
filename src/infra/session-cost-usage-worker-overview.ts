@@ -320,6 +320,7 @@ export async function projectUsageCostQuartersInWorker(params: {
           }
           addRollupToCostUsageSummary({
             rollup: replayed.rollup,
+            civilDays: operation.dayBucket.civilDays,
             startMs: operation.startMs,
             endMs: operation.endMs,
             formatDay,

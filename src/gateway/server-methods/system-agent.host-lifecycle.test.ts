@@ -298,7 +298,7 @@ it.for([
       await pendingChat;
       const expectedReply = completes
         ? `[openclaw] done: gateway.${action}`
-        : "system-agent approval authority is no longer active";
+        : "system-agent approval ended";
       expect(requestResponses.calls).toHaveLength(1);
       expect(rootsAtResponse).toEqual([expect.any(Number)]);
       expect(rootsAtResponse[0]).toBeGreaterThan(0);

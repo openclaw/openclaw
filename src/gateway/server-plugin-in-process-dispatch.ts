@@ -13,6 +13,7 @@ import {
   hasPreparedGatewayDeviceAuthority,
   readGatewayDeviceRevocationGuard,
 } from "./device-revocation.js";
+import { bindInProcessSessionRun } from "./in-process-session-run.js";
 import {
   isInternalApprovalCommitGuard,
   retainInternalApprovalCommitGuard,
@@ -48,19 +49,25 @@ export {
 export { captureOperatorToolGatewayRequestContinuationContext } from "./server-plugin-in-process-request-continuation.js";
 export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-runtime-client.js";
 
-/** Authorizes a sessionless agent execution against its captured Gateway and caller. */
+/** Authorizes background agent execution against its captured Gateway, caller and optional fork source. */
 export async function prepareInProcessAgentExecution(input: PrepareInProcessAgentExecutionOptions) {
   const params = { ...input };
   const inheritedAuthority = readOperatorToolGatewayAuthority();
-  const resolved = resolveInProcessGatewayDispatch(
-    "agent",
-    { agentId: params.agentId },
-    {
-      agentRunTracking: "plugin_subagent",
-      pluginRuntimeOwnerId: params.pluginRuntimeOwnerId,
-      resolveGatewayContext: params.resolveGatewayContext,
-    },
-  );
+  const requestParams = params.sessionRun
+    ? bindInProcessSessionRun(
+        {
+          agentId: params.agentId,
+          sessionKey: params.sessionRun.sessionKey,
+          idempotencyKey: params.sessionRun.runId,
+        },
+        params.sessionRun,
+      )
+    : { agentId: params.agentId };
+  const resolved = resolveInProcessGatewayDispatch("agent", requestParams, {
+    agentRunTracking: "plugin_subagent",
+    pluginRuntimeOwnerId: params.pluginRuntimeOwnerId,
+    resolveGatewayContext: params.resolveGatewayContext,
+  });
   // Profile verification updates the original connection. Sessionless work needs
   // that live principal, not the dispatch copy carrying session tracking metadata.
   const client = getPluginRuntimeGatewayRequestScope()?.client ?? resolved.client;
@@ -72,7 +79,6 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
   const assertLifetime = () => {
     resolved.assertContextCurrent();
     resolved.assertInvocationCurrent();
-    operatorSource?.authority.assertCurrent();
   };
   const assertCurrent = () => {
     assertLifetime();
@@ -115,7 +121,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
       assertLifetime();
       const authorization = await authorizeGatewayRequestPreDispatch({
         method: "agent",
-        requestParams: { agentId: params.agentId },
+        requestParams,
         client,
         context: resolved.context,
         methodRegistry:
@@ -163,21 +169,10 @@ export async function withInProcessGatewayDispatch<T>(
     releaseOperatorAuthority = captured?.release;
     resolved.assertContextCurrent();
     resolved.assertInvocationCurrent();
-    captured?.authority.assertCurrent();
     if (captured) {
       resolved.client = mergePluginRuntimeClientInternal(resolved.client, {
         operatorRunAuthority: captured.authority,
       });
-      const withCapturedAuthority = (assertCurrent: () => void) =>
-        composeSessionSourceAssertion([assertCurrent, captured.authority.assertCurrent]);
-      resolved.assertContextCurrent = withCapturedAuthority(resolved.assertContextCurrent);
-      resolved.assertSourceCurrent = withCapturedAuthority(resolved.assertSourceCurrent);
-      const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
-      if (assertCreatedInputSourceCurrent) {
-        resolved.assertCreatedInputSourceCurrent = withCapturedAuthority(
-          assertCreatedInputSourceCurrent,
-        );
-      }
     }
     // Only preparation refusals prove method work was never entered. Errors
     // from the callback may follow effects and must retain their original form.
@@ -398,6 +393,7 @@ export async function dispatchGatewayMethodInProcessRaw(
     }
     return await dispatchGatewayRequestInProcessRaw(method, params, {
       client: resolved.client,
+      parentHttpRequestAuthority: resolved.parentHttpRequestAuthority,
       context: resolved.context,
       expectFinal: options?.expectFinal,
       isWebchatConnect: resolved.isWebchatConnect,

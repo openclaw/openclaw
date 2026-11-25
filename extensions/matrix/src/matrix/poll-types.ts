@@ -255,15 +255,9 @@ export function buildPollResultsSummary(params: {
       continue;
     }
     const rawAnswers = parsePollResponseAnswerIds(event.content) ?? [];
-    const normalizedAnswers = Array.from(
-      new Set(
-        rawAnswers
-          .map((answerId) => normalizeOptionalString(answerId) ?? "")
-          .filter((answerId) => answerIds.has(answerId))
-          .slice(0, parsed.maxSelections),
-      ),
-    );
-    latestVoteBySender.set(senderId, normalizedAnswers);
+    // Answer IDs reference the exact strings in the poll start event.
+    const validAnswers = rawAnswers.filter((answerId) => answerIds.has(answerId));
+    latestVoteBySender.set(senderId, [...new Set(validAnswers.slice(0, parsed.maxSelections))]);
   }
 
   const voteCounts = new Map<string, number>(

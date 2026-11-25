@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfiguredModelFallbacks } from "../agents/model-selection-resolve.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
@@ -13,9 +14,10 @@ import {
   stripUnknownConfigKeys,
 } from "./doctor-config-analysis.js";
 
-const { noteMock, resolveEnabledProviderPluginIdsMock } = vi.hoisted(() => ({
+const { noteMock, resolveEnabledProviderPluginIdsMock, manifestPlugins } = vi.hoisted(() => ({
   noteMock: vi.fn(),
   resolveEnabledProviderPluginIdsMock: vi.fn(),
+  manifestPlugins: [] as unknown[],
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
@@ -23,9 +25,14 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
 vi.mock("../plugins/providers.js", () => ({
   resolveEnabledProviderPluginIds: resolveEnabledProviderPluginIdsMock,
 }));
+// mock-isolation: Unit tests do not discover installed plugins; load one manifest explicitly.
+vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: () => ({ manifestRegistry: { plugins: manifestPlugins } }),
+}));
 beforeEach(() => {
   noteMock.mockClear();
   resolveEnabledProviderPluginIdsMock.mockReset().mockReturnValue([]);
+  manifestPlugins.length = 0;
 });
 
 function expectContains(message: unknown, fragments: string[]) {
@@ -254,6 +261,34 @@ describe("collectImplicitFallbackClobberWarnings", () => {
         '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
       ].join("\n"),
     ]);
+  });
+});
+
+describe("deprecated configured models", () => {
+  it("warns with the Google catalog reason and leaves configured refs unchanged", async () => {
+    const manifest = JSON.parse(
+      readFileSync(
+        new URL("../../extensions/google/openclaw.plugin.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    manifestPlugins.push({ ...manifest, origin: "bundled" });
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "google/gemini-2.5-pro", fallbacks: ["google/gemini-2.5-flash-lite"] },
+        },
+        entries: { ops: { model: { primary: "google/gemini-2.5-pro", fallbacks: [] } } },
+      },
+    };
+
+    expect(await collectWarnings(cfg)).toEqual([
+      "- google/gemini-2.5-pro (agents.defaults.model.primary, agents.entries.ops.model.primary): Google serves gemini-2.5-pro as gemini-3.8-flash from Dec 1, 2026, billed at that model's rate. Choose a replacement model.",
+    ]);
+    expect(cfg.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-2.5-pro",
+      fallbacks: ["google/gemini-2.5-flash-lite"],
+    });
   });
 });
 

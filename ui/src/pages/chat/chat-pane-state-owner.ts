@@ -2,6 +2,7 @@ import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/
 import type {
   SessionCatalogHost,
   SessionCatalogProfileRelation,
+  SessionsCatalogReadResult,
   SessionCatalogSession,
   SessionSharingRole,
   MessageReactionSummary,
@@ -101,7 +102,6 @@ export abstract class ChatPaneStateOwner {
   awaitDomCommit = (): Promise<boolean> => this.updateComplete;
   isConnected = false;
   headerElement: HTMLElement | null = null;
-  historySentinel: HTMLElement | null = null;
   transcriptAnnouncement: HTMLElement | null = null;
   composerShell: HTMLElement | null = null;
   composerFloat: HTMLElement | null = null;
@@ -114,12 +114,7 @@ export abstract class ChatPaneStateOwner {
     this.transcript.syncViewportGeometry();
   };
   private registerPaneElement(
-    key:
-      | "headerElement"
-      | "historySentinel"
-      | "transcriptAnnouncement"
-      | "composerShell"
-      | "composerFloat",
+    key: "headerElement" | "transcriptAnnouncement" | "composerShell" | "composerFloat",
   ) {
     return (element: HTMLElement) => {
       this[key] = element;
@@ -137,7 +132,6 @@ export abstract class ChatPaneStateOwner {
     };
   }
   protected readonly registerHeaderElement = this.registerPaneElement("headerElement");
-  protected readonly registerHistorySentinel = this.registerPaneElement("historySentinel");
   protected readonly registerTranscriptAnnouncement =
     this.registerPaneElement("transcriptAnnouncement");
   protected readonly registerComposerShell = this.registerPaneElement("composerShell");
@@ -589,6 +583,7 @@ export abstract class ChatPaneStateOwner {
   readonly collaboration: {
     sharingStates: Map<string, ChatSessionSharingState>;
     suggestions: SessionSuggestion[];
+    liveResolutions: Map<string, boolean>;
     role: SessionSharingRole | undefined;
     busyIds: Set<string>;
     addOperation: symbol | undefined;
@@ -599,6 +594,7 @@ export abstract class ChatPaneStateOwner {
   } = {
     sharingStates: new Map(),
     suggestions: [],
+    liveResolutions: new Map(),
     role: undefined,
     busyIds: new Set(),
     addOperation: undefined,
@@ -671,6 +667,7 @@ export abstract class ChatPaneStateOwner {
   readonly publication: { binding: GitHubPublicationBinding | null } = { binding: null };
   readonly workspaceConflicts = { dismissedRefs: new Map<string, string>() };
   readonly history = projectChatFields<{
+    catalogPreviewImage: SessionsCatalogReadResult["previewImage"];
     catalogMessages: unknown[];
     catalogLoading: boolean;
     loadingOlder: boolean;
@@ -679,6 +676,7 @@ export abstract class ChatPaneStateOwner {
     catalogSession: SessionCatalogSession | null;
     catalogHost: SessionCatalogHost | null;
   }>({
+    catalogPreviewImage: undefined,
     catalogMessages: [],
     catalogLoading: false,
     loadingOlder: false,
@@ -690,9 +688,7 @@ export abstract class ChatPaneStateOwner {
   protected catalogLoadGeneration = 0;
   protected catalogRequestedSessionKey: string | null = null;
   protected olderLoadGeneration = 0;
-  protected historyObserver: IntersectionObserver | null = null;
-  protected historyObserverSentinel: HTMLElement | null = null;
-  protected historyObserverArmed = false;
+  protected historyReaderIntent = false;
   protected historyAutoLoadBlocked = false;
   protected historyIntentTimer: number | null = null;
   protected transcriptScrollTop: number | null = null;
@@ -741,7 +737,7 @@ export abstract class ChatPaneStateOwner {
   protected abstract reconcileWaitingApprovalSnapshot(
     approvalQueue?: ApplicationContext["overlays"]["snapshot"]["approvalQueue"],
   ): boolean;
-  protected abstract publishHeaderError(error: unknown, owner?: string): void;
+  protected abstract publishHeaderError(error: unknown, owner?: string, expected?: boolean): void;
   protected abstract probeSessionDiscussion(sessionKey: string): Promise<void>;
   protected abstract initialProgressCardTarget():
     | ReturnType<typeof resolveUiConversationIdentity>

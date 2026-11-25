@@ -15,6 +15,49 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const assertionScript = "scripts/e2e/lib/update-channel-switch/assertions.mjs";
 
+it.each([
+  { name: "already-current", version: "2026.11.15-beta.1", status: "skipped", exit: 0 },
+  { name: "different version", version: "2026.11.10-beta.3", status: "skipped", exit: 1 },
+  { name: "failed", version: "2026.11.15-beta.1", status: "failed", exit: 1 },
+])("checks the beta channel switch receipt: $name", ({ version, status, exit }) => {
+  const receipt = {
+    runId: "beta-switch",
+    phase: "finished",
+    status,
+    reason: "already-current",
+    target: { kind: "package", version },
+    steps: [{ step: "requested", status: "completed" }],
+  };
+  const result = spawnSync(
+    testNodeExecPath,
+    [assertionScript, "assert-update", "beta", "2026.11.15-beta.1"],
+    { encoding: "utf8", env: { ...process.env, UPDATE_JSON: JSON.stringify(receipt) } },
+  );
+  expect(result.status, result.stderr).toBe(exit);
+});
+
+it.each([
+  {
+    name: "owner refusal",
+    status: "1",
+    message:
+      "The resident launcher owns this installation. --channel stable requires the in-place installer, which cannot replace it.",
+    exit: 0,
+  },
+  { name: "successful switch", status: "0", message: "", exit: 1 },
+  { name: "unrelated failure", status: "1", message: "npm install failed", exit: 1 },
+])("checks the resident-owned Git-to-package refusal: $name", ({ status, message, exit }) => {
+  const result = spawnSync(
+    testNodeExecPath,
+    [assertionScript, "assert-owner-refusal", status, "--channel stable"],
+    {
+      encoding: "utf8",
+      env: { ...process.env, UPDATE_JSON: JSON.stringify({ ok: false, error: { message } }) },
+    },
+  );
+  expect(result.status, result.stderr).toBe(exit);
+});
+
 it("preserves the package-derived Git fixture identity through build and lifecycle completion", async () => {
   const root = tempDirs.make("update-channel-git-fixture-");
   const { file, write, json } = fixtureFiles(root);
@@ -24,7 +67,9 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
   write("dist/entry.js", runtimeEntry);
   json("dist/build-info.json", { commit: packageCommit, version: "2026.8.1" });
   execFileSync(testNodeExecPath, ["scripts/e2e/lib/package-git-fixture.mjs", "prepare", root]);
-  execFileSync(testNodeExecPath, [assertionScript, "prepare-git-fixture", root]);
+  const pnpmPin = "pnpm@12.15.0+sha512.fixture";
+  execFileSync(testNodeExecPath, [assertionScript, "prepare-git-fixture", root, pnpmPin]);
+  expect(JSON.parse(readFileSync(file("package.json"), "utf8")).packageManager).toBe(pnpmPin);
   mkdirSync(file("scripts/lib"), { recursive: true });
   for (const name of [
     "node-version.mjs",
@@ -126,4 +171,44 @@ it("rejects retained runtime staging at the channel update success boundary", ()
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("successful update retained runtime staging entries");
   expect(readFileSync(join(staging, "previous"), "utf8")).toBe("recoverable original");
+});
+
+it("checks that a detached release uses the selected commit, not local checkout input", () => {
+  const { file, write } = fixtureFiles(tempDirs.make("update-channel-detached-"));
+  const source = file("source");
+  const release = file("release");
+  mkdirSync(source);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", source, ...args], { encoding: "utf8" }).trim();
+  git("init", "-q");
+  write("source/operator-update-tracked.txt", "committed content\n");
+  git("add", ".");
+  git(
+    "-c",
+    "user.name=F",
+    "-c",
+    "user.email=f@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-qm",
+    "fixture",
+  );
+  const sha = git("rev-parse", "HEAD");
+  git("worktree", "add", "-q", "--detach", release, sha);
+  write("source/operator-update-tracked.txt", "retain tracked edit\n");
+  write("source/operator-update-notes.tmp", "retain user notes\n");
+  const check = () =>
+    spawnSync(testNodeExecPath, [assertionScript, "assert-detached-switch", source, release, sha], {
+      encoding: "utf8",
+    });
+  expect(check().status, check().stderr).toBe(0);
+  write("source/operator-update-notes.tmp", "");
+  expect(check().stderr).toContain("source operator-update-notes.tmp changed");
+  write("source/operator-update-notes.tmp", "retain user notes\n");
+  write("source/operator-update-tracked.txt", "corrupted\n");
+  expect(check().stderr).toContain("source operator-update-tracked.txt changed");
+  write("source/operator-update-tracked.txt", "retain tracked edit\n");
+  write("release/operator-update-tracked.txt", "retain tracked edit\n");
+  expect(check().stderr).toContain("local input leaked into the release");
 });

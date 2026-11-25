@@ -86,7 +86,6 @@ export type DurableDraftModelSelection = {
   agentRuntime?: string;
   thinkingLevel: string;
   cyberAccessProgram?: CyberAccessProgram;
-  daybreakAccessProgram?: Exclude<CyberAccessProgram, "standard">;
 };
 
 export type DurableComposerDraft = {
@@ -163,7 +162,11 @@ export type ChatGuardianNotice = {
 
 export type { ToolApprovalReview } from "../../../../src/shared/tool-approval-reviews.js";
 
-export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true };
+export type ChatQueueDisplayItem = ChatQueueItem & {
+  serverQueued?: true;
+  removing?: boolean;
+  cancelled?: true;
+};
 
 export type ChatQueueItem = {
   id: string;
@@ -217,7 +220,22 @@ export type ChatQueueItem = {
   sender?: SenderIdentity;
 };
 
+export type ChatCompaction = {
+  kind: "compaction";
+  key: string;
+  compactionId?: string;
+  phase: "active" | "complete";
+  label: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  durationMs?: number;
+  timestamp: number;
+  /** An actual agent run, never the standalone manual operation ID. */
+  runId?: string;
+};
+
 export type ChatItem =
+  | ChatCompaction
   | {
       kind: "message";
       key: string;
@@ -257,8 +275,6 @@ export type ChatItem =
   | {
       kind: "divider";
       key: string;
-      compaction?: "active" | "complete";
-      compactionId?: string;
       systemEvent?: "info";
       label: string;
       icon?: IconName;
@@ -362,6 +378,8 @@ export function accumulatedStreamText(
 
 /** A group of consecutive messages from the same role (Slack-style layout) */
 export type MessageGroup = {
+  /** Presentation of a real compaction event; no synthetic message or model call. */
+  compaction?: ChatCompaction;
   /** A hidden narrative message separates this activity from preceding tools. */
   startsActivityGroup?: true;
   kind: "group";

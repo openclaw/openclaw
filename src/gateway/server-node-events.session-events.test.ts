@@ -43,7 +43,7 @@ function nodeFixture(nodeId: string, overrides: Partial<NodeEventContext> = {}) 
     handleNodeEvent(ctx, nodeId, { event, payloadJSON: JSON.stringify(payload) }, opts);
 }
 
-it.each(["live", "revoked", "inline", "unscoped", "result-live", "result-revoked"])(
+it.each(["live", "inline", "unscoped", "result-live"])(
   "keeps original caller custody and delivery for remote exec: %s",
   async (mode) => {
     const resultFirst = mode.startsWith("result-");
@@ -69,21 +69,14 @@ it.each(["live", "revoked", "inline", "unscoped", "result-live", "result-revoked
     pairingCapture.mockResolvedValue({ nodeId, key: "guest-generation" });
     using pairingCurrent = vi.spyOn(pairing, "isNodePairingGenerationCurrent");
     pairingCurrent.mockResolvedValue(true);
-    let current = true;
     const authority = createTestOperatorAuthority({
       profileId: "original-guest",
       scopes: ["operator.write"],
       gatewayAccessGrant: null,
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("original guest revoked");
-        }
-      },
     });
     const producerTarget = {
       ...target("main", sessionKey),
       toolsAllow: ["sessions_spawn"],
-      assertCurrent: authority.assertCurrent,
     };
     let finish = () => {};
     captureTarget.mockImplementation(async () => {
@@ -143,7 +136,6 @@ it.each(["live", "revoked", "inline", "unscoped", "result-live", "result-revoked
     } else if (mode !== "inline") {
       vi.advanceTimersByTime(60_000);
     }
-    current = mode !== "revoked" && mode !== "result-revoked";
     const emit = nodeFixture(nodeId, {
       authorizeNodeSystemRunEvent: (params) =>
         registry.authorizeSystemRunEventWithState({
@@ -167,23 +159,18 @@ it.each(["live", "revoked", "inline", "unscoped", "result-live", "result-revoked
       },
       { connId: "guest-conn" },
     );
-    if (mode === "revoked") {
-      await expect(completion).rejects.toThrow("original guest revoked");
+    await completion;
+    if (delivered) {
       expectNoCalls(enqueue, handoff);
     } else {
-      await completion;
-      if (delivered) {
-        expectNoCalls(enqueue, handoff);
-      } else {
-        expect(handoff).toHaveBeenCalledExactlyOnceWith(
-          expect.any(String),
-          expect.objectContaining({
-            expectedTarget: producerTarget,
-            sessionKey,
-            deliveryContext: mode === "unscoped" ? undefined : deliveryContext,
-          }),
-        );
-      }
+      expect(handoff).toHaveBeenCalledExactlyOnceWith(
+        expect.any(String),
+        expect.objectContaining({
+          expectedTarget: producerTarget,
+          sessionKey,
+          deliveryContext: mode === "unscoped" ? undefined : deliveryContext,
+        }),
+      );
     }
     finish();
     expect((await invocation).mock.calls[0]?.[0]).toBe(delivered);

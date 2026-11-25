@@ -258,7 +258,10 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
             return undefined;
           }
         },
-        { timeout: 30_000 },
+        // Unlocking the receipt still leaves finalizer shutdown and a fresh Gateway boot.
+        // Hosted PG conformance observed startupz still returning 503 at 30s; allow a
+        // full startup budget while still requiring an exact new ready boot.
+        { timeout: 60_000 },
       )
       .toEqual({ status: 200, changed: true });
     const nextBoot = createDeferred<string | undefined>();
@@ -292,7 +295,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
 
   it(
     "joins interrupted cron finalization before restarting in process and reuses its PostgreSQL pool",
-    { timeout: 90_000 },
+    { timeout: 120_000 },
     async ({ signal }) => {
       await using resources = new AsyncDisposableStack();
       const prompt = "Report the interrupted in-process restart result.";

@@ -1,6 +1,9 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildAuthHealthSummary } from "../../../src/agents/auth-health.js";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -52,7 +55,7 @@ const subscriptions = [
   { name: "backup", used: 72, plan: "Pro" },
 ];
 
-async function openAccounts(page: Page, withUsage: boolean) {
+async function openAccounts(page: Page, withUsage: boolean, deferUsage = false) {
   const accounts = (withUsage ? subscriptions : subscriptions.slice(0, 2)).map(({ name }) => ({
     profileId: `openai:${name}`,
     email: `${name}@example.com`,
@@ -68,6 +71,9 @@ async function openAccounts(page: Page, withUsage: boolean) {
     profileOrder: ids,
   };
   const gateway = await installMockGateway(page, {
+    deferredRequests: deferUsage
+      ? ids.map((profileId) => ({ method: "codex.accountUsage", match: { profileId } }))
+      : [],
     featureMethods: [
       ...defaultControlUiFeatureMethods,
       "models.authOrderSet",
@@ -86,6 +92,21 @@ async function openAccounts(page: Page, withUsage: boolean) {
       },
     },
   });
+  if (deferUsage) {
+    await page.addInitScript(() => {
+      const firstFrame = () => {
+        const grid = document.querySelector(".model-providers__usage-bars");
+        if (!grid?.getBoundingClientRect().height) {
+          requestAnimationFrame(firstFrame);
+          return;
+        }
+        performance.mark("first-account-grid", {
+          detail: grid.querySelectorAll(".model-providers__usage-track").length,
+        });
+      };
+      requestAnimationFrame(firstFrame);
+    });
+  }
   await page.goto(`${suite.server.baseUrl}settings/model-providers`);
   return { gateway, card: await expandProvider(page, "openai"), ids, provider, accounts };
 }
@@ -165,6 +186,117 @@ suite.define(() => {
       ).toBe("xai:opaque-account");
     });
   });
+
+  it.each([400, 820, 1280])(
+    "keeps account columns in place as independent readings arrive at %ipx",
+    async (width) => {
+      await withPage(async ({ page }) => {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        const { card, gateway, ids } = await openAccounts(page, true, true);
+        const method = "codex.accountUsage";
+        const grid = card.locator(".model-providers__usage-bars");
+        const names = grid.locator(".model-providers__segment-name");
+        const credits = grid.getByRole("group", { name: "Credits" });
+        const capture = async (stage: string) => {
+          if (width !== 1280) {
+            return;
+          }
+          await page.mouse.move(0, 0);
+          const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [grid], {
+            elements: [card],
+            animations: "disabled",
+            scrollTo: card,
+          });
+          await writeFile(path.join(suite.artifactDir, stage + ".png"), frame.elements[0]!.png);
+          await writeFile(path.join(suite.artifactDir, stage + "-context.png"), frame.png);
+        };
+        await expect.poll(() => names.count()).toBe(4);
+        // The first painted comparison includes names, two reserved quota tracks, and credits.
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                (
+                  performance.getEntriesByName("first-account-grid")[0] as
+                    | PerformanceMark
+                    | undefined
+                )?.detail,
+            ),
+          )
+          .toBe(4);
+        const positions = () =>
+          grid.locator(".model-providers__usage-track > *").evaluateAll((cells) => {
+            const origin = cells[0]!.getBoundingClientRect();
+            return cells.map((cell) => {
+              const box = cell.getBoundingClientRect();
+              return [box.x - origin.x, box.y - origin.y, box.width, box.height];
+            });
+          });
+        const cold = await positions();
+        const pending = grid.getByRole("status").filter({ hasText: "Loading" });
+        expect(await pending.count()).toBe(1);
+        expect(
+          await grid.locator(".model-providers__usage-segment[aria-hidden=true]").count(),
+        ).toBe(8);
+        expect(await credits.locator(".model-providers__credit > :empty").count()).toBe(4);
+        expect(await credits.ariaSnapshot()).not.toContain("@example.com");
+        expect(await grid.locator("[data-account-segment]").count()).toBe(0);
+        await capture("cold");
+        const match = (index: number) => ({ match: { profileId: ids[index] } });
+        await gateway.resolveDeferred(method, undefined, match(2));
+        const weekly = grid.getByRole("group", { name: "Week", exact: true });
+        await expect.poll(() => weekly.locator("strong").allTextContents()).toEqual(["65%"]);
+        expect(
+          await weekly.locator(".model-providers__usage-segment[aria-hidden=true]").count(),
+        ).toBe(3);
+        expect(await weekly.getByRole("button").getAttribute("aria-label")).toContain("Resets");
+        expect(await positions()).toEqual(cold);
+        expect(await pending.count()).toBe(1);
+        await capture("partial");
+        await gateway.resolveDeferred(method, undefined, match(0));
+        await gateway.resolveDeferred(method, undefined, match(1));
+        await gateway.rejectDeferred(method, { message: "Account offline" }, match(3));
+        await grid
+          .getByRole("status")
+          .filter({ hasText: "backup@example.com: Account offline" })
+          .waitFor();
+        expect(await positions()).toEqual(cold);
+        for (const profileId of ids) {
+          await gateway.deferNext(method, { profileId });
+        }
+        await page.getByRole("button", { name: "Refresh", exact: true }).click();
+        await expect.poll(async () => (await gateway.getRequests(method)).length).toBe(8);
+        expect(await weekly.locator("strong").allTextContents()).toEqual([
+          "0%",
+          "100%",
+          "65%",
+          "—",
+        ]);
+        expect(await positions()).toEqual(cold);
+        expect(await credits.locator("[aria-hidden=true]").allTextContents()).toEqual([
+          "0",
+          "0",
+          "12.75",
+          "—",
+        ]);
+        await capture("refresh");
+        for (const [index, id] of ids.entries()) {
+          await gateway.rejectDeferred(method, { message: "Unavailable " + id }, match(index));
+        }
+        await expect
+          .poll(() => grid.getByRole("status").filter({ hasText: "Refresh to try again" }).count())
+          .toBe(4);
+        expect(await grid.locator("[data-account-segment]").count()).toBe(0);
+        expect(await pending.count()).toBe(0);
+        await page.getByRole("button", { name: "Refresh", exact: true }).click();
+        await expect
+          .poll(() => weekly.locator("strong").allTextContents())
+          .toEqual(["0%", "100%", "65%", "28%"]);
+        expect(await grid.getByRole("status").count()).toBe(0);
+      });
+    },
+  );
 
   it("shows independent Codex allowances without reporting an exhausted provider", async () => {
     await withPage(async ({ page }) => {

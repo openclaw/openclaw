@@ -188,6 +188,51 @@ describe("model provider config patches", () => {
     ).toEqual({ agents: { defaults: { utilityModel: { fallbacks: ["fixture/backup"] } } } });
   });
 
+  it("sets and clears the subagent model without touching its sibling settings", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          subagents: {
+            maxConcurrent: 4,
+            model: { primary: "fixture/runner", fallbacks: ["fixture/backup"] },
+          },
+        },
+      },
+    };
+    let defaults = readModelProviderConfig(config).defaults;
+    const actions = modelDefaultsActions(
+      () => defaults,
+      (patch) => {
+        defaults = { ...defaults, ...patch };
+      },
+    );
+    const saved = async () =>
+      applyMergePatch(
+        config,
+        await submitDefaults({ ...defaults, ...readModelBehaviorConfig({}) }),
+      );
+    // Promoting a saved fallback and switching back must not drop it from the chain.
+    actions.onSubagentChange("fixture/backup");
+    expect(await saved()).toEqual({
+      agents: {
+        defaults: {
+          subagents: {
+            maxConcurrent: 4,
+            model: { primary: "fixture/backup", fallbacks: ["fixture/backup"] },
+          },
+        },
+      },
+    });
+    actions.onSubagentChange("fixture/runner");
+    expect(await saved()).toEqual(config);
+    actions.onSubagentChange(null);
+    expect(await saved()).toEqual({
+      agents: {
+        defaults: { subagents: { maxConcurrent: 4, model: { fallbacks: ["fixture/backup"] } } },
+      },
+    });
+  });
+
   it("preserves a configured Ultrafast preference when another default is saved", async () => {
     const behavior = readModelBehaviorConfig({ fastModeDefault: "ultrafast" });
     expect(behavior.fastMode).toBe("ultrafast");

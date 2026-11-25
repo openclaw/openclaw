@@ -692,6 +692,12 @@ describe("hardenApprovedExecutionPaths", () => {
         decoyName: "+i",
         expectedArgvIndex: 2,
       },
+      {
+        name: "zsh value-free shopt toggle",
+        argv: ["zsh", "-O", "./run.sh", "allowed.sh"],
+        decoyName: "allowed.sh",
+        expectedArgvIndex: 2,
+      },
     ];
 
     for (const testCase of casesValue) {

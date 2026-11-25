@@ -653,6 +653,7 @@ async function agentCommandFromIngressInternal(
         }
         return result;
       } finally {
+        prepared.releaseParticipation?.();
         await prepared.runLease?.release();
       }
     });

@@ -221,7 +221,7 @@ broad redesigns unless a maintainer explicitly approves their inclusion. Do not
 substitute convenient dependency bumps for a complete candidate audit. A
 backport is a cherry-pick of a merged `main` commit onto the release branch;
 never re-cut the candidate from newer `main` to absorb one unless Peter
-explicitly asks for it in that release. After dispatch, only confirmed release
+explicitly asks for it in that release. After intake freezes, only confirmed release
 blockers qualify, each named in the handoff record, unless the operator explicitly
 reopens intake under the [owner lifecycle](release-owner.md#prepare-and-admit-hotfixes).
 That decision invalidates affected evidence; it never authorizes publication of
@@ -232,7 +232,9 @@ proposed set for maintainer approval unless selection authority was explicitly
 delegated. During open preparation, a maintainer may instead approve an exact,
 dependency-closed group while independent discovery continues. Record that
 approval and the unfinished audit scope; do not call the full inventory complete
-or advance its scan cursor until every entry is accounted for. Follow the
+or advance its scan cursor until every entry is accounted for. Freezing with an
+unfinished inventory is the operator's call; say how much is still unreviewed
+first. Follow the
 [owner intake procedure](release-owner.md#prepare-and-admit-hotfixes) to integrate
 ready approved groups without waiting for unrelated audit lanes.
 
@@ -253,9 +255,9 @@ and share one host, so run at most eight concurrent writing workers, and do not
 launch or resume workers close to a session usage limit. A worker does not
 spawn its own agents unless its brief allows it. A 17-lane porting wave on
 2026.10.8 saturated the Mac and lost 16 lanes mid-port when the session limit
-hit. The lead keeps a watcher on every worker and never ends a turn waiting on
-one; once the required fixes and P0s are integrated, push and dispatch
-validation, and add stragglers in a later cycle.
+hit. The lead watches every worker and pushes approved groups as they land.
+Follow the [release owner's intake decision](release-owner.md#prepare-and-admit-hotfixes)
+for early diagnostics and the final qualification dispatch.
 
 Every porting brief contains these steps for each pick, in order:
 
@@ -271,8 +273,8 @@ Every porting brief contains these steps for each pick, in order:
    [hotfix assessment](hotfix-ledger-management.md) after every adaptation;
    record newly discovered validation errors and subsequent repairs as they
    occur, not only when the pick or batch is finished.
-4. Run targeted tests and typechecks for the touched owners only. Wrap every
-   local command in `timeout`; full local gates are not a worker's job.
+4. Run focused checks for the touched owners and [report what passed](validation.md#hand-off-a-release-fix).
+   Wrap each local command in `timeout`.
 5. Commit, then append the pick's result to the lane report before the next
    pick. Time-box a pick to about 40 minutes and report it as blocked rather
    than continuing past that.
