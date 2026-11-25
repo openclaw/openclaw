@@ -5,7 +5,9 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 
 export const OPENAI_GPT_LIVE_MODEL_PREFIX = "gpt-live";
 
-export const OPENAI_GPT_LIVE_MODELS = ["gpt-live-1", "gpt-live-1-codex"] as const;
+// The public Live API's models share one endpoint, event set and voice list.
+const OPENAI_GPT_LIVE_API_MODELS = ["gpt-live-1", "gpt-live-1.1"] as const;
+export const OPENAI_GPT_LIVE_MODELS = [...OPENAI_GPT_LIVE_API_MODELS, "gpt-live-1-codex"] as const;
 const OPENAI_GPT_LIVE_API_VOICES = [
   "alloy",
   "ash",
@@ -48,7 +50,8 @@ export type OpenAIGptLiveVoice =
   | (typeof OPENAI_GPT_LIVE_UNLISTED_VOICES)[number];
 
 export function isOpenAIGptLiveApiModel(model: string | undefined): boolean {
-  return model?.trim().toLowerCase() === "gpt-live-1";
+  const normalized = model?.trim().toLowerCase();
+  return OPENAI_GPT_LIVE_API_MODELS.some((apiModel) => apiModel === normalized);
 }
 
 export function isOpenAIGptLiveSubscriptionModel(model: string | undefined): boolean {

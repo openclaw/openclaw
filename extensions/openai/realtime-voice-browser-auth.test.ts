@@ -532,6 +532,14 @@ describe("OpenAI realtime public projection", () => {
         ),
     },
     {
+      model: "gpt-live-1.1",
+      selectedVoice: "quartz",
+      voices:
+        "alloy ash ballad beacon bossa cedar cinder coral delta echo gleam marin meridian quartz ripple sage shimmer stone tempo verse vesper willow".split(
+          " ",
+        ),
+    },
+    {
       model: "gpt-live-1-codex",
       selectedVoice: "spruce",
       voices: ["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"],

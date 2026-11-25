@@ -1,5 +1,9 @@
 // Openai tests cover GPT-Live (quicksilver) realtime voice gating.
 import { describe, expect, it, vi } from "vitest";
+import {
+  buildOpenAIQuicksilverAudioAppend,
+  buildOpenAIQuicksilverContextAppend,
+} from "./realtime-quicksilver-protocol.js";
 import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -20,9 +24,19 @@ describe("openai gpt-live model detection", () => {
   it("distinguishes released routes from unlisted family members", () => {
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1")).toBe(true);
     expect(isSupportedOpenAIGptLiveModel(" GPT-Live-1 ")).toBe(true);
+    expect(isSupportedOpenAIGptLiveModel("gpt-live-1.1")).toBe(true);
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1-codex")).toBe(true);
     expect(isSupportedOpenAIGptLiveModel(" GPT-Live-1-Codex ")).toBe(true);
     expect(isSupportedOpenAIGptLiveModel("gpt-live-test-canary")).toBe(false);
+  });
+
+  it.each(["gpt-live-1", "gpt-live-1.1"])("speaks the public Live API protocol to %s", (model) => {
+    expect(buildOpenAIQuicksilverAudioAppend(model, "AAAA").type).toBe(
+      "session.input_audio.append",
+    );
+    expect(
+      buildOpenAIQuicksilverContextAppend({ model, text: "Checking.", channel: "speakable" }).type,
+    ).toBe("session.commentary.append");
   });
 });
 

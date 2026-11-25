@@ -263,8 +263,8 @@ sidebarTitle: "Voice and speech"
     Installing an update does not rewrite saved configuration or switch an
     active session.
 
-    Set `talk.realtime.model` explicitly to `gpt-live-1` for the public
-    [GPT-Live API](https://developers.openai.com/api/docs/guides/live). GPT-Live
+    Set `talk.realtime.model` explicitly to `gpt-live-1` or `gpt-live-1.1` for
+    the public [GPT-Live API](https://developers.openai.com/api/docs/guides/live). GPT-Live
     handles the spoken conversation while delegated tasks run through your
     configured OpenClaw agent. It can listen while speaking; interrupting speech
     does not itself cancel agent work.
@@ -272,7 +272,7 @@ sidebarTitle: "Voice and speech"
     This model requires an OpenAI Platform API key with model access, selected
     from the configured realtime key, an `openai` API-key profile, or
     `OPENAI_API_KEY`. ChatGPT subscription credentials are not a fallback for
-    `gpt-live-1`.
+    `gpt-live-1` or `gpt-live-1.1`.
 
     ```json5
     {

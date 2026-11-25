@@ -128,11 +128,11 @@ the corresponding `providers` map without regard to case or surrounding whitespa
 When configuring multiple providers, select one explicitly.
 
 OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Select
-`gpt-live-1` for the public API or `gpt-live-1-codex` for the Codex route in
-**Settings → Talk**. The public API requires a Platform key; the Codex route
+`gpt-live-1` or `gpt-live-1.1` for the public API, or `gpt-live-1-codex` for
+the Codex route, in **Settings → Talk**. The public API requires a Platform key; the Codex route
 prefers an OpenClaw ChatGPT OAuth profile and falls back to Platform API-key
 authentication. Browser Talk uses client WebRTC with Gateway-owned control.
-Gateway relay uses direct Platform-key WebSockets for `gpt-live-1` and
+Gateway relay uses direct Platform-key WebSockets for the public API models and
 Gateway-owned WebRTC for `gpt-live-1-codex`. Discord uses these same Gateway
 bridges when configured with the corresponding Live model.
 
