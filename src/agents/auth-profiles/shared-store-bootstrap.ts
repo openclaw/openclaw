@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import {
-  assertEngineStoreExecutionAllowed,
-  withEngineStoreAdmission,
-} from "../../infra/database-engine/admission-scope.js";
+import { assertEngineStoreExecutionAllowed } from "../../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { executeWithCachedStatement } from "../../infra/kysely-sync-cache-state.js";
 import {
@@ -30,7 +27,6 @@ import {
 } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-maintenance-context.js";
 import { resolveUserPath } from "../../utils.js";
 import { listLegacyAuthProfileSources } from "./legacy-source-files.js";
 import {
@@ -226,18 +222,11 @@ export async function inspectSharedAuthLegacyRowsReadOnlyAsync(
   }
   try {
     signal?.throwIfAborted();
-    const inspect = () =>
-      inspectSharedAuthLegacyRowsAtLocation(sourcePath, prepared?.location ?? sourcePath, postgres);
-    const maintenance = getOpenClawDatabaseMaintenanceScope();
-    if (postgres && maintenance?.ownsSchemaMaintenance) {
-      // Only the native continuation is synchronous admission; snapshot preparation
-      // and cleanup retain their ordinary asynchronous owner.
-      return withEngineStoreAdmission(() => {
-        maintenance.assertDatabaseAccess(sourcePath);
-        return inspect();
-      });
-    }
-    return inspect();
+    return inspectSharedAuthLegacyRowsAtLocation(
+      sourcePath,
+      prepared?.location ?? sourcePath,
+      postgres,
+    );
   } finally {
     await prepared?.cleanupAsync();
   }

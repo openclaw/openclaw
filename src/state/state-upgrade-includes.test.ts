@@ -2,25 +2,34 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { doctorOutputEntrypoints } from "../cli/cli-entrypoint.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const registrar = resolveRuntimeWorkerUrl(doctorOutputEntrypoints.maintenance);
+const moduleUrl = (relative: string) => JSON.stringify(new URL(relative, registrar).href);
 
 it("repairs an included legacy config without flattening and restores both authored files", () => {
   const root = fs.realpathSync(dirs.make("state-upgrade-includes-"));
-  // Native ownership belongs to a real process, not the unhosted Vitest worker.
+  // Reuse the prepared native graph and executable cleanup owner, not cold source loaders.
   const result = spawnNodeEvalSync(
     String.raw`
       import assert from "node:assert/strict";
       import fs from "node:fs";
       import path from "node:path";
       import { runInNewContext } from "node:vm";
-      import { upgradeStateDirectory } from ${JSON.stringify(new URL("./state-upgrade.ts", import.meta.url).href)};
-      import { acquireGatewayLock } from ${JSON.stringify(new URL("../infra/gateway-lock.ts", import.meta.url).href)};
-      import { checkRelease } from ${JSON.stringify(new URL("../update/check-release.ts", import.meta.url).href)};
-      import { createTrialPending, resolvePrefix, writeTrial } from ${JSON.stringify(new URL("../update/store.ts", import.meta.url).href)};
-      import { ROLLBACK_SOURCE } from ${JSON.stringify(new URL("../update/rollback-source.ts", import.meta.url).href)};
-      import { resolveRuntimeServiceBuildId, VERSION } from ${JSON.stringify(new URL("../version.ts", import.meta.url).href)};
+      import { upgradeStateDirectory } from ${moduleUrl("../../state/state-upgrade.js")};
+      import { acquireGatewayLock } from ${moduleUrl("../../infra/gateway-lock.js")};
+      import { checkRelease } from ${moduleUrl("../../update/check-release.js")};
+      import { createTrialPending, resolvePrefix, writeTrial } from ${moduleUrl("../../update/store.js")};
+      import { ROLLBACK_SOURCE } from ${moduleUrl("../../update/rollback-source.js")};
+      import { resolveRuntimeServiceBuildId, VERSION } from ${moduleUrl("../../version.js")};
+      import { withCliPluginInvocation } from ${moduleUrl("../run-main-plugin-cache.js")};
+      import { withCliProcessScope } from ${moduleUrl("../runtime-cleanup-scope.js")};
+      import { closeCliResources } from ${moduleUrl("../runtime-cleanup.js")};
+      await withCliProcessScope(() => withCliPluginInvocation(false, async cleanup => {
+      try {
       const env = process.env;
       const stateDir = env.OPENCLAW_STATE_DIR;
       const configPath = env.OPENCLAW_CONFIG_PATH;
@@ -93,9 +102,13 @@ it("repairs an included legacy config without flattening and restores both autho
       assert.equal(fs.existsSync(path.join(path.dirname(externalTarget), ".restore")), false);
       assert.equal(fs.existsSync(configPath + suffix), false);
       assert.equal(fs.existsSync(includePath + suffix), false);
+      } finally {
+        await closeCliResources(cleanup);
+        await cleanup?.pluginResources?.release();
+      }
+      }));
     `,
     {
-      imports: [import.meta.resolve("tsx")],
       timeout: 30_000,
       env: {
         PATH: process.env.PATH,

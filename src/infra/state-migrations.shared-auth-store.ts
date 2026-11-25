@@ -588,8 +588,12 @@ export async function detectSharedAuthStoreMigration(params: {
         if (await retainedSource(source, env)) {
           return { ...source, hasLegacy: true, held: true };
         }
+        const legacyFile =
+          ownership.location === "legacy-main"
+            ? inspectSharedAuthLegacySourceFile(source.sourcePath)
+            : undefined;
         source.hasLegacy =
-          ownership.location === "legacy-main" ||
+          (legacyFile?.status === "present" && legacyFile.size > 0) ||
           hasPendingSharedAuthCleanup(env, source.sourcePath, params);
         if (source.hasLegacy) {
           // After relocation, local rows are overrides unless a pending receipt authorizes cleanup.

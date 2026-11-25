@@ -3,7 +3,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
+import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import { readBackupEngine } from "../infra/database-engine/physical-store.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import * as backup from "../snapshot/database-backup.js";
 import { createTrialPending, resolvePrefix, writeTrial } from "../update/store.js";
 import {
@@ -30,6 +33,8 @@ it.each([
     const statePath = path.join(root, "state", "openclaw.sqlite");
     const agentPath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
     const configPath = path.join(root, "openclaw.json");
+    const env = { OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
+    openClientCredentialCustody(env, { createIfMissing: true })?.close();
     for (const file of [statePath, agentPath]) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
     }
@@ -41,6 +46,9 @@ it.each([
         INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
           VALUES ('primary', 'global', 41, 1, 1);
         INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);`);
+      runSqliteImmediateTransactionSync(state, () =>
+        bindFreshClientCredentialStore(state, { path: statePath, env }),
+      );
       using agent = new DatabaseSync(agentPath);
       agent.exec(
         "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
@@ -70,7 +78,6 @@ it.each([
     vi.spyOn(backup, "clonePostgresUpgrade").mockRejectedValue(
       new Error("Current PostgreSQL stores must not be cloned"),
     );
-    const env = { OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
     if (trial) {
       const target = path.join(resolvePrefix(env), "releases", "candidate", "openclaw");
       fs.mkdirSync(target, { recursive: true });

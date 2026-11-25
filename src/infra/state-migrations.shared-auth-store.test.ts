@@ -495,6 +495,24 @@ it.runIf(process.platform === "linux")(
   },
 );
 
+it.each(["missing", "zero-byte"] as const)(
+  "leaves a %s auth catalog to ordinary bootstrap",
+  async (catalog) => {
+    const fixture = await createEmptyFixture(false);
+    if (catalog === "zero-byte") {
+      fs.mkdirSync(path.dirname(fixture.sourcePath), { recursive: true });
+      new DatabaseSync(fixture.sourcePath).close();
+    }
+    expect(await fixture.detect({ artifactPreservingReadOnly: true })).toMatchObject({
+      hasLegacy: false,
+    });
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath(fixture.env))).toBe(false);
+    expect(fs.statSync(fixture.sourcePath, { throwIfNoEntry: false })?.size).toBe(
+      catalog === "zero-byte" ? 0 : undefined,
+    );
+  },
+);
+
 it("records ownership for an empty source database without reporting relocation", async () => {
   const fixture = await createEmptyFixture(true);
   const detected = await fixture.detect();

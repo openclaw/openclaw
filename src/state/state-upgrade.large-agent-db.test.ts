@@ -3,8 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
+import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import { sha256File } from "../infra/crypto-digest.js";
 import { readSqliteCleanCloseSeal } from "../infra/sqlite-clean-close-seal.js";
+import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { detectSharedAuthStoreMigration } from "../infra/state-migrations.shared-auth-store.js";
+import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -26,6 +32,11 @@ describe("startup canonical ownership", () => {
   it("leaves large current registered agent databases in place while migrating shared state", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-registry-"));
     dirs.push(stateDir);
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    };
+    openClientCredentialCustody(env, { createIfMissing: true })?.close();
     const agentPath = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
     fs.mkdirSync(path.dirname(agentPath), { recursive: true });
     {
@@ -54,6 +65,9 @@ describe("startup canonical ownership", () => {
           OPENCLAW_AGENT_SCHEMA_VERSION,
           fs.statSync(agentPath).size,
         );
+      runSqliteImmediateTransactionSync(state, () =>
+        bindFreshClientCredentialStore(state, { env, path: statePath }),
+      );
     }
     fs.writeFileSync(path.join(stateDir, "openclaw.json"), "{}");
     const readRegistry = () => {
@@ -66,16 +80,47 @@ describe("startup canonical ownership", () => {
     };
     const registrations = readRegistry();
     const agentIdentity = fs.statSync(agentPath);
-    const agentBytes = await sha256File(agentPath);
+    const snapshotLogical = (file: string) => {
+      using database = new DatabaseSync(file, { readOnly: true });
+      const schema = database
+        .prepare(
+          `SELECT type, name, tbl_name, sql FROM sqlite_schema
+           WHERE name NOT IN ('sqlite_stat1', 'sqlite_stat2', 'sqlite_stat3', 'sqlite_stat4')
+           ORDER BY type, name`,
+        )
+        .all();
+      return {
+        userVersion: database.prepare("PRAGMA user_version").get(),
+        applicationId: database.prepare("PRAGMA application_id").get(),
+        schema,
+        tables: schema
+          .filter((entry) => entry.type === "table")
+          .map((entry) => {
+            const name = String(entry.name);
+            const withoutRowid =
+              database
+                .prepare("SELECT wr FROM pragma_table_list WHERE schema = 'main' AND name = ?")
+                .get(name)?.wr === 1;
+            const sql = `SELECT ${withoutRowid ? "" : "rowid, "}* FROM ${quoteSqliteIdentifier(name)}`;
+            const order = database
+              .prepare(sql)
+              .columns()
+              .map((_, index) => index + 1)
+              .join(", ");
+            const rows = database.prepare(`${sql} ORDER BY ${order}`);
+            rows.setReadBigInts(true);
+            return { name, rows: rows.all() };
+          }),
+      };
+    };
+    const originalAgent = snapshotLogical(agentPath);
     const stateIdentity = fs.statSync(statePath);
     const log = { info: vi.fn(), warn: vi.fn() };
     const result = await upgradeStateDirectory({
-      env: {
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      },
+      env,
       log,
     });
+    await closeOpenClawAgentDatabasesAsync();
     expect(readRegistry()).toEqual(registrations);
     expect(result, JSON.stringify({ result, warnings: log.warn.mock.calls })).toEqual({
       status: "upgraded",
@@ -83,9 +128,9 @@ describe("startup canonical ownership", () => {
     expect(fs.statSync(agentPath)).toMatchObject({
       dev: agentIdentity.dev,
       ino: agentIdentity.ino,
-      size: 64 * 1024 * 1024 + 1,
     });
-    expect(await sha256File(agentPath)).toBe(agentBytes);
+    // The first Doctor pass may refresh optimizer pages, not user data.
+    expect(snapshotLogical(agentPath)).toEqual(originalAgent);
     expect(fs.statSync(statePath)).toMatchObject({
       dev: stateIdentity.dev,
       ino: stateIdentity.ino,
@@ -98,9 +143,43 @@ describe("startup canonical ownership", () => {
     expect(
       readSqliteCleanCloseSeal(agentPath, fs.statSync(agentPath, { bigint: true })),
     ).toBeDefined();
-    using state = new DatabaseSync(statePath, { readOnly: true });
-    expect(state.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    {
+      using state = new DatabaseSync(statePath, { readOnly: true });
+      expect(state.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+      const ownership = state
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'")
+        .get();
+      expect(JSON.parse(String(ownership?.value_json))).toEqual({ location: "state-db" });
+    }
+    const migratedState = snapshotLogical(statePath);
+    const agentBytes = await sha256File(agentPath);
+    const stateBytes = await sha256File(statePath);
+    const currentAgentIdentity = fs.statSync(agentPath);
+    const legacy = await detectSharedAuthStoreMigration({
+      stateDir,
+      env,
+      config: {},
+      doctorOnlyStateMigrations: true,
+      artifactPreservingReadOnly: true,
     });
+    expect(legacy.hasLegacy).toBe(false);
+    await expect(upgradeStateDirectory({ env, log })).resolves.toEqual({ status: "current" });
+    await closeOpenClawAgentDatabasesAsync();
+    expect(await sha256File(agentPath)).toBe(agentBytes);
+    expect(await sha256File(statePath)).toBe(stateBytes);
+    expect(fs.statSync(agentPath)).toMatchObject({
+      dev: currentAgentIdentity.dev,
+      ino: currentAgentIdentity.ino,
+      size: currentAgentIdentity.size,
+    });
+    expect(fs.statSync(statePath)).toMatchObject({
+      dev: stateIdentity.dev,
+      ino: stateIdentity.ino,
+    });
+    expect(snapshotLogical(agentPath)).toEqual(originalAgent);
+    expect(snapshotLogical(statePath)).toEqual(migratedState);
+    expect(readRegistry()).toEqual(registrations);
   });
 });

@@ -72,7 +72,7 @@ export async function checkRelease(
         pluginValidation: "core-only",
       }).readConfigFileSnapshotForWrite();
       const plan = snapshot.includedPaths?.length
-        ? await withArtifactPreservingStateReads(() =>
+        ? withArtifactPreservingStateReads(() =>
             planLegacyConfigForUpdateChannel(snapshot, writeOptions),
           )
         : undefined;

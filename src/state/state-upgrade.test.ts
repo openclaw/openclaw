@@ -8,10 +8,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
 import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { ROLLBACK_SOURCE } from "../update/rollback-source.js";
 import { createTrialPending, resolvePrefix, writeTrial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
+import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
 import { getOpenClawAgentMigrationSchema } from "./openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
@@ -107,22 +109,67 @@ describe("startup retained deletion", () => {
         INSERT INTO memory_index_chunks_vec(rowid, embedding) VALUES (1, '[1, 0, 0]');`);
       }
       const bytes = fs.readFileSync(retainedPath);
-      const activeBytes = fs.readFileSync(activePath);
+      const activeIdentity = fs.statSync(activePath);
+      const snapshotActive = () => {
+        using database = new DatabaseSync(activePath, { readOnly: true });
+        const schema = database
+          .prepare(
+            `SELECT type, name, tbl_name, sql FROM sqlite_schema
+             WHERE name NOT IN ('sqlite_stat1', 'sqlite_stat2', 'sqlite_stat3', 'sqlite_stat4')
+             ORDER BY type, name`,
+          )
+          .all();
+        return {
+          userVersion: database.prepare("PRAGMA user_version").get(),
+          applicationId: database.prepare("PRAGMA application_id").get(),
+          schema,
+          tables: schema
+            .filter((entry) => entry.type === "table")
+            .map((entry) => {
+              const name = String(entry.name);
+              const withoutRowid =
+                database
+                  .prepare("SELECT wr FROM pragma_table_list WHERE schema = 'main' AND name = ?")
+                  .get(name)?.wr === 1;
+              const sql = `SELECT ${withoutRowid ? "" : "rowid, "}* FROM ${quoteSqliteIdentifier(name)}`;
+              const order = database
+                .prepare(sql)
+                .columns()
+                .map((_, index) => index + 1)
+                .join(", ");
+              const rows = database.prepare(`${sql} ORDER BY ${order}`);
+              rows.setReadBigInts(true);
+              return { name, rows: rows.all() };
+            }),
+        };
+      };
+      const activeSnapshot = snapshotActive();
       const log = { info: vi.fn(), warn: vi.fn() };
       const upgrade = upgradeStateDirectory({
         env,
         log,
       });
       if (cleanupCompleted) {
-        await expect(upgrade).resolves.toMatchObject(
-          upgradeShared ? { status: "upgraded" } : { status: "current" },
-        );
+        await expect(upgrade).resolves.toEqual({ status: "upgraded" });
+        using state = new DatabaseSync(statePath, { readOnly: true });
+        const ownership = state
+          .prepare(
+            "SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'",
+          )
+          .get();
+        expect(JSON.parse(String(ownership?.value_json))).toEqual({ location: "state-db" });
       } else {
         await expect(upgrade).rejects.toThrow("no such module: vec0");
       }
+      await closeOpenClawAgentDatabasesAsync();
       expect(fs.readFileSync(retainedPath)).toEqual(bytes);
       expect(fs.readdirSync(retainedDir)).toEqual(["openclaw-agent.sqlite"]);
-      expect(fs.readFileSync(activePath)).toEqual(activeBytes);
+      expect(fs.statSync(activePath)).toMatchObject({
+        dev: activeIdentity.dev,
+        ino: activeIdentity.ino,
+      });
+      // Doctor refreshes optimizer statistics; every user row and schema stays intact.
+      expect(snapshotActive()).toEqual(activeSnapshot);
     },
   );
 });
@@ -137,6 +184,7 @@ describe("canonical in-place migration", () => {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       };
+      openClientCredentialCustody(env, { createIfMissing: true })?.close();
       for (const [key, value] of Object.entries(env)) {
         vi.stubEnv(key, value);
       }
@@ -156,6 +204,9 @@ describe("canonical in-place migration", () => {
             VALUES ('primary', 'global', 41, 1, 1);
           INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);
           INSERT INTO config_machine_state VALUES ('plugins.bundledDiscovery', '"all"', 1);`);
+        runSqliteImmediateTransactionSync(state, () =>
+          bindFreshClientCredentialStore(state, { env, path: statePath }),
+        );
         using agent = new DatabaseSync(agentPath);
         agent.exec(getOpenClawAgentMigrationSchema(43));
         agent.exec(`PRAGMA user_version = 43;
