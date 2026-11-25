@@ -303,7 +303,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
         context,
         sessionTarget: target,
         ownerConnId,
-        authority: resolveTalkAgentConsultAuthority(client),
+        authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
         runAuthority,
         getVoiceSessionId: () => activeVoiceSessionId,
         getVoiceSessionSource: () => (logicalSessionCreated ? voiceSessionSource : undefined),

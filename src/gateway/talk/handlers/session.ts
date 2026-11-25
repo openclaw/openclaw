@@ -350,7 +350,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               context,
               connId,
               cfg: runtimeConfig,
-              consultAuthority: resolveTalkAgentConsultAuthority(client),
+              consultAuthority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
               provider: resolution.provider,
               providerConfig,
               controlSource,
@@ -618,7 +618,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             relaySessionId: session.relaySessionId,
             connId,
             authority: {
-              ...resolveTalkAgentConsultAuthority(client),
+              ...resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
               operatorAuthority: captured?.authority,
             },
             sessionKey: normalizeOptionalString(params.sessionKey),

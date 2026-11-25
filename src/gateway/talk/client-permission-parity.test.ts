@@ -57,7 +57,7 @@ describe("authenticated Talk permission parity", () => {
       context: {
         logGateway: createSubsystemLogger("test/talk-permission-parity"),
       },
-      authority: resolveTalkAgentConsultAuthority(client),
+      authority: resolveTalkAgentConsultAuthority(client.connect.scopes, client),
       getVoiceSessionId: () => voiceSessionId,
       initialItems: [],
       ...overrides,
@@ -176,7 +176,7 @@ describe("authenticated Talk permission parity", () => {
     });
     const runner = createRunner({
       config: cfg,
-      authority: resolveTalkAgentConsultAuthority(ownerClient),
+      authority: resolveTalkAgentConsultAuthority(ownerClient.connect.scopes, ownerClient),
     });
     expect(
       await runner.runArgs({

@@ -3,6 +3,7 @@ import { createTestOperatorAuthority } from "../../agents/admitted-run-context.t
 import { invokeGatewayTool } from "../tools-invoke-shared.js";
 import { toolsInvokeHandlers } from "./tools-invoke.js";
 
+// mock-isolation: the cells observe only the owner bit the handler hands to tool invocation.
 vi.mock("../tools-invoke-shared.js", () => ({ invokeGatewayTool: vi.fn() }));
 
 const invoke = vi.mocked(invokeGatewayTool);
