@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
+import { isVisibleSpawnedSession } from "../agents/subagents/spawn/subagent-capabilities.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -15,7 +16,6 @@ import {
   derivePersistedSessionLifecyclePatch,
   restartResumeSkipReason,
 } from "../config/sessions/session-run-lifecycle-projection.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-start.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -50,7 +50,7 @@ import {
 import {
   acceptRestartResumeReceipt,
   recordRestartResumeFailure,
-  recordRestartYieldFailure,
+  recordUnreachableYieldFailure,
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
 import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
@@ -58,7 +58,7 @@ import {
   selectLiveRestartResumeSessions,
   type SessionIdentity,
 } from "./session-restart-resume-selection.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 
 /** Snapshot only live owners after admission closes, before shutdown aborts them. */
 export async function persistRunningSessionsForRestart(params: {
@@ -81,9 +81,9 @@ async function persistRunningSessions(
   summary: ReturnType<typeof createRestartResumeSummary>,
 ): Promise<void> {
   const assertCurrent = () => params.signal?.throwIfAborted();
-  // Enumeration is synchronous; persistence checks custody again at the write boundary.
+  // Snapshot live owners before ancestry reads; persistence checks custody again before writing.
   assertCurrent();
-  const sessions = selectLiveRestartResumeSessions(params.cfg, summary);
+  const sessions = await selectLiveRestartResumeSessions(params.cfg, summary);
   const selectors = new Map<string, { first: SessionIdentity; batch: SessionIdentity[] }>();
   for (const session of sessions.values()) {
     const key = JSON.stringify([session.agentId, session.storePath]);
@@ -117,7 +117,9 @@ async function persistRunningSessions(
             if (!session) {
               continue;
             }
-            const ownerSkip = restartResumeSkipReason(sessionKey, entry);
+            const directChat =
+              session.directChat === true && isVisibleSpawnedSession(sessionKey, { entry });
+            const ownerSkip = restartResumeSkipReason(sessionKey, entry, directChat);
             const skip =
               (ownerSkip === "subagent" && session.parked ? undefined : ownerSkip) ??
               (session.sessionId && session.sessionId !== entry.sessionId
@@ -147,6 +149,7 @@ async function persistRunningSessions(
               entry: {
                 ...entry,
                 resumeAfterRestart: createRestartResumeMarker({
+                  ...(directChat ? { directChat: true } : {}),
                   operatorSource:
                     session.operatorSource ?? entry.resumeAfterRestart?.operatorSource,
                 }),
@@ -346,10 +349,11 @@ async function resumeRestartStore(
   deferred: Map<string, () => Promise<void>>,
 ): Promise<boolean> {
   let completed = true;
-  const { assertCurrent: assertRecoveryCurrent, resume } = await prepareRestartCompletionCustody(
-    { context, signal, log },
-    { target, entries },
-  );
+  const {
+    assertCurrent: assertRecoveryCurrent,
+    ownsInput,
+    resume,
+  } = await prepareRestartCompletionCustody({ context, signal, log }, { target, entries });
   const summary = createRestartResumeSummary("startup");
   const queuedKeys = new Set(orphaned.map(({ sessionKey }) => sessionKey));
   const ended = new Set(outOfScope);
@@ -393,7 +397,11 @@ async function resumeRestartStore(
             if (!selected) {
               return { result: undefined };
             }
+            const skip = restartResumeSkipReason(sessionKey, selected);
             let parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            if (parked === "unreachable" && !skip) {
+              parked = "resume";
+            }
             if (
               parked &&
               (await hasInterruptedCommittedRequesterSettleInput(
@@ -403,7 +411,6 @@ async function resumeRestartStore(
             ) {
               parked = undefined;
             }
-            const skip = restartResumeSkipReason(sessionKey, selected);
             const sameRun = selected.lifecycleRunId === snapshotEntry.lifecycleRunId;
             const resolved = resolveStartupRestartMarker(selected, sameRun, {
               parked,
@@ -471,7 +478,7 @@ async function resumeRestartStore(
           continue;
         }
         if (parked === "unreachable") {
-          await recordRestartYieldFailure({ sessionKey, agentId, entry, signal });
+          await recordUnreachableYieldFailure({ sessionKey, agentId, entry, signal });
           summary.record(agentId, sessionKey, "yield-source-unavailable");
         } else if (parked === "waiting") {
           // The registry retains the wait; a new requester message owns fresh admission.
@@ -520,13 +527,7 @@ async function resumeRestartStore(
                 context,
                 signal,
                 runId: randomUUID(),
-                assertCurrent: composeSessionSourceAssertion(
-                  [authority?.authority.assertCurrent],
-                  (assertSources) => {
-                    assertRecoveryCurrent();
-                    assertSources();
-                  },
-                ),
+                assertCurrent: assertRecoveryCurrent,
                 runSetupScript: authority?.authority.scopes.includes(ADMIN_SCOPE) === true,
               });
             }
@@ -593,7 +594,12 @@ async function resumeRestartStore(
         const remaining = await continueSessionQueuedInputs(
           context,
           { ...target, ...session, agentId },
-          { signal, assertCurrent: () => signal.throwIfAborted(), endCause },
+          {
+            signal,
+            assertCurrent: () => signal.throwIfAborted(),
+            endCause,
+            ownsInput: (row) => ownsInput(row, agentId),
+          },
         );
         if (remaining) {
           completed = false;

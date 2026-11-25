@@ -118,7 +118,7 @@ export function assertSqliteReclamationAuthority(
     return;
   }
   throw new SqliteReclamationRequestRefusedError(
-    "SQLite reclamation authority is no longer current",
+    "SQLite reclamation request ended. Retry reclamation.",
   );
 }
 

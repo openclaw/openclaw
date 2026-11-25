@@ -1,6 +1,6 @@
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { assertRequiredWorkerMove } from "../../../src/config/required-worker-profile.js";
-import type { GatewaySessionRow } from "../api/types.ts";
+import type { AgentsListResult, GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { registerSessionPlacementEnglish } from "../i18n/locales/en-session-placement.ts";
@@ -38,6 +38,16 @@ export function sessionPlacementAction(
   return state === "active" ? "move" : !state || state === "local" ? "dispatch" : undefined;
 }
 
+export function sessionMenuPlacementAction(
+  row: GatewaySessionRow | undefined,
+  roster: AgentsListResult | null | undefined,
+) {
+  const action = sessionPlacementAction(row);
+  return action === "dispatch" && !roster?.sessionPlacement?.hasDispatchableCloudProfile
+    ? undefined
+    : action;
+}
+
 /** Translate the shared required-profile contract into a UI reason. */
 export function sessionPlacementTargetReason(
   requiredProfile: string | undefined,
@@ -69,6 +79,7 @@ export function sessionPlacementActionReason(
   }
   const access = readSessionMethodAccess(snapshot, {
     method: action === "dispatch" ? "sessions.dispatch" : "sessions.move",
+    missingScopeReasonKey: "sessionsView.movePermissionDenied",
     requiredScope:
       action !== "dispatch" && (retry?.target.kind === "profile" || requiredProfile)
         ? "operator.admin"

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test } from "vitest";
 import * as admittedRuns from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -47,11 +48,10 @@ const operatorAuthority = (
   profileId: string,
   policy: Parameters<typeof prepareOperatorModelPolicy>[0]["policy"],
 ) =>
-  admittedRuns.createAdmittedRunOperatorAuthority({
+  createTestOperatorAuthority({
     profileId,
     scopes: ["operator.write"],
     rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
-    assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({ cfg, policy }),
   });
 

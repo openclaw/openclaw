@@ -83,6 +83,9 @@ export function estimateToolSchemaTokens(tools: readonly ToolSchema[] | undefine
   return tools?.length
     ? estimateJsonPayloadTokenPressure(
         tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
+        // Lexical pressure already prices JSON delimiters and dense runs; schema
+        // descriptions should not also pay the arbitrary-JSON density premium.
+        CHARS_PER_TOKEN_ESTIMATE,
       )
     : 0;
 }
@@ -218,10 +221,13 @@ export const estimateMessageTokenPressure = memoizeFrozenPlainDataProjection(
 export function estimateRenderedPromptTokens(params: {
   systemPrompt?: string;
   prompt: string;
+  fixedTokenPressure?: FixedRequestTokenPressure;
 }): number {
-  const systemTokens = params.systemPrompt?.trim()
-    ? MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(params.systemPrompt)
-    : 0;
+  const systemTokens =
+    params.fixedTokenPressure?.systemTokens ??
+    (params.systemPrompt?.trim()
+      ? MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(params.systemPrompt)
+      : 0);
   return (
     systemTokens + MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(params.prompt)
   );

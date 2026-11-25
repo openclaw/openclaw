@@ -45,6 +45,11 @@ import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./lib/tsdown-config-groups.mts";
 import {
+  DEFAULT_TSDOWN_MAX_OLD_SPACE_MB,
+  TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  tsdownBudgetAdmitsParallelNativeWork,
+} from "./lib/tsdown-heap-budget.mts";
+import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
   TSDOWN_PACKAGES_CACHE_INPUT,
   tsdownPackageOutputRoot,
@@ -62,9 +67,7 @@ const DEPENDENCY_PATH_MARKERS = ["node_modules/", "openclaw-pnpm-node-modules/"]
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
-const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
 const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
-export const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
 const DOCKER_TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB";
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
 const SERIALIZED_MAIN_CONFIG_GROUPS = [
@@ -746,6 +749,8 @@ function resolveTsdownEnv(
   return {
     ...compilerEnv,
     NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions, budget.maxOldSpaceMb),
+    // Descendants keep the frozen budget, including the native declaration emitter.
+    [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(budget.maxOldSpaceMb),
   };
 }
 
@@ -843,7 +848,7 @@ export function resolveTsdownBuildInvocation(
     !runtimeOnly && tsdownDeclarationsEnabled(args, env)
       ? 1
       : mainConfig
-        ? budget.maxOldSpaceMb >= DEFAULT_TSDOWN_MAX_OLD_SPACE_MB
+        ? tsdownBudgetAdmitsParallelNativeWork(budget.maxOldSpaceMb)
           ? 2
           : 1
         : null;

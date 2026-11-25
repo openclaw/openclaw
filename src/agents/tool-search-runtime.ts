@@ -164,11 +164,12 @@ async function validateCatalogSchemaValue(
 async function assertCatalogInputMatchesSchema(
   entry: ToolSearchCatalogEntry,
   value: unknown,
+  recoverySurface?: ToolSearchExactCallOptions["recoverySurface"],
 ): Promise<void> {
   const validation = await validateCatalogSchemaValue(entry, "inputSchema", value);
   if (validation && !validation.ok) {
     throw markToolContractFailure(
-      new ToolInputError(formatCatalogInputError(entry, validation.errors, value)),
+      new ToolInputError(formatCatalogInputError(entry, validation.errors, value, recoverySurface)),
       "input_contract",
     );
   }
@@ -407,10 +408,7 @@ export class ToolSearchRuntime {
     catalog: ToolSearchCatalogSession,
     entry: ToolSearchCatalogEntry,
     input?: unknown,
-    options?: Pick<
-      ToolSearchCallOptions,
-      "parentToolCallId" | "signal" | "onUpdate" | "mcpNamespaceGuest"
-    >,
+    options?: ToolSearchExactCallOptions,
   ) => {
     this.pluginRuntimeRefresh.assertCurrent();
     catalog.callCount += 1;
@@ -563,7 +561,7 @@ export class ToolSearchRuntime {
             toolCallId,
             async (finalInput) => {
               if (validateInput) {
-                await assertCatalogInputMatchesSchema(entry, finalInput);
+                await assertCatalogInputMatchesSchema(entry, finalInput, options?.recoverySurface);
               }
               executedInput = asOptionalRecord(structuredClone(finalInput));
               if (outputVariants) {

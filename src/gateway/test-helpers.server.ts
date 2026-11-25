@@ -41,7 +41,6 @@ import {
 } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
-import { writeJsonAtomic } from "../infra/json-files.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
@@ -63,7 +62,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
 import type { GatewayServerOptions } from "./server.js";
 import { disposeSessionReadContexts } from "./session-read-contexts.test-support.js";
-import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
+import { loadGatewayTestConfig, writeGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import type {
   ConnectReqClient,
   ConnectReqDevice,
@@ -197,7 +196,7 @@ async function persistTestSessionConfig(): Promise<void> {
       delete config.session;
     }
     // Suite servers may still read config from pending session-change callbacks.
-    await writeJsonAtomic(configPath, config, { durable: false, trailingNewline: true });
+    await writeGatewayTestConfig(configPath, config);
   }
   publishGatewayTestConfig();
   lastSyncedSessionStorePath = testState.sessionStorePath;

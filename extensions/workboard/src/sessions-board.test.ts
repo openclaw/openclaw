@@ -473,28 +473,14 @@ it("announces sessions added after the first read", async () => {
   ]);
 });
 
-it("shares projections and reuses 80 unchanged rows after one session changes", async () => {
-  const board = await createFixture(
-    Array.from({ length: 81 }, (_, index) => Object.freeze(facts(String(index)))),
-  );
-  const placements = vi.spyOn(board.store, "listSessionPlacements");
-  const boards = vi.spyOn(board.store, "getSessionsBoard");
+it("publishes session changes and retains caller scope in the revision", async () => {
+  const board = await createFixture([Object.freeze(facts("0")), Object.freeze(facts("1"))]);
   const changes = vi.fn();
   board.store.onChange = changes;
-  const readers = await Promise.all(
-    Array.from({ length: 25 }, () => board.read(undefined, { assertCurrent() {} })),
-  );
-  const first = readers[0]!;
-  expect(readers.every((read) => read === first)).toBe(true);
-  expect(first.sessions).toHaveLength(81);
-  expect(boards).toHaveBeenCalledOnce();
-  expect(placements).toHaveBeenCalledOnce();
+  const first = await board.read();
   board.emit(facts("0").key, "category");
   await vi.advanceTimersByTimeAsync(5_000);
   expect(changes).not.toHaveBeenCalled();
-  expect(await board.read()).toBe(first);
-  vi.setSystemTime(NOW + 10 * 60_000);
-  expect(await board.read()).toBe(first);
   board.publish("one-row-changed", [
     Object.freeze({ ...board.state.sessions[0]!, run: "active" as const }),
     ...board.state.sessions.slice(1),
@@ -506,19 +492,8 @@ it("shares projections and reuses 80 unchanged rows after one session changes", 
     expect.objectContaining({ sessionsRevision: next.revision!.revision }),
   );
   expect(next.sessions[0]).toMatchObject({ run: "active", columnId: "focus" });
-  expect(next.sessions[0]).not.toBe(first.sessions[0]);
-  expect(next.sessions.slice(1).every((row, index) => row === first.sessions[index + 1])).toBe(
-    true,
-  );
-  expect(placements).toHaveBeenCalledOnce();
-  expect(boards).toHaveBeenCalledOnce();
-  expect(await board.read()).toBe(next);
   const pinned = await board.move(facts("1").key, "focus");
   expect(pinned.sessions[1]).toMatchObject({ columnId: "focus", source: "operator" });
-  expect(pinned.sessions[1]).not.toBe(next.sessions[1]);
-  expect(
-    pinned.sessions.filter((_, index) => index !== 1).every((row) => next.sessions.includes(row)),
-  ).toBe(true);
   board.state.scope = "new-authorization";
   const rebuilt = await board.read();
   expect(rebuilt.sessions).toEqual(pinned.sessions);

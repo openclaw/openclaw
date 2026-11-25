@@ -94,6 +94,8 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   agentHarnessRuntimePreparationHint?: string;
   /** Keep staged setup config and credentials outside configured Gateway ownership. */
   preparedModelRuntimeMode?: "isolated-read-only";
+  /** Setup may initialize missing account catalog facts before its live inference probe. */
+  refreshModelCatalog?: boolean;
   /** Ring-zero tool override, supplied only by the OpenClaw orchestrator. */
   systemAgentTool?: SystemAgentToolOptions;
   /** Gateway-private lifecycle generation selected before command admission. */

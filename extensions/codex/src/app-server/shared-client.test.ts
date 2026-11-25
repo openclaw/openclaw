@@ -696,43 +696,51 @@ describe("shared Codex app-server client", () => {
     expect(fallback.process.stdin.destroyed).toBe(false);
   });
 
-  it("keeps capture clients separate from ordinary shared clients", async () => {
-    await withTempDir("openclaw-codex-capture-client-", async (root) => {
-      const command = path.join(root, "codex");
-      await fs.writeFile(command, "native-v1");
-      const normal = createInitializingClientHarness("openclaw/0.149.0 (Linux; test)");
-      const captured = createInitializingClientHarness("openclaw/0.149.0 (Linux; test)");
-      const startSpy = vi
-        .spyOn(CodexAppServerClient, "start")
-        .mockResolvedValueOnce(normal.client)
-        .mockResolvedValueOnce(captured.client);
-      const startOptions: CodexAppServerStartOptions = createStartOptions({
-        command,
-        commandSource: "config",
+  it.each(["native", ...(process.platform !== "win32" ? ["standalone"] : [])])(
+    "keeps %s capture clients separate from ordinary shared clients",
+    async (layout) => {
+      await withTempDir("openclaw-codex-capture-client-", async (root) => {
+        const command = path.join(root, layout === "standalone" ? "bin/codex" : "codex");
+        await fs.mkdir(path.dirname(command), { recursive: true });
+        await fs.writeFile(command, "native-v1");
+        if (layout === "standalone") {
+          await fs.writeFile(path.join(root, "codex-package.json"), "{}\n");
+          await fs.symlink("bin/codex", path.join(root, "codex"));
+        }
+        const normal = createInitializingClientHarness("openclaw/0.149.0 (Linux; test)");
+        const captured = createInitializingClientHarness("openclaw/0.149.0 (Linux; test)");
+        const startSpy = vi
+          .spyOn(CodexAppServerClient, "start")
+          .mockResolvedValueOnce(normal.client)
+          .mockResolvedValueOnce(captured.client);
+        const startOptions: CodexAppServerStartOptions = createStartOptions({
+          command,
+          commandSource: "config",
+        });
+
+        try {
+          const normalClient = await getLeasedSharedCodexAppServerClient({ startOptions });
+          const capturedClient = await getLeasedSharedCodexAppServerClient({
+            startOptions,
+            runtimeArtifactMode: "capture",
+          });
+
+          expect(capturedClient).not.toBe(normalClient);
+          expect(startSpy).toHaveBeenCalledTimes(2);
+          const { readCodexAppServerClientRuntimeArtifact } = await import("./runtime-artifact.js");
+          expect(readCodexAppServerClientRuntimeArtifact(normalClient)).toBeUndefined();
+          expect(readCodexAppServerClientRuntimeArtifact(capturedClient)).toEqual({
+            id: expect.stringMatching(/^codex-app-server:v1:/u),
+            fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          });
+          expect(releaseLeasedSharedCodexAppServerClient(normalClient)).toBe(true);
+          expect(releaseLeasedSharedCodexAppServerClient(capturedClient)).toBe(true);
+        } finally {
+          await Promise.all([normal.client.closeAndWait(), captured.client.closeAndWait()]);
+        }
       });
-
-      try {
-        const normalClient = await getLeasedSharedCodexAppServerClient({ startOptions });
-        const capturedClient = await getLeasedSharedCodexAppServerClient({
-          startOptions,
-          runtimeArtifactMode: "capture",
-        });
-
-        expect(capturedClient).not.toBe(normalClient);
-        expect(startSpy).toHaveBeenCalledTimes(2);
-        const { readCodexAppServerClientRuntimeArtifact } = await import("./runtime-artifact.js");
-        expect(readCodexAppServerClientRuntimeArtifact(normalClient)).toBeUndefined();
-        expect(readCodexAppServerClientRuntimeArtifact(capturedClient)).toEqual({
-          id: expect.stringMatching(/^codex-app-server:v1:/u),
-          fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
-        });
-        expect(releaseLeasedSharedCodexAppServerClient(normalClient)).toBe(true);
-        expect(releaseLeasedSharedCodexAppServerClient(capturedClient)).toBe(true);
-      } finally {
-        await Promise.all([normal.client.closeAndWait(), captured.client.closeAndWait()]);
-      }
-    });
-  });
+    },
+  );
 
   it("binds the managed fallback candidate that actually initialized", async () => {
     await withTempDir("openclaw-codex-capture-fallback-", async (root) => {

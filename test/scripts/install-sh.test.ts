@@ -2883,6 +2883,114 @@ EOF
     expect(existsSync(join(home, ".bashrc"))).toBe(false);
   });
 
+  it.each([false, true])(
+    "keeps the final shell handoff actionable (PATH ready=%s)",
+    (pathReady) => {
+      const home = tempDirs.make("install-final home-");
+      const binDir = join(home, "npm prefix", "bin");
+      mkdirSync(binDir, { recursive: true });
+      const cliPath = join(binDir, "openclaw");
+      writeFileSync(
+        cliPath,
+        [
+          "#!/bin/sh",
+          'case "$*" in',
+          "  --version) printf '%s\\n' '2026.11.5' ;;",
+          "  doctor*) printf '%s\\n' 'doctor-fixture-complete' ;;",
+          "  'onboard --help') printf '%s\\n' 'onboard-fixture-help' ;;",
+          "  'daemon status --json') printf '%s\\n' '{\"service\":{\"loaded\":false}}' ;;",
+          "  'plugins update'*) exit 0 ;;",
+          "  'dashboard --help') exit 1 ;;",
+          "  *) exit 64 ;;",
+          "esac",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(cliPath, 0o755);
+      const originalPath = pathReady ? `${binDir}:/usr/bin:/bin` : "/usr/bin:/bin";
+      const provisioningMocks = [
+        "bootstrap_gum_temp",
+        "print_installer_banner",
+        "print_gum_status",
+        "show_install_plan",
+        "ensure_node",
+        "check_git",
+        "fix_npm_permissions",
+        "prepare_git_wrapper_backup_for_npm",
+        "install_openclaw",
+        "retire_git_wrapper_after_npm_install",
+        "warn_duplicate_openclaw_global_installs",
+      ]
+        .map((name) => `${name}() { :; }`)
+        .join("\n");
+
+      for (const configPresent of [false, true]) {
+        const result = runInstallShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            'export HOME="$FIXTURE_HOME"',
+            'export PATH="$FIXTURE_BIN:$PATH"',
+            'ORIGINAL_PATH="$FIXTURE_ORIGINAL_PATH"',
+            "INSTALL_METHOD=npm",
+            "NO_ONBOARD=1",
+            "NO_PROMPT=1",
+            "VERIFY_INSTALL=1",
+            provisioningMocks,
+            "detect_os_or_die() { OS=linux; }",
+            "detect_openclaw_checkout() { return 1; }",
+            "check_existing_openclaw() { return 1; }",
+            'npm_global_bin_dir() { printf "%s\\n" "$FIXTURE_BIN"; }',
+            `has_openclaw_config() { return ${configPresent ? 0 : 1}; }`,
+            "refresh_gateway_service_if_loaded() { :; }",
+            "main 2>&1",
+          ].join("\n"),
+          {
+            SHELL: "/bin/bash",
+            NVM_DIR: "",
+            FIXTURE_HOME: home,
+            FIXTURE_BIN: binDir,
+            FIXTURE_ORIGINAL_PATH: originalPath,
+          },
+        );
+        const output = stripVTControlCharacters(`${result.stdout}\n${result.stderr}`);
+        expect(result.status, output).toBe(0);
+        const summary = pathReady
+          ? "OpenClaw installed successfully"
+          : "Installed; one shell setup step remains";
+        expect(output).toContain(summary);
+        if (pathReady) {
+          expect(output).not.toContain("Installed; one shell setup step remains");
+          expect(output).not.toContain("export PATH=");
+        } else {
+          expect(output).not.toContain("OpenClaw installed successfully");
+          expect(output).toContain(binDir);
+          const repair = output.match(/For this shell, run:\n {4}(.+)/)?.[1];
+          expect(repair, output).toBeTruthy();
+          const repaired = runInstallShell(`${repair}; openclaw --version`, {
+            HOME: home,
+            PATH: originalPath,
+          });
+          expect(repaired.status, repaired.stdout + repaired.stderr).toBe(0);
+          expect(repaired.stdout).toContain("2026.11.5");
+          expect(output.lastIndexOf("export PATH=")).toBeGreaterThan(output.indexOf(summary));
+        }
+        if (configPresent) {
+          expect(output).toContain("Doctor complete");
+          expect(output.indexOf(summary)).toBeGreaterThan(output.indexOf("Doctor complete"));
+        } else {
+          const handoff = output.match(/Skipping onboard \(requested\); run (.+) onboard later/);
+          expect(handoff, output).not.toBeNull();
+          const help = runInstallShell(`${handoff![1]} onboard --help`, {
+            HOME: home,
+            PATH: originalPath,
+          });
+          expect(help.status, `${help.stdout}\n${help.stderr}`).toBe(0);
+          expect(help.stdout).toContain("onboard-fixture-help");
+        }
+      }
+    },
+  );
+
   it("uses a quoted absolute openclaw path in follow-up commands when npm bin is not on the original PATH", () => {
     const tmp = tempDirs.make("openclaw-install-command-");
     const npmBin = join(tmp, "npm bin");
@@ -3583,6 +3691,79 @@ exit 0
         ? '"$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?'
         : '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
     );
+  });
+
+  // #203460: a terminal stdin under sudo-rs use_pty with redirected output stops apt with SIGTTOU.
+  it.each([
+    { gum: false, verbose: "0" },
+    { gum: true, verbose: "0" },
+    { gum: true, verbose: "1" },
+  ])(
+    "quiet steps never hand terminal stdin to the command (gum=$gum, verbose=$verbose)",
+    ({ gum, verbose }) => {
+      const dir = tempDirs.make("openclaw-install-sh-quiet-stdin-");
+      const gumPath = join(dir, "gum");
+      const commandPath = join(dir, "command");
+      const stdinLog = join(dir, "stdin-source");
+      const stdinPath = join(dir, "stdin");
+      writeFileSync(stdinPath, "terminal input\n");
+      writeFileSync(
+        gumPath,
+        '#!/usr/bin/env bash\nwhile [[ "$#" -gt 0 && "$1" != "--" ]]; do shift; done\nshift\n"$@"\n',
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        commandPath,
+        `#!/usr/bin/env bash
+if [[ /dev/fd/0 -ef /dev/null ]]; then echo "devnull" > "${stdinLog}"; else echo "other" > "${stdinLog}"; fi
+`,
+        { mode: 0o755 },
+      );
+
+      const result = runInstallShell(
+        `
+      set -euo pipefail
+      exec < "$STDIN_FIXTURE_PATH"
+      source "${SCRIPT_PATH}"
+      needs_stdin_isolation() { return 1; }
+      gum_is_tty() { return ${gum ? 0 : 1}; }
+      GUM="${gum ? gumPath : ""}"
+      VERBOSE="${verbose}"
+      run_quiet_step "Configuring NodeSource repository" "${commandPath}"
+    `,
+        { STDIN_FIXTURE_PATH: stdinPath },
+      );
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(stdinLog, "utf8").trim()).toBe("devnull");
+    },
+  );
+
+  it("keeps the interactive Homebrew bootstrap on the terminal", () => {
+    const dir = tempDirs.make("openclaw-install-sh-homebrew-stdin-");
+    const stdinLog = join(dir, "stdin-source");
+    const stdinPath = join(dir, "stdin");
+    writeFileSync(stdinPath, "terminal input\n");
+
+    const result = runInstallShell(
+      `
+      set -euo pipefail
+      exec < "$STDIN_FIXTURE_PATH"
+      source "${SCRIPT_PATH}"
+      OS=macos
+      needs_stdin_isolation() { return 1; }
+      is_macos_admin_user() { return 0; }
+      command() { [[ "$1" == "-v" && "$2" == "brew" ]] && return 1; builtin command "$@"; }
+      run_remote_bash() {
+        if [[ /dev/fd/0 -ef /dev/null ]]; then echo "devnull" > "${stdinLog}"; else echo "other" > "${stdinLog}"; fi
+      }
+      install_homebrew
+    `,
+      { STDIN_FIXTURE_PATH: stdinPath },
+    );
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(stdinLog, "utf8").trim()).toBe("other");
   });
 });
 

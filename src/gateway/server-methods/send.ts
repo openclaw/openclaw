@@ -322,21 +322,17 @@ export const sendHandlers: GatewayRequestHandlers = {
                     Boolean(trustedContext.messageActionAuthorization?.scheduled)),
               };
               let payload: unknown;
-              if (canonicalAction || messageAuthority.assertScheduledWriteCurrent) {
+              const useMessageRunner = request.action === "send" || canonicalAction;
+              if (useMessageRunner || messageAuthority.assertScheduledWriteCurrent) {
                 const { runMessageAction } =
                   await import("../../infra/outbound/message-action-runner.js");
                 const result = await runMessageAction({
                   ...actionContext,
                   gatewayOwnedDelivery: true,
-                  // The delegating client records the confirmed send in its destination.
-                  callerRecordsDestinationHistory: true,
-                  ...(request.action === "send"
-                    ? {
-                        actionOrigin: trustedContext.runtimeAgentId
-                          ? ("message-tool" as const)
-                          : undefined,
-                      }
-                    : {}),
+                  actionOrigin:
+                    request.action === "send" && trustedContext.runtimeAgentId
+                      ? ("message-tool" as const)
+                      : undefined,
                   params: {
                     ...request.params,
                     channel,
@@ -349,20 +345,21 @@ export const sendHandlers: GatewayRequestHandlers = {
                 await messageAuthority.beforeDeliveryAttempt();
                 assertDirectAdapterHandoff?.();
                 const handled = await dispatchChannelMessageAction(actionContext);
-                if (handled) {
-                  payload = extractToolPayload(handled);
-                } else {
-                  const error = errorShape(
-                    ErrorCodes.INVALID_REQUEST,
-                    `Message action ${request.action} not supported for channel ${channel}.`,
-                  );
+                if (!handled) {
                   return createGatewayInflightResult({
                     context,
                     dedupeKey,
                     channel,
-                    result: { ok: false, error },
+                    result: {
+                      ok: false,
+                      error: errorShape(
+                        ErrorCodes.INVALID_REQUEST,
+                        `Message action ${request.action} not supported for channel ${channel}.`,
+                      ),
+                    },
                   });
                 }
+                payload = extractToolPayload(handled);
               }
               await scheduleDeliveredSourceReplyTranscriptMirror({
                 context,

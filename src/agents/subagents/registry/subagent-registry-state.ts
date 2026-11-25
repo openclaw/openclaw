@@ -11,7 +11,7 @@ import {
   resolveRecordedRequester,
 } from "./subagent-child-owner-match.js";
 import {
-  isDeliverySuspended,
+  isDeliveryTerminalForRequesterSettle,
   projectSubagentRunForMaintenance,
   shouldPreserveSubagentForMaintenance,
 } from "./subagent-delivery-state.js";
@@ -523,7 +523,8 @@ export function countActiveSubagentRunsForSession(
           }
           if (
             hasSubagentRunEnded(entry)
-              ? typeof entry.cleanupCompletedAt !== "number" && !isDeliverySuspended(entry)
+              ? typeof entry.cleanupCompletedAt !== "number" &&
+                !isDeliveryTerminalForRequesterSettle(entry)
               : isRetainedUnendedSubagentRun(entry, now)
           ) {
             return true;

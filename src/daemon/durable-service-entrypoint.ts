@@ -5,6 +5,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { PackageUpdateTransaction } from "../infra/package-update-swap-contract.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
+import { VERSION } from "../version.js";
 import type { PlannedCliEntrypoint } from "./program-args.js";
 
 const realpathOrResolve = (target: string) => fs.realpath(target).catch(() => path.resolve(target));
@@ -32,14 +33,22 @@ export async function isDisposableEntrypoint(entrypoint: string): Promise<boolea
   return isDisposableInstallPath(await realpathOrResolve(entrypoint));
 }
 
-/** The command that installs (or reinstalls) the durable copy, for users without openclaw on PATH. */
-export function formatDurableInstallCommand(
+/** Formats a version-pinned npx OpenClaw command for disposable entrypoints. */
+function formatNpxCliCommand(
   version: string,
   args: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const command = formatCliCommand(`openclaw ${args}`, env);
+  const command = formatCliCommand(args ? `openclaw ${args}` : "openclaw", env);
   return `npx ${command.replace(/^openclaw\b/u, `openclaw@${version}`)}`;
+}
+
+/** Formats a user-facing OpenClaw command, using version-pinned npx for disposable entrypoints. */
+export async function formatUserCliCommand(args = ""): Promise<string> {
+  if (await isDisposableEntrypoint(process.argv[1] ?? "")) {
+    return formatNpxCliCommand(VERSION, args);
+  }
+  return formatCliCommand(args ? `openclaw ${args}` : "openclaw");
 }
 
 /** The durable copy is missing or fails its version or integrity check; only an install replaces it. */
@@ -147,7 +156,7 @@ export async function resolveDurableServiceCli(
       return { entrypoint: durableEntrypoint };
     }
     throw new DurableServiceCliError(
-      `The background service's OpenClaw copy at ${packageRoot} cannot be reused (${errors.slice(0, 2).join("; ")}). Reinstall it with: ${formatDurableInstallCommand(version, "gateway install --force", env)}`,
+      `The background service's OpenClaw copy at ${packageRoot} cannot be reused (${errors.slice(0, 2).join("; ")}). Reinstall it with: ${formatNpxCliCommand(version, "gateway install --force", env)}`,
     );
   }
   // Whether the copy is reused is decided under the package lock, and a replacement is

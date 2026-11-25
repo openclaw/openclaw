@@ -149,6 +149,7 @@ it("keeps model projections across display writes but invalidates authored value
     ...initial,
     ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
     meta: { lastTouchedVersion: "2026.10.11" },
+    browser: { profiles: { temporary: { cdpPort: 18801, color: "#123456" } } },
   };
   setSnapshot(display, display);
   expect(resolveRuntimeConfigCacheKey(display)).not.toBe(configKey);

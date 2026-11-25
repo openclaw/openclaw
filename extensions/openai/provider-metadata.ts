@@ -29,23 +29,12 @@ export function createOpenAIProviderMetadata(): ProviderPlugin {
         {
           id: "oauth",
           kind: "oauth",
-          label: "Codex login (browser)",
-          hint: "Sign in to Codex locally with your ChatGPT account",
+          label: "Codex login",
+          hint: "Sign in with your ChatGPT account using a one-time code",
           credentialImport: CODEX_CHATGPT_IMPORT,
           wizard: {
             choiceId: "openai",
             assistantPriority: -10,
-          },
-        },
-        {
-          id: "device-code",
-          kind: "device_code",
-          label: "Codex login (device code)",
-          hint: "Use a browser code when OpenClaw runs on a remote VM",
-          credentialImport: CODEX_CHATGPT_IMPORT,
-          wizard: {
-            choiceId: "openai-device-code",
-            assistantPriority: -40,
             onboardingFeatured: true,
           },
         },

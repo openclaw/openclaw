@@ -3,7 +3,7 @@ import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
-import { gitReleaseSlot, resolveGitReleasePrefix } from "../../infra/git-release-paths.js";
+import { resolveGitReleasePrefix, servingGitReleaseSlot } from "../../infra/git-release-paths.js";
 import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidate-snapshot.js";
 import { resolveNativePackageProjectRoot } from "../../infra/update-native-package-owner.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
@@ -22,7 +22,7 @@ function servesFromGitRelease(root: string): boolean {
   const prefix = resolveGitReleasePrefix();
   const resolved = path.resolve(root);
   return (
-    resolved === path.resolve(gitReleaseSlot(prefix)) ||
+    resolved === path.resolve(servingGitReleaseSlot(prefix)) ||
     resolved.startsWith(`${path.resolve(prefix, "releases")}${path.sep}`)
   );
 }

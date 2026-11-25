@@ -131,6 +131,48 @@ it("keeps menu controls with their agent as the roster changes", () => {
   expect(view.queryByRole("button", { name: "Scout renamed settings", hidden: true })).toBeNull();
 });
 
+it("offers Share on each agent row only when sharing is available", () => {
+  const [share, setShare] = createSignal<((agentId: string) => void) | undefined>();
+  const [pending, setPending] = createSignal<{ id: string; name: string }>();
+  const onClose = vi.fn();
+  const onSwitchAgent = vi.fn();
+  const view = renderAgentMenu({
+    agents: [
+      { id: "main", name: "Main" },
+      { id: "scout", name: "Scout" },
+    ],
+    get onShareAgent() {
+      return share();
+    },
+    get pendingAgent() {
+      return pending();
+    },
+    onClose,
+    onSwitchAgent,
+  });
+  flush();
+  expect(view.queryByRole("button", { name: "Share Scout", hidden: true })).toBeNull();
+
+  const onShareAgent = vi.fn();
+  setShare(() => onShareAgent);
+  flush();
+  const scout = view.getByRole("menuitem", { name: "Scout", hidden: true });
+  const actions = [...scout.querySelectorAll(".sidebar-agent-menu__action")];
+  expect(actions.map((action) => action.getAttribute("aria-label"))).toEqual([
+    "Share Scout",
+    "Scout settings",
+  ]);
+  view.getByRole("button", { name: "Share Scout", hidden: true }).click();
+  expect(onShareAgent).toHaveBeenCalledExactlyOnceWith("scout");
+  expect(onClose).toHaveBeenCalledExactlyOnceWith(false);
+  expect(onSwitchAgent).not.toHaveBeenCalled();
+
+  setPending({ id: "scout", name: "Scout" });
+  flush();
+  expect(view.queryByRole("button", { name: "Share Scout", hidden: true })).toBeNull();
+  expect(view.getByRole("button", { name: "Share Main", hidden: true })).not.toBeNull();
+});
+
 const position = { x: 12, y: 30 };
 function dropdown(overrides: Partial<SidebarDropdownProps>) {
   return render(() => (

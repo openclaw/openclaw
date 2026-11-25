@@ -1,24 +1,41 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getScopedDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { readBackupEngineImage } from "../infra/database-engine/physical-store-inspection.js";
+import { readBackupEngine } from "../infra/database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "../infra/database-engine/port-descriptor.js";
 import {
   withDatabasePortPostgres,
   withDatabasePortConnection,
 } from "../infra/database-engine/port-provider.js";
-import { admitDatabasePortDescriptor } from "../infra/database-engine/port.worker.js";
+import {
+  admitDatabasePortDescriptor,
+  inspectDatabasePort,
+} from "../infra/database-engine/port.worker.js";
 import {
   assertPostgresCatalog,
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "../infra/database-engine/postgres-catalog.js";
+import {
+  postgresCopyAclSql,
+  preflightPostgresCopyAcl,
+} from "../infra/database-engine/postgres-copy-acl.js";
+import { readPostgresPortCapabilities } from "../infra/database-engine/postgres-port-capabilities.js";
+import {
+  assertDatabasePortNamespaceOwner,
+  readPostgresStoreMetadata,
+} from "../infra/database-engine/postgres-store-metadata.js";
 import { DEFERRED_PLUGIN_MIGRATION_RUN_PREFIX } from "../infra/deferred-plugin-migrations.contract.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { quoteSqliteIdentifier as quote } from "../infra/sqlite-schema-sql.js";
+import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   assertPluginCohortDatabaseRestoreRecords,
@@ -35,6 +52,7 @@ import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/plugin-metadata-sta
 import {
   captureDatabaseArtifact,
   capturePostgresSchema,
+  clonePostgresSchema,
   exportPostgresBackup,
   restorePostgresBackup,
   discardPostgresNamespace,
@@ -99,7 +117,6 @@ export async function capturePostgresBackupInWorker(params: {
   /** Doctor owns local directory retention; other captures retire through their manifest. */
   prune?: { directoryPrefix: string; captureId: string };
 }): Promise<PostgresExportEnvelope> {
-  const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
   params.assertCurrent();
   await fs.mkdir(params.directory, { mode: 0o700 });
   await fs.writeFile(path.join(params.directory, ".pending"), "", { flag: "wx", mode: 0o600 });
@@ -318,9 +335,226 @@ export async function preparePostgresRestoreInWorker(params: {
   });
 }
 
+function requirePostgresUpgradeAnchor(sourcePath: string) {
+  const anchor = readBackupEngine(sourcePath);
+  if (anchor.engine !== "postgres") {
+    throw new Error("A protected PostgreSQL upgrade requires its original anchor.");
+  }
+  return anchor;
+}
+
+/** Read the physical version without opening a writable family connection. */
+export async function inspectPostgresUpgradeInWorker(params: {
+  sourcePath: string;
+  config: OpenClawConfig;
+}) {
+  const anchor = requirePostgresUpgradeAnchor(params.sourcePath);
+  return withDatabasePortConnection(params.config, async (client) => {
+    const { store: family, version } = await readPostgresStoreMetadata(client, anchor);
+    // Total relation size already includes indexes and TOAST. Partition parents
+    // have no storage; their ordinary-table partitions are counted individually.
+    const size = await client.query<{ physical_bytes: string }>(
+      "SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0)::text AS physical_bytes FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relkind IN ('r', 'm')",
+      [anchor.namespace],
+    );
+    const physicalBytes = Number(size.rows[0]!.physical_bytes);
+    const retainedAgentIds: string[] = [];
+    const registeredAgentDatabases: { agentId: string; path: string }[] = [];
+    if (family === "state") {
+      const present = await client.query(
+        "SELECT to_regclass($1) IS NOT NULL AS present, to_regclass($2) IS NOT NULL AS registered",
+        [
+          `${quote(anchor.namespace)}.agent_deletion_journal`,
+          `${quote(anchor.namespace)}.agent_databases`,
+        ],
+      );
+      if (present.rows[0]?.present) {
+        const retained = await client.query<{ agent_id: string }>(
+          `SELECT agent_id FROM ${quote(anchor.namespace)}.agent_deletion_journal WHERE cleanup_completed = 1 AND delete_files = 0`,
+        );
+        retainedAgentIds.push(...retained.rows.map((row) => row.agent_id));
+      }
+      if (present.rows[0]?.registered) {
+        const registered = await client.query<{ agent_id: string; path: string }>(
+          `SELECT agent_id, path FROM ${quote(anchor.namespace)}.agent_databases`,
+        );
+        registeredAgentDatabases.push(
+          ...registered.rows.map((row) => ({ agentId: row.agent_id, path: row.path })),
+        );
+      }
+    }
+    return {
+      ...anchor,
+      family,
+      version,
+      physicalBytes,
+      retainedAgentIds,
+      registeredAgentDatabases,
+    };
+  });
+}
+
+/** Check every source before the first private namespace is allocated. */
+export async function preflightPostgresUpgradeInWorker(params: {
+  sourcePaths: string[];
+  config: OpenClawConfig;
+}) {
+  for (const sourcePath of params.sourcePaths) {
+    const anchor = requirePostgresUpgradeAnchor(sourcePath);
+    await withDatabasePortPostgres(params.config, anchor, async (client, baseDescriptor) => {
+      const permission = await client.query<{
+        allowed: boolean;
+        database: string;
+        role: string;
+      }>(
+        "SELECT has_database_privilege(current_database(), 'CREATE') AS allowed, current_database() AS database, current_user AS role",
+      );
+      const access = permission.rows[0];
+      if (!access?.allowed) {
+        throw new Error(
+          access
+            ? `Protected PostgreSQL upgrade requires CREATE on the configured database. Run GRANT CREATE ON DATABASE ${quote(access.database)} TO ${quote(access.role)}; then retry the update.`
+            : "Protected PostgreSQL upgrade could not inspect database CREATE permission.",
+        );
+      }
+      await assertDatabasePortNamespaceOwner(client, anchor.namespace);
+      await preflightPostgresCopyAcl(client, anchor.namespace);
+      const descriptor = await admitDatabasePortDescriptor(
+        { engine: "postgres", db: client, namespace: anchor.namespace },
+        baseDescriptor,
+      );
+      await readPostgresPortCapabilities(client, descriptor);
+    });
+  }
+}
+
+/** The carrier's first verified server copy is the private upgrade destination. */
+export async function clonePostgresUpgradeInWorker(params: {
+  sourcePath: string;
+  anchorPath: string;
+  config: OpenClawConfig;
+  assertCurrent: () => void;
+}) {
+  params.assertCurrent();
+  if (path.resolve(params.sourcePath) === path.resolve(params.anchorPath)) {
+    throw new Error("A protected PostgreSQL copy requires a private anchor path.");
+  }
+  // The shadow tree already contains an anchor; replace only that private file.
+  await fs.unlink(params.anchorPath).catch(ignoreMissingPath);
+  await createVerifiedSqliteSnapshot({
+    sourcePath: params.sourcePath,
+    targetPath: params.anchorPath,
+    preserveRowIds: true,
+  });
+  const anchor = requirePostgresUpgradeAnchor(params.anchorPath);
+  return withDatabasePortPostgres(params.config, anchor, async (client, baseDescriptor) => {
+    const descriptor = await admitDatabasePortDescriptor(
+      { engine: "postgres", db: client, namespace: anchor.namespace },
+      baseDescriptor,
+    );
+    const { namespace } = await clonePostgresSchema({
+      ...params,
+      client,
+      anchor,
+      descriptor: {
+        ...descriptor,
+        postgresPostData: (destinationNamespace) =>
+          `${descriptor.postgresPostData?.(destinationNamespace) ?? ""}\n;\n` +
+          postgresCopyAclSql(client, anchor.namespace, destinationNamespace),
+      },
+    });
+    try {
+      params.assertCurrent();
+      using privateAnchor = openNodeSqliteDatabase(params.anchorPath);
+      privateAnchor.prepare("UPDATE openclaw_engine_anchor SET schema = ?").run(namespace);
+      return { namespace };
+    } catch (error) {
+      await discardPostgresNamespace(client, namespace);
+      throw error;
+    }
+  }).catch((error: unknown) => {
+    if (isRecord(error) && error.code === "53100") {
+      throw new Error(
+        "The PostgreSQL server has insufficient disk space for the protected database copy. The original PostgreSQL data was not migrated. Free space on the PostgreSQL server, then run openclaw update.",
+        { cause: error },
+      );
+    }
+    throw error;
+  });
+}
+
+/** Verify the migrated namespace, not its local SQLite anchor. */
+export async function validatePostgresUpgradeInWorker(params: {
+  anchorPath: string;
+  config: OpenClawConfig;
+  expectedVersion: number;
+}) {
+  const anchor = requirePostgresUpgradeAnchor(params.anchorPath);
+  await withDatabasePortPostgres(params.config, anchor, async (client, descriptor, version) => {
+    if (version !== params.expectedVersion) {
+      throw new Error(
+        `Protected PostgreSQL copy has schema ${version}; expected ${params.expectedVersion}.`,
+      );
+    }
+    await inspectDatabasePort(
+      { engine: "postgres", db: client, namespace: anchor.namespace },
+      descriptor,
+      anchor.storeId,
+      true,
+    );
+  });
+}
+
+/** Adoption requires both exact role ownership and the preserved anchor's physical store ID. */
+export async function retirePostgresUpgradeInWorker(params: {
+  anchorPath: string;
+  config: OpenClawConfig;
+  activeAnchors: string[];
+}) {
+  const anchor = requirePostgresUpgradeAnchor(params.anchorPath);
+  for (const activePath of params.activeAnchors) {
+    const active = readBackupEngine(activePath);
+    if (active.engine === "postgres" && active.namespace === anchor.namespace) {
+      throw new Error("Refusing to retire an active PostgreSQL namespace.");
+    }
+  }
+  await withDatabasePortConnection(params.config, async (client) => {
+    // A crash after DROP but before file pruning leaves the same preserved anchor.
+    const present = await client.query(
+      "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1) AS present",
+      [anchor.namespace],
+    );
+    if (!present.rows[0]?.present) {
+      return;
+    }
+    await assertDatabasePortNamespaceOwner(client, anchor.namespace);
+    await readPostgresStoreMetadata(client, anchor);
+    await client.query(`DROP SCHEMA ${quote(anchor.namespace)} CASCADE`);
+  });
+}
+
+export type PostgresUpgradeInspection = {
+  engine: "postgres";
+  storeId: string;
+  namespace: string;
+  family: string;
+  version: number;
+  physicalBytes: number;
+  retainedAgentIds: string[];
+  registeredAgentDatabases: { agentId: string; path: string }[];
+};
+type PostgresUpgradeClone = Parameters<typeof clonePostgresUpgradeInWorker>[0];
+type PostgresUpgradeValidation = Parameters<typeof validatePostgresUpgradeInWorker>[0];
+type PostgresUpgradeRetirement = Parameters<typeof retirePostgresUpgradeInWorker>[0];
+
 export type Capture = Parameters<typeof capturePostgresBackupInWorker>[0];
 export type Restore = Parameters<typeof preparePostgresRestoreInWorker>[0];
 export type BackupTask =
+  | { operation: "inspect-upgrade"; params: { sourcePath: string; config: OpenClawConfig } }
+  | { operation: "preflight-upgrade"; params: { sourcePaths: string[]; config: OpenClawConfig } }
+  | { operation: "clone-upgrade"; params: Omit<PostgresUpgradeClone, "assertCurrent"> }
+  | { operation: "validate-upgrade"; params: PostgresUpgradeValidation }
+  | { operation: "retire-upgrade"; params: PostgresUpgradeRetirement }
   | { operation: "discard"; params: { config: OpenClawConfig; namespaces: string[] } }
   | { operation: "capture"; params: Omit<Capture, "assertCurrent"> }
   | { operation: "restore"; params: Omit<Restore, "assertCurrent"> }
@@ -346,6 +580,8 @@ export type BackupTask =
     };
 export type BackupReply =
   | void
+  | PostgresUpgradeInspection
+  | { namespace: string }
   | PostgresExportEnvelope
   | string
   | string[]

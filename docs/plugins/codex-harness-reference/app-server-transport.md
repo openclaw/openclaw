@@ -14,7 +14,7 @@ How OpenClaw starts and reaches the Codex app-server, and every `appServer` fiel
 
 For ordinary harness turns, OpenClaw starts a managed Codex binary: a newer
 Codex you installed yourself, or the one shipped with the official plugin
-(currently `@openai/codex` `0.169.0`):
+(currently `@openai/codex` `0.172.0`):
 
 ```bash
 codex app-server --listen stdio://
@@ -31,7 +31,7 @@ when you intentionally want a different executable.
 New OpenAI models can require a newer Codex version than your OpenClaw release
 bundles. For GPT-6.2, [the issue report](https://github.com/openclaw/openclaw/issues/200972)
 cites Codex `0.166.0` as the minimum. Its successful test used `0.169.1`,
-so it does not establish the exact minimum. The current `0.169.0` bundle
+so it does not establish the exact minimum. The current `0.172.0` bundle
 exceeds the reported minimum.
 
 To get a newer compatible Codex between OpenClaw releases, install it on the
@@ -82,8 +82,8 @@ on `PATH` and uses it only when all of these hold:
 
 Otherwise OpenClaw uses the shipped binary. The Gateway logs one line with the
 chosen binary, its version, and the reason, for example
-`Codex app-server: using installed /usr/local/bin/codex 0.169.1 (newer than bundled 0.169.0)`
-or `Codex app-server: using bundled 0.169.0 (installed /usr/local/bin/codex 0.159.0 is not newer)`.
+`Codex app-server: using installed /usr/local/bin/codex 0.173.0 (newer than bundled 0.172.0)`
+or `Codex app-server: using bundled 0.172.0 (installed /usr/local/bin/codex 0.159.0 is not newer)`.
 
 If the selected Codex later fails to start, fails `initialize`, or reports
 another version (for example after an in-place upgrade), OpenClaw starts the
@@ -108,6 +108,11 @@ never installs or updates Codex.
 `appServer.command`, `OPENCLAW_CODEX_APP_SERVER_BIN`, and remote app-servers
 always win. Login-status checks, node exec-servers, and the Doctor package check
 always use the shipped binary.
+
+Verified setup and repair inference also fingerprints the selected local runtime.
+For standalone packages, this includes the installer-created `codex -> bin/codex`
+link and the regular target inside the same package. Other package symlinks remain
+unsupported, and a changed link or target invalidates the captured artifact.
 
 Ordinary managed turns with the default isolated agent home prefer this package
 selection even when a macOS desktop bundle is installed. When
@@ -307,7 +312,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin ships stable Codex app-server `0.169.0` and prefers a newer
+The plugin ships stable Codex app-server `0.172.0` and prefers a newer
 installed Codex only under the rules in
 [Newer installed Codex](#newer-installed-codex). Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a

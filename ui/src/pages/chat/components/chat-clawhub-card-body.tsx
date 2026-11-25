@@ -231,7 +231,7 @@ export function ChatClawHubCardBody(
                 name: plugin.catalog.name,
                 author: plugin.catalog.author,
                 description: plugin.catalog.summary,
-                iconUrl: plugin.catalog.imageUrl,
+                iconUrl: plugin.catalog.imageUrl ?? detail.detail?.author?.imageUrl,
                 pluginId: plugin.local.pluginId,
                 official: plugin.catalog.official,
                 inspection,

@@ -380,7 +380,11 @@ function validateSnapshot(stateDir: string, descriptor: PluginSourceSnapshotDesc
   try {
     bytes = readFileDescriptorBoundedSync(pinned.fd, MAX_MANIFEST_BYTES).toString("utf8");
   } finally {
-    fs.closeSync(pinned.fd);
+    if (pinned.close) {
+      pinned.close();
+    } else {
+      fs.closeSync(pinned.fd);
+    }
   }
   if (digest(bytes) !== descriptor.artifact.manifestDigest) {
     fail(root, "manifest content digest changed");

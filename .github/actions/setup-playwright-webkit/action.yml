@@ -14,7 +14,7 @@ runs:
         as_root=()
         [[ "$(id -u)" == 0 ]] || as_root=(sudo -n)
         download_only=/etc/apt/apt.conf.d/99openclaw-webkit-download-only
-        mirrors=/etc/apt/apt-mirrors.txt
+        mirrors=
         mirrors_backup=
         restore_apt() {
           "${as_root[@]}" rm -f "$download_only"
@@ -36,7 +36,11 @@ runs:
         status=0
         download_webkit_deps 120s || status=$?
         if [[ "$status" == 124 || "$status" == 137 ]]; then
-          if [[ -f "$mirrors" ]] && (( $(grep -c . "$mirrors") > 1 )); then
+          # APT owns the active list; provider images need not use apt-mirrors.txt.
+          # Only edit the single plain-text list used by these runner images.
+          mirrors="$(apt-get indextargets --no-release-info --format '$(REPO_URI)' |
+            sed -n 's|^mirror+file:\(/.*\.txt\)/*$|\1|p' | sort -u)" || mirrors=
+          if [[ "$mirrors" != *$'\n'* && -f "$mirrors" ]] && (( $(grep -c . "$mirrors") > 1 )); then
             echo "::warning::WebKit system packages did not download in 120s from $(head -n 1 "$mirrors" | cut -f 1); retrying with the image's other archive mirrors."
             mirrors_backup="$(mktemp)"
             cp "$mirrors" "$mirrors_backup"
@@ -48,7 +52,7 @@ runs:
               exit "$status"
             fi
           else
-            echo "::warning::WebKit system packages did not download in 120s and no other archive mirror is configured; continuing without a deadline."
+            echo "::warning::WebKit system packages did not download in 120s and no single local text mirror list with alternatives was found; continuing without a deadline."
           fi
         elif [[ "$status" != 0 ]]; then
           exit "$status"

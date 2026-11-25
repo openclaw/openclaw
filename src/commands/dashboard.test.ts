@@ -73,6 +73,10 @@ function output() {
 function expectNoLoggedToken(token: string) {
   expect(output()).not.toContain(token);
   expect(output()).not.toContain("#token=");
+  expect(output()).not.toContain("browser-bootstrap");
+  expect(runtime.error.mock.calls.flat().map(String).join("\n")).not.toMatch(
+    /browser-bootstrap|#(?:bootstrapToken|token)=/,
+  );
 }
 
 const browserUrl =
@@ -147,9 +151,7 @@ it.each([
   expect(output()).not.toContain("Token auto-auth unavailable");
   expect(output()).not.toContain("missing env var");
   expect(runtime.log).toHaveBeenCalledWith("Dashboard URL: http://127.0.0.1:18789/");
-  expect(runtime.log).toHaveBeenCalledWith(
-    "One-time browser pairing included in browser/clipboard URL.",
-  );
+  expect(runtime.log).toHaveBeenCalledWith("One-time browser pairing URL copied to clipboard.");
 });
 
 it.each([false, true])(
@@ -178,8 +180,9 @@ it.each([false, true])(
     expect(runtime.log).toHaveBeenCalledWith("ssh hint");
     expectNoLoggedToken(secretToken);
     expect(openUrl).not.toHaveBeenCalled();
-    expect(output()).toContain("OPENCLAW_GATEWAY_TOKEN");
-    expect(output()).toContain("key `token`");
+    expect(output()).toContain("One-time pairing URL not delivered.");
+    expect(output()).toContain("`browserUrl`");
+    expect(output()).not.toContain("key `token`");
   },
 );
 
@@ -195,18 +198,68 @@ it("reports opener failure without claiming the host has no GUI", async () => {
   );
 });
 
-it("guides no-token users to the explicit JSON handoff when clipboard delivery fails", async () => {
-  mockSnapshot("");
-  copyToClipboard.mockResolvedValue(false);
+it.each(["", "synthetic-shared-token"])(
+  "guides users to the JSON handoff without clipboard: %j",
+  async (token) => {
+    mockSnapshot(token);
+    copyToClipboard.mockResolvedValue(false);
+
+    await dashboardCommand(runtime, { noOpen: true });
+
+    expect(runtime.log).toHaveBeenCalledWith("Browser launch disabled (--no-open).");
+    expect(detectBrowserOpenSupport).not.toHaveBeenCalled();
+    expect(openUrlPrivately).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "One-time pairing URL not delivered. Run `openclaw dashboard --json` and open its `browserUrl` within ten minutes.",
+    );
+  },
+);
+
+it.each([
+  { copied: false, opened: true, noOpen: false },
+  { copied: true, opened: false, noOpen: false },
+  { copied: true, opened: true, noOpen: false },
+  { copied: false, opened: false, noOpen: false },
+  { copied: true, opened: false, noOpen: true },
+])("reports only delivered pairing targets: %j", async ({ copied, opened, noOpen }) => {
+  vi.stubEnv("DISPLAY", ":99");
+  vi.stubEnv("SSH_CONNECTION", "");
+  vi.stubEnv("SSH_CLIENT", "");
+  vi.stubEnv("SSH_TTY", "");
+  vi.stubEnv("REMOTE_CONTAINERS", "");
+  vi.stubEnv("CODESPACES", "");
+  copyToClipboard.mockResolvedValue(copied);
+  openUrlPrivately.mockResolvedValue(opened);
+
+  await dashboardCommand(runtime, { noOpen });
+
+  expect(output().includes("One-time browser pairing URL copied to clipboard.")).toBe(copied);
+  expect(output().includes("Opened the one-time browser pairing URL in your browser.")).toBe(
+    opened,
+  );
+  expect(output().includes("One-time pairing URL not delivered.")).toBe(!copied && !opened);
+  expect(output()).not.toContain("One-time browser pairing included");
+  expect(output()).not.toContain("Open the Dashboard URL above manually.");
+  expect(output()).not.toContain("Token auto-auth not delivered");
+  if (!copied && !opened) {
+    expect(output()).toContain("Browser launch failed.");
+    expect(output()).toContain("as a credential; do not share it in logs or support requests.");
+  }
+  if (noOpen) {
+    expect(openUrlPrivately).not.toHaveBeenCalled();
+  }
+  expectNoLoggedToken("abc");
+});
+
+it("recovers from clipboard rejection without claiming delivery", async () => {
+  copyToClipboard.mockRejectedValueOnce(new Error("clipboard unavailable"));
 
   await dashboardCommand(runtime, { noOpen: true });
 
-  expect(runtime.log).not.toHaveBeenCalledWith(
-    "Browser launch disabled (--no-open). Use the URL above.",
-  );
-  expect(runtime.log).toHaveBeenCalledWith(
-    "One-time pairing URL not delivered. Run `openclaw dashboard --json` and open its `browserUrl` within ten minutes.",
-  );
+  expect(output()).toContain("Copy to clipboard unavailable.");
+  expect(output()).toContain("One-time pairing URL not delivered.");
+  expect(output()).not.toContain("pairing included");
+  expectNoLoggedToken("abc");
 });
 
 it("emits one JSON readiness failure before an exiting runtime unwinds", async () => {
@@ -263,6 +316,8 @@ function expectHandoffFailure(...untouched: unknown[]) {
   expectNoCalls(...untouched);
   expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
   expect(runtime.exit).toHaveBeenCalledWith(1);
+  expect(output()).not.toContain("pairing URL copied");
+  expect(output()).not.toContain("Opened the one-time");
 }
 
 describe("verified custom-bind handoff", () => {
@@ -276,9 +331,6 @@ describe("verified custom-bind handoff", () => {
 
     await dashboardCommand(runtime, { noOpen: true });
 
-    expect(gatherStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ rpc: { url: "ws://10.0.0.5:18789" } }),
-    );
     expect(gatherStatus.mock.invocationCallOrder[0]).toBeLessThan(
       inspectPortUsage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
@@ -340,10 +392,10 @@ describe("verified custom-bind handoff", () => {
 
     await dashboardCommand(runtime, { noOpen: true, yes: true });
 
-    expect(gatherStatus.mock.calls.map(([options]) => options.rpc)).toEqual([
-      { url: "ws://10.0.0.5:18789" },
-      { url: "ws://10.0.0.5:18789" },
-      { url: "ws://10.0.0.6:18789" },
+    expect(gatherStatus.mock.calls.map(([options]) => options.dashboardTarget.probeUrl)).toEqual([
+      "ws://10.0.0.5:18789",
+      "ws://10.0.0.5:18789",
+      "ws://10.0.0.6:18789",
     ]);
     expect(startGateway).toHaveBeenCalledExactlyOnceWith({ json: false });
     expectHandoffFailure(copyToClipboard, issueDeviceBootstrapToken, inspectPortUsage);

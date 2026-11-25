@@ -44,7 +44,8 @@ import { acknowledgeReplySessionTransition } from "../../sessions/session-contro
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ReplyPayload } from "../types.js";
 import {
-  defersTokenCompactionToChatGPTBoundary,
+  adoptCompactedFollowupSession,
+  defersTokenCompactionToRequestBoundary,
   followupOwnsNativeCompaction,
   followupUsesCliRuntime,
   resolveFollowupAgentRuntimeId,
@@ -88,7 +89,7 @@ import {
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
-import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import type { FollowupRun } from "./queue.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -127,10 +128,8 @@ export async function runSessionCompactionIfNeeded(params: {
   onSessionIdChanged?: (sessionId: string) => void;
   onCompactionNotice?: (phase: CompactionNoticePhase, text?: string) => Promise<void> | void;
 }): Promise<SessionEntry | undefined> {
-  const operatorAuthority = params.followupRun.operatorAuthority;
   const assertActive = () => {
     params.abortSignal?.throwIfAborted();
-    operatorAuthority?.assertCurrent();
     if (params.authorize?.() === false) {
       throw new Error("Session compaction maintenance is no longer active");
     }
@@ -165,7 +164,6 @@ export async function runSessionCompactionIfNeeded(params: {
       rawBytes: undefined,
       runtime: params.followupRun.run,
       maxBytes: maxActiveTranscriptBytes,
-      contextTokenBudget: contextWindowTokens,
       signal: params.abortSignal,
     });
 
@@ -282,7 +280,11 @@ export async function runSessionCompactionIfNeeded(params: {
   if (
     shouldCompactByTokens &&
     !shouldCompactByTranscriptBytes &&
-    (await defersTokenCompactionToChatGPTBoundary(params.followupRun.run))
+    (await defersTokenCompactionToRequestBoundary(
+      params.followupRun.run,
+      tokenCountForCompaction,
+      contextWindowTokens,
+    ))
   ) {
     assertActive();
     return entry;
@@ -409,7 +411,7 @@ export async function runSessionCompactionIfNeeded(params: {
       },
       {
         assertActive,
-        sourceAuthority: { assertActive, operatorAuthority },
+        sourceAuthority: { assertActive, operatorAuthority: params.followupRun.operatorAuthority },
         requestBudget: params.compactionRequestBudget,
         pendingUserEntryId: params.pendingUserEntryId,
         // Record every host compaction while its session lane still excludes the next writer.
@@ -493,19 +495,7 @@ export async function runSessionCompactionIfNeeded(params: {
     await notifyCompaction(notice.phase, notice.text);
     assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;
-    const previousSessionId = params.followupRun.run.sessionId;
-    params.followupRun.run.sessionId = entry.sessionId;
-    params.onSessionIdChanged?.(entry.sessionId);
-    const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
-    if (queueKey) {
-      params.followupRun.run.sessionFile = queueKey;
-      refreshQueuedFollowupSession({
-        key: queueKey,
-        previousSessionId,
-        nextSessionId: entry.sessionId,
-        nextSessionFile: queueKey,
-      });
-    }
+    adoptCompactedFollowupSession(params, entry.sessionId);
     return entry;
   } catch (err) {
     if (!terminalCompactionNoticeSent && !params.abortSignal?.aborted) {
@@ -525,10 +515,7 @@ export async function runMemoryFlushIfNeeded(
     abortSignal: params.replyOperation?.abortSignal ?? params.abortSignal,
     operatorAuthority: params.followupRun.operatorAuthority,
   });
-  const assertMemoryFlushCurrent = () => {
-    abortSignal?.throwIfAborted();
-    params.followupRun.operatorAuthority?.assertCurrent();
-  };
+  const assertMemoryFlushCurrent = () => abortSignal?.throwIfAborted();
   const { writable: memoryFlushWritable, toolPolicy: sandboxToolPolicy } =
     await resolveMemoryFlushSandbox(params, assertMemoryFlushCurrent);
 

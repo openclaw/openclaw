@@ -130,7 +130,7 @@ function requireDefinedRole(link: Link, role: MemberRole, confirmedAdmin: boolea
   }
 }
 
-/** Changes only the membership role, with the same owner signature and submit path as removal. */
+/** Requests a profile role assignment using the owner-signed membership label carrier. */
 export async function changeMemberRole(
   request: Request,
   link: Link,

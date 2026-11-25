@@ -38,8 +38,7 @@ export {
 } from "./agents-create.js";
 export { AgentsListParamsSchema, type AgentsListParams } from "./agents-list-session-placement.js";
 
-export { SkillsSearchParamsSchema, SkillsSearchResultSchema } from "./skills-search.js";
-export type { SkillsSearchParams, SkillsSearchResult } from "./skills-search.js";
+export * from "./skills-search.js";
 export { SkillWorkshopDraftSchema } from "./skill-workshop-drafts.js";
 export type { SkillWorkshopDraft } from "./skill-workshop-drafts.js";
 

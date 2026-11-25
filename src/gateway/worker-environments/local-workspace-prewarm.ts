@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
+import { setImmediate } from "node:timers/promises";
 import { listAgentIds } from "../../agents/agent-scope-config.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
-import { IDLE_GC_MS } from "../../agents/worktrees/retention.js";
-import { worktreeTemplateMutationKey } from "../../agents/worktrees/template-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { localWorkspaceProjectionRoot } from "./local-workspace-paths.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -17,6 +17,9 @@ export async function prewarmLocalWorkspaceTemplates(params: {
   if (config.worktreeAcceleration === false) {
     return;
   }
+  const { prewarmRecentManagedTemplates } =
+    await import("../../agents/worktrees/template-prewarm.js");
+  const managedBases = await prewarmRecentManagedTemplates(params);
   const { signal } = params;
   const commitGuard = () => {
     signal.throwIfAborted();
@@ -25,14 +28,19 @@ export async function prewarmLocalWorkspaceTemplates(params: {
     }
   };
   const env = process.env;
-  const { listTemplatesAsync } = await import("../../agents/worktrees/template-registry-async.js");
-  const usedSince = Date.now() - IDLE_GC_MS;
-  const templates = (await listTemplatesAsync(env, commitGuard)).filter(
-    (record) => record.backend.startsWith("sandbox-") && record.lastUsedAt > usedSince,
+  const { recentWorktreeTemplates } = await import("../../agents/worktrees/run-end-lifecycle.js");
+  const recipes = [...recentWorktreeTemplates(env).values()].filter(
+    (recipe) => recipe.request.sourceOnly,
   );
-  if (!templates.length) {
+  if (!recipes.length) {
     return;
   }
+  // Keep discovery and sandbox preparation on separate event-loop turns.
+  await setImmediate();
+  if (await params.shouldDefer?.()) {
+    return;
+  }
+  const templateRoot = await localWorkspaceProjectionRoot(env);
   const visited = new Set<string>();
   for (const agentId of listAgentIds(config)) {
     const sandbox = resolveSandboxConfigForAgent(config, agentId);
@@ -43,11 +51,11 @@ export async function prewarmLocalWorkspaceTemplates(params: {
       commitGuard();
       const [
         { withWorktreeMutationLease },
-        { resolveWorktreeBase, observeWorktreeBase },
+        { observeWorktreeBase },
         { resolveRepository },
         { withWorktreeRunEnd },
         { withWorktreeSources },
-        { prepareLocalWorkspaceTemplate, sandboxTemplateCacheKey },
+        { prepareLocalWorkspaceTemplate },
         { resolveSandboxDependencyTemplateIdentity },
       ] = await Promise.all([
         import("../../agents/worktrees/allocation.js"),
@@ -66,41 +74,32 @@ export async function prewarmLocalWorkspaceTemplates(params: {
       if (!identity) {
         continue;
       }
-      // The newest foreground use wins across retained generations; background work never renews it.
-      const candidates = templates
-        .filter(
-          (record) =>
-            worktreeTemplateMutationKey(record.cacheKey) ===
-            sandboxTemplateCacheKey(record.commonDir, record.worktreeRoot, identity.key),
-        )
-        .toReversed();
-      for (const candidate of candidates) {
+      // Successful creates own eligibility for both templates; background rows never extend it.
+      for (const candidate of recipes.toReversed()) {
         if (await params.shouldDefer?.()) {
           return;
         }
-        const key = JSON.stringify([candidate.repoRoot, candidate.worktreeRoot, identity.key]);
+        const repoRoot = candidate.request.template.repoRoot;
+        const baseCommit = managedBases.get(repoRoot);
+        if (!baseCommit) {
+          continue;
+        }
+        const key = JSON.stringify([repoRoot, templateRoot, identity.key]);
         if (visited.has(key)) {
           continue;
         }
         visited.add(key);
         try {
-          const repository = await resolveRepository(candidate.repoRoot);
+          const repository = await resolveRepository(repoRoot);
           await withWorktreeRunEnd(env, () =>
             withWorktreeMutationLease(
-              { env, signal, commitGuard, id: `template-prewarm:${agentId}` },
+              { env, signal, commitGuard, id: `template-prewarm:${agentId}`, idleIoPriority: true },
               (guard) =>
                 withWorktreeSources(env, async (retainRepository) => {
                   await retainRepository({ ...guard, repository });
-                  const base = await resolveWorktreeBase(
-                    repository.repoRoot,
-                    undefined,
-                    signal,
-                    guard.commitGuard,
-                  );
-                  const templateRoot = candidate.worktreeRoot;
                   const superseded = new AbortController();
-                  using _ = observeWorktreeBase((repoRoot, commit) => {
-                    if (repoRoot === repository.repoRoot && commit !== base.commit) {
+                  using _ = observeWorktreeBase((observedRoot, commit) => {
+                    if (observedRoot === repository.repoRoot && commit !== baseCommit) {
                       superseded.abort(new Error("Sandbox dependency prewarm base was superseded"));
                     }
                   });
@@ -109,13 +108,13 @@ export async function prewarmLocalWorkspaceTemplates(params: {
                   const prepared = await prepareLocalWorkspaceTemplate({
                     source: repository.repoRoot,
                     repoRoot: repository.repoRoot,
-                    baseCommit: base.commit,
+                    baseCommit,
                     temporaryRoot: templateRoot,
                     templateRoot,
                     env,
                     sandbox,
                     identity,
-                    backgroundUsedAt: candidate.lastUsedAt,
+                    backgroundUsedAt: candidate.usedAt,
                     // Prepare the default projection manifest along with its dependencies.
                     buildCacheInputs: [],
                     guard: {
@@ -129,9 +128,7 @@ export async function prewarmLocalWorkspaceTemplates(params: {
           );
         } catch {
           commitGuard();
-          log.debug(
-            `sandbox dependency template prewarm unavailable for repository ${candidate.repoRoot}`,
-          );
+          log.debug(`sandbox dependency template prewarm unavailable for repository ${repoRoot}`);
         }
       }
     } catch {

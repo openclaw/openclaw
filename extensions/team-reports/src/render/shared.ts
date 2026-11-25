@@ -21,9 +21,9 @@ export function renderAvatar(
   ).toUpperCase();
   const pixels = { xs: 20, sm: 36, md: 40, xl: 72 }[size];
   const image = /^[A-Za-z0-9-]{1,39}$/.test(login)
-    ? `<img src="https://avatars.githubusercontent.com/${escapeHtml(login)}?s=${pixels}" width="${pixels}" height="${pixels}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+    ? `<img src="https://avatars.githubusercontent.com/${escapeHtml(login)}?s=${pixels}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
     : "";
-  return `<span class="oc-avatar oc-avatar-${size}" data-initials="${escapeHtml(initials)}">${image}</span>`;
+  return `<span class="oc-avatar oc-avatar-${size}" aria-hidden="true" data-initials="${escapeHtml(initials)}">${image}</span>`;
 }
 
 export function safeExternalUrl(value: string): string | undefined {

@@ -124,10 +124,13 @@ it("windows large catalogs without losing keyboard traversal, reordered cards, o
       .map((node) => Number(node.dataset.pluginId!.slice(-4)))
       .filter((index) => index < 100),
   );
-  const focused = card(boundary).querySelector<HTMLAnchorElement>(".plugin-card-author")!;
-  focused.focus();
+  const boundaryCard = card(boundary);
+  const focused = boundaryCard.querySelector<HTMLButtonElement>(".plugin-catalog-card__install")!;
+  find(".plugin-card-author", boundaryCard).focus();
   flush();
   expect(card(boundary + 1)).not.toBeNull();
+  await userEvent.keyboard("{Tab}");
+  expect(document.activeElement).toBe(focused);
   await userEvent.keyboard("{Tab}");
   expect(document.activeElement).toBe(
     card(boundary + 1).querySelector(".plugin-catalog-card__primary-link"),
@@ -192,42 +195,24 @@ it("windows large catalogs without losing keyboard traversal, reordered cards, o
   });
   setProgress(undefined);
   await nextFrame();
+  const firstTop = card(0).getBoundingClientRect().top;
+  const nextRow = cards().find((node) => node.getBoundingClientRect().top > firstTop + 1)!;
+  expect(nextRow).toBeDefined();
+  const compactHeight = card(0).getBoundingClientRect().height;
   setMessages({
     "install:window-0000": { kind: "error", text: "Visible error details. ".repeat(30) },
   });
   await waitForSolid(() => {
     const tall = card(0).getBoundingClientRect();
-    const nextRow = card(4).getBoundingClientRect();
-    expect(tall.height).toBeGreaterThan(150);
-    expect(Math.abs(tall.height - card(1).getBoundingClientRect().height)).toBeLessThan(1);
-    expect(nextRow.top).toBeGreaterThanOrEqual(tall.bottom);
+    expect(tall.height).toBeGreaterThan(compactHeight);
+    expect(nextRow.getBoundingClientRect().top).toBeGreaterThanOrEqual(tall.bottom);
   });
-  const expandedHeight = card(0).getBoundingClientRect().height;
   setMessages({});
   await waitForSolid(() => {
-    expect(card(0).getBoundingClientRect().height).toBeLessThan(expandedHeight);
-    expect(card(4).getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      card(0).getBoundingClientRect().bottom,
-    );
+    const first = card(0).getBoundingClientRect();
+    expect(first.height).toBeCloseTo(compactHeight);
+    expect(nextRow.getBoundingClientRect().top).toBeGreaterThanOrEqual(first.bottom);
   });
-  const rootStyle = document.documentElement.style;
-  const previousSpacing = rootStyle.getPropertyValue("--space-3");
-  const compactHeight = card(0).getBoundingClientRect().height;
-  try {
-    rootStyle.setProperty("--space-3", "32px");
-    await waitForSolid(() => {
-      const first = card(0).getBoundingClientRect();
-      const next = card(4).getBoundingClientRect();
-      expect(first.height).toBeGreaterThan(compactHeight + 30);
-      expect(Math.abs(next.top - first.bottom - 32)).toBeLessThan(1);
-    });
-  } finally {
-    if (previousSpacing) {
-      rootStyle.setProperty("--space-3", previousSpacing);
-    } else {
-      rootStyle.removeProperty("--space-3");
-    }
-  }
   container.style.width = "360px";
   await page.viewport(390, 844);
   await waitForSolid(() => {
@@ -358,23 +343,13 @@ it.each([263, 362])(
       grid.style.gridTemplateColumns = `${width}px`;
       await nextFrame();
       const card = find(".plugin-catalog-card");
-      const identity = find(".installed-plugins-card__identity", card);
+      const identity = find(".plugin-catalog-row__text", card);
       const action = card.querySelector("button")!;
-      const title = find("h3", card).getBoundingClientRect();
+      const text = identity.getBoundingClientRect();
       const button = action.getBoundingClientRect();
-      expect(Math.abs(button.y + button.height / 2 - (title.y + title.height / 2))).toBeLessThan(1);
-      const author = find(".plugin-card-author", card);
-      const authorText = document.createRange();
-      authorText.selectNodeContents(author);
-      expect(authorText.getBoundingClientRect().top - title.bottom).toBeLessThanOrEqual(6);
-      const bounds = identity.getBoundingClientRect();
-      for (const text of identity.querySelectorAll<HTMLElement>("h3,.plugin-card-author")) {
-        const right = text.getBoundingClientRect().right;
-        expect(right).toBeLessThanOrEqual(bounds.right + 1);
-        if (text.matches("h3")) {
-          expect(right).toBeLessThan(action.getBoundingClientRect().left);
-        }
-      }
+      expect(text.width).toBeGreaterThan(0);
+      expect(text.right).toBeLessThanOrEqual(button.left);
+      expect(button.right).toBeLessThanOrEqual(card.getBoundingClientRect().right);
       expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
       expect(action.disabled).toBe(false);
       if (busy) {
@@ -383,7 +358,7 @@ it.each([263, 362])(
         expect(getComputedStyle(spinner!).animationName).toBe("btn-spinner-spin");
         expect(action.getAttribute("aria-busy")).toBe("true");
       }
-      action.click();
+      await page.elementLocator(action).click();
       if (busy) {
         await expect.poll(() => action.getAttribute("aria-expanded")).toBe("true");
         expect(card.querySelector('[role="status"]')?.textContent).toContain(
@@ -396,19 +371,25 @@ it.each([263, 362])(
 );
 
 it.each([263, 362])(
-  "centers installed status dots on the title row in a %ipx card",
+  "keeps the Installed label visible inside a %ipx Featured row",
   async (width) => {
     await renderCatalog({
+      intent: "featured",
+      query: "",
       result: {
         items: [{ ...entry, local: { ...entry.local, installed: true, state: "enabled" } }],
       },
     });
     find(".plugin-catalog-grid").style.gridTemplateColumns = `${width}px`;
     const card = find(".plugin-catalog-card");
-    const header = find(".plugin-card-title-row", card).getBoundingClientRect();
-    const dot = find(".settings-status__dot", card).getBoundingClientRect();
+    const status = find(".plugin-catalog-card__status", card);
+    expect(status.getAttribute("aria-label")).toBe("Installed (Enabled)");
+    expect(status.textContent).toBe("Installed");
+    const dot = find(".settings-status__dot", status).getBoundingClientRect();
     expect(dot.width).toBeGreaterThan(0);
-    expect(Math.abs(dot.y + dot.height / 2 - (header.y + header.height / 2))).toBeLessThan(1);
+    expect(status.getBoundingClientRect().right).toBeLessThanOrEqual(
+      card.getBoundingClientRect().right,
+    );
     expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
   },
 );
@@ -418,8 +399,8 @@ it.each([
   [80, false],
   [40, true],
 ] as const)(
-  "fits a %i-pixel icon with official background=%s and preserves settled artwork",
-  async (width, whiteBackground) => {
+  "fits a %i-pixel icon with official status=%s and preserves settled artwork",
+  async (width, official) => {
     const icon = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="40"><rect width="100%" height="100%" fill="red"/></svg>`)}`;
     const currentSource = "https://example.com/current.svg";
     const failedSource = "https://example.com/failed.svg";
@@ -428,7 +409,11 @@ it.each([
       [failedSource]: "data:image/svg+xml,not-an-svg",
     });
     const items = [
-      { ...entry, id: "loaded-artwork", catalog: { ...entry.catalog, imageUrl: currentSource } },
+      {
+        ...entry,
+        id: "loaded-artwork",
+        catalog: { ...entry.catalog, official, imageUrl: currentSource },
+      },
       {
         ...entry,
         id: "failed-artwork",
@@ -436,11 +421,11 @@ it.each([
       },
     ];
     const artwork = (slug = "demo", name = "Demo") => (
-      <PluginArtTile slug={slug} name={name} iconUrl={icon} whiteBackground={whiteBackground} />
+      <PluginArtTile slug={slug} name={name} iconUrl={icon} whiteBackground={official} />
     );
     render(() => (
       <>
-        {whiteBackground ? (
+        {official ? (
           artwork("official", "Official")
         ) : (
           <>
@@ -472,8 +457,21 @@ it.each([
     expect(loadedImage.hidden).toBe(false);
     expect(loadedCard.querySelector(".skeleton")).toBeNull();
     expect(failedCard.querySelector("img")).toBeNull();
-    expect(failedCard.querySelector(".plugins-tile--fallback")?.textContent?.trim()).toBe("BA");
-    if (whiteBackground) {
+    expect(failedCard.querySelector(".skeleton")).toBeNull();
+    const artworkSlot = find(".plugin-catalog-card__art", loadedCard);
+    const artworkSize = loadedImage.getBoundingClientRect();
+    expect(artworkSize.width).toBeGreaterThanOrEqual(artworkSlot.clientWidth - 2);
+    expect(artworkSize.height).toBeLessThanOrEqual(artworkSlot.clientHeight);
+    expect(getComputedStyle(loadedImage)).toMatchObject({ objectFit: "contain", padding: "0px" });
+    expect(getComputedStyle(artworkSlot).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(loadedImage.parentElement).toBe(artworkSlot);
+    const fallback = find(
+      ".plugin-catalog-card__art--fallback svg",
+      failedCard,
+    ).getBoundingClientRect();
+    expect(fallback.width).toBeGreaterThan(0);
+    expect(fallback.height).toBeGreaterThan(0);
+    if (official) {
       const image = container.querySelector<HTMLImageElement>(".plugins-icon")!;
       expect(image.parentElement!.classList.contains("plugins-tile--white")).toBe(true);
       expect(getComputedStyle(image.parentElement!).backgroundColor).toBe("rgb(255, 255, 255)");

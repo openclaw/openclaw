@@ -5,10 +5,10 @@ import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-cla
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import { throwSqliteLifecycleErrors } from "../sqlite-lifecycle-errors.js";
 import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import { stripInternalRuntimeScaffoldingFromPayload } from "./deliver-payload-normalize.js";
 import {
   collectPayloadMediaSources,
   resolveOutboundMediaAccessForSend,
-  stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
 import { resolveConversationDeliveryScope } from "./delivery-completion.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";

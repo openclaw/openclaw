@@ -1,6 +1,8 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionMemberPermissionLevel } from "../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { resolveParticipationTools } from "../agents/participation-ceiling.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -17,7 +19,12 @@ import {
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import { openclawIdSubjectRolePolicy } from "./openclaw-id/tunnel-principal.js";
+import {
+  isNamedOperatorRoleEnforcementEnabled,
+  isOperatorRoleEnforcedFor,
+  operatorRoleSubject,
+} from "./operator-role-enforcement.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   operatorSessionCap,
@@ -28,12 +35,14 @@ import {
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient, SessionMutationAuthorization } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
+import { resolveSessionMemberAccess } from "./session-member-access.js";
 import {
   SessionMutationAuthorizationChangedError,
   SessionSharingProfileFactsChangedError,
 } from "./session-mutation-authorization-error.js";
 import {
   authorizeSessionSharingTarget,
+  authorizeSessionAgentRun,
   canManageSessionSharing,
   isGatewayAdmin,
   isSessionSharingOwnerEquivalent,
@@ -45,6 +54,7 @@ import {
   type withSessionSharingTarget,
 } from "./session-sharing-policy.js";
 import type { GatewaySessionStoreSelection } from "./session-utils-store-retained.js";
+import { authorizeSessionWorkspaceRead } from "./session-workspace-read-policy.js";
 
 export function canReceiveSessionEvent(params: {
   cfg: OpenClawConfig;
@@ -122,6 +132,11 @@ export function prepareSessionSharing(
     aliases: ReadonlySet<string>;
     sessionCap: ReturnType<typeof operatorSessionCap>;
     isMember: (target: SessionSharingTarget, identityId: string) => boolean;
+    memberAccess?: (
+      target: SessionSharingTarget,
+      identityId: string,
+    ) => SessionMemberPermissionLevel | undefined;
+    policy?: ReturnType<typeof resolveOperatorRolePolicy>;
   },
 ) {
   const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
@@ -137,6 +152,24 @@ export function prepareSessionSharing(
       isMember ?? (prepared && Boolean(identity && prepared.isMember(target, identity.id))),
     );
   const entryFilter = createSessionListEntryFilter(params, isCreator, { sessionCap });
+  const policy = prepared
+    ? prepared.policy
+    : params.cfg && resolveOperatorRolePolicy(params.client, params.cfg);
+  const accessForTarget = (target: SessionSharingTarget) => {
+    const role = roleForTarget(target);
+    return resolveSessionMemberAccess({
+      policy: policy || (sessionCap ? { sessions: { others: sessionCap }, scopes: [] } : undefined),
+      scopes: params.client?.connect.scopes ?? [],
+      creator: role === "owner",
+      admin: role === "admin",
+      member: {
+        present: Boolean(identity && prepared?.isMember(target, identity.id)),
+        access: identity ? prepared?.memberAccess?.(target, identity.id) : undefined,
+      },
+      visibility: resolveSessionVisibility(target.entry),
+      incognito: target.entry.incognito === true || isIncognitoSessionKey(target.canonicalKey),
+    });
+  };
   return {
     identity,
     isCreator,
@@ -149,8 +182,45 @@ export function prepareSessionSharing(
         Boolean(sessionCap === "invited" && identity && prepared?.isMember(target, identity.id)),
       ) ?? true,
     roleForTarget,
-    authorizeTarget: (target: SessionSharingTarget, role = roleForTarget(target)) =>
-      authorizeSessionSharingTarget({ ...params, target }, { ...cap, role }),
+    accessForTarget,
+    invitedAccessCeiling:
+      policy?.sessions.others === "invited" ? policy.sessions.maxInvitedAccess : undefined,
+    invitedTools: resolveParticipationTools(policy?.sessions),
+    invitedPermission: policy?.sessions.invitedPermission ?? "workspace",
+    authorizeRun: (target: SessionSharingTarget, participation = false) =>
+      authorizeSessionAgentRun(
+        {
+          ...params,
+          cfg: params.cfg ?? {},
+          target,
+          invitedSession: participation && accessForTarget(target).access === "send",
+        },
+        { policy: policy || undefined },
+      ),
+    authorizeWorkspaceRead: (target: SessionSharingTarget, unscopedHostRoot: boolean) => {
+      const access = accessForTarget(target);
+      return authorizeSessionWorkspaceRead(
+        {
+          ...params,
+          cfg: params.cfg ?? {},
+          target,
+          unscopedHostRoot,
+          invitedSession: Boolean(
+            access.invitedAccessCeiling && access.role === "member" && access.canRead,
+          ),
+        },
+        { policy: policy || undefined },
+      );
+    },
+    authorizeTarget: (
+      target: SessionSharingTarget,
+      role = roleForTarget(target),
+      participation = false,
+    ) =>
+      authorizeSessionSharingTarget(
+        { ...params, target, participation },
+        { ...cap, role, access: accessForTarget(target) },
+      ),
   };
 }
 
@@ -168,7 +238,14 @@ export type PreparedMutationSharing = {
   storageTarget: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "storePath">;
   members: readonly import("../config/sessions/session-membership-facts.types.js").SessionMember[];
   isMember?: (identityId: string) => boolean;
+  memberAccess?: (identityId: string) => SessionMemberPermissionLevel | undefined;
   assertCurrent: () => void;
+};
+
+export type PreparedSessionSharingTargetFacts = {
+  target: SessionSharingTarget | null;
+  members: readonly string[];
+  memberAccess?: Readonly<Record<string, SessionMemberPermissionLevel>>;
 };
 
 /** Consume live authority or borrow prepared source facts in one synchronous frame. */
@@ -181,14 +258,29 @@ export function createSessionSharingConsumption(params: {
     sharing: PreparedMutationSharing | undefined;
     profiles: PreparedSessionSharingProfiles | undefined;
     members: readonly string[] | undefined;
-  } = { sharing: params.sharing, profiles: params.getProfiles(), members: undefined };
+    memberAccess: PreparedSessionSharingTargetFacts["memberAccess"];
+  } = {
+    sharing: params.sharing,
+    profiles: params.getProfiles(),
+    members: undefined,
+    memberAccess: undefined,
+  };
   const isMember = (_target: SessionSharingTarget, id: string) =>
     current.sharing
       ? (current.sharing.isMember?.(id) ??
         current.sharing.members.some((member) => member.identityId === id))
       : (current.members?.includes(id) ?? false);
+  const memberAccess = (_target: SessionSharingTarget, id: string) =>
+    current.sharing
+      ? (current.sharing.memberAccess?.(id) ??
+        current.sharing.members.find((member) => member.identityId === id)?.access)
+      : current.memberAccess?.[id];
   return Object.assign(current, {
-    policy: (cfg: OpenClawConfig, members?: readonly string[]) => {
+    policy: (
+      cfg: OpenClawConfig,
+      members?: readonly string[],
+      access?: PreparedSessionSharingTargetFacts["memberAccess"],
+    ) => {
       const policy =
         current.sharing || current.profiles
           ? prepareProjectedSessionSharing({
@@ -196,10 +288,12 @@ export function createSessionSharingConsumption(params: {
               client: params.client,
               profiles: current.profiles,
               isMember,
+              memberAccess,
               owner: current,
             })
           : undefined;
       current.members = members;
+      current.memberAccess = access;
       return policy;
     },
     consume: <T>(
@@ -212,6 +306,7 @@ export function createSessionSharingConsumption(params: {
           sharing: current.sharing,
           profiles: current.profiles,
           members: current.members,
+          memberAccess: current.memberAccess,
         };
         Object.assign(current, {
           sharing: typeof prepared === "function" ? undefined : prepared,
@@ -254,7 +349,7 @@ export async function prepareSessionSharingProfiles(
   };
   const requesterChanged = () => {
     throw new SessionMutationAuthorizationChangedError(
-      errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed"),
+      errorShape(ErrorCodes.FORBIDDEN, "Gateway requester identity changed. Retry the request."),
     );
   };
   const prepare = async (profileId: string | undefined) => {
@@ -308,7 +403,6 @@ export async function prepareSessionSharingProfiles(
     }
     if (runAuthority) {
       assertAdmittedRunOperatorAuthority(runAuthority);
-      runAuthority.assertCurrent();
     }
     return { profile: readProfile(), roleProfile: readRoleProfile() };
   };
@@ -405,6 +499,10 @@ export function prepareProjectedSessionSharing(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
   isMember: (target: SessionSharingTarget, identityId: string) => boolean;
+  memberAccess?: (
+    target: SessionSharingTarget,
+    identityId: string,
+  ) => SessionMemberPermissionLevel | undefined;
   profiles?: Pick<PreparedSessionSharingProfiles, "readCurrent">;
   /** Retained consumers lend current membership; viewer facts still revalidate on every call. */
   owner?: object;
@@ -423,31 +521,35 @@ export function prepareProjectedSessionSharing(params: {
   };
   const retainedSnapshot = params.owner ? projectedSharingKeys.get(params.owner) : undefined;
   const publication = runtimeConfigPublication.current;
+  const principal = client?.internal?.openclawIdPrincipal;
+  const subject = operatorRoleSubject(roleProfile);
+  const rolesEnforced = isOperatorRoleEnforcedFor(cfg, subject) || subject.openclawIdMember;
   const policy =
     actor?.kind === "system"
       ? undefined
-      : actor?.kind === "operator" &&
-          (client?.internal?.operatorRunAuthority || client?.internal?.openclawIdPrincipal)
+      : actor?.kind === "operator" && client?.internal?.operatorRunAuthority
         ? resolveOperatorRolePolicy(client, cfg)
-        : retainedSnapshot?.sharing &&
+        : openclawIdSubjectRolePolicy(principal, () =>
+            retainedSnapshot?.sharing &&
             publication?.config === cfg &&
             retainedSnapshot.facts[0] === cfg &&
             retainedSnapshot.facts[1] === publication.revision &&
+            retainedSnapshot.facts[11] === rolesEnforced &&
             retainedSnapshot.facts[16] === roleProfile &&
             retainedSnapshot.facts[17] === roleProfile?.role &&
             retainedSnapshot.facts[18] === roleProfile?.githubLogin &&
             retainedSnapshot.facts[19] === roleProfile?.profileId
-          ? retainedSnapshot.sharing.policy
-          : resolveOperatorRolePolicyForAssignment(
-              roleProfile?.profileId,
-              roleProfile?.role ?? null,
-              cfg,
-              roleProfile?.githubLogin ?? null,
-            );
+              ? retainedSnapshot.sharing.policy
+              : resolveOperatorRolePolicyForAssignment(
+                  roleProfile?.profileId,
+                  roleProfile?.role ?? null,
+                  cfg,
+                  roleProfile?.githubLogin ?? null,
+                  operatorRoleSubject(roleProfile),
+                ),
+          );
   const ownerEquivalent =
-    !identity &&
-    isNamedOperatorRoleEnforcementEnabled(cfg) &&
-    isSessionSharingOwnerEquivalent(client, actor);
+    !identity && rolesEnforced && isSessionSharingOwnerEquivalent(client, actor);
   const scopes = client?.connect?.scopes;
   const readSnapshot = (): ProjectedSharingSnapshot => {
     const viewer = params.owner ?? client ?? cfg;
@@ -467,7 +569,7 @@ export function prepareProjectedSessionSharing(params: {
       facts[8] === Boolean(client?.authenticatedGitHubIdentitySync) &&
       facts[9] === profile &&
       facts[10] === policy &&
-      facts[11] === isNamedOperatorRoleEnforcementEnabled(cfg) &&
+      facts[11] === rolesEnforced &&
       facts[12] === (scopes !== undefined) &&
       facts[13] === ownerEquivalent &&
       facts[14] === policy?.sessions.others &&
@@ -476,10 +578,11 @@ export function prepareProjectedSessionSharing(params: {
       facts[17] === roleProfile?.role &&
       facts[18] === roleProfile?.githubLogin &&
       facts[19] === roleProfile?.profileId &&
-      facts.length === 20 + (scopes?.length ?? 0)
+      facts[20] === (params.owner ? params.memberAccess : undefined) &&
+      facts.length === 21 + (scopes?.length ?? 0)
     ) {
       let i = 0;
-      while (i < (scopes?.length ?? 0) && facts[20 + i] === scopes?.[i]) {
+      while (i < (scopes?.length ?? 0) && facts[21 + i] === scopes?.[i]) {
         i++;
       }
       if (i === (scopes?.length ?? 0)) {
@@ -498,7 +601,7 @@ export function prepareProjectedSessionSharing(params: {
       Boolean(client?.authenticatedGitHubIdentitySync),
       profile,
       policy,
-      isNamedOperatorRoleEnforcementEnabled(cfg),
+      rolesEnforced,
       scopes !== undefined,
       ownerEquivalent,
       policy?.sessions.others,
@@ -507,6 +610,7 @@ export function prepareProjectedSessionSharing(params: {
       roleProfile?.role,
       roleProfile?.githubLogin,
       roleProfile?.profileId,
+      params.owner ? params.memberAccess : undefined,
     ];
     const snapshot = { facts: scopes?.length ? next.concat(scopes) : next };
     projectedSharingKeys.set(viewer, snapshot);
@@ -520,7 +624,9 @@ export function prepareProjectedSessionSharing(params: {
     ...prepareSessionSharing(params, {
       aliases: profile?.aliases ?? emptyProfileAliases,
       sessionCap: policy?.sessions.others,
+      policy,
       isMember,
+      memberAccess: params.memberAccess,
     }),
     policy,
     /** Connection facts follow config/access publications, independently of row revisions. */
@@ -537,7 +643,7 @@ export function prepareProjectedSessionSharing(params: {
         // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
         profile && [...profile.aliases].sort(),
         policy,
-        isNamedOperatorRoleEnforcementEnabled(cfg),
+        rolesEnforced,
         // Equal effective scopes can retain different source sharing authority.
         ownerEquivalent,
       ]));

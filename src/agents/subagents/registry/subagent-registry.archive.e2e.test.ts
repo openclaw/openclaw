@@ -195,7 +195,7 @@ describe("subagent registry archive behavior", () => {
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
     vi.mocked(hasLiveAgentRunContext).mockReturnValue(true);
     vi.mocked(captureSubagentCompletionReply).mockResolvedValue("completed result");
-    vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("retryable");
+    vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("undelivered");
 
     await mod.registerSubagentRun({
       runId: "run-delete-completed",

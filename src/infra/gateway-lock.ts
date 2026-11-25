@@ -43,6 +43,7 @@ import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
+import { drainGatewayLockResources } from "./gateway-lock-release.js";
 import {
   acquireGatewayOwnerLease,
   assertGatewayOwnerLeaseStopped,
@@ -72,6 +73,7 @@ export type GatewayLockHandle = {
   release: () => Promise<void>;
   run<T>(operation: () => T): T;
   markListening?: () => void;
+  publishExternalRestartReceipt?: () => Promise<void>;
   /**
    * Takes PostgreSQL custody for an engine selection resolved after this lock, as cold CLI
    * owners do. Its loss retires this owner; release ends it.
@@ -273,10 +275,7 @@ function shouldReclaimGatewayLock(params: {
         lockPath: params.lockPath,
       })
     : "unknown";
-  if (ownerPid) {
-    return ownerStatus === "dead";
-  }
-  return false;
+  return ownerStatus === "dead";
 }
 
 export function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
@@ -719,6 +718,7 @@ export async function acquireGatewayLock(
     stateDir: paths.stateDir,
     assertCurrent: assertStateOwnerCurrent,
     assertDatabaseAccess,
+    publishExternalRestartReceipt: ownerLease?.publishExternalRestartReceipt,
     markListening: () => {
       assertStateOwnerCurrent();
       try {
@@ -744,8 +744,7 @@ export async function acquireGatewayLock(
     },
     release: () =>
       (released ??= (async () => {
-        await ownerLease?.release();
-        await resources?.close();
+        await drainGatewayLockResources(ownerLease, resources, role);
         projection?.release();
         projection = undefined;
         stateOwner.release();

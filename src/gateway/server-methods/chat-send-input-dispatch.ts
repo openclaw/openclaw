@@ -9,22 +9,19 @@ import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   emitDiagnosticsTimelineEvent,
   withDiagnosticsTimelineObserver,
 } from "../../infra/diagnostics-timeline.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { settleUserTurnPendingInput } from "../../sessions/user-turn-transcript-processing.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
 import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
@@ -35,6 +32,7 @@ import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-proj
 import { recordSessionOperatorSource } from "../session-operator-sources.js";
 import { resolveSessionChildController } from "../session-utils-core.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
+import { finishActiveSteerInput } from "./chat-send-active-steer.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
 import {
@@ -45,13 +43,17 @@ import { createChatSendDashboardAuthority } from "./chat-send-dashboard-authorit
 import { readChatSendDiagnostics, startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
-import { acknowledgeCodexGoal } from "./chat-send-goal-ack.js";
+import { acknowledgeRuntimeGoal } from "./chat-send-goal-ack.js";
 import {
   createChatSendGoalCommitGuard,
   requiresRuntimeApprovedChatInput,
 } from "./chat-send-goal-admission.js";
-import { createChatSendMessageInjectionStarter } from "./chat-send-message-injection.js";
+import {
+  createChatSendMessageInjectionStarter,
+  prepareChatSendSteerDocumentContext,
+} from "./chat-send-message-injection.js";
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
+import { captureChatSendQuestionReplacement } from "./chat-send-question-replacement.js";
 import { readChatSendRetryComparison } from "./chat-send-retry-comparison.js";
 import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
@@ -65,10 +67,6 @@ import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const mediaDocumentContextLoader = createLazyImportLoader(
-  () => import("../../media-understanding/file-context.js"),
-);
-
 /** Owns input custody and ACK timing through the detached dispatch handoff. */
 export async function handleChatSendWithStorage(
   handlerOptions: GatewayRequestHandlerOptions,
@@ -77,17 +75,20 @@ export async function handleChatSendWithStorage(
   options?: ChatSendInternalOptions,
   storage?: { release(): void; retain(): void },
 ): Promise<void> {
-  const {
-    req,
-    respond,
-    context,
-    client,
-    hasCurrentClientAuthority,
-    sessionMutationAuthorization,
-    sessionMutationCommitGuard,
-  } = handlerOptions;
-  const releaseSessionAuthorization =
+  const { req, respond, context, client, hasCurrentClientAuthority, sessionMutationCommitGuard } =
+    handlerOptions;
+  const { sessionMutationAuthorization } = handlerOptions;
+  // Prepared sharing facts keep their original source after the submitting turn closes.
+  const releaseOperatorSource = client?.internal?.operatorRunAuthority?.retain?.();
+  const releaseSharing =
     sessionMutationAuthorization?.takeRelease?.() ?? sessionMutationAuthorization?.release;
+  const releaseSessionAuthorization = () => {
+    try {
+      releaseSharing?.();
+    } finally {
+      releaseOperatorSource?.();
+    }
+  };
   using diagnostics =
     readChatSendDiagnostics(handlerOptions) ?? startChatSendDiagnostics(context.logGateway);
   const setup = await prepareAndAdmitChatSend(
@@ -106,6 +107,7 @@ export async function handleChatSendWithStorage(
   }
   storage?.retain();
   const { request, session, admission } = setup;
+  const requestAuthority = readGatewayRequestMutationAuthority(handlerOptions);
   admission.setPendingInputCleanup(() => releaseSessionAuthorization?.());
   using admittedCleanup = {
     dispatched: false,
@@ -115,7 +117,7 @@ export async function handleChatSendWithStorage(
       }
     },
   };
-  const { systemInputProvenance, reconnectResumeRequested } = request;
+  const { systemInputProvenance } = request;
   const { clientRunId, cfg, storePath, entry, sessionKey, sessionRoutingChanged, selectedAgent } =
     session;
   const {
@@ -167,12 +169,11 @@ export async function handleChatSendWithStorage(
       !resolveSessionChildController(sessionKey, entry),
     ),
     client,
-    isCurrent: hasCurrentClientAuthority,
     inputProvenance: systemInputProvenance,
+    grant: admission.operatorAuthority?.grant,
     hasExplicitOrigin: request.explicitOrigin !== undefined,
     hasRestoredCronContinuation: entry?.cronRunContinuation !== undefined,
     isIncognitoEntry: entry?.incognito === true,
-    isReconnectResume: reconnectResumeRequested,
     isSystemGenerated:
       request.suppressCommandInterpretation || request.systemProvenanceReceipt !== undefined,
     turnKind: request.turnKind,
@@ -214,14 +215,12 @@ export async function handleChatSendWithStorage(
         assertSource();
       },
     );
-    const assertInputAdmissionCurrent = options?.stageCreatedInput
-      ? createDynamicSessionSourceAssertion(
-          () => assertAcceptedInputCurrent ?? assertUnacceptedInputCurrent,
-          () => {
-            throw new Error("Chat input custody changed before admission");
-          },
-        )
-      : assertUnacceptedInputCurrent;
+    const assertInputAdmissionCurrent = createDynamicSessionSourceAssertion(
+      () => assertAcceptedInputCurrent ?? assertUnacceptedInputCurrent,
+      () => {
+        throw new Error("Chat input custody changed before admission");
+      },
+    );
     assertInputAdmissionCurrent();
     const goalCommitGuard = request.goalOperation
       ? createChatSendGoalCommitGuard({
@@ -230,12 +229,11 @@ export async function handleChatSendWithStorage(
           client,
           context,
           sessionMutationAuthorization,
-          sessionMutationCommitGuard,
         })
       : undefined;
-    const codexGoalCommitted = admission.codexGoalAdmission ? createDeferredCore() : undefined;
+    const runtimeGoalCommitted = admission.runtimeGoal ? createDeferredCore() : undefined;
     const userTurn = createGatewayChatUserTurnController({
-      onMessagePersisted: codexGoalCommitted?.resolve,
+      onMessagePersisted: runtimeGoalCommitted?.resolve,
       ...setup,
       client,
       commitInitialInput,
@@ -274,9 +272,7 @@ export async function handleChatSendWithStorage(
           });
           needsSessionCreationBinding = false;
         }
-        if (options?.stageCreatedInput) {
-          assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
-        }
+        assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
         admission.bindAcceptedInputAuthority(pendingAdmission.assertAdmittedCurrent);
       });
     const persistGatewayUserTurnTranscript = (
@@ -358,7 +354,7 @@ export async function handleChatSendWithStorage(
     phase?.mark("persist");
     let approvedInput: PersistedUserTurnMessage | undefined;
     const stageInput =
-      admission.codexGoalAdmission ||
+      admission.runtimeGoal ||
       Boolean(
         entry?.sessionId &&
         userTurn.baseInput.display !== false &&
@@ -400,11 +396,9 @@ export async function handleChatSendWithStorage(
       if (!staged) {
         throw new Error("Chat input was not durably admitted; refresh and retry.");
       }
-      if (options?.stageCreatedInput) {
-        // Only committed input custody can outlive the originating tool, while
-        // the retained operator, destination and Gateway authority stay live.
-        assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
-      }
+      // Committed input keeps its destination and cancellation fences, not the
+      // submitting invocation's permission or transport checks.
+      assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
       admission.bindAcceptedInputAuthority(pendingAdmission.assertAdmittedCurrent);
       approvedInput = userTurnRecorder.getPendingInputMessage?.();
       emitSessionsChanged(
@@ -517,8 +511,6 @@ export async function handleChatSendWithStorage(
       session,
       client,
       context,
-      hasCurrentClientAuthority,
-      sessionMutationCommitGuard,
       sessionMutationAuthorization,
       externalAuthorityAdmission,
       externalAdmissionParams,
@@ -533,27 +525,12 @@ export async function handleChatSendWithStorage(
         client?.internal?.syntheticClient ? undefined : client?.authenticatedUserProfile?.profileId,
       );
     }
-    // Rendering can fail independently of admission; preserve the raw steer on failure.
-    const steerDocumentContext =
-      messageInjectionTarget && !isInternalTextSlashCommandTurn && ctx.media?.length
-        ? await mediaDocumentContextLoader
-            .load()
-            .then(async (runtime) => ({
-              status: "rendered" as const,
-              ...(await runtime.renderInboundDocumentContext({
-                ctx,
-                cfg: session.cfg,
-              })),
-            }))
-            .catch((err: unknown) => {
-              // A poisoned lazy import must not be served to later steers.
-              mediaDocumentContextLoader.clear();
-              logVerbose(
-                `steer document render failed, injecting raw content: ${formatErrorMessage(err)}`,
-              );
-              return { status: "failed" as const };
-            })
-        : undefined;
+    const steerDocumentContext = await prepareChatSendSteerDocumentContext({
+      steering: Boolean(messageInjectionTarget),
+      isInternalTextSlashCommandTurn,
+      ctx,
+      cfg: session.cfg,
+    });
     if (settleInterruptedPreparation()) {
       return;
     }
@@ -570,6 +547,14 @@ export async function handleChatSendWithStorage(
       imageOrder,
       documentContext: steerDocumentContext,
       userTurnTranscriptRecorder: userTurnRecorder,
+      replaceQuestion: captureChatSendQuestionReplacement(
+        handlerOptions,
+        request,
+        sessionKey,
+        messageInjectionTarget?.runId,
+        isInternalTextSlashCommandTurn,
+        admission.operatorAuthority?.grant,
+      ),
       logGateway: context.logGateway,
       assertCurrent:
         req.expectedProfileId === undefined &&
@@ -598,6 +583,18 @@ export async function handleChatSendWithStorage(
       });
       assertInputAdmissionCurrent();
     }
+    if (request.activeSteer) {
+      await finishActiveSteerInput(setup, {
+        context,
+        ctx,
+        userTurnRecorder,
+        begin: beginCapturedMessageInjection,
+        persist: persistGatewayUserTurnTranscriptBestEffort,
+        assertCurrent: assertInputAdmissionCurrent,
+        respond,
+      });
+      return;
+    }
     context.addChatRun(clientRunId, {
       sessionKey,
       agentId: selectedAgent.agentId,
@@ -622,10 +619,11 @@ export async function handleChatSendWithStorage(
     admission.setDiscardAbandonedPreparedMedia(undefined);
     phase?.mark("response");
     admission.markInputAccepted();
-    if (readGatewayRequestMutationAuthority(handlerOptions).family === "worker") {
+    assertAcceptedInputCurrent ??= pendingAdmission.assertAdmittedCurrent;
+    if (requestAuthority.family === "worker") {
       acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
     }
-    if (!admission.codexGoalAdmission) {
+    if (!admission.runtimeGoal) {
       respond(true, ackPayload, undefined, { runId: clientRunId });
     }
     phase?.finish();
@@ -650,16 +648,9 @@ export async function handleChatSendWithStorage(
         owner: {
           client,
           context,
-          sessionMutationCommitGuard: () => {
-            sessionMutationCommitGuard?.();
-            admission.assertWorkAdmissionCurrent();
-          },
+          sessionMutationCommitGuard: assertInputAdmissionCurrent,
         },
-        isHumanTurn:
-          !options &&
-          !systemInputProvenance &&
-          !reconnectResumeRequested &&
-          request.turnKind === "main",
+        grant: admission.operatorAuthority?.grant,
       },
       cronCreatorAuthority,
       assertDashboardReadCurrent,
@@ -695,10 +686,10 @@ export async function handleChatSendWithStorage(
     );
     dispatchHandoff?.finish();
     admittedCleanup.dispatched = true;
-    if (codexGoalCommitted) {
-      await acknowledgeCodexGoal({
+    if (runtimeGoalCommitted) {
+      await acknowledgeRuntimeGoal({
         dispatch,
-        committed: codexGoalCommitted.promise,
+        committed: runtimeGoalCommitted.promise,
         dispatched,
         ackPayload,
         respond,

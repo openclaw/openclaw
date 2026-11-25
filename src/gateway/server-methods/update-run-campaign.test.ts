@@ -241,16 +241,17 @@ beforeEach(() => {
     installRoot: params.root,
   }));
   resolveUpdateInstallSurfaceMock.mockReset();
+  // Package installs keep the handler this suite covers; Git installs use src/update/.
   resolveUpdateInstallSurfaceMock.mockResolvedValue({
-    kind: "git",
-    mode: "git",
+    kind: "package-root",
+    mode: "unknown",
     root: "/tmp/openclaw",
     packageRoot: "/tmp/openclaw",
   });
   resolveStartupInstallStatusMock.mockReset();
   resolveStartupInstallStatusMock.mockResolvedValue({
     root: "/tmp/openclaw",
-    status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
+    status: { root: "/tmp/openclaw", installKind: "package", packageManager: "npm" },
     installReceipt: null,
   });
   detectRespawnSupervisorMock.mockReset();
@@ -264,62 +265,9 @@ beforeEach(() => {
   recordLatestUpdateRestartSentinelMock.mockClear();
 });
 
-function setDevCampaignSchedule(upstreamSha = "frozen-upstream-sha"): void {
-  updateChannel = "dev";
-  const target = {
-    kind: "git",
-    upstreamRef: "origin/main",
-    upstreamSha,
-    commitsBehind: 3,
-  } as const;
-  adoptCampaignMock.mockReturnValue({
-    status: "adopted",
-    campaignId: "campaign-1",
-    target,
-  });
-  updateSchedule = {
-    channel: "dev",
-    autoEnabled: true,
-    install: { kind: "git" },
-    target,
-    campaign: {
-      id: "campaign-1",
-      state: "waiting-for-idle",
-      announcedAtMs: 1,
-      forceAtMs: 2,
-      updatedAtMs: 1,
-    },
-  };
-}
-
-function mockGitInstallStatus(upstreamSha: string, upstreamRef = "origin/main"): void {
-  const root = "/tmp/openclaw";
-  resolveStartupInstallStatusMock.mockResolvedValueOnce({
-    root,
-    status: {
-      root,
-      installKind: "git",
-      packageManager: "pnpm",
-      git: {
-        root,
-        sha: "0".repeat(40),
-        tag: null,
-        branch: "main",
-        upstream: upstreamRef,
-        upstreamSha,
-        dirty: false,
-        ahead: 0,
-        behind: 1,
-        fetchOk: true,
-      },
-    },
-    installReceipt: null,
-  });
-}
-
 function mockPackageInstallSurface(kind: "global" | "package-root"): void {
   const root = "/tmp/openclaw";
-  resolveStartupInstallStatusMock.mockResolvedValueOnce({
+  resolveStartupInstallStatusMock.mockResolvedValue({
     root,
     status: { root, installKind: "package", packageManager: "npm" },
     installReceipt: null,
@@ -435,41 +383,9 @@ describe("update.run campaign ownership", () => {
     );
   });
 
-  it("uses the prepared Git checkout instead of process artifacts", async () => {
-    adoptCampaignMock.mockReturnValueOnce({ status: "absent" });
-    resolveStartupInstallStatusMock.mockResolvedValueOnce({
-      root: "/tmp/openclaw-source",
-      status: {
-        root: "/tmp/openclaw-source",
-        installKind: "git",
-        packageManager: "pnpm",
-      },
-      installReceipt: null,
-    });
-    resolveUpdateInstallSurfaceMock.mockImplementationOnce(async ({ root, installKind }) =>
-      root === "/tmp/openclaw-source" && installKind === "git"
-        ? { kind: "git", mode: "git", root, packageRoot: root }
-        : {
-            kind: "global",
-            mode: "npm",
-            root: "/tmp/openclaw-launcher-package",
-            packageRoot: "/tmp/openclaw-launcher-package",
-          },
-    );
-
-    await invokeUpdateRun();
-
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        root: "/tmp/openclaw-source",
-        argv1: "/tmp/openclaw-source/dist/index.js",
-      }),
-    );
-  });
-
   it("rejects a missing prepared root without scanning the process working directory", async () => {
     adoptCampaignMock.mockReturnValueOnce({ status: "absent" });
-    resolveStartupInstallStatusMock.mockResolvedValueOnce({
+    resolveStartupInstallStatusMock.mockResolvedValue({
       root: null,
       status: { root: null, installKind: "unknown", packageManager: "unknown" },
       installReceipt: null,
@@ -481,101 +397,17 @@ describe("update.run campaign ownership", () => {
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
   });
 
-  it("pins a managed dev campaign handoff to its announced commit", async () => {
-    setDevCampaignSchedule();
-    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-
-    await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, invokeUpdateRun);
-
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        devTarget: {
-          mode: "tracked",
-          upstreamRef: "origin/main",
-          upstreamSha: "frozen-upstream-sha",
-        },
-      }),
-    );
-  });
-  it("rejects an explicit commit that conflicts with the adopted Git campaign before mutation", async () => {
-    const campaignSha = "1234567890abcdef1234567890abcdef12345678";
-    setDevCampaignSchedule(campaignSha);
-    mockGitInstallStatus(campaignSha);
-    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-    adoptCampaignMock.mockReturnValueOnce({ status: "mismatch" });
-
-    const response = await captureUpdateRun({
-      target: {
-        kind: "git",
-        upstreamRef: "origin/main",
-        upstreamSha: "abcdef1234567890abcdef1234567890abcdef12",
-      },
-    });
-
-    expect(response?.result).toMatchObject({
-      status: "error",
-      reason: "update-target-campaign-mismatch",
-    });
-    expectNoUpdateMutation();
-    expect(clearCampaignMock).not.toHaveBeenCalled();
-
-    await invokeUpdateRun();
-
-    expect(adoptCampaignMock).toHaveBeenCalledTimes(2);
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: campaignSha },
-      }),
-    );
-  });
-
   describe("explicit Git target binding", () => {
     const requestTarget = {
       kind: "git",
       upstreamRef: "origin/main",
       upstreamSha: "1234567890abcdef1234567890abcdef12345678",
     };
-    const newerUpstreamSha = "abcdef1234567890abcdef1234567890abcdef12";
-    const trackedTarget = {
-      mode: "tracked",
-      upstreamRef: requestTarget.upstreamRef,
-      upstreamSha: requestTarget.upstreamSha,
-    };
 
     beforeEach(() => {
       updateChannel = "dev";
       adoptCampaignMock.mockReturnValue({ status: "absent" });
     });
-
-    it("rejects an explicit target while its campaign is applying", async () => {
-      setDevCampaignSchedule(newerUpstreamSha);
-      mockGitInstallStatus(newerUpstreamSha);
-      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-      adoptCampaignMock.mockReturnValueOnce({ status: "applying" });
-
-      const response = await captureUpdateRun({ target: requestTarget });
-
-      expect(response).toMatchObject({
-        ok: false,
-        result: { status: "error", reason: "update-campaign-applying" },
-      });
-      expect(adoptCampaignMock).toHaveBeenCalledWith(trackedTarget);
-      expectNoUpdateMutation();
-      expect(clearCampaignMock).not.toHaveBeenCalled();
-    });
-
-    it.each([null, "launchd"] as const)(
-      "keeps the requested commit after upstream advances (supervisor=%s)",
-      async (supervisor) => {
-        detectRespawnSupervisorMock.mockReturnValueOnce(supervisor);
-        mockGitInstallStatus(newerUpstreamSha);
-        const response = await captureUpdateRun({ target: requestTarget });
-        expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-          expect.objectContaining({ devTarget: trackedTarget }),
-        );
-        expect(response?.ok).toBe(true);
-      },
-    );
 
     it.each([
       { name: "short SHA", target: { ...requestTarget, upstreamSha: "1234567" } },
@@ -601,35 +433,6 @@ describe("update.run campaign ownership", () => {
       expect(adoptCampaignMock).not.toHaveBeenCalled();
     });
 
-    it("rejects a target for another Git upstream before update mutation", async () => {
-      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-      mockGitInstallStatus(newerUpstreamSha, "upstream/main");
-
-      const response = await captureUpdateRun({ target: requestTarget });
-
-      expect(response?.result).toMatchObject({
-        status: "error",
-        reason: "update-target-upstream-mismatch",
-      });
-      expectNoUpdateMutation();
-      expect(adoptCampaignMock).not.toHaveBeenCalled();
-    });
-
-    it("rejects an exact Git target outside the dev channel before update mutation", async () => {
-      updateChannel = "stable";
-      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-      mockGitInstallStatus(newerUpstreamSha);
-
-      const response = await captureUpdateRun({ target: requestTarget });
-
-      expect(response?.result).toMatchObject({
-        status: "error",
-        reason: "unsupported-update-target",
-      });
-      expectNoUpdateMutation();
-      expect(adoptCampaignMock).not.toHaveBeenCalled();
-    });
-
     it("rejects an exact Git target on a package install before update mutation", async () => {
       detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
       mockPackageInstallSurface("global");
@@ -646,6 +449,8 @@ describe("update.run campaign ownership", () => {
   });
 
   it("does not add a pin environment to a non-campaign managed handoff", async () => {
+    mockPackageInstallSurface("global");
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     updateChannel = "dev";
     adoptCampaignMock.mockReturnValueOnce({ status: "absent" });
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
@@ -658,6 +463,8 @@ describe("update.run campaign ownership", () => {
   });
 
   it("records handoff preparation failure before ending the adopted campaign", async () => {
+    mockPackageInstallSurface("global");
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(new Error("entrypoint unavailable"));
     let outcomeWhenCampaignEnded: unknown;
     clearCampaignMock.mockImplementationOnce(() => {
@@ -678,7 +485,8 @@ describe("update.run campaign ownership", () => {
   });
 
   it("continues without an explicit target when no campaign can be adopted", async () => {
-    setDevCampaignSchedule();
+    mockPackageInstallSurface("global");
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     adoptCampaignMock.mockReturnValueOnce({ status: "absent" });
 
     await invokeUpdateRun();
@@ -691,7 +499,8 @@ describe("update.run campaign ownership", () => {
   });
 
   it("rejects an untargeted update while a campaign is applying", async () => {
-    setDevCampaignSchedule();
+    mockPackageInstallSurface("global");
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     adoptCampaignMock.mockReturnValueOnce({ status: "applying" });
 
     const response = await captureUpdateRun({});
@@ -706,6 +515,8 @@ describe("update.run campaign ownership", () => {
   });
 
   it("does not clear a replacement campaign when the adopted update fails", async () => {
+    mockPackageInstallSurface("global");
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     const deferredUpdate =
       createDeferred<
         Awaited<
@@ -744,10 +555,11 @@ describe("update.run campaign ownership", () => {
       expect.anything(),
     );
   });
-
   it.each(["transaction", "commit"] as const)(
     "preserves the durable sentinel when its campaign retires at %s admission",
     async (stage) => {
+      mockPackageInstallSurface("global");
+      detectRespawnSupervisorMock.mockReturnValue("launchd");
       const sentinel = await vi.importActual<typeof import("../../infra/restart-sentinel.js")>(
         "../../infra/restart-sentinel.js",
       );

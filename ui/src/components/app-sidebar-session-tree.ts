@@ -43,7 +43,10 @@ function summarizeChildren(
         ])
       : child.attention;
     childAttention.push(attention);
-    unreadChildCount += Number(child.unread) + (descendants?.unreadChildCount ?? 0);
+    // A hidden run counts only while reading its parent can acknowledge it.
+    unreadChildCount +=
+      Number(onlySubagents ? isAcknowledgeableHiddenRun(child) : child.unread) +
+      (descendants?.unreadChildCount ?? 0);
     const visuallyActive = child.isRunVisuallyActive ?? child.hasActiveRun;
     runningChildCount +=
       Number(childShowsParentWorking(child)) + (descendants?.runningChildCount ?? 0);

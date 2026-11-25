@@ -91,3 +91,54 @@ describe("sidebar snooze visibility", () => {
     expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(reads);
   });
 });
+
+describe("sidebar child link visibility", () => {
+  const parentKey = "agent:main:subagent:helper";
+  const listed: GatewaySessionRow = { key: "agent:main:dashboard:listed", kind: "direct" };
+  const unlisted = "agent:main:dashboard:unlisted";
+  const publication = "agent:main:dashboard:github-publication-e205588962dd675361e7676e2da8088e";
+
+  function childVisibility(params: {
+    loaded?: boolean;
+    loading?: boolean;
+    error?: boolean;
+    showSystem?: boolean;
+  }) {
+    const { isChildSessionVisible } = projectSidebarArchiveVisibility({
+      sessionData: {
+        childSessionRowsByParent: params.loaded ? { [parentKey]: [listed] } : {},
+        loadedChildSessionKeys: new Set(params.loaded ? [parentKey] : []),
+        loadingChildSessionKeys: new Set(params.loading ? [parentKey] : []),
+        childSessionErrorsByParent: new Map(params.error ? [[parentKey, "failed"]] : []),
+      },
+      sourceRows: [],
+      selectedAgentId: "main",
+      statusFilter: "active",
+      showSystem: params.showSystem,
+      now: 100,
+      deletionState: () => undefined,
+      archiveVisibility: () => undefined,
+    });
+    return (key: string) => isChildSessionVisible(parentKey, key);
+  }
+
+  it("keeps the settled window's answer while that window refreshes", () => {
+    const settled = childVisibility({ loaded: true });
+    const refreshing = childVisibility({ loaded: true, loading: true });
+    for (const visible of [settled, refreshing]) {
+      expect(visible(listed.key)).toBe(true);
+      expect(visible(unlisted)).toBe(false);
+    }
+  });
+
+  it("retains unconfirmed links before the first window and after a failed read", () => {
+    expect(childVisibility({})(unlisted)).toBe(true);
+    expect(childVisibility({ loading: true })(unlisted)).toBe(true);
+    expect(childVisibility({ error: true })(unlisted)).toBe(true);
+  });
+
+  it("hides unloaded GitHub publication links unless system sessions are shown", () => {
+    expect(childVisibility({ loading: true })(publication)).toBe(false);
+    expect(childVisibility({ loading: true, showSystem: true })(publication)).toBe(true);
+  });
+});

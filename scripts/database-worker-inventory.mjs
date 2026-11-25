@@ -1073,7 +1073,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["clearPersistedCurrentConversationBindingsForTests"],
         evidence:
-          "Explicit testing SDK namespace only: session-binding-service.ts testing.resetSessionBindingAdaptersForTests calls this reset; its callers are tests and contracts/test-helpers/session-binding-registry-backed-contract.ts beforeEach. No production binding cleanup calls it.",
+          "Explicit testing SDK namespace only: session-binding-service.ts testing.resetSessionBindingAdaptersForTests calls this reset; its callers are tests and contracts/test-helpers/registry-session-binding.ts inside the contract test body. No production binding cleanup calls it.",
       },
     ],
   ],
@@ -1970,7 +1970,7 @@ const reviewedOperations = new Map([
       },
       {
         tier: "W",
-        operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
+        operations: ["readCursor", "readMaterialCursors", "writeMaterialCursors"],
         evidence:
           "Watch/record workers and subagent-registry.store.worker.ts execute these queries",
       },
@@ -2139,13 +2139,14 @@ const reviewedOperations = new Map([
         operations: [
           "readUserPreferences",
           "writeUserPreferences",
+          "upsertUserPreferenceValues",
           "deleteUserPreference",
           "selectUserPreferenceValues",
           "readPreferenceKeys",
           "mergeUserPreferences",
         ],
         evidence:
-          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; private key scans serve these worker writers",
+          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; acknowledgements and profile merges share the same worker-owned preference upsert",
       },
     ],
   ],
@@ -3611,6 +3612,7 @@ const workerModules = new Set([
   "src/trajectory/runtime-retention.sqlite.ts", // SQL runs only through agent execution, session-history read, and entry-patch workers; runtime-retention.ts uses only the pure due/state helpers.
   "src/config/sessions/session-reaction-store.read.ts", // Only the history worker reader calls reaction SQL; synchronous test inspection lives in test support.
   "src/config/sessions/session-sharing-store.native.ts", // Membership mutations run only in session-sharing-store.worker.ts; host imports are type-only.
+  "src/config/sessions/session-participation-queue.kernel.ts", // Only session-sharing-store.native.ts revokes queued input inside the sharing worker's membership transaction; the host facade imports its mutation signatures by type.
   "src/config/sessions/session-accessor.sqlite-participants.native.ts", // Participant mutation SQL runs only through the sharing worker; host imports are type-only.
   "src/config/sessions/session-group-categories.read.ts", // Category enumeration runs only in session-sharing-store.worker.ts.
   "src/config/sessions/session-pending-input-history.kernel.ts", // History-read worker owns all remaining callers.
@@ -4059,8 +4061,13 @@ export function loadInventorySources(root = defaultRoot, ref = "", staged = fals
       : [
           "--files",
           "--null",
-          "-g",
-          "*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          // Match Git membership: type filters keep ignore rules (a positive -g glob would list
+          // ignored build outputs), and tracked hidden stubs stay in the source set.
+          "--hidden",
+          "--type-add",
+          "inventory:*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          "--type",
+          "inventory",
           ...roots.filter((dir) => fs.existsSync(path.join(root, dir))),
         ],
     { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
@@ -4310,11 +4317,23 @@ function render(rows) {
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const args = process.argv.slice(2);
-  if (args.length !== 1 || !["--write", "--check", "--json"].includes(args[0])) {
-    console.error("Usage: node scripts/database-worker-inventory.mjs --write|--check|--json");
+  const snapshot = args.length === 2 && args[0] === "--json" && args[1] === "--snapshot";
+  if (!snapshot && (args.length !== 1 || !["--write", "--check", "--json"].includes(args[0]))) {
+    console.error(
+      "Usage: node scripts/database-worker-inventory.mjs --write|--check|--json [--snapshot]",
+    );
     process.exitCode = 2;
   } else {
-    const rows = inventory();
+    /** @type {{ root: string; ref: string; staged: boolean; sources: [string, string][]; trace: boolean } | undefined} */
+    const request = snapshot ? JSON.parse(fs.readFileSync(0, "utf8")) : undefined;
+    const rows = request
+      ? inventory(request.root, request.ref, request.staged, new Map(request.sources), {
+          observer: request.trace
+            ? (phase, facts) =>
+                console.error("[inventory-phase] " + JSON.stringify({ phase, facts }))
+            : undefined,
+        })
+      : inventory();
     if (args[0] === "--json") {
       console.log(
         JSON.stringify(

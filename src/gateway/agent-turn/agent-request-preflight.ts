@@ -62,8 +62,11 @@ export async function prepareAgentRequestPreflight(params: {
     return undefined;
   };
   const cfg = params.context.getRuntimeConfig();
+  // The declared mode is caller-chosen; only in-process or handshake-attested local backends qualify.
   const canUseInternalRuntimeHandoff =
-    params.client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
+    params.client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    (params.client.internal?.syntheticClient === true ||
+      params.client.internal?.localBackendClient === true);
   const requestSessionKey = request.sessionKey?.trim();
   const parsedRequestSessionKey = requestSessionKey
     ? parseAgentSessionKey(requestSessionKey)

@@ -102,6 +102,8 @@ const GENERATOR_INPUTS = [
 export class BoundaryInputSnapshot extends CompilerInputSnapshot {
   private readonly boundary: ReturnType<typeof createDeclarationInputBoundary>;
   private readonly lookupFacts = new Map<string, DeclarationLookup>();
+  // Canonical spellings are lexical facts; replay still admits each new filesystem lookup.
+  private readonly receiptPaths = new Set<string>();
 
   constructor(rootDir: string, generatorInputs: string[] = []) {
     const boundary = createDeclarationInputBoundary(rootDir);
@@ -139,11 +141,15 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
       if (typeof file !== "string" || !file || path.isAbsolute(file)) {
         throw new Error(`Invalid bounded compiler lookup path: ${receipt}`);
       }
+      if (this.receiptPaths.has(file)) {
+        return file;
+      }
       // Replay admits filesystem operations; parsing only validates their recorded paths.
       const normalized = portableRelativePath(this.rootDir, this.boundary.resolve(file)) || ".";
       if (normalized !== file || normalized === ".." || normalized.startsWith("../")) {
         throw new Error(`Invalid bounded compiler lookup path: ${receipt}`);
       }
+      this.receiptPaths.add(file);
       return file;
     };
     const names = (value: unknown): value is string[] =>

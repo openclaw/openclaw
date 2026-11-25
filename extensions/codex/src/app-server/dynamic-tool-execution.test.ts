@@ -389,12 +389,55 @@ describe("dynamic tool execution helpers", () => {
       transcriptDetails: { mcpAppPreview, privateModelPayload: "host only" },
     };
     const protocolResponse = toCodexDynamicToolProtocolResponse(response);
-    const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
+    const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse, "exec");
     expect(protocolResponse).toEqual(textResponse("Background task started."));
     expect(progressResponse).toEqual({
       ...textResponse("Background task started."),
       details: { mcpAppPreview, async: true, status: "started" },
     });
+  });
+
+  it("exposes only authenticated scheduler plan and result fields on live progress", () => {
+    const plan = {
+      type: "automation_creation_plan",
+      planId: "a",
+      slots: [{ slotId: "b", name: "Invoice" }],
+    };
+    const saved = {
+      type: "automation_creation_result",
+      planId: "a",
+      slotId: "b",
+      status: "created",
+      jobId: "invoice",
+    };
+    const definition = {
+      id: "invoice",
+      name: "Invoice",
+      enabled: false,
+      configRevision: "rev",
+      schedule: { kind: "every", everyMs: 60000 },
+    };
+    for (const event of [plan, saved]) {
+      const details =
+        event === plan
+          ? { ...plan, privateField: "host only" }
+          : {
+              automationCreation: saved,
+              created: true,
+              job: { ...definition, privateField: "host only" },
+            };
+      const response = { ...textResponse("result"), transcriptDetails: details };
+      const protocol = toCodexDynamicToolProtocolResponse(response);
+      expect(toCodexDynamicToolProgressResponse(response, protocol, "automations")).toEqual({
+        ...protocol,
+        details: { automationCreation: event === plan ? event : { ...event, definition } },
+      });
+      expect(toCodexDynamicToolProgressResponse(response, protocol, "exec")).toEqual(protocol);
+      const rejected = { ...protocol, success: false };
+      expect(toCodexDynamicToolProgressResponse(response, rejected, "automations")).toEqual(
+        rejected,
+      );
+    }
   });
 
   it("preserves foreground node execution with timeoutSeconds=900", async () => {

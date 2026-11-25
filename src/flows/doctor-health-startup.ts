@@ -10,6 +10,7 @@ import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { isDefaultInstallIdentity, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import { formatDoctorProgressPhase, type DoctorProgressMeasure } from "../infra/doctor-progress.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
@@ -379,6 +380,7 @@ export async function prepareDoctorRuntimeChecks(
   const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
   await measure("UI protocol", () => maybeRepairUiProtocolFreshness(runtime, prompter));
   await measure("Source install", () => noteSourceInstallIssues(root));
+  let restartNotice: string | undefined;
   await measure("CLI launcher", async () => {
     await noteBunCliLauncherIssues({ root, prompter });
     // Earlier updaters can publish a pnpm launcher that still names their removed stage.
@@ -396,9 +398,24 @@ export async function prepareDoctorRuntimeChecks(
           `The openclaw launcher ${file} still points at a removed update stage and could not be repaired (${formatErrorMessage(error)}). Recreate it with \`pnpm add -g --allow-build=openclaw openclaw@<installed-version>\` as the account that owns the pnpm install.`,
         );
       }
+      // A shipped updater published that staged launcher; report the Gateway recovery it needs.
+      if (repaired.length > 0 && isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS)) {
+        const { resolveShippedRestartNotice } =
+          await import("../cli/update-cli/update-refused-restart-recovery.js");
+        restartNotice = await resolveShippedRestartNotice({
+          root,
+          diagnose: (message) => runtime.error(message),
+        });
+      }
     }
   });
   await measure("Plugin runtime links", () => noteStalePluginRuntimeSymlinks(root));
   noteStartupOptimizationHints();
-  return { schemas, nocowPaths: nocow.paths, warnings: deletionJournal.warnings };
+  return {
+    schemas,
+    nocowPaths: nocow.paths,
+    warnings: restartNotice
+      ? [...deletionJournal.warnings, restartNotice]
+      : deletionJournal.warnings,
+  };
 }

@@ -1,4 +1,3 @@
-import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { acquireCronRootTranscriptLease } from "../config/sessions/transcript-lease.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -72,6 +71,7 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
+import { assertParticipationRuntime } from "./participation-ceiling.js";
 import { isRequiredReplyExpectation, resolveReplyExpectation } from "./reply-completion.js";
 import { isAgentRunDirectAbortReason } from "./run-termination.js";
 import {
@@ -138,6 +138,7 @@ async function runCliAgentInternal(
   let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
   const generationAbortController = new AbortController();
   let generation: Awaited<ReturnType<typeof acquireCronRootTranscriptLease>>;
+  assertParticipationRuntime(readRunOperatorAuthority(params)?.participationCeiling, "cli");
   const assertCurrent = () => {
     params.abortSignal?.throwIfAborted();
     params.assertCurrent?.();
@@ -224,9 +225,7 @@ export async function runPreparedCliAgent(
     },
     () =>
       settlePreparedCliRunWithTrajectory(context, diagnosticLifecycle, (complete) =>
-        runWithCliHistoryWriter(context.cliHistoryWriter, () =>
-          runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
-        ),
+        runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
       ),
   );
 }

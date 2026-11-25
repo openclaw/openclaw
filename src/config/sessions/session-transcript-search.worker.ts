@@ -283,7 +283,8 @@ function* readSessionTranscriptSearch(
       .select([
         "window.session_key",
         fullText.identity(textIndex).as("fts_rowid"),
-        useFts ? ranking.value.as("rank") : expression.val(0).as("rank"),
+        // A numeric literal keeps PostgreSQL's fallback score numeric; an untyped bind returns text.
+        useFts ? ranking.value.as("rank") : sql.lit(0).as("rank"),
       ]);
     const ordered = candidates
       .select([

@@ -8,10 +8,10 @@ import * as inventoryOwner from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
-  isRuntimeTestFileIncluded,
   type NodeTestVolumeContext,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { isRuntimeTestFileIncluded } from "../../scripts/lib/ci-runtime-test-eligibility.mts";
 import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 
 it("retains the original eligible denominator across selected subsets and runtime copies", () => {
@@ -117,6 +117,24 @@ const planFiles = (
   ...(job.includePatterns ?? job.targets ?? []),
   ...(job.groups ?? []).flatMap((group) => group.includePatterns ?? []),
 ];
+
+it.each([
+  ["src/commands/doctor-auth-canonical-api-key-alias.test.ts", undefined],
+  ["src/config/config-startup-corpus.test.ts", "runtime"],
+] as const)("plans the build required by the selected suite %s", (target, mode) => {
+  const jobs = expectDefined(
+    createSelectedNodeTestShardBundles([target], {
+      runnerBackend: "github",
+      includeReleaseOnlyRuntimeTests: true,
+      includePrExemptRuntimeTests: true,
+    }),
+    "qualified compact selection",
+  );
+
+  expect(jobs).toHaveLength(1);
+  expect(jobs.flatMap(planFiles)).toEqual([target]);
+  expect(jobs[0]?.pretestBuildMode).toBe(mode);
+});
 
 it("retains canonical capacity and exact scope for a compact selection", () => {
   const targets = [

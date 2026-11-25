@@ -14,6 +14,7 @@ import type { IconName } from "./components/icon-data.ts";
 import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
+export type ShellNavigationIntent = "sidebar-section";
 
 type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtitleKey?: string];
 
@@ -112,10 +113,10 @@ export function sidebarViewForPage(
     : undefined;
 }
 
-// Worktrees renders as a tab of the Sessions hub; the sidebar highlights the
-// Sessions entry for both routes, mirroring the Plugins hub behavior.
+// Projects and Worktrees render as tabs of the Sessions hub; the sidebar highlights
+// the Sessions entry for every hub route, mirroring the Plugins hub behavior.
 export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
-  return routeId === "sessions" || routeId === "worktrees";
+  return routeId === "sessions" || routeId === "projects" || routeId === "worktrees";
 }
 
 export type PersistedSidebarRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
@@ -255,10 +256,11 @@ export type SettingsSearchBlock = {
 
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts). Ordered
 // by user attention: personal/look-and-feel first, system plumbing last.
-// Management surfaces (sessions, worktrees, activity, memory import) are
+// Management surfaces (sessions, projects, worktrees, activity, memory import) are
 // workspace destinations, not settings; model setup is a subpage of Models.
 const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
+  { labelKey: null, routes: ["custodian"] },
+  { labelKey: "nav.settingsGroupPreferences", routes: ["profile", "appearance", "notifications"] },
   { labelKey: "nav.settingsGroupDevice", routes: ["device", "device-permissions"] },
   {
     labelKey: "nav.settingsGroupConnections",
@@ -355,8 +357,10 @@ export function deviceSettingsGroupLabelKey(
 export function visibleSettingsNavigationGroups(
   canAdmin: boolean,
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
-): readonly SettingsNavigationGroup[] {
+): readonly (SettingsNavigationGroup & { key: NavigationRouteId })[] {
   return SETTINGS_NAVIGATION_GROUPS.map((group) => ({
+    // Keep the group identity independent of permission filtering and device-specific labels.
+    key: group.routes[0],
     labelKey:
       group.labelKey === "nav.settingsGroupDevice"
         ? deviceSettingsGroupLabelKey(nativeDeviceSettings?.snapshot)
@@ -399,6 +403,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   approvals: navigationPresentation("badgeCheck", "approvals"),
   workboard: navigationPresentation("workboard", "workboard"),
   worktrees: navigationPresentation("folder", "worktrees"),
+  projects: navigationPresentation("folders", "projects"),
   channels: navigationPresentation("link", "channels"),
   connection: navigationPresentation("radio", "connection"),
   sessions: navigationPresentation("sessions", "sessions"),

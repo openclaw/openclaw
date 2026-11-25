@@ -1,14 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  symlinkSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -22,111 +14,70 @@ const step = action.runs.steps.find(
 );
 
 describe.skipIf(process.platform === "win32")("CI Git capability setup", () => {
-  function fixture(
-    options: { capable?: boolean; ubuntu?: boolean; uid?: string; codename?: string } = {},
-  ) {
+  function fixture(options: { capable?: boolean; codename?: string } = {}) {
     const root = tempDirs.make("openclaw-git-capability-");
     const bin = path.join(root, "bin");
+    const githubPath = path.join(root, "github-path");
     const log = path.join(root, "commands");
-    const capable = path.join(root, "capable");
-    const etc = path.join(root, "etc");
-    const osRelease = path.join(etc, "os-release");
-    const key = path.join(etc, "apt/keyrings/openclaw-git-core-ppa.asc");
-    const source = path.join(etc, "apt/sources.list.d/openclaw-git-core-ppa.list");
-    const unrelatedSource = path.join(etc, "apt/sources.list.d/unrelated.list");
-    mkdirSync(path.dirname(source), { recursive: true });
-    writeFileSync(unrelatedSource, "existing source\n");
+    const archive = "test Git package";
     mkdirSync(bin);
+    writeFileSync(githubPath, "");
     writeFileSync(log, "");
     writeFileSync(
-      osRelease,
-      `ID=${options.ubuntu === false ? "debian" : "ubuntu"}\nVERSION_CODENAME=${JSON.stringify(options.codename ?? "noble")}\n`,
+      path.join(root, "os-release"),
+      `ID=ubuntu\nVERSION_CODENAME=${options.codename ?? "noble"}\n`,
     );
-    if (options.capable) {
-      writeFileSync(capable, "");
-    }
     const shell = (file: string, body: string) =>
-      writeFileSync(file, `#!/bin/bash\nset -euo pipefail\n${body}\n`, { mode: 0o755 });
+      writeFileSync(path.join(bin, file), `#!/bin/bash\nset -euo pipefail\n${body}\n`, {
+        mode: 0o755,
+      });
     shell(
-      path.join(bin, "git"),
+      "git",
+      options.capable
+        ? "echo git version 2.56.0"
+        : `
+[[ "$*" == --version ]] || exit 129
+echo git version 2.43.0`,
+    );
+    shell("apt-get", `echo "Simulated Git PPA index outage: HTTP 503" >&2; exit 100`);
+    shell(
+      "curl",
       `
-if [[ "$*" == --version ]]; then
-  [[ -f "$FIXTURE_CAPABLE" ]] && echo 'git version 2.56.0' || echo 'git version 2.43.0'
-elif [[ "$*" == '--no-lazy-fetch --version' && -f "$FIXTURE_CAPABLE" ]]; then
-  echo 'git version 2.56.0'
-else
-  echo 'unknown option: --no-lazy-fetch' >&2
-  exit 129
-fi`,
+while [[ "$1" != --output ]]; do shift; done
+printf '%s\\n' "$3" >> "$FIXTURE_LOG"
+if [[ "$FIXTURE_PRIMARY_DOWN" == true && "$3" == https://deb.debian.org/* ]]; then exit 22; fi
+printf '%s' "${archive}$FIXTURE_CORRUPTION" > "$2"`,
     );
-    shell(path.join(bin, "id"), `echo '${options.uid ?? "1000"}'`);
     shell(
-      path.join(bin, "timeout"),
+      "dpkg-deb",
       `
-printf 'timeout %s\\n' "$*" >> "$FIXTURE_LOG"
-shift 3
-exec "$@"`,
+printf 'extract\\n' >> "$FIXTURE_LOG"
+mkdir -p "$3/usr/bin" "$3/usr/lib/git-core"
+cp "$FIXTURE_REPLACEMENT" "$3/usr/bin/git"
+printf 'git version 2.47.3\\n' > "$3/usr/lib/git-core/version"`,
     );
     shell(
-      path.join(bin, "sudo"),
+      "replacement-git",
       `
-printf 'sudo %s\\n' "$*" >> "$FIXTURE_LOG"
-[[ "$1" == -n ]]
-shift
-exec "$@"`,
+[[ "$*" == "--no-lazy-fetch --version" ]] || exit 129
+cat "$GIT_EXEC_PATH/version"`,
     );
-    shell(
-      path.join(bin, "add-apt-repository"),
-      "echo 'Launchpad discovery unavailable' >&2; exit 42",
-    );
-    shell(
-      path.join(bin, "install"),
-      `
-printf 'install %s\\n' "$*" >> "$FIXTURE_LOG"
-args=()
-while (( $# )); do
-  case "$1" in
-    -o|-g) shift 2 ;;
-    *) args+=("$1"); shift ;;
-  esac
-done
-exec /usr/bin/install "\${args[@]}"`,
-    );
-    shell(
-      path.join(bin, "apt-get"),
-      `
-printf 'apt %s noninteractive=%s\\n' "$*" "$DEBIAN_FRONTEND" >> "$FIXTURE_LOG"
-[[ "\${FIXTURE_INSTALL_FAIL:-}" != true ]] || exit 100
-if [[ "$*" == *' update' ]]; then
-  updates=0
-  [[ ! -f "$FIXTURE_CAPABLE.updates" ]] || read -r updates < "$FIXTURE_CAPABLE.updates"
-  printf '%s\\n' "$((updates + 1))" > "$FIXTURE_CAPABLE.updates"
-fi
-if [[ "$*" == *'--no-install-recommends git' ]]; then
-  attempt=0
-  [[ ! -f "$FIXTURE_CAPABLE.attempts" ]] || read -r attempt < "$FIXTURE_CAPABLE.attempts"
-  attempt=$((attempt + 1))
-  printf '%s\\n' "$attempt" > "$FIXTURE_CAPABLE.attempts"
-  (( attempt > \${FIXTURE_INSTALL_FAILURES:-0} )) || exit 100
-  read -r updates < "$FIXTURE_CAPABLE.updates"
-  (( updates > \${FIXTURE_STALE_INDEX_UPDATES:-0} )) || exit 0
-  [[ "\${FIXTURE_POST_FAIL:-}" == true ]] || : > "$FIXTURE_CAPABLE"
-fi`,
-    );
-    shell(path.join(bin, "sleep"), `printf 'sleep %s\\n' "$*" >> "$FIXTURE_LOG"`);
-    for (const [command, executable] of [
-      ["env", "/usr/bin/env"],
-      ["grep", "/usr/bin/grep"],
-      ["mktemp", "/usr/bin/mktemp"],
-      ["rm", "/bin/rm"],
-      ["bash", "/bin/bash"],
-    ] as const) {
-      symlinkSync(executable, path.join(bin, command));
+    shell("sha256sum", `exec /usr/bin/shasum -a 256 "$@"`);
+    for (const command of ["env", "bash", "mktemp", "mkdir", "cp", "cat", "rm", "chmod"]) {
+      symlinkSync(
+        command === "bash" ? "/bin/bash" : `/usr/bin/${command}`,
+        path.join(bin, command),
+      );
     }
-    // Keep actual OS parsing and file installation; relocate only the host /etc paths.
+    // Use real checksum validation with synthetic bytes, and never touch the runner /etc.
     writeFileSync(
       path.join(root, "ensure-git.sh"),
-      readFileSync(helper, "utf8").replaceAll("/etc/", `${etc}/`),
+      readFileSync(helper, "utf8")
+        .replaceAll("/etc/", `${root}/`)
+        .replace(
+          /checksum=[a-f0-9]{64}/g,
+          `checksum=${createHash("sha256").update(archive).digest("hex")}`,
+        ),
     );
     const run = (extra: Record<string, string> = {}) =>
       spawnSync("/bin/bash", ["-c", step.run], {
@@ -135,132 +86,68 @@ fi`,
         env: {
           PATH: bin,
           GITHUB_ACTION_PATH: root,
+          RUNNER_ARCH: "X64",
+          RUNNER_TEMP: root,
+          GITHUB_PATH: githubPath,
           FIXTURE_LOG: log,
-          FIXTURE_CAPABLE: capable,
+          FIXTURE_REPLACEMENT: path.join(bin, "replacement-git"),
+          FIXTURE_PRIMARY_DOWN: "false",
+          FIXTURE_CORRUPTION: "",
           ...extra,
         },
       });
-    return {
-      run,
-      commands: () => readFileSync(log, "utf8"),
-      capable,
-      key,
-      source,
-      unrelatedSource,
-    };
+    const nextPath = () => readFileSync(githubPath, "utf8").trim();
+    const runNextStep = () =>
+      spawnSync("/bin/bash", ["-c", "git --no-lazy-fetch --version"], {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: { PATH: [nextPath(), bin].join(path.delimiter) },
+      });
+    return { run, runNextStep, nextPath, commands: () => readFileSync(log, "utf8") };
   }
 
-  it("keeps capable Git without any privileged or package command", () => {
+  it("keeps capable Git without downloading or changing PATH", () => {
     expect(step.if).toBe("runner.os == 'Linux'");
-    const setup = fixture({ capable: true, ubuntu: false });
+    const setup = fixture({ capable: true, codename: "jammy" });
     const result = setup.run();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("git version 2.56.0");
     expect(setup.commands()).toBe("");
+    expect(setup.nextPath()).toBe("");
   });
 
-  it.each(["0", "1000"])("upgrades Ubuntu Git under UID %s and verifies its capability", (uid) => {
-    const setup = fixture({ uid });
+  it("provides capable Git when the Noble Git PPA is unavailable", () => {
+    const setup = fixture();
     const result = setup.run();
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("git version 2.43.0");
-    expect(result.stdout).toContain("git version 2.56.0");
-    expect(existsSync(setup.capable)).toBe(true);
-    const commands = setup.commands();
-    expect(readFileSync(setup.source, "utf8")).toBe(
-      `deb [signed-by=${setup.key}] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble main\n`,
-    );
-    expect(createHash("sha256").update(readFileSync(setup.key)).digest("hex")).toBe(
-      "e1175fa6e5170e9bc91973756ada1c8d65d2f2059442c520146042a52dbc8664",
-    );
-    expect(statSync(setup.key).mode & 0o777).toBe(0o644);
-    expect(statSync(setup.source).mode & 0o777).toBe(0o644);
-    expect(commands).toContain("install -o root -g root -m 0644");
-    expect(commands).toContain("Acquire::http::Timeout=30");
-    expect(commands).toContain("Acquire::https::Timeout=30");
-    expect(commands).toContain("Acquire::Retries=0");
-    expect(commands).toContain(
-      "install -y --no-install-recommends git noninteractive=noninteractive",
-    );
-    expect(commands.match(/^timeout /gm)).toHaveLength(2);
-    expect(commands.includes("sudo -n")).toBe(uid !== "0");
+    const next = setup.runNextStep();
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.stdout).toBe("git version 2.47.3\n");
   });
 
-  it("replaces only its dedicated PPA files on another required upgrade", () => {
+  it("recovers from a missing primary package using the pinned snapshot", () => {
     const setup = fixture();
-    expect(setup.run().status).toBe(0);
-    writeFileSync(setup.key, "stale key");
-    writeFileSync(setup.source, "stale source");
-    unlinkSync(setup.capable);
-    expect(setup.run().status).toBe(0);
-    expect(readFileSync(setup.key, "utf8")).toContain("BEGIN PGP PUBLIC KEY BLOCK");
-    expect(readFileSync(setup.source, "utf8")).toContain("noble main\n");
-    expect(readFileSync(setup.unrelatedSource, "utf8")).toBe("existing source\n");
+    const result = setup.run({ FIXTURE_PRIMARY_DOWN: "true" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(setup.commands()).toContain("https://snapshot.debian.org/");
+    expect(setup.runNextStep().status).toBe(0);
   });
 
-  it.each([
-    { failures: "1", status: 0, installs: 2 },
-    { failures: "3", status: 100, installs: 3 },
-  ])(
-    "settles Git installation after $failures package failures",
-    ({ failures, status, installs }) => {
-      const setup = fixture();
-      const result = setup.run({ FIXTURE_INSTALL_FAILURES: failures });
-      expect(result.status, result.stderr).toBe(status);
-      expect(existsSync(setup.capable)).toBe(status === 0);
-      const commands = setup.commands();
-      expect(commands.match(/^apt .* update /gm)).toHaveLength(1);
-      expect(commands.match(/^apt .* install /gm)).toHaveLength(installs);
-      expect(commands.match(/^sleep 2$/gm)).toHaveLength(installs - 1);
-      expect(commands.match(/^timeout /gm)).toHaveLength(2);
-    },
-  );
+  it("rejects corrupt package bytes before extracting or changing PATH", () => {
+    const setup = fixture();
+    const result = setup.run({ FIXTURE_CORRUPTION: "corrupt" });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("FAILED");
+    expect(setup.commands()).not.toContain("extract");
+    expect(setup.nextPath()).toBe("");
+  });
 
-  it.each([
-    { staleUpdates: "1", status: 0 },
-    { staleUpdates: "3", status: 1 },
-  ])(
-    "verifies Git after successful apt commands with $staleUpdates stale index updates",
-    ({ staleUpdates, status }) => {
-      const setup = fixture();
-      const result = setup.run({ FIXTURE_STALE_INDEX_UPDATES: staleUpdates });
-      expect(result.status, result.stderr).toBe(status);
-      expect(existsSync(setup.capable)).toBe(status === 0);
-      if (status !== 0) {
-        expect(result.stderr).toContain("Git upgrade did not provide --no-lazy-fetch support");
-      }
-    },
-  );
-
-  it.each(["", "noble extra", "../noble"])(
-    "rejects invalid codename %j before privileged writes",
-    (codename) => {
-      const setup = fixture({ codename });
-      const result = setup.run();
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Ubuntu VERSION_CODENAME is missing or invalid");
-      expect(setup.commands()).toBe("");
-      expect(existsSync(setup.source)).toBe(false);
-    },
-  );
-
-  it("rejects unsupported non-Ubuntu Git without package changes", () => {
-    const setup = fixture({ ubuntu: false });
+  it("rejects an unsupported image with old Git without downloading", () => {
+    const setup = fixture({ codename: "jammy" });
     const result = setup.run();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Git 2.45 or newer with --no-lazy-fetch support");
     expect(setup.commands()).toBe("");
-  });
-
-  it.each(["FIXTURE_INSTALL_FAIL", "FIXTURE_POST_FAIL"])("fails closed on %s", (failure) => {
-    const setup = fixture();
-    const result = setup.run({ [failure]: "true" });
-    expect(result.status).not.toBe(0);
-    expect(existsSync(setup.capable)).toBe(false);
-    if (failure === "FIXTURE_POST_FAIL") {
-      expect(result.stderr).toContain("Git upgrade did not provide --no-lazy-fetch support");
-    } else {
-      expect(setup.commands()).not.toContain("install -y --no-install-recommends git");
-    }
+    expect(setup.nextPath()).toBe("");
   });
 });

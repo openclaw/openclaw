@@ -508,7 +508,11 @@ The worker export accepts the typed command and a
 `entries`, `set`, and `delete` methods address the captured stores by index.
 Repeated reads share the transaction's row view; `lookupMany` selects uncached
 keys together. Writes update that view and preserve existing JSON limits,
-namespace quotas, eviction, and TTL rules. The host rejects writes outside
+namespace quotas, eviction, and TTL rules. For a bounded store, pass
+`{ evictSameKeysFrom: companionIndex }` to `set` to delete matching keys from a
+second writable store whenever this write evicts rows for capacity. Both writes
+commit together. Expiry and explicit deletes have their own lifecycles.
+The host rejects writes outside
 `writeStores`, retained transaction methods used after return, and Promise or
 thenable handler results. A failure rolls back the whole operation.
 

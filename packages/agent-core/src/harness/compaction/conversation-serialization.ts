@@ -91,6 +91,11 @@ export interface BoundedConversation {
   trimmedEntries: number;
 }
 
+type ConversationTextRead<TEntry> = {
+  entry: TEntry;
+  variant: ConversationTextVariant;
+};
+
 /**
  * Render descriptors for one summary request within `maxChars` CJK-weighted
  * characters. Small inputs are unchanged. Larger inputs keep, in this order:
@@ -103,6 +108,7 @@ export interface BoundedConversation {
  * because sampling can separate the two. The transcript itself is not changed.
  * Only candidate text is read synchronously, inside the source reader's lifetime;
  * descriptors and the bounded selection never retain unselected source payloads.
+ * A batch reader yields one text per request in request order.
  */
 export function renderConversationEntriesWithinBudget<
   TEntry extends ConversationEntryDescriptor<unknown>,
@@ -110,14 +116,18 @@ export function renderConversationEntriesWithinBudget<
   entries: readonly TEntry[],
   maxChars: number,
   readText: (entry: TEntry, variant: ConversationTextVariant) => string,
+  readTexts?: (reads: readonly ConversationTextRead<TEntry>[]) => Iterable<string>,
 ): BoundedConversation {
   const separatorChars = ENTRY_SEPARATOR.length;
   const totalChars =
     entries.reduce((sum, entry) => sum + entry.fullChars, 0) +
     separatorChars * Math.max(0, entries.length - 1);
   if (totalChars <= maxChars) {
+    const text = readTexts
+      ? Array.from(readTexts(entries.map((entry) => ({ entry, variant: "full" }))), copyString)
+      : entries.map((entry) => copyString(readText(entry, "full")));
     return {
-      text: entries.map((entry) => copyString(readText(entry, "full"))).join(ENTRY_SEPARATOR),
+      text: text.join(ENTRY_SEPARATOR),
       omittedEntries: 0,
       trimmedEntries: 0,
     };
@@ -129,7 +139,7 @@ export function renderConversationEntriesWithinBudget<
       ? entries[index]?.shortChars
       : entries[index]?.labeledChars) ?? 0;
 
-  const selected = new Map<number, string>();
+  const selected = new Map<number, string | ConversationTextRead<TEntry>>();
   let trimmedEntries = 0;
   // Every maximal run of left-out entries renders one marker; the whole span starts as one.
   let usedChars = OMISSION_MARKER_CHARS;
@@ -160,7 +170,15 @@ export function renderConversationEntriesWithinBudget<
     if (chars <= entryLimit && usedChars + chars + markerCost > maxChars) {
       return false;
     }
-    const entry = readText(descriptor, shortenOlder && index < tailStart ? "short" : "labeled");
+    const variant = shortenOlder && index < tailStart ? "short" : "labeled";
+    if (readTexts && chars <= entryLimit) {
+      // The descriptor gives the exact cost. Defer its text until the selected rows
+      // can be read together. Elision still needs the actual text to price this take.
+      selected.set(index, { entry: descriptor, variant });
+      usedChars += chars + markerCost;
+      return true;
+    }
+    const entry = readText(descriptor, variant);
     let text = entry;
     if (chars > entryLimit) {
       const trimmed = elideMiddleWithinWeight(entry, entryLimit - separatorChars);
@@ -256,7 +274,8 @@ export function renderConversationEntriesWithinBudget<
     }
   }
 
-  const parts: string[] = [];
+  const parts: Array<string | null> = [];
+  const pending: ConversationTextRead<TEntry>[] = [];
   let omittedEntries = 0;
   let gap = 0;
   // The extra iteration flushes a trailing gap.
@@ -272,8 +291,29 @@ export function renderConversationEntriesWithinBudget<
       gap = 0;
     }
     if (text !== undefined) {
-      parts.push(text);
+      if (typeof text === "string") {
+        parts.push(text);
+      } else {
+        parts.push(null);
+        pending.push(text);
+      }
     }
   }
-  return { text: parts.join(ENTRY_SEPARATOR), omittedEntries, trimmedEntries };
+  if (!readTexts || pending.length === 0) {
+    return { text: parts.join(ENTRY_SEPARATOR), omittedEntries, trimmedEntries };
+  }
+  const rendered = readTexts(pending)[Symbol.iterator]();
+  const text = parts
+    .map((part) => {
+      if (part !== null) {
+        return part;
+      }
+      const next = rendered.next();
+      if (next.done) {
+        throw new Error("Compaction batch did not return all selected conversation entries");
+      }
+      return copyString(next.value);
+    })
+    .join(ENTRY_SEPARATOR);
+  return { text, omittedEntries, trimmedEntries };
 }

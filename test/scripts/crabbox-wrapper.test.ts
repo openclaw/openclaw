@@ -1807,13 +1807,16 @@ describe("scripts/crabbox-wrapper", () => {
       target: "node22",
       plugins: [
         {
-          name: "fs-safe-source-owner",
+          name: "package-asset-source-owner",
           setup(builder) {
-            // Relocated fixtures keep the parser beside its package-owned WASM asset.
-            builder.onResolve({ filter: /^@openclaw\/fs-safe(?:\/|$)/ }, (args) => ({
-              path: pathToFileURL(require.resolve(args.path)).href,
-              external: true,
-            }));
+            // Relocated fixtures keep WASM and native binaries beside their owning packages.
+            builder.onResolve(
+              { filter: /^(?:@openclaw\/fs-safe(?:\/|$)|@resvg\/resvg-js$)/ },
+              (args) => ({
+                path: pathToFileURL(require.resolve(args.path)).href,
+                external: true,
+              }),
+            );
           },
         },
         {

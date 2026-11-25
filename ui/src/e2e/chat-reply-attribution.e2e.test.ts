@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Reply attribution" });
@@ -155,7 +156,7 @@ suite.define(() => {
         "assistant",
         "The checklist is ready to share.",
         { runId: "announce:review-complete" },
-        { phase: "final_answer", stopReason: "stop" },
+        { ...openAiAuthor, phase: "final_answer", stopReason: "stop" },
       ),
     ]);
     await suite.withPage(

@@ -28,4 +28,5 @@ export type {
   MatrixVerificationMethod,
   MatrixVerificationSummary,
 } from "./src/matrix/sdk/verification-manager.js";
+export { resolveMatrixMonitorAccessState } from "./src/matrix/monitor/access-state.js";
 export { setMatrixRuntime } from "./src/runtime.js";

@@ -141,9 +141,17 @@ Button semantics:
 
 - `action.type: "command"` runs a native slash command through core's command
   path. Use this for built-in command buttons and menus.
-- `action.type: "callback"` carries opaque plugin data through the channel's
+- `action.type: "callback"` carries opaque data through the channel's
   interaction path. Channel plugins must not reinterpret callback data as slash
-  commands.
+  commands. When the agent or an operator authors the control through a
+  `message` action, core marks the value as owned by the conversation's agent.
+  A plugin interactive handler that registers the value's namespace still gets
+  the tap first, with the mark removed. A tap that no handler claims reaches the
+  agent as `callback_data: <value>`, on every channel and without expiry.
+  Channels decode a tapped value with `agentControlText(data)` from
+  `openclaw/plugin-sdk/interactive-runtime`: it returns that agent input for a
+  marked value and `undefined` for any other value. The mark takes 2 bytes of the
+  channel's value limit.
 - `action.type: "approval"` identifies one durable operator approval, its
   explicit `exec` or `plugin` kind, and the requested decision. Channel plugins
   encode that action into a transport-private callback and resolve it through
@@ -655,6 +663,7 @@ code:
 ```ts
 import {
   adaptMessagePresentationForChannel,
+  agentControlText,
   applyPresentationActionLimits,
   hasMessagePresentationBlocks,
   interactiveReplyToPresentation,
