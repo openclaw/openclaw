@@ -97,7 +97,7 @@ openclaw agent exec "Inspect this repository" \
   --json
 ```
 
-`--code-mode direct` disables Code Mode, `auto` uses model capability metadata, and `code` forces the generic Code Mode surface for tool-capable runs. `--agent-profile openclaw/small` selects the small built-in profile, which removes high-latency and channel-dependent tools and enables the bounded Tool Search defaults for the isolated run. `--local-model-lean` is a deprecated alias for it. Its Tool Search directory lists names and owners without descriptions; full descriptions remain searchable. The flag keeps ordinary system instructions, skills, and workspace context.
+`--code-mode direct` disables Code Mode, `auto` uses model capability metadata, and `code` forces the generic Code Mode surface for tool-capable runs. `--agent-profile openclaw/small` selects the [small built-in profile](/concepts/agent-profiles), which bounds OpenClaw-prepared workspace context and removes some optional tools before it builds the catalog. When OpenClaw Tool Search is active, its compact directory lists names and owners without descriptions; full descriptions remain searchable for tools in the catalog. `--local-model-lean` is a deprecated alias for `--agent-profile openclaw/small`.
 
 The timeout defaults to 600 seconds per model attempt for `agent exec`, with a fresh budget for each configured fallback; this does not change the existing embedded `agent --local` default. A successful run exits `0`, any model or result error exits `1`, and a timeout exits `2`. Failure includes `meta.error`, aborted runs, exhausted model fallbacks, an error stop reason, and any error payload.
 

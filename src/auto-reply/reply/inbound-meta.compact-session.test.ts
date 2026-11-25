@@ -48,6 +48,17 @@ describe("compact inbound history and session transcript rows", () => {
     expect(projection.removedSessionMessages).toBe(1);
   });
 
+  it("keeps distinct bodies that render the same at the same timestamp", () => {
+    const projection = buildWithWindow([
+      { message_id: "native-1", sender: "Alice", body: "status ready", timestamp_ms: 1_000 },
+      { message_id: "session:x", sender: "Assistant", body: "status\nready", timestamp_ms: 1_000 },
+    ]);
+
+    expect(projection.text).toContain("#native-1 Alice: status ready");
+    expect(projection.text).toContain("#session:x Assistant: status ready");
+    expect(projection.removedSessionMessages).toBe(0);
+  });
+
   it("keeps a transcript-only session row of InboundHistory and drops one a native entry repeats", () => {
     const projection = buildCompactInboundUserContextPrefix({
       ChatType: "direct",

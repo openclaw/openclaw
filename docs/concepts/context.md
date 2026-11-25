@@ -26,6 +26,9 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 - `/usage tokens` → append per-reply usage footer to normal replies.
 - `/compact` → summarize older history into a compact entry to free window space.
 
+`/context list` and `/context detail` show the Agent Profile ID and selection source
+when the cached run report records them.
+
 See also: [Slash commands](/tools/slash-commands), [Token use & costs](/reference/token-use), [Compaction](/concepts/compaction).
 
 `/context` and `openclaw sessions list` can reuse the last verified model budget

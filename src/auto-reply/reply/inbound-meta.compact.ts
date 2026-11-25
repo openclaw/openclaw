@@ -39,13 +39,14 @@ function readCompactMessageId(value: unknown): string | undefined {
 }
 
 // A session row repeats a native row only when both carry the same timestamp and body, the key
-// the transcript window merge uses. A body alone also matches a different speaker's message.
+// the transcript window merge uses. Display sanitization can collapse distinct bodies.
 function readCompactDuplicateKey(value: unknown): string | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   const timestamp = value["timestamp_ms"];
-  const body = sanitizeTranscriptText(value["body"], "body");
+  const rawBody = value["body"];
+  const body = typeof rawBody === "string" ? rawBody.trim() : "";
   return typeof timestamp === "number" && Number.isFinite(timestamp) && body
     ? `${timestamp}:${body}`
     : undefined;

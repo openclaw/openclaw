@@ -17,10 +17,10 @@ context-window settings, or local serving configuration.
 
 ## Ownership
 
-OpenClaw uses the `agentprofiles` package for the portable resource envelope,
-`spec.common`, domain-section shape, and base validation. The package treats
-domain-named sections as opaque JSON objects. It does not define or validate
-OpenClaw fields.
+OpenClaw uses types from the `agentprofiles` package for the portable resource
+envelope and checks its built-in profiles with the package's validator in tests.
+The portable validator treats domain-named sections as opaque JSON objects. It
+does not define or validate OpenClaw fields.
 
 OpenClaw owns `spec["openclaw.ai"]`. OpenClaw strictly validates this section
 and resolves it with OpenClaw-owned defaults and inheritance rules. The resolved
@@ -133,14 +133,17 @@ separate `contextSerialization` key in agent configuration.
 ## Small profile behavior
 
 `openclaw/small` uses the normal OpenClaw prompt composer. It does not replace
-the complete system prompt. Its OpenClaw extension limits the four managed
-workspace files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`) to 11,500
+the complete system prompt. Its OpenClaw extension limits the content OpenClaw
+prepares from `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md` to 11,500
 characters together, which is a rough 2,900-token proxy at four
 characters per token. Memory and other injected files keep the operator
 limits. `AGENTS.md` may use up to 7,500 of them, enough to keep a
 typical 7,000-character file whole; a smaller cap makes the trim keep a digest
 and drop the file's tail. This is not an exact tokenizer limit and does not include
 conversation history, tool schemas, skills, memory, or generated prompt text.
+Project-local instructions that Codex loads natively, including `AGENTS.md`,
+are also outside these per-file and aggregate limits. Codex uses its own
+project-document settings for those instructions.
 
 The profile keeps `IDENTITY.md` available so the model receives the configured
 assistant identity. An `IDENTITY.md` above its 1,024-character limit, such as
@@ -159,10 +162,13 @@ The profile also removes heavyweight optional tools: `browser`, `message`,
 shell command and then report it as scheduled. `message` stays available when it
 owns the visible reply for the run.
 
-Explicitly allowed tools and delivery-required tools remain available. When
-`tools.toolSearch` is unset, the profile enables bounded structured Tool Search
-with `tool_search`, `tool_describe`, and `tool_call`. Explicit Tool Search
-configuration always wins. The worker wire field that carries the compact
+The profile filters these tools before OpenClaw builds its Tool Search catalog.
+A tool the profile removes is not discoverable or callable through Tool Search.
+An explicit allow rule or delivery requirement can preserve a tool, subject to
+normal tool policy. Where OpenClaw Tool Search applies, the profile defaults to
+bounded structured search (`tool_search`, `tool_describe`, and `dispatch_action`)
+when `tools.toolSearch` is unset. Explicit Tool Search configuration takes
+precedence over that default. The worker wire field that carries the compact
 directory choice keeps its name, `toolSearchDirectoryLean`, so gateways and
 workers on different versions keep working.
 

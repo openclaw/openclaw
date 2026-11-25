@@ -22,7 +22,11 @@ surface instead of Tool Search controls, see [Code Mode](/tools/code-mode).
 
 OpenClaw embedded and Copilot runs use structured Tool Search automatically when
 `tools.toolSearch` is unset. This defers tool schemas while keeping the
-policy-approved capabilities available. It does not select an Agent Profile or remove optional tools. Set `tools.toolSearch: false` to restore direct schemas. Engaged
+policy-approved capabilities available. Tool Search does not remove optional
+tools itself. The `openclaw/small` [Agent Profile](/concepts/agent-profiles)
+filters optional tools before Tool Search builds its catalog, so removed tools
+are not discoverable or callable through it. Set `tools.toolSearch: false` to
+restore direct schemas for the tools that remain. Engaged
 [Code Mode](/tools/code-mode) takes precedence, and Codex keeps its native surface.
 This automatic default does not rewrite the configuration file.
 Manage the global setting in **Settings → Agents → Agent defaults → Tools →
