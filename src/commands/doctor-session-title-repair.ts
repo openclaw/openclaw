@@ -18,7 +18,7 @@ import {
 } from "../infra/session-sqlite-migration-readers.js";
 import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { normalizeInputProvenance } from "../sessions/input-provenance.js";
 import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "../state/openclaw-state-db-readonly.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
@@ -58,10 +58,17 @@ function readLegacySessionTitle(
     for (const event of head.events) {
       const message = asOptionalRecord(asOptionalRecord(event.event)?.message);
       const projected = projectSessionDisplayMessage(message);
-      if (projected?.role === "user" && !hasInterSessionUserProvenance(message)) {
+      if (projected?.role === "user") {
+        const provenance = normalizeInputProvenance(message?.provenance);
+        if (provenance?.kind === "inter_session") {
+          continue;
+        }
         return {
           displayName: deriveGoalSessionTitle(projected.text) || undefined,
-          legacyWakeTitle: legacyWakeTitleByPrompt.get(projected.text),
+          legacyWakeTitle:
+            provenance?.kind === "external_user"
+              ? undefined
+              : legacyWakeTitleByPrompt.get(projected.text),
         };
       }
     }

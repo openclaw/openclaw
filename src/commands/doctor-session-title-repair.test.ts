@@ -204,10 +204,30 @@ it("preserves an explicitly created wake-marker display name without transcript 
         sessionKey,
         storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
       };
-      const before = expectDefined(sessionAccessor.loadSessionEntry(scope));
+      const before = expectDefined(sessionAccessor.loadSessionEntry(scope), sessionKey);
       await repair();
       expect(sessionAccessor.loadSessionEntry(scope)).toEqual(before);
     },
+  );
+});
+
+it("preserves an explicitly named external-user quote of an exec wake", async () => {
+  await withSession(
+    async (params) => {
+      await sessionAccessor.patchSessionEntryCore(params, () => ({
+        displayName: "[OpenClaw exec completion] Disable automatic completion…",
+      }));
+      const before = expectDefined(sessionAccessor.loadSessionEntry(params), params.sessionKey);
+      await repair();
+      expect(sessionAccessor.loadSessionEntry(params)).toEqual(before);
+    },
+    [
+      {
+        role: "user",
+        content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.exec,
+        provenance: { kind: "external_user" },
+      },
+    ],
   );
 });
 
