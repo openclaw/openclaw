@@ -71,6 +71,7 @@ export type CronRunExecutionParams = Pick<
     isAborted: () => boolean;
     lifecycle: Omit<AgentLifecycleTerminalBackstop, "emit">;
     onPromptAdmission: (admission: { close: () => void; finish: () => Promise<void> }) => void;
+    onConfiguredKey?: (message: string) => void;
     onExecutionStarted?: (info?: CronRunnerStartedInfo) => void | Promise<void>;
     onExecutionPhase?: (
       info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &

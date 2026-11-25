@@ -30,6 +30,8 @@ export type PrepareAgentRuntimeAuthPlanParams = {
   requiredAuthProfileId?: string;
   sessionAuthProfileSource?: "auto" | "user" | "user-link";
   allowAuthProfileFallback?: boolean;
+  /** A caller requires direct credentials even when other stored accounts are eligible. */
+  skipAutomaticAuthProfiles?: boolean;
   harnessId?: string;
   harnessRuntime?: string;
   harnessAuthBootstrap?: "harness";

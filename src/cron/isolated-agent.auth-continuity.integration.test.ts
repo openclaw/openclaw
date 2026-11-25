@@ -359,9 +359,17 @@ it.each([
   ],
   ["replacement", undefined],
   ["revocation", undefined],
+  ["automatic removal with configured key", undefined],
+  ["automatic removal without configured key", undefined],
 ] as const)("enforces %s before provider HTTP through the real runner", async (kind, error) => {
   await withAuthState("cron-legacy-account", async (state) => {
     const openaiUrl = "https://api.openai.com/v1";
+    const automaticRemoval = kind.startsWith("automatic removal");
+    const removed = automaticRemoval || kind === "revocation";
+    const hasConfiguredKey =
+      kind === "configured key" ||
+      kind === "automatic removal with configured key" ||
+      kind === "revocation";
     const requests: Array<{ url: string; authorization: string | null }> = [];
     interceptProvider(async (input, init) => {
       const request = new Request(input, init);
@@ -374,13 +382,16 @@ it.each([
     const cfg = configure(
       state,
       {
-        model: { primary: "openai/gpt-4.1", fallbacks: ["local/gpt-4.1"] },
+        model: {
+          primary: "openai/gpt-4.1",
+          fallbacks: kind === "automatic removal without configured key" ? [] : ["local/gpt-4.1"],
+        },
         models: runtimeModels("openai/gpt-4.1", "local/gpt-4.1"),
       },
       {
         openai: {
           ...provider(openaiUrl),
-          ...(kind === "configured key" ? { apiKey: "synthetic-config-key" } : {}),
+          ...(hasConfiguredKey ? { apiKey: "synthetic-config-key" } : {}),
         },
         local: provider("http://127.0.0.1:11434/v1"),
       },
@@ -393,14 +404,17 @@ it.each([
     }
     await writeConfig(state, cfg);
     const job = storedJob("legacy-account");
-    if (kind === "replacement" || kind === "revocation") {
+    if (kind === "replacement" || removed) {
       job.inferenceBinding =
         (await captureCronInferenceBinding({
           cfg,
           agentId: "main",
-          model: `openai/gpt-4.1@${platformId}`,
+          model: automaticRemoval ? undefined : `openai/gpt-4.1@${platformId}`,
         })) ?? undefined;
-      expect(job.inferenceBinding).toMatchObject({ profileId: platformId, source: "user" });
+      expect(job.inferenceBinding).toMatchObject({
+        profileId: platformId,
+        source: automaticRemoval ? "auto" : "user",
+      });
     }
     const storePath = state.statePath("cron", "jobs.json");
     await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
@@ -408,8 +422,13 @@ it.each([
       await persistAuthProfileBatch({
         profiles: [keyProfile(platformId, "synthetic-replacement-key")],
       });
-    } else if (kind === "revocation") {
+    } else if (removed) {
       expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: [platformId] })).toBe(true);
+      if (automaticRemoval) {
+        await persistAuthProfileBatch({
+          profiles: [keyProfile(otherPlatformId, "synthetic-other-platform-key")],
+        });
+      }
     }
     clearRuntimeAuthProfileStoreSnapshots();
     const reloaded = (await loadCronJobsStore(storePath)).jobs[0]!;
@@ -422,6 +441,10 @@ it.each([
         expect(result.status, result.error).toBe("ok");
         expect(requests.some(({ url }) => url.startsWith(openaiUrl))).toBe(false);
         expect(requests.length).toBeGreaterThan(0);
+      } else if (kind === "automatic removal without configured key") {
+        expect(result.status).toBe("error");
+        expect(result.error).toContain(`account ${platformId}, which was removed or signed out`);
+        expect(requests).toEqual([]);
       } else if (error) {
         expect(result.status).toBe("error");
         expect(result.error).toContain(error);
@@ -431,6 +454,11 @@ it.each([
         expect(requests).toEqual([
           { url: `${openaiUrl}/responses`, authorization: "Bearer synthetic-config-key" },
         ]);
+        if (automaticRemoval) {
+          expect(result.diagnostics?.summary).toContain(
+            `account ${platformId} was removed or signed out. This run is using the configured key for openai.`,
+          );
+        }
       }
     } finally {
       await resetPreparedModelRuntimeSnapshotsForTest();

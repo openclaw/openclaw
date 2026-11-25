@@ -2,6 +2,8 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { findErrorProperty } from "../../failover/error.js";
+import { MissingProviderAuthError } from "../../model-auth.js";
 import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveProviderEndpoint } from "../../provider-attribution.js";
@@ -416,7 +418,23 @@ export async function prepareEmbeddedRunTransport(input: {
       : authController.advanceAuthProfile;
 
     if (!pluginHarnessOwnsTransport || pluginHarnessNeedsOpenClawAuthBootstrap) {
-      await authController.initializeAuthProfile();
+      try {
+        await authController.initializeAuthProfile();
+      } catch (error) {
+        // Preserve the removal message if a planned key is missing at resolution time.
+        if (
+          params.scheduledConfiguredKey &&
+          findErrorProperty(error, (cause) =>
+            cause instanceof MissingProviderAuthError ? true : undefined,
+          )
+        ) {
+          throw params.scheduledConfiguredKey.unavailable;
+        }
+        throw error;
+      }
+      if (!pluginHarnessOwnsTransport) {
+        params.scheduledConfiguredKey?.onSelected();
+      }
     } else if (forwardedPluginHarnessProfileId) {
       const initialAttempt = preparedAuthAttempts[authState.profileIndex];
       if (

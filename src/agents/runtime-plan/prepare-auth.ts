@@ -401,6 +401,7 @@ export function prepareAgentRuntimeAuth(
     selectedProfileId ||
     providerBindingSuppressesProfiles ||
     configuredAwsSdkAuth ||
+    params.skipAutomaticAuthProfiles ||
     !store
       ? {
           profileIds: selectedProfileId ? [selectedProfileId] : [],
@@ -423,6 +424,7 @@ export function prepareAgentRuntimeAuth(
     !lockedProfileId &&
     !providerBindingSuppressesProfiles &&
     !configuredAwsSdkAuth &&
+    !params.skipAutomaticAuthProfiles &&
     store
       ? params.resolveProviderPreferredProfileId?.({
           config: params.config,

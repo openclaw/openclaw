@@ -1,6 +1,8 @@
+import { AuthProfileAuthorizationError } from "../agents/auth-profiles/authorization-contract.js";
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   type CronInferenceBinding,
   describeCronInferenceBinding,
@@ -21,14 +23,22 @@ type CronLiveRunParams = Pick<RunEmbeddedAgentInternalParams, "scheduledLiveProv
   authProfileId: undefined;
   authProfileIdSource: undefined;
 };
+type CronConfiguredKeyRunParams = Pick<RunEmbeddedAgentInternalParams, "scheduledConfiguredKey"> & {
+  authProfileId: undefined;
+  authProfileIdSource: undefined;
+};
+
+const log = createSubsystemLogger("cron");
 
 /**
  * A job records the account for its own provider only. Candidates on that provider run on
- * exactly that account; candidates on any other provider (configured fallbacks) select their
- * credentials live, the way an interactive run does.
+ * that account or the provider's configured key after automatic account removal. Candidates
+ * on any other provider select their credentials live, the way an interactive run does.
  */
 export type CronRunInference = {
-  runParams: (provider: string) => CronPinnedRunParams | CronLiveRunParams;
+  runParams: (
+    provider: string,
+  ) => CronPinnedRunParams | CronLiveRunParams | CronConfiguredKeyRunParams;
   /** The session entry a candidate resolves its runtime from: the captured runtime, if any. */
   runtimeSessionEntry: <T extends { agentRuntimeOverride?: string; agentHarnessId?: string }>(
     entry: T,
@@ -88,14 +98,14 @@ export async function prepareCronRunInference(params: {
   binding?: CronInferenceBinding;
   cfg: OpenClawConfig;
   agentDir: string;
+  onConfiguredKey?: (message: string) => void;
 }): Promise<CronRunInference | undefined> {
   const { binding, job } = params;
   if (!binding) {
     return undefined;
   }
   const { acquireCronInferenceAuthorization } = await import("./inference-binding.runtime.js");
-  // A replaced or removed account refuses only the candidates on its provider, when the chain
-  // reaches them; configured fallbacks on other providers still run.
+  // The recorded account governs only its provider, when the fallback chain reaches it.
   let authorization: Awaited<ReturnType<typeof acquireCronInferenceAuthorization>> | undefined;
   let unavailable: unknown;
   try {
@@ -108,6 +118,24 @@ export async function prepareCronRunInference(params: {
   } catch (error) {
     unavailable = error;
   }
+  let reportedConfiguredKey = false;
+  const configuredKey =
+    binding.source === "auto" &&
+    unavailable instanceof Error &&
+    unavailable.cause instanceof AuthProfileAuthorizationError &&
+    unavailable.cause.code === "MCP_AUTHORIZATION_RETIRED"
+      ? {
+          unavailable,
+          onSelected: () => {
+            if (!reportedConfiguredKey) {
+              reportedConfiguredKey = true;
+              const message = `Automation ${jobLabel(job)}: automatically selected account ${binding.profileId} was removed or signed out. This run is using the configured key for ${binding.provider}.`;
+              log.warn(message);
+              params.onConfiguredKey?.(message);
+            }
+          },
+        }
+      : undefined;
   const current = () => {
     if (!authorization) {
       throw unavailable;
@@ -138,7 +166,16 @@ export async function prepareCronRunInference(params: {
   // The last admitted candidate's runtime, named when its CLI backend refuses the account.
   let candidateRuntime: string | undefined;
   return {
-    runParams: (provider) => (provider === binding.provider ? pinned : live),
+    runParams: (provider) =>
+      provider !== binding.provider
+        ? live
+        : configuredKey
+          ? {
+              scheduledConfiguredKey: configuredKey,
+              authProfileId: undefined,
+              authProfileIdSource: undefined,
+            }
+          : pinned,
     runtimeSessionEntry: (entry, provider) =>
       resolveCronRuntimeSessionEntry(binding, entry, provider),
     assertCandidate(provider, cliExecution, runtime) {
@@ -150,17 +187,23 @@ export async function prepareCronRunInference(params: {
         throw incompatibleCandidateError({ job, binding, provider, runtime, cliExecution });
       }
       candidateRuntime = runtime ?? candidateRuntime;
+      if (configuredKey && !cliExecution) {
+        return;
+      }
       // CLI candidates finish this check in resolveCliAuthProfile, before the process starts.
       current().assertCurrent();
     },
     assertCurrent(provider) {
-      if (provider === binding.provider) {
+      if (provider === binding.provider && !configuredKey) {
         current().assertCurrent();
       }
     },
     async resolveCliAuthProfile(provider, resolve, liveSelection) {
       if (provider !== binding.provider) {
         return await liveSelection();
+      }
+      if (configuredKey) {
+        throw configuredKey.unavailable;
       }
       let profileId: string | undefined;
       try {

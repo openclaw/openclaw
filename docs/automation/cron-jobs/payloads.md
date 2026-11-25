@@ -261,16 +261,20 @@ and compatible authentication route. OAuth and API keys can remain enabled toget
 changing interactive defaults, profile order, or the job’s plain model selection does
 not switch the job’s account or billing route. Automatic ownership remains distinct
 from an explicit user profile pin. Token refresh within the same authorization is
-allowed. Deleting, replacing, or revoking that authorization refuses the job's models on
-that provider instead of switching to another of its accounts. Model and route
-compatibility still apply.
+allowed. If an automatically selected account is removed or signed out, the job's
+models on that provider can use a compatible API key from the environment or provider
+config. The run reports the switch and checks the recorded binding again on the next
+run. If no compatible key is available, those models are refused. This recovery never
+uses another saved account or a runtime's native login. A removed explicit pin or a
+replacement authorization still refuses the job's models on that provider. Model and
+runtime compatibility still apply.
 
 The recorded account governs only its own provider. Configured fallback models on other
 providers select their credentials live, the same way an interactive run does, so a job
 bound to one provider still fails over when that provider is out of quota or down. This
-also applies when the recorded account was replaced or removed: its provider is refused,
-and the rest of the fallback chain still runs. If a job has no model of its own and the
-default model moves to another provider, the job follows it with live credentials.
+also applies if the recorded provider is refused because its account was replaced or
+removed. If a job has no model of its own and the default model moves to another
+provider, the job follows it with live credentials.
 
 At creation, account capture follows scheduled-model selection, including an
 allowed `model@profile` value in per-agent or global `subagents.model`. A disallowed

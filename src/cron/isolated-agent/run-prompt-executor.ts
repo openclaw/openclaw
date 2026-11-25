@@ -164,12 +164,12 @@ export function createCronPromptExecutor(
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
     let currentContextSnapshot: CronCompletedPromptRun["currentContextSnapshot"];
     using inferenceLease = new DisposableStack();
-    const binding = params.job.inferenceBinding;
     const inference = await prepareCronRunInference({
       job: params.job,
-      binding,
+      binding: params.job.inferenceBinding,
       cfg: params.cfgWithAgentDefaults,
       agentDir: params.agentDir,
+      onConfiguredKey: params.onConfiguredKey,
     });
     if (inference) {
       inferenceLease.defer(inference.dispose);
@@ -558,7 +558,7 @@ export function createCronPromptExecutor(
                         resolveForwardedProfile(undefined),
                     )
                   : await resolveLiveProfile();
-                if (trigger === "cron" && !binding && authProfileId) {
+                if (trigger === "cron" && !inference && authProfileId) {
                   throw createUnrecordedScheduledAccountRefusal({
                     runtime: executionProvider,
                     modelRef: `${providerOverride}/${modelOverride}`,
@@ -593,7 +593,7 @@ export function createCronPromptExecutor(
                         inference.assertCurrent(providerOverride);
                       }
                     : undefined,
-                  nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
+                  nativeAuthOnly: trigger === "cron" && !inference ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: params.cliSessionBindingFacts,

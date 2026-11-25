@@ -1059,14 +1059,18 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
   );
 
   it.each(["embedded", "cli"] as const)(
-    "fails a %s job whose stored account was removed with one message naming account and runtime",
+    "refuses a removed account for a pinned embedded job or an automatic CLI job (%s)",
     async (route) => {
       const cfg =
         route === "cli" ? await claudeCliConfig() : await embeddedAnthropicConfig(claudeToken());
-      const binding = await capture(cfg);
+      const binding = await capture(
+        cfg,
+        route === "embedded" ? `${claudeRef}@${claudeProfile}` : undefined,
+      );
       if (!binding?.runtime) {
         throw new Error("Expected a binding with its captured runtime");
       }
+      expect(binding.source).toBe(route === "embedded" ? "user" : "auto");
       await removeAuthProfilesAcrossOwnerStores({
         profileIds: [claudeProfile],
         agentDir: state.agentDir(),
