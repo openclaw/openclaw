@@ -16,18 +16,16 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.buttons["model-auth-sign-out"].exists)
         self.attachScreenshot(named: "provider-account-expiring")
         // The system back button returns to the accounts page, then to the models.
-        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        app.buttons["BackButton"].tap()
         XCTAssertTrue(app.navigationBars["Provider accounts"].waitForExistence(timeout: 5))
     }
 
     func testProviderAccountSignInFinishes() throws {
         let app = try self.openProviderAccounts()
         try self.enterXAIKey("fixture-key", in: app)
-        // Signed in: the options give way to the account, with no banner.
-        let option = app.buttons["model-auth-option-xai-api-key"]
-        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: option)
-        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 10), .completed, app.debugDescription)
-        XCTAssertTrue(app.buttons["model-auth-sign-out"].waitForExistence(timeout: 5), app.debugDescription)
+        // Signed in: the page shows the account and Sign out, with no banner; the options stay reachable.
+        XCTAssertTrue(app.buttons["model-auth-sign-out"].waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Other ways to sign in"].exists, app.debugDescription)
         XCTAssertFalse(app.descendants(matching: .any)["model-auth-problem"].exists)
         self.attachScreenshot(named: "provider-account-signed-in")
     }

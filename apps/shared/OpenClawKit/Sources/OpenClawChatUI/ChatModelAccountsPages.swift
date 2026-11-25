@@ -229,7 +229,8 @@ private struct ChatModelAccountSections: View {
                 step: step,
                 providerName: self.account.name,
                 onNeedsRoom: self.onNeedsRoom)
-        } else if !self.account.options.isEmpty, !self.account.isSignedIn || self.account.notice != nil {
+        } else if !self.account.options.isEmpty {
+            // Every way the server offers stays reachable, as in the old sheet's single list.
             self.options
         } else if !self.account.isSignedIn {
             ChatModelAccountsMessageSection(text: ChatModelAccountsCopy.noOptions(self.account.name))
@@ -301,7 +302,8 @@ private struct ChatModelAccountSections: View {
                 .accessibilityIdentifier("model-auth-option-\(option.id)")
             }
         } header: {
-            Text(self.account.isSignedIn ? ChatModelAccountsCopy.signInAgain : ChatModelAccountsCopy.signInWith)
+            Text(!self.account.isSignedIn ? ChatModelAccountsCopy.signInWith
+                : self.account.notice == nil ? ChatModelAccountsCopy.otherWays : ChatModelAccountsCopy.signInAgain)
                 .font(OpenClawChatTypography.settingsSectionHeader)
         } footer: {
             if let problem, let attempt {
@@ -669,6 +671,10 @@ enum ChatModelAccountsCopy {
 
     static var signInWith: String {
         String(localized: "Sign in with")
+    }
+
+    static var otherWays: String {
+        String(localized: "Other ways to sign in")
     }
 
     static func waiting(_ provider: String) -> String {

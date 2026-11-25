@@ -3729,6 +3729,7 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelAccountsPages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.6a3cc8c86d06c26c","source":"Open sign-in page"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelAccountsPages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.257cc8b84c101e43","source":"OpenClaw is still getting accounts ready."},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelAccountsPages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.015be2a8dd3954a0","source":"Option"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelAccountsPages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f4a6ca90c8e886a7","source":"Other ways to sign in"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelAccountsPages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.d2ab13cee75dcaa9","source":"Provider accounts"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelAccountsPages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f50fb1952a724da1","source":"Sign in"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelAccountsPages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.2bac736b68242f20","source":"Sign in again"},

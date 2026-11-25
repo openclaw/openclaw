@@ -66,6 +66,19 @@ struct ChatModelAccountsTests {
         #expect(groups.signedIn.first?.removableProfileIDs == ["saved"])
     }
 
+    @Test func `a provider the server names by its id takes the app's brand name`() throws {
+        let groups = try ChatModelAccountGroups(status: self.status(
+            #"{"providers":[{"provider":"openai","displayName":"openai","status":"static"}]}"#))
+        #expect(groups.signedIn.first?.name == "OpenAI")
+    }
+
+    @Test func `providers the server can't sign in to are not listed`() throws {
+        let groups = try ChatModelAccountGroups(status: self.status(#"""
+        {"providers":[],"providerCapabilities":[{"provider":"groq","loginOptions":[]},{"provider":"zai"}]}
+        """#))
+        #expect(groups.isEmpty)
+    }
+
     @Test func `an empty status has no accounts`() throws {
         #expect(try ChatModelAccountGroups(status: self.status(#"{"providers":[]}"#)).isEmpty)
     }

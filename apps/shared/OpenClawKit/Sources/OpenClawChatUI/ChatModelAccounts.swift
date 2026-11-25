@@ -66,7 +66,10 @@ struct ChatModelAccountGroups: Equatable {
             }
             return ChatModelAccount(
                 id: provider.provider,
-                name: provider.displayName,
+                // The server falls back to the bare id when it has no label for a provider ("openai").
+                name: provider.displayName.caseInsensitiveCompare(provider.provider) == .orderedSame
+                    ? ChatModelPickerStore.providerDisplayName(provider.provider.lowercased())
+                    : provider.displayName,
                 isSignedIn: provider.status != "missing",
                 notice: notice,
                 options: Self.unique(options),
