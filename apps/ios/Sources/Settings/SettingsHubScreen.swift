@@ -215,7 +215,7 @@ struct EmbeddedDashboardContent: View {
                         }
                     } else {
                         self.dashboardWebView(
-                            accessCookie: self.config?.openClawIDDashboard?.cookie,
+                            accessCookie: nil,
                             authorization: nil,
                             webContentIdentity: webContentIdentity)
                     }
@@ -278,7 +278,8 @@ struct EmbeddedDashboardContent: View {
             accessCookie: accessCookie,
             accessAdmissionIsCurrent: authorization?.isCurrent,
             accessResponseCheck: authorization?.checkResponse,
-            onAccessCookieBoundaryFailure: onAccessCookieBoundaryFailure)
+            onAccessCookieBoundaryFailure: onAccessCookieBoundaryFailure,
+            openClawIDDashboardCookie: self.config?.openClawIDDashboard?.cookie)
             .id(webContentIdentity)
             .accessibilityIdentifier("SettingsHub.Dashboard")
     }

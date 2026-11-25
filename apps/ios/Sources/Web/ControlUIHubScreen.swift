@@ -102,8 +102,8 @@ struct ControlUIHubScreen: View {
         let url = self.page.url(config: config)
         let accessCookieAdmission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
             url: url,
-            requiresCookie: authorization != nil || config?.openClawIDDashboard != nil,
-            cookieForURL: { authorization?.dashboardCookie($0) ?? config?.openClawIDDashboard?.cookie })
+            requiresCookie: authorization != nil,
+            cookieForURL: { authorization?.dashboardCookie($0) })
         let authScript: String?
         let authScriptProvider: (@MainActor () async -> String?)?
         if authorization != nil {
@@ -134,7 +134,8 @@ struct ControlUIHubScreen: View {
                     accessCookie: accessCookieAdmission.cookie,
                     accessAdmissionIsCurrent: authorization?.isCurrent,
                     accessResponseCheck: authorization?.checkResponse,
-                    onAccessCookieBoundaryFailure: { self.failedAccessBoundaryIdentity = webContentIdentity })
+                    onAccessCookieBoundaryFailure: { self.failedAccessBoundaryIdentity = webContentIdentity },
+                    openClawIDDashboardCookie: config?.openClawIDDashboard?.cookie)
                     // Unrelated SwiftUI updates must not reload a live desktop or shell.
                         .id(webContentIdentity)
                         .ignoresSafeArea(.container, edges: .bottom)

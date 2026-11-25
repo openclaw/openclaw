@@ -278,10 +278,6 @@ enum AuthenticatedControlUI {
 /// before the Access cookie is installed, so another port cannot receive it.
 enum AuthenticatedControlUIAccessCookieBoundary {
     static func rules(for url: URL) -> String? {
-        // The OpenClaw ID dashboard proxy is plain HTTP on one loopback port.
-        if url.scheme == "http", url.host == "127.0.0.1", url.port != nil {
-            return try? OpenClawIDDashboardProxy.cookieRules(for: url)
-        }
         guard let authority = GatewayTLSAuthority(url: url),
               authority.scheme == "https",
               let host = url.host
@@ -473,9 +469,11 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         accessCookie: HTTPCookie? = nil,
         accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission? = nil,
         accessResponseCheck: (@Sendable (HTTPURLResponse) async throws -> Void)? = nil,
-        onAccessCookieBoundaryFailure: (@MainActor () -> Void)? = nil)
+        onAccessCookieBoundaryFailure: (@MainActor () -> Void)? = nil,
+        openClawIDDashboardCookie: HTTPCookie? = nil)
     {
         self.url = url
+        self.openClawIDDashboardCookie = openClawIDDashboardCookie
         self.authScript = authScript
         self.authScriptProvider = authScriptProvider
         self.nativeAuth = ControlUINativeGatewayAuthHandler(
@@ -841,6 +839,8 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
     let deviceSettingsBridge: IOSDeviceSettingsBridge?
     let usesNativeEmbed: Bool
     let embedCompatibility: DashboardEmbedCompatibility?
+    /// The OpenClaw ID dashboard proxy cookie, kept to the proxy origin by a content rule.
+    let openClawIDDashboardCookie: HTTPCookie?
     let accessCookie: HTTPCookie?
     let accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission?
     let accessResponseCheck: (@Sendable (HTTPURLResponse) async throws -> Void)?
@@ -942,6 +942,18 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             guard let webView, let coordinator else { return }
             guard await coordinator.prepareInitialLoad() else {
                 coordinator.retireAccess(in: webView)
+                return
+            }
+            if let proxyCookie = self.openClawIDDashboardCookie {
+                // Cookies ignore ports: block them everywhere but the proxy origin before loading.
+                guard let rules = try? OpenClawIDDashboardProxy.cookieRules(for: self.url),
+                      let rule = try? await WKContentRuleListStore.default().compileContentRuleList(
+                          forIdentifier: "openclaw.ocid-dashboard-cookie-origin",
+                          encodedContentRuleList: rules)
+                else { return }
+                webView.configuration.userContentController.add(rule)
+                await configuration.websiteDataStore.httpCookieStore.setCookie(proxyCookie)
+                _ = webView.load(request)
                 return
             }
             guard let accessCookie = self.accessCookie else {
