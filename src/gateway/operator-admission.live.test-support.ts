@@ -49,8 +49,10 @@ import {
   dispatchGatewayMethodInProcess,
 } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import {
+  prepareSessionPrincipalRunAuthority,
+  prepareSessionSystemTurnAuthority,
+} from "./session-sharing-authorization-async.js";
 
 type Scenario =
   | "before-start"

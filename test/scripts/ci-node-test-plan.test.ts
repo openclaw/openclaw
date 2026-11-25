@@ -16,8 +16,6 @@ import {
   createNodeTestShardBundles as bundleTests,
   createNodeTestShards as planTests,
   createSelectedNodeTestShardBundles as selectTests,
-  createUiRealGatewayTestShards,
-  createUiTestShardGroups,
   createVitestCacheWarmGroups,
   hasCompleteStartupCorpusCoverage,
   packCompactNodeTestJobsToCapacity,
@@ -38,6 +36,10 @@ import {
   type CiTimingProfile,
 } from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import {
+  createUiRealGatewayTestShards,
+  createUiTestShardGroups,
+} from "../../scripts/lib/ci-ui-test-plan.mts";
 import { isExclusiveCiTestConfig } from "../../scripts/lib/local-check-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { listVitestRuntimeConsumerFiles } from "../../scripts/lib/vitest-build-prerequisites.mts";

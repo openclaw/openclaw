@@ -10,6 +10,7 @@ description: Control UI browser tests, visual reviews and recordings, interactio
 1. **Select proof.** Use the existing browser E2E lane for routing, boot, Gateway
    handshake, and complete user flows; use browser/unit tests for isolated render
    logic. Read each branch below that matches the requested outcome.
+   Added or changed error, empty, and loading states follow the [state capture gate](../openclaw-pr-maintainer/references/media.md#error-empty-and-loading-states). Name each state, including copy-only changes, and capture it through the actual UI. Channel notices require the real-channel branch, not this UI fixture.
    **Done:** every changed behavior has a named scenario and proof boundary.
 2. **Prepare fixtures.** Reuse `ui/src/test-helpers/control-ui-e2e.ts` with synthetic
    Gateway data. Extend its typed scenario options for missing responses. Use the
