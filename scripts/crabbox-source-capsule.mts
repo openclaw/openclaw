@@ -444,6 +444,10 @@ export function prepareCrabboxSourceCapsule(options: {
         changedTracking.add(path);
       }
     }
+    if (!warm && trackingChanges.length === 0) {
+      // Empty tracking still needs an index for the retained selection snapshot.
+      git(directory, ["read-tree", "--empty"], privateEnv);
+    }
     updateIndex(trackingChanges);
     const exclude = git(repoRoot, [
       "rev-parse",

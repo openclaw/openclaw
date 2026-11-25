@@ -156,6 +156,29 @@ function expectNoEmptyGitBatches() {
 }
 
 describe.skipIf(process.platform === "win32")("persistent Crabbox source capsules", () => {
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])("freezes empty source (mirror=%s, empty base=%s)", (mirror, emptyBase) => {
+    const f = fixture();
+    const deleted = f.git(f.repository, "ls-files").split("\n");
+    f.git(f.repository, "rm", "-r", "--", ".");
+    if (emptyBase) {
+      f.git(f.repository, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "empty");
+    }
+    const capsule = f.prepare(mirror);
+    try {
+      expect(f.git(capsule.directory, "ls-tree", "-r", capsule.tree)).toBe("");
+      expect(
+        JSON.parse(f.git(capsule.directory, "show", "-s", "--format=%B", capsule.carrier)),
+      ).toEqual({ deleted: emptyBase ? [] : deleted });
+    } finally {
+      capsule.cleanup();
+    }
+  });
+
   it.each([false, true])("observes cold source only while copying (mirror=%s)", (mirror) => {
     const f = fixture({ ".gitignore": "*.secret\n*.ignored\n.crabboxignore\n" });
     writeFileSync(join(f.repository, "new.txt"), "new source\n");
