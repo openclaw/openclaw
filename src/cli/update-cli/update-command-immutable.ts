@@ -98,7 +98,7 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
     }
     return false;
   }
-  if (await hasReleaseUpdateOwner()) {
+  if (!opts.dryRun && (await hasReleaseUpdateOwner())) {
     const command = [
       process.execPath,
       path.join(resolvePrefix(), "openclaw-launcher.mjs"),
