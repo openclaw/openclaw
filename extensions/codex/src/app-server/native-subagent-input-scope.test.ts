@@ -6,6 +6,7 @@ import {
   CodexNativeSubagentMonitor,
   createClient,
   createMonitorFixture,
+  createNativeModelSourceFixture,
   createRuntime,
   notifyChildStarted,
   parentRegistration,
@@ -86,11 +87,11 @@ describe("Codex native input target scope", () => {
   });
 });
 
-async function coldChild() {
+async function coldChild(modelSource?: ReturnType<typeof createNativeModelSourceFixture>) {
   const { client, monitor, runtime } = createMonitorFixture();
   const custody = createNativeSubagentCompletionCustodyFixture();
   runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(custody.root);
-  const parent = await monitor.registerParent(parentRegistration({ modelSource: undefined }));
+  const parent = await monitor.registerParent(parentRegistration({ modelSource }));
   parent.bindTurn("parent-turn");
   onTestFinished(async () => {
     await parent.unregister();
@@ -118,7 +119,7 @@ async function coldChild() {
       readQualification: () => undefined,
       assertCurrent: () => {},
     });
-  return { parent, client, runtime, metadata, first, prepare };
+  return { parent, client, runtime, metadata, first, prepare, custody };
 }
 
 it.each(["First result", "Second result"])(
@@ -157,6 +158,37 @@ it.each(["First result", "Second result"])(
     );
   },
 );
+
+it("releases a cold worker after history admits its next turn before the start notification", async () => {
+  const source = createNativeModelSourceFixture(["worker"]);
+  const { client, parent, runtime, prepare, metadata, custody } = await coldChild({
+    ...source,
+    bindModelExecution: () =>
+      source.bindModelExecution?.({ provider: "test-provider", model: "worker" }),
+  });
+  await prepare();
+  metadata.thread.turns = [
+    { id: "first", status: "completed", items: [] },
+    { id: "second", status: "inProgress", items: [] },
+  ];
+  await client.item(collabItem("sendInput", [target], { id: "input" }));
+  await client.sendInputOutput({ callId: "input", submissionId: "second" });
+  await client.startTurn("second", { threadId: target });
+  await parent.unregister();
+  expect(source.release).not.toHaveBeenCalled();
+  expect(custody.live().length).toBeGreaterThan(0);
+  await client.completeTurn({
+    threadId: target,
+    turnId: "second",
+    status: "completed",
+    items: [agentMessage("answer", "Second result", "final_answer")],
+  });
+  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ result: "Second result", completionCustody: expect.anything() }),
+  );
+  expect(source.release).toHaveBeenCalledOnce();
+  expect(custody.live()).toHaveLength(0);
+});
 
 it.each(["fork", "multiple turns", "more pages", "commentary only", "failed turn"] as const)(
   "does not assign an inferred follow-up to %s",

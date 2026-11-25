@@ -939,8 +939,7 @@ class Monitor {
           this.registerAgentPath(state, childThreadId, agentPath);
         }
       },
-      admit: (state, owner, input, count, preparedOwner) =>
-        this.submissions.modelInputs.admitModelInput(state, owner, input, count, preparedOwner),
+      admit: this.submissions.modelInputs.admitModelInput,
     });
   }
 
@@ -1521,6 +1520,7 @@ class Monitor {
       known.assignment.nativeTurnId = childState.nativeTurnId;
     }
     childState.pendingCompletion = { ...acceptedCompletion, completedAt: eventAt };
+    this.admissionCustody.completeSubmission(state, childState);
     this.recovery.markTerminalThread(childState.childThreadId, state.parentThreadId);
     releaseNativeDirectChild(childState);
     this.recovery.clearRecoveryTimers(childState);
