@@ -276,7 +276,7 @@ also select `release-update-survivor` in the existing Docker seed job.
 It adds one source-built successor and one Linux npm update that commits
 a schema migration. Crash-after-migration enforcement belongs to the
 store-custody change that makes its rollback assertions pass.
-The lane has a 40-minute total budget; each container keeps its 20-minute
+The lane has a 55-minute total budget; each container keeps its 20-minute
 limit. No new job, matrix row, runner class, or concurrency slot is added.
 An update-only PR can newly select the existing Docker seed job (at most one
 additional runner registration per run). The 21-PR burst envelope adds at
@@ -287,6 +287,24 @@ its existing six-lane seed profile and 115-minute job budget.
 On failure, named artifacts retain the trial, latest 20 update rows, readiness
 and schema observations, and the last 64 KiB of the combined foreground
 Gateway/launcher journal. Environment dumps remain excluded.
+After the healthy case commits, `backward-read.json` reports whether the retained
+old build can open an online SQLite backup of the new shared-state schema.
+The probe uses a fresh home/config, its own port, and bounded child processes;
+it never opens the live candidate state. Its `readable`, `refused`, or `unproven`
+result is observational and does not gate the update lane.
+
+Schema-version or production migration changes also select a pre-ready
+downgrade check. T is built from the PR fork point; T+1 reuses the tested
+merge-tree package. Both source SHAs are recorded. T's own Gateway writers
+seed shared cron and agent session/history data. The candidate is killed at
+its Gateway listen barrier, and copied stores are inspected before rollback.
+Advanced stores must have committed target schemas; lazy stores that did not
+advance are recorded as untouched. The projection restores T's config preimage
+and raised-floor SQLite stores only, retaining other database bytes, then runs
+T's authenticated read smoke. Compatibility is report-only until the
+source-provenanced reader-floor contract is present; setup and store-integrity
+failures always fail. This adds one previous-source build only for selected
+schema/migration diffs, with no new runner or matrix row.
 
 Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. On every main push, `security-fast` also runs the direct-stop cleanup process contract and production lint-suppression inventory on both Node and pinned Bun, independently of changed paths. These two regressions reuse its dependency setup and collect all four results before failing; hourly main CI retains their existing owners. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted upstream `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches run static correctness gates, owner-bounded tests, transitive import consumers, protected regressions, and a six-file runtime smoke set. Node rows target at most 150 estimated test seconds. Single files and indivisible standard groups can exceed that target; setup, builds, and queues are separate from test time. Node shards selecting sandbox container E2E cases prepare the Docker sandbox image when the runner does not already have it. Missing or unbounded runtime selection fails preflight instead of falling back to every test. Windows, browser, Docker, QA Smoke, packaging, contract, and extension families opt in through their existing owners; individual built-process proofs have independent owner flags. Full static fallback does not widen them. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. The existing Plugin Prerelease workflow owns complete extension runtime coverage hourly and in Full Release Validation; normal CI selects affected extension owners on PRs. Windows retains its complete inventory across five measured file shards on hourly main and ordinary manual/release validation; Windows-owner PRs retain that complete inventory.
 
