@@ -117,8 +117,9 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
             !paths.some(
               (other) => other.value !== value && other.parts.slice(-n).join("/") === suffix,
             )
-          )
+          ) {
             return [value, suffix] as const;
+          }
         }
         return [value, value] as const;
       }),
@@ -335,23 +336,25 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                                 !view().operatorAccess.canAdmin ||
                                 busy()
                               }
-                              onClick={async (event) => {
+                              onClick={(event) => {
                                 const trigger = event.currentTarget;
                                 const epoch = model.gateway.readEpoch();
-                                await mutate("row", () =>
-                                  record().removedAt
-                                    ? model.restore(record())
-                                    : model.removeWorktree(record()),
-                                );
-                                // A confirmation cannot restore its disabled invoker. Restore it
-                                // after refresh only if this row remains and focus hasn't moved.
-                                if (
-                                  epoch === model.gateway.readEpoch() &&
-                                  trigger.isConnected &&
-                                  document.activeElement === document.body
-                                ) {
-                                  focusProgrammatically(trigger, { preventScroll: true });
-                                }
+                                void (async () => {
+                                  await mutate("row", () =>
+                                    record().removedAt
+                                      ? model.restore(record())
+                                      : model.removeWorktree(record()),
+                                  );
+                                  // A confirmation cannot restore its disabled invoker. Restore it
+                                  // after refresh only if this row remains and focus hasn't moved.
+                                  if (
+                                    epoch === model.gateway.readEpoch() &&
+                                    trigger.isConnected &&
+                                    document.activeElement === document.body
+                                  ) {
+                                    focusProgrammatically(trigger, { preventScroll: true });
+                                  }
+                                })();
                               }}
                             >
                               {record().removedAt ? t("worktrees.restore") : t("common.delete")}
