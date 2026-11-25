@@ -147,7 +147,7 @@ export function withRecoveredSource<T>(pathname: string, read: (readable: string
   }
 }
 
-export function skipEntry(name: string): boolean {
+function skipEntry(name: string): boolean {
   return GENERATION_NAME.test(name) || RETIRED_BACKUP_NAME.test(name) || COMPANION_NAME.test(name);
 }
 
