@@ -183,6 +183,40 @@ extension ChatViewModelOutboxTests {
         #expect(rebuilt.input == "stored draft\n\ntyped before load")
     }
 
+    @Test(arguments: [false, true], [("é", "e\u{301}"), ("e\u{301}", "é")])
+    @MainActor
+    func `a draft keeps the latest Unicode spelling across a database reopen`(
+        editBeforeLoad: Bool,
+        spellings: (String, String)) async throws
+    {
+        let (store, databases, directory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (original, replacement) = spellings
+        await saveDraftThroughComposer(original, in: store)
+
+        let routing = "per-sender|main|main"
+        let vm = await composerDraftModel(store, sessionRoutingContract: editBeforeLoad ? nil : routing)
+        await settleComposerDraft(vm)
+        vm.input = replacement
+        if editBeforeLoad {
+            vm.syncSessionRoutingContract(routing)
+            await settleComposerDraft(vm)
+        }
+        await vm.persistComposerDraft()
+        let saved = try #require(await store.loadComposerDraft(key: "agent:main:main"))
+        #expect(Data(saved.text.utf8) == Data(replacement.utf8))
+        vm.detachTransport()
+        await settleComposerDraft(vm)
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let rebuilt = await composerDraftModel(reopened.store(gatewayID: store.gatewayID))
+        defer { rebuilt.detachTransport() }
+        await settleComposerDraft(rebuilt)
+        #expect(Data(rebuilt.input.utf8) == Data(replacement.utf8))
+    }
+
     @Test @MainActor func `cold launch waits for the agent and routing before touching the draft`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
