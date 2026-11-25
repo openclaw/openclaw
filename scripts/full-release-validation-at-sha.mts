@@ -231,6 +231,9 @@ always performs read-only reconciliation. --reconcile-request refuses a missing 
 --resume-request continues an admitted candidate request before its first Q workflow
 POST, reusing an exact existing Q ref after interrupted creation. After a
 qualification POST it is observation-only, never a redispatch.
+Fresh validation checks committed mock exports before dispatch. For diagnostics or
+historical candidates, --skip-local-mock-preflight logs and skips only this local check.
+Build-only and retained requests are unchanged.
 Retain the artifact until operator cleanup; its loss never proves non-execution.
 Frozen tooling must declare FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1 before a new request.
 Prints the frozen candidate/tooling, effective profile, group, and soak selection
@@ -451,6 +454,7 @@ export function parseArgs(argv: string[]) {
     specifiedInputs: [] as string[],
     pinAdmissionWorkflow: false,
     keepBranch: false,
+    skipLocalMockPreflight: false,
     dryRun: false,
     inputs,
   };
@@ -492,6 +496,10 @@ export function parseArgs(argv: string[]) {
     }
     if (arg === "--keep-branch") {
       args.keepBranch = true;
+      continue;
+    }
+    if (arg === "--skip-local-mock-preflight") {
+      args.skipLocalMockPreflight = true;
       continue;
     }
     if (arg === "--dry-run") {
@@ -2306,6 +2314,19 @@ async function main() {
     : undefined;
   if (admissionWorkflowSha) {
     assertAdmissionContract(admissionWorkflowSha);
+  }
+  if (args.inputs.rerun_group !== "build-only") {
+    if (args.skipLocalMockPreflight) {
+      console.warn(
+        `Skipping local mock-export preflight for ${targetSha} (--skip-local-mock-preflight)`,
+      );
+    } else {
+      const { checkFrozenMockExports } = await import("./check-test-mock-exports.mts");
+      requireDispatch(
+        checkFrozenMockExports(process.cwd(), targetSha) === 0,
+        `Local mock-export preflight failed for ${targetSha}; no workflow was dispatched. Fix the candidate or use --skip-local-mock-preflight to defer to hosted validation.`,
+      );
+    }
   }
   if (candidateOwned) {
     warnCandidateToolingLag(workflowSha);
