@@ -47,7 +47,7 @@ export async function assertCrabboxSetupEgressSupport(params: {
     !/(?:^|\n)\s+-{1,2}allow-public-destinations(?:\s|$)/u.test(output) ||
     !/(?:^|\n)\s+-{1,2}upstream-proxy-env(?:\s|$)/u.test(output)
   ) {
-    throw new Error("Setup secrets require native egress; update Crabbox to 0.77.0 or newer");
+    throw new Error("Setup secrets require native egress; update Crabbox to 0.79.2 or newer");
   }
 }
 

@@ -6,6 +6,7 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import * as observerModel from "./session-observer-model.js";
 import type { SessionObserverDeps } from "./session-observer-model.js";
 import { createSessionObserver } from "./session-observer.js";
 
@@ -43,7 +44,7 @@ export function event(params: {
 
 export function modelMessage(
   value: Record<string, unknown>,
-): Awaited<ReturnType<NonNullable<SessionObserverDeps["completeModel"]>>> {
+): Awaited<ReturnType<typeof observerModel.defaultCompleteModel>> {
   return {
     text: JSON.stringify(value),
     provider: "openai",
@@ -52,9 +53,7 @@ export function modelMessage(
   };
 }
 
-export function preparedModel(): Awaited<
-  ReturnType<NonNullable<SessionObserverDeps["prepareModel"]>>
-> {
+export function preparedModel(): Awaited<ReturnType<typeof observerModel.defaultPrepareModel>> {
   return {
     config: cfg,
     provider: "openai",
@@ -117,13 +116,11 @@ export function createHarness(options?: {
   subscribe?: boolean;
   broadSubscribe?: boolean;
   visible?: boolean;
-  completeModel?: ReturnType<typeof vi.fn>;
-  prepareModel?: ReturnType<typeof vi.fn>;
+  completeModel?: ReturnType<typeof vi.fn<typeof observerModel.defaultCompleteModel>>;
+  prepareModel?: ReturnType<typeof vi.fn<typeof observerModel.defaultPrepareModel>>;
   persistDigest?: ReturnType<typeof vi.fn<(params: PersistDigestParams) => Promise<unknown>>>;
   readSession?: ReturnType<typeof vi.fn>;
   config?: OpenClawConfig;
-  utilityModelRef?: string | null;
-  resolveUtilityModelRef?: ReturnType<typeof vi.fn>;
 }) {
   const subscribers = createSessionMessageSubscriberRegistry();
   const sessionEventSubscribers = createSessionEventSubscriberRegistry();
@@ -147,21 +144,25 @@ export function createHarness(options?: {
   const persistDigest = options?.persistDigest ?? vi.fn(async () => true);
   const readSession =
     options?.readSession ?? vi.fn(() => ({ sessionId: "session-id", updatedAt: 0 }));
+  const prepareSpy = vi
+    .spyOn(observerModel, "defaultPrepareModel")
+    .mockImplementation(prepareModel);
+  const completeSpy = vi
+    .spyOn(observerModel, "defaultCompleteModel")
+    .mockImplementation(completeModel);
   const observer = createSessionObserver({
     getConfig: () => options?.config ?? cfg,
     subscribers,
     sessionEventSubscribers,
     broadcastToConnIds,
-    resolveUtilityModelRef: (options?.resolveUtilityModelRef ??
-      (() =>
-        options?.utilityModelRef === null
-          ? undefined
-          : (options?.utilityModelRef ?? "openai/gpt-test"))) as never,
-    prepareModel: prepareModel as never,
-    completeModel: completeModel as never,
     readSession: readSession as never,
     persistDigest: persistDigest as never,
   });
+  // Restore native exports; only this observer retains the rearmed spies.
+  prepareSpy.mockRestore();
+  prepareSpy.mockImplementation(prepareModel);
+  completeSpy.mockRestore();
+  completeSpy.mockImplementation(completeModel);
   if ((options?.subscribe !== false || options?.broadSubscribe) && options?.visible !== false) {
     declareObserverVisibility(observer);
   }

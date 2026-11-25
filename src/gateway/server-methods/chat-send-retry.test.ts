@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
-import {
-  classifyAcceptedChatSendFailure,
-  createAcceptedChatSendRetry,
-  shouldRetainAcceptedChatSendRetryIdentity,
-} from "./chat-send-retry.js";
+import { classifyAcceptedChatSendFailure, createAcceptedChatSendRetry } from "./chat-send-retry.js";
 
 const projectionError = new SessionTranscriptProjectionUnavailableError("sess-main");
 
@@ -23,12 +19,6 @@ describe("accepted chat-send retry classification", () => {
     ],
   ] as const)("classifies %j as %s", (params, expected) => {
     expect(classifyAcceptedChatSendFailure(params)).toBe(expected);
-  });
-
-  it("drops same-ID retry authority only for reconciliation-only failures", () => {
-    expect(shouldRetainAcceptedChatSendRetryIdentity("reconcile")).toBe(false);
-    expect(shouldRetainAcceptedChatSendRetryIdentity("terminal")).toBe(true);
-    expect(shouldRetainAcceptedChatSendRetryIdentity("retry")).toBe(true);
   });
 
   it("stops at the bounded attempt count", async () => {

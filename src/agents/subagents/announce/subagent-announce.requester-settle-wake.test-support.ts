@@ -27,7 +27,7 @@ export function makeSettledChild(overrides: SettledChildOverrides): SubagentRunR
     createdAt: 1_000,
     execution: execution ?? { status: "terminal", startedAt, endedAt, outcome },
     expectsCompletionMessage: true,
-    delivery: { status: "delivered" },
+    delivery: { status: "pending" },
     requesterSettleWake: { status: "pending", attemptCount: 0 },
     ...recordOverrides,
   };

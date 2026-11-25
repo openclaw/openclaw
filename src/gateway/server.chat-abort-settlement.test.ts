@@ -205,6 +205,7 @@ describe("gateway WebSocket chat abort settlement", () => {
                   injectionSettled = true;
                 });
                 injectionWork.push(work);
+                dispatchStarted.resolve();
                 return work;
               },
             },
@@ -239,12 +240,13 @@ describe("gateway WebSocket chat abort settlement", () => {
         const started = await rpcReq(socket, "chat.send", sendParameters);
         expect(started.ok).toBe(true);
         expect(started.payload).toMatchObject({ runId, status: "started" });
+        // The ACK owns durable custody; backend admission happens in detached dispatch.
+        await withinTest(dispatchStarted.promise, signal);
         if (settlement === "accepted-injection") {
           expect(injectionWork).toHaveLength(1);
           expect(injectionSignal?.aborted).toBe(false);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         } else {
-          await withinTest(dispatchStarted.promise, signal);
           expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
         }
 
@@ -300,6 +302,7 @@ describe("gateway WebSocket chat abort settlement", () => {
         const abortResponse = rpcReq(socket, "chat.abort", {
           sessionKey: "main",
           runId,
+          userInitiated: true,
         });
         frames.push(abortResponse);
         const aborted = await withinTest(abortResponse, signal);
@@ -352,11 +355,20 @@ describe("gateway WebSocket chat abort settlement", () => {
           payload: terminalResponse.payload,
         });
 
-        // Replay can itself record an aborted receipt, so it must follow the original wait.
-        // It also orders any contradictory terminal frame before this cached response.
+        // Read replay only after the original terminal wait; cancelled input must not look accepted.
         const replay = await rpcReq(socket, "chat.send", sendParameters);
-        expect(replay.ok).toBe(true);
-        expect(replay.payload).toMatchObject({ runId, status: "timeout", summary: "aborted" });
+        if (settlement === "accepted-injection") {
+          expect(replay).toMatchObject({
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              details: { reason: "chat-input-cancelled", endCause: "user-stop" },
+            },
+          });
+        } else {
+          expect(replay.ok).toBe(true);
+          expect(replay.payload).toMatchObject({ runId, status: "timeout", summary: "aborted" });
+        }
         expect(terminalStates).toEqual(["aborted"]);
       } finally {
         vi.useRealTimers();

@@ -39,10 +39,8 @@ export type TuiGatewayConnectionOptions = Pick<
   suppressEnvAuthFallback?: boolean;
 };
 
-type TuiExitReason = "exit" | "return-to-system-agent";
-
 export type TuiResult = {
-  exitReason: TuiExitReason;
+  exitReason: "exit" | "return-to-system-agent";
   systemAgentMessage?: string;
 };
 

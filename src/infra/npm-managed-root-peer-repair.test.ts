@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as processExec from "../process/exec.js";
 import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import { repairManagedNpmRootOpenClawPeer } from "./npm-managed-root.js";
 import {
@@ -9,8 +10,10 @@ import {
   useManagedNpmRootFixture,
   writeFixtureJson,
 } from "./npm-managed-root.test-support.js";
+import * as openclawRoot from "./openclaw-root.js";
 
 const makeTempRoot = useManagedNpmRootFixture();
+afterEach(() => vi.restoreAllMocks());
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.lstat(targetPath)).rejects.toThrow(
@@ -87,10 +90,12 @@ describe("managed npm root peer repair", () => {
       });
       await writePeerShims(npmRoot);
 
-      const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
-      await expect(
-        repairManagedNpmRootOpenClawPeer({ npmRoot, runCommand, workTimeoutMs }),
-      ).resolves.toBe(true);
+      const runCommand = vi
+        .spyOn(processExec, "runCommandWithTimeout")
+        .mockResolvedValue(successfulSpawn);
+      await expect(repairManagedNpmRootOpenClawPeer({ npmRoot, workTimeoutMs })).resolves.toBe(
+        true,
+      );
       expect(runCommand).toHaveBeenCalledExactlyOnceWith(
         expectedNpmCommand([
           "uninstall",
@@ -129,10 +134,11 @@ describe("managed npm root peer repair", () => {
       await writePeerShims(npmRoot);
       await fs.symlink(hostPackageRoot, managedPackageRoot, "dir");
     }
-    const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
-    await expect(
-      repairManagedNpmRootOpenClawPeer({ npmRoot, packageRoot: hostPackageRoot, runCommand }),
-    ).resolves.toBe(linked);
+    const runCommand = vi
+      .spyOn(processExec, "runCommandWithTimeout")
+      .mockResolvedValue(successfulSpawn);
+    vi.spyOn(openclawRoot, "resolveOpenClawPackageRootSync").mockReturnValue(hostPackageRoot);
+    await expect(repairManagedNpmRootOpenClawPeer({ npmRoot })).resolves.toBe(linked);
     expect(runCommand).not.toHaveBeenCalled();
     await expect(readManifest(hostPackageRoot)).resolves.toEqual({ name: "openclaw", version });
     if (linked) {

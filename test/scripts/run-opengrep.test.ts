@@ -6,6 +6,10 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -116,7 +120,7 @@ function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.Process
   expect(steps[1]).toEqual({
     name: "Setup supported Node runtime",
     uses: "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
-    with: { "node-version": "24.21.0", "package-manager-cache": false },
+    with: { "node-version": "24.22.1", "package-manager-cache": false },
   });
   expect(ensureIndex).toBeGreaterThan(1);
   // The fixture already has a supported Node; exercise the repository-owned preparation below.
@@ -246,7 +250,7 @@ describe("run-opengrep.sh", () => {
     );
     expect(sarif.version).toBe("2.1.0");
     expect(sarif.runs[0].tool.driver.name).toBe("Opengrep OSS");
-    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.30.2");
+    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.32.0");
     expect(sarif.runs[0].results).toEqual([]);
     expect(fs.existsSync(argsPath)).toBe(false);
   });
@@ -279,13 +283,12 @@ describe("run-opengrep.sh", () => {
 
       const { argsPath, binDir } = installOpengrepStub(repo);
       if (failedGitCommand) {
-        const realGit = execFileSync("bash", ["-lc", "command -v git"], {
-          encoding: "utf8",
-        }).trim();
+        const realGit = resolveGitOutsideFixtures();
         writeFile(
           path.join(binDir, "git"),
           [
             "#!/usr/bin/env bash",
+            gitPathShimShellPrelude(),
             `if [[ "\${1:-}" == ${JSON.stringify(failedGitCommand)} ]]; then`,
             '  echo "forced git ls-files failure" >&2',
             "  exit 71",

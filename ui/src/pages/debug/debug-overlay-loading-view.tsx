@@ -1,9 +1,12 @@
 import { For, Show } from "solid-js";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerDebugEnglish } from "../../i18n/locales/en-debug.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import {
   DEBUG_OVERLAY_SECTION_HEADERS,
   type DebugOverlaySectionId,
 } from "./debug-overlay-loading.ts";
+
+registerEnglishCatalog(registerDebugEnglish);
 
 export function DebugOverlaySectionLoading(props: { id: DebugOverlaySectionId }) {
   return (

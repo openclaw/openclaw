@@ -6,69 +6,27 @@ import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-run
 import {
   createMattermostPost,
   deleteMattermostPost,
+  fetchMattermostChannelPosts,
   updateMattermostPost,
   type MattermostClient,
 } from "./client.js";
 
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
-const DEFAULT_THROTTLE_MS = 1000;
+const THROTTLE_MS = 1200;
 
 type MattermostDraftPublishedPart = {
   messageId: string;
   content: string;
 };
 
-type MattermostFinalTextResolution =
-  | {
-      kind: "full" | "remaining";
-      text: string;
-      publishedParts: readonly MattermostDraftPublishedPart[];
-    }
-  | {
-      kind: "already-delivered";
-      publishedParts: readonly MattermostDraftPublishedPart[];
-    };
-
-function normalizeMattermostDraftText(text: string, maxChars: number): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return truncateWithMarker(trimmed, maxChars, { marker: "...", reserve: 3, trimEnd: true });
-}
-
-function consumeMattermostPublishedChunk(params: {
-  source: string;
-  offset: number;
-  chunk: string;
-}): number | undefined {
-  const chunk = params.chunk.trim();
-  if (!chunk) {
-    return params.offset;
-  }
-  let offset = params.offset;
-  while (offset < params.source.length && /\s/.test(params.source[offset] ?? "")) {
-    offset += 1;
-  }
-  return params.source.startsWith(chunk, offset) ? offset + chunk.length : undefined;
-}
-
 export function createMattermostDraftStream(params: {
   client: MattermostClient;
   channelId: string;
   rootId?: string;
-  maxChars?: number;
-  throttleMs?: number;
-  renderText?: (text: string) => string;
   chunkText?: (text: string) => string[];
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }) {
-  const maxChars = Math.min(
-    params.maxChars ?? MATTERMOST_STREAM_MAX_CHARS,
-    MATTERMOST_STREAM_MAX_CHARS,
-  );
-  const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const streamState = { stopped: false, final: false };
   let terminalAcceptedDeliveryError: Error | undefined;
   const retainAcceptedDeliveryFailure = (err: unknown) => {
@@ -94,6 +52,10 @@ export function createMattermostDraftStream(params: {
     // replace the ellipsized preview with lossless chunks instead of retaining truncation.
     latestSourceText: string;
     latestAssistantText?: string;
+    // Source of the last write when it was answer text; streamed answers only extend it.
+    lastSentAssistantSource?: string;
+    // Set once a post is found below this preview; posts never move up, so the verdict sticks.
+    newerPostId?: string;
     ready: Promise<void>;
   };
   let currentGeneration: DraftGeneration = {
@@ -106,8 +68,15 @@ export function createMattermostDraftStream(params: {
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     const target = currentGeneration;
-    const rendered = params.renderText?.(text) ?? text;
-    const normalized = normalizeMattermostDraftText(rendered, maxChars);
+    const isAssistantText = text === target.latestAssistantText;
+    const trimmed = text.trim();
+    const normalized = trimmed
+      ? truncateWithMarker(trimmed, MATTERMOST_STREAM_MAX_CHARS, {
+          marker: "...",
+          reserve: 3,
+          trimEnd: true,
+        })
+      : "";
     if (!normalized) {
       return false;
     }
@@ -117,6 +86,19 @@ export function createMattermostDraftStream(params: {
     }
     if (normalized === target.lastSentText) {
       return true;
+    }
+    // A preview with a newer post below it is replaced by a fresh final post, and Mattermost
+    // clients can keep showing a deleted post. Check when answer text starts replacing the
+    // preview (status or an earlier message), not on every streamed edit, and keep the answer
+    // out of a preview that is no longer the newest post.
+    const extendsSentAnswer =
+      target.lastSentAssistantSource !== undefined &&
+      text.startsWith(target.lastSentAssistantSource);
+    if (target.postId && isAssistantText && !extendsSentAnswer) {
+      target.newerPostId ??= await findPostAfter(target.postId).catch(() => undefined);
+      if (target.newerPostId) {
+        return true;
+      }
     }
     try {
       if (target.postId) {
@@ -134,6 +116,7 @@ export function createMattermostDraftStream(params: {
         target.lastProviderText = sent.message ?? normalized;
       }
       target.lastSentText = normalized;
+      target.lastSentAssistantSource = isAssistantText ? text : undefined;
       return true;
     } catch (err) {
       // Stop immediately so a discarded background failure cannot queue a second visible post.
@@ -157,7 +140,8 @@ export function createMattermostDraftStream(params: {
     clearWithStop,
     seal: sealLifecycle,
   } = createFinalizableDraftLifecycle({
-    throttleMs,
+    throttleMs: THROTTLE_MS,
+    coalesceInFlight: true,
     state: streamState,
     sendOrEditStreamMessage,
     readMessageId: () => currentGeneration.postId,
@@ -190,9 +174,15 @@ export function createMattermostDraftStream(params: {
         return;
       }
       publishedAssistantParts.set(messageId, { messageId, content });
+      const chunk = content.trim();
+      let nextOffset = offset;
+      if (chunk) {
+        while (nextOffset < assistantText.length && /\s/.test(assistantText[nextOffset] ?? "")) {
+          nextOffset += 1;
+        }
+      }
       publishedAssistantOffset =
-        consumeMattermostPublishedChunk({ source: assistantText, offset, chunk: content }) ??
-        offset;
+        !chunk || assistantText.startsWith(chunk, nextOffset) ? nextOffset + chunk.length : offset;
     };
     const boundary = (async () => {
       try {
@@ -204,11 +194,10 @@ export function createMattermostDraftStream(params: {
           return;
         }
         const sourceText = pendingText.trim() ? pendingText : sealed.latestSourceText;
-        const rendered = params.renderText?.(sourceText) ?? sourceText;
-        const finalizedText = rendered.trim();
+        const finalizedText = sourceText.trim();
         const chunks =
           params.chunkText?.(finalizedText) ??
-          chunkMarkdownTextWithMode(finalizedText, maxChars, "length");
+          chunkMarkdownTextWithMode(finalizedText, MATTERMOST_STREAM_MAX_CHARS, "length");
         const firstChunk = chunks[0];
         if (!firstChunk) {
           return;
@@ -325,37 +314,57 @@ export function createMattermostDraftStream(params: {
     await currentGeneration.ready;
     assertNoAcceptedDeliveryFailure();
   };
-  const resolveFinalText = (text: string): MattermostFinalTextResolution => {
-    const publishedParts = [...publishedAssistantParts.values()];
+  const resolveFinalText = (text: string) => {
+    const publishedParts: readonly MattermostDraftPublishedPart[] = [
+      ...publishedAssistantParts.values(),
+    ];
     if (sealedAssistantTexts.length === 0) {
-      return { kind: "full", text, publishedParts };
+      return { kind: "full" as const, text, publishedParts };
     }
 
     let remainingText = text.trim();
     for (const sealedText of sealedAssistantTexts) {
       const completed = sealedText.text;
       if (!remainingText.startsWith(completed)) {
-        return { kind: "full", text, publishedParts };
+        return { kind: "full" as const, text, publishedParts };
       }
       const suffix = remainingText.slice(completed.length);
       // Canonical assistant block aggregation uses newline separators. A plain-space
       // suffix can be a block-local final that merely shares the prior block's prefix.
       if (sealedText.requiresBlockBoundary && suffix && !/^\r?\n/.test(suffix)) {
-        return { kind: "full", text, publishedParts };
+        return { kind: "full" as const, text, publishedParts };
       }
       remainingText = suffix.replace(sealedText.requiresBlockBoundary ? /^(?:\r?\n)+/ : /^\s+/, "");
     }
     const currentText = currentGeneration.latestAssistantText?.trim() ?? "";
     const remaining = remainingText.trim();
     if (currentText && !remaining.startsWith(currentText)) {
-      return { kind: "full", text, publishedParts };
+      return { kind: "full" as const, text, publishedParts };
     }
     return remaining
-      ? { kind: "remaining", text: remaining, publishedParts }
-      : { kind: "already-delivered", publishedParts };
+      ? { kind: "remaining" as const, text: remaining, publishedParts }
+      : { kind: "already-delivered" as const, publishedParts };
   };
 
-  params.log?.(`mattermost stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
+  // Generations publish in order, so the current preview is this draft's newest post: anything
+  // after it came from someone else (message tool, a person, another bot). Without collapsed
+  // threads every reply renders in the channel stream, so root-level previews check the whole
+  // channel. Accepted gap: 200+ newer channel posts outside a threaded preview's thread.
+  const findPostAfter = async (postId: string): Promise<string | undefined> => {
+    const { messages } = await fetchMattermostChannelPosts(params.client, params.channelId, {
+      after: postId,
+      limit: 200,
+      skipFetchThreads: true,
+    });
+    return messages.find(
+      (post) =>
+        !post.type?.startsWith("system_") && (!params.rootId || post.root_id === params.rootId),
+    )?.id;
+  };
+
+  params.log?.(
+    `mattermost stream preview ready (maxChars=${MATTERMOST_STREAM_MAX_CHARS}, throttleMs=${THROTTLE_MS})`,
+  );
 
   return {
     update,
@@ -370,5 +379,6 @@ export function createMattermostDraftStream(params: {
     forceNewMessage,
     settleBoundaries,
     resolveFinalText,
+    findPostAfter,
   };
 }

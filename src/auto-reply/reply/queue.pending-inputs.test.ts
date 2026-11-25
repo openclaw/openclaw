@@ -10,19 +10,29 @@ import {
   appendTranscriptMessage,
   listSessionPendingInputs,
   loadTranscriptEvents,
+  readSessionSubmittedInput,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as pendingInputs from "../../config/sessions/session-accessor.pending-inputs.js";
+import { readSessionQueuedInputPage } from "../../config/sessions/session-pending-input-history.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { captureGatewayRootWorkReleaseObserver } from "../../process/gateway-work-admission.js";
-import { createReplyOperation } from "../../sessions/session-controller.js";
+import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import {
   createUserTurnTranscriptRecorder,
-  type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
+} from "../../state/openclaw-agent-db.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
+import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
+import { runReplyAgent } from "./agent-runner-run.js";
+import { createFollowupRunner } from "./followup-runner.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
 import {
   admitFollowupRunLifecycle,
@@ -32,9 +42,15 @@ import {
 } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import { createReplyParams } from "./test-helpers.js";
 import { createTypingController } from "./typing.js";
 
 vi.mock("./agent-runner-execution.js", () => ({ executeAgentTurn: vi.fn() }));
+// mock-isolation: Exercise real input custody with controlled maintenance failures, without loading provider compaction.
+vi.mock("./agent-runner-memory.js", () => ({
+  runMemoryFlushIfNeeded: vi.fn(),
+  runSessionCompactionIfNeeded: vi.fn(),
+}));
 
 const fault = useSqliteWorkerFault([
   {
@@ -60,14 +76,17 @@ describe("followup queue durable input consumption", () => {
     setRuntimeConfigSnapshot(config);
     sessionKey = `agent:main:queue-pending-${++caseSequence}`;
     vi.mocked(executeAgentTurn).mockReset();
+    vi.mocked(runMemoryFlushIfNeeded).mockReset();
+    vi.mocked(runSessionCompactionIfNeeded).mockReset();
     await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearFollowupQueue(sessionKey);
     for (const recorder of recorders.splice(0)) {
-      recorder.finishPendingInput?.("interrupted");
+      recorder.finishPendingInput?.("interrupted", "failed");
     }
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     clearRuntimeConfigSnapshot();
   });
@@ -105,6 +124,119 @@ describe("followup queue durable input consumption", () => {
     return await recorder.withPendingInput(() => recorder.persistApproved());
   };
 
+  it.each(["queued followup", "ordinary reply"] as const)(
+    "retains unstaged channel input across failed maintenance and restart (%s)",
+    async (entrypoint) => {
+      const text = "Original channel request: ünicode 🦞\nKeep this exact input.";
+      const idempotencyKey = "channel-maintenance:user";
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text, idempotencyKey },
+        target: { ...scope(), sessionEntry: undefined },
+        updateMode: "none",
+      });
+      recorders.push(recorder);
+      const onAdopted = vi.fn(() => {});
+      const observed: { operation?: ReplyOperation } = {};
+      const queued: FollowupRun = {
+        ...createQueueTestRun({ prompt: text, messageId: "channel-maintenance" }),
+        transcriptPrompt: text,
+        originatingChannel: "telegram",
+        userTurnTranscriptRecorder: recorder,
+        turnAdoptionLifecycle: { admission: "cancel-only", onAdopted },
+        run: {
+          ...createQueueTestRun({ prompt: "" }).run,
+          agentId: "main",
+          sessionKey,
+          sessionId,
+          messageProvider: "telegram",
+          workspaceDir: fixture.sessionsDir(),
+          config: { session: { store: fixture.storePath() } },
+          onOperationAdmitted: (operation) => {
+            observed.operation = operation;
+          },
+        },
+      };
+      const sessionEntry = { sessionId, updatedAt: 1 };
+      const typing = createTypingController({});
+      const defaults = {
+        typing,
+        typingMode: "never" as const,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath: fixture.storePath(),
+        defaultModel: "gpt-test",
+      };
+      const failure = new Error("stop after observing maintenance input custody");
+      const maintenanceInputs: Awaited<ReturnType<typeof listSessionPendingInputs>>[] = [];
+      vi.mocked(runMemoryFlushIfNeeded).mockImplementation(async (params) => {
+        maintenanceInputs.push(await listSessionPendingInputs(scope()));
+        return { sessionEntry: params.sessionEntry, outcome: "skipped" };
+      });
+      vi.mocked(runSessionCompactionIfNeeded).mockImplementation(async (params) => {
+        maintenanceInputs.push(await listSessionPendingInputs(scope()));
+        await params.beforeCompaction?.(sessionEntry);
+        throw failure;
+      });
+      expect((await listSessionPendingInputs(scope())).total).toBe(0);
+      try {
+        const run =
+          entrypoint === "queued followup"
+            ? createFollowupRunner(defaults)(queued)
+            : runReplyAgent(
+                createReplyParams(queued, {
+                  ...defaults,
+                  transcriptCommandBody: text,
+                  opts: { turnAdoptionLifecycle: queued.turnAdoptionLifecycle },
+                  sessionCtx: {
+                    Provider: "telegram",
+                    MessageSid: "channel-maintenance",
+                    SessionKey: sessionKey,
+                  },
+                }),
+              );
+        if (entrypoint === "queued followup") {
+          await expect(run).resolves.toBeUndefined();
+          const result = observed.operation?.result;
+          assert(result?.kind === "failed", "Queued failure must be recorded on its operation");
+          expect(result.code).toBe("run_failed");
+          expect(result.cause).toBe(failure);
+        } else {
+          await expect(run).rejects.toBe(failure);
+        }
+        expect(executeAgentTurn).not.toHaveBeenCalled();
+        expect(onAdopted).not.toHaveBeenCalled();
+        expect(maintenanceInputs).toHaveLength(2);
+        for (const pending of maintenanceInputs) {
+          expect(
+            pending,
+            `${entrypoint}: maintenance checkpoint retains staged source`,
+          ).toMatchObject({
+            total: 1,
+            items: [{ state: "queued", message: { role: "user", content: text, idempotencyKey } }],
+          });
+        }
+        expect(() => recorder.withPendingInput?.(() => "stale execution")).toThrow(
+          "ownership ended",
+        );
+        const retained = await listSessionPendingInputs(scope());
+        expect(retained).toMatchObject({ total: 1, items: [{ state: "cancelled" }] });
+        rotateAgentEventLifecycleGeneration();
+        await closeOpenClawAgentDatabasesAsync();
+        closeOpenClawAgentDatabasesForTest();
+        expect(await listSessionPendingInputs(scope())).toEqual(retained);
+        expect(await readSessionSubmittedInput(scope(), idempotencyKey)).toMatchObject({
+          role: "user",
+          content: text,
+          idempotencyKey,
+        });
+        expect(await loadTranscriptEvents(scope())).toEqual([]);
+      } finally {
+        typing.cleanup();
+      }
+    },
+  );
+
   const enqueue = (...runs: FollowupRun[]) => {
     for (const run of runs) {
       expect(enqueueFollowupRun(sessionKey, run, { mode: "collect", debounceMs: 0 })).toBe(true);
@@ -139,6 +271,130 @@ describe("followup queue durable input consumption", () => {
     [await createStagedRun("first"), await createStagedRun("second")] as const;
   const collected = (...texts: string[]) =>
     `[Queued messages while agent was busy]\n\n${texts.map((text, i) => `---\nQueued #${i + 1}\n${text}`).join("\n\n")}`;
+
+  it("rejects a different run ID when reattaching a relinquished native queued input", async () => {
+    const message = {
+      role: "user",
+      content: "Retain the original accepted native run identity.",
+      idempotencyKey: "native-run-identity:user",
+      timestamp: 1,
+    } satisfies PersistedUserTurnMessage;
+    const receipts: pendingInputs.SessionPendingInputReceipt[] = [];
+    try {
+      const original = await pendingInputs.stageSessionPendingInput(scope(), {
+        runId: "native-original",
+        message,
+        assertCurrent() {},
+      });
+      assert(original, "Expected the original native receipt");
+      receipts.push(original);
+      original.relinquish();
+      await original.settled?.();
+      await expect(
+        pendingInputs
+          .stageSessionPendingInput(scope(), {
+            runId: "native-different",
+            message,
+            reattachInputId: original.inputId,
+            assertCurrent() {},
+          })
+          .then((receipt) => {
+            if (receipt) {
+              receipts.push(receipt);
+            }
+            return receipt;
+          }),
+      ).rejects.toThrow("Pending input idempotency key conflicts with the accepted input");
+      await expect(
+        pendingInputs.stageSessionPendingInput(scope(), {
+          runId: "native-original",
+          message,
+          reattachInputId: "another-queued-input",
+          assertCurrent() {},
+        }),
+      ).rejects.toThrow("Pending input ownership ended");
+      expect((await pending()).items).toMatchObject([
+        { runId: "native-original", state: "queued", message },
+      ]);
+      expect((await readSessionQueuedInputPage(scope())).rows).toMatchObject([
+        { run_id: "native-original", state: "queued" },
+      ]);
+      expect(await loadMessages()).toEqual([]);
+    } finally {
+      for (const receipt of receipts) {
+        if (receipt.state === "consumed") {
+          receipt.release();
+        } else {
+          receipt.relinquish();
+        }
+        await receipt.settled?.();
+      }
+    }
+  });
+
+  it("admits one native owner when authorized retries race to reattach a relinquished queued input", async () => {
+    const runId = "native-reattach-race";
+    const message = {
+      role: "user",
+      content: "Execute the accepted native input exactly once.",
+      idempotencyKey: `${runId}:user`,
+      timestamp: 1,
+    } satisfies PersistedUserTurnMessage;
+    const receipts: pendingInputs.SessionPendingInputReceipt[] = [];
+    try {
+      const original = await pendingInputs.stageSessionPendingInput(scope(), {
+        runId,
+        message,
+        assertCurrent() {},
+      });
+      assert(original, "Expected the original native receipt");
+      receipts.push(original);
+      original.relinquish();
+      await original.settled?.();
+      const attempts = await Promise.allSettled(
+        [scope(), scope()].map((target) =>
+          pendingInputs.stageSessionPendingInput(target, {
+            runId,
+            message,
+            reattachInputId: original.inputId,
+            assertCurrent() {},
+          }),
+        ),
+      );
+      const admitted = attempts.flatMap((result) =>
+        result.status === "fulfilled" && result.value ? [result.value] : [],
+      );
+      receipts.push(...admitted);
+      const refused = attempts.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      expect(admitted).toHaveLength(1);
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({
+        message: expect.stringMatching(/already admitted|already has a live owner/u),
+      });
+      const winner = admitted[0];
+      assert(winner, "Expected one native reattachment owner");
+      const execute = vi.fn(async () => appendTranscriptMessage(scope(), { message }));
+      await winner.run(execute);
+      expect(execute).toHaveBeenCalledOnce();
+      winner.release();
+      await winner.settled?.();
+      const messages = await loadMessages();
+      expect(messages).toHaveLength(1);
+      expect(messages).toMatchObject([{ message }]);
+      expect((await pending()).items).toEqual([]);
+    } finally {
+      for (const receipt of receipts) {
+        if (receipt.state === "consumed") {
+          receipt.release();
+        } else {
+          receipt.relinquish();
+        }
+        await receipt.settled?.();
+      }
+    }
+  });
 
   it("preserves the committed prefix when a native batch falls back after a later source write fails", async () => {
     const [first, second] = await pair();
@@ -315,6 +571,8 @@ describe("followup queue durable input consumption", () => {
     expect(calls[0]?.prompt).toBe(
       "[Queue overflow] Dropped 2 messages due to cap.\nSummary:\n- second approved",
     );
+    // Context pairs with the shown line; the elided line's source adds no unmatched context.
+    expect(calls[0]?.currentInboundContext).toEqual({ text: "second runtime context" });
     expect(pendingRunIds).toEqual([["third"], []]);
     expect(await loadMessages()).toMatchObject([
       { message: { content: calls[0]?.prompt } },

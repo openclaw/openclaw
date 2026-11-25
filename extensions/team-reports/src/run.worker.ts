@@ -6,7 +6,7 @@ import type {
   ReportWorkerOperation,
   ReportWorkerResponse,
 } from "./run-worker-contract.js";
-import { createReportSources, generateReportPeriods } from "./run.js";
+import { generateReportPeriods } from "./run.js";
 import type { TeamReportsOperations } from "./store-contract.js";
 import { TeamReportsStore } from "./store.js";
 import type { SummaryLlm } from "./summaries.js";
@@ -58,7 +58,6 @@ serveWorkerTasks(async (value, channel, control) => {
       ...input,
       store,
       runtime: { logger },
-      sources: (runtime) => createReportSources(runtime, Boolean(input.resolved.discord)),
       llm: {
         complete: async ({ signal: _signal, ...params }) => {
           // SAFETY: The service-owned host returns the configured completion result for this request.

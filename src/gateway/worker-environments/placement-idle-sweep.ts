@@ -33,9 +33,7 @@ export function createWorkerPlacementIdleSweep(options: {
       "resolveGatewaySessionStoreTargetInWorker"
     >
   >;
-  now?: () => number;
 }) {
-  const now = options.now ?? Date.now;
   const loadSessionRuntime = options.loadSessionRuntime;
   const getSessionWorkAdmissionCheck =
     options.getSessionWorkAdmissionCheck ??
@@ -101,11 +99,13 @@ export function createWorkerPlacementIdleSweep(options: {
           }
           const environment = options.environments.get(placement.environmentId);
           const suspendAfter = environment && profiles[environment.profileId]?.suspendAfter;
-          if (!environment || !suspendAfter) {
+          // Retained compute expires through its own finite work-window owner, not
+          // fixed-lease reclaim/replacement. The original repository disk stays attached.
+          if (!environment || environment.retention || !suspendAfter) {
             continue;
           }
           // Placement activation and every turn-claim admission/release durably refresh this fact.
-          if (now() - placement.updatedAtMs < parseDurationMs(suspendAfter)) {
+          if (Date.now() - placement.updatedAtMs < parseDurationMs(suspendAfter)) {
             continue;
           }
           if (

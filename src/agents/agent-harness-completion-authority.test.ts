@@ -4,7 +4,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
-import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
 import {
   createContext,
   createOperatorClient,
@@ -42,11 +42,12 @@ import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js
 afterEach(() => resetGatewayWorkAdmission());
 
 const requesterSessionKey = "agent:main:main";
-function gateway() {
+function gateway(sessionKey = requesterSessionKey) {
   const context = createContext();
   const resolver = () => context;
   context.resolveGatewayContext = resolver;
-  return { context, resolver };
+  const scope = makeScope({ requesterSessionKey: sessionKey, gatewayContextResolver: resolver });
+  return { context, resolver, scope };
 }
 function requester(state: OpenClawTestState) {
   const target = {
@@ -58,9 +59,8 @@ function requester(state: OpenClawTestState) {
 }
 function operatorFixture(profileName: string) {
   setRuntimeConfigSnapshot({});
-  const { context, resolver } = gateway();
+  const { context, resolver, scope } = gateway();
   const client = createOperatorClient({ profileName, scopes: ["operator.write"] });
-  const scope = makeScope({ requesterSessionKey, gatewayContextResolver: resolver });
   const capture = () =>
     withPluginRuntimeGatewayRequestScope(
       { client, context, resolveGatewayContext: resolver, isWebchatConnect: () => false },
@@ -72,13 +72,15 @@ function operatorFixture(profileName: string) {
 it.each(["current", "missing-requester", "requester-closed", "connection-closed"] as const)(
   "settles memory requester root custody when %s",
   async (outcome) => {
-    const { context, resolver } = gateway();
+    const sessionKey = "agent:main:dashboard:incognito-completion";
+    const { context, scope } = gateway(
+      outcome === "missing-requester" ? `${sessionKey}-missing` : sessionKey,
+    );
     const work = new AsyncWorkScope();
     context.trackExecution = (run) => work.track(run);
     if (outcome === "connection-closed") {
       await work.drain();
     }
-    const sessionKey = "agent:main:dashboard:incognito-completion";
     const owner = createMemorySessionActorOwner({
       agentId: "main",
       path: "/synthetic/completion-custody",
@@ -100,10 +102,6 @@ it.each(["current", "missing-requester", "requester-closed", "connection-closed"
           authority,
         );
       }
-      const scope = makeScope({
-        requesterSessionKey: outcome === "missing-requester" ? `${sessionKey}-missing` : sessionKey,
-        gatewayContextResolver: resolver,
-      });
       const pending = root.run(() =>
         runWithSessionActorStorage({ actor, authority, agentId: "main", path: owner.path }, () =>
           captureCustody(scope),
@@ -192,12 +190,12 @@ it.each(["current", "requester-replaced", "preparation-failed"] as const)(
 );
 
 it.each(["release", "revoke", "gateway-close"] as const)(
-  "retains the original operator ceiling until %s",
+  "retains the admitted operator ceiling with %s",
   (ending) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { context, resolver, client, scope, capture } = operatorFixture("completion-owner");
       const revoked = new AbortController();
-      const source = (await captureGatewayOperatorRunAuthority({
+      const source = (await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: {
@@ -209,7 +207,7 @@ it.each(["release", "revoke", "gateway-close"] as const)(
       const custody = (await capture())!;
       try {
         source.release();
-        expect(source.authority.assertCurrent).not.toThrow();
+        expect(source.authority.signal?.aborted).not.toBe(true);
         const observer = createOperatorClient({
           profileId: "other-owner",
           scopes: ["operator.admin"],
@@ -237,6 +235,13 @@ it.each(["release", "revoke", "gateway-close"] as const)(
           custody.release();
         } else if (ending === "revoke") {
           revoked.abort(new Error("operator revoked"));
+          runWithCustody(custody, scope, () => {
+            const authority =
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
+            expect(authority?.source).toBe(source.authority.source);
+            expect(authority?.scopes).toEqual(["operator.write"]);
+          });
+          custody.release();
         } else {
           getGatewayContextLifetime(resolver).abort();
         }
@@ -254,7 +259,7 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
       setRuntimeConfigSnapshot({});
       const childSessionKey = "native:child";
       const announceId = "native:parent:child:succeeded";
-      const { context, resolver: resolveGatewayContext } = gateway();
+      const { context, resolver: resolveGatewayContext, scope } = gateway();
       context.dedupe.set(`agent:${buildAnnounceIdempotencyKey(announceId)}`, {
         ts: Date.now(),
         ok: true,
@@ -266,10 +271,6 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
       });
       const replaceRequester = requester(state);
       await replaceRequester("parent-session");
-      const scope = makeScope({
-        requesterSessionKey,
-        gatewayContextResolver: resolveGatewayContext,
-      });
       const ready = createDeferredCore();
       let retired = false;
       let delivery: Promise<AgentHarnessCompletionDelivery> | undefined;
@@ -282,7 +283,11 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
             sessionKey: requesterSessionKey,
             operationalRunInstance:
               createTestAdmittedRunContext("parent-run").operationalRunInstance,
-            receiptAuthority: () => !retired,
+            receiptAuthority: () => {
+              if (retired) {
+                throw new Error("agent tool caller authority is no longer active");
+              }
+            },
             gatewayContextResolver: resolveGatewayContext,
           },
           async () => {
@@ -290,9 +295,8 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
             custody = parentCustody?.retain();
             parentCustody?.release();
             // Native monitor callbacks retain this async context after the parent yields.
-            delivery = (async () => {
-              await ready.promise;
-              return await deliverCompletion({
+            delivery = ready.promise.then(() =>
+              deliverCompletion({
                 scope,
                 isSourceSessionAdmissionAllowed: () => custody?.isCurrent() ?? !retired,
                 completionCustody: callerState === "uncaptured" ? undefined : custody,
@@ -301,8 +305,8 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
                 announceId,
                 status: "succeeded",
                 result: "Child result",
-              });
-            })();
+              }),
+            );
           },
         ),
       );
@@ -323,14 +327,10 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
           await expect(delivery).rejects.toThrow(/custody|requester lifecycle/);
         } else {
           const outcome = await delivery;
-          expect(outcome, JSON.stringify(outcome)).toMatchObject(
-            callerState === "uncaptured"
-              ? {
-                  delivered: false,
-                  error: expect.stringContaining("authority is no longer active"),
-                }
-              : { delivered: true, path: "direct" },
-          );
+          expect(outcome, JSON.stringify(outcome)).toMatchObject({
+            delivered: true,
+            path: "direct",
+          });
         }
       } finally {
         custody?.release();

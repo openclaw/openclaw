@@ -31,8 +31,6 @@ async function withStatusPeer(
     secondClient: ReturnType<typeof createDeferred<void>>;
     releaseStop: ReturnType<typeof createDeferred<void>>;
     statusReplies: readonly [Promise<void>, Promise<void>, Promise<void>];
-    requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[];
-    errors: unknown[];
   }) => Promise<void>,
 ) {
   const clients: Array<{ stopJoined: boolean; stop: () => Promise<void> }> = [];
@@ -42,18 +40,11 @@ async function withStatusPeer(
   const statusReplies = [createDeferred(), createDeferred(), createDeferred()] as const;
   let statusReplyCount = 0;
   const stopping: Promise<void>[] = [];
-  const errors: unknown[] = [];
   vi.doMock("../../src/gateway/client.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../../src/gateway/client.js")>();
     class ObservedGatewayClient extends actual.GatewayClient {
       constructor(options: GatewayClientOptions) {
-        super({
-          ...options,
-          onConnectError: (error) => {
-            errors.push(error);
-            options.onConnectError?.(error);
-          },
-        });
+        super(options);
         const stop = this.stopAndWait.bind(this);
         const entry = { stopJoined: false, stop: () => stop() };
         clients.push(entry);
@@ -78,30 +69,23 @@ async function withStatusPeer(
         };
         const request = this.request.bind(this);
         this.request = async <T>(...args: Parameters<GatewayClient["request"]>): Promise<T> => {
-          try {
-            const reply = await request<T>(...args);
-            if (args[0] === "node.list") {
-              statusReplies[statusReplyCount++]?.resolve();
-            }
-            return reply;
-          } catch (error) {
-            errors.push(error);
-            throw error;
+          const reply = await request<T>(...args);
+          if (args[0] === "node.list") {
+            statusReplies[statusReplyCount++]?.resolve();
           }
+          return reply;
         };
       }
     }
     return { ...actual, GatewayClient: ObservedGatewayClient };
   });
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0, maxPayload: 64 * 1024 });
-  const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
   let connection = 0;
   wss.on("connection", (ws) => {
     const ordinal = ++connection;
     sendMinimalGatewayConnectChallenge(ws);
     ws.on("message", (data) => {
       const frame = parseMinimalGatewayRequestFrame(data);
-      requests.push(frame);
       if (!frame.id) {
         throw new Error("status request omitted id");
       }
@@ -152,8 +136,6 @@ async function withStatusPeer(
       secondClient,
       releaseStop,
       statusReplies: [statusReplies[0].promise, statusReplies[1].promise, statusReplies[2].promise],
-      requests,
-      errors,
     });
   } finally {
     releaseStop.resolve();
@@ -165,10 +147,19 @@ async function withStatusPeer(
   }
 }
 
-it.each(["connect failure", "success", "retry", "deadline"] as const)(
-  "joins cleanup before %s settlement or another acquisition",
-  async (mode) => {
-    await withStatusPeer(mode, undefined, async (fixture) => {
+it.each([
+  ["connect failure", false],
+  ["success", false],
+  ["retry", false],
+  ["deadline", false],
+  ["connect failure", true],
+  ["success", true],
+  ["retry", true],
+] as const)(
+  "joins cleanup before %s settlement or reacquisition (stop fails=%s)",
+  async (mode, stopFails) => {
+    const stopError = stopFails ? new Error("synthetic stop failure") : undefined;
+    await withStatusPeer(mode, stopError, async (fixture) => {
       const { connectGatewayStatusClient, waitForNodeStatus } =
         await import("./gateway-e2e-harness.js");
       const startedAt = Date.now();
@@ -176,7 +167,7 @@ it.each(["connect failure", "success", "retry", "deadline"] as const)(
         mode === "deadline" ? vi.spyOn(Date, "now").mockReturnValue(startedAt) : undefined;
       let settled = false;
       const operation =
-        mode === "connect failure"
+        mode === "connect failure" && !stopFails
           ? connectGatewayStatusClient(fixture.instance)
           : waitForNodeStatus(fixture.instance, "synthetic-node");
       const result = operation.then(
@@ -214,8 +205,16 @@ it.each(["connect failure", "success", "retry", "deadline"] as const)(
         const acquiredBeforeStop = fixture.clients.length;
         fixture.releaseStop.resolve();
         const outcome = await result;
-        if (mode === "connect failure") {
-          expect(outcome).toBe(fixture.errors[0]);
+        if (stopError) {
+          if (mode === "success") {
+            expect(outcome).toBe(stopError);
+          } else {
+            expect(outcome).toBeInstanceOf(AggregateError);
+            expect(outcome).toMatchObject({
+              errors: [{ message: "synthetic status failure" }, stopError],
+            });
+          }
+        } else if (mode === "connect failure") {
           expect(outcome).toMatchObject({ message: "synthetic status failure" });
         } else if (mode === "deadline") {
           expect(outcome).toMatchObject({
@@ -226,16 +225,10 @@ it.each(["connect failure", "success", "retry", "deadline"] as const)(
         }
         expect(settledBeforeStop).toBe(false);
         expect(acquiredBeforeStop).toBe(1);
-        expect(fixture.clients).toHaveLength(mode === "retry" ? 2 : 1);
-        expect(fixture.clients.every((entry) => entry.stopJoined)).toBe(true);
-        expect(fixture.requests[0]?.method).toBe("connect");
-        expect(fixture.requests[0]?.params?.client).toMatchObject({
-          id: "cli",
-          displayName: "status-status-acquisition",
-          version: "1.0.0",
-          platform: "test",
-          mode: "cli",
-        });
+        expect(fixture.clients).toHaveLength(mode === "retry" && !stopFails ? 2 : 1);
+        if (!stopFails) {
+          expect(fixture.clients.every((entry) => entry.stopJoined)).toBe(true);
+        }
       } finally {
         // Finish an admitted poll even when a boundary assertion fails, then restore wall time.
         clock?.mockReturnValue(startedAt + 30_000);
@@ -245,29 +238,6 @@ it.each(["connect failure", "success", "retry", "deadline"] as const)(
         } finally {
           clock?.mockRestore();
         }
-      }
-    });
-  },
-);
-
-it.each(["connect failure", "success", "retry"] as const)(
-  "surfaces cleanup failure after %s without acquiring another client",
-  async (mode) => {
-    const stopError = new Error("synthetic stop failure");
-    await withStatusPeer(mode, stopError, async (fixture) => {
-      const { waitForNodeStatus } = await import("./gateway-e2e-harness.js");
-      fixture.releaseStop.resolve();
-      const failure: unknown = await waitForNodeStatus(fixture.instance, "synthetic-node").then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect(fixture.clients).toHaveLength(1);
-      if (mode === "success") {
-        expect(failure).toBe(stopError);
-      } else {
-        expect(failure).toBeInstanceOf(AggregateError);
-        expect(failure).toMatchObject({ errors: [fixture.errors[0], stopError] });
-        expect(fixture.errors[0]).toMatchObject({ message: "synthetic status failure" });
       }
     });
   },

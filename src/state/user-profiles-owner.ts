@@ -91,19 +91,21 @@ export function ensureGatewayOwnerProfileRow(
         .where("id", "=", row.id),
     );
   }
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("user_profile_identities")
-      .values({
-        provider: OWNER_PROVIDER,
-        subject: OWNER_SUBJECT,
-        profile_id: row.id,
-        canonical_login: null,
-        created_at: now,
-      })
-      .onConflict((conflict) => conflict.columns(["provider", "subject"]).doNothing()),
-  );
+  if (!identified) {
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .insertInto("user_profile_identities")
+        .values({
+          provider: OWNER_PROVIDER,
+          subject: OWNER_SUBJECT,
+          profile_id: row.id,
+          canonical_login: null,
+          created_at: now,
+        })
+        .onConflict((conflict) => conflict.columns(["provider", "subject"]).doNothing()),
+    );
+  }
   if (!existing || row.display_name !== existing.display_name || !identified) {
     mutation?.publish(row.id);
     publishUserProfilesChange(db, row.id);

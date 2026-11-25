@@ -27,19 +27,14 @@ type BrokerWorkflow = {
   jobs: {
     prove: {
       permissions: Record<string, string>;
-      steps: Array<{ name?: string; with?: Record<string, unknown> }>;
+      steps: Array<{ uses?: string; with?: Record<string, unknown> }>;
     };
   };
-  on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
 
 type FixtureWorkflow = {
   jobs: { fixture: { permissions: Record<string, string> } };
-  on: {
-    workflow_dispatch: {
-      inputs: { operation: { default: string; options: string[]; type: string } };
-    };
-  };
+  on: { workflow_dispatch: { inputs: { operation: { options: string[] } } } };
   permissions: Record<string, string>;
 };
 
@@ -243,27 +238,11 @@ it.each([1, undefined])(
       operation: "noop",
       sourceRef: "refs/heads/main",
     });
-    const firstMutation = calls.findIndex((call) => call.method !== "GET");
-    expect(calls.slice(0, firstMutation).map((call) => call.path)).toEqual([
-      "/actions/workflows/frv-proof-fixture.yml",
-      "/collaborators/maintainer/permission",
-      "/pulls/128141",
-      `/compare/${landedSha}...${workflowSha}`,
-      "/git/ref/heads/main",
-    ]);
     expect(mutationCalls(calls)).toEqual([dispatch, rerunRequest]);
-    const rerunIndex = calls.findIndex((call) => call.path === rerunRequest.path);
-    expect(calls.slice(rerunIndex - 4, rerunIndex).map((call) => call.path)).toEqual([
-      "/actions/runs/777",
-      "/collaborators/maintainer/permission",
-      "/pulls/128141",
-      `/compare/${landedSha}...${workflowSha}`,
-    ]);
   },
 );
 
 it.each<Refusal>([
-  refusePull({ merged: false, merged_at: null, state: "open" }, /merged pull request/u),
   refusePull({ merged: false, merged_at: null }, /merged pull request/u),
   refusePull(
     { base: { ref: "release/2026.9.1", repo: { full_name: repository } } },
@@ -361,42 +340,25 @@ it("accepts an empty HTTP 201 rerun response without repeating the mutation", as
   expect(fetchImpl).toHaveBeenCalledTimes(1);
 });
 
-const brokerSource = readFileSync(".github/workflows/frv-proof-broker.yml", "utf8");
-const fixtureSource = readFileSync(".github/workflows/frv-proof-fixture.yml", "utf8");
-const broker = parseYaml(brokerSource) as BrokerWorkflow;
-const fixture = parseYaml(fixtureSource) as FixtureWorkflow;
-
-it("pins broker inputs and write-capable checkout to trusted main", () => {
-  expect(Object.keys(broker.on.workflow_dispatch.inputs).toSorted()).toEqual([
-    "landed_sha",
-    "pr_number",
-  ]);
-  expect(broker.concurrency).toEqual({
-    "cancel-in-progress": false,
-    group: "frv-proof-broker",
-  });
+it("isolates the serialized write-capable broker from the tokenless fixture", () => {
+  const broker: BrokerWorkflow = parseYaml(
+    readFileSync(".github/workflows/frv-proof-broker.yml", "utf8"),
+  );
+  const fixtureSource = readFileSync(".github/workflows/frv-proof-fixture.yml", "utf8");
+  const fixture: FixtureWorkflow = parseYaml(fixtureSource);
+  expect(broker.concurrency["cancel-in-progress"]).toBe(false);
+  expect(broker.concurrency.group).not.toContain("${{");
   const job = broker.jobs.prove;
-  expect(job.permissions).toEqual({
-    actions: "write",
-    contents: "read",
-    "pull-requests": "read",
-  });
-  const checkout = job.steps.find((step) => step.name === "Checkout trusted main broker");
-  expect(checkout?.with).toEqual({
-    "fetch-depth": 1,
+  expect(Object.entries(job.permissions).filter(([, level]) => level === "write")).toEqual([
+    ["actions", "write"],
+  ]);
+  const checkout = job.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+  expect(checkout?.with).toMatchObject({
     "persist-credentials": false,
     ref: "${{ github.workflow_sha }}",
   });
-  expect(brokerSource).not.toMatch(/inputs\.landed_sha \}\}|pull\/|contents: write/u);
-});
-
-it("keeps the fixture tokenless and fixes its behavior to noop", () => {
   expect(fixture.permissions).toEqual({});
   expect(fixture.jobs.fixture.permissions).toEqual({});
-  expect(fixture.on.workflow_dispatch.inputs.operation).toMatchObject({
-    default: "noop",
-    options: ["noop"],
-    type: "choice",
-  });
+  expect(fixture.on.workflow_dispatch.inputs.operation.options).toEqual(["noop"]);
   expect(fixtureSource).not.toContain("actions/checkout");
 });

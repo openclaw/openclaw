@@ -8,21 +8,22 @@ import type {
 import type { SessionEntry } from "../config/sessions/types.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { captureSqliteNativeRuntimeAdmission } from "../infra/node-sqlite.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
 import { SqliteIntegrityError, type SqliteIntegrityCheck } from "../infra/sqlite-integrity.js";
+import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
+import type { SqliteWalPeriodicRequest } from "../infra/sqlite-wal-write-admission.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
+import { readActiveOpenClawAgentDatabaseLeasesInDatabase } from "./openclaw-agent-db-lease-inspection.js";
 import { mayShareAgentDatabaseFile } from "./openclaw-agent-db-lease-provenance.js";
-import {
-  readActiveOpenClawAgentDatabaseLeasesReadOnly,
-  type OpenClawAgentDatabaseWorkerLeaseReceipt,
-} from "./openclaw-agent-db-lease.js";
-import { OPENCLAW_AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
+import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
+import { runOpenClawAgentWriteTransaction } from "./openclaw-agent-db.js";
+import { AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import type { WorkerOperations } from "./worker-operation-registry.js";
 
 type PreparationInput = Omit<
   Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>,
@@ -39,7 +40,7 @@ type MetadataInput =
 export function createAgentDatabaseMaintenanceOwner(context: {
   databaseOptions: ReclamationDatabaseOptions;
   openWriter(): OpenClawAgentDatabase;
-  admit(stage: "transaction" | "commit", publication?: unknown): void;
+  admit: (stage: "transaction" | "commit", publication?: unknown) => void;
 }) {
   let preparation:
     | {
@@ -53,7 +54,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     | typeof import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js")
     | undefined;
   let replacements:
-    | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
+    | typeof import("../config/sessions/session-accessor.sqlite-replacement-publication.js")
     | undefined;
   const releasePreparation = () => {
     if (preparation) {
@@ -74,6 +75,19 @@ export function createAgentDatabaseMaintenanceOwner(context: {
         databaseOptions: context.databaseOptions,
       });
       preparation = { plan: input, prepared };
+      if (!prepared.requiresWrite) {
+        try {
+          const value = kernel.runSessionMaintenanceMetadataInTransaction(
+            { ...input, kind: "maintenance-plan", databaseOptions: context.databaseOptions },
+            {},
+            prepared,
+          );
+          return { kind: "not-committed" as const, workerThreadId: threadId, value };
+        } finally {
+          releasePreparation();
+        }
+      }
+      return undefined;
     },
     "session.maintenance.metadata": (input: MetadataInput) => {
       const kernel = expectDefined(maintenance, "Session maintenance kernel");
@@ -144,6 +158,23 @@ export function createAgentDatabaseMaintenanceOwner(context: {
   };
   return {
     operations,
+    maintainPeriodic(input: SqliteWalPeriodicRequest) {
+      return (
+        context.openWriter().walMaintenance.maintainPeriodic?.(input, context.admit, () =>
+          runOpenClawAgentWriteTransaction(
+            ({ db }) => {
+              context.admit("transaction");
+              if (!isPostgresSqlConnection(db)) {
+                refreshSqlitePlannerStatistics(db);
+              }
+              context.admit("commit");
+            },
+            context.databaseOptions,
+            { busyTimeoutMs: 0, operationLabel: "agent.planner-statistics" },
+          ),
+        ) ?? { reclaimedPages: 0 }
+      );
+    },
     repairStartupIntegrity(
       receipt: OpenClawAgentDatabaseWorkerLeaseReceipt,
       check: SqliteIntegrityCheck,
@@ -163,17 +194,17 @@ export function createAgentDatabaseMaintenanceOwner(context: {
       });
       const state = { env: context.databaseOptions.env, path: receipt.sharedStatePath };
       // The shared write fence excludes new leases through Doctor's backed-up repair.
-      const changes = runOpenClawStateWriteTransaction(() => {
+      const changes = runOpenClawStateWriteTransaction((database) => {
         assertCurrent();
-        const owners = readActiveOpenClawAgentDatabaseLeasesReadOnly(state).filter((owner) =>
-          mayShareAgentDatabaseFile(owner.path, receipt.path),
+        const owners = readActiveOpenClawAgentDatabaseLeasesInDatabase(database.db).filter(
+          (owner) => mayShareAgentDatabaseFile(owner.path, receipt.path),
         );
         if (owners.length !== 1 || owners[0]?.lease_id !== receipt.leaseId) {
           throw new Error("Startup FTS repair requires an exclusive live agent database lease");
         }
         return repairDoctorSqliteIndexCorruption(check.database, check.databaseLabel, {
           label: `agent ${context.databaseOptions.agentId}`,
-          ftsSchemas: OPENCLAW_AGENT_FTS_SCHEMAS,
+          ftsSchemas: AGENT_FTS_SCHEMAS,
           ftsOnly: true,
           assertCurrent,
           describeRepair(indexes) {
@@ -200,7 +231,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     prepare() {
       return Promise.all([
         import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js"),
-        import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
+        import("../config/sessions/session-accessor.sqlite-replacement-publication.js"),
       ]).then(([metadata, replacement]) => {
         maintenance = metadata;
         replacements = replacement;
@@ -216,7 +247,3 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     },
   };
 }
-
-export type AgentDatabaseMaintenanceOperations = WorkerOperations<
-  ReturnType<typeof createAgentDatabaseMaintenanceOwner>["operations"]
->;

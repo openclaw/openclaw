@@ -85,30 +85,26 @@ describe("chat.abort native transcript settlement", () => {
   it.each(
     [
       ...(["chat", "agent"] as const).flatMap((owner) =>
-        [true, false].map((hasNativeText) => ({
-          owner,
-          hasNativeText,
-          nativeFirst: false,
-          superseded: false,
-          warningDeliveryFails: false,
-        })),
+        [true, false].map((hasNativeText) => ({ owner, hasNativeText })),
       ),
       {
         owner: "agent" as const,
         hasNativeText: true,
         nativeFirst: true,
-        superseded: false,
-        warningDeliveryFails: false,
       },
       ...[false, true].map((warningDeliveryFails) => ({
         owner: "agent" as const,
         hasNativeText: false,
-        nativeFirst: false,
         superseded: true,
         warningDeliveryFails,
       })),
     ].flatMap((test) =>
-      (["run", "session"] as const).map((stopScope) => Object.assign({ stopScope }, test)),
+      (["run", "session"] as const).map((stopScope) =>
+        Object.assign(
+          { nativeFirst: false, superseded: false, warningDeliveryFails: false, stopScope },
+          test,
+        ),
+      ),
     ),
   )(
     "settles Stop history ($owner, scope=$stopScope, native text=$hasNativeText, native first=$nativeFirst, superseded=$superseded, warning delivery fails=$warningDeliveryFails)",
@@ -297,22 +293,28 @@ describe("chat.abort native transcript settlement", () => {
               expect.anything(),
             );
             expect(loadSessionEntry(target)?.activeWriterRunId).toBe("run-successor");
-            if (warningDeliveryFails) {
-              expect(context.logGateway.warn).toHaveBeenCalledWith(
-                expect.stringContaining("persistence warning delivery failed"),
-              );
-            } else {
-              expect(context.logGateway.warn).not.toHaveBeenCalledWith(
-                expect.stringContaining("persistence warning delivery failed"),
-              );
-            }
+            const warning = expect(context.logGateway.warn);
+            (warningDeliveryFails ? warning : warning.not).toHaveBeenCalledWith(
+              expect.stringContaining("persistence warning delivery failed"),
+            );
             return;
           }
           expect(messages).toHaveLength(1);
           if (hasNativeText) {
-            expect(mirrored.assistantTranscriptOwned).toBe(true);
             const nativeKey = `codex-app-server:${native.threadId}:${turnId}:assistant`;
-            expect(mirrored.assistantTranscriptIdempotencyKey).toBe(nativeKey);
+            expect(mirrored).toMatchObject({
+              assistantTranscriptOwned: true,
+              assistantTranscriptIdempotencyKey: nativeKey,
+              terminalAnchor: {
+                agentId: target.agentId,
+                sessionId: target.sessionId,
+                sessionKey: target.sessionKey,
+                storePath: target.storePath,
+                entryId: messages[0]?.id,
+                rawSeq: expect.any(Number),
+                idempotencyKey: nativeKey,
+              },
+            });
             expect(messages[0]).toMatchObject({
               id: mirrored.terminalAnchor?.entryId,
               message: {
@@ -329,15 +331,6 @@ describe("chat.abort native transcript settlement", () => {
               },
             });
             expect(messages[0]?.message).not.toHaveProperty("openclawAbort");
-            expect(mirrored.terminalAnchor).toMatchObject({
-              agentId: target.agentId,
-              sessionId: target.sessionId,
-              sessionKey: target.sessionKey,
-              storePath: target.storePath,
-              entryId: messages[0]?.id,
-              rawSeq: expect.any(Number),
-              idempotencyKey: nativeKey,
-            });
           } else {
             expect(mirrored.assistantTranscriptOwned).toBe(false);
             expect(messages[0]).toMatchObject({

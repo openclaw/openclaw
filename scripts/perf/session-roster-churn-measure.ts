@@ -71,7 +71,7 @@ const config = {
     controlUi: { enabled: false, allowedOrigins: [`http://127.0.0.1:${port}`] },
   },
   agents: {
-    defaults: { model: { primary: "openai/gpt-5.6-luna" }, heartbeat: { every: "0m" } },
+    defaults: { model: { primary: "openai/gpt-5.6-luna" } },
     entries: { main: { workspace: path.join(root, "workspace") } },
   },
   plugins: { enabled: false },

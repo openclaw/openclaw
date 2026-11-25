@@ -9,6 +9,10 @@ import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import { assertSqliteJsonlReadBudget } from "../../infra/sqlite-jsonl-budget.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import {
+  selectActiveTranscriptEventRows,
+  selectActiveTranscriptIdentityRows,
+} from "./session-accessor.sqlite-projection-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { TranscriptEntryAnchor, TranscriptTurnBoundary } from "./transcript-entry-anchor.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
@@ -101,6 +105,7 @@ function validateTerminalAncestry(params: {
           ),
       )
       .$if(!postgres, (parents) =>
+        /* pg-sqlite-only: The !postgres branch bounds SQLite recursive CTEs. */
         parents.limit(Number.isSafeInteger(depthLimit) ? depthLimit : -1),
       ),
   );
@@ -198,13 +203,7 @@ export function readClosedTranscriptTurnInDatabase(
       const readAnchor = (anchor: TranscriptEntryAnchor) =>
         executeSqliteQueryTakeFirstSync(
           connection,
-          db
-            .selectFrom("transcript_event_identities as identity")
-            .innerJoin("session_transcript_active_events as active", (join) =>
-              join
-                .onRef("active.session_id", "=", "identity.session_id")
-                .onRef("active.event_seq", "=", "identity.seq"),
-            )
+          selectActiveTranscriptIdentityRows({ db: connection })
             .innerJoin("transcript_rewrite_watermarks as rewrite", (join) =>
               join.onRef("rewrite.session_id", "=", "identity.session_id"),
             )
@@ -250,13 +249,7 @@ export function readClosedTranscriptTurnInDatabase(
       if (ancestry !== "descendant") {
         return { kind: ancestry } as const;
       }
-      const selected = db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
+      const selected = selectActiveTranscriptEventRows({ db: connection })
         .where("active.session_id", "=", target.sessionId)
         .where("active.message_position", "is not", null)
         .where("active.message_position", ">=", params.boundary.admission.activeMessagePosition)
@@ -272,7 +265,7 @@ export function readClosedTranscriptTurnInDatabase(
             .as("events"),
           params.maxBytes,
           "Closed transcript turn",
-          { hasExactUtf8Bytes: true, separatorBytes: 0, maxRows: params.maxEvents },
+          { separatorBytes: 0, maxRows: params.maxEvents },
         );
       } catch (error) {
         if (error instanceof SqliteJsonlReadBudgetExceededError) {

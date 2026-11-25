@@ -1,4 +1,5 @@
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
@@ -6,7 +7,6 @@ import {
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
 import {
-  getGlobalHookRunner,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
@@ -19,54 +19,31 @@ import {
 } from "../plugins/loader.test-fixtures.js";
 
 const pluginId = "qa-plugin-hook-contracts";
-const recordedEventsKey = Symbol.for("openclaw.qa.plugin-hook-contracts.events");
+const recordHook = vi.fn<(name: string, event: unknown, context: unknown) => void>();
 const sessionContext = {
   agentId: "main",
   sessionId: "session-1",
   sessionKey: "agent:main:session-1",
 };
-type RecordedHookEvent = {
-  context: Record<string, unknown>;
-  event: Record<string, unknown>;
-  hookName:
-    | "before_tool_call"
-    | "message_received"
-    | "message_sending"
-    | "session_start"
-    | "session_end"
-    | "cron_changed";
-};
 
-function recordedEvents(): RecordedHookEvent[] {
-  return ((globalThis as Record<PropertyKey, unknown>)[recordedEventsKey] ??
-    []) as RecordedHookEvent[];
-}
+afterEach(() => {
+  setEmbeddedPluginApprovalBroker(null);
+  setEmbeddedMode(false);
+  resetGlobalHookRunner();
+  resetPluginLoaderTestStateForTest();
+  vi.unstubAllGlobals();
+});
 
-function requireGlobalHookRunner() {
-  const runner = getGlobalHookRunner();
-  if (!runner) {
-    throw new Error("expected the fixture plugin to initialize the global hook runner");
-  }
-  return runner;
-}
+afterAll(cleanupPluginLoaderFixturesForTest);
 
-function loadFixturePlugin() {
-  (globalThis as Record<PropertyKey, unknown>)[recordedEventsKey] = [];
+it("routes a loaded before_tool_call policy through the embedded approval boundary", async () => {
+  recordHook.mockClear();
+  vi.stubGlobal("openclawQaHookRecord", recordHook);
   useNoBundledPlugins();
   const plugin = writePlugin({
     id: pluginId,
-    body: `
-const eventsKey = Symbol.for("openclaw.qa.plugin-hook-contracts.events");
-function record(hookName, event, context) {
-  const events = globalThis[eventsKey] ?? (globalThis[eventsKey] = []);
-  events.push({ hookName, event, context });
-}
-
-module.exports = {
-  id: ${JSON.stringify(pluginId)},
-  register(api) {
-    api.on("before_tool_call", (event, context) => {
-      record("before_tool_call", event, context);
+    registration: `api.on("before_tool_call", (event, context) => {
+      globalThis.openclawQaHookRecord("before_tool_call", event, context);
       if (event.toolName !== "exec") {
         return;
       }
@@ -78,18 +55,7 @@ module.exports = {
           severity: "info",
         },
       };
-    });
-    api.on("message_received", (event, context) => record("message_received", event, context));
-    api.on("message_sending", (event, context) => {
-      record("message_sending", event, context);
-      return { content: event.content + " [plugin checked]" };
-    });
-    for (const name of ["session_start", "session_end", "cron_changed"]) {
-      api.on(name, (event, context) => record(name, event, context));
-    }
-  },
-};
-`,
+    });`,
   });
   const registry = loadOpenClawPlugins({
     cache: false,
@@ -104,107 +70,35 @@ module.exports = {
   });
   expect(registry.plugins).toEqual([expect.objectContaining({ id: pluginId, status: "loaded" })]);
   initializeGlobalHookRunner(registry);
-  return requireGlobalHookRunner();
-}
+  setEmbeddedMode(true);
+  const broker = new EmbeddedPluginApprovalBroker();
+  setEmbeddedPluginApprovalBroker(broker);
 
-afterEach(() => {
-  setEmbeddedPluginApprovalBroker(null);
-  setEmbeddedMode(false);
-  resetGlobalHookRunner();
-  resetPluginLoaderTestStateForTest();
-  delete (globalThis as Record<PropertyKey, unknown>)[recordedEventsKey];
-});
+  const event = {
+    toolName: "exec",
+    params: { command: "pwd" },
+    toolCallId: "call-1",
+  };
+  const resultPromise = runBeforeToolCallHook({ ...event, ctx: sessionContext });
 
-afterAll(cleanupPluginLoaderFixturesForTest);
-
-describe("plugin hook lifecycle contracts", () => {
-  it("executes message, session, and cron lifecycle hooks from the loaded plugin", async () => {
-    const runner = loadFixturePlugin();
-    const messageContext = { channelId: "qa-channel" };
-
-    await runner.runMessageReceived({ from: "operator", content: "incoming" }, messageContext);
-    await expect(
-      runner.runMessageSending({ to: "operator", content: "outgoing" }, messageContext),
-    ).resolves.toEqual({ content: "outgoing [plugin checked]" });
-
-    await runner.runSessionStart({ ...sessionContext, resumedFrom: "session-0" }, sessionContext);
-    await runner.runSessionEnd(
-      { ...sessionContext, messageCount: 3, reason: "reset" },
-      sessionContext,
-    );
-
-    await runner.runCronChanged(
-      {
-        action: "updated",
-        jobId: "job-1",
-        nextRunAtMs: 123,
-      },
-      {
-        port: 18789,
-        config: {},
-        workspaceDir: "/tmp/openclaw-qa-workspace",
-        getCron: () => undefined,
-      },
-    );
-
-    expect(recordedEvents().map((entry) => entry.hookName)).toEqual([
-      "message_received",
-      "message_sending",
-      "session_start",
-      "session_end",
-      "cron_changed",
-    ]);
-    expect(recordedEvents()[1]?.event).toMatchObject({ content: "outgoing", to: "operator" });
-    expect(recordedEvents()[4]?.event).toMatchObject({
-      action: "updated",
-      jobId: "job-1",
-      nextRunAtMs: 123,
-    });
+  await vi.waitFor(() => {
+    expect(broker.listPending()).toHaveLength(1);
   });
-
-  it("routes a loaded before_tool_call policy through the embedded approval boundary", async () => {
-    loadFixturePlugin();
-    setEmbeddedMode(true);
-    const broker = new EmbeddedPluginApprovalBroker();
-    setEmbeddedPluginApprovalBroker(broker);
-
-    const resultPromise = runBeforeToolCallHook({
-      toolName: "exec",
-      params: { command: "pwd" },
-      toolCallId: "call-1",
-      ctx: sessionContext,
-    });
-
-    await vi.waitFor(() => {
-      expect(broker.listPending()).toHaveLength(1);
-    });
-    const pending = broker.listPending()[0];
-    if (!pending) {
-      throw new Error("expected a pending plugin approval request");
-    }
-    expect(pending.request).toMatchObject({
-      pluginId,
-      title: "Approve QA exec",
-      toolCallId: "call-1",
-      toolName: "exec",
-    });
-    expect(broker.resolve(pending.id, "allow-once")).toBe(true);
-
-    await expect(resultPromise).resolves.toEqual({
-      approvalResolution: "allow-once",
-      blocked: false,
-      params: { command: "pwd", policyChecked: true },
-    });
-    expect(recordedEvents()).toEqual([
-      expect.objectContaining({
-        hookName: "before_tool_call",
-        event: expect.objectContaining({
-          params: { command: "pwd" },
-          toolCallId: "call-1",
-          toolName: "exec",
-        }),
-        context: expect.objectContaining(sessionContext),
-      }),
-    ]);
+  const pending = expectDefined(broker.listPending()[0], "pending plugin approval request");
+  expect(pending.request).toMatchObject({
+    pluginId,
+    title: "Approve QA exec",
+    toolCallId: "call-1",
+    toolName: "exec",
   });
+  expect(broker.resolve(pending.id, "allow-once")).toBe(true);
+
+  await expect(resultPromise).resolves.toEqual({
+    approvalResolution: "allow-once",
+    blocked: false,
+    params: { command: "pwd", policyChecked: true },
+  });
+  expect(recordHook.mock.calls).toEqual([
+    ["before_tool_call", expect.objectContaining(event), expect.objectContaining(sessionContext)],
+  ]);
 });

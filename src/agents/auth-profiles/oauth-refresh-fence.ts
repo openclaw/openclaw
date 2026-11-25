@@ -4,6 +4,7 @@ import { retainCurrentWorkerNativeSection } from "@openclaw/worker-runtime/worke
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { isRecoverableOAuthRefreshFailure } from "../../shared/oauth-refresh-outcome.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
   createFailedOAuthRefreshFence,
@@ -243,14 +244,17 @@ async function runSerializedOAuthRefresh<TData>(
       await params.commit(claim.data);
       return await params.resolve(claim.credential);
     }
-    const markFailed = async () => {
+    const markFailed = async (restore: boolean) => {
       const failed = await params.backend.withLock<TData | null>((current) => {
         const data = params.parse(current);
         const authoritative = params.readCredential(data);
         if (!isExactOAuthCredential(authoritative, claim.fence)) {
           return { result: null };
         }
-        const nextData = params.writeCredential(data, createFailedOAuthRefreshFence(claim.fence));
+        const nextData = params.writeCredential(
+          data,
+          restore ? claim.credential : createFailedOAuthRefreshFence(claim.fence),
+        );
         return { result: nextData, next: params.serialize(nextData) };
       });
       if (failed) {
@@ -258,12 +262,17 @@ async function runSerializedOAuthRefresh<TData>(
       }
     };
 
-    const settleFailure = async (failure?: { error: unknown }): Promise<null> => {
+    const settleFailure = async (failure?: {
+      error: unknown;
+      providerSettled?: true;
+    }): Promise<null> => {
       const normalizedInitiatingError = failure
         ? toErrorObject(failure.error, "OAuth refresh failed")
         : undefined;
       try {
-        await markFailed();
+        await markFailed(
+          failure?.providerSettled === true && isRecoverableOAuthRefreshFailure(failure.error),
+        );
       } catch (cleanupError) {
         const normalizedCleanupError = toErrorObject(
           cleanupError,
@@ -296,7 +305,7 @@ async function runSerializedOAuthRefresh<TData>(
       try {
         refreshed = await params.refresh(claim.credential, claim.data);
       } catch (error) {
-        return settleFailure({ error });
+        return settleFailure({ error, providerSettled: true });
       }
       if (!refreshed) {
         return settleFailure();

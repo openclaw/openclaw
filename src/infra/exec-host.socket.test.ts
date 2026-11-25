@@ -71,21 +71,17 @@ async function withExecPeer(
           hmac: string;
           requestJson: string;
         };
-        expect(envelope.type).toBe("exec");
-        expect(envelope.id).toMatch(
-          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-        );
-        expect(envelope.nonce).toMatch(/^[0-9a-f]{32}$/);
-        expect(typeof envelope.ts).toBe("number");
+        expect(envelope).toEqual({
+          type: "exec",
+          id: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+          ),
+          nonce: expect.stringMatching(/^[0-9a-f]{32}$/),
+          ts: expect.any(Number),
+          hmac: expect.any(String),
+          requestJson: expect.any(String),
+        });
         expect(Math.abs(Date.now() - envelope.ts)).toBeLessThan(10_000);
-        expect(Object.keys(envelope).toSorted()).toEqual([
-          "hmac",
-          "id",
-          "nonce",
-          "requestJson",
-          "ts",
-          "type",
-        ]);
         const hmac = crypto
           .createHmac("sha256", token)
           .update(`${envelope.nonce}:${envelope.ts}:${envelope.requestJson}`)
@@ -222,6 +218,45 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
     },
   );
 
+  it.each([1_048_576, 1_048_577])("bounds the full signed request at %s bytes", async (bytes) => {
+    await withExecPeer(async ({ socketPath, onRequest }) => {
+      const request = { command: ["/bin/echo", ""] };
+      const overhead = Buffer.byteLength(
+        JSON.stringify({
+          type: "exec",
+          id: crypto.randomUUID(),
+          nonce: "0".repeat(32),
+          ts: Date.now(),
+          hmac: "0".repeat(64),
+          requestJson: JSON.stringify(request),
+        }),
+      );
+      request.command[1] = "x".repeat(bytes - overhead);
+      let received = false;
+      onRequest(async (socket, actual, id) => {
+        received = true;
+        expect(actual).toEqual(request);
+        socket.end(`${JSON.stringify({ type: "exec-res", id, ...success })}\n`);
+      });
+      const result = await requestExecHostViaSocket({
+        socketPath,
+        token,
+        request,
+        timeoutMs: 1_000,
+      });
+      if (bytes === 1_048_576) {
+        expect(result).toEqual(success);
+        expect(received).toBe(true);
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          error: { code: "INVALID_REQUEST", reason: "too-large" },
+        });
+        expect(received).toBe(false);
+      }
+    });
+  });
+
   it.each(["close", "malformed matching response", "timeout"] as const)(
     "characterizes the outcome after a signed request starts a child and then %s",
     async (fault) => {
@@ -286,27 +321,23 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
             await vi.advanceTimersByTimeAsync(1_000);
           }
           const result = await pending;
-          if (fault === "close") {
-            expect(result).toEqual({
-              ok: false,
-              error: {
-                code: "UNKNOWN",
-                reason: "response-lost",
-                message:
-                  "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
-              },
-            });
-          } else {
-            expect(result).toEqual({
-              ok: false,
-              error: {
-                code: "TIMEOUT",
-                reason: "timeout",
-                message:
-                  "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
-              },
-            });
-          }
+          expect(result).toEqual({
+            ok: false,
+            error:
+              fault === "close"
+                ? {
+                    code: "UNKNOWN",
+                    reason: "response-lost",
+                    message:
+                      "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+                  }
+                : {
+                    code: "TIMEOUT",
+                    reason: "timeout",
+                    message:
+                      "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
+                  },
+          });
           order.push("client-outcome-unknown");
           expect(await fs.readFile(markers, "utf8")).toBe("START\n");
         } finally {

@@ -23,6 +23,7 @@ vi.mock("../auto-reply/thinking.js", async () => {
   return { normalizeThinkLevel };
 });
 
+// mock-isolation: Worker handoff observes pending queue state without starting a real drain.
 vi.mock("../auto-reply/reply/queue/drain.js", () => {
   const unexpectedDrain = () => {
     throw new Error("worker barrier queue fixtures must remain pending");
@@ -30,7 +31,6 @@ vi.mock("../auto-reply/reply/queue/drain.js", () => {
   return {
     clearFollowupDrainCallback: () => {},
     rememberFollowupDrainCallback: unexpectedDrain,
-    kickFollowupDrainIfIdle: unexpectedDrain,
     prepareStaleFollowupDrainRetirement: unexpectedDrain,
     dropAbortedFollowups: unexpectedDrain,
     scheduleFollowupDrain: unexpectedDrain,
@@ -51,6 +51,7 @@ import {
   resolveGatewaySessionStoreTargetInWorker,
 } from "./session-utils.js";
 import type { WorkerPlacementMoveBarrier } from "./worker-environments/placement-move-service.js";
+import { activePlacement } from "./worker-environments/placement-suite.test-support.js";
 
 const session = {
   sessionId: "session-move-source",
@@ -103,10 +104,9 @@ function createMoveBarrierBeginFixture(sessionId: string, sessionKey: string, ag
       updatedAtMs: 1,
     },
     placement: {
-      sessionId,
+      ...activePlacement(sessionId),
       sessionKey,
       agentId,
-      executionMode: "worker-turn",
       state: "draining",
       generation: 5,
       environmentId: source.environmentId,
@@ -114,13 +114,6 @@ function createMoveBarrierBeginFixture(sessionId: string, sessionKey: string, ag
       workspaceBaseManifestRef: "manifest-source",
       remoteWorkspaceDir: "/worker/session-source",
       workerBundleHash: "c".repeat(64),
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      turnClaim: null,
-      createdAtMs: 1,
       updatedAtMs: 2,
       stateChangedAtMs: 2,
     },
@@ -490,6 +483,7 @@ describe("worker placement move destination", () => {
           forceDestroyEnvironment: vi.fn(),
           move: vi.fn(),
           reclaim: vi.fn(),
+          subscribeOrphanWorkspaceChanges: () => () => {},
           reconcile: vi.fn(),
           reconcileActive: vi.fn(),
         });

@@ -5,10 +5,8 @@ import type {
   SessionTranscriptManualTrimResult,
   SessionTranscriptManualTrimPreflightResult,
 } from "./session-accessor.types.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { trimSessionTranscriptInWorker } from "./session-manual-compact.js";
@@ -24,30 +22,25 @@ import { readTranscriptStatsAsync } from "./session-transcript-stats.js";
 import { resolveSessionWorkStartError } from "./session-work-start.js";
 import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
 import { SessionWorkStartChangedError } from "./work-start-error.js";
-export { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
 export { persistCompactionBoundaryWithSessionEntryAsync } from "./session-accessor.sqlite-compaction-runtime.js";
 export { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
-export { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
+export { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-exact-read.js";
 export { resolveSessionKeyBySessionIdAsync as resolveTranscriptSessionKeyBySessionIdAsync } from "./session-accessor.transcript-target.js";
 export { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
-export {
-  hasSessionTranscriptEventsSync,
-  readTranscriptMutationAtSync,
-  readTranscriptMutationStateSync,
-} from "./session-accessor.sqlite-metadata-read.js";
+export { readTranscriptMutationAtSync } from "./session-accessor.sqlite-transcript-admitted-read.js";
 export {
   inspectTranscriptEventsSync,
   loadLatestAssistantText as readLatestTranscriptAssistantText,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
-  readTranscriptExportSnapshotReadOnlySync,
-  readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
   validatePreparedAssistantAppendSync,
   readTranscriptEventAtSeqSync,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
+export { readTranscriptExportSnapshotReadOnlySync } from "./session-accessor.sqlite-export-read.js";
+export { readTranscriptStatsBatchReadOnlySync } from "./session-accessor.sqlite-transcript-stats-read.js";
 export { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
 export { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 export {
@@ -57,12 +50,12 @@ export {
 export {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  appendTranscriptMessageSync,
   replaceTranscriptSuffixEventsSync,
   rewriteTranscriptEventRowsExact,
   withTranscriptWriteLock,
   withTranscriptWriteSequence,
 } from "./session-accessor.sqlite-transcript-write.js";
+export { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 
 export { emitSessionTranscriptUpdate as emitTranscriptUpdate } from "../../sessions/transcript-events.js";
 
@@ -273,7 +266,8 @@ export async function trimSessionTranscriptForManualCompact(
           source.checks[refused.index]!.refuse(refused.facts);
         }
         assertEntryCurrent(read.entries[0]?.entry);
-        if (read.manualCompact?.archive) {
+        const coldMetadata = read.manualCompact;
+        if (coldMetadata?.archive) {
           const {
             restoreSessionColdTranscript,
             SessionColdSourceReboundError,
@@ -290,13 +284,11 @@ export async function trimSessionTranscriptForManualCompact(
                   acceptSessionSourceValidation(source, validation),
                 readMetadata: async (phase) =>
                   phase === "initial"
-                    ? read.manualCompact?.archive
-                    : (
-                        await owner.readColdMetadata({
-                          sessionId: resolved.sessionId,
-                          env: captured.env,
-                        })
-                      ).archive,
+                    ? coldMetadata
+                    : owner.readColdMetadata({
+                        sessionId: resolved.sessionId,
+                        env: captured.env,
+                      }),
               },
               {
                 kind: "turn",

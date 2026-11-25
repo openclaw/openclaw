@@ -77,7 +77,6 @@ function createInvokeContext(params: {
         },
       },
       sendActivity,
-      sendActivities: async () => [],
       updateActivity,
     } as unknown as MSTeamsTurnContext,
     sendActivity,

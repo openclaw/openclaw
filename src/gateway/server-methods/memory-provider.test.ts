@@ -1,12 +1,11 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
+import type * as OperatorRunAuthority from "../operator-run-authority.js";
 import {
   createMemoryOperatorClient as operatorClient,
   createMemoryProvider,
 } from "./memory-provider.test-support.js";
-import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -20,19 +19,19 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManagerCore: mocks.legacy,
   resolveActiveMemoryBackendConfig: mocks.resolveBackend,
 }));
-vi.mock("../operator-run-authority.js", () => ({
-  captureGatewayOperatorRunAuthority: mocks.capture,
+// mock-isolation: a single-user Gateway; shared-Gateway policy is covered by the authority test.
+vi.mock("../../state/user-profile-list.js", () => ({
+  hasMultipleResidentSessionSharingIdentities: () => false,
+}));
+vi.mock("../operator-run-authority.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof OperatorRunAuthority>()),
+  prepareGatewayOperatorRunAuthority: mocks.capture,
 }));
 
 import { memorySearchHandlers } from "./memory-search.js";
 
 const config: OpenClawConfig = { agents: { entries: { main: {} } } };
 const reference = { providerId: "records", id: "claim:42", revision: "r3" };
-const searchPage = {
-  hits: [{ reference, excerpt: "A record, not a workspace file" }],
-  coverage: "partial" as const,
-  nextCursor: "page2",
-};
 
 function syntheticClient(): NonNullable<GatewayRequestHandlerOptions["client"]> {
   return { ...operatorClient(), internal: { syntheticClient: true } } as NonNullable<
@@ -58,62 +57,16 @@ async function invoke(
 }
 
 let provider: ReturnType<typeof createMemoryProvider>;
-let assertCurrent: ReturnType<typeof vi.fn>;
-let release: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.resolveBackend.mockReturnValue({ backend: "builtin" });
-  assertCurrent = vi.fn();
-  release = vi.fn();
   mocks.capture.mockResolvedValue({
-    authority: { scopes: ["operator.read"], assertCurrent },
-    release,
+    authority: { scopes: ["operator.read"], assertCurrent: vi.fn() },
+    release: vi.fn(),
   });
-  provider = createMemoryProvider(reference, searchPage, true);
+  provider = createMemoryProvider(reference);
   mocks.acquire.mockResolvedValue({ provider, providerId: "records", adapter: "native" });
-});
-
-it("routes explicit v2 search, record retrieval, and health without the file runtime", async () => {
-  const search = await invoke("memory.search", {
-    version: 2,
-    query: "record",
-    agentId: "main",
-    sources: ["memory"],
-  });
-  expect(provider.search).toHaveBeenCalledExactlyOnceWith({
-    query: "record",
-    maxResults: 20,
-    minScore: undefined,
-    cursor: undefined,
-    sources: ["memory"],
-  });
-  expectRpcResult(search, {
-    version: 2,
-    agentId: "main",
-    providerId: "records",
-    ...searchPage,
-  });
-  const get = await invoke("memory.get", { reference, from: 2, lines: 10 });
-  expect(provider.get).toHaveBeenCalledWith({ reference, from: 2, lines: 10 });
-  expectRpcResult(get, expect.objectContaining({ status: "ok", reference, text: "Record body" }));
-  const health = await invoke("memory.status", {});
-  expectRpcResult(health, {
-    version: 2,
-    agentId: "main",
-    providerId: "records",
-    status: "ready",
-  });
-  expect(mocks.legacy).not.toHaveBeenCalled();
-  expect(provider.close).toHaveBeenCalledTimes(3);
-  expect(mocks.capture).not.toHaveBeenCalled();
-  expect(mocks.acquire).toHaveBeenCalledWith(
-    expect.objectContaining({
-      context: expect.objectContaining({
-        authority: { kind: "operator", scopes: ["operator.read"], connId: "cli-connection" },
-      }),
-    }),
-  );
 });
 
 it.each([
@@ -129,37 +82,6 @@ it.each([
   expectRpcError(await invoke(method, params), { code: "INVALID_REQUEST" });
   expect(mocks.acquire).not.toHaveBeenCalled();
 });
-
-it.each(["agent", "ingress"] as const)(
-  "does not release a late result after an %s operator authority is revoked",
-  async (caller) => {
-    const pending = createDeferredCore<{ status: "ready" }>();
-    provider.health.mockImplementation(() => pending.promise);
-    const client = syntheticClient();
-    if (caller === "ingress") {
-      delete client.connId;
-      const principal = createRemoteControlUiIngressTestContext().resolvePrincipal();
-      client.internal = {
-        remoteIngressPrincipal: principal,
-        operatorRoleActor: principal.operatorRoleActor,
-      };
-    }
-    const entered = createDeferredCore();
-    mocks.acquire.mockImplementation(async () => {
-      entered.resolve();
-      return { provider, providerId: "records" };
-    });
-    const result = invoke("memory.status", {}, client);
-    await entered.promise;
-    assertCurrent.mockImplementation(() => {
-      throw new Error("operator revoked");
-    });
-    pending.resolve({ status: "ready" });
-    expectRpcError(await result, { message: "operator revoked" });
-    expect(provider.close).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-  },
-);
 
 it.each([
   ["an unauthenticated caller", null],

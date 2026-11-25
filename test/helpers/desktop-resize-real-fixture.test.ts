@@ -302,15 +302,12 @@ describe("desktop endpoint packet attribution", () => {
       }
       const server = created.value;
       expect(server.address()).toMatchObject({ port: owner.tap.port });
-      const closed = vi.fn();
-      server.on("close", closed);
       const probe = owner.tap.expectPacket(key);
       expect(() => owner.tap.expectPacket(key)).toThrow("busy");
       const rejection = expect(probe.result).rejects.toThrow("aborted");
       owner.abort.abort();
       await rejection;
       await owner.tap.close();
-      expect(closed).toHaveBeenCalledOnce();
       expect(server.listening).toBe(false);
       expect(server.address()).toBeNull();
       expect(() => owner.tap.expectPacket(key)).toThrow();

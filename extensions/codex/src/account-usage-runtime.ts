@@ -2,13 +2,13 @@ import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
-import { ensureAuthProfileStore, type AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import {
   isUserModelAuthProfileId,
+  withAuthProfileStoreAtEffect,
   withPersonalAuthProfileStore,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { z } from "zod";
-import { resolveCodexAppServerAuthProfileStore } from "./app-server/auth-profile.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { isCodexAppServerProxyLaunch } from "./app-server/launch-args.js";
 import { buildCodexAppServerUsageSnapshot } from "./app-server/rate-limits.js";
@@ -40,34 +40,18 @@ export async function handleCodexAccountUsage({
   }
   try {
     const agentDir = resolveAgentDir(config, agentId);
-    // Shared accounts retain their native owner; personal accounts supply published authority.
-    const assertCurrent = (
-      credential: AuthProfileStore["profiles"][string],
-      readCurrentCredential?: () => AuthProfileStore["profiles"][string] | undefined,
-    ) => {
+    const assertCallerCurrent = () => {
       if (
         signal?.aborted ||
         hasCurrentClientAuthority?.() === false ||
-        context.getRuntimeConfig() !== config ||
-        !isDeepStrictEqual(
-          readCurrentCredential
-            ? readCurrentCredential()
-            : ensureAuthProfileStore(agentDir, {
-                profileId,
-                allowKeychainPrompt: false,
-                config,
-                externalCliProviderIds: ["openai"],
-                externalCliProfileIds: [profileId],
-              }).profiles[profileId],
-          credential,
-        )
+        context.getRuntimeConfig() !== config
       ) {
         throw new Error("Account credentials changed. Refresh Models and try again.");
       }
     };
     const readUsage = async (
       preparedStore: AuthProfileStore,
-      readCurrentCredential?: () => AuthProfileStore["profiles"][string] | undefined,
+      reader: { read?(): Promise<AuthProfileStore>; assertCurrent(): void },
     ) => {
       const store = structuredClone(preparedStore);
       const credential = store.profiles[profileId];
@@ -75,7 +59,10 @@ export async function handleCodexAccountUsage({
         invalid("Select a saved Codex subscription login.");
         return;
       }
-      const assertPrepared = () => assertCurrent(credential, readCurrentCredential);
+      const assertPrepared = () => {
+        assertCallerCurrent();
+        reader.assertCurrent();
+      };
       assertPrepared();
       const { start } = resolveCodexAppServerRuntimeOptions({
         pluginConfig: readCodexPluginConfig(config.plugins?.entries?.codex?.config),
@@ -99,7 +86,11 @@ export async function handleCodexAccountUsage({
           homeScope: "agent",
         },
       });
+      const current = await reader.read?.();
       assertPrepared();
+      if (current && !isDeepStrictEqual(current.profiles[profileId], credential)) {
+        throw new Error("Account credentials changed. Refresh Models and try again.");
+      }
       const snapshot = buildCodexAppServerUsageSnapshot(usage.rateLimits, {
         accountDetails: true,
       });
@@ -108,15 +99,31 @@ export async function handleCodexAccountUsage({
 
     if (isUserModelAuthProfileId(profileId)) {
       const handled = await withPersonalAuthProfileStore(profileId, async (owner) => {
-        await readUsage(await owner.read(), owner.readCurrentCredential);
+        const store = await owner.read();
+        const readCurrentCredential = owner.readCurrentCredential;
+        await readUsage(store, {
+          assertCurrent: () => {
+            if (!isDeepStrictEqual(readCurrentCredential(), store.profiles[profileId])) {
+              throw new Error("Account credentials changed. Refresh Models and try again.");
+            }
+          },
+        });
         return true;
       });
       if (!handled) {
         invalid("Select a saved Codex subscription login.");
       }
     } else {
-      await readUsage(
-        await resolveCodexAppServerAuthProfileStore({ agentDir, authProfileId: profileId, config }),
+      await withAuthProfileStoreAtEffect(
+        agentDir,
+        {
+          profileId,
+          allowKeychainPrompt: false,
+          config,
+          externalCliProviderIds: ["openai"],
+          externalCliProfileIds: [profileId],
+        },
+        async (reader) => readUsage(await reader.read(), reader),
       );
     }
   } catch (error) {

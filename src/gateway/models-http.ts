@@ -7,14 +7,13 @@ import {
   sendJson,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
-  sendUnauthorized,
 } from "./http-common.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   OPENCLAW_DEFAULT_MODEL_ID,
   OPENCLAW_MODEL_ID,
   authorizeGatewayHttpRequestOrReply,
-  isOpenClawAgentModelId,
+  canonicalizeOpenClawAgentModelId,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { READ_SCOPE } from "./operator-scopes.js";
@@ -62,10 +61,6 @@ export async function handleOpenAiModelsHttpRequest(
   if (!requestAuth) {
     return true;
   }
-  if (!requestAuth.hasCurrentClientAuthority()) {
-    sendUnauthorized(res);
-    return true;
-  }
 
   const requestedScopes = resolveSharedSecretHttpOperatorScopes(req, requestAuth);
   // The compatibility catalog exposes global agent targets and keeps its general read floor.
@@ -97,12 +92,13 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  if (!isOpenClawAgentModelId(decodedId)) {
+  const modelId = canonicalizeOpenClawAgentModelId(decodedId);
+  if (!modelId) {
     sendInvalidRequest(res, "Invalid model id.");
     return true;
   }
 
-  if (!ids.includes(decodedId)) {
+  if (!ids.includes(modelId)) {
     sendJson(res, 404, {
       error: {
         message: `Model '${decodedId}' not found.`,
@@ -112,6 +108,6 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  sendJson(res, 200, toOpenAiModel(decodedId));
+  sendJson(res, 200, toOpenAiModel(modelId));
   return true;
 }

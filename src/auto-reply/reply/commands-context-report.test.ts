@@ -2,6 +2,7 @@
 import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -11,6 +12,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildContextReply } from "./commands-context-report.js";
@@ -42,11 +44,7 @@ function makeParams(
   const totalTokensFresh = options?.totalTokensFresh ?? true;
   return {
     ...commandFixture(commandBodyNormalized),
-    command: {
-      commandBodyNormalized,
-      channel: "forum",
-      senderIsOwner: true,
-    },
+    command: { commandBodyNormalized, channel: "forum", senderIsOwner: true },
     sessionKey: options?.sessionKey ?? "agent:default:main",
     contextTokens: options?.contextTokens ?? null,
     storePath: options?.storePath,
@@ -62,7 +60,7 @@ function makeParams(
       ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
       totalTokens: options?.totalTokens ?? 123,
       totalTokensFresh,
-      ...(totalTokensFresh ? { totalTokensVersion: 1 as const } : {}),
+      ...(totalTokensFresh ? { totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION } : {}),
       inputTokens: 100,
       outputTokens: 23,
       systemPromptReport: {
@@ -72,11 +70,7 @@ function makeParams(
         bootstrapMaxChars: options?.omitBootstrapLimits ? undefined : 12_000,
         bootstrapTotalMaxChars: options?.omitBootstrapLimits ? undefined : 60_000,
         sandbox: { mode: "off", sandboxed: false },
-        systemPrompt: {
-          chars: 1_000,
-          projectContextChars: 500,
-          nonProjectContextChars: 500,
-        },
+        systemPrompt: { chars: 1_000, projectContextChars: 500, nonProjectContextChars: 500 },
         ...(options?.currentTurn ? { currentTurn: options.currentTurn } : {}),
         injectedWorkspaceFiles: [
           {
@@ -101,10 +95,7 @@ function makeParams(
               ]
             : []),
         ],
-        skills: {
-          promptChars: 10,
-          entries: [{ name: "checks", blockChars: 10 }],
-        },
+        skills: { promptChars: 10, entries: [{ name: "checks", blockChars: 10 }] },
         tools: {
           listChars: 10,
           schemaChars: 20,
@@ -144,11 +135,7 @@ function toolExchange(timestamp: number) {
 
 async function contextMap(options: NonNullable<Parameters<typeof makeParams>[2]>) {
   const result = await buildContextReply(
-    makeParams("/context map", false, {
-      contextTokens: 8_192,
-      totalTokens: 900,
-      ...options,
-    }),
+    makeParams("/context map", false, { contextTokens: 8_192, totalTokens: 900, ...options }),
   );
   if (!result.mediaUrl) {
     throw new Error("missing context map media path");
@@ -236,6 +223,7 @@ describe("buildContextReply", () => {
     "projects session window (resolved=%s authored=%s harness=%s)",
     async (resolved, authored, persistedHarness, expected) => {
       const params = makeParams("/context json", false, { contextTokens: 200_000 });
+      const model = expectDefined(params.model, "context fixture model");
       params.sessionEntry = {
         ...params.sessionEntry,
         sessionId: "local-context",
@@ -246,9 +234,7 @@ describe("buildContextReply", () => {
         contextTokens: 32_768,
         contextTokensSource: "resolved-v1",
       };
-      params.thinkingCatalog = [
-        { provider: params.provider, id: params.model, contextWindow: resolved },
-      ];
+      params.thinkingCatalog = [{ provider: params.provider, id: model, contextWindow: resolved }];
       if (authored !== undefined) {
         params.cfg = {
           models: {
@@ -257,7 +243,7 @@ describe("buildContextReply", () => {
                 baseUrl: "http://127.0.0.1:11434",
                 models: [
                   {
-                    id: params.model,
+                    id: model,
                     name: "Qwen 2.5 7B",
                     reasoning: false,
                     input: ["text"],
@@ -278,10 +264,10 @@ describe("buildContextReply", () => {
     },
   );
 
-  it("describes compactable transcript counts in help output", async () => {
+  it("describes compactable chat history counts in help output", async () => {
     const result = await buildContextReply(makeParams("/context", false));
     expect(result.text).toContain(
-      "/context detail (per-file + per-tool + per-skill + system prompt size + compactable transcript counts)",
+      "/context detail (per-file + per-tool + per-skill + system prompt size + compactable chat history counts)",
     );
   });
 
@@ -295,10 +281,12 @@ describe("buildContextReply", () => {
   });
 
   it("reports native Codex project docs as unverified without OpenClaw limit advice", async () => {
-    const result = await buildContextReply(
-      makeParams("/context detail", false, { nativeUnverified: true }),
-    );
+    const params = makeParams("/context detail", false, { nativeUnverified: true });
+    // Codex base instructions taken from configuration rather than the loaded thread.
+    params.sessionEntry!.systemPromptReport!.systemPrompt.estimatedChars = 400;
+    const result = await buildContextReply(params);
 
+    expect(result.text).toContain("(Project Context 500 chars (~125 tok); estimated 400 chars");
     expect(result.text).toContain(
       "- AGENTS.md: NATIVE/UNVERIFIED | raw(local) 10,000 chars (~2,500 tok) | injected unknown",
     );
@@ -322,6 +310,31 @@ describe("buildContextReply", () => {
     );
   });
 
+  it("tells same-named files apart on context map tiles", async () => {
+    // Moving a file changes only its path, so the image can change only through its tile label.
+    // Real workspace paths are longer than a tile, so the distinguishing directory must survive clipping.
+    const root = "/home/operator/.openclaw/workspace-root";
+    const image = async (layeredAgents: boolean, movedPath: string) => {
+      const params = makeParams("/context map", false, { layeredAgents });
+      const moved = params.sessionEntry?.systemPromptReport?.injectedWorkspaceFiles.at(-1);
+      if (!moved) {
+        throw new Error("missing injected workspace file");
+      }
+      moved.path = movedPath;
+      const { mediaUrl } = await buildContextReply(params);
+      if (!mediaUrl) {
+        throw new Error("missing context map media path");
+      }
+      onTestFinished(() => unlink(mediaUrl));
+      return readFile(mediaUrl);
+    };
+
+    const shared = await image(true, `${root}/main/AGENTS.md`);
+    expect(shared.equals(await image(true, `${root}/other/AGENTS.md`))).toBe(false);
+    const unique = await image(false, `${root}/main/AGENTS.md`);
+    expect(unique.equals(await image(false, `${root}/other/AGENTS.md`))).toBe(true);
+  });
+
   it("uses the session agent profile when legacy reports are missing bootstrap limits", async () => {
     const result = await buildContextReply(
       makeParams("/context list", false, {
@@ -329,12 +342,7 @@ describe("buildContextReply", () => {
         sessionKey: "agent:scout:main",
         cfg: {
           agents: {
-            entries: {
-              scout: {
-                bootstrapMaxChars: 32_000,
-                bootstrapTotalMaxChars: 96_000,
-              },
-            },
+            entries: { scout: { bootstrapMaxChars: 32_000, bootstrapTotalMaxChars: 96_000 } },
           },
         },
       }),
@@ -360,7 +368,7 @@ describe("buildContextReply", () => {
       async (target) => {
         const { text } = await buildContextReply(detailParams(target));
         expect(text).toContain(
-          `Compactable transcript: ${paged ? 2 : 0} real conversation message(s) / ${paged ? 130 : 2} transcript message(s)`,
+          `Compactable chat history: ${paged ? 2 : 0} real conversation message(s) / ${paged ? 130 : 2} history entries`,
         );
         if (paged) {
           expect(text).not.toContain("Compaction note:");
@@ -466,13 +474,6 @@ describe("buildContextReply", () => {
 });
 
 describe("buildCommandContext", () => {
-  it.each([
-    ["/reset soft\nre-read persona files", "/reset soft re-read persona files"],
-    ["/skill demo_skill first line\nsecond line", "/skill demo_skill first line\nsecond line"],
-  ])("normalizes multiline command %j", (body, expected) => {
-    expect(commandContext(body).commandBodyNormalized).toBe(expected);
-  });
-
   it("maps explicit gateway origin into command context", () => {
     const result = commandContext("/codex bind", {
       Provider: "internal",

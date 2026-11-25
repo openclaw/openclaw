@@ -4,7 +4,11 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
@@ -14,8 +18,12 @@ import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agen
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
+import * as agentWorkerStore from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
@@ -26,54 +34,85 @@ import {
   isSessionTranscriptIndexReconcileRunning,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
+import { searchSessionTranscripts } from "./session-transcript-search.js";
 import {
-  searchSessionTranscripts,
-  searchSessionTranscriptsReadOnlySync,
-} from "./session-transcript-search.js";
-import {
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   historyLane,
-  projectionLane,
+  sessionStoreLane,
   registerSessionTranscriptReaderLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
-it("reenters the projection writer from a cold search's retained read admission", async () => {
+function transcriptMessage(id: string, content: string, timestamp = 1) {
+  return timedMessageEvent(id, null, timestamp, { role: "assistant", content });
+}
+
+async function searchFixture(
+  state: OpenClawTestState,
+  name: string,
+  messageId: string,
+  content: string,
+  storePath = state.statePath(`${name}.sqlite`),
+) {
+  const database = { agentId: "main", path: storePath, env: state.env };
+  const scope = { agentId: "main", storePath, env: state.env };
+  const sessionKey = `agent:main:${name}`;
+  await replaceTranscriptEvents({ ...scope, sessionKey, sessionId: name }, [
+    { type: "session", id: name, version: 3 },
+    transcriptMessage(messageId, content),
+  ]);
+  await waitForSessionTranscriptIndexReconcile(database);
+  return {
+    database,
+    scope,
+    sessionKey,
+    storePath,
+    request: { ...scope, query: "needle", sessionKeys: [sessionKey] },
+  };
+}
+
+it("reenters the cold projection writer and keeps search independent of foreground readers", async (context) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.statePath("cold-search.sqlite");
-    const database = { agentId: "main", path: storePath, env: state.env };
-    const scope = { agentId: "main", storePath, env: state.env };
-    const sessionKey = "agent:main:cold-search";
-    await replaceTranscriptEvents({ ...scope, sessionKey, sessionId: "cold-search" }, [
-      { type: "session", id: "cold-search", version: 3 },
-      {
-        type: "message",
-        id: "cold-needle",
-        parentId: null,
-        timestamp: 1,
-        message: { role: "assistant", content: "Cold search needle" },
-      },
-    ]);
-    await waitForSessionTranscriptIndexReconcile(database);
-    await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-    const reader = retainSessionHistoryWorkerDatabase(database);
-    const readStatus = vi.fn((signal: AbortSignal) =>
-      projectionWriter.readSessionTranscriptIndexStatus(
-        database,
-        reader.owner.assertCurrent,
-        signal,
-      ),
+    const { storePath, database, request } = await searchFixture(
+      state,
+      "cold-search",
+      "cold-needle",
+      "Cold search needle",
     );
+    await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+    const release = createDeferred();
+    const readers = [historyLane, sessionStoreLane].map((lane) => {
+      const reader = retainSessionHistoryWorkerDatabase(database, lane);
+      const entered = createDeferred();
+      const work = reader.owner.searchTranscripts(request, async (signal) => {
+        const status = await projectionWriter.readSessionTranscriptIndexStatus(
+          database,
+          reader.owner.assertCurrent,
+          signal,
+        );
+        entered.resolve();
+        await release.promise;
+        return status;
+      });
+      void work.catch(() => {});
+      return { reader, entered: entered.promise, work };
+    });
+    let search: ReturnType<typeof searchSessionTranscripts> | undefined;
     try {
-      const result = await reader.owner.searchTranscripts(
-        { ...scope, query: "needle", sessionKeys: [sessionKey] },
-        readStatus,
-      );
-      expect(result.hits).toMatchObject([{ messageId: "cold-needle" }]);
-      expect(readStatus).toHaveBeenCalledOnce();
+      await withinTest(Promise.all(readers.map(({ entered }) => entered)), context.signal);
+      search = searchSessionTranscripts(request, database);
+      const expected = { hits: [{ messageId: "cold-needle" }], indexing: false };
+      expect(await withinTest(search, context.signal)).toMatchObject(expected);
+      release.resolve();
+      for (const { work } of readers) {
+        expect(await withinTest(work, context.signal)).toMatchObject(expected);
+      }
     } finally {
-      reader.release();
+      release.resolve();
+      await Promise.allSettled([...readers.map(({ work }) => work), ...(search ? [search] : [])]);
+      readers.forEach(({ reader }) => reader.release());
       await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
     }
   });
@@ -86,30 +125,23 @@ it("keeps a warmed search reader through discovery and retires it through its ca
     const aliasDirectory = path.join(directory, "discovery-alias");
     fs.symlinkSync(directory, aliasDirectory, "junction");
     const aliasPath = path.join(aliasDirectory, path.basename(storePath));
-    const database = { agentId: "main", path: storePath, env: state.env };
-    const scope = { agentId: "main", storePath, env: state.env };
-    const sessionKey = "agent:main:discovery-custody";
-    await replaceTranscriptEvents({ ...scope, sessionKey, sessionId: "discovery-custody" }, [
-      { type: "session", id: "discovery-custody", version: 3 },
-      {
-        type: "message",
-        id: "selected-message",
-        parentId: null,
-        timestamp: 1,
-        message: { role: "assistant", content: "Retained discovery needle" },
-      },
-    ]);
-    await waitForSessionTranscriptIndexReconcile(database);
-    const request = { ...scope, query: "needle", sessionKeys: [sessionKey] };
+    const { database, request } = await searchFixture(
+      state,
+      "discovery-custody",
+      "selected-message",
+      "Retained discovery needle",
+      storePath,
+    );
     const reader = retainSessionHistoryWorkerDatabase(database);
     const search = () =>
-      reader.owner.searchTranscripts(request, () =>
-        projectionWriter.readSessionTranscriptIndexStatus(database),
+      reader.owner.searchTranscripts(
+        { ...request, filterCandidates: true },
+        () => projectionWriter.readSessionTranscriptIndexStatus(database),
+        async (keys) => keys.map(() => true),
       );
     try {
       const initial = await search();
       expect(initial.hits).toMatchObject([{ messageId: "selected-message" }]);
-      expect(initial.indexing).toBe(false);
       const hostSql = observeHostDataSql();
       try {
         await withSessionHistoryWorkerReadCandidates(
@@ -152,16 +184,11 @@ it("reuses completed readiness after idle writer eviction and observes a later t
             { ...database, sessionKey: `agent:main:${sessionId}`, sessionId },
             [
               { type: "session", id: sessionId, version: 3 },
-              {
-                type: "message",
-                id: `message-${index}`,
-                parentId: null,
-                timestamp: index + 1,
-                message: {
-                  role: "assistant",
-                  content: index === 0 ? "Original needle" : `Unrelated fixture ${index}`,
-                },
-              },
+              transcriptMessage(
+                `message-${index}`,
+                index === 0 ? "Original needle" : `Unrelated fixture ${index}`,
+                index + 1,
+              ),
             ],
             { scheduleProjectionReconcile: false },
           );
@@ -191,9 +218,7 @@ it("reuses completed readiness after idle writer eviction and observes a later t
         hits: [{ messageId: "message-0", snippet: "Original needle" }],
         indexing: false,
       });
-      expect(openWriter.mock.calls[0]?.[0].databasePath).toBe(primary.database.path);
       const nativeWriter = await openWriter.mock.results[0]!.value;
-      expect(nativeWriter).toBeDefined();
       const closeWriter = vi.spyOn(nativeWriter!, "close");
       try {
         // Five stores exceed the idle writer limit; the first store retains only its reader.
@@ -220,13 +245,7 @@ it("reuses completed readiness after idle writer eviction and observes a later t
           { ...primary.database, sessionKey: "agent:main:session-0", sessionId: "session-0" },
           [
             { type: "session", id: "session-0", version: 3 },
-            {
-              type: "message",
-              id: "replacement",
-              parentId: null,
-              timestamp: 2,
-              message: { role: "assistant", content: "Replacement needle" },
-            },
+            transcriptMessage("replacement", "Replacement needle", 2),
           ],
           { scheduleProjectionReconcile: false },
         );
@@ -272,26 +291,23 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
     });
     const request = { ...scope, query: "needle", sessionKeys: ["agent:main:selected"], limit: 1 };
     const database = { agentId: "main", path: storePath };
-    const { found, ...golden } = searchSessionTranscriptsReadOnlySync(request, {
-      ...database,
-      env: state.env,
-    });
-    expect(found).toBe(true);
-    expect(golden).toMatchObject({
+    const golden = {
       hits: [
-        {
+        expect.objectContaining({
           sessionKey: "agent:main:selected",
           messageId: "message-1",
           snippet: "Needle visible text 1",
-        },
+        }),
       ],
       truncated: true,
-    });
+    };
     const hostSql = observeHostDataSql();
     try {
-      const actual = await searchSessionTranscripts(request, database);
-      expect(actual).toEqual({ ...golden, indexing: false });
-      expect(hostSql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      expect(await searchSessionTranscripts(request, database)).toEqual({
+        ...golden,
+        indexing: false,
+      });
+      expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();
     }
@@ -318,10 +334,8 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
           .mockRejectedValueOnce(new Error("projection writer unavailable")),
       () =>
         vi
-          .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
-          .mockImplementationOnce(() => {
-            throw new Error("projection writer admission unavailable");
-          }),
+          .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync")
+          .mockRejectedValueOnce(new Error("projection writer admission unavailable")),
     ]) {
       const unavailableStatus = makeUnavailable();
       try {
@@ -329,7 +343,7 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
           ...golden,
           indexing: true,
         });
-        expect(unavailableStatus).toHaveBeenCalledTimes(1);
+        expect(unavailableStatus).toHaveBeenCalledOnce();
         expect(isSessionTranscriptIndexReconcileRunning({ ...database, env: state.env })).toBe(
           false,
         );
@@ -353,7 +367,6 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
         message: expect.stringMatching(/narrow the session selection/),
         cause: expect.objectContaining({ code: "timeout" }),
       });
-      expect(slowUnavailable).toHaveBeenCalledTimes(1);
     } finally {
       slowUnavailable.mockRestore();
       clock.mockRestore();
@@ -363,22 +376,12 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
 
 it("cancels a search status callback queued behind a stuck writer at its deadline", async (test) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = path.join(state.stateDir, "search-cancellation.sqlite");
-    const database = { agentId: "main", path: storePath, env: state.env };
-    const scope = { agentId: "main", storePath, env: state.env };
-    const sessionKey = "agent:main:search-cancellation";
-    await replaceTranscriptEvents({ ...scope, sessionKey, sessionId: "search-cancellation" }, [
-      { type: "session", id: "search-cancellation", version: 3 },
-      {
-        type: "message",
-        id: "needle",
-        parentId: null,
-        timestamp: 1,
-        message: { role: "assistant", content: "Committed needle" },
-      },
-    ]);
-    await waitForSessionTranscriptIndexReconcile(database);
-    const request = { ...scope, query: "needle", sessionKeys: [sessionKey] };
+    const { database, request } = await searchFixture(
+      state,
+      "search-cancellation",
+      "needle",
+      "Committed needle",
+    );
     const committed = await searchSessionTranscripts(request, database);
     runOpenClawAgentWriteTransaction(({ db }) => {
       executeSqliteQuerySync(
@@ -437,22 +440,12 @@ describe("search reader concurrency", () => {
     (context) =>
       lifetime.run(() =>
         withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-          const storePath = state.statePath("surplus-history.sqlite");
-          const sessionKey = "agent:main:surplus-history";
-          const scope = { agentId: "main", storePath, env: state.env };
-          const database = { agentId: "main", path: storePath, env: state.env };
-          await replaceTranscriptEvents({ ...scope, sessionKey, sessionId: "surplus-history" }, [
-            { type: "session", id: "surplus-history", version: 3 },
-            {
-              type: "message",
-              id: "retained-needle",
-              parentId: null,
-              timestamp: 1,
-              message: { role: "assistant", content: "Retained reader needle" },
-            },
-          ]);
-          await waitForSessionTranscriptIndexReconcile(database);
-          const request = { ...scope, query: "needle", sessionKeys: [sessionKey] };
+          const { storePath, database, request } = await searchFixture(
+            state,
+            "surplus-history",
+            "retained-needle",
+            "Retained reader needle",
+          );
           const expected = { hits: [{ messageId: "retained-needle" }], indexing: false };
           const entered = createDeferred();
           const release = createDeferred();
@@ -525,7 +518,7 @@ describe("search reader concurrency", () => {
                 reader.release();
               }
               if (ownedLane) {
-                historyClearTimeout(ownedLane.idleTimer);
+                clearDatabaseWorkerIdleRetirement(ownedLane);
               }
               await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
               const failures = closed.flatMap((result) =>
@@ -540,59 +533,72 @@ describe("search reader concurrency", () => {
         }),
       ),
   );
+});
 
-  it.skipIf(historyLane.pool.getSnapshot().maxWorkers < 2)(
-    "searches while foreground and projection readers await index status",
-    (context) =>
-      lifetime.run(() =>
-        withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-          const storePath = path.join(state.stateDir, "parallel-search.sqlite");
-          const sessionKey = "agent:main:parallel-search";
-          const scope = { agentId: "main", storePath, env: state.env };
-          const database = { agentId: "main", path: storePath, env: state.env };
-          await replaceTranscriptEvents({ ...scope, sessionKey, sessionId: "parallel-search" }, [
-            { type: "session", id: "parallel-search", version: 3 },
-            {
-              type: "message",
-              id: "needle",
-              parentId: null,
-              timestamp: 1,
-              message: { role: "assistant", content: "Parallel needle" },
-            },
-          ]);
-          await waitForSessionTranscriptIndexReconcile(database);
-          const request = { ...scope, query: "needle", sessionKeys: [sessionKey] };
-          const release = createDeferred();
-          const readers = [historyLane, projectionLane].map((lane) => {
-            const reader = retainSessionHistoryWorkerDatabase(database, lane);
-            const entered = createDeferred();
-            const work = reader.owner.searchTranscripts(request, async () => {
-              entered.resolve();
-              await release.promise;
-              return projectionWriter.readSessionTranscriptIndexStatus(database);
-            });
-            void work.catch(() => {});
-            return { reader, entered: entered.promise, work };
-          });
-          let search: ReturnType<typeof searchSessionTranscripts> | undefined;
-          try {
-            await withinTest(Promise.all(readers.map(({ entered }) => entered)), context.signal);
-            search = searchSessionTranscripts(request, database);
-            expect(await withinTest(search, context.signal)).toMatchObject({
-              hits: [{ messageId: "needle" }],
-              indexing: false,
-            });
-          } finally {
-            release.resolve();
-            await Promise.allSettled([
-              ...readers.map(({ work }) => work),
-              ...(search ? [search] : []),
-            ]);
-            for (const { reader } of readers) {
-              reader.release();
-            }
-          }
-        }),
-      ),
-  );
+it("releases a projection status execution when canceled during async capture", async (test) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const fixture = await searchFixture(
+      state,
+      "capture-cancel",
+      "retained-message",
+      "Retained needle",
+    );
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.storePath, "main");
+    const database = {
+      ...fixture.database,
+      path: state.statePath("capture-cancel-unadmitted.sqlite"),
+    };
+    await fs.promises.copyFile(fixture.storePath, database.path);
+    const capture = agentExecution.captureOpenClawAgentDatabaseExecutionAsync;
+    const entered = createDeferred();
+    const continueCapture = createDeferred();
+    let execution: Awaited<ReturnType<typeof capture>> | undefined;
+    const held = vi
+      .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync")
+      .mockImplementationOnce(async (...args) => {
+        execution = await capture(...args);
+        entered.resolve();
+        await continueCapture.promise;
+        return execution;
+      });
+    const openStore = vi.spyOn(agentWorkerStore, "openOpenClawAgentSqliteWorkerStore");
+    const controller = new AbortController();
+    const refusal = new Error("Synthetic status capture canceled");
+    const pending = projectionWriter.readSessionTranscriptIndexStatus(
+      database,
+      undefined,
+      controller.signal,
+    );
+    const settled = Promise.allSettled([pending]);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Projection status bypassed asynchronous capture",
+        ),
+        test.signal,
+      );
+      expect(openStore).not.toHaveBeenCalled();
+      controller.abort(refusal);
+      continueCapture.resolve();
+      await expect(pending).rejects.toBe(refusal);
+      expect(openStore).not.toHaveBeenCalled();
+      expect(() => execution!.assertCurrent()).toThrow(
+        "Agent database execution reference is released",
+      );
+    } finally {
+      controller.abort(refusal);
+      continueCapture.resolve();
+      await settled;
+      held.mockRestore();
+      openStore.mockRestore();
+      await execution?.release();
+    }
+    const result = await searchSessionTranscripts(
+      { ...fixture.request, storePath: database.path },
+      database,
+    );
+    expect(result.hits).toMatchObject([{ messageId: "retained-message" }]);
+  });
 });

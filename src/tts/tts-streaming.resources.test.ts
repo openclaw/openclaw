@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -13,6 +14,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture, nativeFixtureEnv } from "../plugins/native-resource.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -121,14 +123,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   });
 } };`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      contracts: { speechProviders: [id] },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    contracts: { speechProviders: [id] },
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
   const cfg: OpenClawConfig = {
     plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
     tts: { provider: id, providers: { [id]: {} } },
@@ -155,17 +154,10 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     },
     async runTest(operation: () => Promise<void>) {
       try {
-        await withEnvAsync(
-          {
-            OPENCLAW_HOME: dir,
-            OPENCLAW_STATE_DIR: dir,
-            OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-          },
-          async () => {
-            useNoBundledPlugins();
-            await operation();
-          },
-        );
+        await withEnvAsync(nativeFixtureEnv(dir), async () => {
+          useNoBundledPlugins();
+          await operation();
+        });
       } finally {
         await this.cleanup();
       }
@@ -175,12 +167,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       tail.resolve();
       releaseResume.resolve();
       await Promise.allSettled(work);
-      for (const { database } of connections) {
-        if (database.isOpen) {
-          database.close();
-        }
-      }
-      Reflect.deleteProperty(globalThis, key);
+      cleanupNativeFixture(key, connections);
     },
   };
 }

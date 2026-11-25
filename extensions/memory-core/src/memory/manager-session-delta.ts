@@ -2,7 +2,7 @@ import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-s
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import { memoryChunkRowId } from "./manager-source-index-kernel.js";
-import type { MemoryIndexWorkItem, MemorySyncProviderGeneration } from "./manager-sync-ops.js";
+import type { MemoryIndexWorkItem, MemorySyncProviderGeneration } from "./manager-sync-base.js";
 
 export type PreparedMemoryIndexEntry = {
   entry: MemoryIndexWorkItem["entry"];
@@ -16,25 +16,6 @@ export type PreparedMemoryIndexEntry = {
   structuredInputBytes?: number;
 };
 
-/** A shadow's empty tombstone table cannot authorize publication into the live index. */
-export async function assertMemorySessionNotForgotten(
-  database: MemoryIndexDatabase,
-  { agentId, sessionId }: { agentId: string; sessionId: string },
-  assertCurrent: () => void,
-): Promise<void> {
-  // Callers may carry all source chunks; only identity belongs in this worker read.
-  const predicate = await database.read(
-    { type: "session.current", input: { agentId, sessionId } },
-    assertCurrent,
-  );
-  assertCurrent();
-  if (predicate === "forgotten") {
-    throw new Error(
-      "A session was forgotten while memory indexing was running; retry the memory index.",
-    );
-  }
-}
-
 // The index owner plans once; publication consumes the plan without rereading it.
 export async function retainIndexedSessionChunks(
   prepared: PreparedMemoryIndexEntry,
@@ -43,7 +24,7 @@ export async function retainIndexedSessionChunks(
   assertCurrent: () => void,
 ): Promise<PreparedMemoryIndexEntry> {
   const { entry, source, chunks } = prepared;
-  // A full reindex fills an empty shadow, which has no rows to retain.
+  // Rebuild groups replace their private shadow rows as a unit.
   if (entry.kind === "multimodal" || chunks.length === 0 || database.isShadow) {
     return prepared;
   }

@@ -167,50 +167,39 @@ it("settles queued CLI records on their captured actor after abort and outside t
   expect(await messages(foreign.target)).toEqual([]);
 });
 
-it("rolls back a failed model and appends its visible note to the original actor after cancellation", async () => {
-  const { target, run, read, abort } = await create("rollback", patchedModel);
-  const foreign = await create("rollback", patchedModel, other);
-  const onError = vi.fn();
-  const guard = await run(() =>
-    createAgentPatchedSessionModelRunGuard({ ...target, cfg: {}, onError }),
-  );
-  abort("run finished");
-  await foreign.run(() => guard.fail(new Error("model unavailable"), "model_not_found"));
-
-  expect(onError).not.toHaveBeenCalled();
-  const reverted = read();
-  expect(reverted).toMatchObject({ model: "gpt-4o", modelOverride: "gpt-4o" });
-  expect(reverted?.modelFallback).toBeUndefined();
-  expect(await messages(target)).toContainEqual(
-    expect.objectContaining({
-      role: "custom",
-      customType: "openclaw.system-note",
-      display: true,
-      content: "System note: model openai/gpt-4.1 failed; reverted to openai/gpt-4o.",
-    }),
-  );
-  expect(foreign.read()).toMatchObject(patchedModel);
-  expect(await messages(foreign.target)).toEqual([]);
-});
-
-it("does not roll a replacement session back using a previous incarnation's model guard", async () => {
-  const { target, entry, run, read } = await create("rollback-replaced", patchedModel);
-  const onError = vi.fn();
-  const guard = await run(() =>
-    createAgentPatchedSessionModelRunGuard({ ...target, cfg: {}, onError }),
-  );
-  await run(() =>
-    replaceSessionEntry(target, { ...entry, sessionId: "replacement", lifecycleRevision: "next" }),
-  );
-  await guard.fail(new Error("late failed model"), "model_not_found");
-
-  expect(onError).not.toHaveBeenCalled();
-  expect(read()).toMatchObject({
-    sessionId: "replacement",
-    lifecycleRevision: "next",
-    ...patchedModel,
-  });
-});
+it.each(["canceled", "replaced"] as const)(
+  "settles a model guard only on its captured incarnation after it is %s",
+  async (state) => {
+    const { target, entry, run, read, abort } = await create(`rollback-${state}`, patchedModel);
+    const onError = vi.fn();
+    const guard = await run(() =>
+      createAgentPatchedSessionModelRunGuard({ ...target, cfg: {}, onError }),
+    );
+    if (state === "replaced") {
+      const replacement = { ...patchedModel, sessionId: "replacement", lifecycleRevision: "next" };
+      await run(() => replaceSessionEntry(target, { ...entry, ...replacement }));
+      await guard.fail(new Error("late failed model"), "model_not_found");
+      expect(read()).toMatchObject(replacement);
+    } else {
+      const foreign = await create(`rollback-${state}`, patchedModel, other);
+      abort("run finished");
+      await foreign.run(() => guard.fail(new Error("model unavailable"), "model_not_found"));
+      expect(read()).toMatchObject({ model: "gpt-4o", modelOverride: "gpt-4o" });
+      expect(read()?.modelFallback).toBeUndefined();
+      expect(await messages(target)).toContainEqual(
+        expect.objectContaining({
+          role: "custom",
+          customType: "openclaw.system-note",
+          display: true,
+          content: "System note: model openai/gpt-4.1 failed; reverted to openai/gpt-4o.",
+        }),
+      );
+      expect(foreign.read()).toMatchObject(patchedModel);
+      expect(await messages(foreign.target)).toEqual([]);
+    }
+    expect(onError).not.toHaveBeenCalled();
+  },
+);
 
 it("reopens hidden actor effects and deletes only their current owner", async () => {
   const params = { agentId: "main", storePath: actor.path, runId: "hidden-effects" };

@@ -33,6 +33,11 @@ function resultOf(
 ): OpenClawAgentToolResult {
   return { content, details };
 }
+const text = (value: string) => ({ type: "text" as const, text: value });
+const textResult = (value: string, details: unknown = {}) => resultOf([text(value)], details);
+const runnerWith = (
+  ...handlers: NonNullable<Parameters<typeof createAgentToolResultMiddlewareRunner>[1]>
+) => createAgentToolResultMiddlewareRunner({ runtime: "codex" }, handlers);
 function nativeContent(content: unknown) {
   return { type: "toolResult", toolUseId: "call-1", content };
 }
@@ -49,10 +54,7 @@ const deliveryFailure = {
 
 describe("createAgentToolResultMiddlewareRunner", () => {
   it("delivers tool result unchanged when no middleware is registered", async () => {
-    const original = resultOf(
-      [{ type: "text", text: "delivered" }],
-      cyclicDetails({ ok: true, messageId: "abc" }),
-    );
+    const original = textResult("delivered", cyclicDetails({ ok: true, messageId: "abc" }));
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, []);
 
     expect(await apply(runner, original)).toBe(original);
@@ -62,10 +64,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     const details = cyclicDetails({ status: "sent", messageId: "msg_123" });
 
     const result = await applyNative(
-      nativeContent([
-        { type: "text", text: "sent message id msg_123" },
-        { type: "text", text: "status delivered" },
-      ]) as never,
+      nativeContent([text("sent message id msg_123"), text("status delivered")]) as never,
       details,
     );
 
@@ -76,21 +75,19 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("coerces nested tool_result blocks returned by middleware", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
-      () => ({
-        result: {
-          content: [
-            {
-              type: "tool_result",
-              content: { message: "message delivered", id: "msg_456" },
-            } as never,
-          ],
-          details: { status: "sent" },
-        },
-      }),
-    ]);
+    const runner = runnerWith(() => ({
+      result: resultOf(
+        [
+          {
+            type: "tool_result",
+            content: { message: "message delivered", id: "msg_456" },
+          } as never,
+        ],
+        { status: "sent" },
+      ),
+    }));
 
-    const result = await apply(runner, { content: [{ type: "text", text: "raw" }], details: {} });
+    const result = await apply(runner, textResult("raw"));
 
     expect(result.content).toEqual([{ type: "text", text: "message delivered" }]);
     expect(result.details).toEqual({ status: "sent" });
@@ -99,11 +96,8 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   it("bounds nested toolResult content before flattening", async () => {
     const result = await applyNative(
       nativeContent([
-        ...Array.from({ length: 200 }, () => ({
-          type: "text",
-          text: "x".repeat(600),
-        })),
-        { type: "text", text: "late chunk" },
+        ...Array.from({ length: 200 }, () => text("x".repeat(600))),
+        text("late chunk"),
       ]) as never,
     );
 
@@ -121,9 +115,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
         {
           type: "tool_result",
           content: [
-            { type: "text", text: "first caption" },
+            text("first caption"),
             { type: "image", mimeType: "image/png", data: "image-one" },
-            { type: "text", text: "second caption" },
+            text("second caption"),
             { type: "image", mimeType: "image/png", data: "image-two" },
           ],
         },
@@ -153,22 +147,17 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("snapshots confirmed delivery before a middleware failure", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
-      () => {
-        throw new Error("post-processing failed");
-      },
-    ]);
+    const runner = runnerWith(() => {
+      throw new Error("post-processing failed");
+    });
 
     const result = await apply(
       runner,
-      {
-        content: [{ type: "text", text: "raw result must stay private" }],
-        details: {
-          ok: true,
-          result: { messageId: "1700000000.000100", channelId: "C123" },
-          raw: "x".repeat(200_000),
-        },
-      },
+      textResult("raw result must stay private", {
+        ok: true,
+        result: { messageId: "1700000000.000100", channelId: "C123" },
+        raw: "x".repeat(200_000),
+      }),
       { args: { action: "send", target: "C123" } },
     );
 
@@ -194,22 +183,17 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   ] satisfies Array<[string, string, Record<string, unknown>, boolean]>)(
     "preserves only confirmed successful delivery for %s after middleware failure",
     async (_name, toolName, details, delivered) => {
-      const failure = resultOf([{ type: "text", text: "post-processing failed" }], {
+      const failure = textResult("post-processing failed", {
         status: "error",
         middlewareError: true,
       });
-      const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
-        () => ({ result: structuredClone(failure) }),
-      ]);
+      const runner = runnerWith(() => ({ result: structuredClone(failure) }));
 
-      const result = await apply(
-        runner,
-        {
-          content: [{ type: "text", text: "raw result must stay private" }],
-          details,
-        },
-        { toolName, isError: false, args: { action: "send", target: "C123" } },
-      );
+      const result = await apply(runner, textResult("raw result must stay private", details), {
+        toolName,
+        isError: false,
+        args: { action: "send", target: "C123" },
+      });
 
       expect(result).toEqual(delivered ? deliveryFailure : failure);
     },

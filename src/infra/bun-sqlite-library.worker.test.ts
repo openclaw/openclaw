@@ -21,7 +21,7 @@ const runtime = vi.hoisted(() => ({
   selectedPath: undefined as string | undefined,
   launches: 0,
   pools: new Set<{ close: () => Promise<void> }>(),
-  dlopen: vi.fn(),
+  probe: vi.fn(),
   select: vi.fn<(path: string) => void>(),
   closeProbe: vi.fn(),
   getEnvironmentData: vi.fn<(key: unknown) => unknown>(),
@@ -29,6 +29,10 @@ const runtime = vi.hoisted(() => ({
 }));
 
 vi.mock("./bun-sqlite-close-probe.js", () => ({ probeSqliteNativeClose: runtime.closeProbe }));
+vi.mock("./bun-sqlite-library-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bun-sqlite-library-probe.js")>()),
+  probeBunSqliteLibrary: runtime.probe,
+}));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -45,9 +49,6 @@ vi.mock("node:module", async (importOriginal) => {
   const createRequire = (...args: Parameters<typeof actual.createRequire>) => {
     const require = actual.createRequire(...args);
     return Object.assign((specifier: string) => {
-      if (specifier === "bun:ffi") {
-        return { dlopen: runtime.dlopen, FFIType: { cstring: 0, i32: 1 } };
-      }
       if (specifier === "bun:sqlite") {
         return { Database: { setCustomSQLite: runtime.select } };
       }
@@ -162,13 +163,10 @@ beforeEach(async () => {
     explicitSqliteCloseReleasesNativeResources: false,
     reason: "fixture native handles require exit",
   });
-  runtime.dlopen.mockReset().mockImplementation(() => ({
-    symbols: {
-      sqlite3_libversion: () => "3.53.4",
-      sqlite3_compileoption_used: () => 0,
-    },
-    close() {},
-  }));
+  runtime.probe.mockReset().mockReturnValue({
+    version: "3.53.4",
+    extensionLoadingSupported: true,
+  });
   runtime.select.mockReset().mockImplementation((selectedPath) => {
     if (runtime.selectedPath) {
       throw new Error("SQLite library selection is process-wide and cannot repeat");
@@ -307,13 +305,15 @@ describe("Bun SQLite process selection and worker inheritance", () => {
       version: "3.53.4",
     });
     expect([...runtime.environment.values()]).toEqual([selected]);
+    expect(runtime.probe).toHaveBeenCalledExactlyOnceWith("/fixture/sqlite.dylib");
+    runtime.probe.mockClear();
     const worker = await enterWorkerHeap();
     expect(worker.ensureSqliteLibrarySelected({ explicitPath: "/worker/different.dylib" })).toEqual(
       selected,
     );
     expect(worker.ensureSqliteLibrarySelected()).toEqual(selected);
     expect(runtime.select).toHaveBeenCalledExactlyOnceWith("/fixture/sqlite.dylib");
-    expect(runtime.dlopen).toHaveBeenCalledTimes(1);
+    expect(runtime.probe).not.toHaveBeenCalled();
     expect(runtime.setEnvironmentData).toHaveBeenCalledTimes(1);
   });
 
@@ -415,7 +415,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
         expect(runtime.getEnvironmentData).not.toHaveBeenCalledWith(key);
       }
       expect(runtime.setEnvironmentData).not.toHaveBeenCalled();
-      expect(runtime.dlopen).not.toHaveBeenCalled();
+      expect(runtime.probe).not.toHaveBeenCalled();
       expect(runtime.select).not.toHaveBeenCalled();
     },
   );

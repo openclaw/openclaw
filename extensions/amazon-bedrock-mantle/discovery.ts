@@ -152,20 +152,14 @@ export async function generateBearerTokenFromIam(params: {
 
 export async function resolveMantleRuntimeBearerToken(params: {
   apiKey: string;
+  authMode?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ apiKey: string; expiresAt?: number } | undefined> {
-  if (params.apiKey !== MANTLE_IAM_TOKEN_MARKER) {
+  if (params.apiKey !== MANTLE_IAM_TOKEN_MARKER && params.authMode !== "aws-sdk") {
     return { apiKey: params.apiKey };
   }
   const now = Date.now();
   const region = resolveMantleRegion(params.env ?? process.env);
-  const cached = getCachedIamTokenEntry(region, now);
-  if (cached) {
-    return {
-      apiKey: cached.token,
-      expiresAt: cached.expiresAt,
-    };
-  }
   const token = await generateBearerTokenFromIam({ region });
   if (!token) {
     return undefined;
@@ -244,7 +238,7 @@ export async function discoverMantleModels(params: {
   const cached = discoveryCache.get(region);
   if (
     cached?.bearerToken === bearerToken &&
-    Date.now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000
+    performance.now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000
   ) {
     return cached.models;
   }
@@ -276,18 +270,26 @@ export async function discoverMantleModels(params: {
       const body = await readMantleModelDiscoveryJson(response);
       const models = body.data
         .filter((model) => model.id?.trim())
-        .map((model) => ({
-          id: model.id,
-          name: model.id,
-          reasoning: inferReasoningSupport(model.id),
-          input: ["text" as const],
-          cost: DEFAULT_COST,
-          contextWindow: DEFAULT_CONTEXT_WINDOW,
-          maxTokens: DEFAULT_MAX_TOKENS,
-        }))
+        .map((model) => {
+          const definition: ModelDefinitionConfig = {
+            id: model.id,
+            name: model.id,
+            reasoning: inferReasoningSupport(model.id),
+            input: ["text"],
+            cost: DEFAULT_COST,
+            contextWindow: DEFAULT_CONTEXT_WINDOW,
+            maxTokens: DEFAULT_MAX_TOKENS,
+          };
+          // Numbered GPT models use Responses; GPT-OSS keeps the generic /v1 route.
+          if (/^openai\.gpt-\d/.test(model.id)) {
+            definition.api = "openai-responses";
+            definition.baseUrl = `${mantleEndpoint(region)}/openai/v1`;
+          }
+          return definition;
+        })
         .toSorted((left, right) => left.id.localeCompare(right.id));
 
-      discoveryCache.set(region, { bearerToken, models, fetchedAt: Date.now() });
+      discoveryCache.set(region, { bearerToken, models, fetchedAt: performance.now() });
       return models;
     } finally {
       await release();

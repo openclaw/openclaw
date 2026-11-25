@@ -3,7 +3,6 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.AppDialog
 import ai.openclaw.app.ui.design.ClawTheme
-import android.annotation.SuppressLint
 import android.util.Base64
 import android.view.ViewGroup
 import android.webkit.RenderProcessGoneDetail
@@ -73,7 +72,6 @@ internal fun ChatMermaidPreview(
 
 // SVG stays an image document, not inline active markup. JavaScript and every network/
 // file route are disabled; native WebView zoom keeps labels sharp without another engine.
-@SuppressLint("MissingOnRenderProcessGone")
 @Suppress("DEPRECATION")
 @Composable
 private fun MermaidSvgView(

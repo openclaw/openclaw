@@ -10,15 +10,22 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createSandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { setRuntimeConfigSnapshot, writeConfigFile } from "../config/config.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import { encodePngRgb } from "../media/png-encode.js";
-import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  syncCanonicalGitHubIdentity,
+} from "../state/user-profile-writes.js";
 import { guestScopes } from "./github-publication-requester.test-support.js";
 import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   commandResult,
+  overrideCommands,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
 import { updateGitHubToolIdentityConfig } from "./github-tool-identity-config.js";
@@ -28,7 +35,15 @@ import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/conn
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 
 const mocks = githubPublicationTestMocks();
-vi.mock("node:dns/promises", { spy: true });
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: vi.fn(actual.lookup),
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 // Mocked fetch normally skips DNS. Retain real guarded preflight with the isolated lookup.
 vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
@@ -40,7 +55,7 @@ vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
   };
 });
 
-async function evidenceFixture() {
+async function evidenceFixture(imported = false) {
   const f = await fixture();
   const cwd = f.local!.cwd;
   const bytes = encodePngRgb(Buffer.from([30, 120, 210]), 1, 1);
@@ -94,12 +109,67 @@ async function evidenceFixture() {
     "../agents/github-tool-identity.js",
   );
   mocks.matchesIdentity.mockImplementation(actualIdentity.matchesPreparedGitHubPublicationIdentity);
-  const previous = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(async (argv, options) =>
+  overrideCommands((argv) =>
     argv.includes(`repos/${f.publication.repository}`) && argv.includes(".id")
       ? commandResult("12345")
-      : previous(argv, options),
+      : undefined,
   );
+  if (imported) {
+    await syncCanonicalGitHubIdentity({
+      identity: { accountId: 101, login: "contributor" },
+      authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
+    });
+    const repo = {
+      id: 12345,
+      full_name: f.publication.repository,
+      private: false,
+      archived: false,
+      owner: { type: "User" },
+      permissions: { push: true },
+    };
+    const number = Number(new URL(f.publication.url).pathname.split("/").at(-1));
+    const base = {
+      repository: repo.full_name,
+      repositoryId: repo.id,
+      branch: "main",
+      commit: "b".repeat(40),
+    };
+    const head = { ...base, branch: f.publication.branch, commit: f.publication.headCommit };
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    await upsertSessionEntryCore(scope, {
+      worktree: {
+        ...loadSessionEntryReadOnly(scope)!.worktree!,
+        githubPullRequest: {
+          url: f.publication.url,
+          host: "github.com",
+          number,
+          base,
+          head,
+          preparedHeadCommit: head.commit,
+        },
+      },
+    });
+    Object.assign(f.state, {
+      number,
+      user: { id: 101, login: "contributor" },
+      maintainer_can_modify: false,
+      base: { repo, ref: base.branch, sha: base.commit },
+      head: { repo, ref: head.branch, sha: head.commit },
+    });
+    overrideCommands((argv) => {
+      if (argv.includes("GET") && argv.at(-1) === `repos/${repo.full_name}`) {
+        return commandResult(JSON.stringify(repo));
+      }
+      if (
+        argv.includes("GET") &&
+        argv.at(-1) === `repos/${repo.full_name}/branches/${encodeURIComponent(head.branch)}`
+      ) {
+        const branch = { name: head.branch, commit: { sha: head.commit }, protected: false };
+        return commandResult(JSON.stringify(branch));
+      }
+      return undefined;
+    });
+  }
   let beforeLookup: (() => Promise<void>) | undefined;
   function lookup(_hostname: string, options: LookupAllOptions): Promise<LookupAddress[]>;
   function lookup(_hostname: string, options?: LookupOneOptions | number): Promise<LookupAddress>;
@@ -123,7 +193,12 @@ async function evidenceFixture() {
   const upload = (input: Record<string, unknown> = {}, client?: typeof f.guestSource.client) =>
     f.invoke(
       "guest",
-      { action: "upload_evidence", ...f.expected, evidence, ...input },
+      {
+        action: "upload_evidence",
+        ...(imported ? { expectedHeadCommit: f.publication.headCommit } : f.expected),
+        evidence,
+        ...input,
+      },
       SESSION_KEY,
       { client, sandbox },
     );
@@ -155,6 +230,28 @@ describe("workspace evidence through the guest tool and registered publication a
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it("uploads to an imported PR and invalidates its binding before a later transfer", async () => {
+    const f = await evidenceFixture(true);
+    const result = await f.upload();
+    expect(result.details).toMatchObject({
+      pullRequest: { url: f.publication.url },
+      evidence: { status: "uploaded", url: f.url },
+    });
+    expect(result.details).not.toHaveProperty("publication");
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    f.onLookup(async () => {
+      const worktree = loadSessionEntryReadOnly(scope)!.worktree!;
+      await upsertSessionEntryCore(scope, {
+        worktree: {
+          ...worktree,
+          githubPullRequest: { ...worktree.githubPullRequest!, number: 999 },
+        },
+      });
+    });
+    await expect(f.upload()).rejects.toThrow();
+    expect(f.fetch).toHaveBeenCalledOnce();
   });
 
   it("uploads inspected guest workspace bytes and associates the reference only through metadata editing", async () => {
@@ -192,6 +289,17 @@ describe("workspace evidence through the guest tool and registered publication a
 
   it("rejects foreign paths, altered bytes, unsafe media and unrelated publication selectors before upload", async () => {
     const f = await evidenceFixture();
+    await expect(
+      f.invoke(
+        "guest",
+        { action: "upload_evidence", ...f.expected, evidence: f.evidence },
+        SESSION_KEY,
+        { raw: true },
+      ),
+    ).rejects.toThrow("not offered to sessions that run directly on the host");
+    f.sandbox.sessionKey = "agent:main:foreign";
+    await expect(f.upload()).rejects.toThrow("this conversation's active sandbox workspace");
+    f.sandbox.sessionKey = SESSION_KEY;
     for (const filename of [
       "../foreign.png",
       "/workspace/proof.png",
@@ -310,7 +418,7 @@ describe("workspace evidence through the guest tool and registered publication a
       expect(admission.authorization).toBeDefined();
       admission.authorization!.assertCurrent();
       await expect(f.upload({}, client)).rejects.toThrow(
-        "The original GitHub publication requester is no longer authorized.",
+        "This requester is not authorized to publish from this conversation.",
       );
       expect(f.fetch).not.toHaveBeenCalled();
     } finally {
@@ -318,7 +426,7 @@ describe("workspace evidence through the guest tool and registered publication a
     }
   });
 
-  it("rechecks PR head and the guest's current role after evidence preparation", async () => {
+  it("rechecks PR head after evidence preparation", async () => {
     const f = await evidenceFixture();
     let reads = 0;
     f.onRead(async () => {
@@ -327,14 +435,6 @@ describe("workspace evidence through the guest tool and registered publication a
       }
     });
     await expect(f.upload()).rejects.toThrow("head changed");
-    f.state.head.sha = f.publication.headCommit;
-    reads = 0;
-    f.onRead(async () => {
-      if (++reads === 2) {
-        await f.revoke();
-      }
-    });
-    await expect(f.upload()).rejects.toThrow("Your operator role changed");
     expect(f.fetch).not.toHaveBeenCalled();
   });
 

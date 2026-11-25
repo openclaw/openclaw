@@ -8,10 +8,8 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { appendSessionTranscriptReport } from "../../config/sessions/session-accessor.sqlite-transcript-reports.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import {
-  runWithoutOwnedSessionTranscriptWrites,
-  withSessionTranscriptWriteAssertion,
-} from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayTransportError } from "../../gateway/call.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
@@ -33,7 +31,7 @@ import {
   ToolInputError,
 } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
   wrapGatewayPersonalToolExecution,
 } from "./gateway-caller-context.js";
 import {
@@ -108,14 +106,7 @@ async function resolvePatchTarget(
   opts: SessionsToolOptions,
   sessionKey: string | undefined,
   callGateway: AgentToolGatewayRequestCaller,
-): Promise<{
-  agentId: string;
-  cfg: OpenClawConfig;
-  isRequesterSession: boolean;
-  key: string;
-  requesterAgentId: string;
-  requesterSessionKey: string;
-}> {
+) {
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
   const requesterAgentId = resolveSessionAgentId({
@@ -392,11 +383,12 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
       if (action === "assign_owner") {
         // Responsibility assignment uses the live agent caller, not the assignee authority.
-        const assertCallerCurrent = captureGatewayToolCallerAssertion();
-        if (opts.senderIsOwner !== true && !assertCallerCurrent) {
+        if (
+          opts.senderIsOwner !== true &&
+          !getGatewayToolCallerIdentity()?.operationalRunInstance
+        ) {
           throw new ToolAuthorizationError("Non-owner assignment requires an admitted agent turn");
         }
-        assertCallerCurrent?.("sessions.assignOwner");
         const ownerType = readToolStringParam(params, "ownerType", { required: true });
         const ownerId = readToolStringParam(params, "ownerId", { required: true });
         if (ownerType !== "human" && ownerType !== "agent") {
@@ -415,7 +407,6 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             owner: { type: ownerType, id: ownerId },
           },
           agentToolCaller: { agentId: requesterAgentId, sessionKey: requesterSessionKey },
-          ...(assertCallerCurrent ? { assertDispatchCurrent: assertCallerCurrent } : {}),
         });
         return jsonResult({
           status: "updated",
@@ -574,99 +565,103 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             // Accepted work retains its source authority, not the request/turn
             // lifetime that must end before the archive can commit.
             const archiveGatewayContext = getInProcessGatewayToolContext();
-            void runWithGatewayToolContinuationContext(() =>
-              released
-                .then(async () => {
-                  const archiveTarget = captureSessionTarget({
-                    storeScope: storePath,
-                    sessionKey: key,
-                    incarnation: expectedSessionIdentity.expectedSessionId,
-                    agentId,
-                  });
-                  const archivePatch = {
-                    key,
-                    ...agentScope,
-                    archived: true,
-                    ...expectedSessionIdentity,
-                  };
-                  while (true) {
-                    const competingRelease = captureSessionControllerSettlement({
-                      target: archiveTarget,
+            void runWithGatewayToolContinuationContext(
+              () =>
+                released
+                  .then(async () => {
+                    const archiveTarget = captureSessionTarget({
+                      storeScope: storePath,
+                      sessionKey: key,
+                      incarnation: expectedSessionIdentity.expectedSessionId,
+                      agentId,
                     });
-                    if (competingRelease) {
-                      await competingRelease;
-                      continue;
-                    }
-
-                    try {
-                      await (controlOnly
-                        ? callSessionPatch(archivePatch)
-                        : callGateway("sessions.patch", archivePatch));
-                      return;
-                    } catch (error) {
-                      // A tracked competing turn can delay archival. Untracked
-                      // races and transport failures are best effort: warn below.
-                      const retryableGatewayFailure =
-                        error instanceof GatewayTransportError ||
-                        isTransientNetworkError(error) ||
-                        (typeof error === "object" &&
-                          error !== null &&
-                          "retryable" in error &&
-                          error.retryable === true);
-                      if (!retryableGatewayFailure) {
-                        throw error;
-                      }
-                      const retryAfterRelease = captureSessionControllerSettlement({
+                    const archivePatch = {
+                      key,
+                      ...agentScope,
+                      archived: true,
+                      ...expectedSessionIdentity,
+                    };
+                    while (true) {
+                      const competingRelease = captureSessionControllerSettlement({
                         target: archiveTarget,
                       });
-                      if (!retryAfterRelease) {
-                        throw error;
+                      if (competingRelease) {
+                        await competingRelease;
+                        continue;
                       }
-                      await retryAfterRelease;
-                    }
-                  }
-                })
-                .catch(async (error: unknown) => {
-                  log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
-                  const source = captureSessionControlAuthority();
-                  const target = {
-                    agentId,
-                    storePath,
-                    sessionKey: key,
-                    sessionId: expectedSessionIdentity.expectedSessionId,
-                  };
-                  // The settled model writer no longer owns this accepted outcome.
-                  // Keep the retained source and exact session generation at the report commit.
-                  const report = await runWithoutOwnedSessionTranscriptWrites(() =>
-                    withSessionTranscriptWriteAssertion(
-                      target,
-                      composeSessionSourceAssertion([source?.assertCurrent], (assertSource) => {
-                        assertSource();
-                        if (getInProcessGatewayToolContext() !== archiveGatewayContext) {
-                          throw new Error("Deferred archive Gateway owner changed");
+
+                      try {
+                        await (controlOnly
+                          ? callSessionPatch(archivePatch)
+                          : callGateway("sessions.patch", archivePatch));
+                        return;
+                      } catch (error) {
+                        // A tracked competing turn can delay archival. Untracked
+                        // races and transport failures are best effort: warn below.
+                        const retryableGatewayFailure =
+                          error instanceof GatewayTransportError ||
+                          isTransientNetworkError(error) ||
+                          (typeof error === "object" &&
+                            error !== null &&
+                            "retryable" in error &&
+                            error.retryable === true);
+                        if (!retryableGatewayFailure) {
+                          throw error;
                         }
-                      }),
-                      () =>
-                        appendSessionTranscriptReport(target, {
-                          kind: "custom",
-                          customTypes: ["session-archive-failed"],
-                          selectReport: () => ({
-                            customType: "session-archive-failed",
-                            content:
-                              "The scheduled session archive could not be confirmed. Check whether this session is archived before trying again.",
-                            display: true,
-                            excludeFromContext: true,
-                            details: { operation: "archive", outcome: "unconfirmed" },
-                          }),
-                        }),
-                    ),
-                  );
-                  if (!report.ok) {
+                        const retryAfterRelease = captureSessionControllerSettlement({
+                          target: archiveTarget,
+                        });
+                        if (!retryAfterRelease) {
+                          throw error;
+                        }
+                        await retryAfterRelease;
+                      }
+                    }
+                  })
+                  .catch(async (error: unknown) => {
                     log.warn(
-                      `deferred self-archive notice unavailable for ${key}: ${report.error.code}`,
+                      `deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`,
                     );
-                  }
-                }),
+                    const source = captureSessionControlAuthority();
+                    const target = {
+                      agentId,
+                      storePath,
+                      sessionKey: key,
+                      sessionId: expectedSessionIdentity.expectedSessionId,
+                    };
+                    // The settled model writer no longer owns this accepted outcome.
+                    // Keep the retained source and exact session generation at the report commit.
+                    const report = await runWithoutOwnedSessionTranscriptWrites(() =>
+                      withSessionTranscriptWriteAssertion(
+                        target,
+                        composeSessionSourceAssertion([source?.assertCurrent], (assertSource) => {
+                          assertSource();
+                          if (getInProcessGatewayToolContext() !== archiveGatewayContext) {
+                            throw new Error("Deferred archive Gateway owner changed");
+                          }
+                        }),
+                        () =>
+                          appendSessionTranscriptReport(target, {
+                            kind: "custom",
+                            customTypes: ["session-archive-failed"],
+                            selectReport: () => ({
+                              customType: "session-archive-failed",
+                              content:
+                                "The scheduled session archive could not be confirmed. Check whether this session is archived before trying again.",
+                              display: true,
+                              excludeFromContext: true,
+                              details: { operation: "archive", outcome: "unconfirmed" },
+                            }),
+                          }),
+                      ),
+                    );
+                    if (!report.ok) {
+                      log.warn(
+                        `deferred self-archive notice unavailable for ${key}: ${report.error.code}`,
+                      );
+                    }
+                  }),
+              { agentId },
             ).catch((error: unknown) => {
               log.warn(
                 `deferred self-archive outcome unavailable for ${key}: ${formatErrorMessage(error)}`,

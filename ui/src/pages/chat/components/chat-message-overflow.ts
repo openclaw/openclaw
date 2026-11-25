@@ -1,5 +1,5 @@
 import { onSettled } from "solid-js";
-import { listen } from "../../../lib/reactive/listener.ts";
+import { observeFontLoading } from "../../../lib/reactive/font-loading.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { findMessageDisclosureLine, type MessageTextRect } from "./chat-message-disclosure.ts";
 
@@ -68,7 +68,7 @@ export function messageOverflowRef(
     // Sibling toggle refs are attached before the initial batched measurement.
     update();
     // Font metrics can change without resizing tightly spaced retained text.
-    const stopFontsLoaded = document.fonts && listen(document.fonts, "loadingdone", update);
+    const stopFontsLoaded = observeFontLoading(document.fonts, update);
     return () => {
       stopFontsLoaded?.();
       if (measurement) {

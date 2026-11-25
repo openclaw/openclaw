@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
 } from "../../config/sessions/session-transcript-read-fence.js";
+import { decideTurnGrant } from "../../gateway/operator-admission.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
+import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -14,7 +15,10 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import type { ReplyPayload } from "../types.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import type { FollowupRun } from "./queue.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
+import type { QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const state = vi.hoisted(() => ({
   account: vi.fn(),
@@ -23,12 +27,8 @@ const state = vi.hoisted(() => ({
   completedSourceDelivery: false,
   deliver: vi.fn(),
   execute: vi.fn(),
+  recordFailure: vi.fn(),
   resolveDecision: vi.fn(),
-  clearRunContext: vi.fn(),
-}));
-
-vi.mock("../../infra/agent-run-registry.js", () => ({
-  clearAgentRunContext: (...args: unknown[]) => state.clearRunContext(...args),
 }));
 
 vi.mock("../../agents/embedded-agent-runner/delivery-evidence.js", () => ({
@@ -42,6 +42,16 @@ vi.mock("./agent-runner-result-accounting.js", () => ({
 vi.mock("./reply-agent-turn-preparation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./reply-agent-turn-preparation.js")>()),
   prepareReplyAgentTurn: (...args: unknown[]) => state.admit(...args),
+}));
+
+// mock-isolation: Presentation tests use synthetic operations; real owner admission is
+// exercised by followup-runner.queue-custody.test.ts through the production runner.
+vi.mock("./reply-turn-admission-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-turn-admission-lifecycle.js")>()),
+  runWithReplyOperationLifecycleAdmission: async (
+    _operation: unknown,
+    run: () => Promise<unknown>,
+  ) => await run(),
 }));
 
 vi.mock("./followup-turn-execution.js", () => ({
@@ -59,41 +69,38 @@ vi.mock("./queue.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn() } }));
+vi.mock("../../sessions/session-run-error.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/session-run-error.js")>()),
+  recordGatewaySessionRunFailure: state.recordFailure,
+}));
 
 const { createFollowupRunner } = await import("./followup-runner.js");
+let turn: ReturnType<typeof createTurn>;
+let typing: ReturnType<typeof createMockTypingController>;
 
-function createQueuedRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
-  return {
-    prompt: "queued prompt",
-    enqueuedAt: 1,
-    run: {
-      agentId: "agent",
-      agentDir: "/tmp/agent",
-      sessionId: "session",
-      sessionKey: "main",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      config: {},
-      provider: "anthropic",
-      model: "claude",
-      timeoutMs: 1_000,
-      blockReplyBreak: "message_end",
-    },
+function createRunner(overrides: Partial<Parameters<typeof createFollowupRunner>[0]> = {}) {
+  return createFollowupRunner({
+    typing,
+    typingMode: "never",
+    defaultModel: "claude",
     ...overrides,
-  };
+  });
 }
 
-function createTypingController() {
-  return {
-    onReplyStart: vi.fn(async () => {}),
-    startTypingLoop: vi.fn(async () => {}),
-    startTypingOnText: vi.fn(async () => {}),
-    refreshTypingTtl: vi.fn(),
-    isActive: vi.fn(() => false),
-    markRunComplete: vi.fn(),
-    markDispatchIdle: vi.fn(),
-    cleanup: vi.fn(),
-  };
+function admitTurn(admitted: ReturnType<typeof createTurn>, execution = createExecution()) {
+  state.admit.mockResolvedValue({ kind: "admitted", turn: admitted });
+  state.execute.mockResolvedValue(execution);
+}
+
+function attachSource(source: ReturnType<typeof createTurn>) {
+  const deliver = vi.fn(async () => {});
+  source.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
+  return deliver;
+}
+
+function expectTypingComplete() {
+  expect(typing.markRunComplete).toHaveBeenCalledOnce();
+  expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
 }
 
 function createTurn(
@@ -107,7 +114,10 @@ function createTurn(
   };
   return {
     runId: "run-1",
-    queued: createQueuedRun(),
+    queued: createQueueTestRun(
+      { prompt: "queued prompt", enqueuedAt: 1 },
+      { sessionId: "session", sessionKey: "main", provider: "anthropic", model: "claude" },
+    ),
     operation,
     config: {},
     session: {
@@ -121,12 +131,25 @@ function createTurn(
   } as unknown as AdmittedFollowupTurn & { operation: typeof operation };
 }
 
-function createRejectedExecution(order: string[] = []): FollowupExecutionResult {
+function createExecution(
+  kind: "settled" | "rejected" = "settled",
+  order: string[] = [],
+): FollowupExecutionResult {
   return {
     commentaryPayloadsEnabled: false,
     execution: {
       runId: "run-1",
-      outcome: { kind: "rejected", payload: { text: "failed" } },
+      outcome:
+        kind === "rejected"
+          ? { kind, payload: { text: "failed" } }
+          : {
+              kind,
+              status: "ok",
+              result: { payloads: [], meta: { durationMs: 0 } },
+              resolved: { provider: "anthropic", model: "claude" },
+              fallback: { exhausted: false, attempts: [] },
+              autoCompactionCount: 0,
+            },
     },
     runStartedAt: 1,
     sessionCtx: {},
@@ -139,60 +162,41 @@ function createRejectedExecution(order: string[] = []): FollowupExecutionResult 
   } as FollowupExecutionResult;
 }
 
-function createSettledExecution(): FollowupExecutionResult {
-  return {
-    ...createRejectedExecution(),
-    execution: {
-      runId: "run-1",
-      outcome: {
-        kind: "settled",
-        status: "ok",
-        result: { payloads: [], meta: { durationMs: 0 } },
-        resolved: { provider: "anthropic", model: "claude" },
-        fallback: { exhausted: false, attempts: [] },
-        autoCompactionCount: 0,
-      },
-    },
-  };
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
+  turn = createTurn();
+  typing = createMockTypingController();
+  admitTurn(turn);
   state.completedSourceDelivery = false;
+  state.account.mockResolvedValue(undefined);
   state.resolveDecision.mockReturnValue({ kind: "suppress", reason: "silent" });
   state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });
 });
 
 describe("createFollowupRunner", () => {
   it.each([
-    { kind: "pending", failed: false },
-    { kind: "pending", failed: true },
-    { kind: "source-retry", failed: false },
-    { kind: "source-retry", failed: true },
+    { kind: "pending", failed: false, visible: false },
+    { kind: "pending", failed: true, visible: false },
+    { kind: "source-retry", failed: false, visible: false },
+    { kind: "source-retry", failed: true, visible: false },
+    { kind: "completed", failed: false, visible: false },
+    { kind: "completed", failed: false, visible: true },
   ] as const)(
-    "distinguishes transport handoff from source retry ($kind, failed=$failed)",
-    async ({ kind, failed }) => {
-      const turn = createTurn();
+    "settles delivery correlations ($kind, failed=$failed, visible=$visible)",
+    async ({ kind, failed, visible }) => {
       const end = vi.fn();
+      const onObservedReplyDelivery = vi.fn(async () => {});
       turn.queued.deliveryCorrelations = [{ begin: () => end }];
-      state.admit.mockResolvedValue({ kind: "admitted", turn });
-      state.execute.mockResolvedValue(
-        failed ? createRejectedExecution() : createSettledExecution(),
-      );
-      state.account.mockResolvedValue(undefined);
+      state.completedSourceDelivery = visible;
+      state.execute.mockResolvedValue(createExecution(failed ? "rejected" : "settled"));
       state.deliver.mockResolvedValue({ kind, payloads: [] });
-
-      await createFollowupRunner({
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-      })(turn.queued);
-
+      await createRunner({ opts: { onObservedReplyDelivery } })(turn.queued);
+      expect(onObservedReplyDelivery).toHaveBeenCalledTimes(visible ? 1 : 0);
       expect(end).toHaveBeenCalledExactlyOnceWith(
         kind === "source-retry" && !failed
           ? undefined
           : {
-              visibleReplySent: false,
+              visibleReplySent: visible,
               failed,
               completed: !failed,
               ...(kind === "pending" ? { transportPending: true } : {}),
@@ -202,7 +206,6 @@ describe("createFollowupRunner", () => {
   );
 
   it("reads the current transcript without borrowing the interrupted turn's admission fence", async () => {
-    const turn = createTurn();
     const admission = {
       agentId: "agent",
       sessionId: "session",
@@ -223,36 +226,35 @@ describe("createFollowupRunner", () => {
     state.execute.mockImplementation(async () => {
       await Promise.resolve();
       expect(resolveSessionTranscriptReadFence(admission)).toBeUndefined();
-      return createSettledExecution();
+      return createExecution();
     });
-    state.account.mockResolvedValue(undefined);
     await runWithSessionTranscriptReadFence(admission, async () => {
-      await createFollowupRunner({
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-      })(turn.queued);
+      await createRunner()(turn.queued);
       expect(resolveSessionTranscriptReadFence(admission)).toBe(admission);
     });
-    expect(state.execute).toHaveBeenCalledOnce();
   });
 
-  it.each([true, false])(
-    "publishes admission notices only for consumed execution (admission succeeds=%s)",
-    async (succeeds) => {
-      const turn = createTurn();
-      const source = createChatSendLateFollowupDisposition({
-        runId: "source-run",
-        originatingChannel: "webchat",
-        logGateway: { info: vi.fn() } as never,
-        deliver: async () => ({ kind: "delivered" }),
-      });
-      source.recordQueued();
-      turn.queued.originatingChannel = "webchat";
-      turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: source.deliver };
+  it.each([
+    { channel: "webchat", phase: "end", succeeds: true },
+    { channel: "webchat", phase: "end", succeeds: false },
+    { channel: "discord", phase: "start", succeeds: true },
+  ] as const)(
+    "delivers $channel compaction $phase at its owner boundary (admitted=$succeeds)",
+    async ({ channel, phase, succeeds }) => {
+      turn.queued.originatingChannel = channel;
+      if (channel === "webchat") {
+        const source = createChatSendLateFollowupDisposition({
+          runId: "source-run",
+          originatingChannel: channel,
+          logGateway: { info: vi.fn() } as never,
+          deliver: async () => ({ kind: "delivered" }),
+        });
+        source.recordQueued();
+        turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: source.deliver };
+      }
       const failure = new Error("session generation changed after compaction");
       const notice = {
-        text: "Context compacted",
+        text: phase === "start" ? "Compacting context" : "Context compacted",
         replyToCurrent: true,
         isCompactionNotice: true,
       };
@@ -263,30 +265,37 @@ describe("createFollowupRunner", () => {
             typeof import("./reply-agent-turn-preparation.js").prepareReplyAgentTurn
           >[0],
         ) => {
-          await params.onCompactionNotice?.("end", notice.text, turn);
+          await params.onCompactionNotice?.(phase, notice.text, turn);
           if (!succeeds) {
             throw failure;
           }
+          order.push("compaction-finished");
           return { kind: "admitted", turn };
         },
       );
       state.execute.mockImplementation(async () => {
         order.push("execution-settled");
-        return createSettledExecution();
+        return createExecution();
       });
-      state.account.mockResolvedValue(undefined);
-      state.deliver.mockImplementation(async () => {
-        order.push("delivery");
+      state.deliver.mockImplementation(async (params: { kind?: string }) => {
+        order.push(params.kind === "block" ? "notice-delivered" : "final-delivered");
         return { kind: "completed", payloads: [] };
       });
-      const run = createFollowupRunner({
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-      });
-      if (succeeds) {
-        await run(turn.queued);
-        expect(order).toEqual(["execution-settled", "delivery", "delivery"]);
+      const run = createRunner()(turn.queued);
+      if (!succeeds) {
+        await expect(run).rejects.toBe(failure);
+        expect(state.execute).not.toHaveBeenCalled();
+        expect(state.deliver).not.toHaveBeenCalled();
+        expect(state.completeLifecycle).not.toHaveBeenCalled();
+        return;
+      }
+      await run;
+      expect(order).toEqual(
+        channel === "webchat"
+          ? ["compaction-finished", "execution-settled", "notice-delivered", "final-delivered"]
+          : ["notice-delivered", "compaction-finished", "execution-settled", "final-delivered"],
+      );
+      if (channel === "webchat") {
         expect(state.deliver).toHaveBeenNthCalledWith(
           1,
           expect.objectContaining({
@@ -295,103 +304,26 @@ describe("createFollowupRunner", () => {
             runId: turn.runId,
           }),
         );
-      } else {
-        await expect(run(turn.queued)).rejects.toBe(failure);
-        expect(state.execute).not.toHaveBeenCalled();
-        expect(state.deliver).not.toHaveBeenCalled();
-        expect(state.completeLifecycle).not.toHaveBeenCalled();
       }
     },
   );
 
-  it("delivers ordinary channel compaction-start while admission is still compacting", async () => {
-    const turn = createTurn();
-    turn.queued.originatingChannel = "discord";
-    const order: string[] = [];
-    state.admit.mockImplementation(
-      async (
-        params: Parameters<
-          typeof import("./reply-agent-turn-preparation.js").prepareReplyAgentTurn
-        >[0],
-      ) => {
-        await params.onCompactionNotice?.("start", "Compacting context", turn);
-        order.push("compaction-finished");
-        return { kind: "admitted", turn };
-      },
-    );
-    state.execute.mockImplementation(async () => {
-      order.push("execution-settled");
-      return createSettledExecution();
-    });
-    state.account.mockResolvedValue(undefined);
-    state.deliver.mockImplementation(async (params: { kind?: string }) => {
-      order.push(params.kind === "block" ? "notice-delivered" : "final-delivered");
-      return { kind: "completed", payloads: [] };
-    });
-    await createFollowupRunner({
-      typing: createTypingController(),
-      typingMode: "never",
-      defaultModel: "claude",
-    })(turn.queued);
-    expect(order).toEqual([
-      "notice-delivered",
-      "compaction-finished",
-      "execution-settled",
-      "final-delivered",
-    ]);
-  });
-
-  it("closes the current run once after transferring source delivery to recovery", async () => {
-    const turn = createTurn();
-    const deliver = vi.fn(async () => {});
-    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
-    state.admit.mockResolvedValue({ kind: "admitted", turn });
-    state.execute.mockResolvedValue(createSettledExecution());
-    state.account.mockResolvedValue(undefined);
-    state.resolveDecision.mockReturnValue({
-      kind: "retry-source-delivery",
-      run: turn.queued,
-      finalTextLength: 300,
-      resolved: { provider: "anthropic", model: "claude" },
-    });
-    state.deliver.mockResolvedValue({ kind: "source-retry" });
-
-    await createFollowupRunner({
-      typing: createTypingController(),
-      typingMode: "never",
-      defaultModel: "claude",
-    })(turn.queued);
-
-    expect(deliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        runId: turn.runId,
-        completion: { kind: "completed" },
-        payloads: [],
-      }),
-    );
-    expect(state.execute).toHaveBeenCalledOnce();
-    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
-  });
-
-  it.each(["silent", "send-policy", "room-event", "message-tool-only"] as const)(
-    "settles the queued source when final delivery is suppressed by %s",
+  it.each(["recovery", "silent", "send-policy"] as const)(
+    "settles the queued source exactly once for %s",
     async (reason) => {
-      const turn = createTurn();
-      const deliver = vi.fn(async () => {});
-      turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
-      const execution = createSettledExecution();
-      state.admit.mockResolvedValue({ kind: "admitted", turn });
-      state.execute.mockResolvedValue(execution);
-      state.account.mockResolvedValue(undefined);
-      state.resolveDecision.mockReturnValue({ kind: "suppress", reason });
-      state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });
-
-      await createFollowupRunner({
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-      })(turn.queued);
-
+      const deliver = attachSource(turn);
+      if (reason === "recovery") {
+        state.resolveDecision.mockReturnValue({
+          kind: "retry-source-delivery",
+          run: turn.queued,
+          finalTextLength: 300,
+          resolved: { provider: "anthropic", model: "claude" },
+        });
+        state.deliver.mockResolvedValue({ kind: "source-retry" });
+      } else {
+        state.resolveDecision.mockReturnValue({ kind: "suppress", reason });
+      }
+      await createRunner()(turn.queued);
       expect(deliver).toHaveBeenCalledExactlyOnceWith({
         kind: "queued-followup",
         runId: turn.runId,
@@ -399,23 +331,17 @@ describe("createFollowupRunner", () => {
         payloads: [],
         completion: {
           kind: "completed",
-          ...(reason === "silent" || reason === "message-tool-only"
-            ? { allowCanvasOnly: true }
-            : {}),
+          ...(reason === "silent" ? { allowCanvasOnly: true } : {}),
         },
       });
-      expect(state.execute).toHaveBeenCalledOnce();
-      expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
     },
   );
 
-  it.each(["timeout", "user", "restart", "superseded"] as const)(
+  it.each(["timeout", "user", "restart"] as const)(
     "preserves %s classification when the queue owns completion",
     async (reason) => {
-      const turn = createTurn();
-      const deliver = vi.fn(async () => {});
-      turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
-      const execution = createSettledExecution();
+      const deliver = attachSource(turn);
+      const execution = createExecution();
       if (reason === "timeout" && execution.execution.outcome.kind === "settled") {
         execution.execution.outcome = {
           ...execution.execution.outcome,
@@ -435,16 +361,9 @@ describe("createFollowupRunner", () => {
       } else if (reason !== "timeout") {
         execution.execution.outcome = { kind: "aborted", reason };
       }
-      state.admit.mockResolvedValue({ kind: "admitted", turn });
-      state.execute.mockResolvedValue(execution);
-      state.account.mockResolvedValue(undefined);
-      state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });
+      admitTurn(turn, execution);
 
-      await createFollowupRunner({
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-      })(turn.queued);
+      await createRunner()(turn.queued);
 
       expect(deliver).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
@@ -459,12 +378,10 @@ describe("createFollowupRunner", () => {
               : { kind: "aborted", stopReason: reason === "user" ? "aborted" : reason },
         }),
       );
-      expect(state.execute).toHaveBeenCalledOnce();
     },
   );
 
   it("retains its Gateway and drops caller authority through the delivery retry handoff", async () => {
-    const turn = createTurn();
     const resolveGatewayContext = () => undefined;
     const otherGatewayContext = () => undefined;
     const staleAuthority = vi.fn();
@@ -478,8 +395,7 @@ describe("createFollowupRunner", () => {
       });
       return { kind: "admitted", turn };
     });
-    state.execute.mockResolvedValue(createRejectedExecution());
-    state.account.mockResolvedValue(undefined);
+    state.execute.mockResolvedValue(createExecution("rejected"));
     state.deliver
       .mockResolvedValue({ kind: "completed", payloads: [] })
       .mockImplementationOnce(
@@ -490,12 +406,7 @@ describe("createFollowupRunner", () => {
           return { kind: "source-retry" };
         },
       );
-    const run = createFollowupRunner({
-      resolveGatewayContext,
-      typing: createTypingController(),
-      typingMode: "instant",
-      defaultModel: "claude",
-    });
+    const run = createRunner({ resolveGatewayContext, typingMode: "instant" });
     await withPluginRuntimeGatewayRequestScope(
       {
         resolveGatewayContext: otherGatewayContext,
@@ -517,71 +428,28 @@ describe("createFollowupRunner", () => {
     expect(state.execute).toHaveBeenCalledTimes(2);
   });
 
-  it("completes lifecycle and both typing signals for an already-aborted item", async () => {
-    const typing = createTypingController();
-    const controller = new AbortController();
-    controller.abort();
-    const endCorrelation = vi.fn();
-    const queued = createQueuedRun({
-      abortSignal: controller.signal,
-      deliveryCorrelations: [{ begin: () => endCorrelation }],
-    });
-
-    await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(queued);
-
-    expect(state.admit).not.toHaveBeenCalled();
-    expect(state.completeLifecycle).toHaveBeenCalledWith(queued);
-    expect(typing.markRunComplete).toHaveBeenCalledOnce();
-    expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
-    expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
-      visibleReplySent: false,
-      failed: true,
-      completed: false,
-    });
-  });
-
-  it("settles invalidated claimed input without executing or replaying", async () => {
-    const typing = createTypingController();
-    const endCorrelation = vi.fn();
-    const queued = createQueuedRun({ deliveryCorrelations: [{ begin: () => endCorrelation }] });
-    state.admit.mockResolvedValue({ kind: "skipped", reason: "lifecycle-invalidated" });
-
-    await expect(
-      createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(queued),
-    ).resolves.toBeUndefined();
-
-    expect(state.completeLifecycle).toHaveBeenCalledWith(queued);
-    expect(typing.markRunComplete).toHaveBeenCalledOnce();
-    expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
-    expect(state.execute).not.toHaveBeenCalled();
-    expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
-      visibleReplySent: false,
-      failed: true,
-      completed: false,
-    });
-  });
-
-  it.each(["aborted", "lifecycle-invalidated", "goal-inactive"])(
-    "settles a terminal admission skip (%s) and releases its operation",
-    async (reason) => {
-      const order: string[] = [];
-      const typing = createTypingController();
-      const turn = createTurn(order);
-      const endCorrelation = vi.fn();
-      turn.queued.deliveryCorrelations = [{ begin: () => endCorrelation }];
-      state.admit.mockResolvedValue({
-        kind: "skipped",
-        reason,
-        operation: turn.operation,
-      });
-
-      await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
-        turn.queued,
-      );
-
-      expect(order).toEqual(["operation-complete"]);
-      expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
-      expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
+  it.each(["already-aborted", "unowned skip", "owned skip"] as const)(
+    "settles terminal input without execution (%s)",
+    async (kind) => {
+      const end = vi.fn();
+      turn.queued.deliveryCorrelations = [{ begin: () => end }];
+      if (kind === "already-aborted") {
+        turn.queued.abortSignal = AbortSignal.abort();
+      } else {
+        state.admit.mockResolvedValue({
+          kind: "skipped",
+          reason: "lifecycle-invalidated",
+          ...(kind === "owned skip" ? { operation: turn.operation } : {}),
+        });
+      }
+      await createRunner({ typingMode: "instant" })(turn.queued);
+      if (kind === "already-aborted") {
+        expect(state.admit).not.toHaveBeenCalled();
+      }
+      expect(state.execute).not.toHaveBeenCalled();
+      expect(turn.operation.complete).toHaveBeenCalledTimes(kind === "owned skip" ? 1 : 0);
+      expectTypingComplete();
+      expect(end).toHaveBeenCalledExactlyOnceWith({
         visibleReplySent: false,
         failed: true,
         completed: false,
@@ -589,109 +457,81 @@ describe("createFollowupRunner", () => {
     },
   );
 
-  it("restores unexpected execution failures after releasing the admitted operation", async () => {
-    const order: string[] = [];
-    const typing = createTypingController();
-    const turn = createTurn(order);
-    const failure = new Error("candidate failed before settlement");
-    state.admit.mockResolvedValue({ kind: "admitted", turn });
-    state.execute.mockRejectedValue(failure);
-
-    await expect(
-      createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(turn.queued),
-    ).rejects.toBe(failure);
-
-    expect(state.completeLifecycle).not.toHaveBeenCalled();
-    expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
-    expect(order).toEqual(["operation-complete"]);
-    expect(typing.markRunComplete).toHaveBeenCalledOnce();
-    expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
-  });
-
-  it("consumes a user abort before execution starts", async () => {
-    const typing = createTypingController();
-    const turn = createTurn([], { kind: "aborted", code: "aborted_by_user" });
-    const deliver = vi.fn(async () => {});
-    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
-    state.admit.mockResolvedValue({ kind: "admitted", turn });
-    state.execute.mockRejectedValue(new Error("aborted before execution start"));
-
-    await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
-      turn.queued,
-    );
-
-    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
-    expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
-    expect(turn.operation.fail).not.toHaveBeenCalled();
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        completion: { kind: "aborted", stopReason: "aborted" },
-        payloads: [],
-      }),
-    );
-  });
-
-  it("consumes revoked operator input instead of retrying a pre-execution refusal", async () => {
-    const typing = createTypingController();
-    const turn = createTurn();
-    const failure = new Error("original operator role changed");
-    turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "guest",
-      scopes: ["operator.write"],
-      assertCurrent: () => {
+  it.each([
+    "unrecorded authority",
+    "unrecorded failure",
+    "user abort",
+    "progress failure",
+  ] as const)(
+    "settles %s without replay and preserves its visible classification",
+    async (phase) => {
+      const unrecorded = phase.startsWith("unrecorded");
+      const admitted = !unrecorded;
+      const failure =
+        phase === "unrecorded authority"
+          ? new GatewayOperatorAccessUnavailableError()
+          : new Error(phase);
+      if (phase === "user abort") {
+        turn = createTurn([], { kind: "aborted", code: "aborted_by_user" });
+      }
+      const deliver = attachSource(turn);
+      if (unrecorded) {
+        const authority = {
+          canonicalIdentity: null,
+          profileId: "guest",
+          scopes: ["operator.write"],
+          grant: decideTurnGrant(["operator.write"]),
+        };
+        turn.queued.operatorAuthority = { ...authority, signal: new AbortController().signal };
+      }
+      const refuse = async () => {
         throw failure;
-      },
-    });
-    state.admit.mockRejectedValueOnce(failure);
-
-    await expect(
-      createFollowupRunner({ typing, typingMode: "never", defaultModel: "claude" })(turn.queued),
-    ).resolves.toBeUndefined();
-
-    expect(state.execute).not.toHaveBeenCalled();
-    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
-    expect(typing.markRunComplete).toHaveBeenCalledOnce();
-  });
-
-  it("does not replay a returned execution when terminal delivery fails", async () => {
-    const typing = createTypingController();
-    const turn = createTurn();
-    const execution = createRejectedExecution();
-    const failure = new Error("terminal delivery failed");
-    const deliver = vi.fn(async () => {});
-    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
-    state.admit.mockResolvedValue({ kind: "admitted", turn });
-    state.execute.mockResolvedValue(execution);
-    state.account.mockResolvedValue(undefined);
-    state.resolveDecision.mockReturnValue({
-      kind: "deliver",
-      payloads: [{ text: "terminal failure", isError: true }],
-    });
-    state.deliver.mockRejectedValue(failure);
-
-    await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
-      turn.queued,
-    );
-
-    expect(state.execute).toHaveBeenCalledOnce();
-    expect(state.account).toHaveBeenCalledOnce();
-    expect(state.deliver).toHaveBeenCalledOnce();
-    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
-    expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
-    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", failure);
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        completion: { kind: "failed", error: failure.message },
-        payloads: [],
-      }),
-    );
-  });
+      };
+      if (!admitted) {
+        state.admit.mockImplementationOnce(refuse);
+      } else {
+        const execution = createExecution();
+        admitTurn(turn, execution);
+        if (phase === "progress failure") {
+          execution.progress.drain = refuse;
+        } else {
+          state.execute.mockImplementationOnce(refuse);
+        }
+      }
+      if (unrecorded) {
+        await expect(createRunner()(turn.queued)).rejects.toBe(failure);
+        expect(state.execute).not.toHaveBeenCalled();
+        expect(deliver).not.toHaveBeenCalled();
+        expect(state.completeLifecycle).not.toHaveBeenCalled();
+        expect(turn.queued.operatorAuthority?.signal?.aborted).toBe(false);
+        return;
+      }
+      await expect(createRunner()(turn.queued)).resolves.toBeUndefined();
+      expect(state.execute).toHaveBeenCalledTimes(admitted ? 1 : 0);
+      expect(turn.operation.fail.mock.calls).toEqual(
+        admitted && phase !== "user abort" ? [["run_failed", failure]] : [],
+      );
+      expect(deliver).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          completion:
+            phase === "user abort"
+              ? { kind: "aborted", stopReason: "aborted" }
+              : {
+                  kind: "failed",
+                  error: failure.message,
+                },
+          payloads: [],
+        }),
+      );
+      expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
+      expectTypingComplete();
+    },
+  );
 
   it("holds the reply operation through progress drain, accounting, and delivery", async () => {
     const order: string[] = [];
-    const typing = createTypingController();
-    const turn = createTurn(order);
-    const execution = createRejectedExecution(order);
+    turn = createTurn(order);
+    const execution = createExecution("rejected", order);
     const sourceDelivery = vi.fn(async () => {
       order.push("completion");
     });
@@ -705,8 +545,7 @@ describe("createFollowupRunner", () => {
       kind: "deliver" as const,
       payloads: [{ text: "done\nUsage: 1.3k total" } satisfies ReplyPayload],
     };
-    state.admit.mockResolvedValue({ kind: "admitted", turn });
-    state.execute.mockResolvedValue(execution);
+    admitTurn(turn, execution);
     state.account.mockImplementation(async () => {
       order.push("accounted");
       return { payloadArray: [{ text: "raw accounting reply" }] };
@@ -715,21 +554,14 @@ describe("createFollowupRunner", () => {
       order.push("decision");
       return decision;
     });
-    state.deliver.mockImplementation(
-      async (
-        params: Parameters<typeof import("./followup-delivery.js").deliverFollowupDecision>[0],
-      ) => {
-        expect(params.decision).toEqual(decision);
-        order.push("delivered");
-        return { kind: "completed", payloads: decision.payloads };
-      },
-    );
+    state.deliver.mockImplementation(async () => {
+      order.push("delivered");
+      return { kind: "completed", payloads: decision.payloads };
+    });
     state.completeLifecycle.mockImplementation(() => order.push("lifecycle-complete"));
 
-    const run = createFollowupRunner({
-      typing,
+    const run = createRunner({
       typingMode: "instant",
-      defaultModel: "claude",
       opts: {
         onQueuedFollowupSettled: () => {
           presentation = (async () => {
@@ -773,13 +605,11 @@ describe("createFollowupRunner", () => {
     expect(sourceDelivery).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ payloads: decision.payloads }),
     );
-    expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
   });
 
   it.each(["delivered", "filtered", "delivery-failed", "completion-failed"])(
     "closes queued continuation adoption after its delivery owner settles (%s)",
     async (outcome) => {
-      const turn = createTurn();
       let continuationOpen = true;
       let openAtCleanup: boolean | undefined;
       const adoptionResults: Array<boolean | undefined> = [];
@@ -798,26 +628,22 @@ describe("createFollowupRunner", () => {
       );
       const decision = { kind: "deliver", payloads: [statusPayload] };
       const draft = { push: () => undefined, retire: () => undefined };
-      turn.queued.queuedFollowupReplyDisposition = {
-        kind: "deliver",
-        deliver: async (batch) => {
-          for (const payload of batch.payloads) {
-            adoptionResults.push(
-              getReplyPayloadMetadata(payload)?.progressContinuation?.adopt(draft),
-            );
-          }
-          if (outcome === "completion-failed") {
-            throw new Error("completion failed after adoption");
-          }
-        },
-      };
-      state.admit.mockResolvedValue({ kind: "admitted", turn });
-      state.execute.mockResolvedValue(createSettledExecution());
-      state.account.mockResolvedValue({});
+      const failure = new Error("terminal delivery failed");
+      const deliver = vi.fn(async (batch: QueuedFollowupReplyBatch) => {
+        for (const payload of batch.payloads) {
+          adoptionResults.push(
+            getReplyPayloadMetadata(payload)?.progressContinuation?.adopt(draft),
+          );
+        }
+        if (outcome === "completion-failed") {
+          throw new Error("completion failed after adoption");
+        }
+      });
+      turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
       state.resolveDecision.mockResolvedValue(decision);
       state.deliver.mockImplementation(async () => {
         if (outcome === "delivery-failed") {
-          throw new Error("delivery failed before adoption");
+          throw failure;
         }
         return {
           kind: "completed",
@@ -825,10 +651,7 @@ describe("createFollowupRunner", () => {
         };
       });
 
-      await createFollowupRunner({
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
+      await createRunner({
         opts: {
           onQueuedFollowupSettled: async () => {
             openAtCleanup = continuationOpen;
@@ -841,98 +664,16 @@ describe("createFollowupRunner", () => {
       expect(adoptionResults).toEqual(
         outcome === "delivered" || outcome === "completion-failed" ? [true] : [],
       );
-      expect(state.execute).toHaveBeenCalledOnce();
-      expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
-    },
-  );
-
-  it.each([true, false])(
-    "projects queued commentary with the refreshed durable owner when enabled is %s",
-    async (commentaryPayloadsEnabled) => {
-      const typing = createTypingController();
-      const turn = createTurn();
-      const execution = Object.assign(createRejectedExecution(), {
-        commentaryPayloadsEnabled,
-      });
-      state.admit.mockResolvedValue({ kind: "admitted", turn });
-      state.execute.mockResolvedValue(execution);
-      state.account.mockResolvedValue(undefined);
-      state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });
-
-      await createFollowupRunner({
-        typing,
-        typingMode: "instant",
-        defaultModel: "claude",
-        opts: { commentaryPayloadsEnabled: !commentaryPayloadsEnabled },
-      })(turn.queued);
-
-      expect(state.resolveDecision).toHaveBeenCalledWith(
-        expect.objectContaining({
-          opts: expect.objectContaining({ commentaryPayloadsEnabled }),
-        }),
-      );
-    },
-  );
-
-  it("does not replay a settled turn when progress presentation fails", async () => {
-    const typing = createTypingController();
-    const turn = createTurn();
-    const execution = createSettledExecution();
-    const deliver = vi.fn(async () => {});
-    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
-    execution.progress.drain = vi.fn(async () => {
-      throw new Error("presentation failed");
-    });
-    state.admit.mockResolvedValue({ kind: "admitted", turn });
-    state.execute.mockResolvedValue(execution);
-    state.account.mockResolvedValue(undefined);
-    state.resolveDecision.mockReturnValue({ kind: "suppress", reason: "silent" });
-    state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });
-
-    await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
-      turn.queued,
-    );
-
-    expect(state.execute).toHaveBeenCalledOnce();
-    expect(state.account).toHaveBeenCalledOnce();
-    expect(state.deliver).toHaveBeenCalledOnce();
-    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
-    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", expect.any(Error));
-    expect(deliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        completion: { kind: "failed", error: "presentation failed" },
-      }),
-    );
-  });
-
-  it.each([true, false])(
-    "settles source delivery correlations with visible=%s",
-    async (visible) => {
-      const typing = createTypingController();
-      const onObservedReplyDelivery = vi.fn(async () => {});
-      const turn = createTurn();
-      const endCorrelation = vi.fn();
-      turn.queued.deliveryCorrelations = [{ begin: () => endCorrelation }];
-      const execution = createSettledExecution();
-      state.completedSourceDelivery = visible;
-      state.admit.mockResolvedValue({ kind: "admitted", turn });
-      state.execute.mockResolvedValue(execution);
-      state.account.mockResolvedValue({});
-      state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });
-
-      await createFollowupRunner({
-        typing,
-        typingMode: "instant",
-        defaultModel: "claude",
-        opts: { onObservedReplyDelivery },
-      })(turn.queued);
-
-      expect(onObservedReplyDelivery).toHaveBeenCalledTimes(visible ? 1 : 0);
-      expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
-        visibleReplySent: visible,
-        failed: false,
-        completed: true,
-      });
+      if (outcome === "delivery-failed") {
+        expect(state.execute).toHaveBeenCalledOnce();
+        expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", failure);
+        expect(deliver).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            completion: { kind: "failed", error: failure.message },
+            payloads: [],
+          }),
+        );
+      }
     },
   );
 });

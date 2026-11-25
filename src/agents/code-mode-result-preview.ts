@@ -175,9 +175,9 @@ export function fitCodeModeResultReference(
   }
   const shapeBytes = 2 + Math.floor(remaining / 3);
   const shape = createJsonPrefixFitter(reference.shape, shapeBytes, () => 0)(shapeBytes);
-  const previewBytes = 2 + remaining - (jsonUtf8Bytes(shape) - 2);
+  const previewBytes = 2 + remaining - (shape.jsonBytes - 2);
   const preview = createJsonPrefixFitter(reference.preview, previewBytes, () => 0)(previewBytes);
-  return { ...minimal, shape, preview };
+  return { ...minimal, shape: shape.text, preview: preview.text };
 }
 
 export function createCodeModeResultReference(

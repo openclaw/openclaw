@@ -4,9 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 const SUBAGENT_ROLES = ["orchestrator", "leaf"] as const;
 const SUBAGENT_CONTROL_SCOPES = ["children", "none"] as const;
 
-type SubagentRole = (typeof SUBAGENT_ROLES)[number];
-type SubagentControlScope = (typeof SUBAGENT_CONTROL_SCOPES)[number];
-
 export type AcpSessionLineageMeta = {
   /** Stable session key emitted to ACP clients. */
   sessionKey: string;
@@ -16,8 +13,8 @@ export type AcpSessionLineageMeta = {
   parentSessionId?: string;
   spawnedBy?: string;
   spawnDepth?: number;
-  subagentRole?: SubagentRole;
-  subagentControlScope?: SubagentControlScope;
+  subagentRole?: (typeof SUBAGENT_ROLES)[number];
+  subagentControlScope?: (typeof SUBAGENT_CONTROL_SCOPES)[number];
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
 };

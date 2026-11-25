@@ -11,12 +11,9 @@ export function isBtwRequestText(text?: string, options?: CommandNormalizeOption
   return BTW_COMMAND_RE.test(normalized);
 }
 
-export function extractBtwQuestion(
-  text?: string,
-  options?: CommandNormalizeOptions,
-): string | null {
+export function extractBtwQuestion(text?: string): string | null {
   if (!text) {
     return null;
   }
-  return matchSlashCommandToken(normalizeCommandBody(text, options), "/btw");
+  return matchSlashCommandToken(normalizeCommandBody(text), "/btw");
 }

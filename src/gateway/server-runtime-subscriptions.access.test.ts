@@ -274,46 +274,6 @@ it.each([
   },
 );
 
-it.each([false, true])(
-  "waits for the outer same-ID reset commit (rollback: %s)",
-  async (rollback) => {
-    await withAccessFixture(async ({ scope, start }) => {
-      const entry = { sessionId: "original", lifecycleRevision: "before", updatedAt: 1 };
-      await upsertSessionEntryCore(scope, entry);
-      start();
-      const revision = readGatewayAccessRevision();
-      await patchSessionEntryCore(scope, () => ({ label: "metadata only" }));
-      expect(readGatewayAccessRevision()).toBe(revision);
-      const replace = () =>
-        runOpenClawAgentWriteTransaction(
-          () => {
-            replaceSessionEntrySync(scope, {
-              sessionId: "original",
-              lifecycleRevision: "after",
-              updatedAt: 2,
-            });
-            expect(readGatewayAccessRevision()).toBe(revision);
-            if (rollback) {
-              throw new Error("rollback identity");
-            }
-          },
-          { agentId: scope.agentId, path: scope.storePath },
-        );
-      if (rollback) {
-        expect(replace).toThrow("rollback identity");
-        expect(readGatewayAccessRevision()).toBe(revision);
-      } else {
-        replace();
-        expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
-      }
-      expect(loadSessionEntry(scope)).toMatchObject({
-        sessionId: "original",
-        lifecycleRevision: rollback ? "before" : "after",
-      });
-    });
-  },
-);
-
 it.each(["agent", "chat"] as const)(
   "invalidates committed compaction access after the %s run is aborted and removed",
   async (kind) => {

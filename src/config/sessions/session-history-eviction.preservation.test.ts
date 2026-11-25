@@ -2,12 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import {
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+} from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import { loadTranscriptEventsSync, replaceSessionEntry } from "./session-accessor.js";
@@ -47,7 +53,7 @@ describe("SQLite historical session preservation", () => {
     mode: "enforce" as const,
     maintenance: { maxDiskBytes, highWaterBytes, preserveRecentMs },
   });
-  it.each(["registry", "recent", "pinned", "manual"] as const)(
+  it.each(["registry", "recent", "pinned", "personal", "personal-group", "manual"] as const)(
     "preserves every generation of a %s session under physical pressure",
     async (protection) => {
       async function inspectHistoryReads<T>(operation: () => Promise<T>): Promise<T> {
@@ -90,7 +96,9 @@ describe("SQLite historical session preservation", () => {
             ? { skillsSnapshot: { prompt: "p".repeat(64 * 1024), skills: [] } }
             : {}),
           ...(protection === "manual" ? { archivedAt: now, archiveReason: protection } : {}),
-          ...(protection === "registry"
+          ...(protection === "registry" ||
+          protection === "personal" ||
+          protection === "personal-group"
             ? { archivedAt: now, archiveReason: "active-session-cap" as const }
             : {}),
           ...(protection === "pinned" ? { pinnedAt: now } : {}),
@@ -104,6 +112,18 @@ describe("SQLite historical session preservation", () => {
           sessionKey: recentKey,
           projectSessionActive: true,
         });
+      }
+      if (protection === "personal" || protection === "personal-group") {
+        const profile = ensureProfileForEmail("pin@example.test").id;
+        const preferences =
+          protection === "personal"
+            ? { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: [`session-rail:${recentKey}`] }
+            : {
+                [UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY]: [
+                  { id: "focus", label: "Focus", sessionKeys: [recentKey] },
+                ],
+              };
+        expect(await setCanonicalUserPreferences(profile, preferences)).toMatchObject({ ok: true });
       }
       const before = await measureSessionPhysicalDiskUsage(storePath);
       const preserveRecentMs = protection === "recent" ? 7 * dayMs : undefined;
@@ -140,13 +160,11 @@ describe("SQLite historical session preservation", () => {
     async (encoding) => {
       const target = resolveSqliteTargetFromSessionStorePath(storePath);
       fs.mkdirSync(path.dirname(target.path), { recursive: true });
-      const seed = new DatabaseSync(target.path);
-      try {
+      {
+        using seed = new DatabaseSync(target.path);
         seed.exec(
           `PRAGMA encoding='${encoding}'; CREATE TABLE encoding_probe(value TEXT); DROP TABLE encoding_probe;`,
         );
-      } finally {
-        seed.close();
       }
       const sessionKey = "agent:main:raw-identity-history";
       const now = Date.now();
@@ -167,12 +185,9 @@ describe("SQLite historical session preservation", () => {
       // CAST preserves the raw stored identity; normal TEXT rebinding can normalize it.
       owner.db
         .prepare(
-          "UPDATE session_nodes SET current_session_id = CAST(? AS TEXT), entry_json = CAST(? AS TEXT), updated_at = ? WHERE session_key = ?",
+          "UPDATE session_nodes SET current_session_id = CAST(? AS TEXT), entry_json = CAST(? AS TEXT), updated_at = ?, entry_valid = 1 WHERE session_key = ?",
         )
         .run(identity, entry, now, sessionKey);
-      owner.db
-        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-        .run(sessionKey);
       const readBytes = () =>
         database()
           .db.prepare(

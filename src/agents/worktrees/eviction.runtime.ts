@@ -1,5 +1,4 @@
 import fsSync from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldTurn } from "node:timers/promises";
 import { safeRealpathSync } from "@openclaw/fs-safe/path";
@@ -8,10 +7,10 @@ import {
   readGitObjectStorageDependencies,
   readGitWorktreeAdministrations,
   type GitObjectStorageDependencies,
-  type GitWorktreeAdministration,
 } from "../../infra/git-root.js";
 import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import { indexWorktreePaths } from "./gc-dependencies.js";
 import type {
   GitWorktreeOperations,
@@ -59,14 +58,10 @@ function checkoutKey(checkout: string) {
 
 function administrationInventory(commonDir: string, assertBudget: () => void) {
   const inventory = readGitWorktreeAdministrations(commonDir, assertBudget);
-  const byCheckout = new Map<string, GitWorktreeAdministration[]>();
-  for (const entry of inventory.entries) {
+  const byCheckout = groupRecords(inventory.entries, (entry) => {
     assertBudget();
-    const key = checkoutKey(entry.checkoutPath);
-    const entries = byCheckout.get(key) ?? [];
-    entries.push(entry);
-    byCheckout.set(key, entries);
-  }
+    return checkoutKey(entry.checkoutPath);
+  });
   return { ...inventory, byCheckout };
 }
 
@@ -515,6 +510,6 @@ export async function purgeWorktreeCheckout(
   } else if (stat) {
     // Git registration may already be missing. Delete only the host's claimed
     // checkout path; never prune shared metadata or delete a possibly moved branch.
-    await fs.rm(checkout, { recursive: true, force: true });
+    fsSync.rmSync(checkout, { recursive: true, force: true });
   }
 }

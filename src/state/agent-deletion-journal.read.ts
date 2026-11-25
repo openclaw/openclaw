@@ -14,7 +14,7 @@ import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
-import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
+import { hasTemplateDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.kernel.js";
 import {
@@ -28,9 +28,11 @@ import type {
   AgentDeletionJournalDisposition,
   AgentDeletionJournalPurpose,
   AgentDeletionJournalStatus,
+  HeldAgentDatabase,
   RetainedAgentDeletion,
 } from "./agent-deletion-journal.types.js";
 import {
+  isAgentDatabaseRegistryChangedError,
   isOpenClawAgentDatabaseRegistryChange,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
 } from "./openclaw-agent-db-registry-listing.js";
@@ -44,6 +46,21 @@ import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveDatabasePath, resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { prepareOpenClawStateReadSource } from "./openclaw-state-worker-context.js";
+
+class AgentDatabaseDeletionSnapshotChangedError extends Error {
+  constructor() {
+    super("Agent database deletion snapshot changed during consumption.");
+    this.name = "AgentDatabaseDeletionSnapshotChangedError";
+  }
+}
+
+/** These owners require a fresh read, never replay of an already-entered consumer. */
+export function isAgentDatabaseDeletionSnapshotChangedError(error: unknown): boolean {
+  return (
+    error instanceof AgentDatabaseDeletionSnapshotChangedError ||
+    isAgentDatabaseRegistryChangedError(error)
+  );
+}
 
 export async function readAgentDeletionRecoveryHoldsInWorker(
   options: OpenClawStateDatabaseOptions = {},
@@ -183,9 +200,9 @@ export function readRetainedAgentDeletionsFromDatabase(
         if (
           row.cleanup_completed === 0 &&
           row.phase == null &&
-          hasClawDeletionOwnership({ db: database }, row.agent_id)
+          hasTemplateDeletionOwnership({ db: database }, row.agent_id)
         ) {
-          entry.manualClawRemoval = true;
+          entry.manualTemplateRemoval = true;
         }
         return entry;
       });
@@ -196,10 +213,17 @@ export function readRetainedAgentDeletionsFromDatabase(
     }
     unreadableReason = formatErrorMessage(error);
   }
-  const held =
-    purpose === "maintenance" && tableExists(database, "migration_sources")
-      ? readAgentDeletionRecoveryHolds({ db: database, path: statePath })
-      : [];
+  let held: HeldAgentDatabase[] = [];
+  try {
+    if (tableExists(database, "migration_sources")) {
+      held = readAgentDeletionRecoveryHolds({ db: database, path: statePath });
+    }
+  } catch (error) {
+    if (purpose === "maintenance" || isSqliteCorruptionError(error)) {
+      throw error;
+    }
+    // Unknown recovery history cannot turn otherwise live agents into held stores.
+  }
   if (missing && held.length === 0 && hasPreJournalStateSchema(database)) {
     return { status: "empty" };
   }
@@ -244,6 +268,7 @@ type PreparedAgentDatabaseDeletionSnapshot = {
 export function prepareAgentDatabaseDeletionSnapshotRead(
   inputOptions: OpenClawStateDatabaseOptions = {},
   purpose: AgentDeletionJournalPurpose = "maintenance",
+  signal?: AbortSignal,
 ): {
   read(): Promise<PreparedAgentDatabaseDeletionSnapshot>;
   readWithCurrentAdmission(): Promise<PreparedAgentDatabaseDeletionSnapshot>;
@@ -264,6 +289,7 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
   const context = source.workerContext();
   const readSnapshot = async (readContext: typeof context) => {
     const assertReadCurrent = () => {
+      signal?.throwIfAborted();
       readContext.maintenanceScope?.assertAdmission();
       readContext.admission.assertCurrent();
     };
@@ -271,7 +297,7 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
     const reply = await executeExistingOpenClawStateRead(
       options,
       { type: "agentDatabaseDeletion.snapshot", purpose },
-      { context: readContext, current: true },
+      { context: readContext, current: true, signal },
     );
     assertReadCurrent();
     if (purpose === "runtime-discovery" && reply) {
@@ -324,7 +350,7 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
           return await consume(snapshot, () => {
             assertCurrent();
             if (changed) {
-              throw new Error("Agent database deletion snapshot changed during consumption.");
+              throw new AgentDatabaseDeletionSnapshotChangedError();
             }
             assertRegistryCurrent?.();
           });

@@ -1,6 +1,11 @@
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, tryResolveSoleAgentId } from "../agents/agent-scope.js";
-import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
+import {
+  isLegacyParentWritableUpdateDoctorPass,
+  isUpdateDoctorInspectionReportMode,
+} from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
 export function isUpdateDoctorRun(
@@ -8,6 +13,14 @@ export function isUpdateDoctorRun(
 ): boolean {
   const value = env.OPENCLAW_UPDATE_IN_PROGRESS;
   return value === "1" || value === "true";
+}
+
+export function shouldDeferPostActivationInspections(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isUpdateDoctorRun(env) &&
+    !resolveUpdateRehearsalRoot(env) &&
+    isUpdateDoctorInspectionReportMode(env)
+  );
 }
 
 export function resolveDoctorMode(cfg: OpenClawConfig): "local" | "remote" {
@@ -28,12 +41,13 @@ export function resolveLegacyParentVersionOverride(ctx: DoctorHealthFlowContext)
   return version ? { lastTouchedVersionOverride: version } : {};
 }
 
-export function noteDoctorRepairResult(
-  result: { changes: readonly string[]; warnings: readonly string[] },
-  note: typeof import("../../packages/terminal-core/src/note.js").note,
-): void {
-  for (const kind of ["changes", "warnings"] as const) {
-    if (result[kind].length > 0) {
+export function noteDoctorRepairResult(result: {
+  changes: readonly string[];
+  notices?: readonly string[];
+  warnings: readonly string[];
+}): void {
+  for (const kind of ["changes", "notices", "warnings"] as const) {
+    if (result[kind]?.length) {
       note(result[kind].join("\n"), `Doctor ${kind}`);
     }
   }

@@ -13,12 +13,15 @@ import {
   insertStoredDeviceIdentityIfAbsent,
   readStoredDeviceIdentity,
 } from "../infra/device-identity-store.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
-import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
 import { repairAuditEventsSchema } from "../state/openclaw-state-db-audit-migration.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseAsync,
@@ -38,8 +41,8 @@ afterAll(() => tempDirs.cleanup());
 function manifest(root: string): Record<string, string> {
   // Ignore lifecycle scratch and SQLite reader noise; persisted state stays byte-identical.
   return Object.fromEntries(
-    fs
-      .readdirSync(root, { recursive: true, withFileTypes: true })
+    listDirectoryTreeStrictSync(root)
+      .map((walkEntry) => walkEntry.dirent)
       .filter((entry) => entry.isFile())
       .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)))
       .filter((relative) => relative.split(path.sep)[0] !== "tmp" && !relative.endsWith("-shm"))
@@ -357,7 +360,51 @@ it.each<[string, AdmissionCase]>([
           }
         }
       } else if (!canonicalIdentity) {
-        expect(manifest(stateDir)).toEqual(before);
+        const after = manifest(stateDir);
+        const wal = path.relative(stateDir, `${databasePath}-wal`);
+        if (!(wal in before) && wal in after) {
+          expect(fs.statSync(`${databasePath}-wal`).size).toBe(0);
+          delete after[wal];
+        }
+        if ((workspace || selectedSession || identityFile) && process.platform !== "win32") {
+          // Default diagnostics are state-local; only the verified new refusal log is exempt.
+          const added = Object.keys(after).filter((file) => !(file in before));
+          expect(added).toHaveLength(1);
+          const logFile = added[0]!;
+          expect(path.dirname(logFile)).toBe("logs");
+          expect(path.basename(logFile)).toMatch(/^openclaw-\d{4}-\d{2}-\d{2}\.log$/u);
+          const records = fs
+            .readFileSync(path.join(stateDir, logFile), "utf8")
+            .trimEnd()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          const migration = workspace
+            ? "workspace setup state migration"
+            : selectedSession
+              ? "session store migration"
+              : "state migration";
+          const refusal =
+            `gateway requires ${migration}. Stop the service with openclaw gateway stop ` +
+            "(or its service owner), then run openclaw doctor --fix, then start it again with openclaw gateway start.";
+          const unavailableLaunchd =
+            "failed to park the managed LaunchAgent: Native Gateway service membership could not be verified. " +
+            "From an interactive external shell not started by the service, run openclaw gateway stop && openclaw update --yes && openclaw gateway start. " +
+            "If the update fails, follow its recovery guidance before starting the Gateway. No service teardown was attempted. " +
+            "With native helper support (systemd-run on Linux), use openclaw gateway call update.run --params '{}' for a managed handoff.";
+          const messages =
+            records[0]?.message === unavailableLaunchd ? [unavailableLaunchd, refusal] : [refusal];
+          expect(records).toEqual(
+            messages.map((message) =>
+              expect.objectContaining({
+                "0": '{"subsystem":"gateway"}',
+                message,
+                _meta: expect.objectContaining({ logLevelName: "ERROR" }),
+              }),
+            ),
+          );
+          delete after[logFile];
+        }
+        expect(after).toEqual(before);
         expect(schemaMetadata(databasePath)).toEqual(schemaBefore);
       }
     } finally {
@@ -478,14 +525,58 @@ it.each<[string, string, boolean, string?]>([
     } else {
       expect(result.stdout, output).toContain("__READY__");
       expect(output).not.toContain("__REFUSED__");
-      expect(fs.readFileSync(approvalsPath, "utf8")).toBe(approvalsJson);
-      expect(fs.readdirSync(stateDir)).not.toContainEqual(
-        expect.stringMatching(/^exec-approvals\.json\.migrated\./),
-      );
+      expect(fs.existsSync(approvalsPath)).toBe(false);
+      expect(fs.existsSync(`${approvalsPath}.doctor-importing`)).toBe(false);
+      const archives = fs
+        .readdirSync(stateDir)
+        .filter((name) => name.startsWith("exec-approvals.json.migrated."));
+      expect(archives).toHaveLength(1);
+      const archivePath = path.join(stateDir, archives[0]!);
+      expect(fs.readFileSync(archivePath, "utf8")).toBe(approvalsJson);
+      if (process.platform !== "win32") {
+        expect(fs.statSync(archivePath).mode & 0o777).toBe(0o600);
+      }
+      // The startup child has exited; inspect its committed state without creating an owner.
+      using migrated = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+        readOnly: true,
+      });
+      const query =
+        getNodeSqliteKysely<Pick<StateDatabase, "migration_sources" | "exec_approvals_config">>(
+          migrated,
+        );
+      const receipts = executeSqliteQuerySync(
+        migrated,
+        query
+          .selectFrom("migration_sources")
+          .selectAll()
+          .where("migration_kind", "=", "legacy-exec-approvals-json"),
+      ).rows;
+      expect(receipts).toHaveLength(1);
+      const sourceHash = createHash("sha256").update(approvalsJson).digest("hex");
+      expect(receipts[0]).toMatchObject({
+        source_path: approvalsPath,
+        source_sha256: sourceHash,
+        source_size_bytes: Buffer.byteLength(approvalsJson),
+        removed_source: 1,
+        status: "completed",
+      });
+      expect(JSON.parse(receipts[0]?.report_json ?? "null")).toMatchObject({
+        decision: "empty-legacy-retired",
+        archivePath,
+        sourceSha256: sourceHash,
+        importedRecordCount: 0,
+        removesSource: true,
+      });
+      expect(
+        executeSqliteQuerySync(
+          migrated,
+          query.selectFrom("exec_approvals_config").select("config_key"),
+        ).rows,
+      ).toEqual([]);
     }
     expect(fs.readFileSync(legacyPath)).toEqual(before);
     expect(fs.readFileSync(configPath)).toEqual(configBefore);
-    expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+    expect(hasActiveStartupMigrationLeaseForTest({ env })).toBe(false);
   },
   75_000,
 );

@@ -1,6 +1,7 @@
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-flush.types.js";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
@@ -10,9 +11,27 @@ import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
+import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import type { MemoryFlushPlan } from "../../plugins/registry-contribution-types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+
+export function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId: "session", updatedAt: Date.now(), ...overrides };
+}
+
+export function createFreshSessionEntry(overrides: Partial<SessionEntry>): SessionEntry {
+  return createSessionEntry({
+    totalTokensFresh: true,
+    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+    ...overrides,
+  });
+}
+
+export function createFlushSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return createFreshSessionEntry({ totalTokens: 80_000, compactionCount: 1, ...overrides });
+}
 
 export async function seedMemoryAccountingTranscript(
   scope: SessionTranscriptRuntimeTarget,
@@ -81,8 +100,8 @@ export function createModifiedMemoryFlushPlan(overrides: Partial<FileFlushPlan>)
 }
 
 export type ModelFallbackParams = {
-  provider?: string;
-  model?: string;
+  provider: string;
+  model: string;
   abortSignal?: AbortSignal;
   agentId?: string;
   sessionId?: string;
@@ -106,6 +125,25 @@ export type ModelFallbackParams = {
     },
   ) => Promise<EmbeddedAgentRunResult>;
 };
+
+export function modelRoutingProvenance(
+  requestedProvider: string,
+  requestedModel: string,
+  stage: ModelFallbackAttemptProvenance["stage"] = "initial",
+): ModelFallbackAttemptProvenance {
+  return { requestedProvider, requestedModel, stage };
+}
+
+export async function runSelectedMemoryModel({ provider, model, run }: ModelFallbackParams) {
+  return {
+    result: await run(provider, model, {
+      modelRoutingProvenance: modelRoutingProvenance(provider, model),
+    }),
+    provider,
+    model,
+    attempts: [],
+  };
+}
 
 export function createMemoryRunEntryMockImplementation(deps: {
   runWithModelFallback: (params: ModelFallbackParams) => Promise<unknown>;
@@ -222,5 +260,35 @@ export type CompactEmbeddedAgentSessionParams = {
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   sessionId?: string;
+  skillsSnapshot?: unknown;
   trigger?: string;
 };
+
+export function registerClaudeCliBackend(ownsNativeCompaction = false): void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+        ownsNativeCompaction,
+      },
+    ],
+  });
+}
+
+export function usageEvent(
+  content: string,
+  usage: Partial<ReturnType<typeof makeAssistantMessageFixture>["usage"]>,
+  api?: string,
+) {
+  return {
+    type: "message",
+    message: { role: "assistant", content, usage, ...(api ? { api } : {}) },
+  };
+}
+
+export function compactionConfig(compaction: AgentDefaultsConfig["compaction"]) {
+  return { agents: { defaults: { compaction } } };
+}

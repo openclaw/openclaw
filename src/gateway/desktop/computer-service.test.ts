@@ -1,12 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
-import { registerComputerUseProvider } from "../../plugins/computer-use-registration.js";
-import { createPluginRecord } from "../../plugins/loader-records.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { startComputerHostProcess, type ComputerHostProcess } from "./computer-process.js";
 import { ComputerHostFinalizationError } from "./computer-protocol.js";
+import { createComputerRegistry } from "./computer-registry.test-support.js";
 import { createGatewayComputerService, type GatewayComputerService } from "./computer-service.js";
 import { computerCapabilities, observeSettlement, whileHeld } from "./computer.test-support.js";
 import type { HostDesktopService } from "./host-source.js";
@@ -49,16 +46,6 @@ function createFixture() {
     desktop: { host: { enabled: true, managed: true } },
     plugins: { entries: { fixture: { enabled: true } } },
   };
-  const registry = createEmptyPluginRegistry();
-  registry.plugins.push(
-    createPluginRecord({
-      id: "fixture",
-      source: "fixture",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    }),
-  );
   const snapshot = vi.fn(async (_paramsJSON?: string | null) => JSON.stringify(screenshot));
   const act = vi.fn(async (_paramsJSON?: string | null) => JSON.stringify({ ok: true }));
   const physicalClose = vi.fn(async (_reason: string) => {});
@@ -74,16 +61,7 @@ function createFixture() {
       label: "Fixture computer",
       generation: `generation-${generation}`,
     });
-  registerComputerUseProvider(
-    {
-      registerNodeHostCommand: (command) =>
-        registry.nodeHostCommands.push({
-          pluginId: "fixture",
-          pluginName: "Fixture",
-          command,
-          source: "fixture",
-        }),
-    },
+  const registry = createComputerRegistry(
     {
       id: "fixture",
       label: "Fixture computer",
@@ -91,12 +69,10 @@ function createFixture() {
       isAvailable: () => true,
       openExecution,
     },
+    { pluginName: "Fixture" },
   );
   const leases: Array<
-    Omit<DesktopComputerLease, "release"> & {
-      valid: boolean;
-      release: ReturnType<typeof vi.fn<() => void>>;
-    }
+    DesktopComputerLease & { valid: boolean; release: ReturnType<typeof vi.fn<() => void>> }
   > = [];
   const stops: Array<() => Promise<void>> = [];
   const desktop: HostDesktopService = {
@@ -125,6 +101,8 @@ function createFixture() {
       return lease;
     },
   };
+  const command = (name: string) =>
+    registry.nodeHostCommands.find((entry) => entry.command.command === name)!.command;
   const children: ComputerHostProcess[] = [];
   startHost.mockImplementation((options) => {
     options.assertCurrent();
@@ -135,17 +113,14 @@ function createFixture() {
       isCurrent: () => active,
       invoke: async (request) => {
         request.assertCurrent();
-        const command = registry.nodeHostCommands.find(
-          (entry) => entry.command.command === request.command,
-        )!.command;
-        return JSON.parse(await command.handle(JSON.stringify(request.params)));
+        return JSON.parse(await command(request.command).handle(JSON.stringify(request.params)));
       },
       close: vi.fn(async (execution?: { executionId: string; reason: string }) => {
         active = false;
         if (execution) {
-          await registry.nodeHostCommands
-            .find((entry) => entry.command.command === "computer.act")!
-            .command.handle(JSON.stringify({ ...execution, action: "__close_execution" }));
+          await command("computer.act").handle(
+            JSON.stringify({ ...execution, action: "__close_execution" }),
+          );
         }
         await registry.nodeHostCommands
           .find((entry) => entry.command.onDisconnect)
@@ -179,6 +154,15 @@ function createFixture() {
       params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
       idempotencyKey,
     });
+  const closeRequest = (reason?: string) =>
+    request({
+      command: "computer.act",
+      params: {
+        executionId: logicalId,
+        action: "__close_execution",
+        ...(reason ? { reason } : {}),
+      },
+    });
   const mocks = { start: startHost, snapshot, act, open: openExecution, close: physicalClose };
   const calls = (expected: Partial<Record<keyof typeof mocks | "release" | "leases", number>>) =>
     expect({
@@ -203,6 +187,7 @@ function createFixture() {
     stops,
     request,
     click,
+    closeRequest,
     declared: () => service.status({ probe: false }),
     holdCleanup: () => {
       const gate = createDeferredCore();
@@ -435,9 +420,7 @@ describe("Gateway computer service", () => {
       error: expect.stringContaining("reloading"),
     });
     await expect(f.invoke({ idempotencyKey: "during-reload" })).rejects.toThrow("closed");
-    await expectCleanupHeld(cleanup, reload.drain(), () => {
-      expect(f.leases[0]!.release).not.toHaveBeenCalled();
-    });
+    await expectCleanupHeld(cleanup, reload.drain(), () => f.calls({ release: 0 }));
     f.calls({ release: 1 });
     if (outcome === "commit") {
       f.config.plugins!.entries!.fixture!.enabled = false;
@@ -473,12 +456,10 @@ describe("Gateway computer service", () => {
 
   it("discovers its managed computer without pairing and binds native executions to the requesting owner", async () => {
     expect(await f.service.status()).toMatchObject({ configured: true, available: true });
-    expect(startComputerHostProcess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: f.leases[0]!.env,
-        pluginIds: ["fixture"],
-      }),
-    );
+    expect(startHost.mock.calls[0]![0]).toMatchObject({
+      env: f.leases[0]!.env,
+      pluginIds: ["fixture"],
+    });
     await expect(f.invoke()).resolves.toEqual(screenshot);
     const physicalId = f.openExecution.mock.calls[0]![0].executionId;
     expect(physicalId).not.toBe(logicalId);
@@ -523,31 +504,19 @@ describe("Gateway computer service", () => {
   });
 
   it("joins native preparation on shutdown and releases the acquired desktop after the child closes", async () => {
-    const nativeReady = createDeferredCore<ComputerUseCapabilityDescriptor>();
-    const launchStarted = createDeferredCore();
+    const delayed = delayReadiness();
     const closed = createDeferredCore();
-    const childClose = vi.fn(() => {
-      nativeReady.reject(new Error("Native preparation was closed"));
+    const discovering = f.service.status();
+    await delayed.started;
+    delayed.close.mockImplementation(() => {
+      delayed.ready.reject(new Error("Native preparation was closed"));
       return closed.promise;
     });
-    startHost.mockImplementationOnce(() => {
-      launchStarted.resolve();
-      return {
-        ready: nativeReady.promise,
-        isCurrent: () => true,
-        invoke: async () => {},
-        close: childClose,
-      };
-    });
-    const discovering = f.service.status();
-    await launchStarted.promise;
     await expectCleanupHeld(
       closed,
       f.service.close(),
-      () => {
-        expect(f.leases[0]!.release).not.toHaveBeenCalled();
-      },
-      childClose,
+      () => f.calls({ release: 0 }),
+      delayed.close,
     );
     expect(await discovering).toMatchObject({ available: false });
     expect(f.leases[0]!.release).toHaveBeenCalled();
@@ -605,12 +574,7 @@ describe("Gateway computer service", () => {
       new Error("Native helper exited unexpectedly"),
     );
     vi.spyOn(child, "close").mockRejectedValue(failure);
-    await expect(
-      f.invoke({
-        command: "computer.act",
-        params: { executionId: logicalId, action: "__close_execution", reason: "completion" },
-      }),
-    ).rejects.toBe(failure);
+    await expect(f.service.invoke(f.closeRequest("completion"))).rejects.toBe(failure);
     expect(f.leases[0]!.release).toHaveBeenCalledTimes(1);
     expect(await f.service.status()).toMatchObject({ available: true });
     f.calls({ start: 2, snapshot: 1, open: 1 });
@@ -621,16 +585,12 @@ describe("Gateway computer service", () => {
     await f.invoke();
     const cleanup = f.holdCleanup();
     const failure = new Error("native cleanup failed");
-    const closeRequest = f.request({
-      command: "computer.act",
-      params: { executionId: logicalId, action: "__close_execution" },
-    });
+    const closeRequest = f.closeRequest();
     const first = f.service.invoke(closeRequest);
-    const firstObserved = Promise.allSettled([first]);
+    const firstObserved = observeSettlement(first);
     await vi.waitFor(() => expect(f.physicalClose).toHaveBeenCalledTimes(1));
     const duplicate = f.service.invoke(closeRequest);
-    const duplicateSettled = vi.fn();
-    const duplicateObserved = duplicate.then(duplicateSettled, duplicateSettled);
+    const duplicateObserved = observeSettlement(duplicate);
     const results = Promise.allSettled([first, duplicate]);
     try {
       await expect(f.service.invoke({ ...closeRequest, owner: "session-b" })).rejects.toThrow(
@@ -639,7 +599,7 @@ describe("Gateway computer service", () => {
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      expect(duplicateSettled).not.toHaveBeenCalled();
+      expect(duplicateObserved.settled).not.toHaveBeenCalled();
       expect(f.leases[0]!.release).not.toHaveBeenCalled();
     } finally {
       cleanup.reject(failure);
@@ -648,8 +608,7 @@ describe("Gateway computer service", () => {
       { status: "rejected", reason: failure },
       { status: "rejected", reason: failure },
     ]);
-    await firstObserved;
-    await duplicateObserved;
+    await Promise.all([firstObserved.done, duplicateObserved.done]);
     await expect(f.service.invoke(closeRequest)).resolves.toEqual({ ok: true });
     expect(f.physicalClose).toHaveBeenLastCalledWith("completion");
     f.calls({ close: 2, release: 1 });

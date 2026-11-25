@@ -1,10 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { BashExecutionMessage, CustomMessage } from "../../agents/sessions/messages.js";
 import type {
-  CommittedCompactionBoundary,
-  PreparedCompactionAppend,
-} from "../../agents/sessions/session-compaction-persistence.js";
-import type {
   ModelChangeEntry,
   SessionEntry,
   SessionLeafControl,
@@ -14,7 +10,6 @@ import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import type { Message } from "../../llm/types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
-import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
@@ -26,11 +21,19 @@ import type {
   TranscriptWriteSnapshot,
 } from "./session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
-import type { PreparedSessionTranscriptHydration as PreparedSessionTranscriptReload } from "./session-history-read.types.js";
+import type {
+  CommittedCompactionBoundary,
+  PreparedCompactionAppend,
+} from "./session-compaction-persistence.types.js";
+import type {
+  PreparedSessionTranscriptHydration as PreparedSessionTranscriptReload,
+  SessionTranscriptContextSelection,
+} from "./session-history-read.types.js";
 import type {
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
 } from "./session-pending-input.types.js";
+import type { SessionMentionInvitation } from "./session-sharing-authority.types.js";
 import type {
   InitialSessionTranscriptWriter,
   SessionTranscriptWriterFence,
@@ -38,7 +41,6 @@ import type {
 import type { InternalSessionEntry } from "./types.js";
 
 type MetadataTarget = Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
-type SessionManagerBoundedContextLimits = { maxBytes: number; maxEvents: number };
 
 /** Host metadata capability; SDK-visible admissions do not expose the actor's other domains. */
 export type SessionManagerIncognitoDatabase = {
@@ -64,6 +66,7 @@ export type InitialSessionEntryCommit = {
 };
 
 export type SessionMetadataMessageControl = {
+  mentionInvitation?: SessionMentionInvitation;
   pendingInput?: { facts: SessionPendingInputWorkerFacts; relocation?: string };
   freshMessageCheck?: true;
 };
@@ -143,7 +146,6 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
         scope: MetadataTarget;
         messageJson: string;
         cwd: string;
-        cliWriter?: CliHistoryWriterFacts;
       } & SessionMetadataMessageControl;
       output: {
         snapshot: Result<
@@ -169,7 +171,6 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
         scope: MetadataTarget;
         event: Omit<SessionMessageEntry, "message"> | string;
         initialModel?: ModelChangeEntry;
-        cliWriter?: CliHistoryWriterFacts;
         message?: {
           messageJson: string;
           cwd: string;
@@ -179,7 +180,7 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
         options: Pick<TranscriptEventAppendOptions, "appendIntent" | "expectedMutationAt">;
         view?: {
           loadedVersion?: SessionTranscriptContextVersion;
-          limits?: SessionManagerBoundedContextLimits;
+          limits?: SessionTranscriptContextSelection;
           admission?: UserTurnTranscriptAdmissionReceipt;
           questionAnswers?: readonly UserTurnTranscriptAdmissionReceipt[];
         };

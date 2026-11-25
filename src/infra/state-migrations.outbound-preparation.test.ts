@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
+import {
+  resetPluginLoaderTestStateForTest,
+  writePlugin,
+  writePluginMetadata,
+} from "../plugins/loader.test-fixtures.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   createOpenClawTestState,
@@ -25,12 +28,12 @@ let pluginFile: string;
 let eventsFile: string;
 let cfg: OpenClawConfig;
 
-async function writePluginFixture({ failDisposal = false }: { failDisposal?: boolean } = {}) {
-  await fs.writeFile(
-    pluginFile,
-    `module.exports = {
-    id: "doctor-outbound-fixture",
-    register(api) {
+function writePluginFixture(failDisposal = false) {
+  const plugin = writePlugin({
+    id: pluginId,
+    dir: state.path("plugin"),
+    filename: "index.cjs",
+    registration: `
       const record = (value) => require("node:fs").appendFileSync(${JSON.stringify(eventsFile)}, value + "\\n");
       api.on("reply_payload_sending", (event) => {
         record("reply");
@@ -53,9 +56,10 @@ async function writePluginFixture({ failDisposal = false }: { failDisposal?: boo
         config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
         outbound: { deliveryMode: "direct", sendText: async () => { throw new Error("migration must not send"); } },
       } });
-    },
-  };`,
-  );
+`,
+  });
+  writePluginMetadata({ ...plugin, channels: ["matrix"], configSchema: { type: "object" } });
+  pluginFile = plugin.file;
 }
 
 beforeEach(async () => {
@@ -63,15 +67,8 @@ beforeEach(async () => {
     label: "doctor-outbound",
     env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
   });
-  const pluginDir = state.path("plugin");
-  pluginFile = path.join(pluginDir, "index.cjs");
   eventsFile = state.path("events.txt");
-  await fs.mkdir(pluginDir, { recursive: true });
-  await fs.writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({ id: pluginId, channels: ["matrix"], configSchema: { type: "object" } }),
-  );
-  await writePluginFixture();
+  writePluginFixture();
   cfg = {
     plugins: {
       allow: [pluginId],
@@ -137,7 +134,7 @@ it.each(["sqlite", "claimed", "disposal-failure"] as const)(
   "handles %s preparation with real plugin modifiers",
   async (kind) => {
     if (kind === "disposal-failure") {
-      await writePluginFixture({ failDisposal: true });
+      writePluginFixture(true);
     }
     const entry = seed(kind === "claimed" ? "outbound-legacy-preparing-v1" : "outbound");
     await repair(false);

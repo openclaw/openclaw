@@ -128,7 +128,26 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
     });
   }
 
-  async listBoards(): Promise<{ boards: WorkboardBoardSummary[] }> {
+  listBoards(): Promise<{ boards: WorkboardBoardSummary[] }> {
+    return this.runOperation(() => {
+      const writeToken = this.refreshWriteReceipt();
+      if (this.boardList) {
+        return this.boardList;
+      }
+      const pending = this.readBoardSummaries().catch((error: unknown) => {
+        if (this.boardList === pending) {
+          this.boardList = undefined;
+        }
+        throw error;
+      });
+      if (writeToken !== undefined) {
+        this.boardList = pending;
+      }
+      return pending;
+    });
+  }
+
+  private async readBoardSummaries(): Promise<{ boards: WorkboardBoardSummary[] }> {
     const boards = new Map<string, WorkboardBoardSummary>();
     for (const entry of await this.boardStore.entries()) {
       const { createdAt: _createdAt, archivedAt, ...board } = entry.value.board;

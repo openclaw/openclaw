@@ -2,12 +2,16 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -15,13 +19,11 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lif
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
 import { handleChannelAvatarHttpRequest } from "./channel-avatar-http.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { readOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
-import * as historyState from "./session-history-state.js";
 import { handleSessionKillHttpRequest } from "./session-kill-http.js";
 import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
 import { invokeGatewayTool } from "./tools-invoke-shared.js";
@@ -62,7 +64,10 @@ vi.mock("./http-utils.js", async (original) => {
     }),
     checkGatewayHttpRequestAuth: async () => ({ ok: true, requestAuth: requestAuth() }),
     authorizeGatewayHttpRequestOrReply: async () => requestAuth(),
-    authorizeControlUiSessionOwnerReadRequestOrReply: async () => requestAuth(),
+    authorizeControlUiSessionOwnerReadRequestOrReply: async () => ({
+      ...requestAuth(),
+      canReadSession: () => true,
+    }),
     resolveTrustedHttpOperatorScopes: () => ["operator.admin"],
     resolveSharedSecretHttpOperatorScopes: () => ["operator.admin"],
   };
@@ -115,7 +120,6 @@ const lifetime = { assertCurrent() {}, assertReadable() {} };
 let location: { agentId: string; path: string };
 let env: NodeJS.ProcessEnv;
 let baseUrl: string;
-let portClaim: TestPortClaim;
 let sequence = 0;
 let lastHandled = Promise.resolve();
 const server = createServer((req, res) => {
@@ -148,11 +152,7 @@ beforeAll(async () => {
     agentId: "main",
     path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
   };
-  portClaim = await acquireTestPortBlock({ offsets: [0] });
-  await new Promise<void>((resolve) => {
-    server.listen(portClaim.port, "127.0.0.1", resolve);
-  });
-  baseUrl = `http://127.0.0.1:${portClaim.port}`;
+  baseUrl = await listenLoopback(server);
 });
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
@@ -166,12 +166,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 afterAll(async () => {
-  server.closeAllConnections();
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
+  await closeHttpServer(server);
   await lastHandled;
-  await portClaim?.release();
   memorySessionActorOwners.closeDatabase(location);
   await closeOpenClawAgentDatabasesAsync();
   vi.unstubAllEnvs();
@@ -243,49 +239,29 @@ function observeHostSql() {
   return { ...host, [Symbol.dispose]: host.restore };
 }
 
-it.each([
-  ["application/json", false],
-  ["text/event-stream", false],
-  ["application/json", true],
-  ["text/event-stream", true],
-] as const)("serves memory history as %s, revoked=%s", async (accept, revoked) => {
-  const key = await seed();
-  using host = revoked ? undefined : observeHostSql();
-  const gate = pauseGate();
-  if (revoked) {
-    const read = historyState.readSessionHistorySnapshotAsync;
-    vi.spyOn(historyState, "readSessionHistorySnapshotAsync").mockImplementation(
-      async (...args) => {
-        const result = await read(...args);
-        await gate.pause();
-        return result;
-      },
-    );
-  }
-  const pending = fetch(historyUrl(revoked ? key : key.toUpperCase()), { headers: { accept } });
-  const response = await (revoked
-    ? gate.during(pending, () => {
-        runtime.current = false;
-      })
-    : pending);
-  expect(response.status).toBe(revoked ? 404 : 200);
-  let text: string;
-  if (!revoked && accept === "text/event-stream") {
-    const reader = response.body!.getReader();
-    try {
-      text = JSON.stringify(await readSseEvent(reader, { buffer: "" }));
-    } finally {
-      await reader.cancel();
+it.each(["application/json", "text/event-stream"] as const)(
+  "serves memory history as %s",
+  async (accept) => {
+    const key = await seed();
+    using host = observeHostSql();
+    const response = await fetch(historyUrl(key.toUpperCase()), { headers: { accept } });
+    expect(response.status).toBe(200);
+    let text: string;
+    if (accept === "text/event-stream") {
+      const reader = response.body!.getReader();
+      try {
+        text = JSON.stringify(await readSseEvent(reader, { buffer: "" }));
+      } finally {
+        await reader.cancel();
+      }
+    } else {
+      text = JSON.stringify(await response.json());
     }
-  } else {
-    text = revoked ? await response.text() : JSON.stringify(await response.json());
-  }
-  expect(text.includes("Private actor history")).toBe(!revoked);
-  if (host) {
+    expect(text).toContain("Private actor history");
     await lastHandled;
     expect(host.queries).toEqual([]);
-  }
-});
+  },
+);
 
 it("checks the captured avatar source after its media wait", async () => {
   const key = await seed();

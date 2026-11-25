@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { assertAgentInitializationCompleteInWorker } from "../config/sessions/agent-initialization.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
@@ -12,8 +14,8 @@ import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import {
   agentWorkAdmissionIdentity,
   type AgentWorkAdmissionTarget,
@@ -29,10 +31,14 @@ import type {
   SessionControllerInput,
 } from "./session-controller.contracts.js";
 import { createSessionControllerPhaseLogger } from "./session-controller.diagnostics.js";
-import { assertAgentControllerAdmissionOpen } from "./session-controller.lifecycle-agent.js";
+import {
+  assertAgentControllerAdmissionOpen,
+  assertAgentControllerDeletionAdmissionOpen,
+} from "./session-controller.lifecycle-agent.js";
 import {
   createLifecycleDiagnosticOperation,
   type SessionLifecycleDiagnosticLabel,
+  type SessionLifecycleDiagnosticWaitDurations,
 } from "./session-controller.lifecycle-diagnostics.js";
 import {
   runAfterRetiringSessionSources,
@@ -114,7 +120,6 @@ export {
   startSessionControllerInterruption,
   interruptSessionControllerEffects,
   captureSessionWorkRunInterruptions,
-  getCompetingSessionWorkAdmissionRelease,
   getTerminalSessionWorkAdmissionRelease,
 } from "./session-controller.lifecycle-work.js";
 export { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "./session-controller.contracts.js";
@@ -124,6 +129,7 @@ export async function runSessionMutation<T>(
   params: {
     requiredSessionId?: string;
     diagnosticLabel?: SessionLifecycleDiagnosticLabel;
+    diagnosticSubphaseDurationsMs?: Readonly<SessionLifecycleDiagnosticWaitDurations>;
     prepare?: (owner: {
       closeWorkAdmissions: (reason: Error) => void;
       operations: readonly ReplyOperation[];
@@ -210,6 +216,7 @@ export async function runSessionMutation<T>(
       targets.flatMap((target) => target.aliases.map((alias) => `${target.storeScope}\0${alias}`)),
     signal,
     mutationKind: params.diagnosticLabel ?? params.kind,
+    subphaseDurationsMs: params.diagnosticSubphaseDurationsMs,
   });
   const mutation: Mutation = {
     diagnostic,
@@ -272,7 +279,7 @@ export async function runSessionMutation<T>(
     effects: current?.effects ?? new Set(),
     mutations: new Set([...(current?.mutations ?? []), mutation]),
   };
-  return await ownerContext.run(context, async () => {
+  return await runWithAsyncStore(ownerContext, context, async () => {
     let stopCompetitionWait: (() => void) | undefined;
     let pendingEffects: Set<Effect> | undefined;
     const runObserved = () => {
@@ -486,6 +493,7 @@ export async function beginSessionEffect(
       const wasAcquired = effect.phase === "acquired";
       effect.phase = "released";
       effect.handoffs.clear();
+      effect.admissionTransitions?.clear();
       state.effects.delete(effect);
       releaseTarget(entry, target);
       effect.validated.resolve();
@@ -514,7 +522,8 @@ export async function beginSessionEffect(
       }
       running++;
       try {
-        return await ownerContext.run(
+        return await runWithAsyncStore(
+          ownerContext,
           {
             sourceInput: caller?.sourceInput ?? current?.sourceInput ?? effect.sourceInput,
             operation,
@@ -573,16 +582,7 @@ export async function beginSessionEffect(
     );
     signal.throwIfAborted();
     if (effect.agent) {
-      const journal = await readAgentDeletionJournalStatusInWorker(
-        effect.agent.agentId,
-        { path: effect.agent.statePath, env: params.env },
-        signal,
-      );
-      if (journal !== "absent") {
-        throw new Error(
-          "Agent " + effect.agent.agentId + " deletion is in progress; new work is unavailable.",
-        );
-      }
+      await assertAgentControllerDeletionAdmissionOpen(effect.agent, params.env, signal);
       assertAgentControllerAdmissionOpen(effect);
       signal.throwIfAborted();
     }
@@ -621,24 +621,7 @@ export async function beginSessionEffect(
     effect.phase = "writer";
     logAdmission("waiting", "store-writer");
     let writerStarted = false;
-    let removeAbort = () => {};
-    const aborted = new Promise<never>((_, reject) => {
-      const abort = () => {
-        if (!writerStarted) {
-          reject(
-            signal.reason instanceof Error
-              ? signal.reason
-              : new Error("Session effect cancelled", { cause: signal.reason }),
-          );
-        }
-      };
-      signal.addEventListener("abort", abort, { once: true });
-      removeAbort = () => signal.removeEventListener("abort", abort);
-      if (signal.aborted) {
-        abort();
-      }
-    });
-    const writer = runExclusiveSessionStoreWrite(
+    await runExclusiveSessionStoreWrite(
       target.storeScope,
       async () => {
         // A withdrawn queue callback has no writer capability or user work left.
@@ -651,16 +634,25 @@ export async function beginSessionEffect(
           } else {
             await params.assertAllowed?.(signal);
           }
+          if (effect.agent && params.run) {
+            await assertAgentInitializationCompleteInWorker(
+              getRuntimeConfigSnapshot() ?? {},
+              effect.agent.agentId,
+              () => signal.throwIfAborted(),
+            );
+          }
         });
         signal.throwIfAborted();
       },
       { reentrant: true, identities: params.storeWriterIdentities, signal },
-    );
-    try {
-      await Promise.race([writer, aborted]);
-    } finally {
-      removeAbort();
-    }
+    ).catch((error: unknown) => {
+      if (!writerStarted && signal.aborted && Object.is(error, signal.reason)) {
+        throw error instanceof Error
+          ? error
+          : new Error("Session effect cancelled", { cause: error });
+      }
+      throw error;
+    });
     effect.phase = "acquired";
     diagnostic?.mark("run");
     logAdmission("settled", "acquired");
@@ -672,6 +664,17 @@ export async function beginSessionEffect(
     ref.release();
     throw error;
   }
+}
+
+/** Ingress consumes this before reserving a receipt, before asynchronous preparation can yield. */
+export function readSessionControllerAdmissionError(params: TargetInput): Error | undefined {
+  for (const entry of matchingEntries(targetFrom(params))) {
+    const closure = entry.lifecycle?.closures.values().next().value;
+    if (closure) {
+      return closure.reason;
+    }
+  }
+  return undefined;
 }
 
 export function closeSessionControllerAdmission(

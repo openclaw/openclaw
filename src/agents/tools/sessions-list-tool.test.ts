@@ -83,11 +83,9 @@ describe("sessions-list-tool", () => {
     }
 
     expect({
-      projected: sessions.map(({ key, kind, classification }) => [key, kind, classification]),
       modelVisible: unfiltered.map(({ key, kind }) => [key, kind]),
       filteredKeys,
     }).toEqual({
-      projected: cases.map(([key, wireKind, classification]) => [key, wireKind, classification]),
       modelVisible: cases.map((row) => [row[0], row[3]]),
       filteredKeys: Object.fromEntries(cases.map((row) => [row[3], [row[0]]])),
     });

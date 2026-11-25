@@ -1,36 +1,31 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   getMatrixActionMocks,
+  matrixActionResults,
   resetMatrixActionMocks,
   runMatrixAction,
 } from "./tool-actions.test-support.js";
-import type { CoreConfig } from "./types.js";
+import type { CoreConfig, MatrixAccountConfig } from "./types.js";
 
 const mocks = getMatrixActionMocks();
 const emptyCfg: CoreConfig = {};
-const cfg: CoreConfig = {
-  channels: {
-    matrix: {
-      actions: {
-        messages: true,
-        reactions: true,
-        pins: true,
-        profile: true,
-        memberInfo: true,
-        channelInfo: true,
-      },
-    },
-  },
-};
+const actionConfig = (actions: MatrixAccountConfig["actions"]): CoreConfig => ({
+  channels: { matrix: { actions } },
+});
+const enabledCfg = actionConfig({
+  messages: true,
+  reactions: true,
+  pins: true,
+  profile: true,
+  memberInfo: true,
+  channelInfo: true,
+});
 const roomId = "!room:example";
 const target = { roomId, messageId: "$msg" };
 const account = { accountId: "ops" };
-const authorizedOpts = { cfg, ...account, client: mocks.matrixClient };
+const authorizedOpts = { cfg: enabledCfg, ...account, client: mocks.matrixClient };
 const mediaLocalRoots = ["/tmp/openclaw-matrix-test"];
 const blockedMessage = "Matrix read target is not allowed.";
-function blockReadTarget() {
-  mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(new Error(blockedMessage));
-}
 type BlockedCase = [
   action: Parameters<typeof runMatrixAction>[0],
   params: Record<string, unknown>,
@@ -39,7 +34,7 @@ type BlockedCase = [
   context?: Parameters<typeof runMatrixAction>[3],
 ];
 function runScoped(action: Parameters<typeof runMatrixAction>[0], params: Record<string, unknown>) {
-  return runMatrixAction(action, params, cfg, account);
+  return runMatrixAction(action, params, enabledCfg, account);
 }
 const makeMessage = (eventId: string, body: string, timestamp = 1_750_000_000_000) => ({
   eventId,
@@ -54,11 +49,14 @@ const readParams = {
   after: "after",
   threadId: "$thread",
 };
+const expectError = (result: ReturnType<typeof runMatrixAction>, message: string) =>
+  expect(result).rejects.toThrow(message);
 
 describe("Matrix public message actions", () => {
   beforeEach(resetMatrixActionMocks);
 
   it("parses snake_case vote params and forwards normalized selectors", async () => {
+    const expectedResult = structuredClone(matrixActionResults.poll);
     const result = await runMatrixAction(
       "poll-vote",
       {
@@ -79,17 +77,7 @@ describe("Matrix public message actions", () => {
       optionIds: ["a2", "a1"],
       optionIndexes: [1, 2],
     });
-    expect(result.details).toEqual({
-      ok: true,
-      result: {
-        eventId: "evt-poll-vote",
-        roomId,
-        pollId: "$poll",
-        answerIds: ["a1", "a2"],
-        labels: ["Pizza", "Sushi"],
-        maxSelections: 2,
-      },
-    });
+    expect(result.details).toEqual({ ok: true, result: expectedResult });
   });
 
   it.each([
@@ -103,9 +91,7 @@ describe("Matrix public message actions", () => {
       error: "pollOptionIndexes must contain positive integers.",
     },
   ])("rejects invalid vote: $error", async ({ params, error }) => {
-    await expect(runMatrixAction("poll-vote", { roomId, ...params }, emptyCfg)).rejects.toThrow(
-      error,
-    );
+    await expectError(runMatrixAction("poll-vote", { roomId, ...params }, emptyCfg), error);
     expect(mocks.voteMatrixPoll).not.toHaveBeenCalled();
   });
 
@@ -132,7 +118,7 @@ describe("Matrix public message actions", () => {
     const result = await runMatrixAction(
       "emoji-list",
       { roomId: `room:${roomId}`, limit: 5 },
-      cfg,
+      enabledCfg,
       {
         ...account,
         requesterAccountId: "ops",
@@ -144,17 +130,6 @@ describe("Matrix public message actions", () => {
       ok: true,
       emojis: [{ name: "party", identifier: "party", url: "mxc://example.org/party" }],
     });
-  });
-
-  it("rejects custom-emote discovery when reactions are disabled", async () => {
-    const params = { roomId: "!blocked:example" };
-    await expect(
-      runMatrixAction("emoji-list", params, {
-        channels: { matrix: { actions: { reactions: false } } },
-      }),
-    ).rejects.toThrow("Matrix reactions are disabled.");
-    expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
-    expect(mocks.listMatrixEmojis).not.toHaveBeenCalled();
   });
 
   it.each<BlockedCase>([
@@ -181,11 +156,12 @@ describe("Matrix public message actions", () => {
     ],
   ])(
     "rejects blocked %s before reading or mutating Matrix",
-    async (action, params, forbidden, config = cfg, context = {}) => {
-      blockReadTarget();
-      await expect(
+    async (action, params, forbidden, config = enabledCfg, context = {}) => {
+      mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(new Error(blockedMessage));
+      await expectError(
         runMatrixAction(action, { ...params, roomId: "!blocked:example" }, config, context),
-      ).rejects.toThrow(blockedMessage);
+        blockedMessage,
+      );
       for (const call of forbidden) {
         expect(call).not.toHaveBeenCalled();
       }
@@ -200,56 +176,10 @@ describe("Matrix public message actions", () => {
     });
   });
 
-  it("passes account-scoped opts and limit to reaction listing", async () => {
-    const result = await runScoped("reactions", {
-      room_id: roomId,
-      message_id: "$msg",
-      limit: "5",
-    });
-    expect(mocks.listMatrixReactions).toHaveBeenCalledWith(roomId, "$msg", {
-      ...authorizedOpts,
-      limit: 5,
-    });
-    expect(result.details).toEqual({
-      ok: true,
-      reactions: [{ key: "👍", count: 1, users: ["@u:example"] }],
-    });
-  });
-
   it("preserves indented Markdown on message edits", async () => {
     const message = "    @alice:example.org";
-    await runMatrixAction("edit", { ...target, message }, cfg);
+    await runMatrixAction("edit", { ...target, message }, enabledCfg);
     expect(mocks.editMatrixMessage.mock.lastCall?.[2]).toBe(message);
-  });
-
-  it("accepts media-only sends with shared aliases, voice flags, and workspace access", async () => {
-    const mediaAccess = {
-      localRoots: mediaLocalRoots,
-      readFile: async () => Buffer.from("chart"),
-      workspaceDir: mediaLocalRoots[0],
-    };
-    await runMatrixAction(
-      "send",
-      {
-        to: `room:${roomId}`,
-        path: "/tmp/clip.mp3",
-        asVoice: true,
-        threadId: "$thread",
-      },
-      cfg,
-      { ...account, mediaAccess, mediaLocalRoots },
-    );
-    expect(mocks.sendMatrixMessage).toHaveBeenCalledWith(`room:${roomId}`, undefined, {
-      cfg,
-      ...account,
-      mediaUrl: "/tmp/clip.mp3",
-      mediaAccess,
-      mediaLocalRoots,
-      replyToId: undefined,
-      threadId: "$thread",
-      audioAsVoice: true,
-    });
-    expect(mocks.sendMatrixMessage.mock.lastCall?.[2]?.mediaAccess).toBe(mediaAccess);
   });
 
   it.each([
@@ -367,6 +297,7 @@ describe("Matrix public message actions", () => {
   });
 
   it("forwards scoped self-profile edits and local avatar access to the profile owner", async () => {
+    const expectedResult = structuredClone(matrixActionResults.profile);
     const result = await runMatrixAction(
       "set-profile",
       {
@@ -374,30 +305,295 @@ describe("Matrix public message actions", () => {
         avatar_url: "mxc://example/avatar",
         path: "/tmp/avatar.jpg",
       },
-      cfg,
+      enabledCfg,
       { ...account, mediaLocalRoots, senderIsOwner: true },
     );
     expect(mocks.applyMatrixProfileUpdate).toHaveBeenCalledWith({
-      cfg,
+      cfg: enabledCfg,
       account: "ops",
       displayName: "Ops Bot",
       avatarUrl: "mxc://example/avatar",
       avatarPath: "/tmp/avatar.jpg",
       mediaLocalRoots,
     });
+    expect(result.details).toEqual({ ok: true, ...expectedResult });
+  });
+});
+
+describe("Matrix action composition", () => {
+  beforeEach(resetMatrixActionMocks);
+  const cfg: CoreConfig = {};
+  const disabledActions = { messages: false, reactions: false, pins: false, memberInfo: false };
+  const disabledCfg = actionConfig(disabledActions);
+  const verificationParams = { operation: "verification-list" };
+  const owner = { accountId: "ops", senderIsOwner: true };
+  const mediaAccess = {
+    localRoots: ["/tmp/matrix-composition"],
+    readFile: async () => Buffer.from("fixture"),
+    workspaceDir: "/tmp/matrix-composition",
+  };
+  const sendDefaults = {
+    mediaLocalRoots: undefined,
+    replyToId: undefined,
+    threadId: undefined,
+    audioAsVoice: undefined,
+  };
+  const mediaContext = { accountId: "ops", mediaAccess, mediaLocalRoots: mediaAccess.localRoots };
+  const discarded = (...keys: string[]) =>
+    Object.fromEntries(keys.map((key) => [key, "discarded"] as const));
+
+  type ActionArgs = Parameters<typeof runMatrixAction>;
+  const run = (
+    action: ActionArgs[0],
+    params: ActionArgs[1],
+    context?: ActionArgs[3],
+    config = cfg,
+  ) => runMatrixAction(action, params, config, context);
+
+  it.each([
+    [
+      {
+        ...discarded("content", "replyToId", "accountId", "account_id"),
+        message: "    indented",
+        media: " first.png ",
+        mediaUrl: "second.png",
+        replyTo: "$reply",
+        asVoice: false,
+        audioAsVoice: true,
+      },
+      "    indented",
+      { mediaUrl: " first.png ", replyToId: "$reply", audioAsVoice: false },
+      { ...mediaContext, accountId: " ops " },
+    ],
+    [
+      {
+        ...discarded("media_url", "file_path", "replyToId", "thread_id", "accountId"),
+        mediaUrl: undefined,
+        filePath: "kept.png",
+        threadId: undefined,
+        as_voice: true,
+        audio_as_voice: true,
+      },
+      undefined,
+      { mediaUrl: "kept.png" },
+      undefined,
+    ],
+    [
+      { path: "/tmp/clip.mp3", asVoice: true, threadId: "$thread" },
+      undefined,
+      { mediaUrl: "/tmp/clip.mp3", threadId: "$thread", audioAsVoice: true },
+      mediaContext,
+    ],
+  ] as const)(
+    "preserves send parameter precedence for %j",
+    async (params, message, options, context) => {
+      await run("send", { to: " room:!room:example ", ...params }, context);
+      const call = mocks.sendMatrixMessage.mock.lastCall;
+      expect(call).toStrictEqual([
+        "room:!room:example",
+        message,
+        { ...sendDefaults, ...(context ? mediaContext : {}), ...options, cfg },
+      ]);
+      expect(call?.[2].mediaAccess).toBe(context?.mediaAccess);
+      expect(call?.[2].cfg).toBe(cfg);
+    },
+  );
+
+  it("drops public delete reasons but preserves the downstream undefined property", async () => {
+    await run("delete", { roomId: "!room:example", messageId: "$message", reason: "discarded" });
+    expect(mocks.deleteMatrixMessage.mock.lastCall).toStrictEqual([
+      "!room:example",
+      "$message",
+      { reason: undefined, cfg, client: mocks.matrixClient },
+    ]);
+  });
+
+  it("carries only trusted read context and retains undefined context properties", async () => {
+    const params = {
+      room_id: "!room:example",
+      message_id: "$message",
+      limit: "5",
+      accountId: "untrusted",
+      requesterAccountId: "untrusted",
+      currentChannelId: "!untrusted:example",
+      conversationReadOrigin: "untrusted",
+    };
+    const context: ActionArgs[3] = {
+      accountId: "ops",
+      requesterAccountId: "requester",
+      toolContext: {
+        currentChannelId: "room:!room:example",
+        currentChannelProvider: "matrix",
+        currentChatType: "direct",
+      },
+    };
+    const result = await run("reactions", params, context);
+
+    expect(mocks.withAuthorizedMatrixReadTarget.mock.lastCall?.[0].context).toStrictEqual({
+      accountId: "ops",
+      requesterAccountId: "requester",
+      currentChannelId: "room:!room:example",
+      currentChannelProvider: "matrix",
+      currentChatType: "direct",
+      conversationReadOrigin: undefined,
+    });
+    expect(mocks.listMatrixReactions).toHaveBeenCalledWith("!room:example", "$message", {
+      cfg,
+      accountId: "ops",
+      client: mocks.matrixClient,
+      limit: 5,
+    });
     expect(result.details).toEqual({
       ok: true,
-      accountId: "ops",
-      displayName: "Ops Bot",
-      avatarUrl: "mxc://example/avatar",
-      profile: {
-        displayNameUpdated: true,
-        avatarUpdated: true,
-        resolvedAvatarUrl: "mxc://example/avatar",
-        uploadedAvatarSource: null,
-        convertedAvatarFromHttp: false,
-      },
-      configPath: "channels.matrix.accounts.ops",
+      reactions: [{ key: "👍", count: 1, users: ["@u:example"] }],
     });
+  });
+
+  it.each([
+    ["send", { to: "!room:example" }, "message required"],
+    ["edit", { messageId: "$m", message: "edit" }, "to required"],
+    ["read", { limit: 1.5 }, "limit must be a positive integer."],
+    ["pin", {}, "messageId required"],
+    ["list-pins", {}, "to required"],
+    ["member-info", {}, "userId required"],
+  ] as const)("validates %s %j before disabled action gates: %s", async (action, params, error) => {
+    await expectError(run(action, params, undefined, disabledCfg), error);
+    expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
+    expect(mocks.sendMatrixMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{}, "emoji required"],
+    [{ emoji: "", remove: true }, "Emoji is required to remove a Matrix reaction."],
+  ] as const)("retains late reaction validation for %j: %s", async (params, enabledError) => {
+    const input = { messageId: "$m", roomId: "!room:example", ...params };
+    await expectError(
+      run("react", input, undefined, disabledCfg),
+      "Matrix reactions are disabled.",
+    );
+    await expectError(run("react", input), enabledError);
+    expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
+  });
+
+  it("uses the current Matrix room only for emoji discovery and retains late whitespace errors", async () => {
+    const toolContext = {
+      currentChannelId: " room:!current:example ",
+      currentChannelProvider: "matrix",
+    };
+    await run("emoji-list", { limit: 3 }, { toolContext });
+    expect(mocks.listMatrixEmojis.mock.lastCall).toStrictEqual([
+      "!current:example",
+      { cfg, client: mocks.matrixClient, limit: 3 },
+    ]);
+    mocks.withAuthorizedMatrixReadTarget.mockClear();
+    mocks.listMatrixEmojis.mockClear();
+    const blankContext = { toolContext: { ...toolContext, currentChannelId: " " } };
+    await expectError(
+      run("emoji-list", {}, blankContext, disabledCfg),
+      "Matrix reactions are disabled.",
+    );
+    await expectError(run("emoji-list", {}, blankContext), "to required");
+    const foreignContext = {
+      toolContext: { currentChannelId: "!foreign:example", currentChannelProvider: "slack" },
+    };
+    await expectError(
+      run("emoji-list", { limit: 1.5 }, foreignContext),
+      "Matrix emoji-list requires a roomId or current Matrix conversation.",
+    );
+    expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
+    expect(mocks.listMatrixEmojis).not.toHaveBeenCalled();
+  });
+
+  it("preserves profile aliases and dropped fields at the public owner boundary", async () => {
+    const params = {
+      ...discarded("display_name", "avatar_url", "avatar_path", "accountId"),
+      displayName: undefined,
+      name: "Fallback Name",
+      avatarUrl: undefined,
+      avatarPath: undefined,
+      path: " /tmp/kept.png ",
+      filePath: "/tmp/later.png",
+    };
+    await run("set-profile", params, owner);
+    expect(mocks.applyMatrixProfileUpdate.mock.lastCall?.[0]).toStrictEqual({
+      cfg,
+      account: "ops",
+      displayName: "Fallback Name",
+      avatarUrl: undefined,
+      avatarPath: "/tmp/kept.png",
+      mediaLocalRoots: undefined,
+    });
+  });
+
+  it("retains owner checks and trusted account propagation for verification", async () => {
+    const ownerError = "Matrix verification actions require owner access.";
+    await expectError(run("permissions", verificationParams), ownerError);
+    await expectError(run("permissions", verificationParams, { senderIsOwner: false }), ownerError);
+    expect(mocks.listMatrixVerifications).not.toHaveBeenCalled();
+
+    const result = await run(
+      "permissions",
+      { ...verificationParams, accountId: "discarded" },
+      owner,
+    );
+    expect(mocks.listMatrixVerifications).toHaveBeenCalledWith({ cfg, accountId: "ops" });
+    expect(result.details).toEqual({ ok: true, verifications: [] });
+  });
+
+  it("rejects inherited verification operations before action gating", async () => {
+    const config = actionConfig({ verification: false });
+    await expectError(
+      run("permissions", { operation: "constructor" }, { senderIsOwner: true }, config),
+      "Unsupported Matrix permissions operation: constructor.",
+    );
+    expect(mocks.listMatrixVerifications).not.toHaveBeenCalled();
+  });
+
+  it("rejects profile mutation without trusted owner identity before applying the profile", async () => {
+    await expectError(
+      run("set-profile", { displayName: "Ops Bot" }, { accountId: "ops" }),
+      "Matrix profile updates require owner access.",
+    );
+    expect(mocks.applyMatrixProfileUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects an omitted profile update when the configured default account disables profile", async () => {
+    const restricted: CoreConfig = {
+      channels: {
+        matrix: {
+          defaultAccount: "ops",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              actions: { profile: false },
+            },
+            alerts: { homeserver: "https://matrix.example.org" },
+          },
+        },
+      },
+    };
+    await expectError(
+      run("set-profile", { displayName: "Ops Bot" }, { senderIsOwner: true }, restricted),
+      "Matrix profile updates are disabled.",
+    );
+    expect(mocks.applyMatrixProfileUpdate).not.toHaveBeenCalled();
+  });
+
+  it("updates the configured default account when a profile action omits the account", async () => {
+    const allowed: CoreConfig = {
+      channels: {
+        matrix: {
+          defaultAccount: "ops",
+          accounts: {
+            ops: { homeserver: "https://matrix.example.org", actions: { profile: true } },
+            alerts: { homeserver: "https://matrix.example.org" },
+          },
+        },
+      },
+    };
+    await run("set-profile", { displayName: "Ops Bot" }, { senderIsOwner: true }, allowed);
+    expect(mocks.applyMatrixProfileUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ account: "ops", displayName: "Ops Bot" }),
+    );
   });
 });

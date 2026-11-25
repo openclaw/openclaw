@@ -4,6 +4,10 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { READ_SCOPE } from "./operator-scopes.js";
+import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
+
+/** Owner-only invalidation; readers fetch fresh authorized People state. */
+export const GATEWAY_EVENT_ID_PEOPLE_CHANGED = "openclawId.people.changed" as const;
 
 export const GATEWAY_EVENT_DEVICE_PAIR_CHANGED = "device.pair.changed" as const;
 
@@ -14,9 +18,24 @@ export const GATEWAY_EVENT_UPDATE_AVAILABLE = "update.available" as const;
 /** Active update ledger progress; detailed records remain admin-scoped. */
 export const GATEWAY_EVENT_UPDATE_RUN_CHANGED = "update.run.changed" as const;
 
+export const GATEWAY_EVENT_CATALOG_ROUTES_CHANGED = "sessions.catalog.routes.changed" as const;
+
+/** Scoped catalog readers refresh their own route; the global plugin refresh requires operator.read. */
+export function broadcastPluginRegistryChanged(
+  broadcast: GatewayBroadcastFn | undefined,
+  generation: number | undefined,
+) {
+  // An unversioned registry still invalidates the caller's cached route.
+  const payload = generation === undefined ? {} : { generation };
+  const options = { dropIfSlow: true };
+  broadcast?.("plugins.changed", payload, options);
+  broadcast?.(GATEWAY_EVENT_CATALOG_ROUTES_CHANGED, payload, options);
+}
+
 /** Gateway event names that clients can subscribe to or receive over the wire. */
 export const GATEWAY_EVENTS = [
   "connect.challenge",
+  GATEWAY_EVENT_ID_PEOPLE_CHANGED,
   "agent",
   "agent.identity.changed",
   "chat",
@@ -35,6 +54,9 @@ export const GATEWAY_EVENTS = [
   "session.typing",
   "session.tool",
   "sessions.changed",
+  GATEWAY_EVENT_CATALOG_ROUTES_CHANGED,
+  "worktrees.branches.changed",
+  "projects.checkoutOptions.changed",
   "sessions.processes.changed",
   "socket.drain",
   "controlUi.sessionPullRequests.changed",
@@ -49,6 +71,7 @@ export const GATEWAY_EVENTS = [
   "health",
   "heartbeat",
   "cron",
+  "cron.inventory.changed",
   "task.suggestion",
   "node.pair.requested",
   "node.pair.resolved",
@@ -57,6 +80,7 @@ export const GATEWAY_EVENTS = [
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
   "node.invoke.cancel",
   "node.invoke.input",
+  "node.worker.localMcpPolicy",
   "node.invoke.request",
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
   "device.pair.requested",
@@ -84,6 +108,7 @@ export const GATEWAY_EVENTS = [
   "portal.changed",
   "progressCard.changed",
   "mentions.changed",
+  "mentions.failed",
 ];
 
 export function canReadDetailedUpdateMetadata(role: string, scopes: readonly string[]): boolean {

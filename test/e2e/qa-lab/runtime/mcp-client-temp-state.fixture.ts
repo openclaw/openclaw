@@ -114,3 +114,61 @@ export async function connectMcpClientWithPairingReconnect<
   handle = await params.connect(params.tempState);
   return handle;
 }
+
+export async function maybeApprovePendingBridgePairing(gateway: {
+  request(
+    method: string,
+    params?: unknown,
+  ): Promise<
+    | {
+        pending?: Array<{ requestId?: string; deviceId?: string; role?: string }>;
+        paired?: Array<{ deviceId?: string; roles?: string[]; role?: string }>;
+      }
+    | undefined
+  >;
+}): Promise<boolean> {
+  let pairingState: Awaited<ReturnType<typeof gateway.request>>;
+  try {
+    pairingState = await gateway.request("device.pair.list", {});
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      message.includes("missing scope: operator.pairing") ||
+      message.includes("device.pair.list")
+    ) {
+      return false;
+    }
+    throw error;
+  }
+  if (!pairingState) {
+    return false;
+  }
+  const pendingRequest = pairingState.pending?.find((entry) => entry.role === "operator");
+  if (!pendingRequest?.requestId) {
+    return false;
+  }
+  try {
+    await gateway.request("device.pair.approve", { requestId: pendingRequest.requestId });
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      error.message !== "unknown requestId" ||
+      !pendingRequest.deviceId
+    ) {
+      throw error;
+    }
+    // Local pairing can complete between the list and approval RPCs. Confirm the
+    // same device was approved; a rejected or expired request is still a failure.
+    const current = await gateway.request("device.pair.list", {});
+    if (
+      !current?.paired?.some(
+        (device) =>
+          device.deviceId === pendingRequest.deviceId &&
+          (device.roles?.includes("operator") || device.role === "operator"),
+      )
+    ) {
+      throw error;
+    }
+  }
+  return true;
+}

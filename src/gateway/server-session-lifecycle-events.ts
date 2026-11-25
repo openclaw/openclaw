@@ -142,7 +142,6 @@ export function createLifecycleEventBroadcastHandler(params: {
             ts: Date.now(),
             ...buildGatewaySessionSnapshot({
               sessionRow,
-              includeSession: true,
               agentId: eventAgentId,
               label: event.label,
               displayName: event.displayName,
@@ -164,6 +163,7 @@ export function createLifecycleEventBroadcastHandler(params: {
               ? {
                   prepareSessionProjection: prepareSessionEventProjection(projection, read, {
                     ancestors,
+                    reuseEnvelope: true,
                   }),
                 }
               : {}),

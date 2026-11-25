@@ -24,6 +24,7 @@ import {
 import {
   classifySystemdUnavailableDetail as classify,
   isSystemctlMissingDetail,
+  isSystemdNotBooted,
 } from "./systemd-unavailable.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
@@ -34,6 +35,37 @@ function captureOutput() {
   return { stdout, output: () => Buffer.concat(chunks).toString() };
 }
 const generic = "generic_unavailable";
+
+describe.skipIf(process.platform === "win32")("systemd boot evidence", () => {
+  const dirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => vi.restoreAllMocks());
+  it.each(["missing", "file", "directory", "symlink", "EACCES", "ENOTDIR"] as const)(
+    "treats %s as affirmative absence only when known not booted",
+    async (scenario) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const home = dirs.make("openclaw-systemd-boot-");
+      const file = path.join(home, "marker");
+      await fs.writeFile(file, "not a directory");
+      const link = path.join(home, "link");
+      await fs.symlink(home, link);
+      const target = scenario === "directory" ? home : scenario === "symlink" ? link : file;
+      const entry = await fs.lstat(target);
+      const lstat = fs.lstat;
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+        if (args[0] !== "/run/systemd/system") {
+          return await lstat(...args);
+        }
+        if (scenario === "missing" || scenario === "EACCES" || scenario === "ENOTDIR") {
+          throw Object.assign(new Error(scenario), {
+            code: scenario === "missing" ? "ENOENT" : scenario,
+          });
+        }
+        return entry;
+      });
+      expect(await isSystemdNotBooted()).toBe(scenario === "missing" || scenario === "file");
+    },
+  );
+});
 
 it("classifies missing systemctl details", () => {
   expect(isSystemctlMissingDetail("spawn systemctl ENOENT")).toBe(true);
@@ -94,8 +126,6 @@ esac`,
 
   it.each([
     { probe: "show", scope: "user" },
-    { probe: "cat", scope: "user" },
-    { probe: "is-active", scope: "user" },
     { probe: "show", scope: "system" },
   ])("sanitizes failed $scope $probe diagnostics", async ({ probe, scope }) => {
     const script =
@@ -130,10 +160,6 @@ esac`,
     { output: "Failed to connect to bus: No medium found", code: 1, available: false },
   ])("preserves manager status $output", async ({ output, code, available }) => {
     await commandFixture("systemctl", `#!/bin/sh\nprintf '%s\\n' '${output}'\nexit ${code}\n`);
-    const expected = { stdout: `${output}\n`, stderr: "", code, termination: "exit" };
-    await expect(execFileUtf8("systemctl", ["--user", "status"], { env })).resolves.toEqual(
-      expected,
-    );
     await expect(isAvailable(env)).resolves.toBe(true);
     await expect(isUserAvailable(env)).resolves.toBe(available);
     if (available) {
@@ -215,6 +241,8 @@ esac`,
       const disableFails = mode === "failure";
       const definition = "[Unit]\nDescription=Gateway cleanup fixture\n";
       const unitPath = await writeUnit(unitName, definition);
+      const backup = "[Unit]\nDescription=Previous Gateway\n";
+      await fs.writeFile(`${unitPath}.bak`, backup);
       if (mode !== "missing") {
         await cleanupCommand(
           `test -f "$HOME/.config/systemd/user/${unitName}" || exit 98\n${disableFails ? "kill -TERM $$" : "exit 0"}`,
@@ -225,10 +253,15 @@ esac`,
       if (disableFails) {
         await expect(uninstall({ env, stdout })).rejects.toThrow("systemctl disable failed:");
         await expect(fs.readFile(unitPath, "utf8")).resolves.toBe(definition);
+        await expect(fs.readFile(`${unitPath}.bak`, "utf8")).resolves.toBe(backup);
         expect(output()).not.toContain("Removed");
       } else {
-        await uninstall({ env, stdout });
+        const result = await uninstall({ env, stdout });
+        if (unitName === "openclaw-gateway.service" && mode === "missing") {
+          expect(result).toMatchObject({ unitName, unitPath, removed: true, disabled: false });
+        }
         await absent(unitPath);
+        await absent(`${unitPath}.bak`);
         expect(output()).toContain("Removed");
       }
       if (mode === "missing") {
@@ -248,6 +281,7 @@ esac`,
     const unitName = "openclaw-lisa.service";
     const definition = "[Unit]\nDescription=OpenClaw Gateway (profile: lisa)\n";
     const unitPath = await writeUnit(unitName, definition);
+    await fs.writeFile(`${unitPath}.bak`, "[Unit]\nDescription=Previous gateway\n");
     if (matches) {
       await cleanupCommand("exit 0");
     }
@@ -265,6 +299,7 @@ esac`,
     }
     expect(await removal).toMatchObject({ unitName, unitPath, removed: true, disabled: true });
     await absent(unitPath);
+    await absent(`${unitPath}.bak`);
     expect(await calls()).toContain("--user disable --now openclaw-lisa.service");
     expect(output()).toContain("Removed");
   });

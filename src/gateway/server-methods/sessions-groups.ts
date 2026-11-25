@@ -4,6 +4,7 @@ import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
+  validateSessionsGroupsCreateParams,
   validateSessionsGroupsDefaultsParams,
   validateSessionsGroupsDeleteParams,
   validateSessionsGroupsListParams,
@@ -17,6 +18,7 @@ import { ensureSessionGroupCatalog, readSessionGroupCatalog } from "../session-g
 import { filterMutableSessionGroupRecords } from "../session-group-defaults-access.js";
 import {
   deleteSessionGroup,
+  ensureSessionGroupRegistered,
   putSessionGroups,
   renameSessionGroup,
   SessionGroupNotEmptyError,
@@ -24,6 +26,7 @@ import {
   updateSessionGroupDefaults,
 } from "../session-groups.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -66,6 +69,21 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       });
       respond(true, { defaults }, undefined);
     },
+  ),
+  "sessions.groups.create": defineValidatedGatewayHandler(
+    "sessions.groups.create",
+    validateSessionsGroupsCreateParams,
+    async ({ params, respond, context, sessionMutationAuthorization }) => {
+      await ensureSessionGroupRegistered(
+        params.name,
+        process.env,
+        sessionMutationAuthorization?.assertCurrent,
+      );
+      const { groups, sectionOrder } = readSessionGroupCatalog();
+      respond(true, { ok: true, groups, sectionOrder }, undefined);
+      emitSessionsChanged(context, { reason: "groups" }, { catalogOnly: true });
+    },
+    (error) => sessionGroupMutationError(error),
   ),
   "sessions.groups.put": defineValidatedGatewayHandler(
     "sessions.groups.put",
@@ -114,20 +132,12 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     validateSessionsGroupsUpdateParams,
     async ({ params, respond, context, client, sessionMutationAuthorization }) => {
       if (params.cwd && !path.isAbsolute(params.cwd)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "session group cwd must be absolute"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "session group cwd must be absolute");
         return;
       }
       const name = normalizeOptionalString(params.name);
       if (!name) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "session group name must not be empty"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "session group name must not be empty");
         return;
       }
       let cwd = params.cwd;
@@ -168,11 +178,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         context.getRuntimeConfig(),
       );
       if (!defaults) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session group: ${name}`),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, `unknown session group: ${name}`);
         return;
       }
       respond(

@@ -5,14 +5,14 @@ import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
-  type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { buildCollectPrompt } from "../../../utils/queue-helpers.js";
-import { hasPreparedCurrentTurnImages } from "./delivery-context.js";
+import { getFollowupOriginRouting, hasPreparedCurrentTurnImages } from "./delivery-context.js";
 import type { FollowupRun, InternalFollowupRun } from "./types.js";
 type OriginRoutingMetadata = Pick<
   FollowupRun,
@@ -43,16 +43,7 @@ export function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutin
   if (!source) {
     return {};
   }
-  return {
-    originatingChannel: source.originatingChannel,
-    originatingTo: source.originatingTo,
-    originatingAccountId: source.originatingAccountId,
-    originatingThreadId: source.originatingThreadId,
-    originatingChatId: source.originatingChatId,
-    originatingReplyToId: source.originatingReplyToId,
-    originatingReplyToMode: source.originatingReplyToMode,
-    originatingChatType: source.originatingChatType,
-  };
+  return getFollowupOriginRouting(source);
 }
 
 export function renderCollectItem(item: FollowupRun, idx: number): string {

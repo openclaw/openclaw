@@ -121,6 +121,26 @@ function reconciliationContext(queueId = "queue-1") {
   } as const;
 }
 
+async function replaceStoredPlan(queueId: string, bytes: Uint8Array) {
+  const store = getMatrixRuntime().state.openBlobStore<Record<string, never>>({
+    namespace: "outbound-delivery-plans",
+    maxEntries: 10_000,
+    maxBytesPerEntry: 8 * 1024 * 1024,
+    maxBytesPerNamespace: 256 * 1024 * 1024,
+    overflowPolicy: "reject-new",
+    defaultTtlMs: 24 * 60 * 60 * 1000,
+  });
+  await store.register(`${createHash("sha256").update(queueId).digest("hex")}.0`, bytes, {});
+}
+
+function expectUnresolved(queueId: string, error: string, retryable = false) {
+  return expect(reconcileMatrixUnknownSend(reconciliationContext(queueId))).resolves.toMatchObject({
+    status: "unresolved",
+    retryable,
+    error: expect.stringContaining(error),
+  });
+}
+
 beforeEach(() => {
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-plan-"));
   installMatrixTestRuntime({ stateDir });
@@ -154,18 +174,9 @@ it.each([{ queueId: "different-queue" }, { partIndex: 1 }])(
   "rejects a stored plan whose identity differs from its lookup key: %j",
   async (changedIdentity) => {
     const plan = await persist({ partCount: 2 });
-    const store = getMatrixRuntime().state.openBlobStore<Record<string, never>>({
-      namespace: "outbound-delivery-plans",
-      maxEntries: 10_000,
-      maxBytesPerEntry: 8 * 1024 * 1024,
-      maxBytesPerNamespace: 256 * 1024 * 1024,
-      overflowPolicy: "reject-new",
-      defaultTtlMs: 24 * 60 * 60 * 1000,
-    });
-    await store.register(
-      `${createHash("sha256").update(plan.queueId).digest("hex")}.0`,
+    await replaceStoredPlan(
+      plan.queueId,
       new TextEncoder().encode(JSON.stringify({ ...plan, ...changedIdentity })),
-      {},
     );
     await expect(loadMatrixDeliveryPlan(planTarget(identity("queue-1", 0, 2)))).rejects.toThrow(
       "Matrix durable delivery plan",
@@ -189,21 +200,8 @@ it("fails closed when a persisted plan contains invalid UTF-8", async () => {
     Buffer.from(json.slice(invalidByteOffset)),
   ]);
 
-  const store = getMatrixRuntime().state.openBlobStore<Record<string, never>>({
-    namespace: "outbound-delivery-plans",
-    maxEntries: 10_000,
-    maxBytesPerEntry: 8 * 1024 * 1024,
-    maxBytesPerNamespace: 256 * 1024 * 1024,
-    overflowPolicy: "reject-new",
-    defaultTtlMs: 24 * 60 * 60 * 1000,
-  });
-  await store.register(`${createHash("sha256").update(queueId).digest("hex")}.0`, bytes, {});
-
-  await expect(reconcileMatrixUnknownSend(reconciliationContext(queueId))).resolves.toMatchObject({
-    status: "unresolved",
-    retryable: false,
-    error: expect.stringContaining("invalid JSON"),
-  });
+  await replaceStoredPlan(queueId, bytes);
+  await expectUnresolved(queueId, "invalid JSON");
   expect(client.sendMessage).not.toHaveBeenCalled();
   await expect(loadMatrixDeliveryPlan(planTarget(deliveryIdentity))).resolves.toBeNull();
 });
@@ -277,13 +275,7 @@ it("fails closed without provider I/O when any expected part plan is missing", a
   const incompleteIdentity = identity("queue-incomplete", 0, 2);
   await persist({ queueId: "queue-incomplete", partIndex: 0, partCount: 2 });
 
-  await expect(
-    reconcileMatrixUnknownSend(reconciliationContext("queue-incomplete")),
-  ).resolves.toMatchObject({
-    status: "unresolved",
-    retryable: false,
-    error: expect.stringContaining("incomplete event plan"),
-  });
+  await expectUnresolved("queue-incomplete", "incomplete event plan");
   expect(client.sendMessage).not.toHaveBeenCalled();
   await expect(loadMatrixDeliveryPlan(planTarget(incompleteIdentity))).resolves.toBeNull();
 });
@@ -297,13 +289,7 @@ it("fails closed when the SDK selects a different Matrix endpoint path", async (
     },
   );
 
-  await expect(
-    reconcileMatrixUnknownSend(reconciliationContext("queue-route")),
-  ).resolves.toMatchObject({
-    status: "unresolved",
-    retryable: false,
-    error: expect.stringContaining("no longer matches the prepared event batch"),
-  });
+  await expectUnresolved("queue-route", "no longer matches the prepared event batch");
 });
 
 it.each(["scope-1", "old-scope"])(
@@ -375,11 +361,11 @@ it.each([false, true])(
       await expect(cleanupMatrixDeliveryPlans({ queueId: " " })).resolves.toBeUndefined();
     }
 
-    await expect(reconcileMatrixUnknownSend(reconciliationContext(" "))).resolves.toMatchObject({
-      status: "unresolved",
-      retryable: populated,
-      error: expect.stringContaining(populated ? "requires a queue id" : "no persisted event plan"),
-    });
+    await expectUnresolved(
+      " ",
+      populated ? "requires a queue id" : "no persisted event plan",
+      populated,
+    );
     expect(client.sendMessage).not.toHaveBeenCalled();
     if (populated) {
       await expect(

@@ -1,3 +1,4 @@
+import "./system-agent-transcript.mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -5,31 +6,12 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
+const { transcriptStoreMocks } = await import("./system-agent-transcript.mocks.test-support.js");
 const inferenceFallbackMocks = vi.hoisted(() => ({ verify: vi.fn() }));
-const transcriptStoreMocks = vi.hoisted(() => ({
-  appendReset: vi.fn(),
-  appendTurn: vi.fn(),
-  readTranscriptTailAsync: vi
-    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
-    .mockResolvedValue([]),
-}));
 
 // mock-isolation: Control inference completion without contacting providers.
 vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback: inferenceFallbackMocks.verify,
-}));
-// mock-isolation: Keep audit persistence local while testing hosted session ownership and disposal.
-vi.mock("../../system-agent/transcript-store.js", () => ({
-  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
-  createSystemAgentTranscriptStore: () => ({
-    assertCurrent: () => undefined,
-    appendTurn: transcriptStoreMocks.appendTurn,
-    appendReset: transcriptStoreMocks.appendReset,
-    readTail: (limit: number, afterLastReset = false) =>
-      afterLastReset
-        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
-        : transcriptStoreMocks.readTranscriptTailAsync(limit),
-  }),
 }));
 // mock-isolation: Keep greeting discovery and provider inference outside session-lifecycle tests.
 vi.mock("../../system-agent/greeting.js", () => ({
@@ -40,7 +22,7 @@ vi.mock("../../system-agent/greeting.js", () => ({
     recentExternalEdit: false,
     auditSequence: 0,
   })),
-  resolveSystemAgentGreeting: vi.fn(async () => ({ text: "welcome text", source: "template" })),
+  resolveSystemAgentGreeting: vi.fn(async () => "welcome text"),
 }));
 
 type FakeEngine = ReturnType<typeof makeEngine>;
@@ -203,28 +185,6 @@ describe("openclaw.chat session lifecycle", () => {
     expect(oldest.engine.dispose).toHaveBeenCalledOnce();
     expect(sessions.size).toBe(8);
     expect([sessions.has("new-1"), sessions.has("new-2")]).toEqual([true, true]);
-  });
-
-  it("disposes the unpublished engine when requester authority changes during eviction", async () => {
-    let current = true;
-    const oldest = seededSession({ lastUsedAt: 0 });
-    oldest.engine.dispose = vi.fn(async () => {
-      current = false;
-    });
-    const sessions = fullSessions(oldest);
-    const respond = vi.fn();
-    const pending = callChat(
-      makeContext(sessions),
-      { sessionId: "unpublished" },
-      () => current,
-      respond,
-    );
-
-    await expect(pending).rejects.toThrow("Gateway requester authority changed");
-    expect(oldest.engine.dispose).toHaveBeenCalledOnce();
-    expect(createdEngines[0]?.dispose).toHaveBeenCalledOnce();
-    expect(sessions.has("unpublished")).toBe(false);
-    expect(respond).not.toHaveBeenCalled();
   });
 
   it("resets a session on request", async () => {

@@ -310,22 +310,9 @@ export class DiscordOpusEncodeStream extends Duplex {
 export async function decodeOpusStreamChunks(
   stream: Readable,
   params: OpusDecodeCallbacks & {
-    onChunk: (pcm48kStereo: Buffer, packet: Buffer) => void | Promise<void>;
+    onChunk: (pcm48kStereo: Buffer<ArrayBuffer>, packet: Buffer) => void | Promise<void>;
   },
 ): Promise<void> {
-  try {
-    for await (const { pcm, packet } of decodeOpusFrames(stream, params)) {
-      await params.onChunk(pcm, packet);
-    }
-  } catch (err) {
-    params.onError?.(err);
-  }
-}
-
-async function* decodeOpusFrames(
-  stream: Readable,
-  params: OpusDecodeCallbacks,
-): AsyncGenerator<{ pcm: Buffer; packet: Buffer }> {
   let decoder: LibopusDecoder;
   try {
     decoder = await createLibopusDecoder({ channels: CHANNELS, sampleRate: SAMPLE_RATE });
@@ -346,10 +333,13 @@ async function* decodeOpusFrames(
       }
       const decoded = decoder.decode(chunk, { maxFrameSize: DISCORD_OPUS_MAX_DECODE_FRAME_SIZE });
       if (decoded.length > 0) {
-        yield {
-          pcm: Buffer.from(decoded.buffer, decoded.byteOffset, decoded.byteLength),
-          packet: chunk,
-        };
+        if (!(decoded.buffer instanceof ArrayBuffer)) {
+          throw new Error("Discord voice decoder must return transferable PCM storage");
+        }
+        await params.onChunk(
+          Buffer.from(decoded.buffer, decoded.byteOffset, decoded.byteLength),
+          chunk,
+        );
       }
     }
   } catch (err) {

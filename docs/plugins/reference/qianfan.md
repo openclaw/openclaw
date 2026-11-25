@@ -20,6 +20,7 @@ Adds Qianfan model provider support to OpenClaw.
 ## Surface
 
 - Providers: `qianfan`
+- Contracts: `embeddingProviders`
 
 ## Related docs
 

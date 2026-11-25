@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -15,19 +15,23 @@ import {
 } from "./session-binding-service.js";
 
 const TARGET_SESSION_KEY = "agent:main:subagent:child";
+const conversation = (conversationId: string) => ({
+  channel: "richchat",
+  accountId: "runtime",
+  conversationId,
+});
 
 function createRuntimeBinding(
   conversationId: string,
-  boundAt = 1,
-  conversation: Partial<SessionBindingRecord["conversation"]> = {},
+  overrides: Partial<SessionBindingRecord["conversation"]> = {},
 ): SessionBindingRecord {
   return {
     bindingId: `runtime:${conversationId}`,
     targetSessionKey: TARGET_SESSION_KEY,
     targetKind: "subagent",
-    conversation: { channel: "richchat", accountId: "runtime", conversationId, ...conversation },
+    conversation: { ...conversation(conversationId), ...overrides },
     status: "active",
-    boundAt,
+    boundAt: 1,
   };
 }
 
@@ -45,72 +49,49 @@ async function withoutHostSql(run: () => Promise<void>) {
 
 beforeEach(() => testing.resetSessionBindingAdaptersForTests());
 
-describe("bound delivery router", () => {
-  it.each([
-    {
-      name: "resolves to a bound destination when a single active binding exists",
-      bindings: [createRuntimeBinding("thread-1", 1, { parentConversationId: "parent-1" })],
-      requesterConversationId: "parent-1",
-      expectedConversationId: "thread-1",
-    },
-    {
-      name: "falls back when no active binding exists",
-      targetSessionKey: "agent:main:subagent:missing",
-      requesterConversationId: "parent-1",
-      expectedConversationId: undefined,
-    },
-    {
-      name: "fails closed when requester signal is missing even with a single binding",
-      bindings: [createRuntimeBinding("thread-1")],
-      expectedConversationId: undefined,
-    },
-    {
-      name: "normalizes adapter binding conversations before requester matching",
-      bindings: [
-        createRuntimeBinding(" thread-1 ", 1, { channel: " richchat ", accountId: " runtime " }),
-        createRuntimeBinding(" thread-2 ", 2, { channel: " RICHCHAT ", accountId: " Runtime " }),
-      ],
-      requesterConversationId: "thread-2",
-      expectedConversationId: " thread-2 ",
-    },
-    {
-      name: "falls back for invalid requester conversation values",
-      bindings: [createRuntimeBinding("thread-1")],
-      requesterConversationId: " ",
-      expectedConversationId: undefined,
-    },
-  ])("$name", async ({ expectedConversationId, ...params }) => {
-    const { bindings, targetSessionKey = TARGET_SESSION_KEY, requesterConversationId } = params;
-    if (bindings) {
-      registerSessionBindingAdapter({
-        channel: "richchat",
-        accountId: "runtime",
-        listBySession: (key) => (key === targetSessionKey ? bindings : []),
-        resolveByConversation: () => null,
-      });
-    }
-    const route = await resolveBoundDeliveryDestination({
-      targetSessionKey,
-      requester:
-        requesterConversationId === undefined
-          ? undefined
-          : {
-              channel: "richchat",
-              accountId: "runtime",
-              conversationId: requesterConversationId,
-            },
-    });
-
-    if (expectedConversationId !== undefined) {
-      expect(route?.conversation.conversationId).toBe(expectedConversationId);
-    } else {
-      expect(route).toBeNull();
-    }
+const normalizedBindings = [
+  createRuntimeBinding(" t1 ", { channel: " richchat ", accountId: " runtime " }),
+  createRuntimeBinding(" t2 ", { channel: " RICHCHAT ", accountId: " Runtime " }),
+];
+type RouteCase = { bindings: SessionBindingRecord[]; requester?: string; expected: string | null };
+it.each`
+  name                     | bindings                                                            | requester    | expected
+  ${"single binding"}      | ${[createRuntimeBinding("t1", { parentConversationId: "parent" })]} | ${"parent"}  | ${"t1"}
+  ${"missing requester"}   | ${[createRuntimeBinding("t1")]}                                     | ${undefined} | ${null}
+  ${"normalized matching"} | ${normalizedBindings}                                               | ${"t2"}      | ${" t2 "}
+  ${"invalid requester"}   | ${[createRuntimeBinding("t1")]}                                     | ${" "}       | ${null}
+`("resolves $name", async ({ bindings, requester, expected }: RouteCase) => {
+  registerSessionBindingAdapter({
+    channel: "richchat",
+    accountId: "runtime",
+    listBySession: (key) => (key === TARGET_SESSION_KEY ? bindings : []),
+    resolveByConversation: () => null,
   });
+  const route = await resolveBoundDeliveryDestination({
+    targetSessionKey: TARGET_SESSION_KEY,
+    requester: requester === undefined ? undefined : conversation(requester),
+  });
+
+  expect(route && route.conversation.conversationId).toBe(expected);
 });
 
-it("lists account and generic destinations and prunes expiry without host SQL", async () => {
+it("creates the store cold, then lists destinations and prunes expiry without host SQL", async () => {
   await withOpenClawTestState({ label: "bound-destination-worker-list" }, async () => {
+    const databasePath = resolveOpenClawStateSqlitePath();
+    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await withoutHostSql(async () => {
+      expect(
+        await resolveBoundDeliveryDestination({
+          targetSessionKey: TARGET_SESSION_KEY,
+          requester: conversation("unbound"),
+        }),
+      ).toBeNull();
+    });
+    expect((await fs.stat(databasePath)).isFile()).toBe(true);
+    const { db } = openOpenClawStateDatabase();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM current_conversation_bindings").get()).toEqual(
+      { count: 0 },
+    );
     const manager = createAccountScopedConversationBindingManager({
       channel: "fixture",
       accountId: "owner",
@@ -135,7 +116,6 @@ it("lists account and generic destinations and prunes expiry without host SQL", 
         });
       const generic = await bind("generic-room");
       const expired = await bind("expired-room", 0);
-      const { db } = openOpenClawStateDatabase();
       const row = db.prepare(
         "SELECT record_json FROM current_conversation_bindings WHERE binding_id = ?",
       );
@@ -153,22 +133,5 @@ it("lists account and generic destinations and prunes expiry without host SQL", 
     } finally {
       manager.stop();
     }
-  });
-});
-
-it("creates the binding store on the first destination lookup without host SQL", async () => {
-  await withOpenClawTestState({ label: "bound-destination-cold-list" }, async () => {
-    const databasePath = resolveOpenClawStateSqlitePath();
-    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-    await withoutHostSql(async () => {
-      expect(
-        await resolveBoundDeliveryDestination({ targetSessionKey: TARGET_SESSION_KEY }),
-      ).toBeNull();
-    });
-    expect((await fs.stat(databasePath)).isFile()).toBe(true);
-    const { db } = openOpenClawStateDatabase();
-    expect(db.prepare("SELECT COUNT(*) AS count FROM current_conversation_bindings").get()).toEqual(
-      { count: 0 },
-    );
   });
 });

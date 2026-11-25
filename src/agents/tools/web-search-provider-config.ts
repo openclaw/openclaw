@@ -1,4 +1,4 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, ensureRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isLegacyWebSearchProviderConfigKey } from "../../config/web-search-legacy-provider-keys.js";
 
@@ -27,7 +27,7 @@ export function setScopedCredentialValue(
   key: string,
   value: unknown,
 ): void {
-  ensureObject(searchConfigTarget, key).apiKey = value;
+  ensureRecord(searchConfigTarget, key).apiKey = value;
 }
 
 /** Projects plugin web-search config into the provider-scoped tool-local shape. */
@@ -61,16 +61,6 @@ export function mergeScopedSearchConfig(
   return next;
 }
 
-function ensureObject(target: Record<string, unknown>, key: string): Record<string, unknown> {
-  const current = asOptionalRecord(target[key]);
-  if (current) {
-    return current;
-  }
-  const next: Record<string, unknown> = {};
-  target[key] = next;
-  return next;
-}
-
 /** Writes a single plugin-owned web-search config value and enables the plugin entry if needed. */
 export function setProviderWebSearchPluginConfigValue(
   configTarget: OpenClawConfig,
@@ -78,13 +68,13 @@ export function setProviderWebSearchPluginConfigValue(
   key: string,
   value: unknown,
 ): void {
-  const plugins = ensureObject(configTarget as Record<string, unknown>, "plugins");
-  const entries = ensureObject(plugins, "entries");
-  const entry = ensureObject(entries, pluginId);
+  const plugins = ensureRecord(configTarget as Record<string, unknown>, "plugins");
+  const entries = ensureRecord(plugins, "entries");
+  const entry = ensureRecord(entries, pluginId);
   if (entry.enabled === undefined) {
     entry.enabled = true;
   }
-  const config = ensureObject(entry, "config");
-  const webSearch = ensureObject(config, "webSearch");
+  const config = ensureRecord(entry, "config");
+  const webSearch = ensureRecord(config, "webSearch");
   webSearch[key] = value;
 }

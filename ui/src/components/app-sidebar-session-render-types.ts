@@ -1,7 +1,8 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
+import type { SessionCatalogProfileRelation } from "../../../packages/gateway-protocol/src/index.ts";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { NavigationRouteId } from "../app-navigation.ts";
+import type { NavigationRouteId, SidebarZoneEntry } from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { PresenceActivity } from "../lib/presence-users.ts";
@@ -15,20 +16,17 @@ import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { ContributionsElement } from "../plugins/control-ui-contributions.solid.tsx";
-import type {
-  CatalogSessionMenuRequest,
-  SidebarSessionCatalog,
-} from "./app-sidebar-session-catalogs.ts";
+import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
 import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
 import type {
   SidebarSessionProjection,
   SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
-import "./mcp-app-catalog.tsx";
 import "./menu-surface.ts";
 import type {
   SidebarRecentSession,
   SidebarToolActivity,
+  SidebarSessionSortMode,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
@@ -39,6 +37,12 @@ import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
 import "./tooltip.ts";
 
 export interface SessionListHost {
+  prepareSessionNavigation(
+    sessionKey: string,
+    pathname: string,
+    profileRelation?: SessionCatalogProfileRelation,
+  ): void;
+  loadMoreSidebarSessions(): Promise<void>;
   readonly presencePeople?: Map<string, HTMLElement>;
   readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;
   readonly sidebarAgentsMode?: "chip" | "roster";
@@ -53,13 +57,16 @@ export interface SessionListHost {
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
-  readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle" | "mountCatalogRow">;
+  readonly sessionProjection: Pick<
+    SidebarSessionProjection,
+    "resolveSubtitle" | "heldSubtitle" | "mountCatalogRow"
+  >;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly connected: boolean;
   readonly sessionData: Pick<
     SessionDataOwner,
     | "childSessionErrorsByParent"
-    | "dismissSessionMutationError"
+    | "dismissSessionListError"
     | "loadMoreSessionCatalog"
     | "loadMoreSidebarSessions"
     | "presenceInstanceId"
@@ -67,7 +74,7 @@ export interface SessionListHost {
     | "refreshSessionCatalogs"
     | "retryChildSessions"
     | "sessionCatalogRefreshStatus"
-    | "sessionMutationError"
+    | "sessionListError"
     | "visibleSessionLimits"
   >;
   readonly sessionsGrouping: SidebarSessionsGrouping;
@@ -82,19 +89,19 @@ export interface SessionListHost {
     | "handleSessionListDragLeave"
     | "handleSessionListDragOver"
     | "handleSessionListDrop"
+    | "handleSidebarZoneDragLeave"
+    | "sidebarZoneDropTarget"
     | "sectionDragLeave"
     | "sectionDragOver"
     | "sectionDrop"
     | "sessionDropTarget"
     | "sidebarSectionDropTarget"
     | "sessionListRemovalDrop"
-    | "setSessionsStatusFilter"
     | "startSessionDrag"
     | "startSidebarSectionDrag"
     | "archiveSessionWithUndo"
     | "patchSession"
     | "isPersonalSessionPin"
-    | "reorderSidebarSection"
     | "sectionHeaders"
   >;
   readonly sidebarMenus: Pick<
@@ -102,6 +109,7 @@ export interface SessionListHost {
     | "catalogMenu"
     | "catalogMenuView"
     | "catalogViewMenuPosition"
+    | "closeSessionMenu"
     | "openCatalogViewMenu"
     | "openSessionGroupMenu"
     | "openSessionMenu"
@@ -134,22 +142,15 @@ export interface SessionListHost {
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
   toggleSessionPin(session: SidebarRecentSession): void;
-  toggleSessionMenu(
-    session: SidebarRecentSession,
-    trigger: HTMLElement,
-    catalogMenu?: CatalogSessionMenuRequest,
-  ): void;
+  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void;
   showMoreChildren(sessionKey: string): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
-  /** Unadmitted New session handoff; presentation only, never a saved selection. */
-  pendingSessionCreate():
-    | Readonly<{ creation: Readonly<{ sessionKey: string }>; displayName?: string }>
-    | undefined;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;
   setVisibleSessionLimit(sectionId: string, limit: number): void;
+  resetVisibleSessionLimit(sectionId: string): void;
   clearSessionSelection(): void;
 }
 
@@ -161,8 +162,7 @@ export type SessionCatalogRenderSnapshot = {
   mainKey: string;
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
-  liveRows: readonly GatewaySessionRow[];
-  toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
+  projectedRows: ReadonlyMap<string, SidebarRecentSession>;
   catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;
 };
@@ -175,6 +175,8 @@ export type SessionCatalogGroupsParams = {
 export type RenderableSessionSection = SidebarVisibleSections["sections"][number];
 export type SidebarSessionListHost = SessionListHost & {
   readonly sidebarAgentsMode: "chip" | "roster";
+  effectiveSessionsGrouping(): SidebarSessionsGrouping;
+  effectiveSessionSortMode(): SidebarSessionSortMode;
   readonly sessionData: SessionListHost["sessionData"] &
     Pick<
       SessionDataOwner,
@@ -187,6 +189,10 @@ export type SidebarSessionListHost = SessionListHost & {
       | "loadingMoreSessionCatalogIds"
     >;
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
+  reconciledSidebarZone(): {
+    entries: readonly SidebarZoneEntry[];
+    sessionRows: ReadonlyMap<string, SidebarRecentSession>;
+  };
 };
 
 export type PersonHeaders = {
@@ -213,24 +219,14 @@ declare module "@solidjs/web" {
           "prop:onClose"?: HTMLElementTagNameMap["openclaw-catalog-session-menu"]["onClose"];
         };
       "openclaw-channel-avatar": BridgeAttributes<ChannelAvatarProps>;
-      "openclaw-mcp-app-catalog": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-mcp-app-catalog"]
-      > &
-        Properties<HTMLElementTagNameMap["openclaw-mcp-app-catalog"]> &
-        Partial<Pick<HTMLElementTagNameMap["openclaw-mcp-app-catalog"], "surface">>;
       "openclaw-menu-surface": HTMLAttributes<HTMLElementTagNameMap["openclaw-menu-surface"]> &
         Properties<HTMLElementTagNameMap["openclaw-menu-surface"]>;
       "openclaw-plugin-contributions": HTMLAttributes<ContributionsElement> &
         Properties<ContributionsElement> & {
           "prop:agentId"?: ContributionsElement["agentId"];
           "prop:navigationMenus"?: ContributionsElement["navigationMenus"];
-        };
-      "openclaw-theme-mode-toggle": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-theme-mode-toggle"]
-      > &
-        Properties<HTMLElementTagNameMap["openclaw-theme-mode-toggle"]> & {
-          "prop:menuAttributes"?: HTMLElementTagNameMap["openclaw-theme-mode-toggle"]["menuAttributes"];
-          "prop:onChange"?: HTMLElementTagNameMap["openclaw-theme-mode-toggle"]["onChange"];
+          "prop:composer"?: ContributionsElement["composer"];
+          "prop:bindActionMenu"?: ContributionsElement["bindActionMenu"];
         };
     }
   }

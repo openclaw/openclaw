@@ -1,8 +1,10 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import {
   resolveExplicitSessionStorePathForScope,
   resolveSessionStorePathCore,
 } from "../../config/sessions/paths.js";
+import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
@@ -12,6 +14,7 @@ import {
   retireSessionControllerInput,
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
 import type { MsgContext } from "../templating.js";
@@ -68,12 +71,13 @@ export function readReplySourceInput(
 }
 
 /** Capture only an actual physical source scope, before asynchronous preparation. */
-export function prepareReplySourceInput(
+export async function prepareReplySourceInput(
   ctx: MsgContext,
   cfg: OpenClawConfig,
   options: InternalGetReplyOptions | undefined,
-): { options: InternalGetReplyOptions; input?: SessionControllerInput; created: boolean } {
+): Promise<{ options: InternalGetReplyOptions; input?: SessionControllerInput; created: boolean }> {
   const prepared = { ...options };
+  const sourceSessionKey = ctx.SessionKey?.trim() || ctx.CommandTargetSessionKey?.trim();
   const existing = readReplySourceInput(prepared);
   if (existing) {
     const signal = existing.claim?.operation?.abortSignal ?? existing.abortSignal;
@@ -83,23 +87,49 @@ export function prepareReplySourceInput(
         : signal;
     return { options: bindReplySourceInput(prepared, existing), input: existing, created: false };
   }
-  const sessionKey = ctx.SessionKey?.trim() || ctx.CommandTargetSessionKey?.trim();
-  if (!sessionKey) {
+  if (!sourceSessionKey) {
     return { options: prepared, created: false };
   }
-  const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
+  const agentId = resolveSessionAgentId({
+    sessionKey: sourceSessionKey,
+    config: cfg,
+    fallbackAgentId: ctx.AgentId,
+  });
+  // Reserve the persisted identity used by initialization, not its transport spelling.
+  const sessionKey = canonicalizeMainSessionAlias({
+    cfg,
+    agentId,
+    sessionKey: resolveSessionKey(
+      cfg.session?.scope ?? "per-sender",
+      { ...ctx, SessionKey: sourceSessionKey },
+      cfg.session?.mainKey,
+      agentId,
+    ),
+  });
   const storePath =
-    resolveExplicitSessionStorePathForScope({ agentId, sessionKey }) ??
+    resolveExplicitSessionStorePathForScope({ agentId, sessionKey: sourceSessionKey }) ??
     resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const policy = resolveQueueSettingsCore({ cfg, channel: ctx.Provider ?? ctx.Surface });
-  // Ambient events and heartbeats may not preempt a user turn. Full directive
+  // Ambient events may not preempt a user turn. Full directive
   // resolution refines policy on this same input before queue publication.
-  if (options?.isHeartbeat || ctx.InboundEventKind === "room_event") {
+  if (ctx.InboundEventKind === "room_event") {
     policy.mode = "followup";
   }
   const signals = [options?.abortSignal, options?.turnAdoptionLifecycle?.abortSignal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
+  const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+  if (signal?.aborted) {
+    // Dispatch owns the skipped outcome for input cancelled before admission.
+    return { options: { ...prepared, abortSignal: signal }, created: false };
+  }
+  signal?.throwIfAborted();
+  // A fresh FIFO reservation would block the recovery input it is waiting for.
+  const preparation = waitForAgentInputAdmission(agentId, { cfg, sessionKey, signal });
+  if (preparation) {
+    await preparation;
+    signal?.throwIfAborted();
+  }
   const input = reserveSessionControllerSource(sessionKey, {
     sourceTurnId: readChannelSourceTurnId(ctx),
     protocolRunId: options?.runId,
@@ -107,11 +137,12 @@ export function prepareReplySourceInput(
     target: captureSessionTarget({
       storeScope: storePath,
       sessionKey,
+      aliases: [sourceSessionKey],
       agentId,
       incarnation: options?.expectedExistingSessionId,
     }),
     adapter: {
-      signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
+      signal,
       authority: options?.operatorAuthority,
     },
   });

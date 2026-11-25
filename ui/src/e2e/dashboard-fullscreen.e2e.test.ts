@@ -1,11 +1,14 @@
+import { writeFile } from "node:fs/promises";
 import type { Server as HttpServer } from "node:http";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -86,8 +89,11 @@ const scrollTop = (page: Locator) => page.evaluate((element) => element.scrollTo
 const scrollRemaining = (board: Locator) =>
   board.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
 async function expectWidgetReady(board: Locator, frame: Locator) {
-  await expect.poll(() => frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
-  expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(0);
+  await expect.poll(() => frame.getAttribute("inert")).toBeNull();
+  expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+  await expect
+    .poll(() => board.getByRole("status", { name: "Loading…", exact: true }).count())
+    .toBe(0);
 }
 
 async function rememberMainTab(page: Page): Promise<void> {
@@ -226,8 +232,68 @@ suite.define(() => {
         widgets: [],
       });
       await gateway.emitGatewayEvent("board.changed", { sessionKey });
-      await document.getByText("A clear board, ready for work", { exact: true }).waitFor();
+      await document.getByText("No widgets yet.", { exact: true }).waitFor();
     });
+  });
+
+  it("keeps widget and tab menus separate from document dismissal on touch screens", async () => {
+    await suite.withPage(
+      { hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        const cards = Array.from({ length: 4 }, (_, index) => ({
+          ...makeWidget(`card-${index}`, `Card ${index + 1}`, index),
+          sizeW: 12,
+          sizeH: 6,
+        }));
+        const snapshot = { ...boardSnapshot, tabs: boardSnapshot.tabs.slice(0, 1), widgets: cards };
+        const gateway = await installBoard(page, { methodResponses: { "board.get": snapshot } });
+        await openFocusFromDashboards(page, initialFocusPath);
+        const document = page.locator("openclaw-board-document");
+        const close = document.getByRole("button", { name: "Close dashboard", exact: true });
+        const options = document.locator(".board-widget__menu-trigger");
+        await options.first().tap();
+        await page.locator('[role="menu"][data-state="open"]').waitFor();
+        await page.keyboard.press("Escape");
+        const last = options.last();
+        await last.scrollIntoViewIfNeeded();
+        await last.tap();
+        await page.locator('[role="menu"][data-state="open"]').waitFor();
+        await page.keyboard.press("Escape");
+        expect(
+          await close.evaluate((button) => {
+            const box = button.getBoundingClientRect();
+            return button.contains(
+              button.ownerDocument.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+            );
+          }),
+        ).toBe(true);
+        await gateway.setMethodResponse("board.get", {
+          ...snapshot,
+          revision: 2,
+          tabs: [
+            ...snapshot.tabs,
+            ...Array.from({ length: 7 }, (_, index) => ({
+              tabId: `tab-${index + 1}`,
+              title: `Tab ${index + 1}`,
+              position: index + 1,
+              chatDock: "right",
+            })),
+          ],
+        });
+        await gateway.emitGatewayEvent("board.changed", { sessionKey });
+        const overflow = document.locator(".board-tabs__overflow-trigger");
+        await overflow.tap();
+        await document
+          .locator('.board-tabs__overflow-panel[data-state="open"]')
+          .getByRole("menuitem", { name: "Tab 7", exact: true })
+          .tap();
+        await document.getByText("No widgets yet.", { exact: true }).waitFor();
+        expect(await gateway.getRequests("board.update")).toHaveLength(0);
+        await close.focus();
+        await close.press("Enter");
+        await page.waitForURL(suite.server.baseUrl + "dashboards");
+      },
+    );
   });
 
   it("leaves dashboard dismissal to the native navigation host", async () => {
@@ -316,10 +382,7 @@ suite.define(() => {
               },
             ],
           };
-          let releaseDocument!: () => void;
-          const documentGate = new Promise<void>((resolve) => {
-            releaseDocument = resolve;
-          });
+          const { promise: documentGate, resolve: releaseDocument } = createDeferred();
           await page.route(widgetUrl, async (route) => {
             await documentGate;
             await route.fulfill({
@@ -347,14 +410,13 @@ suite.define(() => {
               )
               .toBe(true);
             await page.screenshot({ path: `${suite.artifactDir}/dashboard-loading.png` });
-            expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+            expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
             expect(await frame.getAttribute("inert")).toBe("");
             await board.getByRole("status", { name: "Loading…", exact: true }).waitFor();
           } finally {
             releaseDocument();
           }
           await expectWidgetReady(board, frame);
-          expect(await frame.getAttribute("inert")).toBeNull();
           await page.screenshot({ path: `${suite.artifactDir}/dashboard-ready.png` });
           await expect
             .poll(() => board.evaluate((element) => element.scrollHeight > element.clientHeight))
@@ -482,7 +544,235 @@ suite.define(() => {
     }
   });
 
-  it("makes dashboard main and restores chat after focus", async () => {
+  it.each([true, false])(
+    "keeps long auto-height touch widgets in the board scrollport without resizing fixed cards (touch=%s)",
+    async (hasTouch) => {
+      const sandboxHost = createSandboxHostHttpServer();
+      const sandboxPort = await listenOnLoopback(sandboxHost);
+      try {
+        await suite.withPage(
+          { hasTouch, serviceWorkers: "block", viewport: { width: 1376, height: 867 } },
+          async ({ context, page }) => {
+            const widgetUrl = `${suite.server.baseUrl}__widget/touch-grid`;
+            await page.route(`${widgetUrl}*`, (route) =>
+              route.fulfill({
+                contentType: "text/html",
+                body: buildWidgetDocument(
+                  "Touch grid",
+                  `<style>
+              .section{height:168px;margin-bottom:12px;padding:16px;border:1px solid #466}
+              footer{padding:24px;background:#a4ebcb;color:#123}</style>
+              <main>${Array.from(
+                { length: 10 },
+                (_, i) =>
+                  `<section class="section"><h2>Dashboard section ${i + 1}</h2>Ordinary content outside nested controls.</section>`,
+              ).join(
+                "",
+              )}</main><footer id="grid-final">FINAL ROW — dashboard content is reachable.</footer>`,
+                ),
+              }),
+            );
+            const widget = {
+              ...boardSnapshot.widgets[0],
+              sizeW: 12,
+              grantState: "none",
+              frameUrl: widgetUrl,
+              instanceId: "touch-grid-instance",
+              viewTicket: "touch-grid-ticket",
+              viewTicketTtlMs: 1_200_000,
+              viewGeneration: "touch-grid-generation",
+              sandboxUrl: SANDBOX_HOST_PATH,
+              sandboxPort,
+              sandboxOrigin: `http://127.0.0.1:${sandboxPort}`,
+            };
+            await installBoard(page, {
+              methodResponses: {
+                "board.get": {
+                  ...boardSnapshot,
+                  tabs: [boardSnapshot.tabs[0]],
+                  widgets: [
+                    { ...widget, heightMode: "auto" },
+                    { ...widget, name: "fixed", heightMode: "fixed", sizeH: 4, position: 1 },
+                    {
+                      ...widget,
+                      name: "second-auto",
+                      title: "Second Auto",
+                      heightMode: "auto",
+                      position: 2,
+                    },
+                  ],
+                },
+              },
+            });
+            await rememberMainTab(page);
+            await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+            const board = page.locator(".board-session-surface openclaw-board-view");
+            const frame = board.locator('[data-widget-name="status"] .board-widget__frame');
+            await expectWidgetReady(board, frame);
+            const document = page
+              .frameLocator('[data-widget-name="status"] .board-widget__frame')
+              .frameLocator("iframe");
+            const root = document.locator("html");
+            await document.locator("#grid-final").waitFor({ state: "attached" });
+            await expect
+              .poll(() =>
+                frame.evaluate(
+                  (node) => node.clientHeight - node.closest("openclaw-board-view")!.clientHeight,
+                ),
+              )
+              .toBeGreaterThan(0);
+            const remaining = () =>
+              root.evaluate(() => {
+                const scroller = window.document.scrollingElement!;
+                return scroller.scrollHeight - scroller.clientHeight;
+              });
+            // Diagnostic inner-end positioning is not proof of native gesture handling.
+            await root.evaluate(() => {
+              const scroller = window.document.scrollingElement!;
+              scroller.scrollTop = scroller.scrollHeight;
+            });
+            const initial = await takeControlUiScreenshotFrame(page, board, [board], {
+              elements: [board],
+              animations: "disabled",
+            });
+            await writeFile(
+              `${suite.artifactDir}/${hasTouch ? "touch" : "mouse"}-grid-inner-end.png`,
+              initial.elements[0]!.png,
+            );
+            expect(
+              await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches),
+            ).toBe(!hasTouch);
+            expect(
+              await board
+                .locator('[data-widget-name="fixed"]')
+                .evaluate((node) => node.getBoundingClientRect().height),
+            ).toBe(260);
+            if (!hasTouch) {
+              expect(await remaining()).toBeGreaterThan(1);
+              return;
+            }
+            await expect.poll(remaining).toBeLessThanOrEqual(1);
+            const cdp = await context.newCDPSession(page);
+            const final = document.locator("#grid-final");
+            for (let swipe = 0; swipe < 16; swipe += 1) {
+              const available = await board.boundingBox();
+              const marker = await final.boundingBox();
+              if (!available || !marker) {
+                throw new Error("Touch grid or final marker disappeared");
+              }
+              if (marker.y + marker.height <= available.y + available.height) {
+                break;
+              }
+              const x = available.x + available.width / 2;
+              const y = available.y + available.height - 48;
+              await cdp.send("Input.dispatchTouchEvent", {
+                type: "touchStart",
+                touchPoints: [{ x, y }],
+              });
+              await cdp.send("Input.dispatchTouchEvent", {
+                type: "touchMove",
+                touchPoints: [{ x, y: available.y + 64 }],
+              });
+              await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+            }
+            await expect
+              .poll(async () => {
+                const available = await board.boundingBox();
+                const marker = await final.boundingBox();
+                return available && marker
+                  ? marker.y + marker.height - available.y - available.height
+                  : Infinity;
+              })
+              .toBeLessThanOrEqual(1);
+            expect(await scrollTop(board)).toBeGreaterThan(0);
+            expect(await remaining()).toBeLessThanOrEqual(1);
+            const after = await takeControlUiScreenshotFrame(page, board, [board], {
+              elements: [board],
+              animations: "disabled",
+            });
+            await writeFile(
+              `${suite.artifactDir}/touch-grid-final-row.png`,
+              after.elements[0]!.png,
+            );
+            const autoCards = board.locator(
+              '[data-widget-name="status"], [data-widget-name="second-auto"]',
+            );
+            const heights = () =>
+              autoCards.evaluateAll((cards) =>
+                cards.map((card) => card.getBoundingClientRect().height),
+              );
+            await expect.poll(async () => Math.min(...(await heights()))).toBeGreaterThan(1350);
+            const originalHeights = await heights();
+            const expectSeparated = async () => {
+              const cards = await board
+                .locator('[data-test-id="board-widget"]')
+                .evaluateAll((nodes) =>
+                  nodes.map((node) => {
+                    const { top, bottom } = node.getBoundingClientRect();
+                    return { top, bottom };
+                  }),
+                );
+              expect(cards[1]!.top).toBeGreaterThanOrEqual(cards[0]!.bottom + 11);
+              expect(cards[2]!.top).toBeGreaterThanOrEqual(cards[1]!.bottom + 11);
+              expect(await heights()).toEqual(originalHeights);
+            };
+            for (const gesture of ["drag", "resize"]) {
+              const handle = board.locator(
+                `[data-widget-name="fixed"] .board-widget__${gesture}-handle`,
+              );
+              await handle.scrollIntoViewIfNeeded();
+              const bounds = await handle.boundingBox();
+              if (!bounds) {
+                throw new Error("Gesture handle disappeared");
+              }
+              const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+              await cdp.send("Input.dispatchTouchEvent", {
+                type: "touchStart",
+                touchPoints: [point],
+              });
+              try {
+                await expect.poll(() => board.locator(".board-widget--dragging").count()).toBe(1);
+                const preview = await takeControlUiScreenshotFrame(page, board, [board], {
+                  elements: [board],
+                  animations: "disabled",
+                });
+                await writeFile(
+                  `${suite.artifactDir}/touch-gesture-${gesture}.png`,
+                  preview.elements[0]!.png,
+                );
+                await expectSeparated();
+                await cdp.send("Input.dispatchTouchEvent", {
+                  type: "touchMove",
+                  touchPoints: [{ x: point.x, y: point.y + (gesture === "resize" ? 68 : 8) }],
+                });
+                if (gesture === "resize") {
+                  await expect
+                    .poll(() =>
+                      board
+                        .locator(".board-widget--dragging")
+                        .evaluate((card) => getComputedStyle(card).height),
+                    )
+                    .toBe("328px");
+                }
+                await expectSeparated();
+              } finally {
+                await cdp.send("Input.dispatchTouchEvent", {
+                  type: "touchCancel",
+                  touchPoints: [],
+                });
+              }
+              await expect.poll(() => board.locator(".board-widget--dragging").count()).toBe(0);
+              await expectSeparated();
+            }
+          },
+        );
+      } finally {
+        await closeServer(sandboxHost);
+      }
+    },
+  );
+
+  it("expands dashboard and restores split without replacing its iframe", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const widgetUrl = `${suite.server.baseUrl}__widget/seamless-dashboard`;
       await page.route(widgetUrl, (route) =>
@@ -524,11 +814,6 @@ suite.define(() => {
       expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
         "1px",
       );
-      await focusChatSidePanel(page);
-      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-      await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
-      await page.mouse.move(0, 0);
-      await page.screenshot({ path: `${suite.artifactDir}/single-widget-focused.png` });
       const frameInsets = () =>
         frame.evaluate((element) => {
           const board = element.closest("openclaw-board-view")!;
@@ -541,6 +826,11 @@ suite.define(() => {
             bottom: outer.bottom - inner.bottom,
           };
         });
+      await focusChatSidePanel(page);
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
+      await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
+      await page.mouse.move(0, 0);
+      await page.screenshot({ path: `${suite.artifactDir}/single-widget-focused.png` });
       await expect.poll(frameInsets).toEqual({ left: 12, right: 12, top: 12, bottom: 12 });
       expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
         "0px",
@@ -550,11 +840,12 @@ suite.define(() => {
       );
       await selectChatLayoutAction(page, "Restore split");
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
-      await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
-      await page.locator('[data-panel-slot="dashboard"][data-region="main"]').waitFor();
-      await expect.poll(frameInsets).toEqual({ left: 12, right: 12, top: 12, bottom: 12 });
+      await page.locator('.sidebar-region__primary[data-region="main"] .chat-thread').waitFor();
+      await page.locator('[data-panel-slot="dashboard"][data-region="side"]').waitFor();
+      // Side cards scroll as the widget reports new content height.
+      await expect.poll(frameInsets).toMatchObject({ left: 29, right: 29, top: 25 });
       expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
-        "0px",
+        "1px",
       );
       expect(await frame.evaluate((element, previous) => element === previous, frameHandle)).toBe(
         true,

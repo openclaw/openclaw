@@ -1,4 +1,6 @@
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -23,6 +25,7 @@ const model: ModelPreset = {
   maxTokens: 512,
   source: { kind: "hub", repository: "example/model", revision: "a".repeat(40), files: [file] },
 };
+const local: ModelPreset = { ...model, source: { ...model.source, kind: "local-export" } };
 
 function mockDownload(body: BodyInit, onRelease = async () => {}) {
   const response = new Response(body);
@@ -51,34 +54,46 @@ beforeEach(() => {
   target = path.join(destination, file.name);
 });
 
-it.each(process.platform === "win32" ? [false] : [false, true])(
-  "publishes verified artifacts before reuse (directory alias: %s)",
-  async (alias) => {
-    const aliasTarget = path.join(root, "operator-models");
-    if (alias) {
-      await fs.mkdir(aliasTarget);
-      await fs.symlink(aliasTarget, destination);
-    }
-    const { release } = mockDownload(bytes, async () =>
-      expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" }),
-    );
-    await download();
-    await verify();
-    expect(await readModelArtifact(root, model, file)).toEqual(bytes);
-    expect(await fs.readdir(destination)).toEqual(["model.onnx"]);
-    if (process.platform !== "win32") {
-      expect((await fs.stat(target)).mode & 0o777).toBe(0o600 & ~process.umask());
-    }
-    expect(release).toHaveBeenCalledOnce();
-    expect((await fs.lstat(destination)).isSymbolicLink()).toBe(alias);
-    vi.mocked(fetchWithSsrFGuard).mockClear();
-    await download();
-    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
-  },
-);
+it.each(
+  process.platform === "win32"
+    ? ["regular", "invalid"]
+    : ["regular", "directory", "symlink", "hardlink", "invalid"],
+)("publishes and preserves %s artifacts on reuse", async (kind) => {
+  await expect(verify()).rejects.toThrow("model-missing");
+  const external = path.join(root, "operator-model");
+  if (kind === "directory") {
+    await fs.mkdir(external);
+    await fs.symlink(external, destination);
+  }
+  const { release } = mockDownload(bytes, async () =>
+    expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" }),
+  );
+  await download();
+  await verify();
+  expect(await readModelArtifact(root, model, file)).toEqual(bytes);
+  expect(await fs.readdir(destination)).toEqual(["model.onnx"]);
+  if (process.platform !== "win32") {
+    expect((await fs.stat(target)).mode & 0o777).toBe(0o600 & ~process.umask());
+  }
+  expect(release).toHaveBeenCalledOnce();
+  expect((await fs.lstat(destination)).isSymbolicLink()).toBe(kind === "directory");
+  const data = kind === "invalid" ? Buffer.from("keep this") : bytes;
+  if (kind === "symlink" || kind === "hardlink") {
+    await fs.rename(target, external);
+    await (kind === "symlink" ? fs.symlink : fs.link)(external, target);
+  } else if (kind === "invalid") {
+    await fs.writeFile(target, data);
+  }
+  vi.mocked(fetchWithSsrFGuard).mockClear();
+  const reuse = download();
+  await (kind === "invalid" ? expect(reuse).rejects.toThrow("model-integrity") : reuse);
+  expect(await fs.readFile(target)).toEqual(data);
+  expect((await fs.lstat(target)).isSymbolicLink()).toBe(kind === "symlink");
+  expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+});
 
 it.each([
-  { name: "short download", body: Buffer.from("invalid"), error: /integrity/ },
+  { name: "empty download", body: Buffer.alloc(0), error: /integrity/ },
   { name: "wrong hash", body: Buffer.alloc(bytes.length), error: /integrity/ },
   { name: "oversized download", body: Buffer.alloc(bytes.length + 1), error: /pinned size/ },
   { name: "release failure", body: bytes, error: new Error("download release failed") },
@@ -88,6 +103,10 @@ it.each([
   const operation = expect(download()).rejects;
   await (error instanceof Error ? operation.toBe(error) : operation.toThrow(error));
   await expectUnpublished(guarded);
+  if (!(error instanceof Error)) {
+    await install(body);
+    await expect(verify()).rejects.toThrow("model-integrity");
+  }
 });
 
 it("cancels the response and removes staged bytes when a pending read is aborted", async () => {
@@ -122,33 +141,49 @@ it.each([
   expect(release).toHaveBeenCalledOnce();
 });
 
-it.each(process.platform === "win32" ? ["file"] : ["file", "symlink", "hardlink"])(
-  "preserves operator %s without downloading",
-  async (kind) => {
-    const data = kind === "file" ? Buffer.from("keep this") : bytes;
-    const external = path.join(root, "operator-model.onnx");
-    await install(data, external);
-    const link = kind === "file" ? fs.copyFile : kind === "symlink" ? fs.symlink : fs.link;
-    await link(external, target);
-    vi.mocked(fetchWithSsrFGuard).mockClear();
-    const operation = download();
-    await (kind === "file" ? expect(operation).rejects.toThrow("model-integrity") : operation);
-    expect(await fs.readFile(target)).toEqual(data);
-    expect((await fs.lstat(target)).isSymbolicLink()).toBe(kind === "symlink");
-    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+it.skipIf(process.platform === "win32").each(["model.json", "model.onnx"])(
+  "rejects a FIFO %s without waiting for a writer",
+  async (filename) => {
+    const symlink = filename === "model.onnx";
+    await fs.mkdir(destination, { recursive: true });
+    const input = path.join(destination, filename);
+    const fifo = symlink ? path.join(root, "artifact.fifo") : input;
+    execFileSync("mkfifo", [fifo]);
+    if (symlink) {
+      await fs.symlink(fifo, input);
+    }
+    let neededWriter = false;
+    let writer: ReturnType<typeof spawn> | undefined;
+    let writerExited = Promise.resolve();
+    // Rescue a regressed blocking open with EOF, so it fails instead of hanging the worker.
+    const rescue = setTimeout(() => {
+      neededWriter = true;
+      writer = spawn(
+        process.execPath,
+        [
+          "-e",
+          "const fs = require('node:fs'); fs.open(process.argv[1], 'w', (error, fd) => { if (error) throw error; fs.closeSync(fd); });",
+          fifo,
+        ],
+        { stdio: "ignore" },
+      );
+      writerExited = once(writer, "close").then(() => {});
+    }, 1000);
+    try {
+      const operation = filename === "model.json" ? resolveModelFiles(root, local) : verify();
+      await expect(operation).rejects.toThrow("model-integrity");
+      expect(neededWriter, "the regular-file refusal must not need an EOF writer").toBe(false);
+      expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
+      if (symlink) {
+        expect((await fs.lstat(input)).isSymbolicLink()).toBe(true);
+      }
+    } finally {
+      clearTimeout(rescue);
+      writer?.kill("SIGKILL");
+      await writerExited;
+    }
   },
 );
-
-it.each([
-  { name: "missing", data: undefined, code: "model-missing" },
-  { name: "empty", data: Buffer.alloc(0), code: "model-integrity" },
-  { name: "oversized", data: Buffer.alloc(bytes.length + 1), code: "model-integrity" },
-])("reports a $name installed artifact", async ({ data, code }) => {
-  if (data !== undefined) {
-    await install(data);
-  }
-  await expect(verify()).rejects.toThrow(code);
-});
 
 it.each(["grows", "shrinks", "close fails"])("rejects when the artifact %s", async (change) => {
   await install();
@@ -179,7 +214,6 @@ it.each(["grows", "shrinks", "close fails"])("rejects when the artifact %s", asy
 });
 
 it("rejects local-export path traversal and mismatched source identity", async () => {
-  const local: ModelPreset = { ...model, source: { ...model.source, kind: "local-export" } };
   const manifestPath = path.join(destination, "model.json");
   const exportedFiles = [
     { name: "model.onnx", bytes: 1, sha256: "a".repeat(64) },

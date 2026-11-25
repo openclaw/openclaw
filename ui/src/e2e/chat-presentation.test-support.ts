@@ -10,8 +10,6 @@ export const polledCount = (target: Locator) => expect.poll(() => target.count()
 export const polledVisible = (target: Locator) => expect.poll(() => target.isVisible());
 export const polledFocus = (target: Locator) =>
   expect.poll(() => target.evaluate((node) => node === document.activeElement));
-export const polledAncestor = (target: Locator, selector: string) =>
-  expect.poll(() => target.evaluate((node, parent) => node.closest(parent) != null, selector));
 export const polledAttribute = (target: Locator, name: string) =>
   expect.poll(() => target.getAttribute(name));
 export const polledStyle = (target: Locator, name: keyof CSSStyleDeclaration) =>
@@ -28,8 +26,6 @@ export async function layoutBox(target: Locator) {
 type Box = Awaited<ReturnType<typeof layoutBox>>;
 export const right = (box: Box) => box.x + box.width;
 export const bottom = (box: Box) => box.y + box.height;
-export const centerX = (box: Box) => box.x + box.width / 2;
-export const centerY = (box: Box) => box.y + box.height / 2;
 
 export const twoFrames = (page: Page) =>
   page.evaluate(

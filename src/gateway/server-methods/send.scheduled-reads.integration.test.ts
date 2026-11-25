@@ -39,7 +39,7 @@ import type {
 const guildId = "100000000000000001";
 const channelId = "100000000000000002";
 const messageId = "100000000000000003";
-const pinWritePath = `/api/v10/channels/${channelId}/pins/${messageId}`;
+const pinWritePath = `/api/v10/channels/${channelId}/messages/pins/${messageId}`;
 const sessionKey = "agent:main:cron:scheduled-reads:run:fixture";
 const sessionId = "scheduled-reads-session";
 const creatorAuthorization = "Bot synthetic-creator-provider-fixture";
@@ -267,7 +267,10 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
       expectRead(await fixture.read({ client }), "fresh-2");
       const requestsBeforeRevocation = fixture.httpRequests.length;
       fixture.revoke();
-      expectDenied(await fixture.read({ client }), "authority is no longer active");
+      expectDenied(
+        await fixture.read({ client }),
+        "The message turn has ended. Start a new turn to retry.",
+      );
       expect(fixture.httpRequests).toHaveLength(requestsBeforeRevocation);
     }));
 
@@ -293,11 +296,11 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
             5000,
             "Revoked same-key read joined the pending provider response",
           ),
-          "authority is no longer active",
+          "The message turn has ended. Start a new turn to retry.",
         );
         expect(fixture.httpRequests).toHaveLength(requestsBeforeRevocation);
         deferred.release.resolve();
-        expectDenied(await first, "authority is no longer active");
+        expectDenied(await first, "The message turn has ended. Start a new turn to retry.");
         expect(fixture.providerRead).toHaveBeenCalledOnce();
       } finally {
         deferred.release.resolve();

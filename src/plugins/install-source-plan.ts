@@ -7,11 +7,13 @@ import { resolveArchiveKind } from "../infra/archive.js";
 import { isDefaultClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { resolveUserFilesystemPath } from "../infra/home-dir.js";
 import { looksLikeLocalInstallSpec } from "../infra/install-spec.js";
 import { resolveUserPath } from "../utils.js";
 import { findBundledPluginSource, type BundledPluginSource } from "./bundled-sources.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
-import { parseGitPluginSpec } from "./git-install.js";
+import { parseGitPluginSpec } from "./git-source-spec.js";
 import {
   resolveOpenClawTrustedNpmPackageInstall,
   type NonClawHubInstallSourceClass,
@@ -99,8 +101,15 @@ export function resolvePluginInstallSourcePlan(params: {
     return fileSpec;
   }
   const normalized = fileSpec?.path ?? params.raw;
-  const resolved = resolveUserPath(normalized);
-  if (fs.existsSync(resolved)) {
+  let resolved: string | undefined;
+  let untraversable: unknown;
+  try {
+    resolved = resolveUserFilesystemPath(normalized);
+  } catch (error) {
+    // A spec the filesystem cannot traverse is not a local source; keep classifying it.
+    untraversable = error;
+  }
+  if (resolved && fs.existsSync(resolved)) {
     const recordSource = resolveArchiveKind(resolved) ? "archive" : "path";
     const bundled =
       recordSource === "path"
@@ -122,7 +131,11 @@ export function resolvePluginInstallSourcePlan(params: {
   if (npmPackPath !== null) {
     return npmPackPath
       ? sourcePlan(
-          { source: "npm-pack", archivePath: resolveUserPath(npmPackPath), mode: params.mode },
+          {
+            source: "npm-pack",
+            archivePath: resolveUserFilesystemPath(npmPackPath),
+            mode: params.mode,
+          },
           params.raw,
           "npm-pack",
         )
@@ -135,9 +148,10 @@ export function resolvePluginInstallSourcePlan(params: {
       ? sourcePlan(
           {
             source: "git",
+            // Literal @ path characters must not become the outer git: ref delimiter.
             spec:
               isLocalGitUrl(git.url) && !git.url.startsWith("file:")
-                ? `git:${pathToFileURL(resolveUserPath(git.url)).href}${git.ref ? `@${git.ref}` : ""}`
+                ? `git:${pathToFileURL(resolveUserPath(git.url)).href.replaceAll("@", "%40")}${git.ref ? `@${git.ref}` : ""}`
                 : params.raw,
             mode: params.mode,
           },
@@ -146,20 +160,22 @@ export function resolvePluginInstallSourcePlan(params: {
         )
       : { ok: false, error: `unsupported git: plugin spec: ${params.raw}` };
   }
-  const clawhubPrefix = params.raw.trim().toLowerCase().startsWith("clawhub:");
-  const clawhub = parseClawHubPluginSpec(params.raw);
-  if (clawhubPrefix) {
-    return clawhub
+  function planClawHub(parsed: ReturnType<typeof parseClawHubPluginSpec>): PluginInstallSourcePlan {
+    return parsed
       ? sourcePlan(
           {
             source: "clawhub",
-            packageName: clawhub.name,
-            version: clawhub.version,
+            packageName: parsed.name,
+            version: parsed.version,
             mode: params.mode,
           },
           params.raw,
         )
       : { ok: false, error: `Unsupported ClawHub plugin spec: ${params.raw}` };
+  }
+  const clawhubPrefix = params.raw.trim().toLowerCase().startsWith("clawhub:");
+  if (clawhubPrefix) {
+    return planClawHub(parseClawHubPluginSpec(params.raw));
   }
   const explicitNpm = parseNpmPrefixSpec(params.raw);
   if (explicitNpm !== null && !explicitNpm) {
@@ -173,7 +189,12 @@ export function resolvePluginInstallSourcePlan(params: {
         params.raw.includes("/") ? [] : [".tgz", ".tar.gz", ".tar", ".zip"],
       ))
   ) {
-    return { ok: false, error: `Plugin path not found: ${resolved}` };
+    return {
+      ok: false,
+      error: untraversable
+        ? `Plugin path not found: ${normalized} (${formatErrorMessage(untraversable)})`
+        : `Plugin path not found: ${resolved}`,
+    };
   }
 
   const bundledPlan = resolveBundledInstallPlanBeforeNpm({
@@ -212,17 +233,7 @@ export function resolvePluginInstallSourcePlan(params: {
     const defaultClawHub = params.raw.includes(":")
       ? null
       : parseClawHubPluginSpec(`clawhub:${params.raw}`);
-    return defaultClawHub
-      ? sourcePlan(
-          {
-            source: "clawhub",
-            packageName: defaultClawHub.name,
-            version: defaultClawHub.version,
-            mode: params.mode,
-          },
-          params.raw,
-        )
-      : { ok: false, error: `Unsupported ClawHub plugin spec: ${params.raw}` };
+    return planClawHub(defaultClawHub);
   }
   const trusted = resolveOpenClawTrustedNpmPackageInstall(explicitNpm);
   return sourcePlan(

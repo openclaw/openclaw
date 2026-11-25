@@ -4,7 +4,7 @@ import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsCatalogImportResult } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import "../lib/toast-host.ts";
+import "../lib/toast-host.tsx";
 import "../test-helpers/app-sidebar-suite.ts";
 import {
   catalogPage,
@@ -103,7 +103,7 @@ describe("AppSidebar catalog import", () => {
     } else if (outcome === "failure") {
       expect(toast.textContent).toContain("Source device is unavailable");
     } else {
-      expect(toast.textContent).toContain("Imported 2 transcript items.");
+      expect(toast.textContent).toContain("Imported 2 chat items.");
       const nativeRow = sidebar.querySelector('[data-catalog-session-key*="thread-1"]');
       expect(nativeRow?.getAttribute("data-session-key")).toContain(":catalog:codex:");
       toast.querySelector<HTMLButtonElement>(".app-toast__action")!.click();

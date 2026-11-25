@@ -50,6 +50,8 @@ export type CommonChannelMessagingConfig<
   streaming?: TStreaming;
   /** @deprecated Doctor-only legacy input. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** @deprecated Doctor input only; use automation delivery policy. */
+  heartbeatVisibility?: ChannelHeartbeatVisibilityConfig;
 };
 
 export type ChannelExecApprovalConfig<TApprover = string | number> = {

@@ -1,8 +1,6 @@
-import type { AgentMessage, NormalizedUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { NormalizedUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 export type CopilotUsageSnapshot = NormalizedUsage;
 
@@ -27,22 +25,5 @@ export function normalizeCopilotUsage(data: unknown): NormalizedUsage | undefine
     input,
     output,
     total,
-  };
-}
-
-export function buildCopilotAssistantUsage(params: {
-  usage?: NormalizedUsage;
-  fallbackOutputTokens?: unknown;
-}): AssistantMessage["usage"] {
-  const usage =
-    params.usage ?? normalizeCopilotUsage({ outputTokens: params.fallbackOutputTokens });
-
-  return {
-    cacheRead: usage?.cacheRead ?? 0,
-    cacheWrite: usage?.cacheWrite ?? 0,
-    cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
-    input: usage?.input ?? 0,
-    output: usage?.output ?? 0,
-    totalTokens: usage?.total ?? 0,
   };
 }

@@ -5,10 +5,8 @@ import {
   type DecisionBatchResultV2,
 } from "openclaw/plugin-sdk/decisions";
 import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { expect, it, vi } from "vitest";
-import plugin from "./index.js";
+import { expect, it } from "vitest";
+import { registerLevantoTestProvider } from "./registration.test-support.js";
 
 // The same synthetic 32x32 red square, encoded once with Rastermill's internal codecs.
 const images = {
@@ -57,18 +55,7 @@ it.runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.LEVANTO_A
   async () => {
     const apiKey = process.env.LEVANTO_API_KEY;
     assert(apiKey);
-    const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-    const api = createTestPluginApi({ id: "levanto", registerDecisionProvider });
-    api.runtime.media = {
-      getImageMetadata,
-      loadWebMedia: vi.fn(),
-      detectMime: vi.fn(),
-      mediaKindFromMime: vi.fn(),
-      isVoiceCompatibleAudio: vi.fn(),
-      resizeToJpeg: vi.fn(),
-    };
-    plugin.register(api);
-    const provider = registerDecisionProvider.mock.calls[0]?.[0];
+    const provider = registerLevantoTestProvider(getImageMetadata);
     assert(provider?.contractVersion === 2);
     const evaluate = async (name: string, batch: DecisionBatchV2) => {
       // Prepared credentials are fixture input; native transport, media and validation stay real.

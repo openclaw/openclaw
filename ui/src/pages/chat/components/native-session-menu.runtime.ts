@@ -1,3 +1,5 @@
+import { listen } from "../../../lib/reactive/listener.ts";
+
 export async function openNativeSessionMenu(params: {
   pane: HTMLElement;
   signal: AbortSignal;
@@ -12,7 +14,7 @@ export async function openNativeSessionMenu(params: {
         resolvedMenu: HTMLElementTagNameMap["openclaw-chat-header-session-menu"] | null,
       ) => {
         observer.disconnect();
-        signal.removeEventListener("abort", cancelled);
+        stopAbort();
         resolve(resolvedMenu);
       };
       const check = () => {
@@ -31,7 +33,7 @@ export async function openNativeSessionMenu(params: {
       // A retained pane loses its selection through its own attributes.
       observer.observe(pane.getRootNode(), { childList: true, subtree: true });
       observer.observe(pane, { attributes: true });
-      signal.addEventListener("abort", cancelled, { once: true });
+      const stopAbort = listen(signal, "abort", cancelled, { once: true });
       check();
     },
   );

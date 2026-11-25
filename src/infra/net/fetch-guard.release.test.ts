@@ -101,7 +101,7 @@ describe("guarded request release", () => {
       const abandonedClosed = createDeferredCore();
       const heldResponse = createDeferredCore<ServerResponse>();
       const parent = new AbortController();
-      const pool = new PinnedDispatcherPool({ maxEntries: 1, idleTtlMs: 60_000 });
+      const pool = new PinnedDispatcherPool();
       const dispatchers: Array<Dispatcher | undefined> = [];
       const captures = new Map<string, ReturnType<typeof createDeferredCore<CaptureEventRecord>>>();
       const releases: Array<() => Promise<void>> = [];

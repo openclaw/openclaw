@@ -14,12 +14,16 @@ export function createConfigSuite(name: string) {
   });
 }
 
-export const settingsPageOptions = {
-  colorScheme: "dark",
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { height: 1000, width: 1440 },
-} satisfies BrowserContextOptions;
+export function createSettingsPageOptions() {
+  return {
+    colorScheme: "dark",
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { height: 1000, width: 1440 },
+  } satisfies BrowserContextOptions;
+}
+
+export const settingsPageOptions = createSettingsPageOptions();
 
 export function configProof(name: string, variant?: string) {
   const enabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -30,7 +34,16 @@ export function configProof(name: string, variant?: string) {
       directory = variant ? path.join(root, variant) : root;
     }
   });
-  return { enabled, directory: () => directory, capture: proofCapture(() => directory, enabled) };
+  const capture = async (surface: Page | Locator, fileName: string, fullPage = false) => {
+    if (enabled) {
+      await surface.screenshot({
+        animations: "disabled",
+        path: path.join(directory, fileName),
+        ...(fullPage ? { fullPage: true } : {}),
+      });
+    }
+  };
+  return { enabled, directory: () => directory, capture };
 }
 
 export function pageRunner(
@@ -74,8 +87,20 @@ export function computedStyles(control: Locator, names: readonly string[]) {
   }, names);
 }
 
-export async function revealControl(control: Locator) {
-  await expect.poll(() => control.count()).toBe(1);
+// Callers name the closed sections holding a nested control: opening every section in
+// document order until it rendered made the complete-schema form outlast its test timeout.
+export async function revealControl(control: Locator, sections: readonly string[] = []) {
+  const page = control.page();
+  for (const title of sections) {
+    await page
+      .locator("details.cfg-object:not([open]) > summary")
+      .filter({ has: page.locator(".settings-row__title").getByText(title, { exact: true }) })
+      .first()
+      .click();
+  }
+  await expect
+    .poll(() => control.count(), { message: "Pass the closed sections that hold this control" })
+    .toBe(1);
   for (const details of await control.locator("xpath=ancestor::details").all()) {
     if ((await details.getAttribute("open")) === null) {
       await details.locator(":scope > summary").click();
@@ -88,18 +113,6 @@ export function settingsRow(page: Page, title: string): Locator {
   return page.locator(".settings-row").filter({
     has: page.locator(".settings-row__title").getByText(title, { exact: true }),
   });
-}
-
-function proofCapture(directory: () => string, enabled: boolean) {
-  return async (surface: Page | Locator, name: string, fullPage = false) => {
-    if (enabled) {
-      await surface.screenshot({
-        animations: "disabled",
-        path: path.join(directory(), name),
-        ...(fullPage ? { fullPage: true } : {}),
-      });
-    }
-  };
 }
 
 export async function composerStore(page: Page) {

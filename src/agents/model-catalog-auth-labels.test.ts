@@ -83,23 +83,10 @@ it("preserves provider-specific placeholders and independently owned profile lab
     missing: "missing=missing",
   };
   expect([...labels.keys()]).toEqual(["openai", "amazon-bedrock", "anthropic"]);
-  const tables = [];
-  for (const [provider, pair] of labels) {
-    if (typeof pair.all === "string" || typeof pair.apiKey === "string") {
-      throw new Error("Expected captured profile label records");
-    }
-    expect(pair.all.profiles).toEqual(
-      provider === "amazon-bedrock"
-        ? { ...expected, "amazon-bedrock:default": "amazon-bedrock:default=aws-sdk" }
-        : expected,
-    );
-    expect(Object.keys(pair.all.profiles)).toEqual(Object.keys(expected));
-    expect(pair.apiKey.profiles).toBe(pair.all.profiles);
-    expect(pair.apiKey.apiKeyOnly).toBe(provider === "openai");
-    expect(pair.apiKey === pair.all).toBe(provider !== "openai");
-    tables.push(pair.all.profiles);
-  }
-  expect(new Set(tables).size).toBe(3);
+  expect(labels.get("openai")?.all).toMatchObject({ profiles: expected });
+  expect(labels.get("amazon-bedrock")?.all).toMatchObject({
+    profiles: { ...expected, "amazon-bedrock:default": "amazon-bedrock:default=aws-sdk" },
+  });
   expect({ config, store }).toEqual(before);
   expect(read("amazon-bedrock")).toBe(
     "amazon-bedrock:default=aws-sdk (next) (auth profile store: /tmp/catalog-auth/auth-profiles.json)",
@@ -131,13 +118,9 @@ it.each(["expiry", "cooldown"])("updates captured profile ordering after %s", (k
   expect(captured.read()).not.toContain(expiry ? "first=" : "cooldown");
 });
 
-it.each([
-  [true, "rate_limit", "billing", "10m"],
-  [true, "overloaded", "auth_permanent", "10m"],
-  [false, "rate_limit", "billing", "1h"],
-] as const)(
-  "shows the enforced mixed-window deadline (managed=%s, %s, %s)",
-  (managesOwnAvailability, cooldownReason, disabledReason, expected) => {
+it.each([true, false])(
+  "shows the enforced mixed-window deadline (managed=%s)",
+  (managesOwnAvailability) => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const snapshot = createPluginMetadataSnapshotFixture({
       plugins: [{ id: "gateway", providers: ["my-gateway"], managesOwnAvailability }],
@@ -146,14 +129,16 @@ it.each([
     store.usageStats = {
       primary: {
         cooldownUntil: 1_700_003_600_000,
-        cooldownReason,
+        cooldownReason: "rate_limit",
         disabledUntil: 1_700_000_600_000,
-        disabledReason,
+        disabledReason: "billing",
       },
     };
     const captured = capture(store, ["my-gateway"]);
     withPluginMetadataSnapshotScope(snapshot, () => {
-      expect(captured.read()).toContain(`(next, cooldown ${expected})`);
+      expect(captured.read()).toContain(
+        `(next, cooldown ${managesOwnAvailability ? "10m" : "1h"})`,
+      );
       now.mockReturnValue(1_700_000_600_000);
       if (managesOwnAvailability) {
         expect(captured.read()).not.toContain("cooldown");

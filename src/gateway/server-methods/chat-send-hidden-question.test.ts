@@ -1,13 +1,16 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { attachSteerBackend } from "../../auto-reply/reply/agent-runner-steer-adoption.test-support.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
-import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import {
+  prepareReplyRunToolAuthority,
+  prepareReplyToolAuthority,
+} from "../../auto-reply/reply/reply-tool-authority.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.entry.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
@@ -20,13 +23,16 @@ import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-tra
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createChatSendMessageInjectionStarter } from "./chat-send-message-injection.js";
 
-it.each(
-  (["compatible", "restricted", "different profile"] as const).flatMap((caller) =>
-    [false, true].map((image) => ({ caller, image })),
+type Injection = Parameters<typeof attachSteerBackend>[2];
+
+it.each([
+  ...(["compatible", "restricted", "different profile"] as const).flatMap((caller) =>
+    [false, true].map((image) => ({ caller, image, replacement: false })),
   ),
-)(
-  "projects Gateway caller authority before hidden question settlement (caller=$caller, image=$image)",
-  async ({ caller, image }) => {
+  { caller: "compatible", image: false, replacement: true },
+])(
+  "projects Gateway caller authority before question settlement (caller=$caller, image=$image, replacement=$replacement)",
+  async ({ caller, image, replacement }) => {
     const compatible = caller === "compatible";
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:gateway-hidden-question";
@@ -60,58 +66,68 @@ it.each(
         },
       };
       const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-      owner.operatorAuthority = createAdmittedRunOperatorAuthority({
+      owner.operatorAuthority = createTestOperatorAuthority({
         profileId: "question-owner",
         scopes: ["operator.admin"],
         gatewayAccessGrant: null,
         modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
-        assertCurrent: () => operation.abortSignal.throwIfAborted(),
       });
       const incomingAuthority =
         caller === "different profile"
-          ? createAdmittedRunOperatorAuthority({
+          ? createTestOperatorAuthority({
               ...owner.operatorAuthority,
               profileId: "question-participant",
             })
           : owner.operatorAuthority;
-      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(owner));
+      if (replacement) {
+        owner.run.inputProvenance = undefined;
+      }
+      await operation.bindToolAuthoritySnapshotAsync(
+        replacement
+          ? prepareReplyRunToolAuthority(owner, undefined)
+          : prepareReplyToolAuthority(owner),
+      );
       const fingerprint = await operation.bindToolAuthorityRouteAsync({
         provider: owner.run.provider,
         model: owner.run.model,
       });
-      const queueMessage = vi.fn(async () => {});
-      const claim = vi.fn<
-        NonNullable<ReplyBackendMessageInjectionV2["claimPendingUserInputAnswer"]>
-      >(async (_text, options, assertCurrent, authorityKind) => {
-        expect(options?.toolAuthorityFingerprint).toBe(fingerprint);
-        expect(options).not.toHaveProperty("toolAuthorityOverlay");
-        expect(authorityKind).toBe("source-bound");
+      const replaceQuestion = vi.fn(async (assertCurrent: () => void) => {
         assertCurrent();
-        return true;
       });
-      const cancel = vi.fn<NonNullable<ReplyBackendMessageInjectionV2["cancelPendingUserInput"]>>(
+      const queueMessage = vi.fn<Injection["queueMessage"]>(
+        async (_text, options, assertCurrent) => {
+          assertCurrent();
+          expect(options?.allowPendingUserInputAnswer).toBe(false);
+          expect(replaceQuestion).not.toHaveBeenCalled();
+          options?.onQueueAccepted?.(true);
+        },
+      );
+      const claim = vi.fn<NonNullable<Injection["claimPendingUserInputAnswer"]>>(
+        async (_text, options, assertCurrent, authorityKind) => {
+          expect(options?.toolAuthorityFingerprint).toBe(fingerprint);
+          expect(options).not.toHaveProperty("toolAuthorityOverlay");
+          expect(authorityKind).toBe("source-bound");
+          assertCurrent();
+          return true;
+        },
+      );
+      const cancel = vi.fn<NonNullable<Injection["cancelPendingUserInput"]>>(
         async (_resolvedBy, assertCurrent, authorityKind) => {
           expect(authorityKind).toBe("source-bound");
           assertCurrent();
           return true;
         },
       );
-      operation.attachBackend({
-        kind: "embedded",
-        supportsTranscriptCommitWait: true,
+      attachSteerBackend(operation, fingerprint, {
         runId,
-        toolAuthorityFingerprint: fingerprint,
-        cancel: vi.fn(),
-        messageInjectionV2: {
-          version: 2,
-          isAvailable: () => true,
-          queueMessage,
-          claimPendingUserInputAnswer: claim,
-          cancelPendingUserInput: cancel,
-        },
+        queueMessage,
+        claimPendingUserInputAnswer: claim,
+        cancelPendingUserInput: cancel,
       });
-      operation.setPhase("running");
-      registerAgentRunContext(runId, { isControlUiVisible: false, projectSessionMessages: false });
+      registerAgentRunContext(runId, {
+        isControlUiVisible: replacement,
+        projectSessionMessages: replacement,
+      });
       try {
         const target = captureCurrentReplyMessageInjectionTarget(sessionKey);
         expect(target).toBeDefined();
@@ -138,6 +154,7 @@ it.each(
           },
           session: {
             agentId: "main",
+            resolvedSessionModel: { provider: owner.run.provider, model: owner.run.model },
             cfg: { messages: { queue: { allowCollaborativeSteering: true } } },
             entry: undefined,
             sessionKey,
@@ -156,7 +173,7 @@ it.each(
             },
             isInternalTextSlashCommandTurn: false,
             replyOptionImages: image
-              ? [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png", sourceIndex: 0 }]
+              ? [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]
               : [],
             replyOptionMedia: [],
           },
@@ -166,6 +183,7 @@ it.each(
             target: createTestUserTurnTranscriptTarget({ sessionKey, sessionId, storePath }),
           }),
           logGateway: createSubsystemLogger("gateway/question-test"),
+          ...(replacement ? { replaceQuestion } : {}),
         });
         const attempt = await start();
         expect(attempt).toBeDefined();
@@ -174,9 +192,10 @@ it.each(
             ? { status: "accepted" }
             : { status: "rejected", reason: "input_visibility_mismatch" },
         );
-        expect(claim).toHaveBeenCalledTimes(compatible && !image ? 1 : 0);
+        expect(claim).toHaveBeenCalledTimes(compatible && !image && !replacement ? 1 : 0);
         expect(cancel).toHaveBeenCalledTimes(compatible && image ? 1 : 0);
-        expect(queueMessage).not.toHaveBeenCalled();
+        expect(queueMessage).toHaveBeenCalledTimes(replacement ? 1 : 0);
+        expect(replaceQuestion).toHaveBeenCalledTimes(replacement ? 1 : 0);
         retireSessionControllerInput(input);
       } finally {
         clearAgentRunContext(runId);

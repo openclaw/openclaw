@@ -1,8 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, Show } from "solid-js";
+import { copyWithPathPatch } from "../lib/config-form-utils.ts";
+import type { ConfigSecretFields } from "../lib/config/config-secret-fields.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import type { ConfigFormStructuredDraftProps } from "./config-form-structured-draft.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { configFieldId, schemaType } from "./config-form.shared.ts";
@@ -56,6 +57,28 @@ export function ConfigStructuredDraft(
     setDraft((state) => ({ ...state, error: t("configForm.draftRejected") }));
     return false;
   };
+  // A secret saved from inside an unwritten object carries the rest of that object with it.
+  const secretFields = (): ConfigSecretFields | undefined => {
+    const parent = props.params.secretFields;
+    return (
+      parent && {
+        ...parent,
+        save: async (path, value) => {
+          const rootPath = props.params.path;
+          const patched = copyWithPathPatch(draft().value, path.slice(rootPath.length), value);
+          if (!patched.ok) {
+            return { ok: false, error: t("configForm.draftRejected") };
+          }
+          const result = await parent.save(rootPath, patched.value);
+          if (result.ok) {
+            // SAFETY: The root kind is unchanged; only the secret's value was set inside it.
+            setDraft({ value: patched.value as Record<string, unknown> | unknown[], error: "" });
+          }
+          return result;
+        },
+      }
+    );
+  };
   return (
     <openclaw-config-form-structured-draft class={props.class}>
       {props.renderNode(() => ({
@@ -64,6 +87,7 @@ export function ConfigStructuredDraft(
         sourceIdentity: draft().value,
         controlIdentity: draft().value,
         structuredDraftOwner: true,
+        secretFields: secretFields(),
         onPatch: patchDraft,
         onRemove: (path) => patchDraft(path, undefined),
       }))}

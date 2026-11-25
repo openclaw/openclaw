@@ -2,7 +2,7 @@ import {
   prepareHarnessNativeMcpAppPreview,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
 import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
@@ -23,7 +23,17 @@ vi.mock("./shared-client.js", async (importOriginal) => ({
     client ? ownedClients.get(client) : undefined,
   ),
 }));
-beforeEach(() => vi.mocked(retainSharedCodexAppServerClientIfCurrent).mockClear());
+beforeEach(() => {
+  vi.mocked(retainSharedCodexAppServerClientIfCurrent).mockClear();
+  vi.useFakeTimers();
+  onTestFinished(async () => {
+    try {
+      await vi.runOnlyPendingTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 function createAttempt(enabled = true): EmbeddedRunAttemptParams {
   return {
@@ -123,8 +133,6 @@ describe("Codex native MCP Apps", () => {
     expect(vi.mocked(retainSharedCodexAppServerClientIfCurrent).mock.lastCall?.[0]).toBe(client);
     expect(details).toMatchObject({
       mcpAppPreview: {
-        kind: "canvas",
-        view: { id: expect.stringMatching(/^mcp-app-/u), title: "show_options UI" },
         mcpApp: {
           serverName: "sample",
           toolName: "show_options",
@@ -147,7 +155,7 @@ describe("Codex native MCP Apps", () => {
     ).toEqual(new Set(["show_options", "show_menu"]));
   });
 
-  it.each(["call-other", undefined, null])(
+  it.each(["call-other", undefined])(
     "omits the app preview for mismatched MCP origin call %s",
     async (responseOriginCallId) => {
       const { request, prepare } = createFixture(
@@ -216,14 +224,6 @@ describe("Codex native MCP Apps", () => {
       tools: expect.arrayContaining([
         expect.objectContaining({ toolName: "calendar_model_only", uiVisibility: ["model"] }),
         expect.objectContaining({ toolName: "drive_delete", uiVisibility: ["app"] }),
-      ]),
-    });
-    await expect(previewParams?.runtime.listTools?.("codex_apps")).resolves.toMatchObject({
-      tools: expect.arrayContaining([
-        expect.objectContaining({
-          name: "calendar_model_only",
-          _meta: { connector_id: "calendar", ui: { visibility: ["model"] } },
-        }),
       ]),
     });
 

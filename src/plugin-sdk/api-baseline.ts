@@ -151,6 +151,9 @@ async function createCompilerContext(
       roots: fileNames,
       compilerOptions,
       diagnostics: "declarations",
+      // Historical revisions emit with their own locked compiler; newer compilers can
+      // reject declarations that release accepted.
+      compilerRoot: repoRoot,
     });
     // Keep each emitted module at its source location so package scope, path mappings, and
     // import attributes retain the compiler's original resolution conditions.

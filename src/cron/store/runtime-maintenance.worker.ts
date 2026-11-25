@@ -20,7 +20,6 @@ import {
   repairCronRuntimeAuthorityRows,
 } from "./runtime-authority-store.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
-import { mutateCronRuntimeRowsInDatabase } from "./runtime-rows.kernel.js";
 import type {
   CronRuntimeMutationContracts,
   CronRuntimeWorkerOperations,
@@ -54,23 +53,14 @@ export function maintainCronRunHistoryInWorker(
       : [];
   const { nowMs, protectedJobIds } = input.snapshot;
   const protectedJobs = new Set([...protectedJobIds, ...receipts.map((receipt) => receipt.jobId)]);
-  const plan = planCronRunHistoryMaintenance(
-    withReconciliationPayloads(database.db, records, nowMs, protectedJobs),
-    nowMs,
-    protectedJobs,
-  );
-  if (plan.reconciliations.length === 0 && !plan.prune) {
+  const plan = planWithReconciliationPayloads(database.db, records, nowMs, protectedJobs);
+  if (plan.reconciliations.length === 0 && plan.pruneIds.length === 0) {
     return { outcome: { reconciled: 0, pruned: 0, nextSweepAtMs: plan.nextSweepAtMs } };
   }
   return runOpenClawStateWriteTransaction(
     ({ db }) => ({
       outcome: {
-        ...applyCronRunHistoryMaintenanceInDatabase(
-          db,
-          plan,
-          nowMs,
-          prepareCronRunReceiptWriteSchema(db),
-        ),
+        ...applyCronRunHistoryMaintenanceInDatabase(db, plan, prepareCronRunReceiptWriteSchema(db)),
         nextSweepAtMs: plan.nextSweepAtMs,
       },
     }),
@@ -84,15 +74,15 @@ export function maintainCronRunHistoryInWorker(
  * shares the row's exact job and run identity. Load full payloads for exactly those rows, by task
  * id, and replan on them; every other row keeps its planning projection.
  */
-function withReconciliationPayloads(
+function planWithReconciliationPayloads(
   db: EngineConnection,
   records: readonly CronRunRecord[],
   nowMs: number,
   protectedJobs: ReadonlySet<string>,
-): readonly CronRunRecord[] {
+) {
   const draft = planCronRunHistoryMaintenance(records, nowMs, protectedJobs);
   if (draft.reconciliations.length === 0) {
-    return records;
+    return draft;
   }
   const runKey = (row: CronRunRecord) => JSON.stringify([row.jobId, row.runId]);
   const reconciledRuns = new Set(
@@ -112,10 +102,11 @@ function withReconciliationPayloads(
       payloads.set(row.id, row);
     }
   }
-  return records.map((row) => {
+  const hydrated = records.map((row) => {
     const full = payloads.get(row.id);
     return full === undefined ? row : { ...row, summary: full.summary, detail: full.detail };
   });
+  return planCronRunHistoryMaintenance(hydrated, nowMs, protectedJobs);
 }
 
 export function scheduleUnownedCronJobsInWorker(
@@ -146,7 +137,7 @@ export function scheduleUnownedCronJobsInWorker(
         if (
           !job ||
           activeJobIds.has(row.job_id) ||
-          (input.options?.preserveExpiredPacedNextRunJobId === row.job_id && !job.enabled)
+          (input.options?.preserveDisabledJobId === row.job_id && !job.enabled)
         ) {
           continue;
         }
@@ -209,40 +200,5 @@ export function recordCronFailureAlertOutcomeInWorker(
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.failure-alert-outcome" },
-  );
-}
-
-export function recordCronFailureRepairSettlementInWorker(
-  database: OpenClawStateDatabase,
-  input: CronRuntimeWorkerOperations["cron.recordFailureRepairSettlement"]["input"],
-): CronRuntimeWorkerOperations["cron.recordFailureRepairSettlement"]["output"] {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const committed = mutateCronRuntimeRowsInDatabase<
-        CronRuntimeMutationContracts["cron.recordFailureRepairSettlement"]["outcome"]
-      >({
-        database: db,
-        storeKey: input.storeKey,
-        jobIds: new Set([input.jobId]),
-        mutate({ jobs }) {
-          const job = jobs.get(input.jobId);
-          const repair = job?.state.failureAlertIncident?.repair;
-          if (
-            !job ||
-            !repair ||
-            repair.alerted ||
-            repair.atMs !== input.repairAtMs ||
-            job.state.lastFailureNotificationId !== input.repairId
-          ) {
-            return { value: {} };
-          }
-          repair.settledAtMs = input.settledAtMs;
-          return { upsertJobIds: [job.id], value: { job } };
-        },
-      });
-      return { outcome: committed.value };
-    },
-    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-    { operationLabel: "cron.failure-repair-settlement" },
   );
 }

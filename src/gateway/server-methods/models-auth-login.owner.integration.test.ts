@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { WizardNextResult } from "../../../packages/gateway-protocol/src/schema/wizard.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
@@ -11,15 +11,12 @@ import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as providerPersistence from "../../plugins/provider-auth-persistence.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient } from "../test-helpers.e2e.js";
-import type { GatewayClient as ServerGatewayClient } from "./client-types.js";
-import { modelsAuthLoginHandlers } from "./models-auth-login.js";
+import { writeCatalogPlugin } from "./models-catalog-fixture.test-support.js";
 import {
-  closeModelsEndpoint,
   connectModelsReader,
   createModelsTestState,
-  listenModelsEndpoint,
   modelsTestConfig,
+  serveModelsEndpoint,
   settleModelsWork,
   startModelsGateway,
 } from "./models-integration.test-support.js";
@@ -27,43 +24,6 @@ import {
 const provider = "owner-login-fixture";
 const profileId = `${provider}:owner`;
 const token = "owner-login-synthetic-gateway-token";
-
-let currentMode: string | undefined;
-let currentRequester: ServerGatewayClient | null | undefined;
-let credentialPrepared: { resolve: () => void } | undefined;
-
-beforeAll(() => {
-  const login = modelsAuthLoginHandlers["models.authLogin"];
-  if (!login) {
-    throw new Error("Missing registered login handler");
-  }
-  // Keep the real handler and writer; revoke only at the writer's prepared-lock boundary.
-  vi.spyOn(modelsAuthLoginHandlers, "models.authLogin").mockImplementation((options) => {
-    currentRequester = options.client;
-    return login(options);
-  });
-  const persist = providerPersistence.persistProviderAuthProfilesAfterLogin;
-  vi.spyOn(providerPersistence, "persistProviderAuthProfilesAfterLogin").mockImplementation(
-    (input) =>
-      persist({
-        ...input,
-        beforeWrite: () => {
-          if (currentMode === "revoked") {
-            if (!currentRequester) {
-              throw new Error("The real login requester was not captured");
-            }
-            currentRequester.invalidated = true;
-          }
-          try {
-            input.beforeWrite?.();
-          } finally {
-            credentialPrepared?.resolve();
-          }
-        },
-      }),
-  );
-});
-afterAll(() => vi.restoreAllMocks());
 
 async function withGatewayOwner<T>(state: OpenClawTestState, operation: () => Promise<T>) {
   const lock = await acquireGatewayLock({ env: state.env, allowInTests: true, role: "gateway" });
@@ -77,33 +37,30 @@ async function withGatewayOwner<T>(state: OpenClawTestState, operation: () => Pr
   }
 }
 
-async function createState() {
-  return createModelsTestState("owner-bound-login", {
+const createState = () =>
+  createModelsTestState("owner-bound-login", {
     layout: "state-only",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-    },
+    env: { OPENCLAW_TEST_MINIMAL_GATEWAY: "0" },
   });
+
+async function finishLogin(client: Awaited<ReturnType<typeof startModelsGateway>>["client"]) {
+  let result: WizardNextResult = { done: false };
+  while (!result.done) {
+    const step = result.step;
+    result = await client.request<WizardNextResult>("wizard.next", {
+      sessionId: "owner-login",
+      ...(step && step.executor !== "gateway" && step.type !== "progress"
+        ? { answer: { stepId: step.id, value: step.type === "confirm" ? true : null } }
+        : {}),
+    });
+  }
+  return result;
 }
 
 async function writePlugin(state: OpenClawTestState, baseUrl: string) {
-  await state.writeJson("login-plugin/openclaw.plugin.json", {
-    id: provider,
-    providers: [provider],
-    configSchema: { type: "object", additionalProperties: false },
-    providerAuthChoices: [
-      {
-        provider,
-        method: "api-key",
-        choiceId: "fixture-key",
-        choiceLabel: "Fixture API key",
-        appGuidedSecret: true,
-        credentialOnly: true,
-      },
-    ],
-  });
-  const pluginPath = await state.writeText(
-    "login-plugin/index.cjs",
+  const pluginPath = await writeCatalogPlugin(
+    state,
+    provider,
     `module.exports = {
     id: ${JSON.stringify(provider)},
     register(api) { api.registerProvider({
@@ -127,6 +84,18 @@ async function writePlugin(state: OpenClawTestState, baseUrl: string) {
       } }],
     }); },
   };`,
+    {
+      providerAuthChoices: [
+        {
+          provider,
+          method: "api-key",
+          choiceId: "fixture-key",
+          choiceLabel: "Fixture API key",
+          appGuidedSecret: true,
+          credentialOnly: true,
+        },
+      ],
+    },
   );
   return modelsTestConfig(state, token, {
     agents: {
@@ -162,14 +131,11 @@ it("discovers plugins.load.paths using the selected read-only config and honors 
   expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
 });
 
-it.for(["allowed", "non-admin", "revoked"] as const)(
+it.for(["allowed", "non-admin"] as const)(
   "owner-bound login uses real credential/config writers: %s",
   async (mode, { signal }) => {
     await using state = await createState();
-    currentMode = mode;
-    currentRequester = undefined;
     const atCredentialWrite = createDeferred();
-    credentialPrepared = atCredentialWrite;
     const prepared = createDeferred();
     const release = createDeferred();
     let requests = 0;
@@ -185,8 +151,25 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
         response.writeHead(404).end("{}");
       }
     });
+    await using listening = await serveModelsEndpoint(endpoint, true);
+    const persist = providerPersistence.persistProviderAuthProfilesAfterLogin;
+    // Keep real writers and observe the prepared-lock boundary.
+    const observeWrite = vi
+      .spyOn(providerPersistence, "persistProviderAuthProfilesAfterLogin")
+      .mockImplementation((input) =>
+        persist({
+          ...input,
+          beforeWrite: () => {
+            try {
+              input.beforeWrite?.();
+            } finally {
+              atCredentialWrite.resolve();
+            }
+          },
+        }),
+      );
     try {
-      const cfg = await writePlugin(state, await listenModelsEndpoint(endpoint));
+      const cfg = await writePlugin(state, listening.baseUrl);
       await state.writeConfig(cfg);
       await withGatewayOwner(state, async () => {
         await using gateway = await startModelsGateway(state, cfg, token);
@@ -213,35 +196,12 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
             expect(requests).toBe(0);
           } else {
             await client.request("models.authLogin", params);
-            const completion = settleModelsWork(
-              (async () => {
-                let result: WizardNextResult = { done: false };
-                while (!result.done) {
-                  const step = result.step;
-                  result = await client.request<WizardNextResult>("wizard.next", {
-                    sessionId: params.sessionId,
-                    ...(step && step.executor !== "gateway" && step.type !== "progress"
-                      ? {
-                          answer: { stepId: step.id, value: step.type === "confirm" ? true : null },
-                        }
-                      : {}),
-                  });
-                }
-                return result;
-              })(),
-            );
+            const completion = settleModelsWork(finishLogin(client));
             await withinTest(prepared.promise, signal);
             release.resolve();
             await withinTest(atCredentialWrite.promise, signal);
-            if (mode === "revoked") {
-              await disconnectGatewayClient(client);
-            }
             const outcome = await withinTest(completion, signal);
-            if (mode === "allowed") {
-              expect(outcome).toMatchObject({ result: { status: "done" } });
-            } else {
-              expect(outcome.error).toBeDefined();
-            }
+            expect(outcome).toMatchObject({ result: { status: "done" } });
           }
           await gateway.close();
           const profiles = loadPersistedAuthProfileStore()?.profiles;
@@ -265,10 +225,7 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
       });
     } finally {
       release.resolve();
-      endpoint.closeAllConnections();
-      if (endpoint.listening) {
-        await closeModelsEndpoint(endpoint);
-      }
+      observeWrite.mockRestore();
     }
   },
 );

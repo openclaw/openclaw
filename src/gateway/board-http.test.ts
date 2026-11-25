@@ -9,15 +9,11 @@ import {
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+  readBoardHtml,
+  createTestBoardStore,
+  closeBoardDatabases,
+} from "../boards/board-store.test-support.js";
 import { handleBoardHttpRequest } from "./board-http.js";
 import { BOARD_VIEW_TICKET_TTL_MS, createBoardViewTicket } from "./board-view-ticket.js";
 import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
@@ -71,10 +67,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await closeHttpServer(server);
-  await closeOpenClawAgentDatabasesAsync(stateDir);
-  closeOpenClawAgentDatabasesForTest();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
+  await closeBoardDatabases();
   rmSync(stateDir, { recursive: true, force: true });
 });
 

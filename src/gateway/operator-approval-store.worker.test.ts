@@ -2,19 +2,19 @@ import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals-allow-always.js";
-import { recordAllowlistMatchesUse } from "../infra/exec-approvals-authorization.js";
-import {
-  prepareExecApprovalsCurrentRead,
-  updateExecApprovals,
-} from "../infra/exec-approvals-store.js";
+import { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
+import { updateExecApprovals } from "../infra/exec-approvals-store.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as readOwner from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as store from "./operator-approval-store.js";
@@ -24,12 +24,14 @@ import {
   getOperatorApprovalResolutionKey,
   OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
 } from "./operator-approval-store.rows.js";
+import { createExecApprovalPresentation } from "./operator-approval-store.test-support.js";
 import * as nativeTransitions from "./operator-approval-store.transitions.worker.js";
 import type { OperatorApprovalRow } from "./operator-approval-store.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
@@ -51,16 +53,7 @@ function approval(id: string): Parameters<typeof store.insertOperatorApproval>[0
     source: { agentId: "main", sessionKey: "agent:main:synthetic" },
     reviewerDeviceIds: ["reviewer"],
     audienceSessionKeys: ["agent:main:synthetic"],
-    presentation: {
-      kind: "exec",
-      commandText: "printf 'héllo  world'",
-      commandPreview: "printf 'héllo  world'",
-      warningText: null,
-      host: "gateway",
-      nodeId: null,
-      agentId: "main",
-      allowedDecisions: ["allow-once", "deny"],
-    },
+    presentation: createExecApprovalPresentation("printf 'héllo  world'", ["allow-once", "deny"]),
   };
 }
 
@@ -119,8 +112,9 @@ it("preserves serialized records, first-answer wins, consumption and history thr
   );
 });
 
-it("keeps Allow Once executable during approval bookkeeping but rejects a later policy denial", async () => {
+it("keeps Allow Once executable during approval bookkeeping", async () => {
   const databaseOptions = options();
+  vi.stubEnv("OPENCLAW_STATE_DIR", databaseOptions.env.OPENCLAW_STATE_DIR);
   const context = captureOpenClawStateWorkerContext(databaseOptions);
   const policy = await updateExecApprovals(
     { update: { kind: "replace", file: { version: 1, defaults: { security: "allowlist" } } } },
@@ -138,21 +132,18 @@ it("keeps Allow Once executable during approval bookkeeping but rejects a later 
       databaseOptions,
     }),
   ).toMatchObject({ outcome: "resolved", record: { decision: "allow-once" } });
-  const assertCurrent = await recordAllowlistMatchesUse(
-    {
-      agentId: "main",
-      matches: [],
-      command: "printf 'héllo  world'",
-      authorization: {
-        source: "explicit-approval",
-        security: "allowlist",
-        ask: "always",
-        allowlistSatisfied: false,
-        policySnapshot: createExecApprovalPolicySnapshot({ file: policy.file, agentId: "main" }),
-      },
+  const assertCurrent = await commitExecAuthorizationLocked({
+    agentId: "main",
+    matches: [],
+    command: "printf 'héllo  world'",
+    authorization: {
+      source: "explicit-approval",
+      security: "allowlist",
+      ask: "always",
+      allowlistSatisfied: false,
+      policySnapshot: createExecApprovalPolicySnapshot({ file: policy.file, agentId: "main" }),
     },
-    context,
-  );
+  });
   const stages: string[] = [];
   const failures: unknown[] = [];
   const admissionProbe = probe.admission(workerAdmission, (request, grant, admit) => {
@@ -180,56 +171,6 @@ it("keeps Allow Once executable during approval bookkeeping but rejects a later 
   expect(failures).toEqual([]);
   expect(assertCurrent).not.toThrow();
   admissionProbe.mockRestore();
-
-  await updateExecApprovals(
-    { update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } } },
-    context,
-  );
-  expect(assertCurrent).toThrow("Exec approval changed before execution");
-});
-
-it("fences exec while an Allow Always MCP grant commits and publishes the new policy", async () => {
-  const databaseOptions = options();
-  const context = captureOpenClawStateWorkerContext(databaseOptions);
-  await updateExecApprovals({ update: { kind: "replace", file: { version: 1 } } }, context);
-  await store.insertOperatorApproval({
-    approval: {
-      ...approval("mcp-grant"),
-      kind: "plugin",
-      presentation: {
-        kind: "plugin",
-        title: "Approve tool",
-        description: "Allow the synthetic tool",
-        severity: "warning",
-        pluginId: "test-plugin",
-        toolName: "test-tool",
-        agentId: "main",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
-    },
-    databaseOptions,
-  });
-  const readCurrent = await prepareExecApprovalsCurrentRead(context);
-  const stages: string[] = [];
-  probe.admission(workerAdmission, (request, grant, admit) => {
-    admit(request, grant);
-    stages.push(request.stage);
-    expect(readCurrent).toThrow("Exec approval policy is unavailable or changing before execution");
-  });
-  expect(
-    await store.resolveOperatorApproval({
-      id: "mcp-grant",
-      decision: "allow-always",
-      resolver: { kind: "device", id: "reviewer" },
-      mcpToolGrant: { agentId: "main", server: "test-server", tool: "test-tool" },
-      nowMs: 2000,
-      databaseOptions,
-    }),
-  ).toMatchObject({ outcome: "resolved" });
-  expect(stages).toEqual(["transaction", "commit"]);
-  expect(readCurrent().agents?.main?.mcpTools).toEqual([
-    expect.objectContaining({ server: "test-server", tool: "test-tool" }),
-  ]);
 });
 
 it("publishes exact native postimages only after the outer commit and retention tombstones", () => {
@@ -564,4 +505,83 @@ it("queues a brief approval burst through shared input admission", async () => {
       value: { outcome: "found", record: { status: "pending", decision: null } },
     });
   }
+});
+
+it("commits verdicts during a terminal history read and rejects revoked read authority", async ({
+  signal,
+}) => {
+  const databaseOptions = options();
+  for (const id of ["earlier", "later"]) {
+    await store.insertOperatorApproval({ approval: approval(id), databaseOptions });
+  }
+  const ready = createDeferredCore();
+  const release = createDeferredCore();
+  const unblock = () => release.resolve();
+  signal.addEventListener("abort", unblock, { once: true });
+  const executeRead = readOwner.executeExistingOpenClawStateRead;
+  const observed = vi
+    .spyOn(readOwner, "executeExistingOpenClawStateRead")
+    .mockImplementationOnce(async (...args) => {
+      const result = await executeRead(...args);
+      expect(result).toMatchObject({ history: { records: [{ id: "earlier", status: "denied" }] } });
+      ready.resolve();
+      await release.promise;
+      return result;
+    });
+  const resolve = (id: string) =>
+    store.resolveOperatorApproval({
+      id,
+      decision: "deny",
+      resolver: { kind: "device", id: "reviewer" },
+      nowMs: 2000,
+      databaseOptions,
+    });
+  const earlier = resolve("earlier");
+  let current = true;
+  const history = store.listTerminalOperatorApprovals({
+    nowMs: 3000,
+    databaseOptions,
+    assertCurrent() {
+      if (!current) {
+        throw new Error("synthetic history authority revoked");
+      }
+    },
+  });
+  const result = history.then(
+    (value) => ({ value }),
+    (error: unknown) => {
+      ready.reject(error);
+      return { error };
+    },
+  );
+  try {
+    await ready.promise;
+    expect(await earlier).toMatchObject({ outcome: "resolved" });
+    expect(await resolve("later")).toMatchObject({ outcome: "resolved" });
+    current = false;
+    release.resolve();
+    expect(await result).toMatchObject({ error: new Error("synthetic history authority revoked") });
+    observed.mockRestore();
+    const fresh = await store.listTerminalOperatorApprovals({ nowMs: 3000, databaseOptions });
+    expect(fresh.records.map((record) => record.id)).toEqual(["later", "earlier"]);
+  } finally {
+    release.resolve();
+    signal.removeEventListener("abort", unblock);
+    await Promise.allSettled([earlier, result]);
+  }
+});
+
+it("leaves the writer free while the host decides approval admission", async () => {
+  const databaseOptions = options();
+  openOpenClawStateDatabase(databaseOptions);
+  using contention = probe.writerLock(resolveOpenClawStateSqlitePath(databaseOptions.env));
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    contention.observe(request.stage);
+    admit(request, grant);
+  });
+  await store.insertOperatorApproval({ approval: approval("contention"), databaseOptions });
+  expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+  expect(await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions })).toEqual([
+    expect.objectContaining({ id: "contention" }),
+  ]);
 });

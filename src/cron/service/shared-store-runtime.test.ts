@@ -43,7 +43,6 @@ function createDisabledService(storePath: string, extra: Partial<CronServiceDeps
     storePath,
     log,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async () => ({ status: "ok", summary: "unused" }),
     ...extra,
   });
@@ -76,7 +75,6 @@ for (const run of runs) {
     storePath: run.storePath,
     log,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async () => ({ status: "ok", summary: "scheduler child completed" }),
   });
   try {

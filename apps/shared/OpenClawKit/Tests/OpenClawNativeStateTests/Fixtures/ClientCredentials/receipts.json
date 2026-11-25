@@ -9,7 +9,7 @@
     {
       "name": "fresh-canonical-binding",
       "phase": "complete",
-      "source_store": "{\"format\":1,\"source\":null,\"sharedFile\":{\"path\":\"/fixture/state/openclaw.sqlite\",\"dev\":\"1\",\"ino\":\"2\"},\"legacyImports\":{}}"
+      "source_store": "{\"format\":1,\"source\":{\"kind\":\"canonical\",\"engine\":\"sqlite\",\"identity\":\"/fixture/state/openclaw.sqlite:123\",\"generation\":\"bootstrap:123\",\"sha256\":\"2a7509c68153d6badd47f49bb24209c90adbaee4793ad36669984982f8711ec1\",\"destinationVersion\":1},\"sharedFile\":{\"path\":\"/fixture/state/openclaw.sqlite\",\"dev\":\"1\",\"ino\":\"2\"},\"legacyImports\":{}}"
     },
     {
       "name": "canonical-relative-binding",

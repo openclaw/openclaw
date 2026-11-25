@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { readGeneratedSqliteCatalog } from "../state/postgres-schema.generated/sqlite-catalogs.js";
 import {
   sourceRows,
   validateSource,
@@ -29,9 +31,27 @@ export function isNativeClientCredentialBootstrap(database: DatabaseSync): boole
     "index:idx_device_identities_device",
     "table:device_auth_tokens",
     "index:idx_device_auth_tokens_updated",
+    "table:macos_port_guardian_records",
+    "index:idx_macos_port_guardian_records_port",
   ]);
   if (!objects.length || objects.some((object) => !allowed.has(`${object.type}:${object.name}`))) {
     return false;
+  }
+  if (
+    facts.tables.has("macos_port_guardian_records") ||
+    facts.indexes.has("idx_macos_port_guardian_records_port")
+  ) {
+    // Load the canonical companion contract only when validating a present companion.
+    const portGuardianTables = readGeneratedSqliteCatalog(OPENCLAW_STATE_SCHEMA_SQL)?.tables.filter(
+      ({ name }) => name === "macos_port_guardian_records",
+    );
+    if (!portGuardianTables?.length) {
+      throw new Error("Native PortGuardian companion has no canonical schema catalog.");
+    }
+    assertSqliteSchemaContains(database, "Native PortGuardian companion", {
+      tables: portGuardianTables,
+      views: [],
+    });
   }
   assertSqliteSchemaContains(
     database,

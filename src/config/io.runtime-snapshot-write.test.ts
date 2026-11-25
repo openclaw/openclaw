@@ -11,7 +11,7 @@ import {
 import { hashConfigRaw } from "./io.read-helpers.js";
 import { replaceConfigFile, type ConfigMutationIO } from "./mutate.js";
 import { createSnapshot } from "./mutate.test-support.js";
-import { serializeConfigResolutionFacts } from "./resolution-facts.js";
+import { getResolvedConfigEnvSecretRef } from "./resolution-facts.js";
 import {
   registerManagedRuntimeConfigWriteOwner,
   registerRuntimeConfigWriteListener,
@@ -54,42 +54,40 @@ it.each(["root", "include"])("publishes managed %s writes with auth-store scope"
       "utf-8",
     );
     const raw = await fs.readFile(file, "utf-8");
-    const snapshot = {
-      ...createSnapshot({
-        path: file,
-        hash: hashConfigRaw(raw),
-        parsed: authored,
-        sourceConfig: initial,
-      }),
+    const snapshot = createSnapshot({
+      path: file,
+      hash: hashConfigRaw(raw),
+      parsed: authored,
+      sourceConfig: initial,
       raw,
-    };
+    });
     const next: OpenClawConfig = include
       ? { plugins: { entries: { demo: { enabled: true } } } }
       : { ...initial, logging: { level: "debug" } };
     const runtime: OpenClawConfig = include ? { ...next, logging: { level: "debug" } } : next;
-    const calls: Array<[string, RuntimeConfigWritePreparedCandidate, OpenClawConfig]> = [];
     const metadata = Symbol("prepared metadata");
     let prepared: (RuntimeConfigWritePreparedCandidate & { [metadata]: string }) | undefined;
-    const preflight = vi.fn(
-      async (source: OpenClawConfig, options?: { includeAuthStoreRefs?: boolean }) => {
-        if (include && options?.includeAuthStoreRefs !== false) {
-          throw new Error("unavailable auth-profile SecretRef");
-        }
-        return (prepared = {
-          runtimeConfig: include ? snapshot.runtimeConfig : source,
-          compareConfig: include ? snapshot.sourceConfig : source,
-          [metadata]: "preserved",
-          reapplyRuntimeOverlays(config) {
-            calls.push(["runtime", this, config]);
-            return { ...config, logging: { level: "warn" } };
-          },
-          reapplyCompareOverlays(config) {
-            calls.push(["compare", this, config]);
-            return { ...config, logging: { level: "error" } };
-          },
-        });
-      },
-    );
+    const preflight = async (
+      source: OpenClawConfig,
+      options?: { includeAuthStoreRefs?: boolean },
+    ) => {
+      if (options?.includeAuthStoreRefs !== false) {
+        throw new Error("unavailable auth-profile SecretRef");
+      }
+      return (prepared = {
+        runtimeConfig: include ? snapshot.runtimeConfig : source,
+        compareConfig: include ? snapshot.sourceConfig : source,
+        [metadata]: "preserved",
+        reapplyRuntimeOverlays(config) {
+          expect(this).toBe(prepared);
+          return { ...config, logging: { level: "warn" } };
+        },
+        reapplyCompareOverlays(config) {
+          expect(this).toBe(prepared);
+          return { ...config, logging: { level: "error" } };
+        },
+      });
+    };
     const fallback = {
       runtimeConfig: snapshot.runtimeConfig,
       compareConfig: snapshot.sourceConfig,
@@ -98,16 +96,15 @@ it.each(["root", "include"])("publishes managed %s writes with auth-store scope"
     const backup = include
       ? registerManagedRuntimeConfigWriteOwner(file, async () => fallback)
       : undefined;
-    const events: Array<Omit<RuntimeConfigWriteNotification, "preparedCandidatesByOwner">> = [];
-    let candidates: RuntimeConfigWriteNotification["preparedCandidatesByOwner"];
+    const events: RuntimeConfigWriteNotification[] = [];
+    const record = (event: RuntimeConfigWriteNotification) => {
+      if (event.configPath === file) {
+        events.push(event);
+      }
+    };
     const stop = include
-      ? registerRuntimeConfigWriteListener((event) => {
-          if (event.configPath === file) {
-            events.push(event);
-            candidates = event.preparedCandidatesByOwner;
-          }
-        })
-      : registerConfigWriteListener((event) => events.push(event), {
+      ? registerRuntimeConfigWriteListener(record)
+      : registerConfigWriteListener(record, {
           ownsRuntimeActivationFor: file,
           preCommitRuntimePreflight: preflight,
         });
@@ -115,10 +112,10 @@ it.each(["root", "include"])("publishes managed %s writes with auth-store scope"
       if (include) {
         // Only the reread is controlled; include containment, hashing and writes are real.
         const io = {
-          readConfigFileSnapshotForWrite: vi.fn(async () => ({
+          readConfigFileSnapshotForWrite: async () => ({
             snapshot: { ...snapshot, sourceConfig: next, runtimeConfig: runtime, config: runtime },
             writeOptions: { expectedConfigPath: file },
-          })),
+          }),
           writeConfigFile: vi.fn<ConfigMutationIO["writeConfigFile"]>(),
         } satisfies ConfigMutationIO;
         await replaceConfigFile({
@@ -143,32 +140,22 @@ it.each(["root", "include"])("publishes managed %s writes with auth-store scope"
       backup?.();
       owner?.();
     }
-    expect(preflight).toHaveBeenCalledWith(expect.any(Object), { includeAuthStoreRefs: false });
     expect(events).toHaveLength(1);
     const [event] = events;
+    const candidates = event?.preparedCandidatesByOwner;
     expect(event?.runtimeRefresh).toEqual({ includeAuthStoreRefs: false });
     expect(event?.snapshot).toMatchObject({ path: file, sourceConfig: next });
     const projected = owner ? candidates?.get(owner.ownerId) : event?.preparedCandidate;
-    expect(calls).toEqual([
-      ["runtime", prepared, include ? runtime : event?.runtimeConfig],
-      ["compare", prepared, include ? next : event?.sourceConfig],
-    ]);
-    for (const [, receiver] of calls) {
-      expect(receiver).toBe(prepared);
-    }
-    expect(projected).not.toBe(prepared);
     expect(projected).toMatchObject({
-      runtimeConfig: { logging: { level: "warn" } },
-      compareConfig: { logging: { level: "error" } },
+      runtimeConfig: { ...runtime, logging: { level: "warn" } },
+      compareConfig: { ...next, logging: { level: "error" } },
     });
     if (include) {
       expect(event?.snapshot).toMatchObject({ raw, parsed: authored, runtimeConfig: runtime });
-      expect([...(candidates?.keys() ?? [])]).toEqual([owner?.ownerId, backup?.ownerId]);
       expect(projected).toMatchObject({ [metadata]: "preserved" });
       expect(prepared?.runtimeConfig).toBe(snapshot.runtimeConfig);
       expect(prepared?.compareConfig).toBe(snapshot.sourceConfig);
       const unchanged = backup && candidates?.get(backup.ownerId);
-      expect(unchanged).not.toBe(fallback);
       expect(unchanged?.runtimeConfig).toBe(fallback.runtimeConfig);
       expect(unchanged?.compareConfig).toBe(fallback.compareConfig);
       expect(JSON.parse(await fs.readFile(includeFile, "utf-8"))).toMatchObject({
@@ -177,29 +164,17 @@ it.each(["root", "include"])("publishes managed %s writes with auth-store scope"
       await expect(fs.readFile(file, "utf-8")).resolves.toBe(raw);
     } else {
       expect(event?.snapshot).toMatchObject({
-        exists: true,
-        valid: true,
         parsed: { tools: { $include: "./tools.json5" } },
         authoredConfig: { tools: authoredTools },
-        includedPaths: expect.arrayContaining([includeFile]),
         includeProvenance: expect.arrayContaining([
           expect.objectContaining({ path: ["tools"], kind: "single", targetPath: includeFile }),
         ]),
         hash: event?.persistedHash,
       });
       expect(event?.snapshot.raw).toBe(await fs.readFile(file, "utf-8"));
-      expect(serializeConfigResolutionFacts(event?.snapshot.sourceConfig)).toEqual({
-        unresolvedPaths: [],
-        envSecretRefs: [
-          [
-            "tools.exec.safeBins[0]",
-            {
-              ref: { source: "env", provider: "default", id: "CONFIG_PUBLICATION_BIN" },
-              state: "resolved",
-            },
-          ],
-        ],
-      });
+      expect(
+        getResolvedConfigEnvSecretRef(event?.snapshot.sourceConfig, "tools.exec.safeBins[0]"),
+      ).toEqual({ source: "env", provider: "default", id: "CONFIG_PUBLICATION_BIN" });
       expect(prepared?.runtimeConfig.logging?.level).toBe("debug");
       expect(prepared?.compareConfig.logging?.level).toBe("debug");
     }

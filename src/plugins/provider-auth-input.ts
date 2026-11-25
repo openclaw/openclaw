@@ -13,8 +13,6 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
-export { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
-
 /** Keeps secret resolution out of synchronous provider setup metadata imports. */
 export const promptSecretRefForSetup: typeof import("./provider-auth-ref.js").promptSecretRefForSetup =
   async (...args) => (await import("./provider-auth-ref.js")).promptSecretRefForSetup(...args);
@@ -82,13 +80,6 @@ export function formatApiKeyPreview(
   return `${sliceUtf16Safe(trimmed, 0, head)}…${sliceUtf16Safe(trimmed, -tail)}`;
 }
 
-/** Normalizes a token-provider selector from CLI/options input. */
-export function normalizeTokenProviderInput(
-  tokenProvider: string | null | undefined,
-): string | undefined {
-  return normalizeOptionalLowercaseString(tokenProvider);
-}
-
 /** Resolves an API key from CLI options first, then environment or prompt fallback. */
 export async function ensureApiKeyFromOptionEnvOrPrompt(
   params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0] & {
@@ -99,12 +90,12 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(
     noteTitle?: string;
   },
 ): Promise<string> {
-  const tokenProvider = normalizeTokenProviderInput(params.tokenProvider);
+  const tokenProvider = normalizeOptionalLowercaseString(params.tokenProvider);
   if (
     params.token &&
     tokenProvider &&
     params.expectedProviders.some(
-      (provider) => normalizeTokenProviderInput(provider) === tokenProvider,
+      (provider) => normalizeOptionalLowercaseString(provider) === tokenProvider,
     )
   ) {
     const apiKey = params.normalize(params.token);

@@ -1,23 +1,30 @@
+import "../styles/sidebar-attention-floating.css";
 import { getObserver } from "@solidjs/signals";
-import { insert, type JSX } from "@solidjs/web";
+import type { JSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
-  createRoot,
-  getOwner,
+  createProjection,
+  lazy,
+  Loading,
   onCleanup,
   onSettled,
-  runWithOwner,
   Show,
 } from "solid-js";
-import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { sidebarViewForPage } from "../app-navigation.ts";
+import { pluginTabKey, pluginTabRefFromSearch } from "../app-route-paths.ts";
+import { selectShellRouteState } from "../app/app-host-route-state.ts";
+import { projectApplicationConfig } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
+import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { createTimeout } from "../lib/reactive/timers.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { PluginView } from "../plugins/control-ui-view.solid.tsx";
+import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
+import { navigationSectionForPage, pluginPageKeyForRoute } from "../plugins/navigation-sections.ts";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
@@ -29,12 +36,24 @@ import { createSessionAttention } from "./session-attention.ts";
 import { createSessionOwnerFilterQuery } from "./session-owner-filter.ts";
 import { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
-import { createSidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { createSidebarPeople } from "./sidebar-people.ts";
+
+const OpenClawIdNotifications = lazy(() => import("./openclaw-id/notifications.tsx"), {
+  export: "OpenClawIdNotifications",
+});
 
 export { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 
 const sidebarOwners = new WeakMap<HTMLElement, AppSidebarOwner>();
+// Testing a projection's own keys would subscribe every reader to property presence.
+const sidebarPreferenceKeys = new Set<PropertyKey>([
+  "sidebarAgentsMode",
+  "sessionsGrouping",
+  "sessionsShowPreview",
+  "sidebarLiveActivity",
+  "sessionInvolvingMeFilterActive",
+  "sessionOwnerFilterId",
+]);
 
 export function getAppSidebarOwner(host: HTMLElement): AppSidebarOwner | undefined {
   return sidebarOwners.get(host);
@@ -66,18 +85,66 @@ function AppSidebarContent(
 ): JSX.Element {
   host.style.display = "contents";
   const context = useApplication();
-  const catalog = createSidebarNavigationCatalog(context, () => props.navigationView, host);
-  const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(catalog, context, host);
+  const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(context, host);
   sidebarOwners.set(host, owner);
-  owner.navigationCatalog = catalog;
   owner.bindContext(context);
+  onSettled(() => {
+    let previousSelection = "";
+    const synchronizePage = () => {
+      const state = context.router.getState();
+      const destination = state.pendingMatches[0] ?? state.matches[0];
+      const presented = selectShellRouteState(state);
+      const route = presented.routeId;
+      if (!route) {
+        return;
+      }
+      const pluginRef =
+        route === "plugin"
+          ? pluginTabRefFromSearch(
+              presented.location?.search ?? "",
+              presented.location?.pathname,
+              context.basePath,
+            )
+          : undefined;
+      const pluginKey = pluginPageKeyForRoute(
+        route,
+        pluginRef && pluginTabKey(pluginRef),
+        context.gateway.snapshot.hello?.controlUiTabs ?? [],
+      );
+      const section = Boolean(
+        navigationSectionForPage(context.plugins.registrations("navigation"), pluginKey),
+      );
+      const navigationInFlight =
+        destination?.cause === "navigation" &&
+        (destination.isFetching !== false || destination.preload);
+      const selection = `${destination?.id}\n${state.pendingMatches.length > 0}\n${navigationInFlight}\n${route}\n${pluginKey}\n${section}`;
+      if (selection === previousSelection) {
+        return;
+      }
+      previousSelection = selection;
+      const view = sidebarViewForPage(route, pluginKey, section);
+      if (view && owner.navigationView !== view) {
+        owner.navigationView = view;
+        owner.invalidate();
+      }
+    };
+    // Observe each logical transition even when a cold destination keeps the current page.
+    // Navigation settlement repairs preview restoration; background revalidation keeps manual views.
+    synchronizePage();
+    const stops = [
+      context.router.subscribe(synchronizePage),
+      context.plugins.subscribe(synchronizePage),
+      context.gateway.subscribe(synchronizePage),
+    ];
+    return () => stops.forEach((stop) => stop());
+  });
   owner.attention = createSessionAttention(
     context,
     owner.attentionQuestions,
     host,
     () => props.navigationVisible,
   );
-  const scroll = createSidebarScroll(owner);
+  const scroll = (owner.scroll = createSidebarScroll(owner));
   const contextual = createMemo(() => {
     const router = props.router;
     return router
@@ -92,10 +159,24 @@ function AppSidebarContent(
   const projection = projectSource(owner, {
     read: (current) => current,
     subscribe: (current, notify) => {
-      current.catalogRendererImport.schedule();
+      const refresh = () => {
+        const accepted = context.chatSubmissions.readAcceptedCreate();
+        const selected = context.gateway.snapshot.sessionKey;
+        if (
+          accepted &&
+          ((selected && !areUiSessionKeysEquivalent(selected, accepted.creation.sessionKey)) ||
+            current.sessionData.sessionsResult?.sessions.some((row) =>
+              areUiSessionKeysEquivalent(row.key, accepted.creation.sessionKey),
+            ))
+        ) {
+          context.chatSubmissions.retireAcceptedCreate();
+        }
+        notify();
+      };
       const stops = [
-        current.subscribe(notify),
-        context.chatSubmissions.subscribeCreate(notify),
+        current.subscribe(refresh),
+        context.chatSubmissions.subscribeCreate(refresh),
+        context.gateway.subscribe(refresh),
         context.theme.subscribe(notify),
         context.config.subscribe(notify),
         context.agentIdentity.subscribe(current.sessionData.requestSessionDataUpdate),
@@ -136,8 +217,6 @@ function AppSidebarContent(
       snapshotModel();
       Object.values(props);
       contextual()?.read();
-      // Snapshot capture keeps observing Pages after its navigation view closes.
-      void catalog.dashboards;
       // Arm presence deadlines before preparation can project a row.
       people.capture();
       // Synchronous owners release boot snapshots and restore query state before row consumers read.
@@ -149,11 +228,7 @@ function AppSidebarContent(
     },
     { equals: false },
   );
-  createSessionOwnerFilterQuery(owner.sessionOwnerFilter, prepared, () =>
-    owner.sidebarAgentsMode === "roster"
-      ? rosterActivityStore(context).snapshot
-      : context.sessions.listSnapshot(owner.sessionData.sessionListQuery(owner.expandedAgentId())),
-  );
+  createSessionOwnerFilterQuery(owner.sessionOwnerFilter, prepared);
   const narrationEnabled = createMemo(() => {
     // Preparation reads narration while synchronizing the session projection.
     projection.revision();
@@ -175,9 +250,14 @@ function AppSidebarContent(
   });
   const narrationState = createParkedProjection(
     () => narrationProjection()?.read(),
-    () => props.navigationVisible,
+    () => {
+      projection.revision();
+      // Preserve live narration for reactivation without preparing hidden previews.
+      return props.navigationVisible && owner.sessionsShowPreview;
+    },
   );
   onSettled(() => context.gateway.subscribeEvents((event) => owner.narration?.handleEvent(event)));
+  const applicationConfig = projectApplicationConfig(context.config);
   const presentationRevision = createParkedProjection(
     () => {
       Object.values(props);
@@ -201,10 +281,51 @@ function AppSidebarContent(
     ],
   );
   const observed = new WeakMap<object, object>();
+  // Stable primitive preferences need one comparison, not one rerun per visible row.
+  const preferences = createProjection(() => {
+    presentationRevision();
+    return {
+      sidebarAgentsMode: owner.sidebarAgentsMode,
+      sessionsGrouping: owner.sessionsGrouping,
+      sessionsShowPreview: owner.sessionsShowPreview,
+      sidebarLiveActivity: owner.sidebarLiveActivity,
+      sessionInvolvingMeFilterActive: owner.sessionInvolvingMeFilterActive,
+      sessionOwnerFilterId: owner.sessionOwnerFilterId,
+    };
+  });
+  const mutationInputs = createMemo(
+    () => {
+      presentationRevision();
+      const gateway = context.gateway.snapshot;
+      return [
+        owner.connected,
+        Boolean(owner.sidebarSnapshot),
+        gateway.phase,
+        gateway.client,
+        gateway.client?.offlineRecoveryRetired,
+        JSON.stringify([gateway.hello?.auth, gateway.hello?.features?.methods]),
+      ];
+    },
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
+  );
+  const readSessionMutationAccess: AppSidebarOwner["readSessionMutationAccess"] = (request) => {
+    if (getObserver()) {
+      mutationInputs();
+      i18nRevision();
+    }
+    // Only presentation dependencies are narrowed; actions still read the synchronous owner.
+    return owner.readSessionMutationAccess(request);
+  };
   const observe = <T extends object>(target: T): T => {
     const proxy = new Proxy(target, {
       get(current, key, receiver) {
+        if (current === owner && key === "readSessionMutationAccess") {
+          return readSessionMutationAccess;
+        }
         if (getObserver()) {
+          if (current === owner && sidebarPreferenceKeys.has(key)) {
+            return Reflect.get(preferences, key);
+          }
           presentationRevision();
         }
         const value = Reflect.get(current, key, receiver);
@@ -221,40 +342,24 @@ function AppSidebarContent(
   [owner.sessionData, owner.sessionOrganizer, owner.people].forEach(observe);
   owner.sessionPullRequests = createSessionPullRequestIndicators({
     getConnected: () => prepared().isConnected && props.connected,
-    getPresented: () => props.navigationVisible,
+    getPresented: () => props.navigationVisible && !prepared().sidebarSnapshot,
     getRows: () => prepared().readSessionPullRequestRows(),
     getSelectedAgentId: () => prepared().selectedAgentIdForSessions(),
     getGateway: () => prepared().sessionDataContext?.gateway,
     getSessions: () => prepared().sessionDataContext?.sessions,
   });
-  const solidOwner = getOwner();
-  const mountDefaultView = (target: HTMLElement) =>
-    runWithOwner(solidOwner, () =>
-      createRoot((dispose) => {
-        insert(target, hostView.renderSessionsBody());
-        return () => {
-          dispose();
-          target.replaceChildren();
-        };
-      }),
-    );
   const SessionBody = () => hostView.renderSessionsBody();
   const Sessions = () => (
-    <Show
-      when={Boolean(hostView.sessionDataContext?.plugins.selectedReplacement("session-list"))}
-      fallback={<SessionBody />}
-    >
-      <PluginView
-        surface="session-list"
-        props={{
-          sessionKey: hostView.sessionKey,
-          agentId: hostView.getSessionNavigationState().selectedAgentId,
-          sessions: hostView.sessionDataContext?.sessions.state.result?.sessions ?? [],
-        }}
-        presented={hostView.navigationVisible}
-        mountDefaultView={mountDefaultView}
-      />
-    </Show>
+    <PluginSurface
+      surface="session-list"
+      props={{
+        sessionKey: hostView.sessionKey,
+        agentId: hostView.getSessionNavigationState().selectedAgentId,
+        sessions: hostView.sessionDataContext?.sessions.state.result?.sessions ?? [],
+      }}
+      presented={hostView.navigationVisible}
+      renderDefault={() => <SessionBody />}
+    />
   );
   const content = hostView.renderSidebar(Sessions, scroll, {
     pending: snapshotPending,
@@ -305,10 +410,19 @@ function AppSidebarContent(
     return () => {
       cancelAnimationFrame(frame);
       owner.sessionData.disconnect(owner.isConnected);
+      disconnectSidebarOwner(host);
     };
   });
-  onCleanup(() => disconnectSidebarOwner(host));
-  return content;
+  return (
+    <>
+      {content}
+      <Show when={applicationConfig.read().openclawIdEnabled}>
+        <Loading>
+          <OpenClawIdNotifications />
+        </Loading>
+      </Show>
+    </>
+  );
 }
 
 export type AppSidebarMethods = {
@@ -319,6 +433,7 @@ export type AppSidebarMethods = {
     sessionKey: string,
   ): ReturnType<AppSidebarOwner["findSidebarHovercardRowByKey"]> | undefined;
   promoteCreatedSession(sessionKey: string): void;
+  snapshotCaptureStatus(): string | undefined;
 };
 export type AppSidebarElement = SolidBridgeElement<AppSidebarProps, AppSidebarMethods>;
 
@@ -328,8 +443,17 @@ export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
   {
     properties: appSidebarProperties,
     connected: (host) => sidebarOwners.get(host)?.attach(),
-    disconnected: (host) => sidebarOwners.get(host)?.detach(),
+    disconnected: (host) => {
+      dismissSidebarTransientMenus(host);
+      // Match the bridge's retained view when native layout reparents its host.
+      queueMicrotask(() => {
+        if (!host.isConnected) {
+          sidebarOwners.get(host)?.detach();
+        }
+      });
+    },
     methods: {
+      snapshotCaptureStatus: (host) => sidebarOwners.get(host)?.snapshot.read().captureStatus,
       activeNavigationViewElement: (host) => sidebarOwners.get(host)?.activeNavigationViewElement(),
       dismissTransientMenus: dismissSidebarTransientMenus,
       expandedAgentId: (host) => sidebarOwners.get(host)?.expandedAgentId() ?? "",

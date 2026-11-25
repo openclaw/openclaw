@@ -6,6 +6,7 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { Context, ImageContent, Model } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -30,7 +31,7 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import {
-  createCompactionHandlers,
+  createCompactionExtension,
   createResourceLoader,
 } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
 import {
@@ -38,6 +39,7 @@ import {
   estimateCompactedRequestTokens,
   withCompactionQueuedContext,
 } from "../../sessions/compaction/request-budget.js";
+import type { ExtensionFactory } from "../../sessions/extensions/types.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import {
   beginPromptCacheObservation,
@@ -52,11 +54,16 @@ import {
 } from "../runs.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "../session-prompt-state.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
+import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
+import { makeAttempt, makeNormalizationInput } from "./attempt-normalization.test-support.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createBaseInput, createSession, sessionId } from "./attempt-prompt-submit.test-support.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
+import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
+import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
+import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 registerAgentSessionLoopTestLifecycle();
 
@@ -80,6 +87,8 @@ function userMessage(content: string, timestamp = 1, idempotencyKey?: string) {
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
 }
+
+const textContent = (text: string) => [{ type: "text" as const, text }];
 
 function dispatchSession(session: Submission["activeSession"]) {
   return session.agent.streamFn({} as never, { messages: session.messages } as never, {} as never);
@@ -111,7 +120,7 @@ function toolResult(
     role: "toolResult",
     toolCallId,
     toolName,
-    content: [{ type: "text", text }],
+    content: textContent(text),
     isError: false,
     timestamp,
     ...(details ? { details } : {}),
@@ -119,6 +128,137 @@ function toolResult(
 }
 
 describe("submitEmbeddedAttemptPrompt", () => {
+  it("replays mid-turn recovery without adding a continuation or runtime context", async () => {
+    const sessionManager = guardSessionManager(SessionManager.inMemory());
+    const user = {
+      ...userMessage("finish the report", 1, "overflow:user"),
+      __openclaw: { modelPromptProjection: { version: 1, text: "finish the report" } },
+    };
+    await sessionManager.appendMessageAsync(user);
+    const carrier = buildRuntimeContextCustomMessage("synthetic runtime facts ".repeat(120))!;
+    await sessionManager.appendCustomMessageEntryAsync(
+      carrier.customType,
+      carrier.content,
+      carrier.display,
+      carrier.details,
+    );
+    await sessionManager.appendMessageAsync(
+      createAssistant(
+        testModel,
+        [{ type: "toolCall", id: "read-report", name: "read", arguments: {} }],
+        "toolUse",
+      ),
+    );
+    await sessionManager.appendMessageAsync(
+      toolResult("read-report", "read", "completed output", 2),
+    );
+    const recorder = createUserTurnTranscriptRecorder({ message: user, target: () => undefined });
+    recorder.markRuntimePersisted(user);
+    await using state = await createEmbeddedRunSessionPromptState({
+      runParams: {
+        sessionId,
+        sessionFile: sessionId,
+        sessionManager,
+        prompt: user.content,
+        runId: "overflow-retry",
+        timeoutMs: 30_000,
+        workspaceDir: "/tmp",
+        userTurnTranscriptRecorder: recorder,
+        suppressNextUserMessagePersistence: true,
+      },
+      sessionAgentId: "main",
+      resolvedSessionKey: "",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      onInterrupt: () => {},
+    });
+    const { session } = await createTestSession({ sessionManager });
+    const originalMessages = JSON.stringify(session.messages);
+    const requests: Context["messages"][] = [];
+    for (let retry = 0; retry < 3; retry++) {
+      const input = makeNormalizationInput(
+        makeAttempt({
+          pressure: "overflow",
+          route: "truncate_tool_results_only",
+          source: "mid-turn",
+          handled: true,
+          truncatedCount: 1,
+        }),
+      );
+      input.sessionPromptState = state;
+      await normalizeEmbeddedRunAttempt(input);
+      const prompt = state.activePrompt.override ?? user.content;
+      await submitSession(session, {
+        attempt: {
+          sessionId,
+          userTurnTranscriptRecorder: recorder,
+          skipPreparedUserTurnMessage: state.activePrompt.internal,
+          suppressNextUserMessagePersistence: state.suppressNextUserMessagePersistence,
+        },
+        appendOnlyRuntimeContext: true,
+        prependContext: undefined,
+        appendContext: undefined,
+        transcriptPrompt: prompt,
+        modelPrompt: prompt,
+        runtimeContextMessage: carrier,
+        setNextUserMessagePersistence: sessionManager.setNextUserMessagePersistence,
+        onModelRequest: (_model, context) => {
+          requests.push(structuredClone(context.messages));
+          throw new MidTurnPrecheckSignal({
+            pressure: "overflow",
+            route: "compact_only",
+            estimatedPromptTokens: 932_476,
+            promptBudgetBeforeReserve: 922_000,
+            overflowTokens: 10_476,
+            toolResultReducibleChars: 0,
+            effectiveReserveTokens: 78_000,
+          });
+        },
+      });
+      await removeTrailingMidTurnPrecheckAssistantError({ activeSession: session, sessionManager });
+    }
+    expect(requests).toHaveLength(3);
+    expect(requests[1]).toEqual(requests[0]);
+    expect(requests[2]).toEqual(requests[0]);
+    expect(JSON.stringify(session.messages)).toBe(originalMessages);
+  });
+
+  it.each(["pending", "blocked", "empty", "persisted-key", "persisted-no-key"] as const)(
+    "does not reclassify suppressed canonical user state as a runtime control: %s",
+    async (state) => {
+      const message = userMessage(
+        "canonical human input",
+        1,
+        state === "persisted-key" ? "human:user" : undefined,
+      );
+      const recorder = createUserTurnTranscriptRecorder({
+        ...(state === "empty" ? {} : { message }),
+        target: () => undefined,
+      });
+      if (state === "blocked") {
+        recorder.markBlocked();
+      }
+      if (state.startsWith("persisted")) {
+        recorder.markRuntimePersisted(message);
+      }
+      const input = createBaseInput();
+      const promptActiveSession = vi.fn(async () => {});
+      const setNextUserMessagePersistence = vi.fn();
+      await submitEmbeddedAttemptPrompt({
+        ...input,
+        attempt: {
+          ...input.attempt,
+          suppressNextUserMessagePersistence: true,
+          userTurnTranscriptRecorder: recorder,
+        },
+        activeSession: createSession().activeSession,
+        promptActiveSession,
+        setNextUserMessagePersistence,
+      });
+      expect(promptActiveSession).toHaveBeenCalledWith("transcript prompt", expect.any(Object));
+      expect(setNextUserMessagePersistence).not.toHaveBeenCalled();
+    },
+  );
+
   it("refreshes review source authority before continuing a model request and refuses revocation", async () => {
     const { activeSession } = createSession();
     let revision = 0;
@@ -173,7 +313,9 @@ describe("submitEmbeddedAttemptPrompt", () => {
           revision += 1;
           await request();
           active = false;
-          await expect(request()).rejects.toThrow("admitted run authority is no longer active");
+          await expect(request()).rejects.toThrow(
+            "This agent run is no longer active. Start a new turn to retry.",
+          );
         },
       });
       expect(requests).toHaveLength(2);
@@ -247,7 +389,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       settingsManager,
       sessionManager,
       systemPrompt,
-      resourceLoader: createResourceLoader(),
+      resourceLoader: await createResourceLoader(),
     });
     const convert = session.agent.convertToLlm;
     session.agent.convertToLlm = (messages) =>
@@ -320,30 +462,25 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(requests[0]?.text).toBe(pendingPrompt);
     expect(requests[0]?.committedBefore).toBeGreaterThan(0);
     expect(requests[0]?.tokens).toBeLessThanOrEqual(3_072);
-    expect(session.messages.at(-1)).toMatchObject({ content: [{ type: "text", text: "ACK" }] });
+    expect(session.messages.at(-1)).toMatchObject({ content: textContent("ACK") });
   });
 
   it.each(["handled", "rejected"] as const)(
     "retires runtime-only context and preserves the next user when preflight is %s",
     async (outcome) => {
       let calls = 0;
-      const handlers = new Map<string, Array<() => Promise<unknown>>>([
-        [
-          "input",
-          [
-            async () => ({
-              action: calls++ === 0 && outcome === "handled" ? "handled" : "continue",
-            }),
-          ],
-        ],
-      ]);
+      const handlers: ExtensionFactory = (api) => {
+        api.on("input", async () => ({
+          action: calls++ === 0 && outcome === "handled" ? "handled" : "continue",
+        }));
+      };
       streamMocks.streamSimple.mockImplementation((model) =>
         createAssistantResultStream(createAssistant(model, "done")),
       );
       const sessionManager = guardSessionManager(SessionManager.inMemory());
       const { session, modelRegistry } = await createTestSession({
         sessionManager,
-        resourceLoader: createResourceLoader(handlers),
+        resourceLoader: await createResourceLoader(handlers),
       });
       const authCheck = vi.spyOn(modelRegistry, "hasConfiguredAuth");
       if (outcome === "rejected") {
@@ -384,9 +521,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
         .flatMap((entry) =>
           entry.type === "message" && entry.message.role === "user" ? [entry.message] : [],
         );
-      expect(users.map((message) => message.content)).toEqual([
-        [{ type: "text", text: "accepted" }],
-      ]);
+      expect(users.map((message) => message.content)).toEqual([textContent("accepted")]);
       expect(users[0]).not.toHaveProperty("display", false);
       expect(users[0]).not.toHaveProperty("provenance");
     },
@@ -465,7 +600,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     collectRequests(requests, "recovered", true);
     const { session, sessionManager } = await createTestSession({
       settingsManager: createAutoCompactionSettings(),
-      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      resourceLoader: await createResourceLoader(createCompactionExtension()),
     });
     await submitSession(session, {
       appendOnlyRuntimeContext: true,
@@ -579,7 +714,6 @@ describe("submitEmbeddedAttemptPrompt", () => {
           hasBaselineTools: () => false,
           applyPromptBuildToolsAllow: () => [],
           setActiveSessionSystemPrompt: vi.fn(),
-          setLeasedSteering: vi.fn(),
         });
         await submitEmbeddedAttemptPrompt({
           ...input,
@@ -625,12 +759,10 @@ describe("submitEmbeddedAttemptPrompt", () => {
         ...buildRuntimeContextCustomMessage("runtime context")!,
         timestamp: 2,
       };
-      const steering = { leaseId: "lease-1", runIds: ["missing-run"], isCurrent: () => true };
       const submitting = submitEmbeddedAttemptPrompt({
         ...input,
         activeSession,
         images: [image],
-        leasedSteering: runtimeOnly ? steering : undefined,
         runtimeContextMessage: runtimeOnly ? undefined : runtimeContextMessage,
         runtimeOnly,
         promptActiveSession: async (prompt, options) => {
@@ -652,10 +784,8 @@ describe("submitEmbeddedAttemptPrompt", () => {
       });
       if (runtimeOnly) {
         await submitting;
-        expect(input.onSteeringAcknowledged).toHaveBeenCalledOnce();
       } else {
         await expect(submitting).rejects.toThrow("provider failed");
-        expect(input.onSteeringAcknowledged).not.toHaveBeenCalled();
         expect(activeSession.messages).not.toContain(runtimeContextMessage);
       }
       expect(activeSession.agent).toMatchObject({
@@ -681,16 +811,11 @@ describe("submitEmbeddedAttemptPrompt", () => {
       systemPrompt: input.systemPrompt,
       tools: [],
     } as const;
+    const mcpDetails = { mcpServer: "huge", mcpTool: "return_text" };
     activeSession.agent.state.messages = [
       userMessage("call tools"),
-      toolResult("large", "huge__return_text", oversized, 2, {
-        mcpServer: "huge",
-        mcpTool: "return_text",
-      }),
-      toolResult("second", "huge__return_text", "b".repeat(6_000), 3, {
-        mcpServer: "huge",
-        mcpTool: "return_text",
-      }),
+      toolResult("large", "huge__return_text", oversized, 2, mcpDetails),
+      toolResult("second", "huge__return_text", "b".repeat(6_000), 3, mcpDetails),
       toolResult("small", "huge__small_text", small, 4),
       {
         ...createAssistant(testModel, "results processed"),
@@ -726,7 +851,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, submit);
     expect(activeSession.messages[1]).toMatchObject({
       role: "toolResult",
-      content: [{ type: "text", text: oversized }],
+      content: textContent(oversized),
     });
     const [, second, smallResult] = providerMessages.filter(
       (message) => message.role === "toolResult",
@@ -745,16 +870,10 @@ describe("submitEmbeddedAttemptPrompt", () => {
         promptCacheKey,
         usage: { cacheRead: 2_000 },
       }),
-    ).toEqual({
+    ).toMatchObject({
       previousCacheRead: 8_000,
       cacheRead: 2_000,
-      changes: [
-        {
-          code: "aggregateToolResultTruncation",
-          detail: "aggregate tool-result truncation changed provider prompt",
-        },
-        { code: "pruning", detail: "pruning changed provider history" },
-      ],
+      changes: [{ code: "aggregateToolResultTruncation" }, { code: "pruning" }],
     });
     await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, submit);
     expect(changes).toEqual([

@@ -6,6 +6,7 @@ import path from "node:path";
 import { hasErrnoCode, isErrno } from "../infra/errno.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { statIfExists } from "../infra/path-existence.js";
+import { assertionSucceeds } from "../shared/assertion.js";
 import { GitHubPublicationWorkspaceChangedError } from "./github-publication-failure.js";
 
 type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
@@ -317,14 +318,7 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
       }
       throw error;
     } finally {
-      const hasCustody = () => {
-        try {
-          params.assertCustody();
-          return true;
-        } catch {
-          return false;
-        }
-      };
+      const hasCustody = () => assertionSucceeds(() => params.assertCustody());
       if (
         !installed &&
         !refMayHaveMoved &&

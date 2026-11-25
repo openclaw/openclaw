@@ -1,4 +1,3 @@
-// Googlechat tests cover channel plugin behavior.
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createDirectoryTestRuntime,
@@ -80,14 +79,6 @@ function createGoogleChatCfg(): OpenClawConfig {
   });
 }
 
-function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
 describe("googlechatPlugin outbound", () => {
   it("declares durable text and thread delivery with receipt proofs", async () => {
     sendGoogleChatMessageMock.mockResolvedValue({
@@ -117,28 +108,41 @@ describe("googlechatPlugin outbound", () => {
             text: "threaded",
             threadId: "thread-1",
           });
-          expect(requireMockArg(sendGoogleChatMessageMock)).toMatchObject({
-            space: "spaces/AAA",
-            thread: "thread-1",
+          expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+              space: "spaces/AAA",
+              thread: "thread-1",
+            }),
+          );
+        },
+        media: async () => {
+          sendGoogleChatMessageMock.mockClear();
+          const payload = googlechatOutboundAdapter.base.normalizePayload({
+            payload: { mediaUrl: "https://example.invalid/image.png" },
           });
+          expect(payload).toEqual({ text: "Attachment: https://example.invalid/image.png" });
+          const result = await googlechatMessageAdapter.send?.text?.({
+            cfg,
+            to: "spaces/AAA",
+            text: payload?.text ?? "",
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["spaces/AAA/messages/msg-1"]);
+          expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+              text: "Attachment: https://example.invalid/image.png",
+            }),
+          );
         },
         messageSendingHooks: () => {
           expect(googlechatMessageAdapter.send?.text).toBeTypeOf("function");
         },
       },
     });
-    expect(proofs).toStrictEqual(
-      (
-        "text,media,poll,payload,silent,replyTo,thread,nativeQuote,messageSendingHooks," +
-        "batch,reconcileUnknownSend,afterSendSuccess,afterCommit"
-      )
-        .split(",")
-        .map((capability) => ({
-          capability,
-          status: ["text", "thread", "messageSendingHooks"].includes(capability)
-            ? "verified"
-            : "not_declared",
-        })),
+    expect(proofs.filter(({ status }) => status === "verified")).toStrictEqual(
+      ["text", "media", "thread", "messageSendingHooks"].map((capability) => ({
+        capability,
+        status: "verified",
+      })),
     );
   });
 
@@ -148,6 +152,34 @@ describe("googlechatPlugin outbound", () => {
     expect(chunker("**alpha** [docs](https://example.com)", 32_000)).toEqual([
       "*alpha* <https://example.com|docs>",
     ]);
+  });
+
+  it("keeps remote links and captions while rejecting local and non-web media", () => {
+    const normalize = googlechatOutboundAdapter.base.normalizePayload;
+    expect(
+      normalize({
+        payload: {
+          text: "caption",
+          mediaUrls: ["https://example.invalid/image.png"],
+        },
+      }),
+    ).toEqual({ text: "caption\n\nAttachment: https://example.invalid/image.png" });
+    for (const mediaUrl of [
+      "/tmp/local.png",
+      "file:///tmp/local.png",
+      "data:image/png;base64,aA==",
+    ]) {
+      expect(() => normalize({ payload: { text: "caption", mediaUrl } })).toThrow(
+        "require remote HTTP(S) URLs",
+      );
+    }
+    for (const code of [...Array.from({ length: 0x21 }, (_, index) => index), 0x7f]) {
+      expect(() =>
+        normalize({
+          payload: { mediaUrl: `https://example.invalid/a${String.fromCharCode(code)}forged` },
+        }),
+      ).toThrow("require remote HTTP(S) URLs");
+    }
   });
 });
 
@@ -238,14 +270,14 @@ it("preserves accountId when sending pairing approvals", async () => {
     cfg,
     accountId: "work",
   });
-  const request = requireMockArg(sendGoogleChatMessageMock) as {
-    account?: unknown;
-    space?: string;
-    text?: string;
-  };
-  expect(request.account).toBe(account);
-  expect(request.space).toBe("spaces/WORK");
-  expect(request.text).toBe(googlechatPairingTextAdapter.message);
+  expect(sendGoogleChatMessageMock.mock.calls[0]?.[0].account).toBe(account);
+  expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      account,
+      space: "spaces/WORK",
+      text: googlechatPairingTextAdapter.message,
+    }),
+  );
 });
 
 it("lists peers and groups from config", async () => {

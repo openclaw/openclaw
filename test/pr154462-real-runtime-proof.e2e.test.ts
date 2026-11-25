@@ -8,18 +8,12 @@ import {
   loadProviderScopedThinkingCatalog,
 } from "../src/agents/prepared-model-catalog.js";
 import { registerPreparedModelRuntimePublicationListener } from "../src/agents/prepared-model-runtime.publication-events.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-} from "../src/config/config.js";
-import { clearSessionStoreCacheForTest } from "../src/config/sessions/store-writer-state.js";
+import { clearConfigCache, getRuntimeConfig } from "../src/config/config.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../src/config/types.models.js";
 import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../src/gateway/test-helpers.e2e.js";
-import { captureEnv, setTestEnvValue } from "../src/test-utils/env.js";
 import { anthropicTextTurn } from "./anthropic-text-turn.test-support.js";
 import {
   listenLoopback,
@@ -28,7 +22,7 @@ import {
 } from "./helpers/gateway-integration-fixtures.js";
 import { createSolidPngBuffer } from "./helpers/image-fixtures.js";
 import { createDeferred } from "./helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
+import { useRuntimeProofFixture } from "./runtime-proof.test-support.js";
 
 const PROVIDER_ID = "mock-anthropic";
 const PLUGIN_ID = "catalog-reload-proof";
@@ -73,32 +67,14 @@ type ProviderRequest = {
   imageCount: number;
 };
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const createFixture = useRuntimeProofFixture(afterEach);
 
 it(
   "keeps admitted request facts across same-account refresh and same-route account replacement",
   { timeout: 120_000 },
   async () => {
-    const tempHome = tempDirs.make("openclaw-config-reload-proof-");
-    const stateDir = path.join(tempHome, ".openclaw");
-    const workspaceDir = path.join(tempHome, "workspace");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const bundledPluginsDir = path.join(tempHome, "bundled-plugins");
-    const fixtureEnv = {
-      HOME: tempHome,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_GATEWAY_TOKEN: TOKEN,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
-    const envSnapshot = captureEnv(Object.keys(fixtureEnv));
+    const fixture = await createFixture("openclaw-config-reload-proof-", TOKEN);
+    const { stateDir, workspaceDir, configPath } = fixture;
     let providerServer: ReturnType<typeof createServer> | undefined;
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     const requests: ProviderRequest[] = [];
@@ -135,15 +111,7 @@ it(
     let holdPrimary = false;
     let failPrimary = false;
     try {
-      await Promise.all(
-        [workspaceDir, bundledPluginsDir, stateDir].map((dir) =>
-          fs.mkdir(dir, { recursive: true }),
-        ),
-      );
-      for (const [key, value] of Object.entries(fixtureEnv)) {
-        setTestEnvValue(key, value);
-      }
-      const pluginDir = path.join(tempHome, "provider-plugin");
+      const pluginDir = path.join(stateDir, "..", "provider-plugin");
       const pluginFile = path.join(pluginDir, "index.mjs");
       await fs.mkdir(pluginDir, { recursive: true });
       for (const [file, content] of Object.entries({
@@ -274,7 +242,7 @@ it(
       };
       const refreshCatalog = async (rich: boolean) => {
         const requestsBefore = catalogRequests.length;
-        const committed = createDeferred();
+        const committed = createDeferred<boolean>();
         const checkReady = () => {
           const catalog = currentCatalog();
           const model = catalog?.entries.find(
@@ -286,13 +254,13 @@ it(
             model?.reasoning === rich &&
             model.input?.includes("image") === rich;
           if (ready) {
-            committed.resolve();
+            committed.resolve(true);
           }
           return ready;
         };
         const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
           if (event.phase === "catalog-failed") {
-            committed.reject(event.error);
+            committed.resolve(false);
           } else if (event.phase === "catalog-published") {
             checkReady();
           }
@@ -310,7 +278,7 @@ it(
                 throw new Error("Catalog refresh settled without the requested provider inventory");
               }
             }),
-            committed.promise,
+            committed.promise.then((published) => expect(published).toBe(true)),
           ]);
         } finally {
           unsubscribe();
@@ -427,10 +395,8 @@ it(
           providerServer!.close(() => resolve());
         });
       }
-      envSnapshot.restore();
-      clearRuntimeConfigSnapshot();
+      await fixture.close(undefined, undefined);
       clearConfigCache();
-      clearSessionStoreCacheForTest();
     }
   },
 );

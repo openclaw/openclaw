@@ -39,6 +39,9 @@ it.each([
 ] as const)(
   "keeps native $operation dispatch bound to the $transition requester at $boundary",
   async ({ operation, transition, boundary }) => {
+    const threadMethod = { start: "thread/start", resume: "thread/resume", btw: "thread/fork" }[
+      operation
+    ];
     const params = createParams(path.join(tempDir, "session.jsonl"), tempDir, {
       sessionKey: "agent:main:dashboard:native-authority",
       provider: "openai",
@@ -95,19 +98,14 @@ it.each([
           }
           return turnStartResult();
         }
-        if (method === "modelProvider/capabilities/read") {
-          return { imageGeneration: false, webSearch: true };
-        }
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "skills/list" || method === "thread/backgroundTerminals/list") {
-          return { data: [], nextCursor: null };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
-        return {};
+        const replies: Record<string, unknown> = {
+          "modelProvider/capabilities/read": { imageGeneration: false, webSearch: true },
+          "config/read": { config: {}, origins: {}, layers: [] },
+          "skills/list": { data: [], nextCursor: null },
+          "thread/backgroundTerminals/list": { data: [], nextCursor: null },
+          "configRequirements/read": { requirements: null },
+        };
+        return replies[method] ?? {};
       },
     });
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
@@ -223,19 +221,8 @@ it.each([
         (error: unknown) => ({ error }),
       );
       const requests = harness.writes.map((line) => JSON.parse(line) as RpcRequest);
-      const starts = requests.filter(
-        (request) =>
-          request.method ===
-          (operation === "start"
-            ? "thread/start"
-            : operation === "resume"
-              ? "thread/resume"
-              : "thread/fork"),
-      );
+      const starts = requests.filter((request) => request.method === threadMethod);
       const turns = requests.filter((request) => request.method === "turn/start");
-      console.log(
-        `[authority-chain] boundary=${boundary} requester=${transition} host=active native-thread-writes=${starts.length} native-turn-writes=${turns.length} outcome=${"error" in outcome ? "rejected" : "completed"}`,
-      );
       expect(transitioned, "error" in outcome ? String(outcome.error) : undefined).toBe(true);
       if (transition === "allowed" || boundary === "turn/start") {
         expect(starts[0]?.params).toMatchObject({ config: { web_search: "disabled" } });
@@ -246,12 +233,9 @@ it.each([
         expect(turns).toHaveLength(1);
         expect(isJsonObject(turns[0]?.params) && turns[0].params.input).toBeTruthy();
       } else {
-        expect(outcome).toHaveProperty("error");
-        if ("error" in outcome) {
-          expect(outcome.error).toMatchObject({
-            message: expect.stringMatching(/policy changed|superseded|no longer active/),
-          });
-        }
+        expect(outcome).toMatchObject({
+          error: { message: expect.stringMatching(/policy changed|superseded|no longer active/) },
+        });
         expect(starts).toHaveLength(boundary === "turn/start" ? 1 : 0);
         expect(turns).toEqual([]);
       }

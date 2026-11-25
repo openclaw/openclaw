@@ -88,7 +88,7 @@ export async function verifyReversibleFenceRecovery(
         pauseScheduling,
         resumeScheduling,
       });
-      assert(prepared.status === "draining");
+      assert(prepared.status === "ready");
       expect(prepared.activeCount).toBeGreaterThan(0);
       expect(pauseScheduling).toHaveBeenCalledOnce();
       releaseFence = () => {

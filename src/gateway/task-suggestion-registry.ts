@@ -31,10 +31,10 @@ type CreateTaskSuggestionResult =
 
 function planTaskSuggestionEvictions(
   suggestionBytes: number,
-): Array<[string, TaskSuggestionRecord]> | null {
+): Array<[string, TaskSuggestionRecord, number]> | null {
   let projectedCount = suggestions.size + 1;
   let projectedBytes = retainedSuggestionBytes + suggestionBytes + 1;
-  const planned: Array<[string, TaskSuggestionRecord]> = [];
+  const planned: Array<[string, TaskSuggestionRecord, number]> = [];
   // Accepted replay is best-effort and evicted before unseen pending work;
   // completed entries must not displace suggestions awaiting operator action.
   for (const status of ["dismissed", "accepted", "pending"] as const) {
@@ -48,9 +48,10 @@ function planTaskSuggestionEvictions(
       if (record.status !== status) {
         continue;
       }
-      planned.push([taskId, record]);
+      const bytes = retainedBytesForSuggestion(record.suggestion);
+      planned.push([taskId, record, bytes]);
       projectedCount -= 1;
-      projectedBytes -= retainedBytesForSuggestion(record.suggestion);
+      projectedBytes -= bytes;
     }
   }
   return projectedCount <= MAX_TASK_SUGGESTIONS &&
@@ -81,8 +82,8 @@ export function createTaskSuggestion(
   const evictedPendingSuggestions: Array<Pick<TaskSuggestion, "id" | "sessionKey" | "agentId">> =
     [];
   // Commit only a complete plan; failed admissions must not discard state.
-  for (const [taskId, record] of plannedEvictions) {
-    retainedSuggestionBytes -= retainedBytesForSuggestion(record.suggestion);
+  for (const [taskId, record, bytes] of plannedEvictions) {
+    retainedSuggestionBytes -= bytes;
     suggestions.delete(taskId);
     if (record.status === "pending") {
       evictedPendingSuggestions.push(record.suggestion);

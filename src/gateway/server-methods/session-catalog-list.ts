@@ -2,14 +2,15 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
-  errorShape,
   type SessionCatalog,
   validateSessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { prepareShellPathFromLoginShell } from "../../infra/shell-env.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { resolveSessionCatalogProfileRelation } from "../session-catalog-identity.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import { respondError } from "./response.js";
 import {
   createSessionCatalogRequestEntrySnapshot,
   type SessionCatalogInstances,
@@ -22,6 +23,7 @@ import {
 import {
   getSessionCatalogListOperations,
   listSessionCatalogWithinBudget,
+  retainSessionCatalogHostStatus,
   resolvePublishedSessionCatalogs,
   sessionCatalogListKey,
   type CatalogListEnumeration,
@@ -50,10 +52,10 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
   async ({ params, respond, context, client, signal }) => {
     const request = params;
     if (request.cursors !== undefined && request.catalogId === undefined) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "catalogId is required when cursors are provided"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "catalogId is required when cursors are provided",
       );
       return;
     }
@@ -62,15 +64,15 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
       ? catalogRegistrations.providers.find((candidate) => candidate.id === request.catalogId)
       : undefined;
     if (request.catalogId && !requestedProvider) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `unknown session catalog: ${request.catalogId}`,
       );
       return;
     }
     const selected = requestedProvider ? [requestedProvider] : catalogRegistrations.providers;
-    if (request.metadataOnly) {
+    if (request.metadataOnly || selected.length === 0) {
       const metadataConfig = context.getRuntimeConfig();
       const metadataAgent = resolveAgentIdOrRespondError({
         rawAgentId: request.agentId,
@@ -123,6 +125,20 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
     const search = searchInput
       ? truncateUtf16Safe(searchInput, SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS)
       : undefined;
+    let profileRelation: Awaited<ReturnType<typeof resolveSessionCatalogProfileRelation>>;
+    let relationError: Error | undefined;
+    if (request.profileRelation && selected.some((provider) => provider.supportsProfileRelation)) {
+      try {
+        profileRelation = await resolveSessionCatalogProfileRelation(
+          request.profileRelation,
+          client?.authenticatedUserProfile?.profileId,
+        );
+      } catch (error) {
+        // Local catalogs keep their existing client-side filter; only shared queries need this identity.
+        relationError =
+          error instanceof Error ? error : new Error("Profile selection failed", { cause: error });
+      }
+    }
     const allowHomeFallback = allowProcessHomeFallback(context.logGateway);
     // Shared provider enumeration is not permission. Each synchronous delivery gets current
     // caller facts and one canonical index, never the provider's pre-await planning snapshot.
@@ -145,7 +161,21 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
             hosts: catalog.hosts.map((host) =>
               filterSessionCatalogHost(
                 requestEntries.projectHostSessions(
-                  host,
+                  {
+                    ...host,
+                    ...(host.profileRelation ? { profileRelation: request.profileRelation } : {}),
+                    ...(relationError &&
+                    catalog.capabilities.profileRelation &&
+                    (!host.error || host.error.code === "FILTER_PARTIAL")
+                      ? {
+                          error: {
+                            code: "FILTER_PARTIAL",
+                            message:
+                              "Relationship filtering requires a verified GitHub link. Showing authorized rows with client-side matching.",
+                          },
+                        }
+                      : {}),
+                  },
                   result.instancesByCatalog.get(catalog.id)!,
                   providerAudiences.get(catalog.id),
                 ),
@@ -220,7 +250,7 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
     const listKey = sessionCatalogListKey({
       agentId: resolvedAgent.agentId,
       client,
-      request,
+      request: { ...request, profileRelation: profileRelation ?? request.profileRelation },
       allowPartialResults,
       search,
       allowProcessHomeFallback: allowHomeFallback,
@@ -270,23 +300,24 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
       const finishProvider = diagnostics?.startWait("provider");
       let catalogList: SessionCatalog[];
       try {
-        if (selected.length > 0) {
-          // Plugin availability callbacks retain synchronous executable resolution contracts.
-          await prepareShellPathFromLoginShell({ env: process.env });
-          progress.assertCurrent();
-        }
+        // Plugin availability callbacks retain synchronous executable resolution contracts.
+        await prepareShellPathFromLoginShell({ env: process.env });
+        progress.assertCurrent();
         catalogList = await Promise.all(
           selected.map(async (provider): Promise<SessionCatalog> => {
             const shareRoute = catalogRegistrations.shareRoutes.get(provider);
             const resolution = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
             const createTarget = resolution.ok ? resolution.target : undefined;
+            const providerKey = JSON.stringify([listKey, provider.id]);
             const page = await listSessionCatalogWithinBudget(
               operations,
-              JSON.stringify([listKey, provider.id]),
+              providerKey,
               progress,
               subscribe,
               catalogResult(provider, shareRoute, [], undefined, createTarget),
               async () => {
+                const cached = operations.pages.get(providerKey)?.page;
+                const cachedCatalog = cached && resolvePublishedSessionCatalogs(cached)[0];
                 const providerInstances: SessionCatalogInstances = new Map();
                 const onHost = (host: SessionCatalog["hosts"][number]) => {
                   if (publishedHosts) {
@@ -294,12 +325,16 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
                     hosts.set(host.hostId, host);
                     publishedHosts.set(provider.id, hosts);
                   }
+                  const previousHost = cachedCatalog?.hosts.find(
+                    (candidate) => candidate.hostId === host.hostId,
+                  );
+                  const currentHost = retainSessionCatalogHostStatus(host, previousHost);
                   requestEntries?.captureHostInstances(host, providerInstances);
                   const catalog = catalogResult(
                     provider,
                     shareRoute,
-                    [host],
-                    undefined,
+                    [currentHost],
+                    operations.pages.get(providerKey)?.error,
                     createTarget,
                   );
                   // The final response also reconciles these snapshots if a slow client drops a frame.
@@ -313,6 +348,9 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
                       allowPartialResults,
                       allowProcessHomeFallback: allowHomeFallback,
                       search,
+                      ...(provider.supportsProfileRelation && profileRelation
+                        ? { profileRelation }
+                        : {}),
                       limitPerHost: request.limitPerHost,
                       hostIds: request.hostIds,
                       ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),

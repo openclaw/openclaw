@@ -1,5 +1,4 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import {
   definePluginEntry,
@@ -69,7 +68,12 @@ function wrapMinimaxProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
     if ((ctx.sourceApi ?? model.api) !== "anthropic-messages" || !isMinimaxM31ModelId(model.id)) {
       return underlying(model, context, options);
     }
-    const thinkingLevel = options?.reasoning ?? ctx.thinkingLevel;
+    const requested = options?.reasoning ?? ctx.thinkingLevel;
+    // Runtime streams cap reasoning at "high"; keep the session's xhigh/max for M3.1.
+    const thinkingLevel =
+      requested === "high" && (ctx.thinkingLevel === "xhigh" || ctx.thinkingLevel === "max")
+        ? ctx.thinkingLevel
+        : requested;
     const effort = MINIMAX_M31_THINKING_LEVELS.find((level) => level === thinkingLevel) ?? "max";
     // The Anthropic client uses a manual budget for non-Claude models. Give that
     // calculation room to retain signed history; the payload keeps the real cap below.
@@ -238,7 +242,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
   return async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
     const progress = ctx.prompter.progress(`Starting MiniMax OAuth (${regionLabel})…`);
     try {
-      const { loginMiniMaxPortalOAuth } = await import("./oauth.runtime.js");
+      const { loginMiniMaxPortalOAuth } = await import("./oauth.js");
       const result = await loginMiniMaxPortalOAuth({
         openUrl: ctx.openUrl,
         note: (message, title) => ctx.prompter.note(message, title),
@@ -250,10 +254,6 @@ function createOAuthHandler(region: MiniMaxRegion) {
       });
 
       progress.stop("MiniMax OAuth complete");
-
-      if (result.notification_message) {
-        await ctx.prompter.note(result.notification_message, "MiniMax OAuth");
-      }
 
       const baseUrl = result.resourceUrl || defaultBaseUrl;
 
@@ -279,27 +279,18 @@ function createOAuthHandler(region: MiniMaxRegion) {
             defaults: {
               models: {
                 [`${PORTAL_PROVIDER_ID}/MiniMax-M3`]: { alias: "minimax-m3" },
-                [`${PORTAL_PROVIDER_ID}/MiniMax-M2.7`]: { alias: "minimax-m2.7" },
-                [`${PORTAL_PROVIDER_ID}/MiniMax-M2.7-highspeed`]: {
-                  alias: "minimax-m2.7-highspeed",
-                },
               },
             },
           },
         },
         notes: [
-          "MiniMax OAuth tokens auto-refresh. Re-run login if refresh fails or access is revoked.",
+          "MiniMax OAuth tokens auto-refresh.",
           `Base URL defaults to ${defaultBaseUrl}. Override models.providers.${PORTAL_PROVIDER_ID}.baseUrl if needed.`,
           ...(result.notification_message ? [result.notification_message] : []),
         ],
       });
     } catch (err) {
-      const errorMsg = formatErrorMessage(err);
-      progress.stop(`MiniMax OAuth failed: ${errorMsg}`);
-      await ctx.prompter.note(
-        "If OAuth fails, verify your MiniMax account has portal access and try again.",
-        "MiniMax OAuth",
-      );
+      progress.stop();
       throw err;
     }
   };
@@ -384,7 +375,7 @@ export default definePluginEntry({
       },
       auth: [createMinimaxOAuthMethod("global"), createMinimaxOAuthMethod("cn")],
       refreshOAuth: async (credential, config) => {
-        const { refreshMiniMaxPortalOAuthCredential } = await import("./oauth.runtime.js");
+        const { refreshMiniMaxPortalOAuthCredential } = await import("./oauth.js");
         return await refreshMiniMaxPortalOAuthCredential(
           credential,
           config === undefined
@@ -402,7 +393,7 @@ export default definePluginEntry({
       id: "minimax",
       capabilities: ["image"],
       defaultModels: { image: "MiniMax-VL-01" },
-      documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
+      documentModels: { pdf: { textExtraction: "MiniMax-M3", image: false } },
       autoPriority: { image: 40 },
       describeImage: undefined,
       describeImages: undefined,
@@ -411,7 +402,7 @@ export default definePluginEntry({
       id: "minimax-portal",
       capabilities: ["image"],
       defaultModels: { image: "MiniMax-VL-01" },
-      documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
+      documentModels: { pdf: { textExtraction: "MiniMax-M3", image: false } },
       autoPriority: { image: 50 },
       describeImage: undefined,
       describeImages: undefined,

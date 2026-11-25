@@ -23,11 +23,9 @@ export type ResolveQueueSettingsParams = {
 
 export type QueueDedupeMode = "message-id" | "none";
 
-type QueueInsertPosition = "tail" | "front";
-
 export type EnqueueFollowupRunOptions = {
   /** Physical owner of a new source, when it differs from the configured store. */
   storePath?: string;
-  position?: QueueInsertPosition;
+  position?: "tail" | "front";
   steerCandidate?: boolean;
 };

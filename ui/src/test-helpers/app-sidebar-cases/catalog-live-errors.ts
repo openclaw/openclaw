@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { catalogPage, createSessions, mountSidebar } from "../app-sidebar.ts";
 import { domProbe } from "../dom-probe.ts";
 import "../../components/app-sidebar.tsx";
@@ -158,7 +159,7 @@ describe("AppSidebar session catalog request errors", () => {
       expect(error).toBeNull();
     } else {
       expect(error?.textContent).toContain(message);
-      expect(error?.textContent).toContain("Showing stale data");
+      expect(error?.textContent).toContain("Showing last known data");
       expect(error?.querySelector("button")).toBeNull();
       gateway.publish({ suspensionPhase: "draining" });
     }

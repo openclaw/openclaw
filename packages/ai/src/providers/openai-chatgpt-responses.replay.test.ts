@@ -1,8 +1,9 @@
 import { once } from "node:events";
-import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
+import { claimConversationProviderState } from "../session-resources.js";
 import type { Context } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -10,7 +11,8 @@ import {
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
 import {
-  chatgptModel as model,
+  createLoopbackModel,
+  closeServer,
   chatgptContext as simpleContext,
   completedResponse as completion,
 } from "./openai-chatgpt-responses.test-helpers.js";
@@ -80,11 +82,13 @@ describe("ChatGPT Responses rejected continuation", () => {
         });
       });
       await once(server, "listening");
-      const loopbackModel = {
-        ...model,
-        baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/backend-api`,
+      const loopbackModel = createLoopbackModel(server);
+      const options = {
+        apiKey,
+        sessionId: "tool-replay",
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState("tool-replay"),
+        transport: "auto" as const,
       };
-      const options = { apiKey, sessionId: "tool-replay", transport: "auto" as const };
       try {
         const run = (context: Context) =>
           streamOpenAICodexResponses(loopbackModel, context, options).result();
@@ -130,12 +134,7 @@ describe("ChatGPT Responses rejected continuation", () => {
         }
       } finally {
         closeOpenAICodexWebSocketSessions(options.sessionId);
-        for (const socket of server.clients) {
-          socket.terminate();
-        }
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeServer(server, server.clients);
       }
     },
   );

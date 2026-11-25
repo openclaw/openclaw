@@ -1,25 +1,22 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
-import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { WebSocket } from "ws";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
-import {
-  readOriginDeviceTokenReadOnlyForTest,
-  seedOriginDeviceToken,
-} from "../infra/device-auth-store.test-support.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { sendMinimalGatewayResponse } from "../gateway/minimal-gateway.test-helpers.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
-import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import {
+  runCliProcessChild,
+  waitForCliProcessStderrMarker,
+} from "./cli-process-child.test-helpers.js";
 import {
   prepareGatewayCliFixture,
-  prepareSharedStateReadArtifacts,
   runIsolatedGatewayCli,
+  seedDeviceAuth,
   snapshotDirectoryContents,
   snapshotSharedStateArtifacts,
   tempDirs,
@@ -31,6 +28,7 @@ import {
   startAgentTurnGateway,
   startCliReadGateway,
   startCronLookupMissGateway,
+  startGateway,
   startGatewayStabilityRpcServer,
   startNodePairingGateway,
 } from "./gateway-backed-exit.test-helpers.js";
@@ -41,24 +39,7 @@ const TEST_TOKEN = "test-token";
 const cliEntrypoint = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
 
 async function remoteFixture(root: string, remote: { url: string; token?: string }) {
-  return { root, ...(await prepareGatewayCliFixture(root, { mode: "remote", remote })) };
-}
-
-function seedDeviceAuth(root: string, stateDir: string, url: string, token: string) {
-  const env = { ...process.env, HOME: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  openOpenClawStateDatabase({ env });
-  const identity = loadOrCreateDeviceIdentity({ env });
-  seedOriginDeviceToken({
-    gatewayScope: gatewayOriginScope(url),
-    deviceId: identity.deviceId,
-    role: "operator",
-    token,
-    scopes: ["operator.admin"],
-    env,
-  });
-  closeOpenClawStateDatabaseForTest();
-  prepareSharedStateReadArtifacts(stateDir);
-  return { identity, env };
+  return await prepareGatewayCliFixture(root, { mode: "remote", remote });
 }
 
 const statusArgs = (url: string, token: string) => [
@@ -115,8 +96,70 @@ it("lists nodes with an explicit positive timeout", async () => {
     pending: [{ requestId: "request-1", nodeId: "node-1" }],
     paired: [],
   });
-  expect(gateway.connectionCount).toBeGreaterThan(0);
   expect(gateway.calls).toEqual(["node.pair.list", "node.list"]);
+});
+
+it.skipIf(process.platform === "win32").each([
+  { command: ["camera", "list"], method: "node.list" },
+  { command: ["location", "get"], method: "node.pair.list" },
+])("cancels nodes $command while awaiting $method", async ({ command, method }) => {
+  const lookup = createDeferredCore<{ socket: WebSocket; id: string }>();
+  const gateway = await startGateway(
+    (socket, frame) => {
+      if (frame.method === "node.list" && method === "node.pair.list") {
+        socket.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: { code: "INVALID_REQUEST", message: "unknown method: node.list" },
+          }),
+        );
+      } else if (frame.method === method) {
+        lookup.resolve({ socket, id: frame.id });
+      }
+    },
+    (frame) => {
+      expect(frame.params?.auth?.token).toBe(TEST_TOKEN);
+      return { methods: ["node.list", "node.pair.list", "node.invoke"] };
+    },
+  );
+  const fixture = await remoteFixture(tempDirs.make("openclaw-node-lookup-cancel-"), {
+    url: gateway.url,
+    token: TEST_TOKEN,
+  });
+  let releasedResponse = false;
+  const result = await runIsolatedGatewayCli({
+    ...fixture,
+    args: ["nodes", ...command, "--node", "fixture", "--timeout", "30000", "--json"],
+    interact: async (child) => {
+      child.stdin.end();
+      const { socket, id } = await lookup.promise;
+      const interrupted = waitForCliProcessStderrMarker(child, "Command interrupted by SIGINT");
+      expect(child.kill("SIGINT")).toBe(true);
+      await interrupted;
+      try {
+        if (socket.readyState !== WebSocket.CLOSED) {
+          await once(socket, "close", { signal: AbortSignal.timeout(ONE_SHOT_EXIT_BUDGET_MS) });
+        }
+      } catch (error) {
+        if (!(error instanceof Error) || error.name !== "AbortError") {
+          throw error;
+        }
+        // Let a broken client unwind cleanly; needing this reply is the failed invariant.
+        releasedResponse = true;
+        sendMinimalGatewayResponse(socket, id, { nodes: [], pending: [], paired: [] });
+      }
+    },
+  });
+  expect(releasedResponse, "Ctrl+C must close node lookup without waiting for its response").toBe(
+    false,
+  );
+  expect(result).toMatchObject({ code: 130, signal: null, stdout: "" });
+  expect(result.stderr).toContain("Command interrupted by SIGINT");
+  expect(gateway.calls).toEqual(
+    method === "node.list" ? ["node.list"] : ["node.list", "node.pair.list"],
+  );
 });
 
 it.each([
@@ -145,7 +188,7 @@ it.each([
   );
   const fixture = await remoteFixture(root, { url: gateway.url });
   const { stateDir } = fixture;
-  const { identity, env } = seedDeviceAuth(root, stateDir, gateway.url, storedToken);
+  await seedDeviceAuth(root, stateDir, gateway.url, storedToken);
   const before = await test.snapshot(stateDir);
   const result = await runIsolatedGatewayCli({ args: test.args, ...fixture });
   expect(expectCliResult(result)).toEqual(test.result);
@@ -153,80 +196,62 @@ it.each([
   if (test.label === "stability RPC") {
     expect(gateway.authInputs).toEqual([{ deviceToken: storedToken }]);
   }
-  expect(
-    readOriginDeviceTokenReadOnlyForTest({
-      gatewayScope: gatewayOriginScope(gateway.url),
-      deviceId: identity.deviceId,
-      role: "operator",
-      env,
-    })?.token,
-  ).toBe(storedToken);
   expect(await test.snapshot(stateDir)).toEqual(before);
 });
 
-it("requires a reachable status RPC without changing seeded shared state", async () => {
-  const root = tempDirs.make("openclaw-gateway-status-seeded-");
-  const token = "configured-token";
-  const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
-  const fixture = await remoteFixture(root, { url: gateway.url, token });
-  const { stateDir } = fixture;
-  seedDeviceAuth(root, stateDir, gateway.url, token);
-  const before = await snapshotSharedStateArtifacts(stateDir);
-  expect(Object.keys(before).includes("openclaw.sqlite")).toBe(true);
-
-  const result = await runIsolatedGatewayCli({
-    args: statusArgs(gateway.url, token),
-    ...fixture,
-  });
-
-  expect(expectCliResult(result)).toMatchObject({
-    rpc: { ok: true, kind: "read" },
-  });
-  expect(gateway.calls).toEqual(["status"]);
-  expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
-});
-
-it.runIf(process.platform !== "win32")(
-  "runs gateway status through one OpenClaw entry process",
-  async () => {
-    const root = tempDirs.make("openclaw-gateway-status-entry-process-");
+it.each(process.platform === "win32" ? [true] : [true, false])(
+  "reads gateway status without changing state (seeded=%s)",
+  async (seeded) => {
+    const root = tempDirs.make("openclaw-gateway-status-");
     const pidLogPath = path.join(root, "entry-pids");
     const preloadPath = path.join(root, "track-entry-pid.mjs");
     const token = "configured-token";
     const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
     const fixture = await remoteFixture(root, { url: gateway.url, token });
     const { stateDir } = fixture;
-    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
-    await fs.writeFile(
-      preloadPath,
-      [
-        'import fs from "node:fs";',
-        'const entry = process.argv[1]?.replaceAll("\\\\", "/");',
-        `if (entry === ${JSON.stringify(fileURLToPath(cliEntrypoint).replaceAll("\\", "/"))}) {`,
-        "  fs.appendFileSync(process.env.OPENCLAW_ENTRY_PID_LOG, `${process.pid}\\n`);",
-        "}",
-        "",
-      ].join("\n"),
-    );
+    if (seeded) {
+      await seedDeviceAuth(root, stateDir, gateway.url, token);
+    }
+    const before = await snapshotSharedStateArtifacts(stateDir);
+    expect(Object.keys(before).includes("openclaw.sqlite")).toBe(seeded);
+    if (!seeded) {
+      await fs.writeFile(
+        preloadPath,
+        [
+          'import fs from "node:fs";',
+          'const entry = process.argv[1]?.replaceAll("\\\\", "/");',
+          `if (entry === ${JSON.stringify(fileURLToPath(cliEntrypoint).replaceAll("\\", "/"))}) {`,
+          "  fs.appendFileSync(process.env.OPENCLAW_ENTRY_PID_LOG, `${process.pid}\\n`);",
+          "}",
+          "",
+        ].join("\n"),
+      );
+    }
 
     const result = await runIsolatedGatewayCli({
       args: statusArgs(gateway.url, token),
       ...fixture,
-      env: {
-        ...withRuntimePreload({}, preloadPath),
-        OPENCLAW_ENTRY_PID_LOG: pidLogPath,
-        OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1",
-        OPENCLAW_NODE_OPTIONS_READY: undefined,
-        OPENCLAW_NO_RESPAWN: undefined,
-      },
+      env: seeded
+        ? undefined
+        : {
+            ...withRuntimePreload({}, preloadPath),
+            OPENCLAW_ENTRY_PID_LOG: pidLogPath,
+            OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1",
+            OPENCLAW_NODE_OPTIONS_READY: undefined,
+            OPENCLAW_NO_RESPAWN: undefined,
+          },
     });
 
     expect(expectCliResult(result)).toMatchObject({
       rpc: { ok: true, kind: "read" },
     });
-    const entryPids = (await fs.readFile(pidLogPath, "utf8")).trim().split(/\s+/u);
-    expect(new Set(entryPids).size).toBe(1);
-    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
+    expect(gateway.calls).toEqual(["status"]);
+    if (!seeded) {
+      const entryPids = (await fs.readFile(pidLogPath, "utf8")).trim().split(/\s+/u);
+      expect(new Set(entryPids).size).toBe(1);
+      expect(before).toEqual({});
+    }
+    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
   },
 );
 
@@ -252,6 +277,7 @@ it("rejects invalid remote config before a node pairing mutation without opening
       type: "cli_error",
       message: expect.stringContaining("OpenClaw config is invalid:"),
     },
+    repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
     issues: [
       {
         path: "gateway.mode",

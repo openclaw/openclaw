@@ -1,7 +1,6 @@
 // @vitest-environment node
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "../extensions/openai/api.js";
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
@@ -19,7 +18,6 @@ import type { GatewayBrowserClient } from "../ui/src/api/gateway.js";
 import { useRealtimeTalkMicrophoneFixture } from "../ui/src/pages/chat/talk/input.test-support.js";
 import { RealtimeTalkSession } from "../ui/src/pages/chat/talk/session.js";
 import type { RealtimeTalkTransport } from "../ui/src/pages/chat/talk/shared.js";
-import { createDeferred } from "./helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({
   providers: [] as RealtimeVoiceProviderPlugin[],
@@ -96,6 +94,13 @@ vi.mock("../src/talk/client-voice-session-write.js", async (importOriginal) => {
   return {
     ...actual,
     ensureClientVoiceAgentSessionEntry: async () => "test-agent-session",
+  };
+});
+vi.mock("../src/talk/client-voice-session-source.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../src/talk/client-voice-session-source.js")>();
+  return {
+    ...actual,
     // Creation is mocked here; preserve its source without acquiring a database writer.
     captureClientVoiceSessionWriter: ({
       physicalSource,
@@ -126,38 +131,20 @@ beforeEach(() => {
 
 describe("OpenAI browser Talk catalog defaults", () => {
   it.each([
-    {
-      label: "unpinned browser",
-      model: undefined,
-      camera: false,
-      expected: "gpt-live-1",
-    },
-    { label: "explicit GA", model: "gpt-realtime-2.1", camera: true, expected: "gpt-realtime-2.1" },
-    {
-      label: "Live launch over configured GA",
-      model: "gpt-realtime-2.1",
-      launchModel: "gpt-live-1",
-      camera: false,
-      expected: "gpt-live-1",
-    },
-    {
-      label: "GA launch through a provider alias",
-      model: "gpt-live-1",
-      launchModel: "gpt-realtime-2.1",
-      launchProvider: " OPENAI-VOICE ",
-      camera: true,
-      expected: "gpt-realtime-2.1",
-    },
-    {
-      label: "audio-only browser",
-      model: undefined,
-      camera: false,
-      expected: "gpt-live-1",
-      audioOnly: true,
-    },
-  ])(
-    "preserves $label from discovery through session creation",
-    async ({ model, launchModel, launchProvider, camera, expected, audioOnly }) => {
+    ["unpinned browser", undefined, undefined, false, "gpt-live-1", false],
+    ["explicit GA", "gpt-realtime-2.1", undefined, true, "gpt-realtime-2.1", false],
+    [
+      "configured GA through a provider alias",
+      "gpt-realtime-2.1",
+      " OPENAI-VOICE ",
+      true,
+      "gpt-realtime-2.1",
+      false,
+    ],
+    ["audio-only browser", undefined, undefined, false, "gpt-live-1", true],
+  ] as const)(
+    "preserves %s from discovery through session creation",
+    async (_label, model, providerId, camera, expected, audioOnly) => {
       await withOpenClawTestState({ prefix: "talk-browser-defaults-" }, async (state) => {
         const cfg: OpenClawConfig = {
           agents: {
@@ -166,7 +153,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
           talk: {
             agentId: "main",
             realtime: {
-              provider: "openai",
+              provider: providerId ?? "openai",
               ...(model ? { model } : {}),
               providers: { openai: { apiKey: "test-platform-key" } },
             },
@@ -196,7 +183,6 @@ describe("OpenAI browser Talk catalog defaults", () => {
           },
         });
         provider.aliases = ["openai-voice"];
-        let catalogReleased = createDeferred<"settled" | "reset">();
         mocks.providers = [
           provider,
           {
@@ -206,7 +192,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
               expectDefined(
                 captureGatewayRootWorkReleaseObserver(),
                 "catalog refresh must own root work admission",
-              )(catalogReleased.resolve);
+              );
               return providerConfig.model === model;
             },
             createBridge: () => {
@@ -228,10 +214,6 @@ describe("OpenAI browser Talk catalog defaults", () => {
           }
           let payload: unknown;
           let failure: string | undefined;
-          let warming = false;
-          if (method === "talk.catalog") {
-            catalogReleased = createDeferred<"settled" | "reset">();
-          }
           await withLocalGatewayRequestScope(
             { deps: {}, getRuntimeConfig: () => cfg },
             async () => {
@@ -240,55 +222,43 @@ describe("OpenAI browser Talk catalog defaults", () => {
                 throw new Error("Local Gateway context was not installed");
               }
               bindSessionRowProjection(context, () => projection);
-              const invoke = async () =>
-                handler({
-                  req: { type: "req", id: method, method },
-                  params,
-                  client: {
-                    connId: "camera-defaults",
-                    connect: {
-                      minProtocol: 3,
-                      maxProtocol: 3,
-                      client: {
-                        id: "openclaw-control-ui",
-                        version: "test",
-                        platform: "web",
-                        mode: "webchat",
-                      },
-                      scopes: ["operator.admin"],
+              await handler({
+                req: { type: "req", id: method, method },
+                params,
+                client: {
+                  connId: "camera-defaults",
+                  connect: {
+                    minProtocol: 3,
+                    maxProtocol: 3,
+                    client: {
+                      id: "openclaw-control-ui",
+                      version: "test",
+                      platform: "web",
+                      mode: "webchat",
                     },
+                    scopes: ["operator.admin"],
                   },
-                  isWebchatConnect: () => false,
-                  respond: (ok, value, error) => {
-                    warming =
-                      method === "talk.catalog" &&
-                      error?.code === "UNAVAILABLE" &&
-                      error.retryable === true &&
-                      asOptionalRecord(error.details)?.reason === "talk-catalog-warming";
-                    if (!ok) {
-                      failure = error?.message ?? "Talk request failed";
-                    }
-                    payload = value;
-                  },
-                  context,
-                  sessionMutationAuthorization: {
-                    talkSessionTarget: {
-                      agentId: "main",
-                      sessionKey: "agent:main:main",
-                      canonicalKey: "agent:main:main",
-                      storePath: state.sessionsDir(),
-                      assertCurrent: () => undefined,
-                    },
+                },
+                isWebchatConnect: () => false,
+                respond: (ok, value, error) => {
+                  if (!ok) {
+                    failure = error?.message ?? "Talk request failed";
+                  }
+                  payload = value;
+                },
+                context,
+                sessionMutationAuthorization: {
+                  talkSessionTarget: {
+                    agentId: "main",
+                    sessionKey: "agent:main:main",
+                    canonicalKey: "agent:main:main",
+                    storePath: state.sessionsDir(),
                     assertCurrent: () => undefined,
-                    assertTargetCurrent: () => undefined,
                   },
-                });
-              await invoke();
-              if (warming) {
-                expect(await catalogReleased.promise).toBe("settled");
-                failure = undefined;
-                await invoke();
-              }
+                  assertCurrent: () => undefined,
+                  assertTargetCurrent: () => undefined,
+                },
+              });
             },
           );
           if (failure) {
@@ -304,13 +274,11 @@ describe("OpenAI browser Talk catalog defaults", () => {
           { request } as GatewayBrowserClient,
           "agent:main:main",
           audioOnly ? {} : { onVideoCapability },
-          launchModel ? { provider: launchProvider ?? "openai", model: launchModel } : {},
         );
         try {
           await session.start();
           expect(mocks.createSession).toHaveBeenCalledWith({
             sessionKey: "agent:main:main",
-            ...(launchModel ? { provider: launchProvider ?? "openai", model: launchModel } : {}),
             capabilities: camera
               ? ["voice-transcript", "voice-selection", "camera-frame"]
               : ["voice-transcript", "voice-selection"],

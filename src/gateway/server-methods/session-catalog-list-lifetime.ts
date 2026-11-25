@@ -3,9 +3,11 @@ import type {
   SessionCatalogHost,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { SessionCatalogListProviderParams } from "../../plugins/session-catalog.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
+import { retainGatewayDeviceRevocation } from "../device-revocation.js";
 import type { SessionCatalogInstances } from "./session-catalog-entry-snapshot.js";
 
 export const SESSION_CATALOG_LIST_LIFETIME_MS = 60_000;
@@ -33,17 +35,32 @@ type CatalogSubscriber = {
 // Native work still owns its admitted resources after delivery expires.
 class CatalogListWork {
   private pending = 0;
+  private nativePending = 0;
   private releaseRoot: (() => void) | undefined;
+  private releaseCaller: (() => void) | undefined;
 
-  begin(retainRoot = false): void {
-    this.pending++;
-    if (retainRoot) {
+  begin(kind: "provider" | "completion" | "delivery" = "delivery"): void {
+    if (kind === "provider") {
+      this.releaseCaller ??= retainGatewayDeviceRevocation(
+        getPluginRuntimeGatewayRequestScope()?.hasCurrentClientAuthority,
+      );
       this.releaseRoot ??= retainGatewayRootWorkAdmissionContinuation() ?? undefined;
+    }
+    this.pending++;
+    if (kind !== "delivery") {
+      this.nativePending++;
     }
   }
 
-  end(): void {
+  end(kind: "provider" | "completion" | "delivery" = "delivery"): void {
     this.pending--;
+    if (kind !== "delivery") {
+      this.nativePending--;
+    }
+    if (this.nativePending === 0) {
+      this.releaseCaller?.();
+      this.releaseCaller = undefined;
+    }
     if (this.pending === 0) {
       this.releaseRoot?.();
       this.releaseRoot = undefined;
@@ -60,7 +77,7 @@ function trackCatalogCompletion(
   signal: AbortSignal,
   settled: () => void,
 ): void {
-  work.begin();
+  work.begin("completion");
   let delivery: { signal: AbortSignal; settled: () => void } | undefined = { signal, settled };
   const close = () => {
     const current = delivery;
@@ -74,7 +91,7 @@ function trackCatalogCompletion(
     close();
   }
   const finish = () => {
-    work.end();
+    work.end("completion");
     close();
   };
   void trackWork(() => completion.then(finish, finish));
@@ -270,9 +287,9 @@ export class SessionCatalogListLifetime {
       callbacks.releasePublisher();
       this.publishers.delete(releasePublisher);
     };
+    this.work.begin("provider");
     this.publishers.add(releasePublisher);
     this.pending += 1;
-    this.work.begin(true);
     const settle = () => {
       pending -= 1;
       this.pending -= 1;
@@ -306,7 +323,7 @@ export class SessionCatalogListLifetime {
       listing = false;
       callbacks.closeRegistration();
       this.pending -= 1;
-      this.work.end();
+      this.work.end("provider");
       if (pending === 0) {
         releasePublisher();
       }

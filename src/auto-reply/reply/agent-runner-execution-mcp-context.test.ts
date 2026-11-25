@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import {
@@ -12,7 +12,7 @@ import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
   getRawExecuteAgentTurnForTest,
-  initialFallbackAttemptOptions,
+  runFallbackCandidate,
   setupAgentRunnerExecutionTestState,
   type EmbeddedAgentParams,
   type FallbackRunnerParams,
@@ -27,10 +27,9 @@ const image = {
   data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRz0AAAAASUVORK5CYII=",
 };
 const authority = (profileId: string) =>
-  createAdmittedRunOperatorAuthority({
+  createTestOperatorAuthority({
     profileId,
     scopes: ["operator.read", "operator.write"],
-    assertCurrent() {},
   });
 async function pendingView(text: string, requesterId?: string, agentId = "main", images = false) {
   const runtime = { sessionId: "session" } as SessionMcpRuntime;
@@ -178,12 +177,9 @@ describe("executeAgentTurn MCP App context", () => {
     followupRun.run.model = "gpt-5.4";
     const { provider, model } = followupRun.run;
     state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-      provider,
-      model,
-      attempts: [],
-    }));
+    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+      runFallbackCandidate(params, provider, model),
+    );
     const { runtime, view } = await pendingView("CLI selection");
     state.runCliAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       params.onExecutionPhase?.({ phase: "process_spawned" });

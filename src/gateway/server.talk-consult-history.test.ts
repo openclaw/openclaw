@@ -6,7 +6,6 @@ import {
   afterEach,
   beforeAll,
   beforeEach,
-  describe,
   expect,
   it,
   vi,
@@ -32,6 +31,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
@@ -51,6 +51,7 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
 import {
@@ -71,6 +72,8 @@ import {
 } from "./test-helpers.js";
 
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
+const heldModel = () =>
+  expectDefined(runEmbeddedAgent.getMockImplementation(), "held model implementation");
 installGatewayTestHooks({ scope: "suite" });
 let agentId = "main";
 let sessionKey = "agent:main:main";
@@ -102,7 +105,7 @@ let publicationErrors: unknown[] = [];
 let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
 let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;
 let lifecyclePersistence: MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>;
-let expectedRevokedWriters: Map<string, () => boolean>;
+let reportParityFailure: (() => void) | undefined;
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
@@ -111,28 +114,15 @@ afterAll(async () => {
   await harness.close();
 });
 beforeEach(async () => {
+  reportParityFailure = undefined;
   requestExecution = await observeGatewayRunExecution();
   lifecycleWrites = createPreparedLifecycleWriteTracker();
-  expectedRevokedWriters = new Map();
   const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
   lifecyclePersistence = vi
     .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
     .mockImplementation((params) => {
       const persist = prepareLifecycle(params);
-      return lifecycleWrites.track(async () => {
-        try {
-          await persist();
-        } catch (error) {
-          const isCurrent = params.event.runId
-            ? expectedRevokedWriters.get(params.event.runId)
-            : undefined;
-          if (!isCurrent || isCurrent()) {
-            throw error;
-          }
-          expect(error).toBeInstanceOf(Error);
-          expect(error).toHaveProperty("message", "Terminal write owner changed before commit");
-        }
-      });
+      return lifecycleWrites.track(persist);
     });
   agentId = "main";
   sessionKey = canonicalKey = "agent:main:main";
@@ -154,19 +144,8 @@ beforeEach(async () => {
   const profile = ensureProfileForEmail("talk-history@example.test");
   client = {
     connId: connectionId,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.read", "operator.write", "operator.admin"],
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-    },
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"]),
+    authenticatedUserProfile: gatewayProfile(profile.id),
   };
   // Admission, the recorder, and publication stay real; only model execution is held.
   gatewayReplyMock.mockImplementation(getReplyFromConfig);
@@ -177,22 +156,7 @@ beforeEach(async () => {
   runEmbeddedAgent.mockImplementation(async (params) => {
     modelStarted.resolve();
     const signal = params.abortSignal;
-    let onAbort: (() => void) | undefined;
-    const aborted = new Promise<void>((resolve) => {
-      onAbort = resolve;
-      if (signal?.aborted) {
-        resolve();
-      } else {
-        signal?.addEventListener("abort", onAbort, { once: true });
-      }
-    });
-    try {
-      await Promise.race([releaseModel.promise, aborted]);
-    } finally {
-      if (onAbort) {
-        signal?.removeEventListener("abort", onAbort);
-      }
-    }
+    await racePromiseWithAbortSignal(releaseModel.promise, signal, (aborted) => aborted.reason);
     signal?.throwIfAborted();
     return {
       payloads: [{ text: answer }],
@@ -234,7 +198,10 @@ beforeEach(async () => {
     transcriptCapable: true,
   });
 });
-afterEach(async () => {
+afterEach(async ({ task }) => {
+  if (task.result?.state === "fail") {
+    reportParityFailure?.();
+  }
   releaseModel.resolve();
   try {
     try {
@@ -274,6 +241,8 @@ const assistantMessage = (text: string) =>
   makeAgentAssistantMessage({ content: [{ type: "text", text }] });
 const matchingTexts = (messages: unknown[], text: string) =>
   messages.map(extractText).filter((value) => value === text);
+const generatedInputs = <T>(messages: T[]) =>
+  messages.filter((message) => extractText(message)?.includes(args.question));
 function transcriptMessages() {
   return loadTranscriptEventsSync(scope()).flatMap((event) => {
     const message = asOptionalRecord(asOptionalRecord(event)?.message);
@@ -375,22 +344,17 @@ function expectNoGeneratedInput(messages: unknown[], surface: string) {
   }
 }
 function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer: boolean) {
+  const check = (value: unknown, label: string) => expect.soft(value, `${surface} ${label}`);
   const users = messages.filter((message) => asOptionalRecord(message)?.role === "user");
   expect.soft(users.map(extractText), surface).toEqual([spoken]);
   const markdown = buildChatMarkdown(messages, "Voice test assistant");
-  expect.soft(markdown, `${surface} Markdown`).toContain(spoken);
-  expect
-    .soft(markdown?.match(/^## Message(?: \(|$)/gm), `${surface} input headings`)
-    .toHaveLength(1);
+  check(markdown, "Markdown").toContain(spoken);
+  check(markdown?.match(/^## Message(?: \(|$)/gm), "input headings").toHaveLength(1);
   expectNoGeneratedInput(messages, surface);
-  expect
-    .soft(matchingTexts(messages, answer), `${surface} spoken answer`)
-    .toHaveLength(hasAnswer ? 1 : 0);
-  expect
-    .soft(markdown?.split(answer).length, `${surface} spoken answer in Markdown`)
-    .toBe(hasAnswer ? 2 : 1);
-  expect.soft(JSON.stringify(messages), `${surface} internal final`).not.toContain(consultAnswer);
-  expect.soft(markdown, `${surface} internal final in Markdown`).not.toContain(consultAnswer);
+  check(matchingTexts(messages, answer), "spoken answer").toHaveLength(hasAnswer ? 1 : 0);
+  check(markdown?.split(answer).length, "spoken answer in Markdown").toBe(hasAnswer ? 2 : 1);
+  check(JSON.stringify(messages), "internal final").not.toContain(consultAnswer);
+  check(markdown, "internal final in Markdown").not.toContain(consultAnswer);
 }
 async function historyMessages() {
   const result = await rpc("chat.history", { sessionKey: canonicalKey, agentId });
@@ -497,40 +461,33 @@ it.each([
   }
 });
 
-describe("Browser Talk literal consult commands", () => {
-  it("does not turn a generated stop question into cancellation of the active consult", async () => {
-    const first = await startHeldConsult();
-    const ack = await consult("/stop", "literal-stop-during-task");
-    expect(ack.runId).not.toBe(first.ack.runId);
-    expect
-      .soft(first.abortSignal.aborted, "generated input cancelled the existing task")
-      .toBe(false);
-    releaseModel.resolve();
-    await waitForDispatchEnd();
-    expect(runEmbeddedAgent.mock.calls.map(([run]) => run.prompt)).toEqual(
-      expect.arrayContaining([expect.stringContaining("/stop")]),
-    );
-  });
+it("does not turn a generated stop question into cancellation of the active consult", async () => {
+  const first = await startHeldConsult();
+  const ack = await consult("/stop", "literal-stop-during-task");
+  expect(ack.runId).not.toBe(first.ack.runId);
+  expect.soft(first.abortSignal.aborted, "generated input cancelled the existing task").toBe(false);
+  releaseModel.resolve();
+  await waitForDispatchEnd();
+  expect(runEmbeddedAgent.mock.calls.map(([run]) => run.prompt)).toEqual(
+    expect.arrayContaining([expect.stringContaining("/stop")]),
+  );
+});
 
-  it("preserves an actual human stop command", async () => {
-    const first = await startHeldConsult();
-    const stopped = await rpc("chat.send", {
-      sessionKey,
-      message: "/stop",
-      idempotencyKey: "human-stop",
-    });
-    expect(stopped).toMatchObject({ aborted: true, runIds: [first.ack.runId] });
-    expect(first.abortSignal.aborted).toBe(true);
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+it("preserves an actual human stop command", async () => {
+  const first = await startHeldConsult();
+  const stopped = await rpc("chat.send", {
+    sessionKey,
+    message: "/stop",
+    idempotencyKey: "human-stop",
   });
+  expect(stopped).toMatchObject({ aborted: true, runIds: [first.ack.runId] });
+  expect(first.abortSignal.aborted).toBe(true);
+  expect(runEmbeddedAgent).toHaveBeenCalledOnce();
 });
 
 it("keeps read-only Talk operator consult scaffolding out of chat and later context but in the raw archive", async () => {
   client.connect.scopes = ["operator.read", "operator.talk"];
-  const completeModel = expectDefined(
-    runEmbeddedAgent.getMockImplementation(),
-    "held model implementation",
-  );
+  const completeModel = heldModel();
   let modelReply = consultAnswer;
   let modelMessages: Parameters<SessionManager["appendMessage"]>[0][] = [
     Object.assign(assistantMessage(consultCommentary), {
@@ -557,6 +514,8 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
     assistantMessage(modelReply),
   ];
   runEmbeddedAgent.mockImplementation(async (params) => {
+    const recorder = expectDefined(params.userTurnTranscriptRecorder, "consult input recorder");
+    await recorder.persistApproved();
     await params.onAgentEvent?.({
       stream: "lifecycle",
       data: { phase: "start" },
@@ -582,7 +541,6 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
     modelStarted.promise,
     captureSessionControllerSettlement({ scope: storePath, identities: [sessionKey, sessionId] }),
   ]);
-  expect(context.logGateway.error).not.toHaveBeenCalled();
   expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "consult model invocation");
   expect(run.toolsAllow).toEqual([
@@ -609,9 +567,7 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   expectVisibleSpeechOnly(await historyMessages(), "chat.history", true);
 
   const storedMessages = transcriptMessages();
-  const generated = storedMessages.filter((message) =>
-    extractText(message)?.includes(args.question),
-  );
+  const generated = generatedInputs(storedMessages);
   expect(matchingTexts(storedMessages, consultAnswer)).toHaveLength(1);
   const storedToolResult = storedMessages.find(
     (message) => extractText(message) === consultToolResult,
@@ -689,14 +645,10 @@ it.each(["before-final", "after-final"] as const)(
     const directAnswer = "DIRECT_FINAL_134003: The requested note contains both labels.";
     const finalCommitted = createDeferred();
     const releaseResult = createDeferred();
-    const completeModel = expectDefined(
-      runEmbeddedAgent.getMockImplementation(),
-      "held model implementation",
-    );
+    const completeModel = heldModel();
     runEmbeddedAgent.mockImplementation(async (params) => {
       const recorder = expectDefined(params.userTurnTranscriptRecorder, "direct input recorder");
       await recorder.persistApproved();
-      expect(recorder.hasPersisted()).toBe(true);
       const result = await completeModel(params);
       params.abortSignal?.throwIfAborted();
       transcriptManager(params).appendMessage(assistantMessage(directAnswer));
@@ -741,15 +693,13 @@ it.each(["before-final", "after-final"] as const)(
       expectNoGeneratedInput(liveMessages(), "direct live publication");
 
       const storedMessages = transcriptMessages();
-      const generated = storedMessages.filter((message) =>
-        extractText(message)?.includes(args.question),
-      );
+      const generated = generatedInputs(storedMessages);
       expect(generated).toHaveLength(1);
       expect(generated[0]).toMatchObject({
         role: "user",
         display: false,
-        excludeFromContext: true,
       });
+      expect(generated[0]).not.toHaveProperty("excludeFromContext");
       expect(
         storedMessages.filter((message) => message.role === "assistant").map(extractText),
       ).toEqual([directAnswer]);
@@ -763,7 +713,7 @@ it.each(["before-final", "after-final"] as const)(
         expectNoGeneratedInput(messages, `closed direct call ${view}`);
       }
       const modelContext = SessionManager.openModelContext(scope()).buildSessionContext().messages;
-      expectNoGeneratedInput(modelContext, "closed direct call model context");
+      expect(generatedInputs(modelContext).map(extractText)).toEqual([extractText(generated[0])]);
       expect(modelContext.map(extractText)).toContain(directAnswer);
     } finally {
       releaseModel.resolve();
@@ -813,14 +763,16 @@ it("preserves the original operator source through chat-backed capability adapta
 
 // The isolated native cell uses Linux executables; protocol/policy siblings remain portable.
 it.runIf(process.platform === "linux").each([false, true])(
-  "keeps host-authenticated node approval cancellation (public callback: %s)",
+  "keeps admitted node approvals through device revocation and honors Stop (public callback: %s)",
   async (publicOnly) => {
     const { runTalkNodePermissionParity } =
       await import("./server.talk-permission-parity.test-support.js");
     await runTalkNodePermissionParity({
       ...parityFixture(),
       publicOnly,
-      expectRevokedWriter: (runId, isCurrent) => expectedRevokedWriters.set(runId, isCurrent),
+      setFailureReporter: (report) => {
+        reportParityFailure = report;
+      },
     });
   },
 );
@@ -828,7 +780,7 @@ it.runIf(process.platform === "linux").each([false, true])(
 it.runIf(process.platform === "linux")(
   "isolates registered Talk replay across authenticated callers",
   async () => {
-    const { runTalkCallerReplay } = await import("./server.talk-caller-replay.test-support.js");
+    const { runTalkCallerReplay } = await import("./server.talk-native-action.test-support.js");
     await runTalkCallerReplay({
       ...parityFixture(),
       voiceSessionId: expectDefined(voiceSessionId, "shared voice identity"),

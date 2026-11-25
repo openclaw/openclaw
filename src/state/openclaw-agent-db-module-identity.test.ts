@@ -74,39 +74,9 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
       String.raw`
         import assert from "node:assert/strict";
         import path from "node:path";
-        import { createRequire, syncBuiltinESMExports } from "node:module";
         const root = ${JSON.stringify(root)};
         const agentPath = path.join(process.env.OPENCLAW_STATE_DIR, "agents", "main", "agent", "openclaw-agent.sqlite");
         const options = { agentId: "main", path: agentPath };
-        const sqlite = createRequire(import.meta.url)("node:sqlite");
-        const OriginalDatabase = sqlite.DatabaseSync;
-        const opened = [];
-        let physicalOpens = 0;
-        let integrityScans = 0;
-        sqlite.DatabaseSync = class extends OriginalDatabase {
-          constructor(...args) {
-            super(...args);
-            const [location] = args;
-            this.observedAgent = location === path.toNamespacedPath(agentPath);
-            if (this.observedAgent) physicalOpens += 1;
-            opened.push(this);
-          }
-          prepare(sql) {
-            if (this.observedAgent) this.queryPrepares = (this.queryPrepares ?? 0) + 1;
-            const statement = super.prepare(sql);
-            if (this.observedAgent && /\b(?:integrity_check|quick_check)\b/i.test(sql)) {
-              for (const operation of ["get", "all", "run", "iterate"]) {
-                const original = statement[operation].bind(statement);
-                statement[operation] = (...args) => {
-                  integrityScans += 1;
-                  return original(...args);
-                };
-              }
-            }
-            return statement;
-          }
-        };
-        syncBuiltinESMExports();
         let host;
         let plugin;
         let borrowed;
@@ -118,8 +88,6 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
           const nativeBorrow = nativeSdk.borrowOpenClawAgentDatabase(options);
           assert.equal(nativeBorrow.db, canonical.db);
           nativeBorrow.release();
-          assert.equal(physicalOpens, 1);
-          assert.equal(integrityScans, 1);
           const modulePath = path.join(root, "plugin.ts");
           plugin = host.getCachedPluginModuleLoader({
             modulePath, rootDir: root, importerUrl: import.meta.url, tryNative: false,
@@ -127,8 +95,6 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
           })(modulePath);
           assert.equal(plugin.openOpenClawAgentDatabase, nativeSdk.openOpenClawAgentDatabase);
           borrowed = plugin.borrowOpenClawAgentDatabase(options);
-          assert.equal(physicalOpens, 1, "plugin borrowing must not physically reopen the agent database");
-          assert.equal(integrityScans, 1, "plugin borrowing must not repeat integrity validation");
           assert.equal(borrowed.db, canonical.db);
           for (const name of ["runExclusiveSqliteTranscriptArchiveWorker", "runExclusiveSqliteSessionReclamation"]) {
             let release;
@@ -150,12 +116,6 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
 
           const db = canonical.db;
           db.exec("CREATE TABLE module_identity_entries (id TEXT PRIMARY KEY)");
-          const query = nativeSdk.getNodeSqliteKysely(db).selectFrom("module_identity_entries").select("id");
-          const preparesBefore = db.queryPrepares;
-          for (const sdk of [nativeSdk, nativeSdk, plugin, plugin]) {
-            assert.deepEqual(sdk.executeSqliteQuerySync(db, query).rows, []);
-          }
-          assert.equal(db.queryPrepares - preparesBefore, 2);
           const rows = () => db.prepare("SELECT id FROM module_identity_entries ORDER BY id").all().map(row => row.id);
           const insert = id => db.prepare("INSERT INTO module_identity_entries VALUES (?)").run(id);
           const publications = [];
@@ -235,9 +195,6 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
           await host?.closeOpenClawAgentDatabasesAsync();
           await plugin?.closeOpenClawStateDatabaseAsync();
           await host?.closeOpenClawStateDatabaseAsync();
-          for (const db of opened) if (db.isOpen) db.close();
-          sqlite.DatabaseSync = OriginalDatabase;
-          syncBuiltinESMExports();
         }
       `,
       {

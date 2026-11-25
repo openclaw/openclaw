@@ -4,6 +4,7 @@ import {
   validateExecApprovalsNodeSnapshot,
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
+  validateExecApprovalsNativeRequest,
 } from "./index.js";
 
 const fileWithEntry = (entry: Record<string, unknown>) => ({
@@ -12,6 +13,28 @@ const fileWithEntry = (entry: Record<string, unknown>) => ({
 });
 
 describe("exec approvals protocol validators", () => {
+  it("accepts native authorization and refuses host-floor bypass", () => {
+    const request = {
+      operation: "commit",
+      agentId: "main",
+      command: "echo native",
+      uses: [],
+      grants: [],
+      authorization: {
+        source: "current-policy",
+        security: "full",
+        ask: "off",
+        allowlistSatisfied: false,
+      },
+    };
+    expect(validateExecApprovalsNativeRequest(request)).toBe(true);
+    expect(
+      validateExecApprovalsNativeRequest({
+        ...request,
+        authorization: { ...request.authorization, bypassHostApprovalFloors: true },
+      }),
+    ).toBe(false);
+  });
   it("accepts runtime-owned allowlist metadata on gateway and node set payloads", () => {
     const file = {
       version: 1 as const,

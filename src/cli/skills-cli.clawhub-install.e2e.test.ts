@@ -1,80 +1,63 @@
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
-import os from "node:os";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import JSZip from "jszip";
-import { describe, expect, it } from "vitest";
-import { readRequestBody, spawnOpenClaw } from "./clawhub-install.test-support.js";
+import { afterEach, expect, it } from "vitest";
+import { readRequestText as readRequestBody } from "../../test/helpers/gateway-integration-fixtures.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import { spawnOpenClaw } from "./clawhub-install.test-support.js";
 
-async function buildGitHubSkillZip(): Promise<Buffer> {
+const directories = useAutoCleanupTempDirTracker(afterEach);
+function reply(res: ServerResponse, body: unknown, type = "application/json", status = 200) {
+  res.writeHead(status, { "Content-Type": type });
+  res.end(typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body));
+}
+
+it("installs a ClawHub GitHub skill through the CLI and reports telemetry", async () => {
+  const commit = "c".repeat(40);
+  const telemetryBodies: unknown[] = [];
+  const requestLog: string[] = [];
   const zip = new JSZip();
   zip.file("skills-main/skills/aiq-deploy/SKILL.md", "# AIQ Deploy\n");
   zip.file("skills-main/skills/aiq-deploy/skill-card.md", "# Card\n");
   zip.file("skills-main/skills/other/SKILL.md", "# Other\n");
-  return await zip.generateAsync({ type: "nodebuffer" });
-}
+  const githubZipBytes = await zip.generateAsync({ type: "nodebuffer" });
+  async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    requestLog.push(`${req.method ?? "GET"} ${url.pathname}`);
 
-describe("openclaw skills install ClawHub GitHub-backed E2E", () => {
-  it("installs from the install resolver and reports install telemetry", async () => {
-    const commit = "c".repeat(40);
-    const telemetryBodies: unknown[] = [];
-    const requestLog: string[] = [];
-    const githubZipBytes = await buildGitHubSkillZip();
-    async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-      const url = new URL(req.url ?? "/", "http://127.0.0.1");
-      requestLog.push(`${req.method ?? "GET"} ${url.pathname}`);
-
-      if (req.method === "GET" && url.pathname === "/api/v1/skills/aiq-deploy/install") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            ok: true,
-            slug: "aiq-deploy",
-            installKind: "github",
-            github: {
-              repo: "NVIDIA/skills",
-              path: "skills/aiq-deploy",
-              commit,
-              contentHash: "hash-aiq-deploy",
-              sourceUrl: `https://github.com/NVIDIA/skills/tree/${commit}/skills/aiq-deploy`,
-            },
-          }),
-        );
-        return;
-      }
-
-      if (req.method === "GET" && url.pathname === `/NVIDIA/skills/zip/${commit}`) {
-        res.writeHead(200, { "Content-Type": "application/zip" });
-        res.end(githubZipBytes);
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/api/cli/telemetry/install") {
+    switch (`${req.method} ${url.pathname}`) {
+      case "GET /api/v1/skills/aiq-deploy/install":
+        return reply(res, {
+          ok: true,
+          slug: "aiq-deploy",
+          installKind: "github",
+          github: {
+            repo: "NVIDIA/skills",
+            path: "skills/aiq-deploy",
+            commit,
+            contentHash: "hash-aiq-deploy",
+            sourceUrl: `https://github.com/NVIDIA/skills/tree/${commit}/skills/aiq-deploy`,
+          },
+        });
+      case `GET /NVIDIA/skills/zip/${commit}`:
+        return reply(res, githubZipBytes, "application/zip");
+      case "POST /api/cli/telemetry/install":
         telemetryBodies.push(JSON.parse(await readRequestBody(req)) as unknown);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: true }));
-        return;
-      }
-
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end("not found");
+        return reply(res, { ok: true });
+      default:
+        return reply(res, "not found", "text/plain; charset=utf-8", 404);
     }
-    const server = createServer((req, res) => {
+  }
+  const stateDir = directories.make("openclaw-clawhub-cli-e2e-");
+  await withServer(
+    (req, res) => {
       void handleRequest(req, res).catch((error: unknown) => {
-        res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end(error instanceof Error ? error.message : String(error));
+        reply(res, String(error), "text/plain; charset=utf-8", 500);
       });
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", () => {
-        resolve();
-      });
-    });
-
-    const registry = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-cli-e2e-"));
-    try {
+    },
+    async (registry) => {
       const result = await spawnOpenClaw(
         ["skills", "install", "@demo-owner/aiq-deploy", "--global"],
         {
@@ -94,31 +77,18 @@ describe("openclaw skills install ClawHub GitHub-backed E2E", () => {
       );
 
       expect(result.status, result.stderr || result.stdout).toBe(0);
-      await expect(
-        fs.readFile(path.join(stateDir, "skills", "aiq-deploy", "SKILL.md"), "utf8"),
-      ).resolves.toContain("# AIQ Deploy");
-      await expect(
-        fs.readFile(path.join(stateDir, "skills", "aiq-deploy", "skill-card.md"), "utf8"),
-      ).resolves.toContain("# Card");
-      await expect(
-        fs.readFile(path.join(stateDir, "skills", "aiq-deploy", "other", "SKILL.md")),
-      ).rejects.toThrow();
-      if (telemetryBodies.length !== 1) {
-        throw new Error(`Expected one install telemetry request, saw: ${requestLog.join(", ")}`);
-      }
+      const readInstalled = (name: string) =>
+        fs.readFile(path.join(stateDir, "skills", "aiq-deploy", name), "utf8");
+      await expect(readInstalled("SKILL.md")).resolves.toContain("# AIQ Deploy");
+      await expect(readInstalled("skill-card.md")).resolves.toContain("# Card");
+      await expect(readInstalled("other/SKILL.md")).rejects.toThrow();
+      expect(telemetryBodies, `Install requests: ${requestLog.join(", ")}`).toHaveLength(1);
       expect(telemetryBodies[0]).toMatchObject({
         event: "install",
         slug: "aiq-deploy",
         ownerHandle: "demo-owner",
         version: commit,
       });
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
-      });
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  }, 30_000);
-});
+    },
+  );
+}, 30_000);

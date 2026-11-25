@@ -103,7 +103,7 @@ it.each(["after describe", "while pinning and reading", "after a successor list"
         case "sessions.subscribe":
           return { subscribed: true };
         case "sessions.groups.list":
-          return { names: [], sectionOrder: [] };
+          return { groups: [], sectionOrder: [] };
         case "models.list":
           return { models: [] };
       }

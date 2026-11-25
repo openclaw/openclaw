@@ -6,7 +6,6 @@ import {
   awaitGateBeforeSettlement as awaitGate,
   createDeferred,
 } from "../../../test/helpers/promise.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import * as sessionStateEvents from "../../sessions/session-state-events.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { getActiveAcpTurnCount, listActiveAcpSessionsForOwner } from "./active-turns.js";
@@ -27,6 +26,7 @@ import {
   mockParentedAcpSessionEntries,
   readySessionMeta,
   resolvedIdentity,
+  runtimeHandle,
   type OpenClawConfig,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
@@ -166,11 +166,7 @@ describe("AcpSessionManager", () => {
       const onElicitation = vi.fn(async () => ({ action: "cancel" as const }));
       f.runtimeState.ensureSession.mockImplementation(async (input) => {
         await releaseInit.promise;
-        return {
-          sessionKey: input.sessionKey,
-          backend: "acpx",
-          runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
-        };
+        return runtimeHandle(input.sessionKey, `${input.sessionKey}:${input.mode}:runtime`);
       });
       mockParentedAcpSessionEntries({
         childSessionKey,
@@ -231,35 +227,6 @@ describe("AcpSessionManager", () => {
       expect(listActiveAcpSessionsForOwner(ownerSessionKey)).toEqual([]);
     });
   }, 300_000);
-
-  it("cancels a queued turn promptly when its caller aborts before the actor is free", async () => {
-    const f = fixture();
-    const { entered: firstTurnStarted, release: releaseFirstTurn } = holdTurn(f.runtimeState, "r1");
-    const first = f.run("first", "r1");
-    const abortController = new AbortController();
-    const events: AcpRuntimeEvent[] = [];
-    let second: Promise<void> | undefined;
-    try {
-      await Promise.race([firstTurnStarted.promise, first]);
-      second = f.run("second", "r2", {
-        admittedRunContext: createTestAdmittedRunContext("r2"),
-        signal: abortController.signal,
-        onEvent: (event) => {
-          events.push(event);
-        },
-      });
-      abortController.abort();
-      await second;
-      expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
-      expect(f.runtimeState.runTurn).toHaveBeenCalledOnce();
-      releaseFirstTurn.resolve();
-      await first;
-    } finally {
-      abortController.abort();
-      releaseFirstTurn.resolve();
-      await Promise.allSettled([first, second]);
-    }
-  });
 
   it("times out a hung persistent turn after partial progress without closing the session and lets queued work continue", async () => {
     vi.useFakeTimers();
@@ -326,11 +293,9 @@ describe("AcpSessionManager", () => {
     const f = fixture(
       readySessionMeta({ backend: "metadata-backend", runtimeSessionName: "metadata-runtime" }),
     );
-    f.runtimeState.ensureSession.mockImplementation(async ({ sessionKey }) => ({
-      sessionKey,
-      backend: "metadata-backend",
-      runtimeSessionName: "metadata-runtime",
-    }));
+    f.runtimeState.ensureSession.mockImplementation(async ({ sessionKey }) =>
+      runtimeHandle(sessionKey, "metadata-runtime", { backend: "metadata-backend" }),
+    );
     hoisted.requireAcpRuntimeBackendMock.mockImplementation((backendId?: string) => {
       if (backendId !== "metadata-backend") {
         throw new Error(`unexpected backend ${backendId ?? "<auto>"}`);

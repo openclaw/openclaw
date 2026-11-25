@@ -13,7 +13,6 @@ export type MemoryDatabaseAdmission = {
   engine?: "postgres";
   hasIndex: boolean;
   ftsAvailable: boolean;
-  schemaVersion?: number;
   identity?: ReturnType<typeof readOpenClawAgentDatabaseIdentity>;
   facts?: MemoryDatabaseFacts;
 };

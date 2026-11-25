@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { JSDOM } from "jsdom";
 import * as ts from "typescript/ast";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.ts";
 import { getChangedPathFacts, isTestSupportFileTarget } from "./changed-path-facts.mjs";
 import { createNativeTypeScriptParser, type NativeTypeScriptSource } from "./native-typescript.mts";
 import { getPropertyNameText, unwrapExpression } from "./ts-guard-utils.mts";
@@ -706,7 +707,7 @@ export function loadIconFixtures(rootDir: string): IconFixture[] {
   try {
     using parser = createNativeTypeScriptParser({ cwd: rootDir });
     const sources: NativeTypeScriptSource[] = [];
-    for (const relative of fs.readdirSync(sourceRoot, { recursive: true }).map(String).toSorted()) {
+    for (const { relativePath: relative } of listDirectoryTreeStrictSync(sourceRoot)) {
       const sourcePath = path.join("ui/src", relative).split(path.sep).join("/");
       const facts = getChangedPathFacts(sourcePath);
       if (

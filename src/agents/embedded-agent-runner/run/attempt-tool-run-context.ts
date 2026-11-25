@@ -45,11 +45,13 @@ type AttemptToolRunFacts = Pick<
   | "replyToMode"
   | "hasRepliedRef"
   | "sourceReplyDeliveryMode"
+  | "messageToolFinalByDefault"
   | "taskSuggestionDeliveryMode"
 >;
 
 /**
  * Builds the shared tool-run context for embedded and plugin harness attempts.
+ * Pass per-run overrides separately to avoid copying the complete attempt.
  */
 export function buildEmbeddedAttemptToolRunContext(
   params: AttemptToolRunFacts & {
@@ -57,7 +59,6 @@ export function buildEmbeddedAttemptToolRunContext(
     thinkLevel?: ThinkLevel;
     thinkingExplicit?: boolean;
     trigger?: EmbeddedRunTrigger;
-    continuesConversation?: boolean;
     jobId?: string;
     memoryFlushWritePath?: string;
     memoryFlushTools?: RunEmbeddedAgentParams["memoryFlushTools"];
@@ -72,6 +73,7 @@ export function buildEmbeddedAttemptToolRunContext(
     sessionKey?: string;
     replyOperation?: { readonly acceptedSteeredInboundAudio: boolean };
   },
+  overrides: { forceMessageTool?: boolean; trace?: DiagnosticTraceContext } = params,
 ) {
   const { currentInboundAudio } = params;
   const currentOwner = getCurrentSessionControllerOwner();
@@ -82,7 +84,7 @@ export function buildEmbeddedAttemptToolRunContext(
       : undefined);
   // Collector output is mandatory result transport, even on a narrowed tool surface.
   const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
-    forceMessageTool: params.forceMessageTool,
+    forceMessageTool: overrides.forceMessageTool,
     forceToolNames:
       params.swarmCollector && params.swarmOutputSchema ? ["structured_output"] : undefined,
   });
@@ -120,6 +122,7 @@ export function buildEmbeddedAttemptToolRunContext(
     replyToMode: params.replyToMode,
     hasRepliedRef: params.hasRepliedRef,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    messageToolFinalByDefault: params.messageToolFinalByDefault,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     requesterThinkingLevel: params.thinkLevel,
     requesterThinkingExplicit: params.thinkingExplicit,
@@ -128,7 +131,6 @@ export function buildEmbeddedAttemptToolRunContext(
       ? { provider: params.model.provider, model: params.model.id }
       : undefined,
     trigger: params.trigger,
-    continuesConversation: params.continuesConversation,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
     memoryFlushTools: params.memoryFlushTools,
@@ -144,6 +146,6 @@ export function buildEmbeddedAttemptToolRunContext(
       : {}),
     // Freeze trace metadata at the attempt boundary so later mutable diagnostic updates do not
     // rewrite the facts attached to tool calls already in flight.
-    ...(params.trace ? { trace: freezeDiagnosticTraceContext(params.trace) } : {}),
+    ...(overrides.trace ? { trace: freezeDiagnosticTraceContext(overrides.trace) } : {}),
   };
 }

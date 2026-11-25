@@ -4,7 +4,6 @@ export const REPLY_TOOL_AUTHORITY_COMPAT_RECORD = {
   code: "reply-tool-authority-sync-preparation",
   status: "deprecated",
   owner: "sdk",
-  introduced: "2026-10-04",
   deprecated: "2026-10-04",
   warningStarts: "2026-10-04",
   removeAfter: "2026-12-31",
@@ -23,10 +22,4 @@ export const REPLY_TOOL_AUTHORITY_COMPAT_RECORD = {
   diagnostics: [
     "TypeScript @deprecated annotations and bounded warnings on legacy preparation or injection fallbacks; supported prepared projections and live effect assertions remain silent",
   ],
-  tests: [
-    "src/plugins/compat/registry.test.ts",
-    "test/type-contracts/reply-tool-authority-compat.ts",
-  ],
-  releaseNote:
-    "Reply tool authority preparation gains awaited session-reader paths while retaining released synchronous snapshot, operation, and dispatcher contracts. Legacy external V2 dispatchers retain fresh native authority checks; schema, retention, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

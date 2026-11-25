@@ -3,10 +3,8 @@ import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createTestChatPane,
-} from "../chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
+import { createTestChatPane } from "../chat-pane.test-support.ts";
 import { createChatProps } from "../chat-view.test-helpers.ts";
 import { ChatDetailSlot } from "./chat-detail-slot-view.tsx";
 import type { SidebarSelection } from "./chat-sidebar-content-types.ts";

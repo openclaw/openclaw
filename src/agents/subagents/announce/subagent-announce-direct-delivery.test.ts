@@ -1,27 +1,33 @@
+import assert from "node:assert/strict";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
-import { createSessionWorkStartChangedError } from "../../../config/sessions/lifecycle.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
-import * as sessionEntryWorker from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { createRecoveryTypingManager } from "../../../gateway/recovery-typing.js";
+import { createLifecycleTypingManager } from "../../../gateway/lifecycle-typing.js";
+import { registerGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
-import { registerGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import type { sendMessage } from "../../../infra/outbound/message.js";
+import { createOwnedTestInstance } from "../../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../../../plugins/runtime/gateway-request-scope.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../../sessions/session-controller.contracts.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
+  adoptSessionControllerSource,
   clearSessionControllerMailbox,
   reserveSessionControllerSource,
   retireSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
+import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 
@@ -37,38 +43,23 @@ const unconfirmedCommit = {
 const queued = {
   delivered: false,
   reason: "requester_turn_pending",
-  disposition: "session_queued",
 } as const;
 
 const sessionKey = "agent:main:requester-settle";
-const sourceRunId = "announce-requester-settle-recovery";
-const finalReceipt: Partial<SessionEntry> = {
-  restartRecoveryTerminalRunIds: [sourceRunId],
-  restartRecoveryTerminalDeliveryEvidence: [
-    {
-      runId: sourceRunId,
-      transcriptRunId: "recovery-successor",
-      captured: true,
-      payloads: [{ visible: true }],
-      deliveryStatus: { status: "sent", resultCount: 1 },
-    },
-  ],
-};
+const sourceRunId = "announce-requester-settle";
 
 function setup(sourceTool = "subagent_settle") {
   const controller = new AbortController();
   let ownedDelivery: ReturnType<typeof deliverSubagentAnnouncement> | undefined;
   const dispatchEntered = createDeferredCore();
   const dispatchDone = createDeferredCore<unknown>();
-  const readEntered = createDeferredCore();
-  const readDone = createDeferredCore();
   const initialEntry: SessionEntry = {
     sessionId: "requester-session",
     lifecycleRevision: "requester-revision",
     updatedAt: 1,
   };
   const state = { entry: initialEntry, allowed: true, active: false };
-  const storePath = "/synthetic/requester-recovery/sessions.json";
+  const storePath = "/synthetic/requester-completion/sessions.json";
   const cfg: OpenClawConfig = { session: { store: storePath } };
   const target = captureSessionTarget({
     storeScope: storePath,
@@ -85,28 +76,12 @@ function setup(sourceTool = "subagent_settle") {
     dispatchEntered.resolve();
     return (await dispatchDone.promise) as T;
   });
-  const read = vi
-    .spyOn(sessionEntryWorker, "readSessionEntriesFromStoreInWorker")
-    .mockImplementation(async () => {
-      readEntered.resolve();
-      await readDone.promise;
-      return {
-        kind: "session-exact-entries",
-        entries: [{ sessionKey, entry: state.entry }],
-        lifecycleTimestamps: {},
-      };
-    });
   onTestFinished(async () => {
     // Revoke, release, and join before restoring shared dependencies.
     controller.abort();
     dispatchDone.resolve({ status: "error", stopReason: "rpc" });
-    readDone.resolve();
     await Promise.allSettled(ownedDelivery ? [ownedDelivery] : []);
-    try {
-      read.mockRestore();
-    } finally {
-      testing.setDepsForTest();
-    }
+    testing.setDepsForTest();
   });
   const send = vi.fn<typeof sendMessage>(async () => {
     throw new Error("Unexpected replay");
@@ -136,8 +111,8 @@ function setup(sourceTool = "subagent_settle") {
     directOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
     sourceTool,
     requesterIsSubagent: false,
-    expectsCompletionMessage: sourceTool === "subagent_announce",
-    requireVisibleReply: true,
+    expectsCompletionMessage: sourceTool !== "subagent_settle",
+    requireVisibleReply: sourceTool !== "agent_harness_completion",
     directIdempotencyKey: sourceRunId,
     isSourceSessionEffectsAllowed: () => state.allowed,
     signal: controller.signal,
@@ -152,9 +127,6 @@ function setup(sourceTool = "subagent_settle") {
     dispatchEntered,
     dispatchDone,
     startExecution: () => executionStarted?.(),
-    read,
-    readEntered,
-    readDone,
     send,
   };
 }
@@ -162,6 +134,8 @@ function setup(sourceTool = "subagent_settle") {
 function steering(
   fixture: ReturnType<typeof setup>,
   inject: ReplyBackendMessageInjectionV2["queueMessage"],
+  phase: "running" | "preflight_compacting" = "running",
+  runId?: string,
 ) {
   const { target } = fixture;
   const operation = createReplyOperation({
@@ -170,17 +144,18 @@ function steering(
     resetTriggered: false,
     target,
   });
-  operation.setPhase("running");
+  operation.setPhase(phase);
   const queueMessage = vi.fn(inject);
   operation.attachBackend({
     kind: "embedded",
+    runId,
     cancel() {},
     supportsTranscriptCommitWait: true,
     messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
   });
   const input = reserveSessionControllerSource(sessionKey, {
     target,
-    policy: { mode: "steer" },
+    policy: { mode: "followup" },
   });
   onTestFinished(() => {
     operation.complete();
@@ -188,157 +163,295 @@ function steering(
     clearSessionControllerMailbox(input.mailbox, () => {});
   });
   fixture.state.active = true;
-  return { queueMessage, input };
+  return { queueMessage, input, operation };
 }
+
+it.each(["rpc", "restart"])(
+  "settles a private completion interrupted by %s",
+  async (stopReason) => {
+    const fixture = setup("subagent_announce");
+    fixture.params.completionTarget = "parent";
+    const delivery = fixture.startDelivery();
+    await fixture.dispatchEntered.promise;
+    fixture.dispatchDone.resolve({ status: "timeout", stopReason });
+    expect(await delivery).toMatchObject({
+      delivered: false,
+    });
+    expect(fixture.send).not.toHaveBeenCalled();
+  },
+);
 
 function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
   expect(fixture.dispatch).toHaveBeenCalledTimes(dispatches);
   expect(fixture.send).not.toHaveBeenCalled();
 }
 
-it.each([
-  ["committed steering", false, false],
-  ["unconfirmed steering", false, true],
-  ["required direct delivery", true, false],
-] as const)(
-  "preserves the completion dispatch phase for %s without replacing controller custody",
-  async (_name, requireDirectDelivery, unconfirmed) => {
+it.each(["resumed", "preparing", "idle"] as const)(
+  "delivers a restart-terminated child's result to the %s requester session",
+  async (state) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const fixture = setup("subagent_announce");
-    const expected = unconfirmed
-      ? { delivered: false, path: "steered", error: "commit outcome unknown" }
-      : { delivered: true, path: requireDirectDelivery ? "direct" : "steered" };
-    const { queueMessage, input } = steering(fixture, async (_text, options, assertCurrent) => {
-      assertCurrent();
-      options?.onQueueAccepted?.(true);
-      return unconfirmed ? unconfirmedCommit : undefined;
+    const dispatch = fixture.dispatch.getMockImplementation()!;
+    fixture.dispatch.mockImplementation(async function <T>(
+      ...args: Parameters<typeof dispatchGatewayMethodInProcess>
+    ) {
+      const input = args[2]?.controllerInput;
+      assert(input);
+      adoptSessionControllerSource(input, {
+        protocolRunId: fixture.params.directIdempotencyKey,
+        target: fixture.target,
+        policy: input.policy,
+        adapter: {},
+      });
+      return (await withSessionTurn(
+        {
+          sessionKey,
+          sessionId: fixture.state.entry.sessionId,
+          target: fixture.target,
+          controllerInput: input,
+        },
+        () => dispatch(...args),
+      )) as T;
     });
-    fixture.dispatchDone.resolve(response([{ text: "Completed directly" }], sentDeliveryStatus));
-    const result = await deliverSubagentAnnouncement({
-      ...fixture.params,
-      controllerInput: input,
-      requireDirectDelivery,
+    const original = steering(
+      fixture,
+      async () => assert.fail("Retired requester received input"),
+      "running",
+      "pre-restart",
+    );
+    const child = createReplyOperation({
+      sessionKey: "agent:worker:subagent:interrupted-child",
+      sessionId: "child-session",
+      resetTriggered: false,
     });
-    expect(result).toMatchObject(expected);
-    expect(result.phases).toEqual([
-      {
-        phase: "direct-primary",
-        ...expected,
-        deliveredAt: undefined,
-        enqueuedAt: undefined,
-        ...(!unconfirmed ? { error: undefined } : {}),
-      },
-    ]);
-    expect(queueMessage).toHaveBeenCalledTimes(requireDirectDelivery ? 0 : 1);
-    expect(fixture.dispatch).toHaveBeenCalledTimes(requireDirectDelivery ? 1 : 0);
-    if (requireDirectDelivery) {
-      expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
+    original.operation.abortForRestart();
+    child.abortForRestart();
+    original.operation.complete();
+    child.complete();
+    retireSessionControllerInput(original.input);
+    fixture.params.sourceSessionKey = "agent:worker:subagent:interrupted-child";
+    fixture.params.internalEvents = taskCompletionEvents({
+      childSessionKey: fixture.params.sourceSessionKey,
+      status: "error",
+      statusLabel: "failed: Gateway stopped",
+      result: "(no output)",
+      noVisibleResult: true,
+    });
+    const received: string[] = [];
+    const childTerminal = createDeferredCore();
+    const resumed =
+      state !== "idle"
+        ? steering(
+            fixture,
+            async (_text, options) => {
+              options?.onQueueAccepted?.(true);
+              received.push(options?.currentInboundContext?.text ?? "");
+              childTerminal.resolve();
+            },
+            state === "preparing" ? "preflight_compacting" : "running",
+            "restart-recovery",
+          )
+        : undefined;
+    const parentContinuation = childTerminal.promise.then(() => "child failure handled");
+    const input =
+      resumed?.input ??
+      reserveSessionControllerSource(sessionKey, {
+        target: fixture.target,
+        policy: { mode: "followup" },
+      });
+    fixture.params.controllerInput = input;
+    fixture.dispatchDone.resolve(
+      response([{ text: "Child interruption handled" }], sentDeliveryStatus),
+    );
+    try {
+      const delivery = fixture.startDelivery();
+      let settled: Awaited<typeof delivery> | undefined;
+      void delivery.then((result) => {
+        settled = result;
+      });
+      if (state === "preparing") {
+        setTimeout(() => resumed!.operation.setPhase("running"), 10);
+      }
+      await vi.advanceTimersByTimeAsync(10);
+      expect(settled).toMatchObject({ delivered: true, path: resumed ? "steered" : "direct" });
+      expect(original.queueMessage).not.toHaveBeenCalled();
+      if (resumed) {
+        expect(received).toHaveLength(1);
+        expect(received[0]).toContain("Gateway stopped");
+        await expect(parentContinuation).resolves.toBe("child failure handled");
+        resumed.operation.complete();
+        expect(resumed.operation.result).toMatchObject({ kind: "completed" });
+        expect(fixture.dispatch).not.toHaveBeenCalled();
+      } else {
+        expect(fixture.dispatch).toHaveBeenCalledOnce();
+        expect(fixture.dispatch.mock.calls[0]?.[1]).toMatchObject({ sessionKey });
+      }
+    } finally {
+      resumed?.operation.complete();
+      retireSessionControllerInput(input);
     }
   },
 );
 
-it.for(["current", "revoked"] as const)(
-  "settles a rejected recovery handoff before releasing the parent turn (%s source)",
-  async (source, { signal }) => {
-    const fixture = setup("subagent_announce");
-    const gate = <T>(pending: Promise<T>, active: Promise<unknown>, message: string) =>
-      withinTest(awaitGateBeforeSettlement(pending, active, message), signal);
-    const { target } = fixture;
-    const recoveryEntered = createDeferredCore();
-    const releaseRecovery = createDeferredCore();
-    const retirementEntered = createDeferredCore();
-    const releaseRetirement = createDeferredCore();
-    const recovery = withSessionTurn(
-      { target, sessionKey, sessionId: fixture.state.entry.sessionId },
-      async (operation) => {
-        if (!operation) {
-          throw new Error("Timeout recovery requires its retained controller operation");
-        }
-        operation.setPhase("preflight_compacting");
-        recoveryEntered.resolve();
-        await releaseRecovery.promise;
-      },
+it("delivers a text fallback on the current generation after its producer releases", async ({
+  signal,
+}) => {
+  const fixture = setup("subagent_announce");
+  fixture.params.directOrigin = { channel: "discord", to: "dm:U123" };
+  fixture.params.sourceSessionKey = "agent:worker:subagent:child";
+  fixture.params.internalEvents = taskCompletionEvents({ childSessionId: "child-session-id" });
+  const predecessor = createOwnedTestInstance("announce-predecessor");
+  const successor = createOwnedTestInstance("announce-successor");
+  const shared = createOwnedTestInstance("announce-shared");
+  const currentRegistry = successor.owner!.registry!;
+  const invocations = new PluginInvocationScope(
+    predecessor.owner!.registry!,
+    [predecessor, shared],
+    { retained: true },
+  );
+  const oldCallback = invocations.wrap(predecessor.wrap(() => "previous"));
+  const sharedCallback = shared.wrap(() => "shared");
+  fixture.send.mockImplementation(async () => {
+    expect(getPluginRegistryForContext()).toBe(currentRegistry);
+    expect(sharedCallback()).toBe("shared");
+    return {
+      channel: "discord",
+      to: "dm:U123",
+      via: "direct",
+      mediaUrl: null,
+      result: { messageId: "completion-message" },
+    };
+  });
+  const original = captureActivePluginRegistrySnapshot();
+  let delivery: ReturnType<typeof fixture.startDelivery> | undefined;
+  try {
+    setActivePluginRegistry(currentRegistry);
+    delivery = invocations.run(() => fixture.startDelivery());
+    await withinTest(
+      awaitGateBeforeSettlement(
+        fixture.dispatchEntered.promise,
+        delivery,
+        "Missed requester dispatch",
+      ),
+      signal,
     );
-    const abandonment = vi
-      .spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment")
-      .mockReturnValue("recovering_timeout");
-    fixture.state.active = true;
-    fixture.dispatch.mockRejectedValue(new Error("Unexpected completion during recovery"));
-    fixture.readDone.resolve();
-    let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
-    let delivery: ReturnType<typeof fixture.startDelivery> | undefined;
-    let handoffSettled = false;
-    try {
-      await gate(recoveryEntered.promise, recovery, "Recovery exited before admission");
-      input = reserveSessionControllerSource(sessionKey, {
-        target,
-        policy: { mode: "followup" },
-        adapter: {
-          onSettled: async () => {
-            retirementEntered.resolve();
-            await releaseRetirement.promise;
-          },
-        },
-      });
-      const parentClaim = input.mailbox.claim;
-      expect(parentClaim?.operation).toMatchObject({
-        phase: "preflight_compacting",
-        result: null,
-      });
-      fixture.params.controllerInput = input;
-      delivery = fixture.startDelivery().finally(() => {
-        handoffSettled = true;
-      });
-      await gate(retirementEntered.promise, delivery, "Completion skipped retirement");
-      expect(handoffSettled).toBe(false);
-      expect(input.mailbox.entries).toContain(input);
-      expect(input.mailbox.claim).toBe(parentClaim);
-      expect(parentClaim?.operation?.result).toBeNull();
-      if (source === "revoked") {
-        fixture.state.allowed = false;
-      }
-      releaseRetirement.resolve();
-      const result = await gate(delivery, recovery, "Recovery released before handoff");
-      await input.settlement.promise;
-      expect(result).toMatchObject(
-        source === "current"
-          ? { delivered: false, reason: "completion_handoff_pending", disposition: "retryable" }
-          : {
-              delivered: false,
-              reason: "source_owner_changed",
-              terminal: true,
-              disposition: "intentional_non_delivery",
-            },
-      );
-      expect(input.phase).toBe("consumed");
-      expect(input.mailbox.entries).not.toContain(input);
-      expect(input.mailbox.claim).toBe(parentClaim);
-      expect(parentClaim).toMatchObject({
-        released: false,
-        operation: { phase: "preflight_compacting", result: null },
-      });
-      expectNoReplay(fixture, 0);
-      releaseRecovery.resolve();
-      await recovery;
-      expectNoReplay(fixture, 0);
-    } finally {
-      releaseRetirement.resolve();
-      releaseRecovery.resolve();
-      if (input) {
-        retireSessionControllerInput(input);
-      }
-      await Promise.allSettled([recovery, delivery, input?.settlement.promise]);
-      abandonment.mockRestore();
+    invocations.release();
+    expect(() => oldCallback()).toThrow("Plugin announce-predecessor consumer is closed");
+    fixture.dispatchDone.resolve(response([{ text: "unsent parent completion" }]));
+    const result = await withinTest(delivery, signal);
+    expect(fixture.send).toHaveBeenCalledOnce();
+    await expect(fixture.send.mock.results[0]!.value).resolves.toMatchObject({
+      result: { messageId: "completion-message" },
+    });
+    expect(result).toMatchObject({ delivered: true, path: "direct" });
+    expect(fixture.dispatch).toHaveBeenCalledOnce();
+    expect(fixture.dispatch.mock.calls[0]?.[1]).toMatchObject({ idempotencyKey: sourceRunId });
+    expect(fixture.send).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ idempotencyKey: `${sourceRunId}:text-direct` }),
+    );
+  } finally {
+    invocations.release();
+    fixture.dispatchDone.resolve(response());
+    await Promise.allSettled(delivery ? [delivery] : []);
+    restoreActivePluginRegistrySnapshot(original);
+  }
+});
+
+it.each([false, true])("preserves a committed direct completion (restart=%s)", async (restart) => {
+  const fixture = setup("agent_harness_completion");
+  const expected = { delivered: true, path: "direct" };
+  const { queueMessage, input } = steering(fixture, vi.fn());
+  fixture.dispatchDone.resolve({
+    ...response([{ text: "Completed directly" }], sentDeliveryStatus),
+    ...(restart ? { status: "timeout", stopReason: "restart" } : {}),
+  });
+  const result = await deliverSubagentAnnouncement({
+    ...fixture.params,
+    controllerInput: input,
+    requireDirectDelivery: true,
+  });
+  expect(result).toMatchObject(expected);
+  expect(result.phases).toEqual([
+    {
+      phase: "direct-primary",
+      ...expected,
+      deliveredAt: undefined,
+      enqueuedAt: undefined,
+      error: undefined,
+    },
+  ]);
+  expect(queueMessage).not.toHaveBeenCalled();
+  const options = fixture.dispatch.mock.calls[0]?.[2];
+  expect(options).toMatchObject({ controllerInput: input, replyExpectation: "optional" });
+});
+
+it("keeps the same completion input when timeout recovery ends without a backend", async ({
+  signal,
+}) => {
+  const fixture = setup("subagent_announce");
+  const recoveryEntered = createDeferredCore();
+  const releaseRecovery = createDeferredCore();
+  const recovery = withSessionTurn(
+    { target: fixture.target, sessionKey, sessionId: fixture.state.entry.sessionId },
+    async (operation) => {
+      assert(operation, "Missing timeout recovery operation");
+      operation.setPhase("preflight_compacting");
+      recoveryEntered.resolve();
+      await releaseRecovery.promise;
+    },
+  );
+  const abandonment = vi
+    .spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment")
+    .mockReturnValue("recovering_timeout");
+  fixture.state.active = true;
+  let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
+  let delivery: ReturnType<typeof fixture.startDelivery> | undefined;
+  try {
+    await withinTest(recoveryEntered.promise, signal);
+    input = reserveSessionControllerSource(sessionKey, {
+      target: fixture.target,
+      policy: { mode: "followup" },
+    });
+    const parentClaim = input.mailbox.claim;
+    fixture.params.controllerInput = input;
+    delivery = fixture.startDelivery();
+    expect(input.mailbox.claim).toBe(parentClaim);
+    expect(input.phase).not.toBe("consumed");
+    releaseRecovery.resolve();
+    await recovery;
+    await withinTest(
+      awaitGateBeforeSettlement(
+        fixture.dispatchEntered.promise,
+        delivery,
+        "Completion lost its controller input",
+      ),
+      signal,
+    );
+    expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
+    expect(input.phase).not.toBe("consumed");
+    fixture.dispatchDone.resolve(response([{ text: "Recovered completion" }], sentDeliveryStatus));
+    await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
+    expectNoReplay(fixture);
+  } finally {
+    releaseRecovery.resolve();
+    fixture.dispatchDone.resolve(response());
+    if (input) {
+      retireSessionControllerInput(input);
     }
-  },
-);
+    await Promise.allSettled([recovery, delivery, input?.settlement.promise]);
+    abandonment.mockRestore();
+  }
+});
 
 it("reports no attempted completion phase when cancelled before dispatch", async () => {
   const fixture = setup();
   fixture.controller.abort();
-  await expect(fixture.startDelivery()).resolves.toEqual({
+  await expect(fixture.startDelivery()).resolves.toMatchObject({
     delivered: false,
     path: "none",
-    phases: [],
   });
   expectNoReplay(fixture, 0);
 });
@@ -374,43 +487,19 @@ it.each([
     expect(queueMessage).not.toHaveBeenCalled();
   } else {
     expect(queueMessage).toHaveBeenCalledOnce();
+    // A committed steer is the delivery; only an unconfirmed commit still depends on its owner.
     expect(result).toMatchObject(
-      change === "admission"
-        ? outcome === "accepted"
-          ? { delivered: true, path: "steered" }
-          : {
+      outcome === "accepted"
+        ? { delivered: true, path: "steered" }
+        : change === "admission"
+          ? {
               delivered: false,
               path: "steered",
-              disposition: "ambiguous",
               error: "commit outcome unknown",
             }
-        : { delivered: false, reason: "source_owner_changed" },
+          : { delivered: false, reason: "source_owner_changed" },
     );
   }
-  expectNoReplay(fixture, 0);
-});
-
-it.each(["subagent_settle", "subagent_announce"])("reuses %s receipt", async (sourceTool) => {
-  const fixture = setup(sourceTool);
-  fixture.state.entry = {
-    ...fixture.state.entry,
-    restartRecoveryDeliverySourceRunId: sourceRunId,
-    restartRecoveryDeliveryRunId: "recovery-successor",
-  };
-  fixture.dispatchDone.resolve(response([{ text: "Unexpected duplicate" }], sentDeliveryStatus));
-  await expect(fixture.startDelivery()).resolves.toMatchObject(queued);
-  expect(fixture.dispatch).not.toHaveBeenCalled();
-  fixture.state.active = true;
-  fixture.state.entry = {
-    ...fixture.state.entry,
-    ...finalReceipt,
-    restartRecoveryDeliveryRunId: undefined,
-    restartRecoveryDeliverySourceRunId: undefined,
-  };
-  await expect(deliverSubagentAnnouncement(fixture.params)).resolves.toMatchObject({
-    delivered: true,
-    requesterVisibleFinalDelivered: true,
-  });
   expectNoReplay(fixture, 0);
 });
 
@@ -428,22 +517,20 @@ it.each([
   });
   const sendTyping = vi.fn(async () => {});
   const clearTyping = vi.fn(async () => {});
-  const typing = createRecoveryTypingManager({
+  const typing = createLifecycleTypingManager({
     getConfig: () => ({}),
     isAvailable: () => true,
     resolveAdapter: async () => ({ sendTypingGuarded: sendTyping, clearTyping }),
   });
   const unused = async () => {
-    throw new Error("unexpected recovery dispatch");
+    throw new Error("unexpected lifecycle dispatch");
   };
-  const unregister = registerGatewayRecoveryRuntime({
-    prepareRestartRecovery: unused,
-    resumeChatInput: unused,
+  const unregister = registerGatewayLifecycleRuntime({
     dispatchSessionMethod: unused,
     dispatchAgent: unused,
     waitForAgent: unused,
-    sendRecoveryNotice: unused,
-    startRecoveryTyping: (params) => typing.start(params),
+    sendNotice: unused,
+    startTyping: (params) => typing.start(params),
   });
   const fixture = setup();
   fixture.params.directOrigin = {
@@ -455,8 +542,6 @@ it.each([
   const visible = ending !== "private" && ending !== "child" && ending !== "session-only";
   if (ending === "private") {
     fixture.params.completionTarget = "parent";
-    fixture.params.completionRequesterSessionId = "requester-session";
-    fixture.params.completionRequesterLifecycleRevision = "requester-revision";
   }
   if (ending === "child") {
     fixture.params.requesterIsSubagent = true;
@@ -477,7 +562,6 @@ it.each([
   await vi.advanceTimersByTimeAsync(0);
   if (!visible) {
     expect(sendTyping).not.toHaveBeenCalled();
-    fixture.readDone.resolve();
     fixture.dispatchDone.resolve(response());
     await delivery;
     expect(clearTyping).not.toHaveBeenCalled();
@@ -506,153 +590,9 @@ it.each([
   expect(sendTyping).toHaveBeenCalledTimes(count);
   expect(clearTyping).toHaveBeenCalledOnce();
 });
-
-type DirectOutcome = {
-  name: string;
-  sourceTool?: string;
-  input: unknown;
-  patch?: Partial<SessionEntry>;
-  expected: Partial<Awaited<ReturnType<typeof deliverSubagentAnnouncement>>>;
-  preserve?: boolean;
-};
-type Expected = DirectOutcome["expected"];
-const recovered = {
-  delivered: true,
-  requesterVisibleFinalDelivered: true,
-  disposition: undefined,
-} satisfies Expected;
-const missing = { delivered: false, reason: "visible_reply_missing" } as const;
-const retryable = { ...missing, disposition: "retryable" } satisfies Expected;
-const permanent = { delivered: false, disposition: "permanent_failure" } satisfies Expected;
-const ambiguous = { delivered: false, disposition: "ambiguous" } satisfies Expected;
-const liveClaim = {
-  restartRecoveryDeliverySourceRunId: sourceRunId,
-  restartRecoveryDeliveryRunId: "successor",
-} satisfies Partial<SessionEntry>;
-const unsent = {
-  restartRecoveryTerminalDeliveryEvidence: [
-    { runId: sourceRunId, captured: true, payloads: [{ visible: true }] },
-  ],
-} satisfies Partial<SessionEntry>;
-const suppressed = {
-  status: "ok",
-  result: {
-    deliveryStatus: {
-      status: "suppressed",
-      reason: "cancelled_by_message_sending_hook",
-      resultCount: 0,
-    },
-  },
-};
-it.each`
-  name                                     | input                                                                                         | patch                                                                                    | expected                                                                            | sourceTool             | preserve
-  ${"pending settle response"}             | ${{ status: "accepted", runId: "pending-requester" }}                                         | ${{} satisfies Partial<SessionEntry>}                                                    | ${{ ...queued, path: "direct" } satisfies Expected}                                 | ${undefined}           | ${false}
-  ${"announcement during recovery"}        | ${createSessionWorkStartChangedError(sessionKey)}                                             | ${undefined}                                                                             | ${recovered}                                                                        | ${"subagent_announce"} | ${false}
-  ${"empty final"}                         | ${response()}                                                                                 | ${undefined}                                                                             | ${recovered}                                                                        | ${undefined}           | ${false}
-  ${"restart interruption"}                | ${{ status: "error", stopReason: "restart" }}                                                 | ${undefined}                                                                             | ${recovered}                                                                        | ${undefined}           | ${false}
-  ${"old keyed-input rejection"}           | ${new Error("old keyed input rejected")}                                                      | ${undefined}                                                                             | ${recovered}                                                                        | ${undefined}           | ${false}
-  ${"live claim"}                          | ${response()}                                                                                 | ${liveClaim}                                                                             | ${queued}                                                                           | ${undefined}           | ${false}
-  ${"terminal without receipt"}            | ${response()}                                                                                 | ${{ restartRecoveryTerminalRunIds: [sourceRunId] } satisfies Partial<SessionEntry>}      | ${{ ...missing, ...permanent } satisfies Expected}                                  | ${undefined}           | ${false}
-  ${"unrelated source"}                    | ${response()}                                                                                 | ${{ restartRecoveryTerminalRunIds: ["another-source"] } satisfies Partial<SessionEntry>} | ${retryable}                                                                        | ${undefined}           | ${false}
-  ${"replacement session"}                 | ${response()}                                                                                 | ${{ ...finalReceipt, sessionId: "replacement" } satisfies Partial<SessionEntry>}         | ${retryable}                                                                        | ${undefined}           | ${false}
-  ${"replacement lifecycle"}               | ${response()}                                                                                 | ${{ ...finalReceipt, lifecycleRevision: "replacement" } satisfies Partial<SessionEntry>} | ${retryable}                                                                        | ${undefined}           | ${false}
-  ${"unsent external final"}               | ${response()}                                                                                 | ${unsent}                                                                                | ${retryable}                                                                        | ${undefined}           | ${false}
-  ${"committed final"}                     | ${response([{ text: "Sent final" }], sentDeliveryStatus)}                                     | ${undefined}                                                                             | ${{ delivered: true, disposition: undefined } satisfies Expected}                   | ${undefined}           | ${true}
-  ${"partial send"}                        | ${{ status: "ok", result: { deliveryStatus: { status: "partial_failed", resultCount: 1 } } }} | ${undefined}                                                                             | ${ambiguous}                                                                        | ${undefined}           | ${true}
-  ${"intentional suppression"}             | ${suppressed}                                                                                 | ${undefined}                                                                             | ${{ delivered: false, disposition: "intentional_non_delivery" } satisfies Expected} | ${undefined}           | ${true}
-  ${"explicit stop"}                       | ${{ status: "error", stopReason: "rpc" }}                                                     | ${undefined}                                                                             | ${{ delivered: false, disposition: undefined } satisfies Expected}                  | ${undefined}           | ${true}
-  ${"permanent failure"}                   | ${Object.assign(new Error("unsupported channel: fixture"), { code: "UNSUPPORTED" })}          | ${undefined}                                                                             | ${permanent}                                                                        | ${undefined}           | ${true}
-  ${"flattened transcript turn assertion"} | ${new Error("Error: Session transcript keyed user is outside the current turn: old-input")}   | ${undefined}                                                                             | ${permanent}                                                                        | ${undefined}           | ${true}
-  ${"send ambiguity"}                      | ${Object.assign(new Error("send outcome unknown"), { sentBeforeError: true })}                | ${undefined}                                                                             | ${ambiguous}                                                                        | ${undefined}           | ${true}
-`("reconciles the direct outcome for $name without replay", async (outcome: DirectOutcome) => {
-  const fixture = setup(outcome.sourceTool);
-  const onDeliveryError = vi.fn();
-  if (outcome.preserve) {
-    fixture.params.onDeliveryError = onDeliveryError;
-  }
-  const delivery = fixture.startDelivery();
-  await fixture.dispatchEntered.promise;
-  fixture.state.entry = { ...fixture.state.entry, ...(outcome.patch ?? finalReceipt) };
-  fixture.readDone.resolve();
-  if (outcome.input instanceof Error) {
-    fixture.dispatchDone.reject(outcome.input);
-  } else {
-    fixture.dispatchDone.resolve(outcome.input);
-  }
-  const result = await delivery;
-  const { disposition, ...expected } = outcome.expected;
-  expect(result).toMatchObject(expected);
-  expect(result.disposition).toBe(disposition);
-  if (outcome.preserve) {
-    expect(fixture.read).not.toHaveBeenCalled();
-    if (outcome.input instanceof Error) {
-      expect(onDeliveryError).toHaveBeenCalledWith(outcome.input);
-      expect(result.error).toBe(outcome.input.message);
-    } else {
-      expect(onDeliveryError).not.toHaveBeenCalled();
-    }
-  }
-  expectNoReplay(fixture);
-});
-
-it.each(["private", "incognito"] as const)("no recovery reads for %s", async (scope) => {
+it("reports queue custody for a pending settle response without replay", async () => {
   const fixture = setup();
-  if (scope === "private") {
-    fixture.params.completionTarget = "parent";
-    fixture.params.completionRequesterSessionId = "requester-session";
-    fixture.params.completionRequesterLifecycleRevision = "requester-revision";
-  } else {
-    fixture.params.requesterSessionKey = "agent:main:dashboard:incognito-recovery";
-    fixture.params.targetRequesterSessionKey = fixture.params.requesterSessionKey;
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
-    onTestFinished(() =>
-      memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath }),
-    );
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey: fixture.params.requesterSessionKey, storePath },
-      { ...fixture.state.entry, incognito: true },
-    );
-  }
-  const delivery = fixture.startDelivery();
-  await awaitGateBeforeSettlement(
-    fixture.dispatchEntered.promise,
-    delivery,
-    "Announcement did not reach direct delivery",
-  );
-  fixture.state.entry = { ...fixture.state.entry, ...finalReceipt };
-  fixture.dispatchDone.resolve(response());
-  await expect(delivery).resolves.toMatchObject({ delivered: false });
-  expect(fixture.read).not.toHaveBeenCalled();
+  fixture.dispatchDone.resolve({ status: "accepted", runId: "pending-requester" });
+  expect(await fixture.startDelivery()).toMatchObject({ ...queued, path: "queued" });
   expectNoReplay(fixture);
 });
-
-it.each(["source retired", "cancelled", "read failed"] as const)(
-  "does not accept late evidence when %s during its read",
-  async (change) => {
-    const fixture = setup();
-    const delivery = fixture.startDelivery();
-    await fixture.dispatchEntered.promise;
-    fixture.state.entry = { ...fixture.state.entry, ...finalReceipt };
-    fixture.dispatchDone.reject(new Error("gateway unavailable before admission"));
-    await awaitGateBeforeSettlement(
-      fixture.readEntered.promise,
-      delivery,
-      "Delivery settled before reading its late recovery receipt",
-    );
-    if (change === "source retired") {
-      fixture.state.allowed = false;
-    }
-    if (change === "cancelled") {
-      fixture.controller.abort();
-    }
-    if (change === "read failed") {
-      fixture.readDone.reject(new Error("worker unavailable"));
-    } else {
-      fixture.readDone.resolve();
-    }
-    const result = await delivery;
-    expect(result).toMatchObject({ delivered: false });
-    expect(result.reason).toBe(change === "source retired" ? "source_owner_changed" : undefined);
-    expectNoReplay(fixture);
-  },
-);

@@ -13,12 +13,9 @@ const FALLBACK_DOCS_TEMPLATE_DIR = path.resolve(
 );
 
 /** Resolves existing packaged workspace-template directories without retired runtime paths. */
-export async function resolveWorkspaceTemplateSearchDirs(opts?: {
-  cwd?: string;
-  moduleUrl?: string;
-}): Promise<string[]> {
-  const moduleUrl = opts?.moduleUrl ?? import.meta.url;
-  const cwd = opts?.cwd ?? process.cwd();
+export async function resolveWorkspaceTemplateSearchDirs(): Promise<string[]> {
+  const moduleUrl = import.meta.url;
+  const cwd = process.cwd();
 
   const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl, argv1: process.argv[1], cwd });
   const relativeDir = path.join("docs", "reference", "templates");

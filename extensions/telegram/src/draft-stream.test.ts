@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDraftStream,
   createMockDraftApi,
+  telegramDraftCodeFixture,
   type MockSentMessage,
 } from "./draft-stream.api.test-helpers.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
@@ -315,7 +316,7 @@ describe("createTelegramDraftStream", () => {
 
       await vi.advanceTimersByTimeAsync(10_000);
       expect(api.sendMessage).toHaveBeenCalledTimes(2);
-      expect(stream.sendMayHaveLanded()).toBe(true);
+      expect(stream.sendMayHaveLanded("Replacement")).toBe(true);
       expect(api.deleteMessage).not.toHaveBeenCalled();
 
       await stream.clear();
@@ -352,7 +353,7 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
-    expect(stream.sendMayHaveLanded?.()).toBe(false);
+    expect(stream.sendMayHaveLanded("Hello")).toBe(false);
     expect(stream.messageId()).toBe(17);
   });
 
@@ -501,13 +502,7 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("paginates rendered fenced code without losing code context", async () => {
-    const text = [
-      "```ts",
-      "  const one = 1;",
-      "  const two = 2;",
-      "  return one + two;",
-      "```",
-    ].join("\n");
+    const text = telegramDraftCodeFixture;
     const pagePattern = /^<pre><code class="language-ts">[\s\S]*<\/code><\/pre>$/u;
     const api = createMockDraftApi();
     const onSupersededPreview = vi.fn();
@@ -541,13 +536,7 @@ describe("createTelegramDraftStream", () => {
   it("paginates one rendered rich-code plan without reparsing Markdown tails", async () => {
     const api = createMockDraftApi();
     const onSupersededPreview = vi.fn();
-    const text = [
-      "```ts",
-      "  const one = 1;",
-      "  const two = 2;",
-      "  return one + two;",
-      "```",
-    ].join("\n");
+    const text = telegramDraftCodeFixture;
     const stream = createDraftStream(api, {
       // Plain code body is shorter than HTML-wrapped rich text; keep the limit
       // under the pre body so pagination still splits across messages.

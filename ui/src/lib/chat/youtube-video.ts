@@ -4,23 +4,6 @@ const YOUTUBE_HOSTS = new Set(["youtube.com", "www.youtube.com", "m.youtube.com"
 const YOUTUBE_EMBED_HOSTS = new Set(["youtube-nocookie.com", "www.youtube-nocookie.com"]);
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/u;
 
-function parseStartSeconds(value: string | null): number | undefined {
-  if (value === null) {
-    return 0;
-  }
-  let seconds: number;
-  if (/^\d+$/u.test(value)) {
-    seconds = Number(value);
-  } else {
-    const units = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/iu.exec(value);
-    if (!units || !value) {
-      return undefined;
-    }
-    seconds = Number(units[1] ?? 0) * 3600 + Number(units[2] ?? 0) * 60 + Number(units[3] ?? 0);
-  }
-  return Number.isSafeInteger(seconds) && seconds >= 0 ? seconds : undefined;
-}
-
 /** Resolves supported video links into fixed YouTube player and image origins. */
 export function parseYouTubeVideoUrl(raw: string | undefined) {
   if (!raw) {
@@ -56,9 +39,22 @@ export function parseYouTubeVideoUrl(raw: string | undefined) {
   if (!videoId || !VIDEO_ID.test(videoId)) {
     return undefined;
   }
-  const startSeconds = parseStartSeconds(query.get("start") ?? query.get("t") ?? fragment.get("t"));
-  if (startSeconds === undefined) {
-    return undefined;
+  const start = query.get("start") ?? query.get("t") ?? fragment.get("t");
+  let startSeconds = 0;
+  if (start !== null) {
+    if (/^\d+$/u.test(start)) {
+      startSeconds = Number(start);
+    } else {
+      const units = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/iu.exec(start);
+      if (!units || !start) {
+        return undefined;
+      }
+      startSeconds =
+        Number(units[1] ?? 0) * 3600 + Number(units[2] ?? 0) * 60 + Number(units[3] ?? 0);
+    }
+    if (!Number.isSafeInteger(startSeconds) || startSeconds < 0) {
+      return undefined;
+    }
   }
   const watchUrl = new URL("https://www.youtube.com/watch");
   watchUrl.searchParams.set("v", videoId);
@@ -69,8 +65,6 @@ export function parseYouTubeVideoUrl(raw: string | undefined) {
     embedUrl.searchParams.set("start", String(startSeconds));
   }
   return {
-    videoId,
-    startSeconds,
     watchUrl: watchUrl.href,
     embedUrl: embedUrl.href,
     thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,

@@ -77,6 +77,15 @@ function buildApprovalPresentation(
       commandText,
       commandPreview,
       warningText,
+      ...(request.streamProposal
+        ? {
+            streamProposal: {
+              jobId: request.streamProposal.jobId,
+              name: sanitizeExecApprovalDisplayText(request.streamProposal.name),
+              operation: request.streamProposal.operation,
+            },
+          }
+        : {}),
       host: sanitizeOptionalSingleLine(request.host),
       nodeId: sanitizeOptionalSingleLine(request.nodeId),
       agentId: sanitizeOptionalSingleLine(request.agentId),

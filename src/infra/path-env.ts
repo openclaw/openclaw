@@ -7,29 +7,12 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
-import { canAccessSync } from "./path-existence.js";
+import { canAccessSync, realpathExistingAncestorSync } from "./path-existence.js";
 import { isPathInside, safeStatSync } from "./path-guards.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
 function isKnownPathDir(existingPathParts: ReadonlySet<string>, dirPath: string): boolean {
   return existingPathParts.has(dirPath) || safeStatSync(dirPath)?.isDirectory() === true;
-}
-
-function realpathExistingPath(candidate: string): string | undefined {
-  const suffix: string[] = [];
-  let current = candidate;
-  while (true) {
-    try {
-      return path.resolve(fs.realpathSync.native(current), ...suffix.toReversed());
-    } catch {
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return undefined;
-      }
-      suffix.push(path.basename(current));
-      current = parent;
-    }
-  }
 }
 
 function isFilesystemRoot(dirPath: string): boolean {
@@ -62,9 +45,9 @@ function normalizeTrustedPackageManagerRoot(params: {
     return undefined;
   }
 
-  const realCandidate = realpathExistingPath(normalized);
-  const realCwd = realpathExistingPath(cwd);
-  const realHome = realpathExistingPath(homeDir);
+  const realCandidate = realpathExistingAncestorSync(normalized);
+  const realCwd = realpathExistingAncestorSync(cwd);
+  const realHome = realpathExistingAncestorSync(homeDir);
   if (
     realCwd &&
     realCwd !== realHome &&
@@ -161,9 +144,13 @@ function candidateBinDirs(existingPathParts: ReadonlySet<string>): {
   if (npmPrefix) {
     append.push(path.join(npmPrefix, "bin"));
   }
-  const miseDataDir = resolveMiseDataDir({ homeDir, platform });
-  const miseShims = path.join(miseDataDir, "shims");
-  if (isKnownPathDir(existingPathParts, miseShims)) {
+  // Validate the complete candidate so significant spaces in the data root survive.
+  const miseShims = normalizeTrustedPackageManagerRoot({
+    value: path.join(resolveMiseDataDir({ homeDir, platform }), "shims"),
+    cwd,
+    homeDir,
+  });
+  if (miseShims) {
     append.push(miseShims);
   }
   if (platform === "darwin") {
@@ -172,8 +159,13 @@ function candidateBinDirs(existingPathParts: ReadonlySet<string>): {
       path.join(homeDir, "Library", "pnpm"),
     );
   }
-  if (process.env.XDG_BIN_HOME) {
-    append.push(process.env.XDG_BIN_HOME);
+  const xdgBinHome = normalizeTrustedPackageManagerRoot({
+    value: process.env.XDG_BIN_HOME,
+    cwd,
+    homeDir,
+  });
+  if (xdgBinHome) {
+    append.push(xdgBinHome);
   }
   append.push(path.join(homeDir, ".local", "bin"));
   append.push(path.join(homeDir, ".npm-global", "bin"));

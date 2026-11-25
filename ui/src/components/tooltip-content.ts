@@ -44,9 +44,7 @@ function collectTooltipText(
       !hidesText &&
       style?.visibility !== "hidden" &&
       style?.visibility !== "collapse" &&
-      (style?.display === "contents" ||
-        typeof element.checkVisibility !== "function" ||
-        element.checkVisibility({ checkVisibilityCSS: true }));
+      (style?.display === "contents" || element.checkVisibility({ checkVisibilityCSS: true }));
     return [...element.childNodes]
       .map((node) => {
         if (isElementNode(node)) {
@@ -76,6 +74,9 @@ function hasTooltipOverflow(element: Element) {
 export function isTooltipTextRedundant(content: string, trigger: Element) {
   const tooltipText = normalizeTooltipText(content);
   if (!tooltipText) {
+    return false;
+  }
+  if (!trigger.textContent?.trim()) {
     return false;
   }
   const overflowTargets: Element[] = [];

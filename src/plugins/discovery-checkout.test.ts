@@ -3,8 +3,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
+import { resolvePluginManifestInstallOwner } from "./manifest-install-owner.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -46,6 +48,44 @@ function discoveryEnv(stateDir: string, bundledDir: string | undefined, realChec
     OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: realCheckout ? "0" : "1",
   };
 }
+
+it.each(["home", "state"])(
+  "keeps official global installs trusted when the workspace is %s",
+  (workspace) => {
+    const home = makeDir("openclaw-global-provenance");
+    const stateDir = path.join(home, ".openclaw");
+    const pluginDir = path.join(stateDir, "extensions", "codex");
+    writePlugin(pluginDir, "codex", "js");
+    const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const workspaceDir = workspace === "home" ? home : stateDir;
+    const installRecords: Record<string, PluginInstallRecord> = {
+      codex: {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/codex",
+        clawhubPackage: "@openclaw/codex",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubChannel: "official",
+        installPath: pluginDir,
+      },
+    };
+    withPluginCache(createPluginCache(), () => {
+      const discovery = discoverOpenClawPlugins({ env, workspaceDir, installRecords });
+      const registry = loadPluginManifestRegistryCore({
+        discovery,
+        env,
+        workspaceDir,
+        installRecords,
+      });
+      expect(registry.plugins).toHaveLength(1);
+      expect(registry.plugins[0]).toMatchObject({
+        id: "codex",
+        origin: "global",
+        trustedOfficialInstall: true,
+      });
+      expect(resolvePluginManifestInstallOwner(registry.plugins[0]!)).toBe("codex");
+    });
+  },
+);
 
 it.each(["default", "source"])(
   "selects the checkout %s tree over a tracked local copy without trusting unrelated plugins",

@@ -18,9 +18,8 @@ vi.mock("openclaw/plugin-sdk/runtime-group-policy", () => ({
   warnMissingProviderGroupPolicyFallbackOnce,
 }));
 
-vi.mock("./api.js", () => ({
-  sendGoogleChatMessage,
-}));
+// mock-isolation: Record access-policy replies without contacting the Google Chat API.
+vi.mock("./api.js", () => ({ sendGoogleChatMessage }));
 
 function createCore() {
   return {
@@ -32,9 +31,7 @@ function createCore() {
         shouldHandleTextCommands: vi.fn(() => false),
         isControlCommandMessage: vi.fn(() => false),
       },
-      text: {
-        hasControlCommand: vi.fn(() => false),
-      },
+      text: { hasControlCommand: vi.fn(() => false) },
     },
   };
 }
@@ -46,29 +43,13 @@ function primeCommonDefaults() {
     groupPolicy: "allowlist",
     providerMissingFallbackApplied: false,
   });
-  warnMissingProviderGroupPolicyFallbackOnce.mockReturnValue(undefined);
-  allowInboundGroupTraffic();
-}
-
-const baseAccessConfig = {
-  channels: { googlechat: {} },
-  commands: { useAccessGroups: true },
-} as const;
-
-const defaultSender = {
-  senderId: "users/alice",
-  senderName: "Alice",
-  senderEmail: "alice@example.com",
-} as const;
-
-let applyGoogleChatInboundAccessPolicy: typeof import("./monitor-access.js").applyGoogleChatInboundAccessPolicy;
-
-function allowInboundGroupTraffic() {
   createChannelPairingController.mockReturnValue({
     readAllowFromStore: vi.fn(async () => []),
     issueChallenge: vi.fn(),
   });
 }
+
+let applyGoogleChatInboundAccessPolicy: typeof import("./monitor-access.js").applyGoogleChatInboundAccessPolicy;
 
 function account(config: ResolvedGoogleChatAccount["config"]) {
   return { accountId: "default", config } as ResolvedGoogleChatAccount;
@@ -83,14 +64,16 @@ async function applyInboundAccessPolicy(
 ) {
   return applyGoogleChatInboundAccessPolicy({
     account: account({}),
-    config: baseAccessConfig as never,
+    config: { channels: { googlechat: {} }, commands: { useAccessGroups: true } } as never,
     core: createCore() as never,
     space: { name: "spaces/AAA", displayName: "Team Room" } as never,
     message: { annotations: [] } as never,
     isGroup: true,
     rawBody: "hello team",
     logVerbose: vi.fn(),
-    ...defaultSender,
+    senderId: "users/alice",
+    senderName: "Alice",
+    senderEmail: "alice@example.com",
     ...overrides,
   } as never);
 }
@@ -138,7 +121,7 @@ describe("googlechat inbound access policy", () => {
   });
 
   it("issues a pairing challenge for unauthorized DMs in pairing mode", async () => {
-    const now = new Date("2026-05-09T06:35:00.000Z").getTime();
+    const now = Date.parse("2026-05-09T06:35:00.000Z");
     const issueChallenge = vi.fn(async ({ onCreated, sendPairingReply }) => {
       onCreated?.();
       await sendPairingReply("pairing text");
@@ -150,29 +133,20 @@ describe("googlechat inbound access policy", () => {
     sendGoogleChatMessage.mockResolvedValue({ ok: true });
 
     const statusSink = vi.fn();
-    const logVerbose = vi.fn();
     const pairingAccount = account({ dmPolicy: "pairing" });
-
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
       await expect(
         applyInboundAccessPolicy({
           account: pairingAccount,
-          config: {
-            channels: { googlechat: {} },
-          } as never,
-          space: { name: "spaces/AAA", displayName: "DM" } as never,
           isGroup: false,
           senderId: "users/abc",
-          rawBody: "hello",
           contextBinding: {
             agentId: "main",
             sessionKey: "agent:main:googlechat:direct:users/abc",
             inboundEventKind: "user_request",
           },
           statusSink,
-          logVerbose,
         }),
       ).resolves.toEqual({ ok: false });
 
@@ -182,11 +156,9 @@ describe("googlechat inbound access policy", () => {
         space: "spaces/AAA",
         text: "pairing text",
       });
-      expect(statusSink).toHaveBeenCalledWith({
-        lastOutboundAt: now,
-      });
+      expect(statusSink).toHaveBeenCalledWith({ lastOutboundAt: now });
     } finally {
-      vi.useRealTimers();
+      clock.mockRestore();
     }
   });
 
@@ -283,13 +255,11 @@ describe("googlechat inbound access policy", () => {
             "Finance Ops": {
               users: ["users/alice"],
               requireMention: true,
-              systemPrompt: "finance-only prompt",
             },
           },
         }),
         space: { name: "spaces/BBB", displayName: "Finance Ops" } as never,
         message: mention("users/app"),
-        rawBody: "show quarter close status",
       },
       "Deprecated Google Chat group key detected: group routing now requires stable space ids (spaces/<spaceId>). Update channels.googlechat.groups keys: Finance Ops",
       "drop group message (deprecated mutable group key matched, space=spaces/BBB)",
@@ -312,7 +282,6 @@ describe("googlechat inbound access policy", () => {
           },
         }),
         space: { name: "spaces/BBB", displayName: "Finance Ops" } as never,
-        rawBody: "show quarter close status",
       },
       "drop group message (deprecated mutable group key matched, space=spaces/BBB)",
     );

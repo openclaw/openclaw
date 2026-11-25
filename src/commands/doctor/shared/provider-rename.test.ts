@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { prepareOperatorModelPolicy } from "../../../agents/operator-model-policy.js";
 import type { GatewayOperatorRoleDefinition } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.js";
-import type { ModelDefinitionConfig } from "../../../config/types.models.js";
+import { createTestModelDefinition as model } from "../../test-runtime-config-helpers.js";
 import {
   applyProviderRenames,
   planProviderRenames,
@@ -13,18 +13,6 @@ import {
 const renames: ProviderRename[] = [
   { from: "ollama", to: "ollama-cloud", baseUrl: "https://ollama.com" },
 ];
-
-function model(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8192,
-    maxTokens: 4096,
-  };
-}
 
 function configFor(baseUrl: string): OpenClawConfig {
   return {

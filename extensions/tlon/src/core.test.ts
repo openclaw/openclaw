@@ -38,9 +38,8 @@ const shipCredentials = {
 const configure = (prompter: WizardPrompter, cfg: OpenClawConfig = {}) =>
   runSetupWizardConfigure({ configure: tlonConfigure, cfg, prompter, options: {} });
 function promptText(answers: Record<string, string>) {
-  const byMessage = new Map(Object.entries(answers));
   return vi.fn(async ({ message }: { message: string }) => {
-    const answer = byMessage.get(message);
+    const answer = answers[message];
     if (answer === undefined) {
       throw new Error(`Unexpected prompt: ${message}`);
     }
@@ -68,24 +67,56 @@ describe("tlon core", () => {
   });
 
   it("preserves mention policy at root and account scope", () => {
-    expect(
-      tlonChannelConfigSchema.runtime?.safeParse({
-        implicitMentions: { threadParticipation: false },
-        requireMentionInBotThreads: true,
-        accounts: {
-          primary: {
-            implicitMentions: { replyToBot: false },
-            requireMentionInBotThreads: false,
-          },
+    const policy = {
+      implicitMentions: { threadParticipation: false },
+      requireMentionInBotThreads: true,
+      accounts: {
+        primary: {
+          implicitMentions: { replyToBot: false },
+          requireMentionInBotThreads: false,
         },
-      }),
-    ).toMatchObject({
-      success: true,
-      data: {
-        requireMentionInBotThreads: true,
-        accounts: { primary: { requireMentionInBotThreads: false } },
       },
+    };
+    expect(tlonChannelConfigSchema.runtime?.safeParse(policy)).toMatchObject({
+      success: true,
+      data: policy,
     });
+  });
+
+  it("preserves club policy and rules for named accounts without inheriting ship permission", () => {
+    const cfg = accountConfig({
+      ...shipCredentials,
+      dmAllowlist: ["~bus"],
+      clubPolicy: "approve-each",
+      clubRules: { "0v1.abcde": "allow" },
+      accounts: { work: { clubPolicy: "disabled", clubRules: {} } },
+    });
+    expect(tlonChannelConfigSchema.runtime?.safeParse(cfg.channels.tlon).success).toBe(true);
+    expect(resolveTlonAccount(cfg)).toMatchObject({
+      clubPolicy: "approve-each",
+      clubRules: { "0v1.abcde": "allow" },
+    });
+    expect(resolveTlonAccount(cfg, "work")).toMatchObject({
+      clubPolicy: "disabled",
+      clubRules: {},
+    });
+    expect(resolveTlonAccount(accountConfig({ dmAllowlist: ["~bus"] }))).toMatchObject({
+      clubPolicy: null,
+      clubRules: {},
+    });
+  });
+
+  it.each([
+    ["0v0", true],
+    ["0vabc", true],
+    ["0v1.abcde", true],
+    ["0v1.abc", false],
+    ["0v01", false],
+    ["0v123456", false],
+  ])("validates club rule ID %s against Tlon's wire format", (clubId, success) => {
+    expect(
+      tlonChannelConfigSchema.runtime?.safeParse({ clubRules: { [clubId]: "allow" } }).success,
+    ).toBe(success);
   });
 
   it("configures ship, auth, and discovery settings", async () => {

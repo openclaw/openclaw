@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import { createCliOutputFailoverError } from "../../agents/cli-runner/output-error.js";
+import { CliCredentialRemovedError } from "../../agents/cli-runner/auth-profile-preparation-error.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { MissingProviderAuthError, ProviderAuthError } from "../../agents/model-auth.js";
+import { MODEL_FALLBACK_SKIPPED_CODE } from "../../agents/model-fallback.types.js";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
@@ -31,7 +32,41 @@ const providerLoginPresentation = (command: string) => ({
 const PROVIDER_LOGIN_PRESENTATION = providerLoginPresentation("/login openai");
 
 describe("executeAgentTurn: authentication failures", () => {
-  it("preserves OAuth profile guidance through fallback summaries", async () => {
+  it.each([
+    ["direct", "anthropic:pasted", 'Saved account "anthropic:pasted"'],
+    ["group", "anthropic:pasted", "The selected account"],
+    [
+      "direct",
+      "personal:00000000-0000-0000-0000-000000000001:00000000-0000-0000-0000-000000000002",
+      "Selected personal account",
+    ],
+  ])("delivers removed-account recovery in %s channel replies", async (chatType, id, label) => {
+    const error = new CliCredentialRemovedError(id);
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error("private-wrapper", { cause: error }),
+    );
+    state.isInternalMessageChannelMock.mockReturnValue(false);
+    const params = createMinimalRunAgentTurnParams();
+    params.sessionCtx = {
+      ...params.sessionCtx,
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: chatType,
+    };
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    expect(await executeAgentTurn(params)).toMatchObject({
+      kind: "final",
+      payload: {
+        text: `⚠️ ${label} was removed. Select a connected account or sign in again under Models, then retry. OpenClaw did not submit this turn.`,
+        isError: true,
+      },
+    });
+    if (id.startsWith("personal:")) {
+      expect(error.message).not.toContain(id);
+    }
+  });
+
+  it("keeps OAuth sign-in recovery through fallback summaries", async () => {
     const refreshError = new OAuthRefreshFailureError({
       provider: "openai",
       profileId: "openai:user@example.com",
@@ -66,7 +101,10 @@ describe("executeAgentTurn: authentication failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("--profile-id 'openai:user@example.com'");
+      // Chat offers `/login`; the CLI-only `--profile-id` command stays out of the reply.
+      expect(result.payload.text).toBe(
+        "⚠️ Your model provider needs a new login. Send /login openai from a private chat or the OpenClaw app.",
+      );
       expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
     }
   });
@@ -85,6 +123,23 @@ describe("executeAgentTurn: authentication failures", () => {
       expected: "3 fallback attempts failed",
       intermediateAttempts: 2,
       needsLogin: false,
+    },
+    {
+      name: "OAuth refresh timeout before a skipped candidate",
+      message: 'OAuth refresh call "refreshOAuthCredential(xai)" exceeded hard timeout (120000ms)',
+      expected: "timed out",
+      intermediateAttempts: 0,
+      needsLogin: false,
+      trailingSkip: true,
+    },
+    {
+      name: "primary login failure before a skipped candidate",
+      message: "invalid_grant",
+      expected: "needs a new login",
+      intermediateAttempts: 0,
+      needsLogin: true,
+      trailingSkip: true,
+      primaryOnly: true,
     },
     {
       name: "expired fallback login",
@@ -109,7 +164,14 @@ describe("executeAgentTurn: authentication failures", () => {
     },
   ])(
     "retains the primary failure for $name",
-    async ({ message, expected, intermediateAttempts, needsLogin }) => {
+    async ({
+      message,
+      expected,
+      intermediateAttempts,
+      needsLogin,
+      trailingSkip = false,
+      primaryOnly = false,
+    }) => {
       const refreshError = new OAuthRefreshFailureError({
         provider: "xai",
         profileId: "xai:private-profile-canary",
@@ -119,13 +181,17 @@ describe("executeAgentTurn: authentication failures", () => {
         createTestFallbackSummaryError({
           message: "All models failed (2): private-runtime-diagnostic-canary",
           attempts: [
-            {
-              provider: "openai",
-              model: "primary-model",
-              reason: "unknown",
-              error:
-                "MCP runtime cleanup could not confirm closure: private-runtime-diagnostic-canary",
-            },
+            ...(primaryOnly
+              ? []
+              : [
+                  {
+                    provider: "openai",
+                    model: "primary-model",
+                    reason: "unknown" as const,
+                    error:
+                      "MCP runtime cleanup could not confirm closure: private-runtime-diagnostic-canary",
+                  },
+                ]),
             ...Array.from({ length: intermediateAttempts }, () => ({
               provider: "anthropic",
               model: "intermediate-model",
@@ -140,6 +206,17 @@ describe("executeAgentTurn: authentication failures", () => {
               status: 401,
               error: refreshError.message,
             },
+            ...(trailingSkip
+              ? [
+                  {
+                    provider: "anthropic",
+                    model: "cooldown-model",
+                    reason: "auth" as const,
+                    code: MODEL_FALLBACK_SKIPPED_CODE,
+                    error: "cooldown-skip-diagnostic-canary",
+                  },
+                ]
+              : []),
           ],
           cause: refreshError,
         }),
@@ -160,8 +237,16 @@ describe("executeAgentTurn: authentication failures", () => {
 
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
-        expect(result.payload.text).toContain("Primary attempt failed");
-        expect(result.payload.text).toMatch(/\bfallback\b/iu);
+        if (primaryOnly) {
+          expect(result.payload.text).not.toMatch(/Primary attempt failed|\bfallback\b/iu);
+        } else {
+          expect(result.payload.text).toContain("Primary attempt failed");
+          expect(result.payload.text).toMatch(/\bfallback\b/iu);
+        }
+        if (trailingSkip) {
+          expect(result.payload.text).not.toContain("2 fallback attempts failed");
+          expect(result.payload.text).not.toContain("cooldown-skip-diagnostic-canary");
+        }
         expect(result.payload.text).toContain("xai");
         expect(result.payload.text).toContain(expected);
         expect(result.payload.text).not.toMatch(/private-.*canary|401/u);
@@ -200,7 +285,7 @@ describe("executeAgentTurn: authentication failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("openclaw models auth login --provider openai");
+      expect(result.payload.text).toContain("Send /login openai");
       expect(result.payload.text).not.toContain("user@example.com");
       expect(result.payload.presentation).toEqual(PROVIDER_LOGIN_PRESENTATION);
     }
@@ -251,17 +336,16 @@ describe("executeAgentTurn: authentication failures", () => {
   });
 
   it("surfaces Agent SDK OAuth session expiry in Discord channels", async () => {
-    const error = createCliOutputFailoverError({
-      output: {
-        text: "",
-        errorText: "Failed to authenticate: OAuth session expired and could not be refreshed",
+    const error = new FailoverError(
+      "Failed to authenticate: OAuth session expired and could not be refreshed",
+      {
+        reason: "auth",
+        provider: "claude-cli",
+        model: "claude-opus-5",
+        status: 401,
+        rawError: "Failed to authenticate: OAuth session expired and could not be refreshed",
       },
-      provider: "claude-cli",
-      model: "claude-opus-5",
-    });
-    if (!error) {
-      throw new Error("expected CLI output failure");
-    }
+    );
     state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -279,7 +363,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` on the gateway.",
+        "⚠️ Your model provider needs a new login. Send /login from a private chat or the OpenClaw app.",
       );
       expect(result.payload.presentation).toEqual(providerLoginPresentation("/login"));
     }
@@ -299,7 +383,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`.",
+        "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the OpenClaw app or run `openclaw configure`.",
       );
     }
   });
@@ -321,7 +405,9 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain("Couldn't sign in to openai.");
-      expect(result.payload.text).toContain("openclaw configure");
+      // A chat reply names the app, never a terminal command.
+      expect(result.payload.text).toContain("Open Models in the OpenClaw app to sign in again");
+      expect(result.payload.text).not.toMatch(/openclaw (configure|models)/u);
       expect(result.payload.text).not.toContain("invalid_grant");
       expect(result.payload.text).not.toContain("Auth profile failover exhausted");
     }
@@ -346,7 +432,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
+        "This saved login isn't available. Choose another login under Models in the OpenClaw app or run `openclaw configure`.",
       );
       expect(result.payload.text).not.toContain("openai:private");
       expect(result.payload.text).not.toContain("arbitrary plugin detail");
@@ -370,12 +456,12 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.",
+        "⚠️ This AI service isn't set up yet. Sign in under Models in the OpenClaw app or run `openclaw configure`.",
       );
     }
   });
 
-  it("falls back to a generic reauth command when the provider in the OAuth error is unsafe", async () => {
+  it("falls back to a bare /login when the provider in the OAuth error is unsafe", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new OAuthRefreshFailureError({ provider: "openai`\nrm -rf /", message: "invalid_grant" }),
     );
@@ -386,7 +472,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login` on the gateway.",
+        "⚠️ Your model provider needs a new login. Send /login from a private chat or the OpenClaw app.",
       );
       expect(result.payload.presentation).toEqual(providerLoginPresentation("/login"));
     }

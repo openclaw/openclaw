@@ -1,5 +1,3 @@
-// Gateway agent-command test helpers.
-// Waits for mocked agent command dispatches in async gateway tests.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
@@ -19,12 +17,34 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
   const chatModule = selection
     ? undefined
     : await import("./server-methods/chat-send-dispatch-errors.js");
-  const execute = executionModule.startAgentRunExecution;
-  const handleRequest = requestModule.handleGatewayRequest;
-  const retainWork = admission.runWithRetainedGatewayRootWork;
-  const continueWork = admission.runWithGatewayIndependentRootWorkContinuation;
-  const trackWork = asyncWork.trackAsyncWork;
-  const beginSessionWork = sessionWork.beginSessionEffect;
+  // Vitest reuses spy objects; capture their implementation before a nested observer replaces it.
+  const previousExecute = vi.isMockFunction(executionModule.startAgentRunExecution)
+    ? vi.mocked(executionModule.startAgentRunExecution).getMockImplementation()
+    : undefined;
+  const execute = previousExecute ?? executionModule.startAgentRunExecution;
+  const previousHandleRequest = vi.isMockFunction(requestModule.handleGatewayRequest)
+    ? vi.mocked(requestModule.handleGatewayRequest).getMockImplementation()
+    : undefined;
+  const handleRequest = previousHandleRequest ?? requestModule.handleGatewayRequest;
+  const previousRetainWork = vi.isMockFunction(admission.runWithRetainedGatewayRootWork)
+    ? vi.mocked(admission.runWithRetainedGatewayRootWork).getMockImplementation()
+    : undefined;
+  const retainWork = previousRetainWork ?? admission.runWithRetainedGatewayRootWork;
+  const previousContinueWork = vi.isMockFunction(
+    admission.runWithGatewayIndependentRootWorkContinuation,
+  )
+    ? vi.mocked(admission.runWithGatewayIndependentRootWorkContinuation).getMockImplementation()
+    : undefined;
+  const continueWork =
+    previousContinueWork ?? admission.runWithGatewayIndependentRootWorkContinuation;
+  const previousTrackWork = vi.isMockFunction(asyncWork.trackAsyncWork)
+    ? vi.mocked(asyncWork.trackAsyncWork).getMockImplementation()
+    : undefined;
+  const trackWork = previousTrackWork ?? asyncWork.trackAsyncWork;
+  const previousBeginSessionWork = vi.isMockFunction(sessionWork.beginSessionEffect)
+    ? vi.mocked(sessionWork.beginSessionEffect).getMockImplementation()
+    : undefined;
+  const beginSessionWork = previousBeginSessionWork ?? sessionWork.beginSessionEffect;
   const rootWorkAdmission = admission.tryBeginGatewayRootWorkAdmission;
   const previousRootWork = vi.isMockFunction(rootWorkAdmission)
     ? rootWorkAdmission.getMockImplementation()
@@ -42,10 +62,8 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
     const observed = observedRequest.getStore();
     if (observed) {
       observed.effects.add(pending);
-      void pending.then(
-        () => observed.effects.delete(pending),
-        () => observed.effects.delete(pending),
-      );
+      const settled = () => observed.effects.delete(pending);
+      void pending.then(settled, settled);
     }
     return pending;
   };
@@ -72,123 +90,140 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
           }),
       };
     });
-  const sessionWorkSpy = vi
-    .spyOn(sessionWork, "beginSessionEffect")
-    .mockImplementation((params) => {
+  const chatLifecycle = chatModule?.createChatSendDispatchErrorLifecycle;
+  const previousChatLifecycle =
+    chatLifecycle && vi.isMockFunction(chatLifecycle)
+      ? vi.mocked(chatLifecycle).getMockImplementation()
+      : undefined;
+  const createChatLifecycle = previousChatLifecycle ?? chatLifecycle;
+  const spies = {
+    session: vi.spyOn(sessionWork, "beginSessionEffect").mockImplementation((params) => {
       const pending = beginSessionWork(params);
       if (observedRequest.getStore()) {
         // Queued custody can finish outside the request frame after dispatch settles.
         void captureEffect(pending.then((lease) => lease.released));
       }
       return pending;
-    });
-  // Best-effort participant persistence is request-owned async work, not a
-  // retained Gateway root. Observe its existing promise without changing admission.
-  const observeAsyncWork: typeof trackWork = (run) => captureEffect(trackWork(run));
-  const asyncWorkSpy = vi.spyOn(asyncWork, "trackAsyncWork").mockImplementation(observeAsyncWork);
-  const observeEffect: typeof retainWork = (run) => captureEffect(retainWork(run));
-  const effectSpy = vi
-    .spyOn(admission, "runWithRetainedGatewayRootWork")
-    .mockImplementation(observeEffect);
-  const observeContinuation: typeof continueWork = (run, origin) =>
-    captureEffect(continueWork(run, origin));
-  const continuationSpy = vi
-    .spyOn(admission, "runWithGatewayIndependentRootWorkContinuation")
-    .mockImplementation(observeContinuation);
-  const requestSpy = vi
-    .spyOn(requestModule, "handleGatewayRequest")
-    .mockImplementation((options, diagnostics) => {
-      const params = isRecord(options.req.params) ? options.req.params : undefined;
-      const runId = params?.idempotencyKey ?? params?.runId;
-      const selected = selection
-        ? options.req.method === selection.method && params?.idempotencyKey === selection.runId
-        : true;
-      if (!selected) {
-        return handleRequest(options, diagnostics);
-      }
-      const observed: ObservedRequest = {
-        runId: typeof runId === "string" ? runId : undefined,
-        executions: [],
-        effects: new Set(),
-      };
-      requests.push(observed);
-      observed.request = observedRequest.run(observed, () => handleRequest(options, diagnostics));
-      return observed.request;
-    });
-  const executionSpy = vi
-    .spyOn(executionModule, "startAgentRunExecution")
-    .mockImplementation((params) => {
+    }),
+    // Observe persistence and retained work without changing their admission or promises.
+    asyncWork: vi
+      .spyOn(asyncWork, "trackAsyncWork")
+      .mockImplementation((run) => captureEffect(trackWork(run))),
+    effect: vi
+      .spyOn(admission, "runWithRetainedGatewayRootWork")
+      .mockImplementation((run) => captureEffect(retainWork(run))),
+    continuation: vi
+      .spyOn(admission, "runWithGatewayIndependentRootWorkContinuation")
+      .mockImplementation((run, origin) => captureEffect(continueWork(run, origin))),
+    request: vi
+      .spyOn(requestModule, "handleGatewayRequest")
+      .mockImplementation((options, diagnostics) => {
+        const params = isRecord(options.req.params) ? options.req.params : undefined;
+        const runId = params?.idempotencyKey ?? params?.runId;
+        const selected = selection
+          ? options.req.method === selection.method && params?.idempotencyKey === selection.runId
+          : true;
+        if (!selected) {
+          return handleRequest(options, diagnostics);
+        }
+        const observed: ObservedRequest = {
+          runId: typeof runId === "string" ? runId : undefined,
+          executions: [],
+          effects: new Set(),
+        };
+        requests.push(observed);
+        observed.request = observedRequest.run(observed, () => handleRequest(options, diagnostics));
+        return observed.request;
+      }),
+    execution: vi.spyOn(executionModule, "startAgentRunExecution").mockImplementation((params) => {
       const pending = execute(params);
       observedRequest.getStore()?.executions.push(pending);
       return pending;
-    });
-  const createChatLifecycle = chatModule?.createChatSendDispatchErrorLifecycle;
-  const chatSpy =
-    chatModule && createChatLifecycle
-      ? vi
-          .spyOn(chatModule, "createChatSendDispatchErrorLifecycle")
-          .mockImplementation((params) => {
-            const lifecycle = createChatLifecycle(params);
-            const observed = observedRequest.getStore();
-            if (!observed) {
-              return lifecycle;
-            }
-            const completed = createDeferred();
-            observed.executions.push(completed.promise);
-            void completed.promise.catch(() => undefined);
-            return {
-              ...lifecycle,
-              finalize() {
-                const pending = lifecycle.finalize();
-                // Adopt the original promise without replacing the caller's continuation.
-                completed.resolve(pending);
-                return pending;
-              },
-            };
-          })
-      : undefined;
-  const settleDispatch = async (observed: ObservedRequest) => {
-    // RPC responses and final events assert outcomes; cleanup observes settlement.
-    await Promise.allSettled([observed.request]);
-    // Request admission can register detached execution after cleanup starts.
-    await Promise.allSettled(observed.executions);
+    }),
+    chat:
+      chatModule && createChatLifecycle
+        ? vi
+            .spyOn(chatModule, "createChatSendDispatchErrorLifecycle")
+            .mockImplementation((params) => {
+              const lifecycle = createChatLifecycle(params);
+              const observed = observedRequest.getStore();
+              if (!observed) {
+                return lifecycle;
+              }
+              const completed = createDeferred();
+              observed.executions.push(completed.promise);
+              void completed.promise.catch(() => undefined);
+              return {
+                ...lifecycle,
+                finalize() {
+                  const pending = lifecycle.finalize();
+                  // Adopt the original promise without replacing the caller's continuation.
+                  completed.resolve(pending);
+                  return pending;
+                },
+              };
+            })
+        : undefined,
   };
-  const settleRequest = async (observed: ObservedRequest) => {
-    await settleDispatch(observed);
-    while (observed.effects.size > 0) {
-      await Promise.allSettled(observed.effects);
+  const settleSelected = async (runId?: string, includeEffects = true) => {
+    for (const observed of requests) {
+      if (runId === undefined || observed.runId === runId) {
+        // Admission can register detached execution while the request settles.
+        await Promise.allSettled([observed.request]);
+        await Promise.allSettled(observed.executions);
+        if (includeEffects) {
+          while (observed.effects.size > 0) {
+            await Promise.allSettled(observed.effects);
+          }
+        }
+      }
     }
   };
   return {
     // Queued custody intentionally retains effects until a later execution settles.
-    async waitForDispatch(runId: string) {
-      for (const observed of requests) {
-        if (observed.runId === runId) {
-          await settleDispatch(observed);
-        }
-      }
-    },
-    async waitForCompletion(runId?: string) {
-      for (const observed of requests) {
-        if (runId !== undefined && observed.runId !== runId) {
-          continue;
-        }
-        await settleRequest(observed);
-      }
-    },
+    waitForDispatch: (runId: string) => settleSelected(runId, false),
+    waitForCompletion: (runId?: string) => settleSelected(runId),
     async restore() {
       try {
-        for (const observed of requests) {
-          await settleRequest(observed);
-        }
+        await settleSelected();
       } finally {
-        chatSpy?.mockRestore();
-        sessionWorkSpy.mockRestore();
-        asyncWorkSpy.mockRestore();
-        executionSpy.mockRestore();
-        requestSpy.mockRestore();
-        effectSpy.mockRestore();
-        continuationSpy.mockRestore();
+        if (previousExecute) {
+          spies.execution.mockImplementation(previousExecute);
+        } else {
+          spies.execution.mockRestore();
+        }
+        if (previousHandleRequest) {
+          spies.request.mockImplementation(previousHandleRequest);
+        } else {
+          spies.request.mockRestore();
+        }
+        if (previousRetainWork) {
+          spies.effect.mockImplementation(previousRetainWork);
+        } else {
+          spies.effect.mockRestore();
+        }
+        if (previousContinueWork) {
+          spies.continuation.mockImplementation(previousContinueWork);
+        } else {
+          spies.continuation.mockRestore();
+        }
+        if (previousTrackWork) {
+          spies.asyncWork.mockImplementation(previousTrackWork);
+        } else {
+          spies.asyncWork.mockRestore();
+        }
+        if (previousBeginSessionWork) {
+          spies.session.mockImplementation(previousBeginSessionWork);
+        } else {
+          spies.session.mockRestore();
+        }
+        if (spies.chat) {
+          if (previousChatLifecycle) {
+            spies.chat.mockImplementation(previousChatLifecycle);
+          } else {
+            spies.chat.mockRestore();
+          }
+        }
         if (previousRootWork) {
           rootWorkSpy.mockImplementation(previousRootWork);
         } else {
@@ -204,12 +239,9 @@ function agentCommandCalls(): Array<[AgentCommandCall]> {
   return vi.mocked(agentCommandMock).mock.calls as unknown as Array<[AgentCommandCall]>;
 }
 
-/** Waits until the mocked `agentCommand` receives a call for a specific run id. */
 export async function waitForAgentCommandCall(runId: string): Promise<AgentCommandCall> {
   for (let elapsed = 0; elapsed <= 2_000; elapsed += 5) {
-    const call = agentCommandCalls()
-      .map((entry) => entry[0])
-      .find((entry) => entry.runId === runId);
+    const call = agentCommandCalls().find(([entry]) => entry.runId === runId)?.[0];
     if (call) {
       return call;
     }

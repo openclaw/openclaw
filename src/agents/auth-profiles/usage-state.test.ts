@@ -21,9 +21,7 @@ it("preserves a sibling model cooldown until that model succeeds", () => {
     cooldownReason: "rate_limit",
     cooldownModel: "primary",
     cooldownUntil: 31_000,
-    errorCount: 1,
-    failureCounts: { rate_limit: 1 },
-    lastFailureAt: 1_000,
+    lastRateLimitAt: 1_000,
   };
   const siblingSuccess = resetAuthProfileFailureState(existing, { lastUsed: 2_000 }, "fallback");
   expect(siblingSuccess).toMatchObject({ ...existing, lastUsed: 2_000 });
@@ -31,7 +29,7 @@ it("preserves a sibling model cooldown until that model succeeds", () => {
     resetAuthProfileFailureState(siblingSuccess, { lastUsed: 32_000 }, "primary"),
   ).toMatchObject({
     cooldownUntil: undefined,
-    failureCounts: undefined,
+    lastRateLimitAt: undefined,
     lastUsed: 32_000,
   });
 });
@@ -158,23 +156,19 @@ const scenario = (
   models: Array<[Model, boolean]>,
   profileId = anthropic,
 ) => ({ stats, models, profileId });
-const copilotChecks = checks([sonnet, undefined], ["gpt-4.1"]);
+const copilotChecks = checks([sonnet, undefined], ["gpt-4.1", null]);
 const geminiChecks = checks([gemini, undefined], [geminiLite, "gemini-2.5-flash"]);
 it.each([
-  scenario(cooldown("rate_limit", "target"), checks([], ["target", "sibling", null]), openrouter),
   scenario(cooldown("timeout", "target"), checks(["target"], ["sibling", null]), openrouter),
-  scenario(cooldown("auth", "target"), checks(["target", "sibling", null]), openrouter),
   scenario(undefined, checks([], [undefined])),
   scenario({ cooldownUntil: now - 1_000 }, checks([], [undefined])),
   scenario({ cooldownUntil: now - 1_000, ...billingDisable }, checks([undefined])),
   scenario(cooldown("rate_limit", sonnet), copilotChecks, copilot),
   scenario(cooldown("timeout", gemini), geminiChecks, google), // #87462
   scenario(cooldown("model_not_found", sonnet), copilotChecks, copilot), // #116464
-  scenario(cooldown("model_not_found"), checks(["gpt-4.1", sonnet]), copilot),
   scenario(cooldown("rate_limit", sonnet, longerDisable), checks(["gpt-4.1"]), copilot),
   scenario(cooldown("timeout", gemini, longerBlock), checks([gemini], [geminiLite]), google),
   scenario({ blockedUntil: later, blockedModel: gemini }, checks([geminiLite]), google),
-  scenario(cooldown("rate_limit", "gpt-5.5"), checks([], [null]), "openai:api-key"),
   scenario(cooldown("rate_limit"), checks([null])),
 ])("checks $profileId cooldown $stats", ({ profileId, stats, models }) => {
   const store = makeStore(stats === undefined ? undefined : { [profileId]: stats });
@@ -199,14 +193,13 @@ const reasonCase = (
   backup?: Stats,
 ) => ({ expected, usageStats: { primary, ...(backup ? { backup } : {}) } });
 it.each([
-  reasonCase("auth", withFailures({ rate_limit: 99 }, "auth")),
+  reasonCase("auth", withFailures({ timeout: 99 }, "auth")),
   reasonCase(
     "session_expired",
     withFailures({ session_expired: 1 }),
     withFailures({ session_expired: 1 }),
   ),
-  reasonCase("overloaded", withFailures({ overloaded: 2, rate_limit: 1 })),
-  reasonCase("unknown", cooldown()),
+  reasonCase("overloaded", withFailures({ overloaded: 2, timeout: 1 })),
   reasonCase(
     null,
     { cooldownUntil: now - 1_000, failureCounts: { auth: 5 } },
@@ -244,65 +237,47 @@ const clearedCooldown = {
   cooldownModel: undefined,
 };
 const clearedDisable = { disabledUntil: undefined, disabledReason: undefined };
+const resetCounters = { errorCount: 0, failureCounts: undefined };
+const history: Stats = {
+  errorCount: 4,
+  failureCounts: { timeout: 2, billing: 2 },
+  lastFailureAt: now - 120_000,
+  lastRateLimitAt: now - 2_000,
+};
+const expired = now - 1_000;
 const expires = (name: string, before: Stats, changed: Stats, useClock = false) => ({
   name,
-  before,
-  after: { ...before, ...changed },
+  before: { ...history, ...before },
+  after: { ...history, ...before, ...changed },
   useClock,
 });
 it.each([
   expires(
     "expiry boundary clears classification",
-    {
-      cooldownUntil: now,
-      cooldownClassification: "wham_token_expired",
-      errorCount: 4,
-      failureCounts: { timeout: 1 },
-      lastFailureAt: now - 120_000,
-    },
-    { ...clearedCooldown, errorCount: 0, failureCounts: undefined },
+    { cooldownUntil: now, cooldownClassification: "wham_token_expired" },
+    { ...clearedCooldown, ...resetCounters },
   ),
   expires(
     "expired cooldown preserves active disable",
-    {
-      cooldownUntil: now - 1_000,
-      disabledUntil: now + 3_600_000,
-      disabledReason: "billing",
-      errorCount: 5,
-      failureCounts: { rate_limit: 3, billing: 2 },
-    },
+    { cooldownUntil: expired, ...billingDisable },
     clearedCooldown,
   ),
   expires(
     "expired disable preserves active cooldown",
-    {
-      cooldownUntil: now + 300_000,
-      disabledUntil: now - 1_000,
-      disabledReason: "billing",
-      errorCount: 3,
-    },
+    { ...billingDisable, cooldownUntil: until, disabledUntil: expired },
     clearedDisable,
   ),
   expires(
-    "all expired windows preserve rate-limit history",
-    {
-      cooldownUntil: now - 2_000,
-      disabledUntil: now - 1_000,
-      disabledReason: "billing",
-      errorCount: 4,
-      failureCounts: { rate_limit: 2, billing: 2 },
-    },
-    { ...clearedCooldown, ...clearedDisable, errorCount: 0, failureCounts: { rate_limit: 2 } },
+    "all expired windows reset counters but keep rate-limit recovery",
+    { ...billingDisable, cooldownUntil: expired, disabledUntil: expired },
+    { ...clearedCooldown, ...clearedDisable, ...resetCounters },
   ),
   expires(
-    "expired provider block preserves retry backoff",
+    "expired provider block keeps rate-limit recovery",
     {
-      blockedUntil: now - 1_000,
+      blockedUntil: expired,
       blockedReason: "subscription_limit",
       blockedSource: "codex_rate_limits",
-      errorCount: 4,
-      failureCounts: { rate_limit: 4, timeout: 2 },
-      lastFailureAt: now - 120_000,
     },
     {
       blockedUntil: undefined,
@@ -310,8 +285,7 @@ it.each([
       blockedSource: undefined,
       blockedModel: undefined,
       blockedScope: undefined,
-      errorCount: 0,
-      failureCounts: { rate_limit: 4 },
+      ...resetCounters,
     },
     true,
   ),

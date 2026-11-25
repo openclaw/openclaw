@@ -19,7 +19,6 @@ export type { SecretsRuntimeEnvSnapshot } from "./runtime-openai-file-fixture.te
 import { clearSecretsRuntimeSnapshot } from "./runtime.js";
 
 const secretsRuntimePluginMocks = vi.hoisted(() => ({
-  resolveExternalAuthProfilesWithPluginsMock: vi.fn(() => []),
   resolvePluginWebSearchProvidersMock: vi.fn(() => []),
 }));
 
@@ -29,15 +28,8 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: secretsRuntimePluginMocks.resolvePluginWebSearchProvidersMock,
 }));
 
-vi.mock("../plugins/provider-external-auth.js", () => ({
-  resolveExternalAuthProfilesWithPlugins:
-    secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock,
-}));
-
 /** Start an isolated secrets runtime test with plugin auth/web discovery disabled. */
 export function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot {
-  secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock.mockReset();
-  secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
   secretsRuntimePluginMocks.resolvePluginWebSearchProvidersMock.mockReset();
   secretsRuntimePluginMocks.resolvePluginWebSearchProvidersMock.mockReturnValue([]);
   const envSnapshot = captureEnv([

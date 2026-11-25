@@ -1,11 +1,47 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as ownedBuffer from "../shared/owned-buffer.js";
 import {
   runCommandBuffersWithTimeout,
   runCommandWithTimeout,
   runUtf8CommandBuffersWithTimeout,
 } from "./exec-runner.js";
+import { runCommandBuffered } from "./exec.js";
 
 describe("owned command output bytes", () => {
+  it("assembles complete binary output without copying each received chunk", async () => {
+    const copy = vi.spyOn(ownedBuffer, "copyOwnedBuffer");
+    try {
+      const result = await runCommandBuffered(
+        [
+          process.execPath,
+          "-e",
+          "process.stdout.write(Buffer.alloc(256 * 1024, 255));process.stderr.write(Buffer.from([0,128,255]));",
+        ],
+        { timeoutMs: 10_000 },
+      );
+      expect(result).toMatchObject({ code: 0, termination: "exit" });
+      expect(result.stdout).toEqual(Buffer.alloc(256 * 1024, 255));
+      expect(result.stderr).toEqual(Buffer.from([0, 128, 255]));
+      expect(copy).not.toHaveBeenCalled();
+    } finally {
+      copy.mockRestore();
+    }
+  });
+
+  it("keeps the raw multibyte prefix when the byte cap stops the command", async () => {
+    const result = await runCommandBuffered(
+      [process.execPath, "-e", "process.stdout.write(Buffer.from('A\\u{1F600}'));"],
+      { timeoutMs: 10_000, maxOutputBytes: { stdout: 3 } },
+    );
+    expect(result).toMatchObject({
+      stdout: Buffer.from([0x41, 0xf0, 0x9f]),
+      stderr: Buffer.alloc(0),
+      code: null,
+      termination: "output-limit",
+      outputLimitStream: "stdout",
+    });
+  });
+
   it("keeps incomplete UTF-8 at EOF as the exact observed bytes", async () => {
     const observed: Buffer[] = [];
     const result = await runUtf8CommandBuffersWithTimeout(

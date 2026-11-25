@@ -5,17 +5,15 @@ import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
 } from "../../config/sessions/session-actor-storage-binding.js";
-import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { projectExecutionSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { sameSessionTranscriptStorePath } from "../../config/sessions/transcript-store-identity.js";
-import {
-  withOwnedSessionTranscriptWrites,
-  type OwnedSessionTranscriptWriteContext,
-} from "../../config/sessions/transcript-write-context.js";
+import type { OwnedSessionTranscriptWriteContext } from "../../config/sessions/transcript-write-context-store.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import {
   resolveCompactionSuccessorTranscript,
   type ContextEngine,
@@ -29,7 +27,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { prepareCliHistoryCompactionBoundary } from "../cli-runner/history-boundary.js";
+import { readCompactionTranscriptBytes } from "../compaction-transcript-bytes.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { buildCompactionFailureResult } from "./compact-reasons.js";
@@ -239,16 +237,15 @@ export async function executeQueuedContextEngineCompaction(input: {
           compactionConfig?.maxActiveTranscriptBytes,
         );
         if (maxActiveTranscriptBytes !== null && maxActiveTranscriptBytes > 0) {
-          const { readSessionTranscriptAccountingAsync } =
-            await import("../../gateway/session-transcript-readers.js");
+          const pressureBytes = await readCompactionTranscriptBytes({
+            target: runtimeTarget,
+            rawBytes: undefined,
+            maxBytes: maxActiveTranscriptBytes,
+            runtime: preparedParams,
+            signal: params.abortSignal,
+          });
           assertCallerActive();
-          const snapshot = await readSessionTranscriptAccountingAsync(
-            runtimeTarget,
-            { includeByteSize: true, includeUsage: false },
-            params.abortSignal,
-          );
-          assertCallerActive();
-          if (snapshot.byteSize !== undefined && snapshot.byteSize >= maxActiveTranscriptBytes) {
+          if (pressureBytes !== undefined && pressureBytes >= maxActiveTranscriptBytes) {
             preflightCompactionTrigger = "transcript_bytes";
           }
         }
@@ -309,7 +306,6 @@ export async function executeQueuedContextEngineCompaction(input: {
       // Queued callers keep result-based failures; recovery rejects cancellation.
       let result: Awaited<ReturnType<typeof contextEngine.compact>>;
       let committedCompaction: CompactionAccountingReceipt | undefined;
-      let commitCliHistoryCompaction: (() => Promise<void>) | undefined;
       try {
         const compactionSessionTarget = projectQueuedCompactionSessionTarget(params);
         const ownedCompactor: Pick<ContextEngine, "compact" | "info"> = {
@@ -320,6 +316,9 @@ export async function executeQueuedContextEngineCompaction(input: {
                 hostOwnsCompactionLifecycle: engineOwnsCompaction,
                 requestBudget: host.requestBudget,
                 pendingUserEntryId: host.pendingUserEntryId,
+                ...(params.preflightRequired === true
+                  ? { requestRequiresCompaction: true as const }
+                  : {}),
                 preparedSession:
                   contextEngine.info.id === "legacy" ? host.preparedSession : undefined,
                 withCompactionPersistenceAsync:
@@ -343,15 +342,9 @@ export async function executeQueuedContextEngineCompaction(input: {
               await assertPluginWriterActive(runtimeTarget, expectedEntry);
             }
             writeContext.assertCommitAllowed();
-            return withOwnedSessionTranscriptWrites(writeContext, async () => {
-              if (!host.preparedSession || host.preparedSession.entry.cliHistoryBoundary) {
-                commitCliHistoryCompaction = await prepareCliHistoryCompactionBoundary(
-                  runtimeTarget,
-                  writeContext.assertCommitAllowed,
-                );
-              }
-              return contextEngine.compact(backendParams);
-            });
+            return withOwnedSessionTranscriptWrites(writeContext, () =>
+              contextEngine.compact(backendParams),
+            );
           },
         };
         result = await compactContextEngineWithSafetyTimeout(
@@ -433,9 +426,6 @@ export async function executeQueuedContextEngineCompaction(input: {
         // Completion survives cancellation; a proposed successor's token snapshot
         // belongs to that identity only after the host accepts it.
         tokensAfter = sameTarget ? result.result?.tokensAfter : undefined;
-        if (!sameTarget) {
-          commitCliHistoryCompaction = undefined;
-        }
         try {
           successor =
             sameTarget && host.preparedSession && committedCompaction
@@ -525,9 +515,6 @@ export async function executeQueuedContextEngineCompaction(input: {
           });
           await maintenance;
         }
-        if (result.ok && result.compacted && canContinue()) {
-          await commitCliHistoryCompaction?.();
-        }
         if (engineOwnsCompaction && result.ok && result.compacted && canContinue()) {
           await runPostCompactionSideEffects({
             config: params.config,
@@ -577,7 +564,7 @@ export async function executeQueuedContextEngineCompaction(input: {
                 sessionFile: postCompactionSessionFile,
                 sessionTarget: postCompactionSessionTarget,
                 ...(successor.entry
-                  ? { sessionEntry: projectPublicSessionEntry(successor.entry) }
+                  ? { sessionEntry: projectExecutionSessionEntry(successor.entry) }
                   : {}),
                 runtimeModel: effectiveRuntimeModel,
                 contextEngine,

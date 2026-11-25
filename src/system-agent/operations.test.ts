@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgent } from "../agents/agent-create.js";
 import { runConfigSet } from "../cli/config-cli.js";
-import { createGatewayHostLifecycle } from "../cli/gateway-cli/host-lifecycle.js";
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -64,20 +64,14 @@ const mockConfig = vi.hoisted(() => {
     readConfigFileSnapshot: vi.fn(async () => {
       const config = structuredClone(state.config);
       return {
-        path: "/tmp/openclaw.json",
+        ...createSnapshot({ sourceConfig: config, hash: "mock-hash-0" }),
         exists: state.exists,
         valid: state.valid,
         raw: state.exists ? `${JSON.stringify(config)}\n` : null,
         parsed: state.exists ? config : undefined,
         sourceConfigBeforeMigrations: config,
-        sourceConfig: config,
-        resolved: config,
-        runtimeConfig: config,
-        config,
         hash: state.exists ? "mock-hash-0" : undefined,
         issues: state.exists ? [] : [{ path: "", message: "missing config" }],
-        warnings: [],
-        legacyIssues: [],
       };
     }),
     getRuntimeConfig() {
@@ -98,7 +92,9 @@ vi.mock("../agents/agent-create.js", () => ({ createAgent: vi.fn() }));
 vi.mock("../cli/config-cli.js", () => ({ runConfigSet: vi.fn() }));
 // mock-isolation: Never uninstall real plugins while testing executor approval.
 vi.mock("../cli/plugins-uninstall-command.js", () => ({ runPluginUninstallCommand: vi.fn() }));
-const runPluginInstallCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const installManagedPluginMock = vi.hoisted(() =>
+  vi.fn(async () => ({ plugin: { id: "openclaw-demo" } })),
+);
 const mockScheduleGatewayRestart = vi.hoisted(() =>
   vi.fn(() => ({
     ok: true,
@@ -116,8 +112,9 @@ vi.mock("../cli/daemon-cli/lifecycle.js", () => ({
   runDaemonStop: vi.fn(async () => {}),
   runDaemonRestart: mockDaemonRestart,
 }));
-vi.mock("../cli/plugins-install-command.js", () => ({
-  runPluginInstallCommand: runPluginInstallCommandMock,
+// mock-isolation: Executor tests own approval/audit, not package acquisition or runtime loading.
+vi.mock("../plugins/management-mutations.js", () => ({
+  installManagedPlugin: installManagedPluginMock,
 }));
 vi.mock("../infra/restart.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/restart.js")>()),
@@ -171,7 +168,7 @@ describe("system agent operations", () => {
     vi.mocked(createAgent).mockReset();
     vi.mocked(runConfigSet).mockReset().mockResolvedValue(undefined);
     vi.mocked(runPluginUninstallCommand).mockReset();
-    runPluginInstallCommandMock.mockClear();
+    installManagedPluginMock.mockClear();
     mockScheduleGatewayRestart.mockClear();
     vi.stubEnv("OPENCLAW_STATE_DIR", opTempDirs.make("openclaw-operations-"));
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -209,12 +206,9 @@ describe("system agent operations", () => {
   it("reads canonical array indices after redaction", async () => {
     const configPath = "agents.entries.main.skills[00]";
     mockConfig.setConfig({
-      channels: { modelByChannel: { telegram: { "team.ops[west]": "openai/gpt-5.5" } } },
-      models: { providers: { "local.service": { apiKey: "synthetic-key" } } },
       agents: { entries: { main: { skills: ["weather"] } } },
     });
     const operation = parseSystemAgentOperation(`config get ${configPath}`);
-    expect(operation).toEqual({ kind: "config-get", path: configPath });
     expect(await run(operation)).toEqual({ applied: false });
     expect(lines).toEqual([`${configPath} = "weather"`]);
   });
@@ -235,29 +229,6 @@ describe("system agent operations", () => {
     expect(output).toContain('"config": "<redacted>"');
     expect(output).not.toContain("recovery-secret");
     expect(output).not.toContain("invalid-plugin-secret");
-  });
-
-  it("fails closed for model-visible config owned by missing plugins and channels", async () => {
-    mockConfig.setConfig({
-      plugins: {
-        entries: {
-          missing: { enabled: true, config: { opaque: "missing-plugin-secret" } },
-        },
-      },
-      channels: {
-        missing: { enabled: true, opaque: "missing-channel-secret" },
-        defaults: { groupPolicy: "open" },
-        modelByChannel: { telegram: { chat: "openai/gpt-5.5" } },
-      },
-    });
-    const output = await readConfigOutput("plugins.entries.missing", "channels");
-    expect(output).toContain('"enabled": true');
-    expect(output).toContain('"config": "<redacted>"');
-    expect(output).toContain('"missing": "<redacted>"');
-    expect(output).toContain('"groupPolicy": "open"');
-    expect(output).toContain('"chat": "openai/gpt-5.5"');
-    expect(output).not.toContain("missing-plugin-secret");
-    expect(output).not.toContain("missing-channel-secret");
   });
 
   it("reads installed plugin field schemas and authored help from the active metadata", async () => {
@@ -348,34 +319,6 @@ describe("system agent operations", () => {
     });
   });
 
-  it("restarts its own Gateway despite hostile remote Gateway routing", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://another-gateway.example:9443");
-    mockConfig.setConfig({
-      gateway: {
-        mode: "remote",
-        remote: { url: "wss://configured-remote-gateway.example:9443" },
-      },
-    });
-
-    const host = createGatewayHostLifecycle({
-      processOwner: { ownsProcessLifecycle: true, supervisor: null },
-      isCurrent: () => true,
-      isServing: () => true,
-      acceptStop: () => {},
-    });
-    await expect(host.capability.request("restart", () => {})).resolves.toEqual({
-      ok: true,
-      value: { outcome: "scheduled" },
-    });
-    await host.retire();
-
-    expect(mockScheduleGatewayRestart).toHaveBeenCalledExactlyOnceWith({
-      reason: "gateway.restart.safe",
-      delayMs: 0,
-    });
-    expect(mockDaemonRestart).not.toHaveBeenCalled();
-  });
-
   it("records an approved standalone restart truthfully", async () => {
     const result = await run({ kind: "gateway-restart" }, { approved: true });
     expect(result.applied).toBe(true);
@@ -416,13 +359,14 @@ describe("system agent operations", () => {
       },
     );
     expect(result.applied).toBe(true);
-    expect(runConfigSet).toHaveBeenCalledWith({
+    expect(vi.mocked(runConfigSet).mock.calls[0]?.[0]).toMatchObject({
       path,
       cliOptions: { refProvider: "default", refSource: "env", refId: id },
-      runtime: expect.objectContaining({ log: expect.any(Function) }),
-      throwOnError: false,
     });
     expect(loggedOutput()).toContain("[openclaw] done: config.setRef");
+    expect(loggedOutput()).toContain(
+      "Completed only config.setRef. Other requested actions are not done unless separately confirmed.",
+    );
     expectAudit("config.setRef", "Set config gateway.auth.token SecretRef", {
       rescue: true,
       channel: "whatsapp",
@@ -477,11 +421,9 @@ describe("system agent operations", () => {
       expect(result.applied).toBe(true);
       const [name] = await storedEntries();
       expect(name).toEqual(mintedName);
-      expect(runConfigSet).toHaveBeenCalledWith({
+      expect(vi.mocked(runConfigSet).mock.calls[0]?.[0]).toMatchObject({
         path: operation.path,
         cliOptions: { refProvider: "team", refSource: "store", refId: name },
-        runtime: expect.objectContaining({ log: expect.any(Function) }),
-        throwOnError: true,
       });
       expect(await readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
       expect(loggedOutput()).not.toContain(operation.secret);
@@ -503,7 +445,7 @@ describe("system agent operations", () => {
       applied: false,
       message: "Plan: install plugin clawhub:openclaw-demo. Say yes to apply.",
     });
-    expect(runPluginInstallCommandMock).not.toHaveBeenCalled();
+    expect(installManagedPluginMock).not.toHaveBeenCalled();
 
     const result = await run(operation, {
       approved: true,
@@ -513,14 +455,11 @@ describe("system agent operations", () => {
     });
     expect(result.applied).toBe(true);
 
-    expect(runPluginInstallCommandMock).toHaveBeenCalledWith(
+    expect(installManagedPluginMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        raw: "clawhub:openclaw-demo",
-        opts: {},
-        allowInstallPolicyWarningPrompt: false,
+        request: expect.objectContaining({ source: "clawhub", packageName: "openclaw-demo" }),
         beforePersistentApply: expect.any(Function),
         applyRuntime: applyPluginRuntime,
-        runtime: expect.objectContaining({ log: expect.any(Function) }),
       }),
     );
     expect(beforePersistentApply).toHaveBeenCalledOnce();
@@ -529,12 +468,31 @@ describe("system agent operations", () => {
     expectAudit("plugin.install", "Installed plugin clawhub:openclaw-demo", {
       rescue: true,
       spec: "clawhub:openclaw-demo",
+      pluginId: "openclaw-demo",
+    });
+  });
+
+  it("redacts authenticated Git audit details without losing source identity", async () => {
+    const spec =
+      "git:https://x-access-token:SYNTHETIC_AUDIT_CREDENTIAL@github.com/example/plugin.git@main";
+    expect(await run({ kind: "plugin-install", spec }, { approved: true })).toMatchObject({
+      applied: true,
+    });
+    expect(installManagedPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ source: "git", spec }),
+      }),
+    );
+    const audit = readLastAuditEntry();
+    expect(JSON.stringify(audit)).not.toContain("SYNTHETIC_AUDIT_CREDENTIAL");
+    expect(audit).toMatchObject({
+      details: { spec: expect.stringContaining("github.com/example/plugin.git@main") },
     });
   });
 
   it.each([
-    [true, "https://example.test/plugin.tgz", "accepts npm or ClawHub package specs only"],
-    [false, "npm:@example/plugin", "trusted shell"],
+    [true, "https://example.test/plugin.tgz", "not local paths or archive URLs"],
+    [false, "git:file:///tmp/plugin.git", "requires a remote package source"],
   ] as const)(
     "rejects spec %s/%s without exiting, reading config, or writing",
     async (approved, spec, error) => {
@@ -546,7 +504,7 @@ describe("system agent operations", () => {
 
       expect(runtime.error).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
-      expect(runPluginInstallCommandMock).not.toHaveBeenCalled();
+      expect(installManagedPluginMock).not.toHaveBeenCalled();
       expect(mockConfig.readConfigFileSnapshot).not.toHaveBeenCalled();
     },
   );
@@ -562,11 +520,7 @@ describe("system agent operations", () => {
 
     const result = await run(operation, { approved: true });
     expect(result.applied).toBe(true);
-    expect(runPluginUninstallCommand).toHaveBeenCalledWith(
-      ["openclaw-demo"],
-      undefined,
-      expect.objectContaining({ log: expect.any(Function) }),
-    );
+    expect(vi.mocked(runPluginUninstallCommand).mock.calls[0]?.[0]).toEqual(["openclaw-demo"]);
     expect(loggedOutput()).toContain("[openclaw] done: plugin.uninstall");
     expect(loggedOutput()).toContain("Restart the Gateway to apply plugin changes.");
   });

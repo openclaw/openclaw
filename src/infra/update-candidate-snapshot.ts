@@ -15,6 +15,7 @@ import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
+import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 import { measureUpdateStateFiles, withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import {
   readUpdateCandidatePluginCodeLinks,
@@ -30,7 +31,12 @@ import {
   UpdateCandidateSnapshotInventorySchema,
   UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
+import {
+  createUpdateStateResultPath,
+  readUpdateStateResult,
+} from "./update-candidate-state.result.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
+import { assessUpdateDatabaseSpace } from "./update-database-backup-space.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunStep } from "./update-run-record.js";
 import {
@@ -124,13 +130,38 @@ async function measureInitialUpdateSnapshotState(params: InitialSnapshotParams) 
   );
   return {
     capacity: measureSnapshotCapacity(params.stateDir, { ...size, pluginBytes: null }, params.env),
-    families: size.families,
+    size,
   };
 }
 
+/**
+ * Candidate admission inspects these stores from a staged package, so its allowance follows
+ * measured state like the rehearsal's checks. The update step deadline stays the outer bound.
+ */
+export async function resolveUpdateCandidateAdmissionTimeoutMs(
+  params: InitialSnapshotParams & { stepTimeoutMs: number },
+): Promise<number> {
+  const bytes = await measureInitialUpdateSnapshotState(params).then(
+    ({ size }) => size.bytes,
+    () => 0,
+  );
+  const { timeoutMs } = resolveSqliteInspectionBudget("update admission", params.stateDir, bytes);
+  return Math.min(params.stepTimeoutMs, timeoutMs);
+}
+
+export type UpdateSnapshotSpaceAssessment = {
+  step: UpdateStepResult;
+  /** The migration has no room, or the pre-migration image will be skipped. */
+  shortfall: boolean;
+};
+
+/**
+ * Before anything changes. Refuses only when the migration itself has no room;
+ * an image that does not fit is skipped later, never a reason to refuse.
+ */
 export async function assessInitialUpdateSnapshotCapacity(
-  params: InitialSnapshotParams,
-): Promise<UpdateStepResult> {
+  params: InitialSnapshotParams & { backupDirectory: string },
+): Promise<UpdateSnapshotSpaceAssessment> {
   const started = Date.now();
   const step = {
     name: "snapshot-space-preflight",
@@ -138,54 +169,48 @@ export async function assessInitialUpdateSnapshotCapacity(
     cwd: params.stateDir,
   };
   try {
-    const { capacity, families } = await measureInitialUpdateSnapshotState(params);
-    // Refuse only at the existing allocator's data-at-risk boundary: every
-    // eligible destination is known to be too small for the private state copy.
-    const refused =
-      capacity.candidates.length > 0 &&
-      capacity.candidates.every(
-        (candidate) =>
-          candidate.availableBytes !== null && candidate.availableBytes < capacity.requiredBytes,
-      );
-    const diagnostics = [
-      "Snapshot size estimate: plugin copies and registered external databases are measured after staging.",
-      `Initial snapshot needs ${formatDiskSpaceBytes(capacity.requiredBytes)} for ${formatDiskSpaceBytes(capacity.sqliteBytes)} of known SQLite files and temporary working space.`,
-      ...capacity.candidates.map(
-        (candidate) =>
-          `${candidate.kind} ${candidate.directory}: ${formatDiskSpaceBytes(capacity.requiredBytes)} needed; ${candidate.availableBytes === null ? "free space unknown" : `${formatDiskSpaceBytes(candidate.availableBytes)} free`}.`,
-      ),
-      ...families.map(
+    const { size } = await measureInitialUpdateSnapshotState(params);
+    const diagnostics = size.families
+      .toSorted((left, right) => right.bytes - left.bytes)
+      .map(
         (family) =>
           `SQLite family ${family.path}: ${formatDiskSpaceBytes(family.bytes)} (database and supporting files).`,
-      ),
-    ];
-    if (refused) {
+      );
+    const space = await assessUpdateDatabaseSpace(params.backupDirectory, size);
+    diagnostics.push(...space.diagnostics);
+    if (space.refusal) {
       return {
-        ...step,
-        durationMs: Date.now() - started,
-        exitCode: 1,
-        stderrTail: [
-          "snapshot-capacity-insufficient: no eligible directory has enough free space for the required state snapshot.",
-          ...diagnostics,
-          "Free space on a reported filesystem or set TMPDIR to a writable directory with enough space, then retry the update.",
-        ].join("\n"),
-        snapshotCapacity: capacity,
+        shortfall: true,
+        step: {
+          ...step,
+          durationMs: Date.now() - started,
+          exitCode: 1,
+          // The instruction line leads; the blank line keeps the diagnostics out of the terminal.
+          stderrTail: [`Update refused: ${space.refusal}`, "", ...diagnostics].join("\n"),
+        },
       };
     }
     return {
-      ...step,
-      durationMs: Date.now() - started,
-      exitCode: 0,
-      diagnostics,
+      shortfall: space.imageSkipped,
+      step: {
+        ...step,
+        durationMs: Date.now() - started,
+        exitCode: 0,
+        diagnostics,
+        ...(space.warnings.length ? { warnings: space.warnings } : {}),
+      },
     };
   } catch {
     return {
-      ...step,
-      durationMs: Date.now() - started,
-      exitCode: 0,
-      warnings: [
-        "Initial snapshot capacity could not be measured; continuing to the update snapshot check.",
-      ],
+      shortfall: false,
+      step: {
+        ...step,
+        durationMs: Date.now() - started,
+        exitCode: 0,
+        warnings: [
+          "Database backup space could not be measured before the update; activation checks it again.",
+        ],
+      },
     };
   }
 }
@@ -283,22 +308,11 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     const workerEnv = params.workerEnv(directory);
     const outputController = new AbortController();
     let progressPending = Promise.resolve();
+    let progressWriting = false;
+    let nextProgress: UpdateRunStep | undefined;
     let progressFailure: { error: unknown } | undefined;
     const failProgress = (error: unknown) => {
-      if (!progressFailure) {
-        progressFailure = { error };
-      } else if (
-        !hasCommandProcessCleanupError(progressFailure.error) &&
-        hasCommandProcessCleanupError(error)
-      ) {
-        progressFailure = {
-          error: new AggregateError(
-            [progressFailure.error, error],
-            "Update snapshot progress recording failed",
-            { cause: progressFailure.error },
-          ),
-        };
-      }
+      progressFailure = { error };
       outputController.abort(error);
     };
     let stderrOutputExceeded = false;
@@ -319,19 +333,28 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           { env: params.env, stateDir: params.stateDir },
           { maxLength: UPDATE_RUN_TEXT_LIMIT },
         );
-        try {
-          // Invoke at emission so the writer captures this source before it yields.
-          const recording = Promise.resolve(
-            params.onProgress?.({
-              step: "candidate-state-snapshot",
-              status: "in_progress",
-              startedAtMs,
-              detail,
-            }),
-          ).catch(failProgress);
-          progressPending = Promise.all([progressPending, recording]).then(() => {});
-        } catch (error) {
-          failProgress(error);
+        nextProgress = {
+          step: "candidate-state-snapshot",
+          status: "in_progress",
+          startedAtMs,
+          detail,
+        };
+        if (!progressWriting && !progressFailure) {
+          progressWriting = true;
+          progressPending = (async () => {
+            try {
+              // Keep one write in flight and only the latest advisory observation behind it.
+              while (nextProgress) {
+                const step = nextProgress;
+                nextProgress = undefined;
+                await params.onProgress?.(step);
+              }
+            } catch (error) {
+              failProgress(error);
+            } finally {
+              progressWriting = false;
+            }
+          })();
         }
         if (
           progress.snapshot?.status === "completed" &&
@@ -343,6 +366,13 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     });
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
+    const sourceSelectors =
+      params.env.OPENCLAW_STATE_DIR?.trim() || params.env.OPENCLAW_CONFIG_PATH?.trim()
+        ? {
+            OPENCLAW_STATE_DIR: params.env.OPENCLAW_STATE_DIR,
+            OPENCLAW_CONFIG_PATH: params.env.OPENCLAW_CONFIG_PATH,
+          }
+        : { OPENCLAW_STATE_DIR: params.stateDir };
     let workerTermination = "exit";
     let budgetSignal: AbortSignal | undefined;
     const outcome = await withUpdateCandidateIoBudget(
@@ -357,6 +387,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         budgetSignal = signal;
         signal.throwIfAborted();
         params.assertCurrent?.();
+        const resultPath = createUpdateStateResultPath(directory);
         const result = await runUtf8CommandWithTimeout(
           [
             params.nodeRunner ?? process.execPath,
@@ -371,7 +402,9 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           {
             input: JSON.stringify({
               ...request,
+              resultPath,
               includeLocalStoreVersions: true,
+              includeClientCredentialStoreVersion: true,
               streamProgress: true,
               stateDir: params.stateDir,
               config: params.config,
@@ -383,6 +416,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
                 HOME: params.env.HOME,
                 OPENCLAW_HOME: params.env.OPENCLAW_HOME,
                 USERPROFILE: params.env.USERPROFILE,
+                ...sourceSelectors,
                 OPENCLAW_AGENT_DIR: params.env.OPENCLAW_AGENT_DIR,
                 PI_CODING_AGENT_DIR: params.env.PI_CODING_AGENT_DIR,
                 OPENCLAW_BUNDLED_PLUGINS_DIR: params.env.OPENCLAW_BUNDLED_PLUGINS_DIR,
@@ -419,7 +453,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         ) {
           throw new Error(diagnostics.stderr() || result.stderr);
         }
-        return JSON.parse(result.stdout) as unknown;
+        return JSON.parse(await readUpdateStateResult(result.stdout, resultPath)) as unknown;
       },
     ).then(
       (value) => ({ value }),

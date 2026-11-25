@@ -5,6 +5,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import type {
+  MemoryBackendRegistration,
   MemoryCorpusSupplement,
   MemoryCorpusSupplementRegistration,
   MemoryFlushFilePlanDraft,
@@ -305,7 +306,8 @@ function snapshotMemoryPromptContext(
   params: MemoryPromptSectionParams,
 ): PreparedMemoryPromptSection["context"] {
   return Object.freeze({
-    availableTools: Object.freeze([...params.availableTools].toSorted()),
+    // oxlint-disable-next-line unicorn/no-array-sort -- The spread already owns this array.
+    availableTools: Object.freeze([...params.availableTools].sort()),
     citationsMode: params.citationsMode,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
@@ -339,9 +341,8 @@ export async function prepareMemoryPromptSection(
   const synchronous = buildSynchronousMemoryPromptSection(
     cloneMemoryPromptSectionParams(runParams),
   );
-  const preparationRegistrations = [...requireActivePluginRegistry().memoryPromptPreparations];
   const preparedSupplements = await Promise.all(
-    preparationRegistrations.map(async (registration) => ({
+    requireActivePluginRegistry().memoryPromptPreparations.map(async (registration) => ({
       pluginId: registration.pluginId,
       lines: filterStringEntries(
         await registration.prepare(cloneMemoryPromptSectionParams(runParams)),
@@ -351,7 +352,8 @@ export async function prepareMemoryPromptSection(
   const lines = Object.freeze([
     ...synchronous.primary,
     ...[...synchronous.supplements, ...preparedSupplements]
-      .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId))
+      // oxlint-disable-next-line unicorn/no-array-sort -- Sort the fresh merged array without copying it again.
+      .sort((left, right) => left.pluginId.localeCompare(right.pluginId))
       .flatMap((registration) => registration.lines),
   ]);
   const prepared = Object.freeze({
@@ -444,6 +446,11 @@ export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
 
 export function getMemoryProviderRuntime() {
   return getMemoryCapability()?.capability.providerRuntime;
+}
+
+/** Passive backends published beside the slot owner in the same registry. */
+export function listMemoryBackendRegistrations(): readonly MemoryBackendRegistration[] {
+  return getPluginRegistryForContext()?.memoryBackends ?? [];
 }
 
 let standaloneMemoryManagerActive = false;

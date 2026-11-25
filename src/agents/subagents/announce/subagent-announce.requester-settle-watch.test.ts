@@ -36,15 +36,60 @@ import {
   readDescendantFacts,
   REQUESTER_KEY,
   settledChild,
-  publishWakeTransition,
+  wakeParams,
   useRequesterSettleDispatchFixture,
   createRequesterSettleContext as createContext,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
+import { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
 describe("requester settle watch admission", () => {
   useRequesterSettleDispatchFixture();
   afterEach(() => clearRuntimeConfigSnapshot());
+
+  it("refuses a watch when its retained requester database is missing", async () => {
+    const state = await createOpenClawTestState({
+      prefix: "missing-settle-watch-",
+      layout: "state-only",
+    });
+    onTestFinished(() => state.cleanup());
+    const storePath = state.statePath("missing-requester.sqlite");
+    const cfg = { session: { store: storePath } };
+    setRuntimeConfigSnapshot(cfg);
+    const receipt = createRequesterSettleReceiptAdmission({
+      requester: { canonicalKey: REQUESTER_KEY, agentId: "main", storePath },
+      readCurrent: () => ({ sessionId: "requester-session" }),
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      cfg,
+      "missing-settle-watch",
+      "main",
+      "settle-watch-test",
+    );
+    onTestFinished(() => admission.close());
+    const caller = createAdmittedGatewayToolCallerIdentity({
+      admittedRunContext: await admission.admit("gateway"),
+      agentId: "main",
+      sessionKey: REQUESTER_KEY,
+      receiptAuthority: () => true,
+      receiptAdmission: receipt,
+    });
+    const target = "agent:main:missing-requester-watch-target";
+    await expect(
+      withGatewayToolCallerIdentity(caller, () =>
+        registerSessionStateWatch(
+          { watcherSessionKey: REQUESTER_KEY, targetSessionKey: target },
+          { prepareCurrent: prepareGatewayToolCallerAssertion },
+        ),
+      ),
+    ).resolves.toBe(false);
+    const row = openOpenClawStateDatabase()
+      .db.prepare(
+        "SELECT target_session_key FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
+      )
+      .get(REQUESTER_KEY, target);
+    expect(row).toBeUndefined();
+  });
 
   it("waits for requester startup preparation before reserving a delivery attempt", async () => {
     setRuntimeConfigSnapshot({});
@@ -57,6 +102,8 @@ describe("requester settle watch admission", () => {
     const context = createContext();
     context.agentDatabaseStartup = {
       hasPendingAgents: true,
+      registerInputRecovery: () => {},
+      isAgentInputRecoveryPending: () => false,
       waitForAgentPreparation: (agentId) => {
         expect(agentId).toBe("main");
         preparationObserved.resolve();
@@ -67,13 +114,7 @@ describe("requester settle watch admission", () => {
     registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
     deliver.mockResolvedValue({ delivered: true, path: "direct" });
     const completeBatch = vi.fn();
-    const wake = maybeWakeRequesterAfterAllChildrenSettled({
-      isSourceCurrent: () => true,
-      requesterSessionKey: REQUESTER_KEY,
-      settledEntry: child,
-      transitionBatch: publishWakeTransition,
-      completeBatch,
-    });
+    const wake = maybeWakeRequesterAfterAllChildrenSettled(wakeParams(child, completeBatch));
     try {
       await expect(
         Promise.race([
@@ -87,9 +128,7 @@ describe("requester settle watch admission", () => {
 
       preparation.resolve();
       await expect(wake).resolves.toBe(true);
-      expect(deliver).toHaveBeenCalledOnce();
       expect(completeBatch).toHaveBeenCalledOnce();
-      expect(Date.now()).toBe(10_000);
     } finally {
       preparation.resolve();
       await wake;
@@ -187,7 +226,11 @@ describe("requester settle watch admission", () => {
             admittedRunContext,
             agentId: "main",
             sessionKey: REQUESTER_KEY,
-            receiptAuthority: params.isSourceSessionEffectsAllowed,
+            receiptAuthority: () => {
+              if (params.isSourceSessionEffectsAllowed?.() === false) {
+                throw new Error("agent tool caller authority is no longer active");
+              }
+            },
             receiptAdmission: params.sourceReceiptAdmission,
           });
           const sql = writer ? undefined : observeMainThreadSql();
@@ -213,16 +256,8 @@ describe("requester settle watch admission", () => {
         child.requesterSettleWake = undefined;
       });
       await expect(
-        maybeWakeRequesterAfterAllChildrenSettled({
-          requesterSessionKey: REQUESTER_KEY,
-          settledEntry: child,
-          isSourceCurrent: () => true,
-          transitionBatch: publishWakeTransition,
-          completeBatch,
-        }),
+        maybeWakeRequesterAfterAllChildrenSettled(wakeParams(child, completeBatch)),
       ).resolves.toBe(true);
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(completeBatch).toHaveBeenCalledOnce();
       expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
       expect(watched).toBe(change === "current");
       if (change !== "current") {

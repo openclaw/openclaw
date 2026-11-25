@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { harnessRegistry } from "../model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
 import { mergePreparedNativeCatalog } from "../prepared-model-runtime.catalog-publication.js";
 import {
@@ -41,16 +42,13 @@ const nativeRoute = {
   api: "openai-chatgpt-responses" as const,
   baseUrl: "https://chatgpt.com/backend-api/codex",
 };
+const standardEfforts = ["low", "medium", "high", "xhigh", "max"];
+const reasoningCompat = (efforts = standardEfforts) => ({
+  supportsReasoningEffort: true,
+  supportedReasoningEfforts: [...efforts],
+});
 const snapshot: ModelCatalogSnapshot = {
-  entries: [
-    {
-      ...apiModel,
-      compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-      },
-    },
-  ],
+  entries: [{ ...apiModel, compat: reasoningCompat() }],
   routeVariants: [apiModel],
   staticEntries: [
     {
@@ -61,8 +59,7 @@ const snapshot: ModelCatalogSnapshot = {
       reasoning: true,
       params: { providerFact: "kept", codexAppServerRuntimeModel: "stale-runtime" },
       compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        ...reasoningCompat(),
         supportsTools: false,
       },
     },
@@ -71,10 +68,7 @@ const snapshot: ModelCatalogSnapshot = {
       id: "gpt-5.6-terra",
       name: "GPT-5.6 Terra",
       reasoning: true,
-      compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-      },
+      compat: reasoningCompat([...standardEfforts, "ultra"]),
     },
     row("provider-empty-reasoner", {
       provider: "openai",
@@ -85,19 +79,9 @@ const snapshot: ModelCatalogSnapshot = {
 
 function catalogRegistry(loaders: Record<string, () => Promise<readonly ModelCatalogEntry[]>>) {
   const registry = createEmptyPluginRegistry();
-  for (const [id, loadModelCatalog] of Object.entries(loaders)) {
-    registry.agentHarnesses.push({
-      pluginId: id,
-      source: "test",
-      harness: {
-        id,
-        label: id,
-        supports: () => ({ supported: true }),
-        runAttempt: vi.fn(),
-        loadModelCatalog,
-      },
-    });
-  }
+  registry.agentHarnesses = Object.entries(loaders).flatMap(
+    ([id, loadModelCatalog]) => harnessRegistry(id, { loadModelCatalog }).agentHarnesses,
+  );
   return registry;
 }
 const registryWithCatalog = (load: () => Promise<readonly ModelCatalogEntry[]>) =>
@@ -314,8 +298,7 @@ describe("agent harness model catalog", () => {
         reasoning: true,
         params: { codexAppServerRuntimeModel: "gpt-5.6-sol-runtime" },
         compat: {
-          supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["high", "ultra"],
+          ...reasoningCompat(["high", "ultra"]),
           supportsTools: true,
         },
       },
@@ -391,18 +374,7 @@ it("checks resident native readiness with linear catalog work and observes revoc
   const readModelCatalogReadiness = vi.fn(() =>
     ready ? { accountType: "apiKey" as const } : undefined,
   );
-  const pluginRegistry = createEmptyPluginRegistry();
-  pluginRegistry.agentHarnesses.push({
-    pluginId: "native-test",
-    source: "fixture",
-    harness: {
-      id: "native-test",
-      label: "Native fixture",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(),
-      readModelCatalogReadiness,
-    },
-  });
+  const pluginRegistry = harnessRegistry("native-test", { readModelCatalogReadiness });
   const params = {
     input: {
       config: cfg,

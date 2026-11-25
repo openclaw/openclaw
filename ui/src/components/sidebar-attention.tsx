@@ -1,8 +1,6 @@
-import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, lazy, Loading, onSettled, Show } from "solid-js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
-import type { ExecApprovalDecision } from "../app/exec-approval.ts";
-import { isCustodianPanelAvailable } from "../app/panel-availability.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
@@ -10,21 +8,18 @@ import { projectGateway, projectSidebarAttention } from "../lib/reactive/applica
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { createScrollStateRef } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { showToast } from "../lib/toast.ts";
 import "../styles/sidebar-attention-floating.css";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { sidebarInboxTabCounts, type SidebarAttentionItem } from "./sidebar-attention-entries.ts";
-import type { SidebarAttentionFocus } from "./sidebar-attention-focus.ts";
 import type { SidebarAttentionPanelPosition } from "./sidebar-attention-panel.runtime.tsx";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
-import type { IssueTab } from "./sidebar-issues-tabs.ts";
 import { Icon } from "./solid/icon.tsx";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
 
-type PanelRenderer = typeof import("./sidebar-attention-panel.runtime.tsx").SidebarAttentionPanel;
 export type SidebarAttentionProps = {
+  cachedCount?: number;
   activeRouteId?: NavigationRouteId;
   onNavigate?: ApplicationContext["navigate"];
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
@@ -55,53 +50,42 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     anchor: "bottom",
     bottom: 8,
   });
-  const [selectedTab, setSelectedTab] = createSignal<IssueTab>("all");
-  const [overflowAbove, setOverflowAbove] = createSignal(false);
-  const [overflowBelow, setOverflowBelow] = createSignal(false);
-  const [panelRenderer, setPanelRenderer] = createSignal<PanelRenderer | null>(null);
-  const panelLoad = createIdleImport(() => import("./sidebar-attention-panel.runtime.tsx"));
+  const Panel = lazy(() => import("./sidebar-attention-panel.runtime.tsx"), {
+    export: "SidebarAttentionPanel",
+  });
+  const panelLoad = createIdleImport(Panel.preload);
+  let panelRuntime: Awaited<ReturnType<typeof panelLoad.load>> | undefined;
   let panelTrigger: { element: HTMLElement; scope: ReturnType<typeof routeScope> } | null = null;
   let list: HTMLDivElement | null = null;
-  let panelFocus: SidebarAttentionFocus | null = null;
   let panelGeneration = 0;
   let disposed = false;
-  const count = createMemo(() => sidebarInboxTabCounts(attention.read()).all);
+  const count = createMemo(() => props.cachedCount ?? sidebarInboxTabCounts(attention.read()).all);
   const label = createMemo(() =>
     t(count() === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count()),
     }),
   );
 
+  function isCurrentPanel(generation: number, scope: ReturnType<typeof routeScope>) {
+    return (
+      !disposed && host.isConnected && generation === panelGeneration && scope === routeScope()
+    );
+  }
+
   function closePanel(restoreFocus: boolean) {
     const generation = ++panelGeneration;
     const scope = routeScope();
     const trigger = restoreFocus && panelOpen() ? panelTrigger?.element : null;
     setPanelOpen(false);
-    setOverflowAbove(false);
-    setOverflowBelow(false);
     panelTrigger = null;
     if (trigger) {
       queueMicrotask(() => {
-        if (!disposed && generation === panelGeneration && scope === routeScope()) {
+        if (isCurrentPanel(generation, scope)) {
           trigger.focus();
         }
       });
     }
   }
-  panelDismissals.set(host, () => {
-    const wasOpen = !disposed && panelOpen();
-    closePanel(false);
-    return wasOpen;
-  });
-
-  const syncOverflowCue = (element: HTMLElement) => {
-    setOverflowAbove(element.scrollTop > 2);
-    setOverflowBelow(element.scrollHeight - element.scrollTop - element.clientHeight > 2);
-  };
-  const observeListScroll = createScrollStateRef(syncOverflowCue, {
-    presented: panelOpen,
-    content: attention.revision,
-  });
   const preloadPanel = () => {
     void panelLoad.load().catch(() => undefined);
   };
@@ -109,57 +93,40 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     const generation = ++panelGeneration;
     const scope = routeScope();
     panelTrigger = { element: trigger, scope };
-    const runtime = await panelLoad.load();
-    if (disposed || !host.isConnected || generation !== panelGeneration || scope !== routeScope()) {
+    let runtime: Awaited<ReturnType<typeof panelLoad.load>>;
+    try {
+      runtime = await panelLoad.load();
+    } catch {
+      if (isCurrentPanel(generation, scope)) {
+        showToast({
+          message: `${t("lazyView.errorTitle")} ${t("lazyView.staleSubtitle")}`,
+          severity: "error",
+        });
+      }
+      return;
+    }
+    if (!isCurrentPanel(generation, scope)) {
       return;
     }
     context.scopeUpgrade.activate(runtime.ScopeUpgradeOwner);
-    const rect = trigger.getBoundingClientRect();
-    const width = Math.min(390, globalThis.innerWidth - 16);
-    const preferredLeft = rect.left + rect.width / 2 - width / 2;
-    const left = Math.max(8, Math.min(preferredLeft, globalThis.innerWidth - width - 8));
-    setPanelRenderer(() => runtime.SidebarAttentionPanel);
-    setPanelPosition(
-      rect.top < globalThis.innerHeight / 2
-        ? { left, anchor: "top", top: Math.max(8, rect.bottom + 8) }
-        : { left, anchor: "bottom", bottom: Math.max(8, globalThis.innerHeight - rect.top + 8) },
-    );
-    setSelectedTab("all");
+    panelRuntime = runtime;
+    setPanelPosition(runtime.sidebarAttentionPanelPosition(trigger));
     setPanelOpen(true);
     queueMicrotask(() => {
-      if (!disposed && generation === panelGeneration && scope === routeScope()) {
+      if (isCurrentPanel(generation, scope)) {
         list?.focus();
       }
     });
   }
-  function selectTab(tab: IssueTab) {
-    setSelectedTab(tab);
-    queueMicrotask(() => {
-      if (disposed || !panelOpen() || selectedTab() !== tab) {
-        return;
-      }
-      if (list) {
-        list.scrollTop = 0;
-        syncOverflowCue(list);
-      }
-    });
-  }
-  async function open(item: SidebarAttentionItem) {
+  function open(item: SidebarAttentionItem) {
     closePanel(false);
-    if (item.action.kind === "navigate") {
-      props.onNavigate?.(item.action.routeId);
-      return;
-    }
-    const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
-    custodianAlertStore.present(item.action.alert);
-    if (isCustodianPanelAvailable(context.gateway)) {
-      window.dispatchEvent(
-        new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }),
-      );
-    } else {
-      (props.onNavigate ?? context.navigate)("custodian");
-    }
+    const generation = panelGeneration;
+    const scope = routeScope();
+    void panelRuntime?.openSidebarAttentionItem(item, context, props.onNavigate, () =>
+      isCurrentPanel(generation, scope),
+    );
   }
+
   const handleOutsideInteraction = (event: PointerEvent | KeyboardEvent) => {
     const dismiss =
       event instanceof KeyboardEvent
@@ -186,63 +153,35 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
       closePanel(false);
     }
   };
-  const handlePanelKeydown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closePanel(true);
-      return;
-    }
-    if (event.key !== "Tab" || !(event.currentTarget instanceof HTMLElement)) {
-      return;
-    }
-    const rows = panelFocus?.controls() ?? [];
-    const first = rows[0];
-    const last = rows.at(-1);
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last?.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first?.focus();
-    }
-  };
-  async function decideApproval(event: Event, approvalId: string, decision: ExecApprovalDecision) {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
-    const focusOrder = panelFocus?.rows() ?? [];
-    const row = target.closest<HTMLElement>("[data-approval-id]");
-    const rowIndex = focusOrder.findIndex((element) => row?.contains(element));
-    const generation = panelGeneration;
-    await context.overlays.decideApproval(decision, approvalId);
-    onSettled(() => {
-      if (disposed || generation !== panelGeneration || target.isConnected) {
-        return;
-      }
-      const remaining = panelFocus?.rows() ?? [];
-      remaining[Math.min(Math.max(rowIndex, 0), remaining.length - 1)]?.focus();
+  onSettled(() => {
+    panelDismissals.set(host, () => {
+      const wasOpen = !disposed && panelOpen();
+      closePanel(false);
+      return wasOpen;
     });
-  }
-
-  onCleanup(listen(document, "pointerdown", handleOutsideInteraction, true));
-  onCleanup(listen(document, "keydown", handleOutsideInteraction, true));
-  onCleanup(listen(window, "blur", handleWindowBlur));
-  onCleanup(() => {
-    disposed = true;
-    panelGeneration += 1;
-    panelDismissals.delete(host);
-    panelLoad.dispose();
+    const stopPointer = listen(document, "pointerdown", handleOutsideInteraction, true);
+    const stopKeydown = listen(document, "keydown", handleOutsideInteraction, true);
+    const stopBlur = listen(window, "blur", handleWindowBlur);
+    return () => {
+      stopPointer();
+      stopKeydown();
+      stopBlur();
+      disposed = true;
+      panelGeneration += 1;
+      panelDismissals.delete(host);
+      panelLoad.dispose();
+    };
   });
 
   return (
-    <Show when={gateway.read().snapshot.phase === "connected" || attention.read().length > 0}>
+    <>
       <span class="sr-only" role="status" aria-live="polite">
         {label()}
       </span>
       <button
         type="button"
         class="sidebar-issues-button"
+        disabled={gateway.read().snapshot.phase !== "connected" && attention.read().length === 0}
         aria-expanded={panelOpen() ? "true" : "false"}
         aria-haspopup="dialog"
         aria-controls="sidebar-issues-panel"
@@ -267,36 +206,24 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
           </span>
         </Show>
       </button>
-      <Show when={panelOpen() && panelRenderer()} keyed>
-        {(Panel) => (
+      <Show when={panelOpen()}>
+        <Loading>
           <Panel
             entries={attention.read()}
-            onApprovalDecision={(event, id, decision) => void decideApproval(event, id, decision)}
             onClose={() => closePanel(true)}
             onDismiss={(dismissal) => context.sidebarAttention.dismiss(dismissal)}
-            onKeydown={handlePanelKeydown}
             onNavigate={(route, options) => {
               closePanel(false);
               (props.onNavigate ?? context.navigate)(route, options);
             }}
-            onOpen={(item) => void open(item)}
-            listRef={(element) => {
-              list = element;
-              if (element) {
-                observeListScroll(element);
-              }
-            }}
-            focusRef={(registry) => (panelFocus = registry)}
-            onSelectTab={selectTab}
-            overflowAbove={overflowAbove()}
-            overflowBelow={overflowBelow()}
+            onOpen={open}
+            listRef={(element) => (list = element)}
             panelPosition={panelPosition()}
-            selectedTab={selectedTab()}
             watchUpdateProgress={props.watchUpdateProgress}
           />
-        )}
+        </Loading>
       </Show>
-    </Show>
+    </>
   );
 }
 
@@ -306,11 +233,17 @@ export const SidebarAttention = defineSolidBridge<SidebarAttentionProps, Sidebar
     useOptionalApplication() ? renderSidebarAttentionContent(props, host) : props.children,
   {
     properties: {
+      cachedCount: { default: undefined, attribute: false },
       activeRouteId: { default: undefined, attribute: false },
       onNavigate: { default: undefined, attribute: false },
       watchUpdateProgress: { default: undefined, attribute: false },
     },
     methods: { dismissPanel: (host) => panelDismissals.get(host)?.() ?? false },
+    propertyChanged: (host, key) => {
+      if (key === "activeRouteId") {
+        panelDismissals.get(host)?.();
+      }
+    },
     disconnected: (host) => {
       queueMicrotask(() => {
         // A same-turn sidebar move retains intent; a detached Inbox retires it.

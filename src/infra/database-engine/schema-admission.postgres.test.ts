@@ -1,5 +1,4 @@
 import { channel } from "node:diagnostics_channel";
-import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -7,13 +6,14 @@ import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import {
   captureSqliteDatabaseAdmissions,
-  publishSqliteDatabaseSchemaChange,
   revokeSqliteDatabaseAdmissions,
 } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
+import {
+  createPostgresEngineTestFixture,
+  openPostgresEngineTestStore,
+} from "./engine-store.test-support.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
@@ -34,47 +34,110 @@ function fixture(
   }) => void,
 ) {
   withEngineStoreAdmission(() => {
-    const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-schema-"), "anchor.sqlite"));
-    const connections: PostgresSyncConnection[] = [];
-    const open = (selected = schema, existingVersion = false) => {
-      const db = openEngineStore({
-        anchor,
-        schema: selected,
-        existingVersion,
-        input: { connection: connection!, schemaPrefix: "r2" },
-        openSqlite: () => {
-          throw new Error("Unexpected SQLite bootstrap");
-        },
-        prepareAnchor: () => {},
-        inspectSqlite: () => {
-          admitSqliteSchema(anchor);
-          return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
-        },
-      });
-      if (!(db instanceof PostgresSyncConnection)) {
-        throw new Error("Expected PostgreSQL connection");
-      }
-      connections.push(db);
-      return db;
-    };
-    try {
-      const db = open();
-      test({ open, db, invalidate: () => publishSqliteDatabaseSchemaChange(anchor) });
-    } finally {
-      try {
-        const db = connections[0];
-        if (db) {
-          db.exec(`DROP SCHEMA "${db.schema}" CASCADE`);
-        }
-      } finally {
-        connections.forEach((item) => item.close());
-        anchor.close();
-      }
-    }
+    using store = createPostgresEngineTestFixture({
+      directory: dirs.make("pg-schema-"),
+      connection: connection!,
+      schemaPrefix: "r2",
+      schema,
+    });
+    const { open, invalidate } = store;
+    test({ open, db: open(), invalidate });
   });
 }
 
 describe.skipIf(!connection)("PostgreSQL schema admission", () => {
+  it("restores runtime statement limits after maintenance commits and nested rollbacks", () => {
+    fixture(({ db, open, invalidate }) => {
+      db.exec("SET statement_timeout = '37s'");
+      const timeout = () => db.prepare("SHOW statement_timeout").get()!.statement_timeout;
+      const runtime = timeout();
+      db.runTransaction(
+        () => {
+          expect(timeout()).not.toBe(runtime);
+          db.exec("INSERT INTO items(id) VALUES (1)");
+        },
+        { maintenance: true },
+      );
+      expect(timeout()).toBe(runtime);
+      db.runTransaction(() => {
+        for (const fail of [false, true]) {
+          const nested = () =>
+            db.runTransaction(
+              () => {
+                expect(timeout()).not.toBe(runtime);
+                db.exec(`INSERT INTO items(id) VALUES (${fail ? 3 : 2})`);
+                if (fail) {
+                  throw new Error("maintenance failed");
+                }
+              },
+              { maintenance: true },
+            );
+          if (fail) {
+            expect(nested).toThrow("maintenance failed");
+          } else {
+            nested();
+          }
+          expect(timeout()).toBe(runtime);
+        }
+      });
+      expect(db.prepare("SELECT id FROM items ORDER BY id").all()).toEqual([{ id: 1 }, { id: 2 }]);
+      expect(timeout()).toBe(runtime);
+      const nextDdl = `${ddl}\nALTER TABLE items ADD COLUMN migrated BOOLEAN NOT NULL DEFAULT true;`;
+      invalidate();
+      const migrated = open({
+        ...schema,
+        version: 2,
+        postgres: nextDdl,
+        postgresMigrations: [
+          {
+            version: 2,
+            fromSchema: { postgres: ddl },
+            schema: { postgres: nextDdl },
+            sql: `DO $$ BEGIN
+            IF current_setting('statement_timeout')::interval <= interval '90 seconds' THEN
+              RAISE EXCEPTION 'migration still has a runtime statement limit';
+            END IF;
+          END $$; ALTER TABLE items ADD COLUMN migrated BOOLEAN NOT NULL DEFAULT true;`,
+          },
+        ],
+      });
+      expect(migrated.prepare("SELECT id, migrated FROM items ORDER BY id").all()).toEqual([
+        { id: 1, migrated: 1 },
+        { id: 2, migrated: 1 },
+      ]);
+      expect(migrated.prepare("SHOW statement_timeout").get()!.statement_timeout).toBe("90s");
+    });
+  });
+
+  it("keeps migration callbacks out of worker admission snapshots", () => {
+    fixture(({ open, invalidate }) => {
+      invalidate();
+      open({
+        ...schema,
+        postgresMigrations: [
+          {
+            version: 2,
+            fromSchema: { postgres: ddl },
+            schema: { postgres: ddl },
+            sql: "",
+            backup: {
+              id: "fixture",
+              version: 1,
+              minimumPostgresVersion: 16,
+              tables: [],
+              sqlite: "",
+              preData: "",
+              postData: "",
+              expectedCatalog: [],
+              postgresPostData: () => "",
+            },
+          },
+        ],
+      });
+      expect(() => structuredClone(captureSqliteDatabaseAdmissions())).not.toThrow();
+    });
+  });
+
   it("reads an existing anchor while another handle holds write admission", () => {
     fixture(({ db }) => {
       db.exec("INSERT INTO items (id) VALUES (1)");
@@ -86,19 +149,11 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
       revokeSqliteDatabaseAdmissions(db.anchor);
       db.anchor.exec("BEGIN IMMEDIATE");
       try {
-        const opened = openEngineStore({
+        const opened = openPostgresEngineTestStore({
           anchor: reader,
           schema,
           input: { connection: connection!, schemaPrefix: "r2" },
           existingOnly: true,
-          openSqlite: () => {
-            throw new Error("Unexpected SQLite bootstrap");
-          },
-          prepareAnchor: () => {},
-          inspectSqlite: () => {
-            admitSqliteSchema(reader);
-            return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(reader)) };
-          },
         });
         try {
           expect(opened.prepare("SELECT value FROM items").all()).toEqual([{ value: 1 }]);

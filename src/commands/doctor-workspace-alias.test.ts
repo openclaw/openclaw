@@ -56,7 +56,7 @@ function buildAliasCfg(aliasPath: string, other?: string): OpenClawConfig {
 }
 
 function runWorkspaceRepair(cfg: OpenClawConfig, prompter: DoctorPrompter) {
-  return createWorkspaceAliasMigrationRepair(prompter, vi.fn())!(cfg);
+  return createWorkspaceAliasMigrationRepair(prompter)!(cfg);
 }
 
 function link(target: string, alias: string) {
@@ -120,7 +120,7 @@ it("shares one private snapshot across alias findings and rereads committed repa
   }
   const entries = aliases.map(({ alias }, i) => ["agent-" + i, { workspace: alias }]);
   const cfg: OpenClawConfig = { agents: { entries: Object.fromEntries(entries) } };
-  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+  const prepare = vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync");
   const inspect = async () => {
     closeOpenClawStateDatabaseForTest();
     prepare.mockClear();
@@ -128,7 +128,7 @@ it("shares one private snapshot across alias findings and rereads committed repa
       collectRepointedWorkspaceAliasFindings(cfg),
     );
     expect(prepare).toHaveBeenCalledOnce();
-    const location = prepare.mock.results[0]?.value.location;
+    const location = (await prepare.mock.results[0]!.value.result).location;
     expect(fs.existsSync(location)).toBe(false);
     return { findings, location };
   };
@@ -195,7 +195,7 @@ it.each(["target", "agent", "diagnostic"])("leaves state untouched for %s", asyn
   const prompter = buildPrompter(async () => true, owner !== "diagnostic");
   const cfg = buildAliasCfg(alias, owner === "agent" ? original : undefined);
   if (owner === "diagnostic") {
-    expect(createWorkspaceAliasMigrationRepair(prompter, vi.fn())).toBeUndefined();
+    expect(createWorkspaceAliasMigrationRepair(prompter)).toBeUndefined();
   } else {
     await expect(runWorkspaceRepair(cfg, prompter)).rejects.toThrow();
   }

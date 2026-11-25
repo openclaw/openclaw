@@ -13,6 +13,7 @@ import {
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile as writeJson } from "../helpers/temp-repo.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
 const CLICKCLACK_FIXTURE_SCRIPT = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
@@ -47,11 +48,6 @@ function runAssertion(home: string, args: string[]) {
     },
     killSignal: "SIGKILL",
   });
-}
-
-function writeJson(filePath: string, value: unknown) {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 async function waitUntil(matches: () => boolean | Promise<boolean>, label: string): Promise<void> {
@@ -141,7 +137,7 @@ describe("release user journey assertions", () => {
     const fileA = path.join(root, "a.log");
     const fileB = path.join(root, "b.log");
     writeFileSync(fileA, "first marker\n", "utf8");
-    writeFileSync(fileB, "second marker\n", "utf8");
+    writeFileSync(fileB, `OLD_OUTPUT${"x".repeat(70 * 1024)}\nsecond marker\n`, "utf8");
     const previousArgv = process.argv;
     const previousArgs = [...previousArgv];
 
@@ -157,6 +153,8 @@ describe("release user journey assertions", () => {
           await expect(assertion).rejects.toThrow(
             `${file} did not contain ${needle}. Output tail: `,
           );
+          await expect(assertion).rejects.toThrow("second marker");
+          await expect(assertion).rejects.not.toThrow("OLD_OUTPUT");
         } else {
           await expect(assertion).resolves.toBeUndefined();
         }
@@ -169,31 +167,17 @@ describe("release user journey assertions", () => {
     }
   });
 
-  it.each([false, true])("bounds oversized artifact diagnostics (JSON: %s)", (json) => {
-    const { root, home } = fixture();
-    const file = json ? path.join(home, ".openclaw/openclaw.json") : path.join(root, "output.log");
-    const marker = json ? "DO_NOT_DUMP_OLD_JSON" : "DO_NOT_DUMP_OLD_OUTPUT";
-    const tail = json ? "recent json tail" : "recent output tail";
+  it("bounds oversized JSON artifact diagnostics", () => {
+    const { home } = fixture();
+    const file = path.join(home, ".openclaw/openclaw.json");
     mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(
-      file,
-      `${marker}${"x".repeat(json ? 2 * 1024 * 1024 : 70 * 1024)}\n${tail}${json ? "" : "\n"}`,
-    );
-    const result = runAssertion(
-      home,
-      json ? ["configure-mock-model", "18080"] : ["assert-file-contains", file, "missing"],
-    );
-    if (json) {
-      expect(result.status).not.toBe(0);
-      expect(result.stderr.length).toBeLessThan(80 * 1024);
-    } else {
-      expect(result.status).toBe(1);
-    }
-    expect(result.stderr).toContain(
-      json ? "JSON artifact exceeded" : `${file} did not contain missing. Output tail: `,
-    );
-    expect(result.stderr).toContain(tail);
-    expect(result.stderr).not.toContain(marker);
+    writeFileSync(file, `DO_NOT_DUMP_OLD_JSON${"x".repeat(2 * 1024 * 1024)}\nrecent json tail`);
+    const result = runAssertion(home, ["configure-mock-model", "18080"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr.length).toBeLessThan(80 * 1024);
+    expect(result.stderr).toContain("JSON artifact exceeded");
+    expect(result.stderr).toContain("recent json tail");
+    expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_JSON");
   });
 
   it("accepts a configured channel before Gateway startup", async () => {
@@ -279,6 +263,9 @@ describe("release user journey assertions", () => {
       socket = await openClickClackSocket(port, token);
       await expect(reconnected).resolves.toBeUndefined();
       expect(await state()).toMatchObject({ socketCount: 1, socketGeneration: 2 });
+      const pong = once(socket, "pong");
+      socket.ping();
+      await pong;
     } finally {
       if (socket) {
         await closeClickClackSocket(socket);

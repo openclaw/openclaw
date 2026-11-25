@@ -25,10 +25,8 @@ type LaneDiagnosticsPayload = {
 
 async function requestDiagnostics(method: string, params: Record<string, unknown> = {}) {
   const respond = vi.fn();
-  await expectDefined(
-    diagnosticsHandlers[method],
-    method,
-  )({
+  const handler = expectDefined(diagnosticsHandlers[method], method);
+  await handler({
     req: { type: "req", id: "diagnostics", method, params: {} },
     params,
     client: null,
@@ -46,6 +44,8 @@ async function requestLaneDiagnostics(): Promise<LaneDiagnosticsPayload> {
 }
 
 async function blockLane(lane: string) {
+  const originalConcurrency = getCommandLaneSnapshot(lane).maxConcurrent;
+  setCommandLaneConcurrency(lane, 1);
   const started = createDeferred();
   const release = createDeferred();
   const active = enqueueCommandInLane(lane, async () => {
@@ -53,7 +53,22 @@ async function blockLane(lane: string) {
     await release.promise;
   });
   await started.promise;
-  return { active, release: release.resolve };
+  const runs = [active];
+  return {
+    active,
+    release: release.resolve,
+    queue() {
+      const queued = enqueueCommandInLane(lane, async () => undefined);
+      runs.push(queued);
+      return queued;
+    },
+    async [Symbol.asyncDispose]() {
+      release.resolve();
+      setCommandLaneConcurrency(lane, 1);
+      await Promise.all(runs);
+      setCommandLaneConcurrency(lane, originalConcurrency);
+    },
+  };
 }
 
 async function expectLane(lane: string, state: Partial<LaneDiagnosticsPayload["lanes"][number]>) {
@@ -140,58 +155,32 @@ describe("diagnostics gateway methods", () => {
 
   it("reports static lanes in sorted order and hides disabled lanes only after work drains", async () => {
     const lane = CommandLane.HookDispatch;
-    const originalConcurrency = getCommandLaneSnapshot(lane).maxConcurrent;
+    await using blocked = await blockLane(lane);
+    const { active, release } = blocked;
+    setCommandLaneConcurrency(lane, 0);
+    await expectLane(lane, { activeCount: 1, queuedCount: 0, maxConcurrent: 0 });
     setCommandLaneConcurrency(lane, 1);
+    const queued = blocked.queue();
+    const payload = await requestLaneDiagnostics();
+    expect(payload.ts).toBeGreaterThan(0);
+    const names = payload.lanes.map((snapshot) => snapshot.lane);
+    expect(names).toEqual(names.toSorted());
+    expect(names).toContain(CommandLane.Main);
+    await expectLane(lane, { activeCount: 1, queuedCount: 1, maxConcurrent: 1, blockedBy: "lane" });
 
-    const { active, release } = await blockLane(lane);
-    let queued: Promise<void> | undefined;
+    setCommandLaneConcurrency(lane, 0);
+    release();
+    await active;
+    await expectLane(lane, { activeCount: 0, queuedCount: 1, maxConcurrent: 0 });
 
-    try {
-      setCommandLaneConcurrency(lane, 0);
-      await expectLane(lane, { activeCount: 1, queuedCount: 0, maxConcurrent: 0 });
-      setCommandLaneConcurrency(lane, 1);
-      queued = enqueueCommandInLane(lane, async () => undefined);
-      const payload = await requestLaneDiagnostics();
-      expect(payload.ts).toBeGreaterThan(0);
-      expect(payload.lanes.map((snapshot) => snapshot.lane)).toEqual([
-        CommandLane.ActiveMemory,
-        CommandLane.Background,
-        CommandLane.Cron,
-        CommandLane.CronNested,
-        CommandLane.HookDispatch,
-        CommandLane.Main,
-        CommandLane.Nested,
-        CommandLane.RestartRecovery,
-        CommandLane.Subagent,
-        CommandLane.SystemAgent,
-        CommandLane.SystemAgentInference,
-      ]);
-      await expectLane(lane, {
-        activeCount: 1,
-        queuedCount: 1,
-        maxConcurrent: 1,
-        blockedBy: "lane",
-      });
+    setCommandLaneConcurrency(lane, 1);
+    await queued;
+    await expectLane(lane, { activeCount: 0, queuedCount: 0, maxConcurrent: 1 });
 
-      setCommandLaneConcurrency(lane, 0);
-      release();
-      await active;
-      await expectLane(lane, { activeCount: 0, queuedCount: 1, maxConcurrent: 0 });
-
-      setCommandLaneConcurrency(lane, 1);
-      await queued;
-      await expectLane(lane, { activeCount: 0, queuedCount: 0, maxConcurrent: 1 });
-
-      setCommandLaneConcurrency(lane, 0);
-      expect((await requestLaneDiagnostics()).lanes.map((snapshot) => snapshot.lane)).not.toContain(
-        lane,
-      );
-    } finally {
-      release();
-      setCommandLaneConcurrency(lane, 1);
-      await Promise.all([active, queued]);
-      setCommandLaneConcurrency(lane, originalConcurrency);
-    }
+    setCommandLaneConcurrency(lane, 0);
+    expect((await requestLaneDiagnostics()).lanes.map((snapshot) => snapshot.lane)).not.toContain(
+      lane,
+    );
   });
 
   it("reports subagent totals with per-session capacity without exposing parent identities", async () => {
@@ -204,29 +193,25 @@ describe("diagnostics gateway methods", () => {
     const runs = parents.flatMap((lane) =>
       Array.from({ length: 2 }, () => enqueueCommandInLane(lane, async () => await gate.promise)),
     );
-    try {
-      let payload = await requestLaneDiagnostics();
+    const expectSubagents = (payload: LaneDiagnosticsPayload, saturated: boolean) => {
       expect(payload.lanes.find((lane) => lane.lane === "subagent")).toMatchObject({
-        activeCount: 4,
-        queuedCount: 0,
+        activeCount: saturated ? 5 : 4,
+        queuedCount: saturated ? 1 : 0,
         maxConcurrent: 3,
         concurrencyScope: "session",
-        saturatedLaneCount: 0,
-        blockedBy: null,
+        saturatedLaneCount: Number(saturated),
+        blockedBy: saturated ? "lane" : null,
       });
+    };
+    try {
+      let payload = await requestLaneDiagnostics();
+      expectSubagents(payload, false);
       runs.push(
         enqueueCommandInLane(parentA, async () => await gate.promise),
         enqueueCommandInLane(parentA, async () => await gate.promise),
       );
       payload = await requestLaneDiagnostics();
-      expect(payload.lanes.find((lane) => lane.lane === "subagent")).toMatchObject({
-        activeCount: 5,
-        queuedCount: 1,
-        maxConcurrent: 3,
-        concurrencyScope: "session",
-        saturatedLaneCount: 1,
-        blockedBy: "lane",
-      });
+      expectSubagents(payload, true);
       expect(payload.dynamic).toEqual(before.dynamic);
       expect(JSON.stringify(payload)).not.toContain("private-parent");
     } finally {
@@ -239,24 +224,16 @@ describe("diagnostics gateway methods", () => {
   it("aggregates saturated dynamic lanes without exporting their names", async () => {
     const lane = `test:diagnostics-${Date.now()}`;
     const before = await requestLaneDiagnostics();
-    setCommandLaneConcurrency(lane, 1);
-
-    const { active, release } = await blockLane(lane);
-    const queued = enqueueCommandInLane(lane, async () => undefined);
-
-    try {
-      const payload = await requestLaneDiagnostics();
-      const baseline = before.dynamic;
-      expect(payload.lanes.map((snapshot) => snapshot.lane)).not.toContain(lane);
-      expect(payload.dynamic).toEqual({
-        laneCount: (baseline?.laneCount ?? 0) + 1,
-        activeCount: (baseline?.activeCount ?? 0) + 1,
-        queuedCount: (baseline?.queuedCount ?? 0) + 1,
-        queuedLaneCount: (baseline?.queuedLaneCount ?? 0) + 1,
-      });
-    } finally {
-      release();
-      await Promise.all([active, queued]);
-    }
+    await using blocked = await blockLane(lane);
+    void blocked.queue();
+    const payload = await requestLaneDiagnostics();
+    const baseline = before.dynamic;
+    expect(payload.lanes.map((snapshot) => snapshot.lane)).not.toContain(lane);
+    expect(payload.dynamic).toEqual({
+      laneCount: (baseline?.laneCount ?? 0) + 1,
+      activeCount: (baseline?.activeCount ?? 0) + 1,
+      queuedCount: (baseline?.queuedCount ?? 0) + 1,
+      queuedLaneCount: (baseline?.queuedLaneCount ?? 0) + 1,
+    });
   });
 });

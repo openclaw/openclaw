@@ -1,5 +1,6 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "../../packages/retry/src/index.js";
 import type {
   ReplyRunAdmissionSource,
   ReplyRunWaiter,
@@ -63,13 +64,16 @@ function waitForSessionControllerEntryIdle(
 export function waitForSessionRunIdle(
   sessionKey: string,
   timeoutMs?: number | null,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; target?: SessionTarget },
 ): Promise<boolean> {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (!normalizedSessionKey) {
     return Promise.resolve(true);
   }
-  const owners = findSessionControllerEntries(normalizedSessionKey).filter((entry) => entry.active);
+  // A target narrows the wait to its physical owner instead of every store sharing the key.
+  const owners = findSessionControllerEntries(normalizedSessionKey, opts?.target).filter(
+    (entry) => entry.active,
+  );
   return Promise.all(
     owners.map((owner) => waitForSessionControllerEntryIdle(owner, timeoutMs, opts?.signal)),
   ).then((outcomes) => outcomes.every(Boolean));
@@ -108,33 +112,20 @@ async function waitForReplyRunAdmissionBarrier(
     if (remainingMs !== undefined && remainingMs <= 0) {
       return { settled: false };
     }
-    let timer: NodeJS.Timeout | undefined;
-    let abortHandler: (() => void) | undefined;
-    const outcome = await Promise.race([
-      barrier.settled.then(() => true),
-      ...(remainingMs !== undefined
-        ? [
-            new Promise<boolean>((resolve) => {
-              timer = setTimeout(() => resolve(false), Math.max(1, remainingMs));
-              timer.unref?.();
-            }),
-          ]
-        : []),
-      ...(signal
-        ? [
-            new Promise<boolean>((resolve) => {
-              abortHandler = () => resolve(false);
-              signal.addEventListener("abort", abortHandler, { once: true });
-            }),
-          ]
-        : []),
-    ]);
-    if (timer) {
-      clearTimeout(timer);
-    }
-    if (abortHandler) {
-      signal?.removeEventListener("abort", abortHandler);
-    }
+    const settled = barrier.settled.then(() => true);
+    const aborted = new Error("Admission wait aborted");
+    const outcome = await (remainingMs === undefined
+      ? racePromiseWithAbortSignal(settled, signal, () => aborted).catch((error: unknown) => {
+          if (error === aborted) {
+            return false;
+          }
+          throw error;
+        })
+      : raceWithTimeout(settled, Math.max(1, remainingMs), () => false, {
+          ref: false,
+          signal,
+          onAbort: () => false,
+        }));
     if (!outcome) {
       return { settled: false };
     }
@@ -150,18 +141,18 @@ async function waitForReplyRunAdmissionBarrier(
   }
 }
 
-export async function waitForReplyRunFollowupAdmission(
+export function waitForReplyRunFollowupAdmission(
   sessionKey: string,
   timeoutMs: number,
   opts?: ReplyRunAdmissionWaitOptions,
 ): Promise<ReplyRunAdmissionSettlement> {
-  return await waitForReplyRunAdmissionBarrier("followupBarrier", 100, sessionKey, timeoutMs, opts);
+  return waitForReplyRunAdmissionBarrier("followupBarrier", 100, sessionKey, timeoutMs, opts);
 }
 
-export async function waitForReplyRunSuccessorAdmission(
+export function waitForReplyRunSuccessorAdmission(
   sessionKey: string,
   timeoutMs?: number | null,
   opts?: ReplyRunAdmissionWaitOptions,
 ): Promise<ReplyRunAdmissionSettlement> {
-  return await waitForReplyRunAdmissionBarrier("successorBarrier", 0, sessionKey, timeoutMs, opts);
+  return waitForReplyRunAdmissionBarrier("successorBarrier", 0, sessionKey, timeoutMs, opts);
 }

@@ -34,6 +34,12 @@ export type QueuedAgentRunParams = {
   clientCaps?: string[];
   /** Profile selected from the session's assigned human owner or authenticated human creator, never its latest sender. */
   bootstrapUserProfileId?: string;
+  /**
+   * The same session selection for every turn, whatever its sender. Embedded runs key the
+   * prompt series and render personal USER.md from it; bootstrapUserProfileId is then
+   * absent only when this turn's sender does not qualify.
+   */
+  sessionUserProfileId?: string;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   chatType?: ChatType;
   agentAccountId?: string;
@@ -54,6 +60,7 @@ export type QueuedAgentRunParams = {
   thinkLevel?: ThinkLevel;
   /** Run-scoped selection intent for declared chat-template effort. */
   thinkingExplicit?: boolean;
+  cyberAccessProgram?: SessionEntry["cyberAccessProgram"];
   fastMode?: FastMode;
   /** Effective auto fast-mode cutoff for this run, in seconds. */
   fastModeAutoOnSeconds?: number;
@@ -65,6 +72,8 @@ export type QueuedAgentRunParams = {
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   extraSystemPrompt?: string;
+  /** Exact producer-owned transient section; unannotated instructions remain persistent. */
+  extraSystemPromptTurnContext?: { start: number; text: string };
   /** Visible source replies must use the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Action sink available for model-proposed follow-up tasks. */
@@ -80,6 +89,8 @@ export type QueuedAgentRunParams = {
   memberRoleIds?: string[];
   permissionMode?: SessionEntry["permissionMode"];
   sessionRoot?: string;
+  /** Spawn-time blind child: the rendered prompt omits its model, identity and workspace path. */
+  blindPrompt?: SessionEntry["blindPrompt"];
   /** Locks the selected model against hooks and fallbacks; does not imply native model ownership. */
   modelSelectionLocked?: boolean;
   authProfileIdSource?: "auto" | "user";

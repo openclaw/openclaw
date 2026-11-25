@@ -1,6 +1,6 @@
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
-import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery-types.js";
 import type { ChildOperation, ChildPurpose } from "./update-command-executor-children.js";
 import {
   originalCancellations,
@@ -37,10 +37,10 @@ export function registerUpdateCommandTerminalPreparation(
 
 export function requireUpdateCommandAcquisition(
   acquired: ReturnType<ReturnType<typeof createManagedHandoffLeaseStore>["acquire"]>,
-  message: string,
+  message: string | (() => string),
 ) {
   if (acquired.kind !== "acquired") {
-    throw new UpdateCommandRecoveryPendingError(message);
+    throw new UpdateCommandRecoveryPendingError(typeof message === "string" ? message : message());
   }
   return acquired;
 }

@@ -1,26 +1,17 @@
 import { spawnSync } from "node:child_process";
-import { once } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
-import { createServer, type RequestListener, type Server } from "node:http";
+import { createServer, type RequestListener } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveSlotSelection } from "../../../../src/plugins/slots.js";
 import { runNodeScript } from "../../../helpers/run-node-script.js";
 import { cleanupTempDirs, makeTempDir } from "../../../helpers/temp-dir.js";
+import { listenLoopback } from "./gateway-recovery.test-support.js";
 
 const clientPath = path.resolve("scripts/e2e/lib/openai-chat-tools/client.mjs");
 const dockerRunnerPath = path.resolve("scripts/e2e/openai-chat-tools-docker.sh");
 const tempDirs: string[] = [];
 afterEach(() => cleanupTempDirs(tempDirs));
-
-async function listen(server: Server): Promise<number> {
-  await once(server.listen(0, "127.0.0.1"), "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test server did not expose a TCP port");
-  }
-  return address.port;
-}
 
 async function runClient(
   handler: RequestListener,
@@ -36,7 +27,7 @@ async function runClient(
         MODEL_REF: "openai/gpt-5.4-mini",
         OPENCLAW_GATEWAY_TOKEN: "test-token",
         OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "1",
-        PORT: String(await listen(server)),
+        PORT: new URL(await listenLoopback(server, "test server did not expose a TCP port")).port,
         ...env,
       },
       timeout,

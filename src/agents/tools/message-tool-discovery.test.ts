@@ -3,6 +3,8 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listMessageActionDiscoveryChannels } from "../../channels/plugins/message-action-discovery.js";
+import * as preparedCatalogModule from "../../plugins/prepared-message-tool-catalog.js";
 
 const { readDeliveryMock, getChannelPluginMock, getBootstrapChannelPluginMock } = vi.hoisted(
   () => ({
@@ -25,7 +27,11 @@ vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
 
 import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
 import { resolveBundledChannelMessageToolDiscoveryAdapter } from "../../channels/plugins/message-tool-api.js";
-import type { ChannelMessageActionDiscoveryContext } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelMessageActionDiscoveryContext,
+  ChannelMessageToolDiscovery,
+  ChannelMessageToolSchemaContribution,
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { settlePreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -35,10 +41,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import {
   buildMessageToolDescription,
-  buildMessageToolSchema,
-  resolveMessageToolActionSchemaActions,
+  hasMessageToolSourceConversation,
   resolveEffectiveCurrentChannelContextForRequest,
   resolveMessageToolDiscoveryAsync,
+  resolveMessageToolDiscovery,
   type MessageToolDiscoveryParams,
 } from "./message-tool-discovery.js";
 
@@ -49,58 +55,74 @@ const options = {
   agentSessionKey: `agent:main:googlechat:group:${foldedSpace}`,
 };
 const request = { config: {}, action: "send" as const, params: {} };
+type DiscoveryChannel = PreparedMessageToolCatalog["channels"][number];
+function channel(
+  id: string,
+  actions: ChannelMessageToolDiscovery["actions"],
+  properties?: ChannelMessageToolSchemaContribution["properties"],
+  capabilities?: ChannelMessageToolDiscovery["capabilities"],
+) {
+  return {
+    id,
+    reconcilesUnknownSend: false,
+    actions: {
+      describeMessageTool: () => ({
+        actions,
+        capabilities,
+        ...(properties && { schema: { visibility: "all-configured", properties } }),
+      }),
+    },
+  } satisfies DiscoveryChannel;
+}
+function catalog(channels: PreparedMessageToolCatalog["channels"]): PreparedMessageToolCatalog {
+  return { version: 1, channels, getChannel: (id) => channels.find((entry) => entry.id === id) };
+}
+function discover(params: MessageToolDiscoveryParams) {
+  const { actions, schema } = resolveMessageToolDiscovery(params);
+  return {
+    actions,
+    schema,
+    properties: expectDefined(asOptionalRecord(schema.properties), "message schema properties"),
+    description: buildMessageToolDescription(actions),
+  };
+}
+
+it.each([
+  [undefined, false],
+  [{ currentChannelProvider: "telegram" }, false],
+  [{ currentChannelId: "123" }, false],
+  [{ currentChannelProvider: "telegram", currentChannelId: "heartbeat" }, false],
+  [{ currentChannelProvider: "telegram", currentChannelId: "channel:agent:main:main" }, false],
+  [{ currentChannelProvider: "telegram", currentMessagingTarget: "123" }, true],
+  [{ currentChannelProvider: "webchat", agentSessionKey: "agent:main:telegram:direct:123" }, true],
+] as const)("reports source routing for %o", (context, expected) => {
+  expect(hasMessageToolSourceConversation(context)).toBe(expected);
+});
 
 describe("session-derived message destinations", () => {
   beforeEach(() => {
     getBootstrapChannelPluginMock.mockReset();
-    readDeliveryMock.mockReset();
-    readDeliveryMock.mockReturnValue({
+    readDeliveryMock.mockReset().mockReturnValue({
       channel: "googlechat",
       to: `googlechat:${canonicalSpace}`,
       accountId: "default",
     });
-    getChannelPluginMock.mockReset();
-    getChannelPluginMock.mockReturnValue({
+    getChannelPluginMock.mockReset().mockReturnValue({
       config: { listAccountIds: () => ["default"] },
       messaging: { targetIdComparison: "case-sensitive" },
     });
   });
 
-  it.each<{
-    name: string;
-    delivery?: { channel: string; to: string; accountId?: string };
-    direct?: boolean;
-    expected: string;
-  }>([
-    {
-      name: "canonical group",
-      delivery: { channel: "googlechat", to: `googlechat:${canonicalSpace}`, accountId: "default" },
-      expected: canonicalSpace,
-    },
-    { name: "missing delivery", expected: foldedSpace },
-    {
-      name: "another channel",
-      delivery: { channel: "slack", to: canonicalSpace },
-      expected: foldedSpace,
-    },
-    {
-      name: "another peer",
-      delivery: { channel: "googlechat", to: "spaces/Other" },
-      expected: foldedSpace,
-    },
-    {
-      name: "another account",
-      delivery: { channel: "googlechat", to: canonicalSpace, accountId: "other" },
-      expected: foldedSpace,
-    },
-    {
-      name: "direct account and thread",
-      direct: true,
-      delivery: { channel: "googlechat", to: canonicalSpace, accountId: "work" },
-      expected: canonicalSpace,
-    },
-  ])("recovers only the matching route: $name", async ({ delivery, direct, expected }) => {
-    readDeliveryMock.mockReturnValue(delivery);
+  it.each([
+    ["canonical group", "googlechat", `googlechat:${canonicalSpace}`, "default", canonicalSpace],
+    ["missing delivery", undefined, undefined, undefined, foldedSpace],
+    ["another channel", "slack", canonicalSpace, undefined, foldedSpace],
+    ["another peer", "googlechat", "spaces/Other", undefined, foldedSpace],
+    ["another account", "googlechat", canonicalSpace, "other", foldedSpace],
+    ["direct account and thread", "googlechat", canonicalSpace, "work", canonicalSpace],
+  ])("recovers only the matching route: %s", async (_name, provider, to, accountId, expected) => {
+    const direct = accountId === "work";
+    readDeliveryMock.mockReturnValue(provider ? { channel: provider, to, accountId } : undefined);
     expect(
       await resolveEffectiveCurrentChannelContextForRequest(
         direct
@@ -131,30 +153,27 @@ describe("session-derived message destinations", () => {
       getBootstrapChannelPluginMock.mockReturnValue({
         actions: { messageActionTargetAliases: { read: { aliases: ["messageId"] } } },
       });
-      const channels: PreparedMessageToolCatalog["channels"] = hasAliases
-        ? [
-            {
-              id: "googlechat",
-              reconcilesUnknownSend: false,
-              actions: {
-                describeMessageTool: () => ({ actions: ["read"] }),
-                messageActionTargetAliases: { read: { aliases: ["messageId"] } },
+      const readChannel = channel("googlechat", ["read"]);
+      const selectedCatalog = catalog(
+        hasAliases
+          ? [
+              {
+                ...readChannel,
+                actions: {
+                  ...readChannel.actions,
+                  messageActionTargetAliases: { read: { aliases: ["messageId"] } },
+                },
               },
-            },
-          ]
-        : [];
-      const catalog = {
-        version: 1,
-        channels,
-        getChannel: (id: string) => channels.find((entry) => entry.id === id),
-      };
+            ]
+          : [],
+      );
       expect(
         (
           await resolveEffectiveCurrentChannelContextForRequest(options, {
             ...request,
             action: "read",
             params: { messageId: "message-1" },
-            preparedMessageToolCatalog: selected ? catalog : undefined,
+            preparedMessageToolCatalog: selected ? selectedCatalog : undefined,
           })
         ).currentMessagingTarget,
       ).toBe(expected);
@@ -199,60 +218,23 @@ describe("session-derived message destinations", () => {
 
 describe("message tool discovery cache stability", () => {
   it("limits actions and fields to the session's channel bindings with stable bytes", async () => {
-    const channels: PreparedMessageToolCatalog["channels"] = [
-      {
-        id: "qa-primary",
-        reconcilesUnknownSend: false,
-        actions: {
-          describeMessageTool: () => ({
-            actions: ["send", "react"],
-            schema: {
-              visibility: "all-configured",
-              properties: { primaryLabel: Type.Optional(Type.String()) },
-            },
-          }),
-        },
-      },
-      {
-        id: "qa-secondary",
-        reconcilesUnknownSend: false,
-        actions: {
-          describeMessageTool: () => ({
-            actions: ["send", "poll"],
-            capabilities: ["presentation"],
-            schema: {
-              visibility: "all-configured",
-              properties: { ballotLabel: Type.Optional(Type.String()) },
-            },
-          }),
-        },
-      },
-      {
-        id: "qa-unrelated",
-        reconcilesUnknownSend: false,
-        actions: {
-          describeMessageTool: () => ({
-            actions: ["event-create"],
-            schema: {
-              visibility: "all-configured",
-              properties: { unrelatedLabel: Type.Optional(Type.String()) },
-            },
-          }),
-        },
-      },
+    const channels = [
+      channel("qa-primary", ["send", "react"], {
+        primaryLabel: Type.Optional(Type.String()),
+      }),
+      channel("qa-secondary", ["send", "poll"], { ballotLabel: Type.Optional(Type.String()) }, [
+        "presentation",
+      ]),
+      channel("qa-unrelated", ["event-create"], { unrelatedLabel: Type.Optional(Type.String()) }),
     ];
-    const discover = (bindings: OpenClawConfig["bindings"], orderedChannels = channels) =>
+    const discoverBindings = (bindings: OpenClawConfig["bindings"], orderedChannels = channels) =>
       resolveMessageToolDiscoveryAsync({
         cfg: { bindings },
         agentId: "main",
         currentChannelProvider: "qa-primary",
-        preparedMessageToolCatalog: {
-          version: 1,
-          channels: orderedChannels,
-          getChannel: (id) => orderedChannels.find((channel) => channel.id === id),
-        },
+        preparedMessageToolCatalog: catalog(orderedChannels),
       });
-    const single = await discover([]);
+    const single = await discoverBindings([]);
     expect(single.actions).toEqual(["react", "send"]);
     expect(single.schema.properties).toHaveProperty("emoji");
     for (const field of ["pollId", "eventName", "ballotLabel", "unrelatedLabel", "presentation"]) {
@@ -262,80 +244,25 @@ describe("message tool discovery cache stability", () => {
       { agentId: "main", match: { channel: "qa-secondary", accountId: "*" } },
       { agentId: "other", match: { channel: "qa-unrelated" } },
     ];
-    const multi = await discover(bindings);
+    const multi = await discoverBindings(bindings);
     expect(multi.actions).toEqual(["poll", "react", "send"]);
     expect(multi.schema.properties).toHaveProperty("ballotLabel");
     expect(multi.schema.properties).toHaveProperty("presentation");
     expect(multi.schema.properties).not.toHaveProperty("eventName");
     expect(multi.schema.properties).not.toHaveProperty("unrelatedLabel");
     expect(
-      Value.Check(multi.schema, {
-        action: "poll",
-        pollQuestion: "Ready?",
-        pollOption: ["Yes", "No"],
-      }),
-    ).toBe(true);
-    expect(JSON.stringify(await discover(bindings.toReversed(), channels.toReversed()))).toBe(
-      JSON.stringify(multi),
-    );
+      JSON.stringify(await discoverBindings(bindings.toReversed(), channels.toReversed())),
+    ).toBe(JSON.stringify(multi));
   });
 
-  it.each([
-    { allow: undefined, expected: ["poll", "poll-vote", "react", "send"] },
-    { allow: ["send", "react", "poll", "react"], expected: ["poll", "react", "send"] },
-    { allow: ["read", "edit", "read"], expected: ["edit", "read"] },
-  ])("keeps schema bytes stable across channel discovery order ($allow)", ({ allow, expected }) => {
-    const channels: PreparedMessageToolCatalog["channels"] = [
-      {
-        id: "telegram",
-        reconcilesUnknownSend: false,
-        actions: { describeMessageTool: () => ({ actions: ["send", "react", "poll"] }) },
-      },
-      {
-        id: "discord",
-        reconcilesUnknownSend: false,
-        actions: { describeMessageTool: () => ({ actions: ["send", "poll", "poll-vote"] }) },
-      },
-    ];
-    const createTool = (
-      orderedChannels: PreparedMessageToolCatalog["channels"],
-      currentChannelProvider: string,
-    ) => {
-      const params = {
-        cfg: {
-          tools: { message: { actions: { allow } } },
-          bindings: [
-            { agentId: "main", match: { channel: "telegram" } },
-            { agentId: "main", match: { channel: "discord" } },
-          ],
-        },
-        agentId: "main",
-        currentChannelProvider,
-        preparedMessageToolCatalog: {
-          version: 1,
-          channels: orderedChannels,
-          getChannel: (id: string) => orderedChannels.find((channel) => channel.id === id),
-        },
-      };
-      const actions = resolveMessageToolActionSchemaActions(params);
-      return {
-        parameters: buildMessageToolSchema(params, actions),
-        description: buildMessageToolDescription(actions),
-      };
-    };
-    const tools = [
-      createTool(channels, "telegram"),
-      createTool(channels.toReversed(), "discord"),
-    ] as const;
-
-    expect(tools[0].description).toBe(tools[1].description);
-    expect(JSON.stringify(tools[0].parameters)).toBe(JSON.stringify(tools[1].parameters));
-    for (const tool of tools) {
-      expect(tool.parameters.properties.action).toMatchObject({ enum: expected });
-      if (allow) {
-        expect(tool.description).not.toContain("poll-vote");
-      }
-    }
+  it("falls back to the normalized allowlist when no discovered action matches", () => {
+    const result = discover({
+      cfg: { tools: { message: { actions: { allow: ["read", "edit", "read"] } } } },
+      currentChannelProvider: "telegram",
+      preparedMessageToolCatalog: catalog([channel("telegram", ["send", "react"])]),
+    });
+    expect(result.schema.properties.action).toMatchObject({ enum: ["edit", "read"] });
+    expect(result.description).not.toContain("react");
   });
 });
 
@@ -346,33 +273,19 @@ describe("message tool discovery without a current channel", () => {
     { allow: ["send", "react"], actions: ["react", "send"], compact: false },
   ])("keeps the fields needed by $actions", ({ allow, actions, compact }) => {
     const deliveryTag = Type.Optional(Type.String());
-    const channels: PreparedMessageToolCatalog["channels"] = [
-      {
-        id: "telegram",
-        reconcilesUnknownSend: false,
-        actions: {
-          describeMessageTool: () => ({
-            actions: compact ? ["send"] : ["send", "react"],
-            capabilities: ["presentation", "delivery-pin"],
-            schema: { visibility: "all-configured", properties: { deliveryTag } },
-          }),
-        },
-      },
-    ];
-    const params: MessageToolDiscoveryParams = {
+    const {
+      actions: discovered,
+      schema,
+      properties,
+    } = discover({
       cfg: { tools: { message: { actions: { allow } } } },
-      preparedMessageToolCatalog: {
-        version: 1,
-        channels,
-        getChannel: (id) => channels.find((channel) => channel.id === id),
-      },
-    };
-    const discovered = resolveMessageToolActionSchemaActions(params);
-    const schema = buildMessageToolSchema(params, discovered);
-    const properties = expectDefined(
-      asOptionalRecord(schema.properties),
-      "message schema properties",
-    );
+      preparedMessageToolCatalog: catalog([
+        channel("telegram", compact ? ["send"] : ["send", "react"], { deliveryTag }, [
+          "presentation",
+          "delivery-pin",
+        ]),
+      ]),
+    });
 
     expect(discovered).toEqual(actions);
     for (const field of ["target", "targets", "media", "attachments", "presentation", "delivery"]) {
@@ -421,56 +334,41 @@ describe("scheduled account discovery", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
 
   function registerChannels(foreignContexts?: ChannelMessageActionDiscoveryContext[]) {
-    const slack = {
-      ...createChannelTestPluginBase({ id: "slack" }),
-      actions: expectDefined(
-        resolveBundledChannelMessageToolDiscoveryAdapter("slack"),
-        "Slack public message-tool discovery adapter",
-      ),
-    };
-    const registry = createTestRegistry([
-      { pluginId: "slack", source: "test", plugin: slack },
-      ...(foreignContexts
-        ? [
-            {
-              pluginId: "telegram",
-              source: "test",
-              plugin: {
-                ...createChannelTestPluginBase({ id: "telegram" }),
-                actions: {
-                  describeMessageTool: (context: ChannelMessageActionDiscoveryContext) => {
-                    foreignContexts.push(context);
-                    return {
-                      actions: context.accountId === "disabled" ? ["send", "poll"] : ["send"],
-                      schema: {
-                        visibility: "all-configured",
-                        properties: {
-                          foreignHint: Type.Optional(
-                            Type.String({ description: `Account: ${String(context.accountId)}` }),
-                          ),
-                        },
-                      },
-                    };
-                  },
+    const plugins = [
+      {
+        ...createChannelTestPluginBase({ id: "slack" }),
+        actions: expectDefined(
+          resolveBundledChannelMessageToolDiscoveryAdapter("slack"),
+          "Slack public message-tool discovery adapter",
+        ),
+      },
+    ];
+    if (foreignContexts) {
+      plugins.push({
+        ...createChannelTestPluginBase({ id: "telegram" }),
+        actions: {
+          describeMessageTool: (context) => {
+            foreignContexts.push(context);
+            return {
+              actions: context.accountId === "disabled" ? ["send", "poll"] : ["send"],
+              schema: {
+                visibility: "all-configured",
+                properties: {
+                  foreignHint: Type.Optional(
+                    Type.String({ description: `Account: ${String(context.accountId)}` }),
+                  ),
                 },
               },
-            },
-          ]
-        : []),
-    ]);
+            };
+          },
+        },
+      });
+    }
+    const registry = createTestRegistry(
+      plugins.map((plugin) => ({ pluginId: plugin.id, source: "test", plugin })),
+    );
     setActivePluginRegistry(registry);
     return expectDefined(settlePreparedMessageToolCatalog(registry), "prepared message catalog");
-  }
-
-  function discover(params: MessageToolDiscoveryParams) {
-    const actions = resolveMessageToolActionSchemaActions(params);
-    const schema = buildMessageToolSchema(params, actions);
-    return {
-      actions,
-      schema,
-      properties: expectDefined(asOptionalRecord(schema.properties), "message schema properties"),
-      description: buildMessageToolDescription(actions),
-    };
   }
 
   it.each([
@@ -519,7 +417,7 @@ describe("scheduled account discovery", () => {
     "preserves foreign discovery for primary %s (prepared catalog: %s)",
     (currentChannelProvider, prepared) => {
       const foreignContexts: ChannelMessageActionDiscoveryContext[] = [];
-      const catalog = registerChannels(foreignContexts);
+      const preparedCatalog = registerChannels(foreignContexts);
       const params: MessageToolDiscoveryParams = {
         cfg,
         agentId: "main",
@@ -531,7 +429,7 @@ describe("scheduled account discovery", () => {
         currentMessageId: "delivery-message",
         sessionKey: "agent:main:cron:scheduled-read",
         sessionId: "scheduled-session",
-        ...(prepared ? { preparedMessageToolCatalog: catalog } : {}),
+        ...(prepared ? { preparedMessageToolCatalog: preparedCatalog } : {}),
       };
       const baseline = discover(params);
       const baselineContexts = foreignContexts.splice(0);
@@ -542,6 +440,17 @@ describe("scheduled account discovery", () => {
       });
 
       expect(scoped.actions).toContain("read");
+      expect(
+        Value.Check(scoped.schema, {
+          action: "read",
+          channel: "slack",
+          target: "channel:C123",
+          readAs: "bot",
+        }),
+      ).toBe(true);
+      if (currentChannelProvider === "telegram") {
+        expect(scoped.actions).not.toContain("channel-list");
+      }
       expect(baseline.actions).not.toContain("read");
       expect(scoped.actions).toContain("poll");
       expect(baseline.properties).toHaveProperty("foreignHint");
@@ -560,4 +469,204 @@ describe("scheduled account discovery", () => {
       ).toBe(true);
     },
   );
+});
+
+it("uses modern raw-plugin fallback and current configuration facts", () => {
+  let configured = true;
+  const plugin = {
+    ...createChannelTestPluginBase({
+      id: "fixture",
+      config: {
+        resolveAccount: () => ({ configured }),
+        isConfigured: (account) => account.configured,
+      },
+    }),
+    message: {
+      send: { text: async () => ({ receipt: { platformMessageIds: [], parts: [], sentAt: 1 } }) },
+    },
+  };
+  const registry = createTestRegistry([{ pluginId: "fixture", source: "test", plugin }]);
+  setActivePluginRegistry(registry);
+  const unprepared = vi
+    .spyOn(preparedCatalogModule, "getPreparedMessageToolCatalog")
+    .mockReturnValue(undefined);
+  try {
+    expect(listMessageActionDiscoveryChannels()[0]).toBe(plugin);
+    const params = { cfg: {}, agentId: "main" };
+    expect(resolveMessageToolDiscovery(params).available).toBe(true);
+    configured = false;
+    expect(resolveMessageToolDiscovery(params).available).toBe(false);
+  } finally {
+    unprepared.mockRestore();
+    resetPluginRuntimeStateForTest();
+  }
+});
+
+describe("channel-owned message tool fields", () => {
+  const optional = () => Type.Optional(Type.String());
+  const owned = (
+    id: string,
+    actions: ChannelMessageToolDiscovery["actions"],
+    schema: ChannelMessageToolSchemaContribution[],
+  ): DiscoveryChannel => ({
+    id,
+    reconcilesUnknownSend: false,
+    actions: { describeMessageTool: () => ({ actions, schema }) },
+  });
+  const channels = [
+    owned(
+      "discord",
+      ["send", "channel-list", "member-info", "emoji-upload"],
+      [
+        {
+          actions: ["channel-list", "member-info", "emoji-upload"],
+          visibility: "all-configured",
+          properties: { guildId: optional() },
+        },
+        {
+          actions: ["emoji-upload"],
+          visibility: "all-configured",
+          properties: { emojiName: optional() },
+        },
+        { actions: ["send"], visibility: "all-configured", properties: { components: optional() } },
+      ],
+    ),
+    owned(
+      "signal",
+      ["send", "react"],
+      [
+        {
+          actions: ["react"],
+          visibility: "all-configured",
+          properties: { targetAuthorUuid: optional() },
+        },
+      ],
+    ),
+    owned(
+      "telegram",
+      [
+        "send",
+        "delete",
+        "edit",
+        "emoji-list",
+        "poll",
+        "react",
+        "read",
+        "topic-create",
+        "topic-edit",
+      ],
+      [{ visibility: "all-configured", properties: { effectId: optional() } }],
+    ),
+  ];
+  const run = (params: Omit<MessageToolDiscoveryParams, "preparedMessageToolCatalog">) =>
+    discover({ ...params, preparedMessageToolCatalog: catalog(channels) });
+  const otherChannelFields = [
+    "guildId",
+    "roleId",
+    "roleIds",
+    "emojiName",
+    "components",
+    "targetAuthor",
+    "targetAuthorUuid",
+    "openId",
+    "unionId",
+    "memberIdType",
+    "gifPlayback",
+    "deleteDays",
+    "position",
+    "nsfw",
+    "categoryId",
+    "memberId",
+    "userId",
+  ];
+
+  it("keeps other channels' fields out of a Telegram forum-topic turn", () => {
+    const { actions, properties } = run({ cfg: {}, currentChannelProvider: "telegram" });
+    expect(actions).toEqual([
+      "delete",
+      "edit",
+      "emoji-list",
+      "poll",
+      "react",
+      "read",
+      "send",
+      "topic-create",
+      "topic-edit",
+    ]);
+    for (const field of otherChannelFields) {
+      expect(properties, field).not.toHaveProperty(field);
+    }
+    for (const field of ["effectId", "chatId", "channelId", "name", "messageId", "pollId"]) {
+      expect(properties, field).toHaveProperty(field);
+    }
+  });
+
+  it("keeps a Discord turn's own fields without other channels' fields", () => {
+    const { properties } = run({ cfg: {}, currentChannelProvider: "discord" });
+    for (const field of ["guildId", "emojiName", "components", "userId", "memberId"]) {
+      expect(properties, field).toHaveProperty(field);
+    }
+    for (const field of ["effectId", "targetAuthorUuid", "openId", "gifPlayback"]) {
+      expect(properties, field).not.toHaveProperty(field);
+    }
+  });
+
+  it("gates plugin fields by the allowlisted actions", () => {
+    // Narrowing to channel-move keeps the layout params its handler reads and
+    // drops fragments for actions the allowlist removed.
+    const layout = owned(
+      "discord",
+      ["send", "channel-move", "emoji-upload"],
+      [
+        {
+          actions: ["channel-move", "category-delete"],
+          visibility: "all-configured",
+          properties: { position: optional(), categoryId: optional() },
+        },
+        {
+          actions: ["emoji-upload"],
+          visibility: "all-configured",
+          properties: { emojiName: optional() },
+        },
+      ],
+    );
+    const { actions, properties } = discover({
+      cfg: { tools: { message: { actions: { allow: ["channel-move"] } } } },
+      currentChannelProvider: "discord",
+      preparedMessageToolCatalog: catalog([layout]),
+    });
+    expect(actions).toEqual(["channel-move"]);
+    expect(properties).toHaveProperty("position");
+    expect(properties).toHaveProperty("categoryId");
+    expect(properties).not.toHaveProperty("emojiName");
+  });
+
+  it.each([
+    { name: "WebChat", params: { currentChannelProvider: "webchat" }, clawhub: true },
+    { name: "a scheduled run", params: { isScheduledRun: true }, clawhub: false },
+  ])("keeps configured channels' fields for $name", ({ params, clawhub }) => {
+    const { properties } = run({ cfg: {}, ...params });
+    for (const field of ["guildId", "emojiName", "components", "targetAuthorUuid", "effectId"]) {
+      expect(properties, field).toHaveProperty(field);
+    }
+    expect(Object.hasOwn(properties, "clawhub")).toBe(clawhub);
+    for (const field of ["openId", "unionId", "memberIdType", "gifPlayback"]) {
+      expect(properties, field).not.toHaveProperty(field);
+    }
+  });
+
+  it("keeps fields for a bound channel's cross-channel actions", () => {
+    const { actions, properties } = run({
+      cfg: { bindings: [{ agentId: "main", match: { channel: "discord" } }] },
+      agentId: "main",
+      currentChannelProvider: "telegram",
+    });
+    expect(actions).toEqual(
+      expect.arrayContaining(["channel-list", "emoji-upload", "topic-create"]),
+    );
+    for (const field of ["guildId", "emojiName", "components", "effectId"]) {
+      expect(properties, field).toHaveProperty(field);
+    }
+    expect(properties).not.toHaveProperty("targetAuthorUuid");
+  });
 });

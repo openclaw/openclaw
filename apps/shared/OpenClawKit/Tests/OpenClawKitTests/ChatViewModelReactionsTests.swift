@@ -458,7 +458,9 @@ struct ChatViewModelReactionsTests {
             messages: original.messages,
             thinkingLevel: "off")
         #expect(fixture.model.applyHistoryPayload(
-            replacement, for: fixture.model.beginHistoryRequest(), preservingOptimisticLocalMessages: false))
+            replacement, for: fixture.model.beginHistoryRequest(), preservingOptimisticLocalMessages: false,
+            decodedMessages: await OpenClawChatViewModel.decodeMessages(
+                replacement.messages ?? [], activity: replacement.activity)))
         #expect(fixture.model.messageReactions(for: prompt).isEmpty)
         #expect(!fixture.model.canReact(to: prompt))
         await gate.release()

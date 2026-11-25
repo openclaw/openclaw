@@ -79,7 +79,6 @@ function expandCollapsed(sidebar: SidebarLifecycleState) {
 async function mountParent() {
   const harness = createSessionsHarness("main", [parentKey]);
   const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
-  // Baseline the existing child before mounting; publishing it later now auto-expands.
   harness.publishList({ result: result([parentRow]) });
   const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
   const data = sidebar.sessionData;
@@ -260,9 +259,7 @@ it("retires collapsed child state after an event refresh finishes", async () => 
     });
     await settleLitElement(sidebar);
     expect(data.loadingChildSessionKeys.has(parentKey)).toBe(false);
-    expect(childToggle(sidebar)?.classList.contains("sidebar-child-session-toggle--running")).toBe(
-      false,
-    );
+    expect(data.childSessionRowsByParent[parentKey]).toBeUndefined();
     expect(harness.list).toHaveBeenCalledTimes(2);
   } finally {
     refresh.resolve(result([child]));

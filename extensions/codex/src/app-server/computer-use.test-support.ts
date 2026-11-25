@@ -1,8 +1,44 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, vi } from "vitest";
 import type { CodexComputerUseRequest } from "./computer-use-readiness.js";
 import type { CodexComputerUseStatus } from "./computer-use.js";
+import type { MacOSDesktopCodexAppPathCandidate } from "./desktop-app-paths.js";
 import type { CodexListMcpServerStatusResponse } from "./protocol-mcp.js";
+
+async function writeFixtureJson(file: string, value: unknown): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(value));
+}
+
+export async function writeBundledComputerUsePlugin(marketplace: string, version: string) {
+  await writeFixtureJson(path.join(marketplace, "plugins/computer-use/.codex-plugin/plugin.json"), {
+    name: "computer-use",
+    version,
+  });
+}
+
+export async function writeMarketplaceCandidate(
+  root: string,
+  version = "1.0.0",
+  marketplaceRelativePath = "openai-bundled",
+): Promise<MacOSDesktopCodexAppPathCandidate> {
+  const appBundlePath = path.join(root, "ChatGPT.app");
+  const bundledMarketplacePath = path.join(appBundlePath, marketplaceRelativePath);
+  await writeFixtureJson(path.join(bundledMarketplacePath, ".agents/plugins/marketplace.json"), {
+    name: "openai-bundled",
+    plugins: [{ name: "computer-use" }],
+  });
+  await writeBundledComputerUsePlugin(bundledMarketplacePath, version);
+  return {
+    appName: "ChatGPT.app",
+    appBundlePath,
+    appServerCommandPath: path.join(appBundlePath, "codex"),
+    bundledMarketplacePath,
+    computerUseServiceAppPaths: [],
+  };
+}
 
 export function expectStatusFields(
   status: CodexComputerUseStatus,

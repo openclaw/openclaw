@@ -1,3 +1,4 @@
+import { runWithAsyncStore } from "../shared/async-store.js";
 import type {
   ReplyOperation,
   SessionControllerInput,
@@ -17,7 +18,8 @@ import { targetFrom, type SessionTarget } from "./session-controller.target.js";
 export function withSessionControllerOwner<T>(operation: ReplyOperation, run: () => T): T {
   assertSessionControllerOperation(operation);
   const current = ownerContext.getStore();
-  return ownerContext.run(
+  return runWithAsyncStore(
+    ownerContext,
     {
       sourceInput: current?.sourceInput,
       operation,
@@ -48,7 +50,8 @@ export function withSessionControllerClaim<T>(
     throw new Error("Mailbox claim is no longer current");
   }
   const current = ownerContext.getStore();
-  return ownerContext.run(
+  return runWithAsyncStore(
+    ownerContext,
     {
       sourceInput: current?.sourceInput,
       operation: claim.operation,
@@ -77,7 +80,8 @@ export function isCurrentSessionControllerTurnInput(input: SessionControllerInpu
 /** Identify raw cleanup without granting a turn, effect admission, or execution authority. */
 export function withSessionControllerSource<T>(input: SessionControllerInput, run: () => T): T {
   const current = ownerContext.getStore();
-  return ownerContext.run(
+  return runWithAsyncStore(
+    ownerContext,
     {
       sourceInput: input,
       operation: current?.operation,
@@ -108,11 +112,11 @@ export function sourceSettlements(
   );
 }
 
-/** Includes direct producers and accepted unbound sources, not only reply payloads. */
-export function hasSessionControllerQueuedWork(
+function hasQueuedInput(
   scope: string,
   identities: Iterable<string | undefined>,
-  agentId?: string,
+  agentId: string | undefined,
+  counts: (input: SessionControllerInput) => boolean,
 ): boolean {
   return matchingEntries(targetFrom({ scope, identities, agentId })).some((entry) => {
     const mailbox = entry.mailbox;
@@ -120,10 +124,39 @@ export function hasSessionControllerQueuedWork(
       mailbox &&
       (mailbox.droppedCount > 0 ||
         mailbox.entries.some(
-          (input) => input.phase !== "consumed" && !isCurrentSessionControllerTurnInput(input),
+          (input) =>
+            input.phase !== "consumed" &&
+            counts(input) &&
+            !isCurrentSessionControllerTurnInput(input),
         )),
     );
   });
+}
+
+/** Includes direct producers and accepted unbound sources, not only reply payloads. */
+export function hasSessionControllerQueuedWork(
+  scope: string,
+  identities: Iterable<string | undefined>,
+  agentId?: string,
+): boolean {
+  return hasQueuedInput(scope, identities, agentId, () => true);
+}
+
+/**
+ * Queued work that becomes a reply turn: a bound reply source or a reserved one still preparing.
+ * A native task with no reply source (for example post-turn session maintenance) is not a turn.
+ */
+export function hasSessionControllerQueuedTurn(
+  scope: string,
+  identities: Iterable<string | undefined>,
+  agentId?: string,
+): boolean {
+  return hasQueuedInput(
+    scope,
+    identities,
+    agentId,
+    (input) => input.source !== undefined || input.task === undefined,
+  );
 }
 export function isCompetingSessionControllerWorkActive(
   scope: string,

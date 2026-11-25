@@ -1,5 +1,6 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { createGatewayStoreTestStore } from "../app/gateway-store.test-support.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
@@ -7,147 +8,213 @@ import {
   clearModelCatalogCache,
   beginModelCatalogRead,
   publishModelCatalogResult,
+  invalidateModelCatalogCache,
 } from "./model-catalog-cache.ts";
 import { ModelCatalogReader } from "./model-catalog-reader.ts";
 import { peekModelCatalog, subscribeModelCatalogCache } from "./model-catalog-store.ts";
 
 const first = { models: [{ provider: "fixture", id: "first", name: "First" }] };
 const second = { models: [{ provider: "fixture", id: "second", name: "Second" }] };
+const main = { agentId: "main" },
+  other = { agentId: "other" };
 
-function fixture(scope: ModelsListParams = { agentId: "main" }) {
+function fixture(options?: ConstructorParameters<typeof ModelCatalogReader>[1]) {
   const { gateway, current } = createGatewayStoreTestStore();
   gateway.start();
-  current().opts.onHello?.(gatewayHelloForMethods([]));
+  current().testOptions.onHello?.(gatewayHelloForMethods([]));
   const client = gateway.snapshot.client;
   if (!client) {
     throw new Error("Expected connected fixture client");
   }
-  const notify = vi.fn();
-  const reader = new ModelCatalogReader(notify);
-  reader.bind(gateway, scope);
+  const notify = vi.fn(),
+    reader = new ModelCatalogReader(notify, options);
+  reader.bind(gateway, main);
   onTestFinished(() => {
     reader.clear();
     gateway.stop();
   });
-  const publish = (target: ModelsListParams, result: ModelCatalogResult = first) =>
+  const take = () => {
+    const state = { ...reader.snapshot, calls: notify.mock.calls.length, failed: reader.failed };
+    notify.mockClear();
+    return expect(state);
+  };
+  const publish = (target: ModelsListParams, result: ModelCatalogResult = first) => {
     publishModelCatalogResult(beginModelCatalogRead(client, target), target, result);
-  return { gateway, current, client, reader, notify, publish, scope };
+    return take();
+  };
+  return { gateway, current, client, reader, publish, take };
 }
 
-it("keeps warm reader publications scoped while accepting own replacements, failed discovery and changed bindings", async () => {
-  const { reader, notify, publish, scope, gateway, client, current } = fixture();
-  publish(scope);
-  expect(reader.snapshot.models[0]?.id).toBe("first");
-  notify.mockClear();
-  for (const other of [
-    { agentId: "other" },
-    { agentId: "main", authProfileId: "personal:other" },
-    { agentId: "main", sessionKey: "agent:main:other" },
+it("scopes warm publications and retires old bindings", async () => {
+  const { reader, publish, gateway, client, current, take } = fixture();
+  clearModelCatalogCache(client);
+  take().toMatchObject({ retired: false, hasSnapshot: false, calls: 1 });
+  publish(main).toMatchObject({ models: first.models, calls: 1 });
+  for (const scope of [
+    other,
+    { ...main, authProfileId: "personal:other" },
+    { ...main, sessionKey: "agent:main:other" },
   ]) {
-    publish(other);
-    expect(notify).not.toHaveBeenCalled();
+    publish(scope).toMatchObject({ calls: 0 });
   }
-  publish(scope, second);
-  expect(notify).toHaveBeenCalledOnce();
-  expect(reader.snapshot.models[0]?.id).toBe("second");
-  notify.mockClear();
-  publish(scope, { ...first, refreshFailed: true });
-  expect(notify).toHaveBeenCalledOnce();
-  expect(reader.snapshot.refreshFailed).toBe(true);
-  expect(peekModelCatalog(client, scope)).toBeUndefined();
+  publish(main, second).toMatchObject({ models: second.models, calls: 1 });
+  publish(main, { ...first, refreshFailed: true }).toMatchObject({
+    refreshFailed: true,
+    calls: 1,
+  });
+  expect(peekModelCatalog(client, main)).toBeUndefined();
   current().request.mockRejectedValueOnce(new Error("Synthetic failure"));
   await reader.read();
-  expect(reader.failed).toBe(true);
-  notify.mockClear();
-  publish(scope, second);
-  expect(reader.failed).toBe(false);
-  expect(notify).toHaveBeenCalledOnce();
-  reader.bind(gateway, { agentId: "other" });
-  notify.mockClear();
-  publish(scope);
-  expect(notify).not.toHaveBeenCalled();
-  publish({ agentId: "other" }, second);
-  expect(notify).toHaveBeenCalledOnce();
+  take().toMatchObject({ failed: true });
+  publish(main, second).toMatchObject({ failed: false, calls: 1 });
+  reader.bind(gateway, other);
+  publish(main).toMatchObject({ calls: 0 });
+  publish(other, second).toMatchObject({ calls: 1 });
   reader.clear();
-  notify.mockClear();
-  publish({ agentId: "other" });
-  expect(notify).not.toHaveBeenCalled();
+  publish(other).toMatchObject({ calls: 0 });
 });
 
-it("notifies cold readers of first admission and restricted policy transitions, not every unrelated snapshot", () => {
-  const { client, reader, notify, publish } = fixture();
+it("notifies cold readers only on admission and restricted policy transitions", () => {
+  const { client, publish, take, reader, gateway } = fixture();
   clearModelCatalogCache(client, { requireSnapshot: true });
-  expect(reader.snapshot.retired).toBe(true);
-  notify.mockClear();
-  publish({ agentId: "other" });
-  expect(notify).toHaveBeenCalledOnce();
-  expect(reader.snapshot.retired).toBe(false);
-  expect(reader.snapshot.hasSnapshot).toBe(false);
-  notify.mockClear();
-  publish({ agentId: "other" }, second);
-  expect(notify).not.toHaveBeenCalled();
-  publish(
-    { agentId: "other" },
-    { ...second, modelSelectionPolicy: { restricted: true, defaultModel: "fixture/second" } },
-  );
-  expect(notify).toHaveBeenCalledOnce();
-  expect(reader.snapshot.retired).toBe(true);
-  notify.mockClear();
-  publish({ agentId: "other" }, first);
-  expect(notify).toHaveBeenCalledOnce();
-  expect(reader.snapshot.retired).toBe(false);
+  take().toMatchObject({ retired: true, calls: 1 });
+  publish(other).toMatchObject({ retired: false, hasSnapshot: false, calls: 1 });
+  publish(other, second).toMatchObject({ calls: 0 });
+  const restricted: ModelCatalogResult = {
+    ...second,
+    modelSelectionPolicy: { restricted: true, defaultModel: "fixture/second" },
+  };
+  publish(other, restricted).toMatchObject({ retired: true, calls: 1 });
+  reader.bind(gateway, other);
+  take().toMatchObject({ retired: false, hasSnapshot: true });
+  reader.bind(gateway, main);
+  publish(other).toMatchObject({ retired: false, calls: 1 });
 });
 
-it("preserves successful refresh invalidations, failed refresh isolation, eviction and connection clear", () => {
-  const { client, reader, notify, publish, scope } = fixture();
-  publish(scope);
-  publish({ agentId: "other" });
-  notify.mockClear();
-  publish({ agentId: "other", refresh: true }, { ...second, refreshFailed: true });
-  expect(notify).not.toHaveBeenCalled();
-  expect(peekModelCatalog(client, scope)?.models[0]?.id).toBe("first");
-  publish({ agentId: "other", refresh: true }, second);
-  expect(notify).toHaveBeenCalledOnce();
-  expect(peekModelCatalog(client, scope)).toBeUndefined();
-  expect(reader.snapshot.models[0]?.id).toBe("first");
+it("isolates failed refreshes and preserves refresh, eviction, and clear notifications", () => {
+  const { client, publish, take } = fixture();
+  publish(main);
+  publish(other);
+  publish({ ...other, refresh: true }, { ...second, refreshFailed: true }).toMatchObject({
+    calls: 0,
+  });
+  expect(peekModelCatalog(client, main)?.models[0]?.id).toBe("first");
+  publish({ ...other, refresh: true }, second).toMatchObject({
+    models: first.models,
+    calls: 1,
+  });
+  expect(peekModelCatalog(client, main)).toBeUndefined();
   clearModelCatalogCache(client);
-  publish(scope);
-  notify.mockClear();
-  for (let index = 0; index < 64; index++) {
-    publish({ agentId: "other-" + index });
+  publish(main);
+  // Drain only at the end: the 64 publications together must trigger one eviction notification.
+  for (let index = 0; index < 63; index++) {
+    const target = { agentId: "other-" + index };
+    publishModelCatalogResult(beginModelCatalogRead(client, target), target, first);
   }
-  expect(notify).toHaveBeenCalledOnce();
-  expect(reader.snapshot.hasSnapshot).toBe(false);
+  publish({ agentId: "other-63" }).toMatchObject({ hasSnapshot: false, calls: 1 });
   clearModelCatalogCache(client);
-  expect(notify).toHaveBeenCalledTimes(2);
-  expect(reader.snapshot.retired).toBe(true);
+  take().toMatchObject({ retired: true, hasSnapshot: false, models: [], calls: 1 });
 });
 
-it("uses the current scoped subscription intent and keeps global observers global", () => {
-  const { client, publish } = fixture();
-  publish({ agentId: "main" });
+it("follows subscription intent while keeping global observers global", () => {
+  const { client, publish, reader } = fixture();
+  publish(main);
   let scope = { agentId: " main " };
-  const scoped = vi.fn();
-  const global = vi.fn();
+  const scoped = vi.fn(),
+    global = vi.fn();
   const stopScoped = subscribeModelCatalogCache(client, scoped, () => scope);
   const stopGlobal = subscribeModelCatalogCache(client, global);
   onTestFinished(() => {
     stopScoped();
     stopGlobal();
   });
-  publish({ agentId: "other" });
-  expect(scoped).not.toHaveBeenCalled();
-  expect(global).toHaveBeenCalledOnce();
-  publish({ agentId: "main" });
-  expect(scoped).toHaveBeenCalledOnce();
-  scope = { agentId: "other" };
-  publish({ agentId: "main" });
-  expect(scoped).toHaveBeenCalledOnce();
-  publish({ agentId: "other" });
-  expect(scoped).toHaveBeenCalledTimes(2);
+  for (const [agentId, target, calls] of [
+    [" main ", other, 0],
+    [" main ", main, 1],
+    ["other", main, 1],
+    ["other", other, 2],
+  ] as const) {
+    scope = { agentId };
+    publish(target);
+    expect(scoped).toHaveBeenCalledTimes(calls);
+    if (calls === 0) {
+      expect(global).toHaveBeenCalledOnce();
+    }
+  }
   stopScoped();
   stopScoped();
-  publish({ agentId: "other" });
+  publish(other);
   expect(scoped).toHaveBeenCalledTimes(2);
   expect(global).toHaveBeenCalledTimes(5);
+  reader.clear();
+  stopGlobal();
 });
+
+it("observes each admitted read while preserving the non-throwing request contract", async () => {
+  const onRead = vi.fn<(read: Promise<ModelCatalogResult | undefined>) => void>();
+  const { reader, current, publish, client } = fixture({ onRead });
+  const failure = new Error("Synthetic catalog failure");
+  current().request.mockRejectedValueOnce(failure);
+  const legacy = reader.read();
+  const observed = onRead.mock.calls[0]![0];
+  await expect(observed).rejects.toBe(failure);
+  await expect(legacy).resolves.toBeUndefined();
+  expect(reader.failed).toBe(true);
+
+  publish(main);
+  await expect(reader.read()).resolves.toEqual(first);
+  await expect(onRead.mock.calls[1]![0]).resolves.toEqual(first);
+  clearModelCatalogCache(client);
+  const pending = createDeferred<ModelCatalogResult>();
+  current().request.mockReturnValueOnce(pending.promise);
+  const retired = reader.read();
+  reader.clear();
+  pending.reject(failure);
+  await expect(onRead.mock.calls[2]![0]).resolves.toBeUndefined();
+  await expect(retired).resolves.toBeUndefined();
+  expect(onRead).toHaveBeenCalledTimes(3);
+});
+
+it.each(["document", "presentation"] as const)(
+  "defers hidden %s catalog changes and catches up once on reveal",
+  async (hiddenBy) => {
+    let visible = true;
+    const visibility = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockImplementation(() => (hiddenBy === "document" && !visible ? "hidden" : "visible"));
+    onTestFinished(() => visibility.mockRestore());
+    const onRead = vi.fn<(read: Promise<ModelCatalogResult | undefined>) => void>();
+    const { reader, client, current } = fixture({
+      isPresented: () => hiddenBy !== "presentation" || visible,
+      onRead,
+    });
+    current().request.mockResolvedValue(first);
+    await reader.read();
+    current().request.mockClear();
+    onRead.mockClear();
+    visible = false;
+    current().request.mockResolvedValue(second);
+    for (let index = 0; index < 60; index++) {
+      invalidateModelCatalogCache(client, main);
+      current().testOptions.onEvent?.({
+        type: "event",
+        event: "chat.metadata.changed",
+        payload: { modelCatalogChanged: true, commandsChanged: false, authChanged: false },
+      });
+    }
+    expect(current().request).not.toHaveBeenCalled();
+    expect(onRead).not.toHaveBeenCalled();
+    visible = true;
+    if (hiddenBy === "document") {
+      document.dispatchEvent(new Event("visibilitychange"));
+      document.dispatchEvent(new Event("visibilitychange"));
+    } else {
+      reader.resume();
+      reader.resume();
+    }
+    await onRead.mock.calls[0]![0];
+    expect(current().request).toHaveBeenCalledTimes(1);
+    expect(reader.snapshot.models).toEqual(second.models);
+    expect(onRead).toHaveBeenCalledOnce();
+  },
+);

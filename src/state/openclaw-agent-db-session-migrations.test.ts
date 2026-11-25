@@ -1,17 +1,25 @@
 import type { SQLInputValue } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
-import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
 import {
   backfillSessionConversations,
   ensureSessionAdditiveColumns,
   migrateConversationDeliveryTargetColumn,
 } from "./openclaw-agent-db-session-migrations.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { expectRow, readRows } from "./openclaw-state-db-fixtures.test-support.js";
 
 const deliveryContext = (channel: string, to: string) => ({ channel, accountId: "default", to });
+function expectValues(
+  database: ReturnType<typeof conversationDatabase>,
+  sql: string,
+  expected: unknown,
+) {
+  expect(
+    readRows(database, sql).map((row) => Object.values(row)),
+    sql,
+  ).toEqual(expected);
+}
 
 function conversationDatabase(deliveryTarget = true) {
   const { DatabaseSync } = requireNodeSqlite();
@@ -49,54 +57,14 @@ function conversationDatabase(deliveryTarget = true) {
 }
 
 describe("agent DB conversation migration", () => {
-  it("covers every installed same-version column in admission facts", () => {
-    const { DatabaseSync } = requireNodeSqlite();
-    using canonical = new DatabaseSync(":memory:");
-    canonical.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-    using database = new DatabaseSync(":memory:");
-    // Every canonical table exists but has no projections. This catches a future
-    // ensureColumn call even if it was not added to the admission declarations.
-    for (const { name } of canonical
-      .prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-      .all()) {
-      database.exec(`CREATE TABLE "${String(name)}" (probe TEXT)`);
-    }
-    ensureSessionAdditiveColumns(database);
-    const installed = captureSqliteSchemaFacts(database).tableSql;
-    expect(hasPendingAgentStartupColumns(installed)).toBe(false);
-    let additions = 0;
-    for (const [table, sql] of installed) {
-      for (const { name } of database.prepare(`PRAGMA table_info("${table}")`).all()) {
-        if (name === "probe") {
-          continue;
-        }
-        additions += 1;
-        const missing = new Map(installed);
-        // Model an older writer's catalog, without changing unrelated tables.
-        missing.set(
-          table,
-          sql!.replace(new RegExp(`,\\s*${String(name)} (TEXT|INTEGER)`, "u"), ""),
-        );
-        expect(hasPendingAgentStartupColumns(missing), `${table}.${String(name)}`).toBe(true);
-        expect(canonical.prepare(`PRAGMA table_info("${table}")`).all()).toContainEqual(
-          expect.objectContaining({ name }),
-        );
-      }
-    }
-    expect(additions).toBeGreaterThan(0);
-  });
-
   it("adds nullable route context without advancing the schema version", () => {
     const sqlite = requireNodeSqlite();
     using database = new sqlite.DatabaseSync(":memory:");
     database.exec(`
       PRAGMA user_version = 17;
       CREATE TABLE session_conversations (
-        session_id TEXT NOT NULL,
-        conversation_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        first_seen_at INTEGER NOT NULL,
-        last_seen_at INTEGER NOT NULL,
+        session_id TEXT NOT NULL, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
+        first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
         PRIMARY KEY (session_id, conversation_id, role)
       ) STRICT;
       INSERT INTO session_conversations (
@@ -117,26 +85,22 @@ describe("agent DB conversation migration", () => {
     const currentRoute = route("current-write");
     update("route_context_json = ?", route("candidate-write"));
     update("route_context_json = ?, last_seen_at = ?", currentRoute, 1);
-    expect(
-      database
-        .prepare(
-          "SELECT route_context_json FROM session_conversations WHERE session_id = 'session-a'",
-        )
-        .get(),
-    ).toEqual({ route_context_json: currentRoute });
+    expectRow(
+      database,
+      "SELECT route_context_json FROM session_conversations WHERE session_id = 'session-a'",
+      { route_context_json: currentRoute },
+    );
     update("last_seen_at = ?", 1);
 
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
-    expect(
-      database
-        .prepare(
-          "SELECT route_context_json, last_seen_at FROM session_conversations WHERE session_id = 'session-a'",
-        )
-        .get(),
-    ).toEqual({ route_context_json: null, last_seen_at: 1 });
+    expectRow(database, "PRAGMA user_version", { user_version: 17 });
+    expectRow(
+      database,
+      "SELECT route_context_json, last_seen_at FROM session_conversations WHERE session_id = 'session-a'",
+      { route_context_json: null, last_seen_at: 1 },
+    );
   });
 
-  it("backfills direct addresses and keeps shared-main peers as participants", () => {
+  it("backfills direct targets and shared-main participants", () => {
     using database = conversationDatabase();
     const insertSession = database.prepare(
       "INSERT INTO sessions (session_id, session_key, session_scope, chat_type) VALUES (?, ?, ?, ?)",
@@ -144,83 +108,51 @@ describe("agent DB conversation migration", () => {
     const entryStatement = database.prepare(
       "INSERT INTO session_entries (session_key, session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
     );
-    const insertEntry = (key: string, session: string, entry: object, updatedAt: number) =>
-      entryStatement.run(key, session, JSON.stringify(entry), updatedAt);
-    insertSession.run("shared", "agent:main:main", "shared-main", "channel");
-    insertEntry(
-      "agent:main:main",
-      "shared",
-      { groupId: "shared-ops", deliveryContext: deliveryContext("discord", "channel:shared-ops") },
-      50,
-    );
-    insertEntry(
-      "agent:main:reef:direct:peer-a",
-      "shared",
-      { deliveryContext: deliveryContext("reef", "reef:peer-a") },
-      100,
-    );
-    insertSession.run("dedicated", "agent:main:reef:direct:peer-b", "conversation", "direct");
-    insertEntry(
-      "agent:main:reef:direct:peer-b",
-      "dedicated",
-      {
-        chatType: "direct",
-        origin: { provider: "reef", nativeDirectUserId: "stale-peer", from: "reef:stale-peer" },
-        deliveryContext: deliveryContext("reef", "reef:peer-b"),
+    const session = (id: string, key: string, scope: string, chat: string | null = null) =>
+      insertSession.run(id, `agent:main:${key}`, scope, chat);
+    const entry = (id: string, key: string, channel: string, to: string, at: number, extra = {}) =>
+      entryStatement.run(
+        `agent:main:${key}`,
+        id,
+        JSON.stringify({ deliveryContext: deliveryContext(channel, to), ...extra }),
+        at,
+      );
+    session("shared", "main", "shared-main", "channel");
+    entry("shared", "main", "discord", "channel:shared-ops", 50, { groupId: "shared-ops" });
+    entry("shared", "reef:direct:peer-a", "reef", "reef:peer-a", 100);
+    session("dedicated", "reef:direct:peer-b", "conversation", "direct");
+    entry("dedicated", "reef:direct:peer-b", "reef", "reef:peer-b", 200, {
+      chatType: "direct",
+      origin: { provider: "reef", nativeDirectUserId: "stale-peer", from: "reef:stale-peer" },
+    });
+    entry("dedicated", "reef:direct:peer-a:related", "reef", "reef:peer-a", 300, {
+      chatType: "direct",
+      origin: { provider: "reef", nativeDirectUserId: "peer-a" },
+    });
+    session("channel-case", "legacy-room", "channel");
+    entry("channel-case", "legacy-room", "discord", "channel:ops-room", 400, {
+      groupId: "ops-room",
+    });
+    session("group-case", "legacy-group", "channel");
+    entry("group-case", "legacy-group", "telegram", "-100123", 500, { groupId: "crew-room" });
+    session("thread-case", "discord:channel:ops-room:thread", "channel");
+    entry("thread-case", "discord:channel:ops-room:thread", "discord", "channel:ops-room", 600, {
+      chatType: "channel",
+      groupId: "ops-room",
+      deliveryContext: {
+        ...deliveryContext("discord", "channel:ops-room"),
+        threadId: "user-context",
       },
-      200,
-    );
-    insertEntry(
-      "agent:main:reef:direct:peer-a:related",
-      "dedicated",
-      {
-        chatType: "direct",
-        origin: { provider: "reef", nativeDirectUserId: "peer-a" },
-        deliveryContext: deliveryContext("reef", "reef:peer-a"),
-      },
-      300,
-    );
-    insertSession.run("channel-case", "agent:main:legacy-room", "channel", null);
-    insertEntry(
-      "agent:main:legacy-room",
-      "channel-case",
-      { groupId: "ops-room", deliveryContext: deliveryContext("discord", "channel:ops-room") },
-      400,
-    );
-    insertSession.run("group-case", "agent:main:legacy-group", "channel", null);
-    insertEntry(
-      "agent:main:legacy-group",
-      "group-case",
-      { groupId: "crew-room", deliveryContext: deliveryContext("telegram", "-100123") },
-      500,
-    );
-    insertSession.run("thread-case", "agent:main:discord:channel:ops-room:thread", "channel", null);
-    insertEntry(
-      "agent:main:discord:channel:ops-room:thread",
-      "thread-case",
-      {
-        chatType: "channel",
-        groupId: "ops-room",
-        deliveryContext: {
-          ...deliveryContext("discord", "channel:ops-room"),
-          threadId: "user-context",
-        },
-      },
-      600,
-    );
+    });
 
     backfillSessionConversations(database);
 
-    expect(
-      database
-        .prepare(
-          `SELECT sc.session_id, sc.role, c.kind, c.peer_id, c.delivery_target
+    expectValues(
+      database,
+      `SELECT sc.session_id, sc.role, c.kind, c.peer_id, c.delivery_target
            FROM session_conversations sc
            JOIN conversations c ON c.conversation_id = sc.conversation_id
            ORDER BY sc.session_id, sc.role, c.peer_id`,
-        )
-        .all(),
-    ).toEqual(
       [
         ["channel-case", "primary", "channel", "ops-room", "channel:ops-room"],
         ["dedicated", "primary", "direct", "peer-a", "reef:peer-a"],
@@ -229,58 +161,40 @@ describe("agent DB conversation migration", () => {
         ["shared", "participant", "direct", "peer-a", "reef:peer-a"],
         ["shared", "primary", "channel", "shared-ops", "channel:shared-ops"],
         ["thread-case", "primary", "channel", "ops-room", "channel:ops-room"],
-      ].map(([session_id, role, kind, peer_id, delivery_target]) => ({
-        session_id,
-        role,
-        kind,
-        peer_id,
-        delivery_target,
-      })),
+      ],
     );
-    expect(
-      database
-        .prepare(
-          `SELECT c.conversation_id, c.parent_conversation_id, c.thread_id
+    expectRow(
+      database,
+      `SELECT c.conversation_id, c.parent_conversation_id, c.thread_id
            FROM session_conversations sc
            JOIN conversations c ON c.conversation_id = sc.conversation_id
            WHERE sc.session_id = 'thread-case'`,
-        )
-        .get(),
-    ).toEqual({
-      conversation_id: buildConversationRef({
-        channel: "discord",
-        accountId: "default",
-        kind: "channel",
-        peerId: "ops-room",
-        threadId: "user-context",
-      }),
-      parent_conversation_id: null,
-      thread_id: "user-context",
-    });
-    expect(
-      database
-        .prepare(
-          `SELECT s.session_id, s.primary_conversation_id, c.peer_id
+      {
+        conversation_id: buildConversationRef({
+          channel: "discord",
+          accountId: "default",
+          kind: "channel",
+          peerId: "ops-room",
+          threadId: "user-context",
+        }),
+        parent_conversation_id: null,
+        thread_id: "user-context",
+      },
+    );
+    expectValues(
+      database,
+      `SELECT s.session_id, s.primary_conversation_id, c.peer_id
            FROM sessions s
            JOIN conversations c ON c.conversation_id = s.primary_conversation_id
            WHERE s.session_id IN ('shared', 'dedicated') ORDER BY s.session_id`,
-        )
-        .all(),
-    ).toEqual([
-      {
-        session_id: "dedicated",
-        primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
-        peer_id: "peer-a",
-      },
-      {
-        session_id: "shared",
-        primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
-        peer_id: "shared-ops",
-      },
-    ]);
+      [
+        ["dedicated", expect.stringMatching(/^conv_[a-f0-9]{32}$/u), "peer-a"],
+        ["shared", expect.stringMatching(/^conv_[a-f0-9]{32}$/u), "shared-ops"],
+      ],
+    );
   });
 
-  it("drops v8 conversation rows whose exact delivery target cannot be reconstructed", () => {
+  it("drops unrecoverable v8 delivery targets", () => {
     using database = conversationDatabase(false);
     database.exec(`
       INSERT INTO conversations (
@@ -310,29 +224,20 @@ describe("agent DB conversation migration", () => {
     migrateConversationDeliveryTargetColumn(database);
     backfillSessionConversations(database);
 
-    expect(
-      database
-        .prepare(
-          "SELECT conversation_id, delivery_target FROM conversations ORDER BY conversation_id",
-        )
-        .all(),
-    ).toEqual([
-      {
-        conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
-        delivery_target: "reef:peer-a",
-      },
-    ]);
-    expect(
-      database
-        .prepare("SELECT primary_conversation_id FROM sessions WHERE session_id = 'orphaned'")
-        .get(),
-    ).toEqual({ primary_conversation_id: null });
-    expect(
-      database
-        .prepare(
-          "SELECT COUNT(*) AS count FROM session_conversations WHERE session_id = 'orphaned'",
-        )
-        .get(),
-    ).toEqual({ count: 0 });
+    expectValues(
+      database,
+      "SELECT conversation_id, delivery_target FROM conversations ORDER BY conversation_id",
+      [[expect.stringMatching(/^conv_[a-f0-9]{32}$/u), "reef:peer-a"]],
+    );
+    expectRow(
+      database,
+      "SELECT primary_conversation_id FROM sessions WHERE session_id = 'orphaned'",
+      { primary_conversation_id: null },
+    );
+    expectRow(
+      database,
+      "SELECT COUNT(*) AS count FROM session_conversations WHERE session_id = 'orphaned'",
+      { count: 0 },
+    );
   });
 });

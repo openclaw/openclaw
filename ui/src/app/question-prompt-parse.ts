@@ -1,13 +1,8 @@
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeNullableString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type { Question } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  isQuestionThumbnail,
-  readQuestionResourceInput,
-  readQuestionResourcePreview,
-} from "../../../packages/gateway-protocol/src/question-media.js";
 import { takeGraphemes } from "../lib/graphemes.ts";
-import { normalizeQuestionSecretStoreFields } from "./question-prompt-secret-store.ts";
 
 const MAX_HEADER_GRAPHEMES = 12;
 
@@ -21,32 +16,10 @@ export function parseQuestion(value: Question): Question | null {
   // semantics, and any re-count here (UTF-16, code points, or a second grapheme
   // impl) can disagree at the boundary and silently drop the whole prompt.
   const clampedHeader = takeGraphemes(value.header, MAX_HEADER_GRAPHEMES);
-  const options = value.options.flatMap((option) => {
-    const label = readNonEmptyString(option.label);
-    if (!label) {
-      return [];
-    }
-    if (option.thumbnail !== undefined && !isQuestionThumbnail(option.thumbnail)) {
-      return [];
-    }
-    const preview =
-      option.preview === undefined ? undefined : readQuestionResourcePreview(option.preview);
-    if (
-      (option.preview !== undefined && !preview) ||
-      (option.resourceUri !== undefined &&
-        (typeof option.resourceUri !== "string" || option.resourceUri.length > 2048))
-    ) {
-      return [];
-    }
-    return [
-      {
-        ...option,
-        label,
-        ...(preview ? { preview } : {}),
-      },
-    ];
-  });
-  if (options.length !== value.options.length) {
+  // The Gateway validates media and store bindings before publishing; the UI
+  // only normalizes their visible text.
+  const options = value.options.map((option) => ({ ...option, label: option.label.trim() }));
+  if (options.some((option) => !option.label)) {
     return null;
   }
   const url = readNonEmptyString(value.url);
@@ -59,13 +32,14 @@ export function parseQuestion(value: Question): Question | null {
       return null;
     }
   }
-  const resource =
-    value.resource === undefined ? undefined : readQuestionResourceInput(value.resource);
-  if (value.resource !== undefined && (!resource || value.presentation !== "form")) {
-    return null;
-  }
-  const secretStoreFields = normalizeQuestionSecretStoreFields(value);
-  if (!secretStoreFields) {
+  // Replacement metadata comes from stored entries, outside request validation.
+  const existing = value.secretStoreExisting;
+  const updatedBy = readNonEmptyString(existing?.updatedBy);
+  if (
+    existing &&
+    (asSafeIntegerInRange(existing.updatedAtMs, { min: 0 }) === undefined ||
+      (existing.updatedBy !== undefined && !updatedBy))
+  ) {
     return null;
   }
   return {
@@ -74,8 +48,14 @@ export function parseQuestion(value: Question): Question | null {
     header: clampedHeader,
     question,
     options,
-    ...(resource ? { resource } : {}),
     ...(url ? { url } : {}),
-    ...secretStoreFields,
+    ...(existing
+      ? {
+          secretStoreExisting: {
+            updatedAtMs: existing.updatedAtMs,
+            ...(updatedBy ? { updatedBy } : {}),
+          },
+        }
+      : {}),
   };
 }

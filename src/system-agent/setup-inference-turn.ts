@@ -10,8 +10,12 @@ import {
   extractAgentRunText,
 } from "../agents/agent-run-result.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { CONNECTION_CHECK_PROMPT } from "../agents/connection-check.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import type { AgentHarnessPluginSelection } from "../agents/harness/runtime-plugin-load-plan.js";
+import {
+  requiresAgentHarnessPluginSelection,
+  type AgentHarnessPluginSelection,
+} from "../agents/harness/runtime-plugin-load-plan.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,16 +38,17 @@ import {
   type SystemAgentConfigSnapshot,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
+import { isLocalSystemAgentRoute } from "./route-locality.js";
 import {
   type BoundVerifySetupInferenceResult,
-  type CompleteSetupInferenceResult,
   describeSetupInferenceError,
   invalidSetupConfigError,
   parseInferenceRef,
   redactSetupInferenceError,
   resolveSetupInferenceWinnerError,
+  resolveSetupContextShortfall,
   resolveToolFreeCliSetupError,
-  SETUP_INFERENCE_TEST_PROMPT,
+  SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS,
   SETUP_INFERENCE_TEST_TIMEOUT_MS,
   SetupInferenceCancelledError,
   type SetupInferenceFailureStatus,
@@ -54,11 +59,11 @@ import {
 import {
   registerHiddenSetupInferenceProbeRun,
   runSetupInferenceProbeWork,
-  SETUP_INFERENCE_TEST_MAX_TOKENS,
   type SetupTurnFailure,
   type SetupTurnSuccess,
 } from "./setup-inference-probe-work.js";
 import { resolveSetupInferenceProfileError } from "./setup-inference-profile.js";
+import { createSystemAgentUserTurnRecorder } from "./user-turn-transcript.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
   createSystemAgentVerifiedInferenceBinding,
@@ -78,6 +83,7 @@ export async function runSetupInferenceTurn(params: {
   prompt?: string;
   timeoutMs?: number;
   requireExecutionOwner: boolean;
+  assertSourceCurrent?: () => void;
   signal?: AbortSignal;
   runtime?: RuntimeEnv;
 }): Promise<SetupTurnSuccess | SetupTurnFailure> {
@@ -85,7 +91,14 @@ export async function runSetupInferenceTurn(params: {
   // Probe ids stay under OpenAI's 64-char session cap and match the command-lane log filters.
   const runId = `probe-setup-inference-${randomUUID()}`;
   const sessionKey = `agent:${route.agentId}:setup-inference:incognito-${runId}`;
-  const timeoutMs = params.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
+  const timeoutMs =
+    params.timeoutMs ??
+    // Setup pins the built-in runtime as "openclaw"; only other harnesses keep the long budget.
+    (route.runner === "embedded" &&
+    (!route.agentHarnessRuntimeOverride || route.agentHarnessRuntimeOverride === "openclaw") &&
+    !isLocalSystemAgentRoute(route)
+      ? SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS
+      : SETUP_INFERENCE_TEST_TIMEOUT_MS);
   const started = Date.now();
   // A scratch workspace keeps the probe from reading the real workspace's bootstrap files.
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-"));
@@ -107,7 +120,9 @@ export async function runSetupInferenceTurn(params: {
       error:
         status === "timeout"
           ? "The setup response check timed out. Retry setup, or choose another model or runtime. No default model was changed."
-          : error,
+          : status === "rate_limit"
+            ? "The model check failed because the provider is busy or limiting requests. Wait a few minutes, then try again."
+            : error,
     };
   };
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
@@ -115,8 +130,10 @@ export async function runSetupInferenceTurn(params: {
     runId,
     route.agentId,
     "system-agent.setup-inference",
+    params.assertSourceCurrent,
   );
   let successfulAuth: AgentExecutionAuthBinding | undefined;
+  const prompt = params.prompt ?? CONNECTION_CHECK_PROMPT;
   const shared = {
     preparedRunAdmission,
     sessionId: runId,
@@ -128,7 +145,8 @@ export async function runSetupInferenceTurn(params: {
     workspaceDir,
     agentDir: route.agentDir,
     config: route.runConfig,
-    prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
+    prompt,
+    userTurnTranscriptRecorder: createSystemAgentUserTurnRecorder(prompt),
     provider: route.provider,
     model: route.model,
     timeoutMs,
@@ -174,7 +192,11 @@ export async function runSetupInferenceTurn(params: {
         authProfileStateMode: "read-only",
         allowAuthProfileFallback: false,
         retryConnectionErrors: false,
+        // One-shot verification behind a blocking dialog: report the provider's answer
+        // instead of spending the chat turn's ~90 s backoff ladder on 5xx/429/overload.
+        retryTransientErrors: false,
         preparedModelRuntimeMode: "isolated-read-only",
+        refreshModelCatalog: !harness || harness === "openclaw",
         ...(harness === "codex" ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(harness ? { agentHarnessRuntimeOverride: harness } : {}),
         lane: `session:probe-setup-inference:${route.provider}`,
@@ -182,10 +204,6 @@ export async function runSetupInferenceTurn(params: {
         reasoningLevel: "off",
         verboseLevel: "off",
         disableTrajectory: true,
-        // The "reply OK" probe stays bounded; custom completions keep the model's own budget.
-        ...(params.prompt === undefined && (!harness || harness === "openclaw")
-          ? { streamParams: { maxTokens: SETUP_INFERENCE_TEST_MAX_TOKENS } }
-          : {}),
         modelRun: true,
       });
     }
@@ -224,6 +242,9 @@ export async function runSetupInferenceTurn(params: {
       latencyMs: Date.now() - started,
       text,
       auth: successfulAuth ?? (route.authProfileId ? { authProfileId: route.authProfileId } : {}),
+      ...(result.meta?.agentMeta?.contextTokens !== undefined
+        ? { contextTokens: result.meta.agentMeta.contextTokens }
+        : {}),
     };
   } catch (error) {
     const described = describeSetupInferenceError(error, route);
@@ -395,9 +416,9 @@ export async function revalidateStableSetupInferenceOwner(params: {
   return binding;
 }
 
-type SetupInferenceRequestParams = {
+export type SetupInferenceRequestParams = {
   agentId?: string;
-  modelTarget?: "utility";
+  modelTarget?: "primary" | "utility";
   runtime: RuntimeEnv;
   timeoutMs?: number;
 };
@@ -549,6 +570,10 @@ export async function verifySetupInferenceConfig(
     agentDir?: string;
     onVerifiedExecution?: (binding: SystemAgentVerifiedInferenceBinding) => void;
     requireExecutionOwner?: boolean;
+    assertSourceCurrent?: () => void;
+    signal?: AbortSignal;
+    /** A model being chosen in setup gets a context warning; existing routes keep the runtime guard. */
+    candidateSetup?: true;
   },
 ): Promise<VerifySetupInferenceResult> {
   const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
@@ -563,7 +588,10 @@ export async function verifySetupInferenceConfig(
     return {
       ok: false,
       status: "unavailable",
-      error: "No agent model is configured. Run `openclaw onboard` first.",
+      error:
+        params.modelTarget === "primary"
+          ? "No primary model is configured for this agent. Choose one in Model Setup, then retry."
+          : "No agent model is configured. Run `openclaw onboard` first.",
     };
   }
   const route = params.agentDir
@@ -574,13 +602,32 @@ export async function verifySetupInferenceConfig(
   const baselineRoute = requireExecutionOwner
     ? await projectInferenceRoute(params.config, route.agentId, { modelTarget: params.modelTarget })
     : undefined;
+  await using cache = requireExecutionOwner ? createPluginCache() : null;
+  let generation: SetupInferencePluginGeneration | undefined;
+  const withGeneration = <T>(run: () => T): T =>
+    generation ? withPluginRuntimeGenerationScope(generation, run) : run();
   let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
-  if (requireExecutionOwner) {
+  if (cache) {
     try {
-      stagedOwnerPluginArtifacts = captureSystemAgentOwnerPluginArtifacts({
-        config: route.sourceConfig,
-        executionRoute: route,
-      });
+      const selection = { provider: route.provider, modelId: route.model, agentId: route.agentId };
+      if (
+        route.runner === "embedded" &&
+        !route.agentHarnessRuntimeOverride &&
+        requiresAgentHarnessPluginSelection(selection, route.runConfig)
+      ) {
+        generation = await loadSetupInferencePluginGeneration({
+          cache,
+          config: route.runConfig,
+          workspaceDir: resolveAgentWorkspaceDir(route.runConfig, route.agentId, process.env),
+          selection,
+        });
+      }
+      stagedOwnerPluginArtifacts = withGeneration(() =>
+        captureSystemAgentOwnerPluginArtifacts({
+          config: route.sourceConfig,
+          executionRoute: route,
+        }),
+      );
     } catch (error) {
       return {
         ok: false,
@@ -589,12 +636,16 @@ export async function verifySetupInferenceConfig(
       };
     }
   }
-  const turn = await runSetupInferenceTurn({
-    route,
-    timeoutMs: params.timeoutMs,
-    requireExecutionOwner,
-    runtime: params.runtime,
-  });
+  const turn = await withGeneration(() =>
+    runSetupInferenceTurn({
+      route,
+      timeoutMs: params.timeoutMs,
+      requireExecutionOwner,
+      runtime: params.runtime,
+      assertSourceCurrent: params.assertSourceCurrent,
+      signal: params.signal,
+    }),
+  );
   if (!turn.ok) {
     return { ...turn, error: await redactSetupInferenceError(turn.error) };
   }
@@ -640,59 +691,14 @@ export async function verifySetupInferenceConfig(
       return { ok: false, status: "auth", error: await redactSetupInferenceError(error) };
     }
   }
+  const warning = params.candidateSetup
+    ? resolveSetupContextShortfall(route, turn.contextTokens)
+    : undefined;
   return {
     ok: true,
     modelRef: route.modelLabel,
     latencyMs: turn.latencyMs,
     ...(route.modelTarget ? { modelTarget: route.modelTarget } : {}),
+    ...(warning ? { warning } : {}),
   };
-}
-
-/** Run one tool-free completion through the configured setup inference route. */
-export async function completeSetupInference(
-  params: SetupInferenceRequestParams & { prompt: string },
-): Promise<CompleteSetupInferenceResult> {
-  const readSnapshot = (await import("../config/config.js")).readConfigFileSnapshot;
-  const snapshot = await readSnapshot();
-  if (!snapshot.exists) {
-    return { ok: false, status: "unavailable", error: "No OpenClaw config exists." };
-  }
-  if (!snapshot.valid) {
-    return { ok: false, status: "format", error: invalidSetupConfigError(snapshot) };
-  }
-  return await completeSetupInferenceConfig({
-    ...params,
-    config: snapshot.runtimeConfig ?? snapshot.config,
-    configSnapshot: snapshot,
-  });
-}
-
-/** Config-injected variant used by setup clients and live provider tests. */
-export async function completeSetupInferenceConfig(
-  params: SetupInferenceRequestParams & {
-    config: OpenClawConfig;
-    configSnapshot?: SystemAgentConfigSnapshot;
-    prompt: string;
-  },
-): Promise<CompleteSetupInferenceResult> {
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(
-    params.config,
-    params.agentId,
-    {},
-    params.configSnapshot,
-  );
-  if (!route) {
-    return { ok: false, status: "unavailable", error: "No agent model is configured." };
-  }
-  const turn = await runSetupInferenceTurn({
-    route,
-    prompt: params.prompt,
-    timeoutMs: params.timeoutMs,
-    requireExecutionOwner: false,
-    runtime: params.runtime,
-  });
-  if (!turn.ok) {
-    return { ...turn, error: await redactSetupInferenceError(turn.error) };
-  }
-  return { ok: true, modelRef: route.modelLabel, latencyMs: turn.latencyMs, text: turn.text };
 }

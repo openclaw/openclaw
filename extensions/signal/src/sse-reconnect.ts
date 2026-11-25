@@ -2,7 +2,6 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   computeBackoff,
-  logVerbose,
   sleepWithAbort,
   type BackoffPolicy,
   type RuntimeEnv,
@@ -20,15 +19,6 @@ const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0.2,
 };
-
-function isPermanentSignalSseRejection(error: unknown): error is SignalSseRejectionError {
-  if (!(error instanceof SignalSseRejectionError)) {
-    return false;
-  }
-  // signal-cli uses other 4xx responses for request/configuration rejection.
-  // These three statuses explicitly permit a later retry.
-  return error.status >= 400 && error.status < 500 && ![408, 425, 429].includes(error.status);
-}
 
 export type SignalStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 
@@ -71,6 +61,7 @@ export async function runSignalSseLoop({
     ...policy,
   };
   let reconnectAttempts = 0;
+  let lastEventId: string | undefined;
 
   for (;;) {
     if (abortSignal?.aborted) {
@@ -84,12 +75,17 @@ export async function runSignalSseLoop({
         abortSignal,
         timeoutMs,
         transportKind,
+        ...(lastEventId ? { lastEventId } : {}),
         onStreamOpen: () => {
           statusSink?.(channelReadyPatch());
         },
         onEvent: async (event: SignalSseEvent) => {
           reconnectAttempts = 0;
           await onEvent(event);
+          // Resume only after receive accepted the event, including durable ingress.
+          if (event.id !== undefined) {
+            lastEventId = event.id || undefined;
+          }
         },
         logger: {
           log: runtime.log,
@@ -99,12 +95,21 @@ export async function runSignalSseLoop({
       if (abortSignal?.aborted) {
         return;
       }
+      lastError =
+        "Signal daemon closed the event stream. Check the daemon or proxy, then watch for reconnects.";
     } catch (err) {
       if (abortSignal?.aborted) {
         return;
       }
       runtime.error?.(`Signal stream error: ${String(err)}`);
-      if (isPermanentSignalSseRejection(err)) {
+      // signal-cli uses other 4xx responses for request/configuration rejection.
+      // These three statuses explicitly permit a later retry.
+      if (
+        err instanceof SignalSseRejectionError &&
+        err.status >= 400 &&
+        err.status < 500 &&
+        ![408, 425, 429].includes(err.status)
+      ) {
         lastError = `Signal daemon rejected the event stream: ${err.message}. Check the configured account and daemon URL, fix the daemon or proxy response, then restart the channel.`;
         runtime.log?.(`Signal reconnect stopped: ${lastError}`);
         statusSink?.(channelBlockedPatch(lastError, { connected: false }));
@@ -115,11 +120,7 @@ export async function runSignalSseLoop({
     publishSignalRecovering(statusSink, lastError);
     reconnectAttempts += 1;
     const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
-    if (lastError !== undefined) {
-      runtime.log?.(`Signal connection lost, reconnecting in ${delayMs / 1000}s...`);
-    } else {
-      logVerbose(`Signal stream ended, reconnecting in ${delayMs / 1000}s...`);
-    }
+    runtime.log?.(`Signal connection lost (${lastError}), reconnecting in ${delayMs / 1000}s...`);
     try {
       await sleepWithAbort(delayMs, abortSignal);
     } catch (sleepErr) {

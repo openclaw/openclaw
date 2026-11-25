@@ -57,9 +57,4 @@ export async function createSupervisedExitWatcherFixture(fixtureDir: string) {
   };
 }
 
-export function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
+export { waitForFast } from "../../test/helpers/vitest-wait.js";

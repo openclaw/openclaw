@@ -11,6 +11,7 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import type { ReplyBackendHandle } from "../../sessions/session-controller.contracts.js";
 import {
   abortActiveReplyRuns,
+  captureReplyMessageInjectionTarget,
   getSessionControllerOperation,
 } from "../../sessions/session-controller.js";
 import {
@@ -18,10 +19,10 @@ import {
   captureSessionControllerSettlement,
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
+import { canInjectReplyMessageTarget } from "../../sessions/session-controller.message-injection.js";
 import {
   isSessionRunActive,
   isSessionRunActiveForKey,
-  isSessionRunCompactionBlocked,
 } from "../../sessions/session-controller.queries.js";
 import { waitForReplyOperationBackend } from "../../sessions/session-controller.state.js";
 import { clearReplyRunForResetBySessionId } from "../../sessions/session-controller.stop-runtime.js";
@@ -41,6 +42,11 @@ function createRunningOperation(
   return { operation, cancel, backend };
 }
 
+function expectActive(operation: ReturnType<typeof createTestReplyOperation>, active: boolean) {
+  expect(isSessionRunActiveForKey(operation.key)).toBe(active);
+  expect(isSessionRunActive(operation.sessionId)).toBe(active);
+}
+
 afterEach(() => {
   testing.resetSessionControllerForTest();
   resetCommandQueueStateForTest();
@@ -49,39 +55,17 @@ afterEach(() => {
 });
 
 describe("reply run registry cancellation", () => {
-  it("treats queued reply operations as non-abortable for compaction", () => {
-    const operation = createTestReplyOperation({
-      sessionId: "session-compact",
-    });
-
-    expect(isSessionRunActive("session-compact")).toBe(true);
-    expect(isSessionRunCompactionBlocked("session-compact")).toBe(false);
-
-    operation.markWaitingForDeferredMaintenance();
-
-    expect(isSessionRunCompactionBlocked("session-compact")).toBe(false);
-
-    operation.markDeferredMaintenanceWaitEnded();
-    operation.setPhase("running");
-
-    expect(isSessionRunCompactionBlocked("session-compact")).toBe(true);
-  });
-
   it("retains deferred-maintenance custody until its aborted producer completes", () => {
-    const operation = createTestReplyOperation({
-      sessionId: "session-waiting-abort",
-    });
+    const operation = createTestReplyOperation({ sessionId: "session-waiting-abort" });
 
     operation.markWaitingForDeferredMaintenance();
     operation.abortByUser();
 
     expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    expect(isSessionRunActiveForKey("agent:main:main")).toBe(true);
-    expect(isSessionRunActive("session-waiting-abort")).toBe(true);
+    expectActive(operation, true);
     expect(() => createTestReplyOperation()).toThrow();
     operation.complete();
-    expect(isSessionRunActiveForKey("agent:main:main")).toBe(false);
-    expect(isSessionRunActive("session-waiting-abort")).toBe(false);
+    expectActive(operation, false);
   });
 
   it("retains an aborted global-lane reservation through producer and delivery settlement", async () => {
@@ -93,8 +77,7 @@ describe("reply run registry cancellation", () => {
     try {
       operation.abortByUser();
       expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-      expect(isSessionRunActiveForKey(operation.key)).toBe(true);
-      expect(isSessionRunActive(operation.sessionId)).toBe(true);
+      expectActive(operation, true);
       await Promise.resolve();
       expect(settled).not.toHaveBeenCalled();
 
@@ -112,9 +95,7 @@ describe("reply run registry cancellation", () => {
   });
 
   it("does not reset deferred-maintenance operations as backend-owned work", () => {
-    const operation = createTestReplyOperation({
-      sessionId: "session-waiting-reset",
-    });
+    const operation = createTestReplyOperation({ sessionId: "session-waiting-reset" });
 
     operation.markWaitingForDeferredMaintenance();
     clearReplyRunForResetBySessionId("session-waiting-reset");
@@ -142,40 +123,14 @@ describe("reply run registry cancellation", () => {
   });
 
   it.each([
-    {
-      reason: new Error("caller cancelled"),
-      code: "aborted_by_user",
-      cancelReason: "user_abort",
-      direct: false,
-    },
-    {
-      reason: createAgentRunDirectAbortError(),
-      code: "aborted_by_user",
-      cancelReason: "user_abort",
-      direct: true,
-    },
-    {
-      reason: createAgentRunRestartAbortError(),
-      code: "aborted_for_restart",
-      cancelReason: "restart",
-      direct: false,
-    },
-    {
-      reason: createAgentRunSupersededAbortError(),
-      code: "aborted_for_supersession",
-      cancelReason: "superseded",
-      direct: false,
-    },
-    {
-      reason: createAgentRunRestartAbortError(),
-      code: "aborted_by_user",
-      cancelReason: "user_abort",
-      userFirst: true,
-      direct: true,
-    },
-  ])(
-    "records cancellation once as $code (userFirst=$userFirst)",
-    ({ reason, code, cancelReason, userFirst, direct }) => {
+    [new Error("caller cancelled"), "aborted_by_user", "user_abort", false, false],
+    [createAgentRunDirectAbortError(), "aborted_by_user", "user_abort", true, false],
+    [createAgentRunRestartAbortError(), "aborted_for_restart", "restart", false, false],
+    [createAgentRunSupersededAbortError(), "aborted_for_supersession", "superseded", false, false],
+    [createAgentRunRestartAbortError(), "aborted_by_user", "user_abort", true, true],
+  ] as const)(
+    "records cancellation %s as %s (%s, direct=%s, userFirst=%s)",
+    (reason, code, cancelReason, direct, userFirst) => {
       const upstreamAbort = new AbortController();
       const { operation, cancel } = createRunningOperation(upstreamAbort.signal);
       if (userFirst) {
@@ -190,8 +145,7 @@ describe("reply run registry cancellation", () => {
       if (!userFirst) {
         expect(operation.abortSignal.reason).toBe(upstreamAbort.signal.reason);
       }
-      expect(cancel).toHaveBeenCalledTimes(1);
-      expect(cancel).toHaveBeenCalledWith(cancelReason);
+      expect(cancel).toHaveBeenCalledExactlyOnceWith(cancelReason);
       operation.complete();
     },
   );
@@ -267,9 +221,7 @@ describe("reply run registry cancellation", () => {
       },
     });
     faultyOperation.setPhase("running");
-    const compactingOperation = createTestReplyOperation({
-      sessionId: "session-compacting",
-    });
+    const compactingOperation = createTestReplyOperation({ sessionId: "session-compacting" });
     compactingOperation.setPhase("preflight_compacting");
 
     const runningOperation = createTestReplyOperation({
@@ -286,6 +238,116 @@ describe("reply run registry cancellation", () => {
 });
 
 describe("reply operation backend readiness", () => {
+  it("waits for the same logical owner's next backend when input arrives during recovery", async () => {
+    const { operation, backend } = createRunningOperation();
+    const nextBackend = {
+      kind: "embedded" as const,
+      runId: "recovered-attempt",
+      cancel: vi.fn(),
+      queueMessage: vi.fn(async () => {}),
+    };
+    const settled = vi.fn();
+    try {
+      await expect(waitForReplyOperationBackend(operation)).resolves.toBe(true);
+      operation.detachBackend(backend);
+      // No attachment was captured by this incoming input. It may wait for this
+      // exact logical owner; it must not select a replacement operation by key.
+      expect(captureReplyMessageInjectionTarget(operation)).toBeUndefined();
+      const readiness = waitForReplyOperationBackend(operation).then((ready) => {
+        settled(ready);
+        return ready ? captureReplyMessageInjectionTarget(operation) : undefined;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      operation.attachBackend(nextBackend);
+      const selected = await readiness;
+      expect(selected?.runId).toBe("recovered-attempt");
+      expect(settled).toHaveBeenCalledExactlyOnceWith(true);
+      expect(getSessionControllerOperation(operation.key)).toBe(operation);
+    } finally {
+      operation.complete();
+    }
+  });
+
+  it("does not let a captured old attachment select its owner's recovery backend", async () => {
+    const { operation, backend } = createRunningOperation();
+    Object.assign(backend, { queueMessage: vi.fn(async () => {}) });
+    const captured = captureReplyMessageInjectionTarget(operation);
+    expect(captured).toBeDefined();
+    expect(canInjectReplyMessageTarget(captured!)).toBe(true);
+    try {
+      operation.detachBackend(backend);
+      operation.attachBackend({
+        kind: "embedded",
+        runId: "replacement-attachment",
+        cancel: vi.fn(),
+        queueMessage: vi.fn(async () => {}),
+      });
+      expect(canInjectReplyMessageTarget(captured!)).toBe(false);
+      expect(captureReplyMessageInjectionTarget(operation)?.runId).toBe("replacement-attachment");
+    } finally {
+      operation.complete();
+    }
+  });
+
+  it("cancels a recovery readiness waiter without cancelling the logical owner", async () => {
+    const { operation, backend } = createRunningOperation();
+    const source = new AbortController();
+    try {
+      operation.detachBackend(backend);
+      const readiness = waitForReplyOperationBackend(operation, source.signal);
+      source.abort();
+      await expect(readiness).rejects.toMatchObject({ name: "AbortError" });
+      expect(operation.abortSignal.aborted).toBe(false);
+      operation.attachBackend({ kind: "embedded", runId: "retained-recovery", cancel: vi.fn() });
+      await expect(waitForReplyOperationBackend(operation)).resolves.toBe(true);
+    } finally {
+      operation.complete();
+    }
+  });
+
+  it.each(["Stop", "completion", "finalization", "yield"] as const)(
+    "releases a detached recovery waiter on %s without borrowing a successor",
+    async (terminal) => {
+      const { operation, backend } = createRunningOperation();
+      operation.detachBackend(backend);
+      const readiness = waitForReplyOperationBackend(operation);
+      if (terminal === "Stop") {
+        operation.abortByUser();
+      } else if (terminal === "finalization") {
+        operation.freezeAbort();
+      } else if (terminal === "yield") {
+        operation.yield();
+      } else {
+        operation.complete();
+      }
+      await expect(readiness).resolves.toBe(false);
+      operation.complete();
+      const successor = createRunningOperation();
+      try {
+        await expect(waitForReplyOperationBackend(successor.operation)).resolves.toBe(true);
+        await expect(readiness).resolves.toBe(false);
+      } finally {
+        successor.operation.complete();
+      }
+    },
+  );
+
+  it("does not rearm current backend readiness when an old attachment detaches again", async () => {
+    const { operation, backend } = createRunningOperation();
+    try {
+      operation.detachBackend(backend);
+      const readiness = waitForReplyOperationBackend(operation);
+      operation.attachBackend({ kind: "embedded", runId: "current-recovery", cancel: vi.fn() });
+      await expect(readiness).resolves.toBe(true);
+      operation.detachBackend(backend);
+      await expect(waitForReplyOperationBackend(operation)).resolves.toBe(true);
+    } finally {
+      operation.complete();
+    }
+  });
+
   it.each(["phase", "backend", "global-lane"] as const)(
     "waits for both startup facts (%s first)",
     async (first) => {
@@ -311,6 +373,7 @@ describe("reply operation backend readiness", () => {
       }
       await ready;
       expect(settled).toHaveBeenCalledExactlyOnceWith(true);
+      operation.freezeAbort();
       operation.detachBackend(backend);
       await expect(waitForReplyOperationBackend(operation)).resolves.toBe(false);
       operation.complete();
@@ -340,36 +403,31 @@ describe("reply operation backend readiness", () => {
     operation.complete();
   });
 
-  it("keeps startup waiters bound to their key across rekey and replacement", async () => {
-    const operation = createTestReplyOperation();
-    const previousKey = operation.key;
-    const oldWait = waitForReplyOperationBackend(operation);
-    operation.updateSessionKey("agent:main:rekeyed");
-    const movedWait = waitForReplyOperationBackend(operation);
-    const replacement = createTestReplyOperation({ sessionKey: previousKey });
-    replacement.setPhase("running");
-    replacement.attachBackend({ kind: "embedded", cancel: vi.fn() });
-    await expect(oldWait).resolves.toBe(false);
-    operation.setPhase("running");
-    operation.attachBackend({ kind: "embedded", cancel: vi.fn() });
-    await expect(movedWait).resolves.toBe(true);
-    operation.complete();
-    replacement.complete();
-  });
-
-  it("does not revive an old startup waiter when its owner returns to the same key", async () => {
-    const operation = createTestReplyOperation();
-    const originalKey = operation.key;
-    const retired = waitForReplyOperationBackend(operation);
-    operation.updateSessionKey("agent:main:temporary-target");
-    operation.updateSessionKey(originalKey);
-    const current = waitForReplyOperationBackend(operation);
-    operation.attachBackend({ kind: "embedded", cancel: vi.fn() });
-    operation.setPhase("running");
-    await expect(retired).resolves.toBe(false);
-    await expect(current).resolves.toBe(true);
-    operation.complete();
-  });
+  it.each(["replacement", "return"] as const)(
+    "keeps retired startup waiters fenced across rekey and %s",
+    async (kind) => {
+      const operation = createTestReplyOperation();
+      const originalKey = operation.key;
+      const retired = waitForReplyOperationBackend(operation);
+      operation.updateSessionKey("agent:main:rekeyed");
+      if (kind === "return") {
+        operation.updateSessionKey(originalKey);
+      }
+      const current = waitForReplyOperationBackend(operation);
+      const replacement =
+        kind === "replacement" ? createTestReplyOperation({ sessionKey: originalKey }) : undefined;
+      if (replacement) {
+        replacement.setPhase("running");
+        replacement.attachBackend({ kind: "embedded", cancel: vi.fn() });
+      }
+      await expect(retired).resolves.toBe(false);
+      operation.setPhase("running");
+      operation.attachBackend({ kind: "embedded", cancel: vi.fn() });
+      await expect(current).resolves.toBe(true);
+      operation.complete();
+      replacement?.complete();
+    },
+  );
 
   it("retains physical source settlement after its queued operation moves to another key", async () => {
     const source = captureSessionTarget({

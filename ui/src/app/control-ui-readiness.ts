@@ -81,7 +81,25 @@ export class ControlUiReadiness {
 
   readonly hook = {
     snapshot: () => this.snapshot,
-    diagnostics: () => this.diagnostics(),
+    diagnostics: () => {
+      const context = this.runtime?.context;
+      const agents = context?.agents.state;
+      return {
+        agentSelection: context?.agentSelection.state ?? null,
+        gateway: {
+          assistantAgentId: context?.gateway.snapshot.assistantAgentId ?? null,
+          phase: context?.gateway.snapshot.phase ?? null,
+        },
+        roster: {
+          agentsError: agents?.agentsError ?? null,
+          agentsList: agents?.agentsList ?? null,
+          agentsLoading: agents?.agentsLoading ?? null,
+          connected: agents?.connected ?? null,
+        },
+        router: this.snapshot.route,
+        settlementError: this.settlementError,
+      };
+    },
     navigate: (routeId: RouteId, options?: ReadinessNavigationOptions) => {
       if (!this.runtime) {
         throw new Error("Control UI is disconnected");
@@ -256,26 +274,6 @@ export class ControlUiReadiness {
       terminalActivationReady:
         this.committedGeneration === this.generation &&
         this.presentation?.terminalActivationReady === true,
-    };
-  }
-
-  private diagnostics() {
-    const context = this.runtime?.context;
-    const agents = context?.agents.state;
-    return {
-      agentSelection: context?.agentSelection.state ?? null,
-      gateway: {
-        assistantAgentId: context?.gateway.snapshot.assistantAgentId ?? null,
-        phase: context?.gateway.snapshot.phase ?? null,
-      },
-      roster: {
-        agentsError: agents?.agentsError ?? null,
-        agentsList: agents?.agentsList ?? null,
-        agentsLoading: agents?.agentsLoading ?? null,
-        connected: agents?.connected ?? null,
-      },
-      router: this.snapshot.route,
-      settlementError: this.settlementError,
     };
   }
 }

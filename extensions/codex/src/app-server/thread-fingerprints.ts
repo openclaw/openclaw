@@ -31,7 +31,8 @@ export function areCodexDynamicToolFingerprintsCompatible(params: {
 export function codexLegacyDynamicToolsFingerprint(dynamicTools: readonly JsonValue[]): string {
   // Codex persists the complete model-visible schema at thread/start; resume
   // cannot refresh changed tool or nested input descriptions.
-  return JSON.stringify(dynamicTools.map(stabilizeJsonValue).toSorted(compareJsonFingerprint));
+  const tools = dynamicTools.map((tool) => JSON.stringify(stabilizeJsonValue(tool)));
+  return `[${tools.toSorted((left, right) => left.localeCompare(right)).join(",")}]`;
 }
 
 export function legacyFingerprintUserMcpServersConfigPatch(
@@ -244,8 +245,4 @@ export function shouldStartTransientNoToolThread(params: {
     params.previous !== LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT &&
     !params.nextHasDynamicTools,
   );
-}
-
-function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
-  return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }

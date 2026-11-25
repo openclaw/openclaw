@@ -21,7 +21,10 @@ function skipped(
 }
 
 describe("fallback-skip-cache", () => {
-  beforeEach(resetFallbackSkipCacheForTest);
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_FALLBACK_SKIP_TTL_MS", undefined);
+    resetFallbackSkipCacheForTest();
+  });
   afterEach(() => {
     vi.unstubAllEnvs();
     resetFallbackSkipCacheForTest();
@@ -29,9 +32,13 @@ describe("fallback-skip-cache", () => {
 
   it("treats falsy sessionId as a no-op for both mark and check", () => {
     // Missing scope must never suppress candidates across conversations.
-    mark({ sessionId: undefined });
+    mark({ sessionId: undefined, ttlMs: 10_000 });
+    mark({ sessionId: "", ttlMs: 10_000 });
+    expect(listFallbackSkipCacheSessionIdsForTest()).toEqual([]);
     expect(skipped(1_000, { sessionId: undefined })).toBe(false);
     expect(skipped(1_000, { sessionId: "" })).toBe(false);
+    mark({ ttlMs: 10_000 });
+    expect(listFallbackSkipCacheSessionIdsForTest()).toEqual(["s1"]);
   });
 
   it("expires entries after the TTL elapses", () => {

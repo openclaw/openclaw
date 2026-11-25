@@ -271,6 +271,9 @@ describe("call delivery runtime", () => {
           withSessionFacts: async () => {
             throw new Error("Unexpected session facts request");
           },
+          appendAgentMessage: async () => {
+            throw new Error("Unexpected agent message");
+          },
           subscribeSessionChanges: () => () => {},
         };
     const delivery = createCallDeliveryRuntime({
@@ -297,7 +300,7 @@ describe("call delivery runtime", () => {
       callId: call.callId,
       timestamp: Date.now(),
       type: "call.speech",
-      transcript: "Friday 09:00. " + "Full transcript. ".repeat(600),
+      transcript: "Friday 09:00. " + "  Full\ttranscript 🦞 e\u0301.\r\n".repeat(600),
       isFinal: true,
     });
     await actor.run("ending-caller", () =>
@@ -470,6 +473,9 @@ describe("call delivery runtime", () => {
           readSessionFacts: async () => ({ sessions: [] }),
           withSessionFacts: async () => {
             throw new Error("Unexpected session facts request");
+          },
+          appendAgentMessage: async () => {
+            throw new Error("Unexpected agent message");
           },
           subscribeSessionChanges: () => () => {},
         },

@@ -1,15 +1,20 @@
 import {
-  hasNonEmptyString,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveModelResponsePrefixContext } from "../../auto-reply/reply/response-prefix-template.js";
 import { isScheduledMessageWriteAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  composePreparedOnlySessionSource,
+  composeSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -26,27 +31,34 @@ import { isDeliveredCurrentSourceReplyAsync } from "../../infra/outbound/source-
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
+import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
+import { resolveMessageToolSourceReplyFinal } from "../embedded-agent-message-tool-source-reply.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
-import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   createMessageToolDecisionRecorder,
   resolveTrustedDecisionChannel,
 } from "./message-tool-decision.js";
 import {
   buildMessageToolDescription,
-  buildMessageToolSchema,
   type MessageToolDiscoveryParams,
   resolveAgentAccountId,
   resolveEffectiveCurrentChannelContext,
   resolveEffectiveCurrentChannelContextForRequest,
-  resolveMessageToolActionSchemaActions,
+  resolveMessageToolDiscovery,
   resolveMessageToolDiscoveryAsync,
+  resolveMessageToolDefinitionContext,
+  prepareMessageToolSessionBinding,
+  readMessageToolSessionEntry,
+  resolveMessageToolScheduledAccountScope,
   supportsMessageToolPromptReactions,
 } from "./message-tool-discovery.js";
 import type { MessageToolOptions } from "./message-tool-execution.types.js";
@@ -63,12 +75,12 @@ import {
 } from "./message-tool-scheduled-execution.js";
 import { MessageToolSchema } from "./message-tool-schema.js";
 import {
-  addSourceReplyFinalControl,
   enforceSourceReplyOnlyMessageAction,
   enforceSourceReplyOnlyTextDirectives,
   enforceTrustedTurnExplicitAccount,
   resolveSourceReplySinkDeliveryMode,
 } from "./message-tool-source-policy.js";
+import { buildMessageToolThreadingContext } from "./message-tool-threading-context.js";
 import { createMessageToolTurnAuthority } from "./message-tool-turn-authority.js";
 import {
   hasSanitizedSendPayloadContent,
@@ -82,17 +94,16 @@ import {
 } from "./poll-vote-echo.js";
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
-  const steps = createMessageToolSteps(options);
+  const steps = createMessageToolSteps(options, readMessageToolSessionEntry(options));
   let next = steps.next();
   while (!next.done) {
-    const actions = resolveMessageToolActionSchemaActions(next.value);
-    next = steps.next({ actions, schema: buildMessageToolSchema(next.value, actions) });
+    next = steps.next(resolveMessageToolDiscovery(next.value));
   }
   return next.value;
 }
 
 export async function createMessageToolAsync(options?: MessageToolOptions): Promise<AnyAgentTool> {
-  const steps = createMessageToolSteps(options);
+  const steps = createMessageToolSteps(options, await prepareMessageToolSessionBinding(options));
   let next = steps.next();
   while (!next.done) {
     next = steps.next(await resolveMessageToolDiscoveryAsync(next.value));
@@ -102,6 +113,7 @@ export async function createMessageToolAsync(options?: MessageToolOptions): Prom
 
 function* createMessageToolSteps(
   options?: MessageToolOptions,
+  sessionEntry?: SessionEntry,
 ): Generator<
   MessageToolDiscoveryParams,
   AnyAgentTool,
@@ -114,7 +126,8 @@ function* createMessageToolSteps(
   const rawPollEchoSessionKey = options?.agentSessionKey?.trim() || undefined;
   const failedAutogeneratedIdempotencyKeys = new Map<string, string>();
   const inferredCurrentChannel = resolveEffectiveCurrentChannelContext(options);
-  const supportsPromptReactions = supportsMessageToolPromptReactions(options);
+  const definitionContext = resolveMessageToolDefinitionContext(options, sessionEntry);
+  const supportsPromptReactions = supportsMessageToolPromptReactions(options, sessionEntry);
   const preparedMessageToolCatalog =
     options?.preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
   const currentThreadTs =
@@ -129,6 +142,10 @@ function* createMessageToolSteps(
     inferredCurrentChannel.currentChannelProvider,
     options?.sourceReplyDeliveryMode,
   );
+  // Only a session bound to an external chat can have no viewer of the internal sink.
+  const sourceReplyTranscriptOnly =
+    options?.inputProvenance?.kind === "inter_session" &&
+    sessionDeliveryChannel(sessionEntry) !== undefined;
   const resolvedAgentId =
     options?.agentId ??
     (options?.agentSessionKey
@@ -147,23 +164,27 @@ function* createMessageToolSteps(
     getConfig: () => options?.config ?? getRuntimeConfig(),
     admitScheduledInvocation: options?.admitScheduledInvocation,
   });
-  const messageToolDiscoveryParams: MessageToolDiscoveryParams | undefined = options?.config
+  // Cold SDK construction has no route evidence yet; execution keeps its live reader.
+  const discoveryConfig = options?.config ?? getRuntimeConfigSnapshot();
+  const messageToolDiscoveryParams: MessageToolDiscoveryParams | undefined = discoveryConfig
     ? {
-        cfg: options.config,
-        currentChatType: inferredCurrentChannel.currentChatType,
-        currentChannelProvider: inferredCurrentChannel.currentChannelProvider,
-        currentChannelId: inferredCurrentChannel.currentChannelId,
-        currentThreadTs,
-        currentMessageId: options.currentMessageId,
+        cfg: discoveryConfig,
+        currentChatType: definitionContext.currentChatType,
+        currentChannelProvider: definitionContext.currentChannelProvider,
+        currentChannelId: definitionContext.currentChannelId,
+        currentThreadTs: definitionContext.currentThreadTs,
         supportsPromptReactions,
-        currentAccountId: agentAccountId,
-        isScheduledRun: turnAuthority.isScheduledRun,
-        scheduledAccountScope: turnAuthority.scheduledAccountScope,
-        sessionKey: options.agentSessionKey,
-        sessionId: options.sessionId,
+        currentAccountId:
+          definitionContext.accountId ??
+          (options?.agentSessionKey ? undefined : options?.agentAccountId),
+        isScheduledRun: isCronSessionKey(options?.agentSessionKey),
+        scheduledAccountScope: resolveMessageToolScheduledAccountScope(
+          options?.scheduledToolPolicy,
+          sessionEntry,
+        ),
+        sessionKey: options?.agentSessionKey,
+        sessionId: options?.sessionId,
         agentId: resolvedAgentId,
-        requesterSenderId: options.requesterSenderId,
-        senderIsOwner: options.senderIsOwner,
         preparedMessageToolCatalog,
       }
     : undefined;
@@ -183,6 +204,7 @@ function* createMessageToolSteps(
   // Schema and prompt must use the same snapshot; repeated discovery can drift
   // across plugin hooks while needlessly loading channel action metadata twice.
   const discovered = messageToolDiscoveryParams ? yield messageToolDiscoveryParams : undefined;
+  options?.onAvailability?.(discovered?.available ?? true);
   const actions = discovered?.actions;
   // A source-bound completion keeps the session's message definition so its
   // prompt prefix stays cached; the source-reply policy is enforced per call.
@@ -213,11 +235,13 @@ function* createMessageToolSteps(
     name: "message",
     displaySummary: "Send and manage messages across configured channels.",
     description,
-    parameters: addSourceReplyFinalControl(baseSchema),
+    parameters: baseSchema,
     prepareBeforeToolCallParams: explicitTargetGuard?.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: explicitTargetGuard?.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal) => {
-      const assertCaller = turnAuthority.captureCaller(signal, captureGatewayToolCallerAssertion);
+      const assertCaller = turnAuthority.captureCaller(signal, () =>
+        composePreparedOnlySessionSource(getGatewayToolCallerIdentity()),
+      );
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
       const action = readToolStringParam(params, "action", {
@@ -299,6 +323,10 @@ function* createMessageToolSteps(
       // not be dispatched to a provider or participate in idempotency.
       const requestedSourceReplyFinal =
         typeof params.final === "boolean" ? params.final : undefined;
+      const sourceReplyFinal =
+        action === "send"
+          ? resolveMessageToolSourceReplyFinal(params, options?.messageToolFinalByDefault)
+          : requestedSourceReplyFinal;
       delete params.final;
 
       const suppressedVisiblePayloadReason = sanitizeMessageToolVisiblePayload(
@@ -327,13 +355,17 @@ function* createMessageToolSteps(
       if (explicitTargetGuard) {
         decisions.runBoundary(() => explicitTargetGuard.require(params, action));
       }
-      // The admitted prompt wins over an inherited external delivery route. Only
-      // an explicit external channel enters the ordinary channel reaction path,
-      // including on runs without a grant, which see the same stable definition.
+      // A live local prompt grant wins over an inherited external delivery route.
       const requestedChannel = normalizeOptionalLowercaseString(params.channel);
-      const reactsToCurrentPrompt =
-        action === "react" && (requestedChannel ?? "webchat") === "webchat";
-      if (reactsToCurrentPrompt && supportsPromptReactions && !currentPromptReaction) {
+      const reactionChannel =
+        requestedChannel ??
+        (currentPromptReaction ||
+        parseAgentSessionKey(options?.agentSessionKey)?.rest.startsWith("dashboard:")
+          ? "webchat"
+          : normalizeMessageChannel(options?.currentChannelProvider)) ??
+        "webchat";
+      const reactsToCurrentPrompt = action === "react" && reactionChannel === "webchat";
+      if (reactsToCurrentPrompt && !currentPromptReaction) {
         throw new Error("No prompt here permits reactions; pass channel, target, and messageId.");
       }
       if (reactsToCurrentPrompt && currentPromptReaction) {
@@ -487,32 +519,11 @@ function* createMessageToolSteps(
         });
       }
 
-      const toolContext =
-        effectiveCurrentChannel.currentChannelId ||
-        effectiveCurrentChannel.currentChatType ||
-        effectiveCurrentChannel.currentChannelProvider ||
-        effectiveCurrentChannel.currentMessagingTarget ||
-        currentThreadTs ||
-        typeof options?.currentMessageId === "number" ||
-        hasNonEmptyString(options?.currentMessageId) ||
-        replyToMode ||
-        options?.hasRepliedRef ||
-        options?.sameChannelThreadRequired
-          ? {
-              currentChannelId: effectiveCurrentChannel.currentChannelId,
-              currentChatType: effectiveCurrentChannel.currentChatType,
-              currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
-              currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
-              currentThreadTs,
-              currentMessageId: options?.currentMessageId,
-              replyToMode,
-              hasRepliedRef: options?.hasRepliedRef,
-              sameChannelThreadRequired: options?.sameChannelThreadRequired,
-              // Direct tool invocations should not add cross-context decoration.
-              // The agent is composing a message, not forwarding from another chat.
-              skipCrossContextDecoration: true,
-            }
-          : undefined;
+      const toolContext = buildMessageToolThreadingContext(
+        effectiveCurrentChannel,
+        { currentThreadTs, replyToMode },
+        options,
+      );
       const groupThread = prepareMessageToolGroupThread(params, {
         action,
         channel: scope.channel,
@@ -541,7 +552,6 @@ function* createMessageToolSteps(
         : params;
       const hasExactSourceTurn =
         action === "send" &&
-        sourceReplySinkDeliveryMode === "message_tool_only" &&
         normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
       return await withChannelReadAuthority(
         action === "download-file" || scheduledRead || assertDashboardReadCurrent
@@ -557,6 +567,14 @@ function* createMessageToolSteps(
                   action,
                   params: actionParams,
                   actionOrigin: "message-tool",
+                  responsePrefixContext:
+                    options?.modelProvider && options.modelId
+                      ? resolveModelResponsePrefixContext({
+                          provider: options.modelProvider,
+                          model: options.modelId,
+                          thinkLevel: options.requesterThinkingLevel,
+                        })
+                      : undefined,
                   defaultAccountId: accountId ?? undefined,
                   ...messageActionTurnCapability.selectMessageActionRequesterIdentity(
                     trustedTurnContext,
@@ -584,13 +602,13 @@ function* createMessageToolSteps(
                   sandboxRoot: options?.sandboxRoot,
                   sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
                   sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
-                  sourceReplyTranscriptOnly: options?.inputProvenance?.kind === "inter_session",
+                  sourceReplyTranscriptOnly,
                   // Only an admitted channel source can arm terminal restart reconciliation.
-                  // Preserve explicit progress even without a source turn: recovery must not
+                  // Preserve progress even without a source turn: recovery must not
                   // mistake its persisted mirror for a completed assistant reply.
                   sourceReplyFinal: hasExactSourceTurn
-                    ? (requestedSourceReplyFinal ?? true)
-                    : action === "send" && requestedSourceReplyFinal === false
+                    ? sourceReplyFinal
+                    : action === "send" && sourceReplyFinal === false
                       ? false
                       : undefined,
                   sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
@@ -657,12 +675,12 @@ function* createMessageToolSteps(
             sessionKey: options?.agentSessionKey,
             toolContext,
             deliveredPayload: result.payload,
-            sourceReplyFinal: requestedSourceReplyFinal,
+            sourceReplyFinal,
             replyToIsExplicit: Boolean(readToolStringParam(actionParams, "replyTo")),
           };
           const currentSourceReply =
             result.handledBy === "internal-source"
-              ? options?.inputProvenance?.kind !== "inter_session"
+              ? !sourceReplyTranscriptOnly
               : await isDeliveredCurrentSourceReplyAsync(sourceReply);
           // A completed provider write must settle even if its caller was revoked
           // while awaiting the accepted response. Its next request stays fenced.
@@ -684,11 +702,11 @@ function* createMessageToolSteps(
             result,
             currentSourceReply,
           );
-          groupThread.record(result, sourceReply, currentSourceReply, requestedSourceReplyFinal);
+          groupThread.record(result, sourceReply, currentSourceReply, sourceReplyFinal);
           if (
             messageDelivery?.status === "settled" &&
             !messageDelivery.partialDelivery &&
-            requestedSourceReplyFinal !== false &&
+            sourceReplyFinal !== false &&
             !result.dryRun &&
             currentSourceReply
           ) {

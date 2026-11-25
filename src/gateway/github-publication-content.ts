@@ -1,4 +1,5 @@
 import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
+import { appendPrAttribution, preparePrAttribution } from "../agents/pr-attribution.js";
 import { resolveControlUiPublicSessionUrl } from "../config/control-ui-link-base.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
@@ -12,6 +13,7 @@ export async function prepareGitHubPublicationContent(params: {
     GitHubPublicationExecutionRow,
     "request_id" | "agent_id" | "session_id" | "session_key" | "branch" | "title"
   >;
+  requesterProfileId?: string;
   storePath: string;
   accountId: number;
   host: string;
@@ -46,6 +48,12 @@ export async function prepareGitHubPublicationContent(params: {
     sessionId: row.session_id,
     storePath: params.storePath,
   });
+  const attributionEnabled = await preparePrAttribution({
+    requesterProfileId: params.requesterProfileId,
+    sessionKey: row.session_key,
+    incognito: initialEntry?.incognito,
+  });
+  params.assertCurrent();
   const title = row.title?.trim() || `Publish ${row.branch}`;
   const trailers = prepared.attribution?.trailers ?? [];
   const credit = prepared.attribution?.logins.map((login) => `- @${login}`).join("\n");
@@ -63,7 +71,8 @@ export async function prepareGitHubPublicationContent(params: {
       }
     },
     pullRequestBody() {
-      const currentShare = resolveSessionPublicShare(params.readCurrentEntry());
+      const currentEntry = params.readCurrentEntry();
+      const currentShare = resolveSessionPublicShare(currentEntry);
       const participants = credit ? `\n\n## Worked on by\n\n${credit}` : "";
       // A late revoke only removes optional disclosure; a new grant cannot add it to this request.
       const footer =
@@ -72,7 +81,11 @@ export async function prepareGitHubPublicationContent(params: {
         currentShare?.sessionId === initialShare?.sessionId
           ? `\n\n---\n[View the OpenClaw team session](${sessionUrl})`
           : "";
-      return `${description}${participants}\n\n<!-- openclaw-publication:${row.request_id} -->${footer}`;
+      const body = appendPrAttribution(
+        `${description}${participants}\n\n<!-- openclaw-publication:${row.request_id} -->`,
+        attributionEnabled() && !currentEntry?.incognito,
+      );
+      return `${body}${footer}`;
     },
   };
 }

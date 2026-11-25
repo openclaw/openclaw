@@ -1,7 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { prepareAuthProfileProvider } from "../../agents/auth-profiles/store-runtime.js";
-import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveExecDefaultsAsync } from "../../agents/exec-defaults.js";
 import {
   formatFastModeCommandOptions,
@@ -9,6 +8,8 @@ import {
   formatFastModeValue,
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
+import { resolveAgentHarnessOperatorPolicyError } from "../../agents/operator-access-program.js";
 import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -185,13 +186,17 @@ export async function handleDirectiveOnly(
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
+  // Thinking and fast mode are capabilities of a model; the other session settings apply without one.
+  if (!resolvedModel && (directives.hasThinkDirective || directives.hasFastDirective)) {
+    return rejectModelTransaction(NO_MODEL_CONFIGURED_MESSAGE);
+  }
   const preparedModel = modelSelection
     ? await prepareModelSelectionRuntime({
         cfg: params.cfg,
         agentId: activeAgentId,
         workspaceDir: params.workspaceDir,
-        provider: resolvedProvider,
-        model: resolvedModel,
+        provider: modelSelection.provider,
+        model: modelSelection.model,
         catalog: thinkingCatalog ?? [],
         rawRuntime: directives.rawModelRuntime,
         sessionEntry,
@@ -204,25 +209,31 @@ export async function handleDirectiveOnly(
   thinkingCatalog = preparedModel?.catalog ?? thinkingCatalog;
   const modelRuntimeResolution = preparedModel?.runtime ?? { kind: "unchanged" as const };
   const validateSelection = () =>
-    modelResolution.validateModelSelection?.() ?? preparedModel?.validateRuntimeSelection?.();
+    modelResolution.validateModelSelection?.() ??
+    resolveAgentHarnessOperatorPolicyError(preparedModel?.harness, params.operatorAuthority) ??
+    preparedModel?.validateRuntimeSelection?.();
   const prospectiveSessionEntry = { ...sessionEntry };
   applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
-  const selectedCatalogEntry = findSelectedCatalogEntry({
-    catalog: thinkingCatalog,
-    provider: resolvedProvider,
-    model: resolvedModel,
-  });
+  const selectedCatalogEntry = resolvedModel
+    ? findSelectedCatalogEntry({
+        catalog: thinkingCatalog,
+        provider: resolvedProvider,
+        model: resolvedModel,
+      })
+    : undefined;
   const resolveThinkingRuntime = (entry: typeof sessionEntry) =>
-    resolveEffectiveAgentRuntime({
-      cfg: params.cfg,
-      provider: resolvedProvider,
-      modelId: resolvedModel,
-      modelApi: selectedCatalogEntry?.api,
-      modelBaseUrl: selectedCatalogEntry?.baseUrl,
-      agentId: activeAgentId,
-      sessionKey: runtimePolicySessionKey,
-      sessionEntry: entry,
-    });
+    resolvedModel
+      ? resolveEffectiveAgentRuntime({
+          cfg: params.cfg,
+          provider: resolvedProvider,
+          modelId: resolvedModel,
+          modelApi: selectedCatalogEntry?.api,
+          modelBaseUrl: selectedCatalogEntry?.baseUrl,
+          agentId: activeAgentId,
+          sessionKey: runtimePolicySessionKey,
+          sessionEntry: entry,
+        })
+      : undefined;
   const thinkingRuntime = resolveThinkingRuntime(prospectiveSessionEntry);
   const thinkingPolicy = {
     provider: resolvedProvider,
@@ -349,7 +360,7 @@ export async function handleDirectiveOnly(
       const nodeLabel = execDefaults.node ? `node=${execDefaults.node}` : "node=(unset)";
       return acknowledgeIgnoredDirective(
         withOptions(
-          `Current exec defaults: host=${renderExecTargetLabel(execDefaults.host)}, effective=${execDefaults.effectiveHost}, security=${execDefaults.security}, ask=${execDefaults.ask}, ${nodeLabel}.`,
+          `Current exec defaults: host=${execDefaults.host}, effective=${execDefaults.effectiveHost}, security=${execDefaults.security}, ask=${execDefaults.ask}, ${nodeLabel}.`,
           "host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>",
         ),
         "hasExecDirective",
@@ -458,7 +469,7 @@ export async function handleDirectiveOnly(
           modelSelectionUpdated && sessionEntry.liveModelSwitchPending === true,
         touchedFields: touchedSessionFields,
         commitGuard: modelResolution.modelSelectionSource,
-        validateCommit: preparedModel?.validateRuntimeSelection,
+        validateCommit: validateSelection,
       });
       if (persistence.status !== "applied") {
         const errorText =

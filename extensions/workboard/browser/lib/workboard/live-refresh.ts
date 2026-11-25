@@ -55,7 +55,6 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
         refreshWorkboard({
           host,
           client: entry.client,
-          requestUpdate: entry.requestUpdate,
           source: "live",
         }));
       if (!runtime.liveRefreshEntry) {
@@ -101,7 +100,6 @@ export function configureWorkboardLiveRefresh(
   );
   runtime.liveRefreshEntry = {
     client: params.client,
-    requestUpdate: params.requestUpdate,
     refresh: params.refresh,
     shouldDefer: params.shouldDefer,
   };

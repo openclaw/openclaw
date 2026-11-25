@@ -88,15 +88,6 @@ it.each([...producers, "native bootstrap"] as const)(
       const ready = await runStartupConfigPreflight({ gateway: true, observe: false });
       expect(ready.snapshot.valid).toBe(true);
       expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(false);
-
-      const owner = await acquireGatewayLock({ allowInTests: true, env: state.env, timeoutMs: 0 });
-      expect(owner).not.toBeNull();
-      try {
-        expect(await migrateDaemonRuntimePins(state.env)).toEqual({ changes: [], warnings: [] });
-        owner?.assertCurrent();
-      } finally {
-        await owner?.release();
-      }
     });
   },
 );

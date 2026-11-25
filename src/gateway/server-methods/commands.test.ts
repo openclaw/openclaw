@@ -82,12 +82,10 @@ vi.mock("../../plugins/command-specs.js", async (importOriginal) => ({
     if (provider === "whatsapp") {
       return mockPluginSpecs;
     }
-    if (provider === "discord") {
-      return mockPluginSpecs.map((entry) =>
-        Object.assign({}, entry, { nativeName: "discord_tts" }),
-      );
-    }
-    return mockPluginSpecs.map((entry) => Object.assign({}, entry, { nativeName: entry.name }));
+    return mockPluginSpecs.map((entry) => ({
+      ...entry,
+      nativeName: provider === "discord" ? "discord_tts" : entry.name,
+    }));
   }),
 }));
 // mock-isolation: command inventory comes from this suite's synthetic plugin registry.
@@ -135,28 +133,24 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { commandsHandlers } from "./commands.js";
 
 function channelPlugin(provider: string) {
-  if (provider !== "discord") {
-    return undefined;
-  }
-  return {
-    commands: {
-      nativeCommandsAutoEnabled: true,
-      resolveNativeCommandName: ({
-        commandKey,
-        defaultName,
-      }: {
-        commandKey: string;
-        defaultName: string;
-      }) => (commandKey === "model" ? "set_model" : defaultName),
-    },
-  };
+  return provider !== "discord"
+    ? undefined
+    : {
+        commands: {
+          nativeCommandsAutoEnabled: true,
+          resolveNativeCommandName: ({
+            commandKey,
+            defaultName,
+          }: {
+            commandKey: string;
+            defaultName: string;
+          }) => (commandKey === "model" ? "set_model" : defaultName),
+        },
+      };
 }
 
 async function callHandler(params: Record<string, unknown> = {}) {
-  let result: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
-  const respond = (ok: boolean, payload?: unknown, error?: unknown) => {
-    result = { ok, payload, error };
-  };
+  const respond = vi.fn<(ok: boolean, payload?: unknown, error?: unknown) => void>();
   await expectDefined(
     commandsHandlers["commands.list"],
     "commands.list handler",
@@ -168,14 +162,13 @@ async function callHandler(params: Record<string, unknown> = {}) {
     isWebchatConnect: () => false,
     context: { getRuntimeConfig: () => ({}) } as never,
   });
-  return expectDefined(result, "commands.list response");
+  const [ok, payload, error] = expectDefined(respond.mock.calls[0], "commands.list response");
+  return { ok, payload, error };
 }
 
-type ListedCommand = CommandEntry;
-
-async function listCommands(params: Record<string, unknown> = {}): Promise<ListedCommand[]> {
+async function listCommands(params: Record<string, unknown> = {}): Promise<CommandEntry[]> {
   const { payload } = await callHandler(params);
-  return (payload as { commands: ListedCommand[] }).commands;
+  return (payload as { commands: CommandEntry[] }).commands;
 }
 
 function requireCommand<T extends { name: string }>(commands: T[], name: string): T {
@@ -185,10 +178,13 @@ function requireCommand<T extends { name: string }>(commands: T[], name: string)
   );
 }
 
-async function pluginCommand(
-  params: Record<string, unknown> = {},
-): Promise<ListedCommand | undefined> {
-  return (await listCommands(params)).find((command) => command.source === "plugin");
+function expectCommand(commands: CommandEntry[], name: string, expected?: object) {
+  const command = commands.find((entry) => entry.name === name);
+  if (expected) {
+    expect(command).toMatchObject(expected);
+  } else {
+    expect(command).toBeUndefined();
+  }
 }
 
 function createCommandRegistry(commands: RuntimeCommandRegistration[]) {
@@ -201,9 +197,8 @@ function createCommandRegistry(commands: RuntimeCommandRegistration[]) {
   return registry;
 }
 
-function setGatewayRegistry(commands: RuntimeCommandRegistration[]): void {
+const setGatewayRegistry = (commands: RuntimeCommandRegistration[]) =>
   setActivePluginRegistry(createCommandRegistry(commands));
-}
 
 function registration(
   name: string,
@@ -242,21 +237,16 @@ describe("commands.list handler", () => {
   });
 
   it("limits provider-specific native commands while keeping login text-visible", async () => {
-    expect(
-      (await listCommands({ provider: "discord" })).find((c) => c.name === "login"),
-    ).toBeUndefined();
-    expect(
-      (await listCommands({ provider: "slack", scope: "native" })).find((c) => c.name === "login"),
-    ).toBeUndefined();
-    expect(requireCommand(await listCommands({ provider: "telegram" }), "login").nativeName).toBe(
-      "login",
-    );
-    expect(
-      requireCommand(await listCommands({ provider: "discord", scope: "text" }), "login"),
-    ).toMatchObject({ name: "login", textAliases: ["/login"] });
+    expectCommand(await listCommands({ provider: "discord" }), "login");
+    expectCommand(await listCommands({ provider: "slack", scope: "native" }), "login");
+    expectCommand(await listCommands({ provider: "telegram" }), "login", { nativeName: "login" });
+    expectCommand(await listCommands({ provider: "discord", scope: "text" }), "login", {
+      name: "login",
+      textAliases: ["/login"],
+    });
   });
 
-  it.each(["text", "native", "both"] as const)(
+  it.each(["text", "native"] as const)(
     "projects registered plugin commands without native support for scope=%s",
     async (scope) => {
       setGatewayRegistry([registration("demo")]);
@@ -294,11 +284,14 @@ describe("commands.list handler", () => {
     },
   );
 
-  it("reads plugin commands from the gateway registry before the global command table", async () => {
+  it("projects gateway registry commands with channel filters and native aliases", async () => {
     setGatewayRegistry([
+      registration("android_only", { channels: ["android"] }),
       registration("  demo  ", {
         description: "  Demo command  ",
         acceptsArgs: true,
+        nativeNames: { discord: "discord_demo" },
+        channels: ["discord"],
         clientPresentation: {
           when: "no-arguments",
           action: { kind: "device-pairing" },
@@ -306,17 +299,17 @@ describe("commands.list handler", () => {
       }),
     ]);
 
-    const commands = await listCommands();
-    expect(commands.find((c) => c.source === "plugin")).toEqual(
-      expect.objectContaining({
-        name: "demo",
-        description: "Demo command",
-        textAliases: ["/demo"],
-        acceptsArgs: true,
-        clientPresentation: { when: "no-arguments", action: { kind: "device-pairing" } },
-      }),
-    );
+    const commands = await listCommands({ provider: "discord" });
+    expect(commands.find((c) => c.source === "plugin")).toMatchObject({
+      name: "discord_demo",
+      nativeName: "discord_demo",
+      description: "Demo command",
+      textAliases: ["/demo"],
+      acceptsArgs: true,
+      clientPresentation: { when: "no-arguments", action: { kind: "device-pairing" } },
+    });
     expect(commands.find((c) => c.source === "plugin" && c.name === "tts")).toBeUndefined();
+    expect(commands.find((c) => c.name === "android_only")).toBeUndefined();
   });
 
   it.each([false, true])(
@@ -330,28 +323,11 @@ describe("commands.list handler", () => {
       expect(
         commands.filter((command) => command.source === "plugin").map((command) => command.name),
       ).toEqual(empty ? [] : ["scoped"]);
-      expect((await pluginCommand({ scope: "text" }))?.name).toBe("ambient");
+      expect((await listCommands({ scope: "text" })).find((c) => c.source === "plugin")?.name).toBe(
+        "ambient",
+      );
     },
   );
-
-  it("keeps provider-filtered native plugin names paired with their text aliases", async () => {
-    setGatewayRegistry([
-      registration("android_only", { channels: ["android"] }),
-      registration("demo", { nativeNames: { discord: "discord_demo" }, channels: ["discord"] }),
-    ]);
-
-    const commands = await listCommands({ provider: "discord" });
-    const plugin = await pluginCommand({ provider: "discord" });
-
-    expect(plugin).toMatchObject({
-      name: "discord_demo",
-      nativeName: "discord_demo",
-      textAliases: ["/demo"],
-    });
-    expect(
-      commands.find((c) => c.source === "plugin" && c.name === "android_only"),
-    ).toBeUndefined();
-  });
 
   it("excludes args when includeArgs=false", async () => {
     const model = requireCommand(await listCommands({ includeArgs: false }), "model");

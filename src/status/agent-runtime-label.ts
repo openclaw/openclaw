@@ -30,7 +30,7 @@ export function formatAgentRuntimeName(runtime: string, pluginLabel?: string): s
   return AGENT_RUNTIME_LABELS[id] ?? sanitizeTerminalText(label ?? runtime.trim());
 }
 
-type AgentRuntimeLabelArgs = {
+export function resolveAgentRuntimeLabel(args: {
   config?: OpenClawConfig;
   sessionEntry?: Pick<
     SessionEntry,
@@ -45,9 +45,7 @@ type AgentRuntimeLabelArgs = {
   resolvedHarness?: string;
   fallbackProvider?: string;
   classifyCliProvider?: CliProviderClassifier;
-};
-
-export function resolveAgentRuntimeLabel(args: AgentRuntimeLabelArgs): string {
+}): string {
   const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
   const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
   // ACP sessions own their displayed runtime because the backend can differ

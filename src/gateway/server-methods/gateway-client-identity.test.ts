@@ -1,21 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolveSessionToolListingClientCaps } from "../../agents/openclaw-tools.client-caps.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
+import { parseCanonicalSqliteSessionEntry } from "../../config/sessions/session-entry-json.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
-import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
-import {
-  createAttachments,
-  createClientInfo,
-  createUserTurnInputController,
-} from "./chat-send-user-turn.test-support.js";
+import { prepareTurn } from "./chat-send-user-turn-family.test-support.js";
+import { createClientInfo } from "./chat-send-user-turn.test-support.js";
 import {
   authenticatedProfileUnavailableError,
   gatewayClientSenderFields,
   gatewayClientSessionCreator,
   resolveChatSendCallerContext,
 } from "./gateway-client-identity.js";
+import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 function profile(profileId: string, displayName: string, updatedAt = 1) {
@@ -93,18 +93,62 @@ describe("gateway client identity", () => {
 describe("chat send command authority", () => {
   function createClient(overrides: Partial<GatewayClient> = {}): GatewayClient {
     return {
+      ...createSessionMutationTestClient(),
       authenticatedUserId: "ada@example.test",
       authenticatedUserProfile: profile("profile-ada", "Ada"),
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-        role: "operator",
-        scopes: ["operator.write"],
-      },
       ...overrides,
     };
   }
+  it.each([false, true])(
+    "only a live client updates recorded capability metadata (synthetic=%s)",
+    (synthetic) => {
+      const client = createClient({ internal: synthetic ? { syntheticClient: true } : undefined });
+      client.connect.caps = [];
+      const ctx = resolveChatSendCallerContext(client);
+      const existing = {
+        sessionId: "restart-source",
+        updatedAt: 1,
+        clientCapabilities: ["approvals", "webchat-prompt-reactions"],
+      };
+      const updated = {
+        ...existing,
+        ...deriveSessionMetaPatch({
+          ctx,
+          sessionKey: "agent:main:dashboard:restart-source",
+          existing,
+        }),
+      };
+      expect(ctx.GatewayClientCaps).toEqual(synthetic ? undefined : []);
+      expect(updated.clientCapabilities).toEqual(
+        synthetic ? existing.clientCapabilities : ["webchat-prompt-reactions"],
+      );
+    },
+  );
+
+  it.each([{ clientCapabilities: ["approvals", "webchat-prompt-reactions"] }, {}])(
+    "replays stored sessions written before this change (catalog=$clientCapabilities)",
+    ({ clientCapabilities }: { clientCapabilities?: string[] }) => {
+      const sessionKey = "agent:main:dashboard:stored-before-upgrade";
+      // Row JSON as earlier releases persisted it; the stored shape is unchanged.
+      const entry_json = JSON.stringify({ sessionId: "stored", updatedAt: 1, clientCapabilities });
+      const existing = parseCanonicalSqliteSessionEntry({ entry_json })!;
+      expect(existing.clientCapabilities).toEqual(clientCapabilities);
+      const ctx = resolveChatSendCallerContext(
+        createClient({ internal: { syntheticClient: true } }),
+      );
+      const entry = { ...existing, ...deriveSessionMetaPatch({ ctx, sessionKey, existing }) };
+      expect(entry.clientCapabilities).toEqual(clientCapabilities);
+      // Listing reads the recorded catalog; without one it falls back to the turn's capabilities.
+      expect(
+        resolveSessionToolListingClientCaps({
+          sessionKey,
+          clientCaps: [...(ctx.GatewayClientCaps ?? [])],
+          preparedSessionEntry: { sessionKey, entry },
+        }),
+      ).toEqual(clientCapabilities ?? []);
+    },
+  );
+
   function authorize(
     context: ReturnType<typeof resolveChatSendCallerContext>,
     entry = "profile-ada",
@@ -139,7 +183,6 @@ describe("chat send command authority", () => {
       },
       false,
     ],
-    ["revoked connection", { invalidated: true }, false],
   ])("matches human allowlists only for %s", (_name, overrides, allowed) => {
     const context = resolveChatSendCallerContext(createClient(overrides));
     expectAuthority(context, allowed);
@@ -194,26 +237,9 @@ describe("chat send command authority", () => {
     expectAuthority(resolveChatSendCallerContext(createClient()), false, "cli");
   });
 
-  it.each(["invalidation", "closure", "profile replacement"])(
-    "rechecks retained context after %s",
-    (change) => {
-      const lifetime = new AbortController();
-      const client = createClient({ connectionSignal: lifetime.signal });
-      const context = resolveChatSendCallerContext(client);
-      expect(authorize(context).isAuthorizedSender).toBe(true);
-      if (change === "invalidation") {
-        client.invalidated = true;
-      } else if (change === "closure") {
-        lifetime.abort();
-      } else {
-        client.authenticatedUserProfile = profile("profile-other", "Other", 2);
-      }
-      expectAuthority(context, false);
-    },
-  );
-
   it.each([
     "profile",
+    "profile-replacement",
     "identity",
     "disconnect",
     "invalidated",
@@ -227,15 +253,13 @@ describe("chat send command authority", () => {
       internal: change === "owner" ? { authenticatedOperator: true } : undefined,
       connectionSignal: lifetime.signal,
     });
+    const commandContext = resolveChatSendCallerContext(client);
+    expectAuthority(commandContext, change !== "owner");
     let current = true;
-    const { controller } = createUserTurnInputController("Change my theme");
-    const { ctx } = prepareChatSendUserTurn({
-      request: {
-        inboundMessage: "Change my theme",
-        clientInfo: client.connect.client,
-        suppressCommandInterpretation: false,
-      },
-      session: { agentId: "main", clientRunId: "owner-turn", sessionKey: "agent:main:main" },
+    const { ctx } = prepareTurn({
+      inputText: "Change my theme",
+      request: { inboundMessage: "Change my theme", clientInfo: client.connect.client },
+      session: { clientRunId: "owner-turn" },
       admission: {
         originatingRoute: {
           originatingChannel: "webchat",
@@ -248,10 +272,8 @@ describe("chat send command authority", () => {
           }
         },
       },
-      attachments: createAttachments({ parsedMessage: "Change my theme" }),
+      attachments: { parsedMessage: "Change my theme" },
       client,
-      logGateway: { warn: vi.fn() } as never,
-      userTurn: controller,
     });
     const render = () => buildInboundUserContextPrefix(finalizeInboundContext({ ...ctx }));
     expect(render()).toContain("requester_profile");
@@ -259,6 +281,9 @@ describe("chat send command authority", () => {
     switch (change) {
       case "profile":
         client.authenticatedUserProfile!.profileId = "profile-bob";
+        break;
+      case "profile-replacement":
+        client.authenticatedUserProfile = profile("profile-other", "Other", 2);
         break;
       case "identity":
         client.authenticatedUserId = "bob@example.test";
@@ -281,6 +306,9 @@ describe("chat send command authority", () => {
     }
     expect(render()).not.toContain("requester_profile");
     expect(ctx).not.toHaveProperty("SenderId");
+    if (change !== "admission" && change !== "identity") {
+      expectAuthority(commandContext, false);
+    }
   });
 
   it("does not inherit human or application candidates from ambient agent work", async () => {

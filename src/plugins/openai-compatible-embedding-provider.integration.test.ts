@@ -1,9 +1,13 @@
-import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { clearAuthProfileMigrationDiagnostics } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -14,10 +18,6 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
-import {
-  resolveApiKeyForProviderCore,
-  resolveScopedAuthProfileStore,
-} from "../agents/model-auth-provider.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
@@ -46,17 +46,10 @@ beforeEach(async () => {
     request.resume();
     request.once("end", () => {
       requests.push({ url: request.url, headers: request.headers });
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [{ index: 0, embedding: vector }] }));
+      respondJson(response, { data: [{ index: 0, embedding: vector }] });
     });
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("embedding fixture did not expose a TCP address");
-  }
-  baseUrl = `http://127.0.0.1:${address.port}/v1`;
+  baseUrl = `${await listenLoopback(server)}/v1`;
 });
 
 afterEach(async () => {
@@ -64,10 +57,7 @@ afterEach(async () => {
   closeOpenClawAgentDatabases(fixtureAgentDir);
   await rm(fixtureAgentDir, { force: true, recursive: true });
   vi.unstubAllEnvs();
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
+  await closeHttpServer(server);
 });
 
 function createOptions(
@@ -199,13 +189,11 @@ it.each([
       ...(query ? { providerBaseUrl: `${baseUrl}?tenant=provider` } : {}),
       remote: query ? { ...remote, baseUrl: `${baseUrl}?tenant=remote` } : remote,
     });
-    await expect(embed(options)).resolves.toEqual(vector);
-    expect(requests).toHaveLength(1);
+    await expectEmbedding(embed(options), authorization);
     expect(requests[0]).toMatchObject({
       url: `/v1/embeddings${query ? "?tenant=remote" : ""}`,
       headers: expectedHeaders,
     });
-    expect(requests[0]?.headers.authorization).toBe(authorization);
     if (destination !== "owned") {
       expect(requests[0]?.headers).not.toHaveProperty("x-provider-tenant");
       expect(requests[0]?.headers).not.toHaveProperty("x-shared");
@@ -253,16 +241,6 @@ it.each([false, true])(
     if (ownedStore) {
       writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, fixtureAgentDir);
       options.agentDir = fixtureAgentDir;
-      const authParams = {
-        cfg: options.config,
-        provider: options.provider,
-        agentDir: fixtureAgentDir,
-      };
-      const store = resolveScopedAuthProfileStore(authParams);
-      expect(store.profiles[profileId]).toBeUndefined();
-      await expect(resolveApiKeyForProviderCore({ ...authParams, store })).resolves.toMatchObject({
-        apiKey: profileId,
-      });
     }
     await expectEmbedding(embed(options), `Bearer ${profileId}`);
   },

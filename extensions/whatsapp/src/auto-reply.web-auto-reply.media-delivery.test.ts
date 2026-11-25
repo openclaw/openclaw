@@ -11,8 +11,8 @@ import {
   sendWebGroupInboundMessage,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
-import type { WebInboundCallbackMessage } from "./inbound.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
+import type { WebInboundCallbackMessage } from "./inbound/types.js";
 
 installWebAutoReplyTestHomeHooks();
 installWebAutoReplyUnitTestHooks({ pinDns: true });

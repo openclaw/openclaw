@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { resolveModelRefFromString } from "../../agents/model-selection-shared.js";
 import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
@@ -60,11 +60,16 @@ const modelCatalog = [
   { provider: primary.provider, id: primary.model, name: "GPT-5.5", reasoning: true },
   { provider: fallback.provider, id: fallback.model, name: "Claude Fallback", reasoning: false },
 ];
-const heartbeat = { isHeartbeat: true, heartbeatModelOverride: "openai/gpt-5.5@openai:metered" };
 const resolvedConfig: OpenClawConfig = {
   channels: { telegram: { botToken: "resolved-telegram-token" } },
   agents: { defaults: { userTimezone: "America/New_York" } },
 };
+const baseline = (sessionId: string): Awaited<ReturnType<CaptureSessionDiffBaseline>> => ({
+  version: 1,
+  sessionId,
+  root: "/workspace",
+  files: [],
+});
 
 beforeEach(() => {
   vi.unstubAllEnvs();
@@ -165,31 +170,28 @@ describe("getReplyFromConfig configOverride", () => {
       { snapshot: true },
     );
     mocks.initSessionState.mockResolvedValue(session.fixture);
-    mocks.captureBaseline.mockImplementation(async ({ sessionId }) => ({
-      version: 1,
-      sessionId,
-      root: "/workspace",
-      files: [],
-    }));
+    mocks.captureBaseline.mockImplementation(async ({ sessionId }) => baseline(sessionId));
   });
 
   it("rejects forged operator authority at the public SDK reply entry", async () => {
-    const assertCurrent = vi.fn();
-    const plain = { profileId: "guest", scopes: ["operator.admin"], assertCurrent };
-    const issued = createAdmittedRunOperatorAuthority(plain);
+    const plain = {
+      canonicalIdentity: null,
+      profileId: "guest",
+      scopes: ["operator.admin"],
+    };
+    const issued = createTestOperatorAuthority(plain);
     for (const operatorAuthority of [plain, { ...issued }]) {
       const options = { runId: "forged-operator", operatorAuthority };
       await expect(getReplyFromConfig(buildCtx(), options, {})).rejects.toThrow(
         "operator run authority must be issued by the host",
       );
     }
-    expectCallCounts(0, assertCurrent, loadConfig, mocks.initSessionState, runReply);
+    expectCallCounts(0, loadConfig, mocks.initSessionState, runReply);
   });
   it("pins the issued operator source once through public reply option copies", async () => {
-    const issued = createAdmittedRunOperatorAuthority({
+    const issued = createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
     });
     let reads = 0;
     const options = {
@@ -273,19 +275,12 @@ describe("getReplyFromConfig configOverride", () => {
   });
 });
 
-function makeReasoningModelConfig(
-  thinking?: false | "high",
-  filterPrimary = false,
-): OpenClawConfig {
+function makeReasoningModelConfig(): OpenClawConfig {
   return withFastReplyConfig({
     agents: {
       defaults: {
         model: "openai/gpt-5.5",
         workspace: "/tmp/workspace",
-        ...(thinking === undefined
-          ? {}
-          : { models: { "openai/gpt-5.5": { params: { thinking } } } }),
-        ...(filterPrimary ? { modelPolicy: { allow: ["anthropic/*"] } } : {}),
       },
     },
     models: {
@@ -327,11 +322,6 @@ async function mockAutoFallbackSession(
 }
 function runParams() {
   return runReply.mock.calls[0]?.[0];
-}
-async function expectPreparedReply(cfg: OpenClawConfig, options?: InternalGetReplyOptions) {
-  await expect(getReplyFromConfig(buildCtx(), options, cfg)).resolves.toEqual({ text: "ok" });
-  expect(runReply).toHaveBeenCalledOnce();
-  return runParams();
 }
 
 describe("getReplyFromConfig auto-fallback primary probes", () => {
@@ -389,12 +379,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       await beforeSettlement(modelStarted.promise, reply, signal, "model did not start");
       expect(events).toEqual(["model"]);
     } finally {
-      capture.resolve({
-        version: 1,
-        sessionId: "overlapping-baseline",
-        root: "/workspace",
-        files: [],
-      });
+      capture.resolve(baseline("overlapping-baseline"));
       await reply.catch(() => undefined);
     }
     await expect(reply).resolves.toEqual({ text: "ok" });
@@ -404,49 +389,31 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       sessionDiffBaseline: { sessionId: "overlapping-baseline" },
     });
   });
-  it("suppresses heartbeat model overrides for a model-locked session", async () => {
-    await mockAutoFallbackSession(true);
-    await expectPreparedReply(makeReasoningModelConfig(), heartbeat);
-    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
-    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
-      ...fallback,
-      hasResolvedHeartbeatModelOverride: false,
-    });
-    expect(runParams()).toMatchObject(fallback);
-    expect(runParams()?.autoFallbackPrimaryProbe).toBeUndefined();
-    expect(runParams()).not.toHaveProperty("configuredProfileId", "openai:metered");
-  });
-  it("keeps an explicit heartbeat profile on its turn without persisting it into chat", async () => {
-    const { sessionKey, storePath } = await mockAutoFallbackSession(undefined, primary);
-    const cfg = makeReasoningModelConfig();
-    await getReplyFromConfig(buildCtx(), heartbeat, cfg);
-    expect(runParams()).toMatchObject({ ...primary, configuredProfileId: "openai:metered" });
-    expect(loadSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
-    await getReplyFromConfig(buildCtx(), undefined, cfg);
-    expect(runReply.mock.calls[1]?.[0]).not.toHaveProperty("configuredProfileId", "openai:metered");
-  });
-  it.each([false, true])(
-    "resolves primary-probe reasoning (policy-filtered: %s)",
-    async (filtered) => {
-      await mockAutoFallbackSession();
-      if (filtered) {
-        const catalogRuntime = await import("../../agents/model-catalog.runtime.js");
-        vi.mocked(catalogRuntime.loadPreparedModelCatalogSnapshot).mockResolvedValueOnce({
-          entries: modelCatalog,
-          routeVariants: modelCatalog,
-          authoritative: true,
-        });
-      }
-      const prepared = await expectPreparedReply(
-        makeReasoningModelConfig(filtered ? "high" : undefined, filtered),
-        filtered ? undefined : { thinkingLevelOverride: "off" },
+
+  it.for([false, true])(
+    "keeps a scheduled model override turn-local (locked=%s)",
+    async (locked) => {
+      const { sessionKey, storePath } = await mockAutoFallbackSession(
+        locked,
+        locked ? fallback : primary,
       );
-      expect(prepared).toMatchObject({
-        ...(filtered ? { modelState: fallback } : {}),
-        ...primary,
-        resolvedThinkLevel: "off",
-        resolvedReasoningLevel: "off",
+      const { getReplyFromConfig: getInternalReply } = await import("./get-reply.js");
+      const cfg = makeReasoningModelConfig();
+      await expect(
+        getInternalReply(buildCtx(), { modelOverride: "openai/gpt-5.5@openai:metered" }, cfg),
+      ).resolves.toEqual({ text: "ok" });
+      expect(runParams()).toMatchObject(
+        locked ? fallback : { ...primary, configuredProfileId: "openai:metered" },
+      );
+      expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
+        hasResolvedTurnModelOverride: !locked,
       });
+      expect(loadSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
+      await getInternalReply(buildCtx(), undefined, cfg);
+      expect(runReply.mock.calls[1]?.[0]).not.toHaveProperty(
+        "configuredProfileId",
+        "openai:metered",
+      );
     },
   );
 });

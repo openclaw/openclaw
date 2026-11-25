@@ -28,6 +28,9 @@ export class WorkerInferenceSessionDrainBusyError extends Error {
 
 export type WorkerInferenceCancellation = {
   readonly runIds: readonly string[];
+  /** Physical execution for precisely these captured registrations, not cancellation ACKs. */
+  readonly settled: Promise<void>;
+  readonly executing: boolean;
   cancel(control?: {
     assertCurrent?: () => void;
     onCancelled?: (runId: string) => void;
@@ -101,7 +104,7 @@ export class WorkerInferenceAuthorityError extends Error {
     readonly reason: WorkerInferenceErrorReason,
     cause?: unknown,
   ) {
-    super(`Worker inference authority changed: ${reason}`, { cause });
+    super(`Worker inference stopped: ${reason}`, { cause });
   }
 }
 
@@ -193,8 +196,14 @@ export function createWorkerInferenceSessionControls(params: {
         entry.request.sessionId === sessionId &&
         (runId === undefined || entry.request.runId === runId),
     );
+    const executionSettled = joinInferenceOperations(
+      captured.flatMap((entry) => (entry.execution ? [entry.execution] : [])),
+    );
+    void executionSettled.catch(() => {});
     return {
       runIds: [...new Set(captured.map((entry) => entry.request.runId))].toSorted(),
+      settled: executionSettled,
+      executing: captured.some((entry) => entry.execution !== undefined && !entry.settled),
       cancel(control) {
         const cancelled = new Set<string>();
         const settled = cancelCaptured(captured, "cancelled", {

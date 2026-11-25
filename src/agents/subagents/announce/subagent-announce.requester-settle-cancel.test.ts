@@ -94,7 +94,7 @@ it.each([
       expectsCompletionMessage: true,
     });
     const entry = structuredClone(subagentRuns.get(runId)!);
-    // Restored successful children can owe a wake without a parent turn binding.
+    // A live successful child can owe a wake before a parent turn accepts it.
     entry.execution = {
       ...entry.execution,
       status: "terminal",
@@ -240,10 +240,10 @@ it.each([
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   try {
-    // Restore resumes each durable wake; the sweeper never re-drives one.
+    // Explicit delivery resumes each durable wake; the sweeper never re-drives one.
     const resumeWakes = () => {
       for (const child of entries) {
-        resumeSubagentRun(child.runId, "restore");
+        resumeSubagentRun(child.runId);
       }
     };
     if (phase !== "pending") {
@@ -594,13 +594,31 @@ it.each([
           expect(subagentRuns.has("nested")).toBe(false);
         }
       }
+      if (phase === "requester replacement") {
+        // Turnover keeps the unspent results owed to the session's current turn instead
+        // of consuming them; that turn's runtime context carries them.
+        expect(subagentRuns.get("nested")?.requesterSettleWake).toMatchObject({
+          status: "pending",
+        });
+        const { buildActiveSubagentRuntimeContext } =
+          await import("../registry/subagent-active-context.js");
+        const context = await buildActiveSubagentRuntimeContext({
+          cfg: getRuntimeConfig(),
+          controllerSessionKey: requesterKey,
+          controllerAgentId: "main",
+        });
+        expect(context).toContain('run_json="nested"');
+        expect(context).toContain("requester_continuation=pending");
+        expect(startedTurns).toEqual([]);
+        return;
+      }
       expect(subagentRuns.get("nested")?.requesterSettleWake).toBeUndefined();
       if (completedNestedOutcome) {
         expect(nestedPublications.length).toBeGreaterThan(0);
         for (const published of nestedPublications) {
           expect(published.execution.outcome).toEqual(completedNestedOutcome);
         }
-        if (phase === "requester reset" || phase === "requester replacement") {
+        if (phase === "requester reset") {
           expect(subagentRuns.get("nested")?.execution.outcome).toEqual(completedNestedOutcome);
         } else {
           expect(subagentRuns.has("nested")).toBe(false);

@@ -1,24 +1,47 @@
+import { existsSync } from "node:fs";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import * as lifecycleReads from "../../config/sessions/lifecycle-read.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { listSessionPendingInputs } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import {
+  acquireSessionInputActor,
+  bindUserTurnInputActor,
+} from "../../config/sessions/session-input-actor.js";
+import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+import {
+  beginSessionEffect,
+  isSessionMutationActive,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
+import {
+  releaseSessionControllerClaim,
+  retireSessionControllerInput,
+  submitSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
 import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
+import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
+import * as resetCleanup from "./session-reset-cleanup.js";
 import {
   initSessionState,
   writeSessionStore as writeSessionStoreFast,
 } from "./test/session.test-support.js";
+import { createTypingController } from "./typing.js";
 
 export function telegramTurn(sessionKey: string, body: string, from: string) {
   return {
@@ -38,9 +61,7 @@ type Scope = { agentId: string; storePath: string; sessionKey: string };
 
 async function admit(scope: Scope, sessionId: string, resetTriggered: boolean) {
   const admitted = await admitReplyTurn({ ...scope, sessionId, kind: "visible", resetTriggered });
-  if (admitted.status !== "owned" || !admitted.databaseClaim) {
-    throw new Error("Fixture requires a retained reply admission");
-  }
+  assert(admitted.status === "owned" && admitted.databaseClaim, "Expected retained admission");
   const controller = getSessionControllerEntryForOperation(admitted.operation);
   return {
     ...admitted,
@@ -87,6 +108,33 @@ export function registerSessionInitializationAdmissionTests({
       updatedAt: Date.now(),
       sessionStartedAt: Date.now(),
     });
+  it("blocks secondary reply initialization until its canonical Template admission completes", async () => {
+    const scope = await makeScope("template-secondary-admission");
+    const canonicalKey = "agent:main:main";
+    const entry = { sessionId: "template-canonical", updatedAt: Date.now() };
+    await writeSessionStoreFast(scope.storePath, {
+      [canonicalKey]: {
+        ...entry,
+        initializationPending: true,
+        templateInitialization: {
+          source: { packageName: "@openclaw/admission-fixture", version: "1.0.0" },
+          agentConfig: {},
+          workspaceIdentity: "verified-workspace",
+        },
+      },
+    });
+    const initializeSecondary = () =>
+      initSessionState({
+        cfg: { session: { store: scope.storePath } },
+        ctx: telegramTurn(scope.sessionKey, "hello", "template-user"),
+      });
+    await expect(initializeSecondary()).rejects.toThrow("Template setup is still initializing");
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    await writeSessionStoreFast(scope.storePath, { [canonicalKey]: entry });
+    const initialized = await initializeSecondary();
+    expect(initialized.sessionKey).toBe(scope.sessionKey);
+    expect(loadSessionEntry(scope)?.sessionId).toBe(initialized.sessionId);
+  });
   it.each(["same-id", "new-id", "created", "reset-before-read"] as const)(
     "hands the acknowledged %s initialization to a fresh view of its original admission",
     async (kind) => {
@@ -114,9 +162,7 @@ export function registerSessionInitializationAdmissionTests({
         ).rejects.toThrow("released");
       }
       const reader = getReplyOperationSessionReader(admitted.operation);
-      if (!reader) {
-        throw new Error("Acknowledged initialization must retain its new reader");
-      }
+      assert(reader, "Acknowledged initialization must retain its new reader");
       const read = () =>
         reader.withRead(
           { sessionKeys: [sessionKey] },
@@ -137,6 +183,112 @@ export function registerSessionInitializationAdmissionTests({
       }
     },
   );
+  it("stages first-turn input through its initialized owner without opening the legacy locator", async () => {
+    const scope = await makeScope("initialization-input-custody");
+    const text = "Keep this first request before maintenance.";
+    const idempotencyKey = "first-turn-input-custody";
+    await using admitted = await admit(scope, "initializing-input", false);
+    const initialized = await initialize(scope, admitted, text);
+    const target = {
+      ...scope,
+      sessionId: initialized.sessionId,
+      sessionEntry: initialized.sessionEntry,
+    };
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text, idempotencyKey },
+      target,
+      updateMode: "none",
+    });
+    // The Gateway recorder predates first-session initialization and has no read source yet.
+    let gatewayInput: ReturnType<typeof acquireSessionInputActor> | undefined;
+    bindUserTurnInputActor(recorder, {
+      phase: "acceptInput",
+      acquire: () =>
+        (gatewayInput ??= acquireSessionInputActor(
+          {
+            ...scope,
+            target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+          },
+          { assertCurrent() {}, assertReadable() {} },
+        )),
+    });
+    const queued = createQueueTestRun({ prompt: text, messageId: idempotencyKey });
+    const followupRun = {
+      ...queued,
+      userTurnTranscriptRecorder: recorder,
+      run: {
+        ...queued.run,
+        agentId: scope.agentId,
+        sessionId: target.sessionId,
+        sessionKey: scope.sessionKey,
+        config: { session: { store: scope.storePath } },
+      },
+    };
+    const input = submitSessionControllerInput(
+      scope.sessionKey,
+      followupRun,
+      { mode: "followup" },
+      {
+        protocolRunId: idempotencyKey,
+        storePath: scope.storePath,
+      },
+    );
+    const typing = createTypingController({});
+    const checkpoint = new Error("first-turn input reached the maintenance boundary");
+    let releaseSourceAdmission: (() => Promise<void>) | undefined;
+    try {
+      expect(existsSync(scope.storePath)).toBe(false);
+      const prepared = await prepareReplyAgentTurn({
+        queued: followupRun,
+        kind: "visible",
+        providedReplyOperation: admitted.operation,
+        onOperationOwned: () => true,
+        defaults: {
+          typing,
+          typingMode: "never",
+          defaultModel: queued.run.model,
+          sessionEntry: target.sessionEntry,
+          sessionStore: initialized.sessionStore,
+          sessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+          opts: { runId: idempotencyKey },
+        },
+        signalRunStart: async () => {
+          expect(await listSessionPendingInputs(target)).toMatchObject({
+            total: 1,
+            items: [{ state: "queued", message: { role: "user", content: text, idempotencyKey } }],
+          });
+          expect(existsSync(scope.storePath)).toBe(false);
+          // This existing callback follows source staging and precedes model/memory work.
+          throw checkpoint;
+        },
+      });
+      assert(prepared.kind === "admitted", "First-turn preparation must retain its admitted owner");
+      releaseSourceAdmission = prepared.turn.releaseSourceAdmission;
+      expect(prepared.turn.preflightError).toBe(checkpoint);
+      expect(existsSync(scope.storePath)).toBe(false);
+    } finally {
+      try {
+        await releaseSourceAdmission?.();
+      } finally {
+        admitted.operation.complete();
+        try {
+          const claim = input.claim;
+          if (claim) {
+            releaseSessionControllerClaim(claim);
+            await claim.settlement.promise;
+          } else {
+            retireSessionControllerInput(input);
+            await input.settlement.promise;
+          }
+        } finally {
+          typing.cleanup();
+          await (await gatewayInput?.catch(() => undefined))?.actor.release();
+        }
+      }
+    }
+  });
+
   it.for(["prepared", "retiring"] as const)(
     "joins reply close while the initialization handoff is %s",
     async (stage, { signal }) => {
@@ -146,9 +298,10 @@ export function registerSessionInitializationAdmissionTests({
       await seed(scope, sessionId, "before-close");
       await using admitted = await admit(scope, sessionId, true);
       const previous = admitted.databaseClaim;
-      if (!("kind" in previous) || !previous.afterTransition) {
-        throw new Error("Fixture requires the worker initialization handoff");
-      }
+      assert(
+        "kind" in previous && typeof previous.afterTransition === "function",
+        "Expected initialization handoff",
+      );
       const prepare = previous.afterTransition.bind(previous);
       const prepared = createDeferred<Awaited<ReturnType<typeof prepare>>>();
       const paused = createDeferred();
@@ -253,5 +406,175 @@ export function registerSessionInitializationAdmissionTests({
     });
     expect(admitted.databaseClaim.isCurrent()).toBe(true);
     expect(separateHeaderPhase).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "reuses a fresh replacement without interrupting its work",
+      body: "continue",
+      expectedInterruption: false,
+    },
+    {
+      name: "reacquires a changed identity before an explicit reset",
+      body: "/new",
+      expectedInterruption: true,
+    },
+  ])("$name", async ({ body, expectedInterruption }) => {
+    const storePath = await makeStorePath("openclaw-rollover-revalidation-");
+    const sessionKey = "agent:main:telegram:dm:rollover-revalidation";
+    const staleSessionId = "stale-session-before-revalidation";
+    const replacementSessionId = "fresh-replacement-before-revalidation";
+    const postDrainSessionId = "replacement-created-during-drain";
+    const finalGapSessionId = "replacement-created-before-destructive-write";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: staleSessionId,
+        updatedAt: Date.now() - 10 * 60_000,
+      },
+    });
+
+    let replacementInterrupted = false;
+    let replacementIdentityFenced = false;
+    let postDrainIdentityFenced = false;
+    let finalGapIdentityFenced = false;
+    let postDrainAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
+    let finalGapAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
+    const cleanupPrepared = createDeferred();
+    let postDrainFinalization = Promise.resolve();
+    let finalGapRebind = Promise.resolve();
+    let releaseReplacementAdmission = () => {};
+    const replacementAdmission = await beginSessionEffect({
+      scope: storePath,
+      identities: [replacementSessionId],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        replacementInterrupted = true;
+        replacementIdentityFenced = isSessionMutationActive(storePath, [replacementSessionId]);
+        if (!expectedInterruption) {
+          releaseReplacementAdmission();
+          return;
+        }
+        postDrainFinalization = cleanupPrepared.promise
+          .then(() =>
+            runExclusiveSessionStoreWrite(storePath, async () => {
+              await writeSessionStoreFast(storePath, {
+                [sessionKey]: { sessionId: postDrainSessionId, updatedAt: Date.now() },
+              });
+            }),
+          )
+          .then(async () => {
+            let releasePostDrainAdmission = () => {};
+            postDrainAdmission = await beginSessionEffect({
+              scope: storePath,
+              identities: [postDrainSessionId],
+              assertAllowed: () => {},
+              onInterrupt: () => {
+                postDrainIdentityFenced = isSessionMutationActive(storePath, [postDrainSessionId]);
+                releasePostDrainAdmission();
+                finalGapRebind = runExclusiveSessionStoreWrite(storePath, async () => {
+                  await writeSessionStoreFast(storePath, {
+                    [sessionKey]: { sessionId: finalGapSessionId, updatedAt: Date.now() },
+                  });
+                  let releaseFinalGapAdmission = () => {};
+                  finalGapAdmission = await beginSessionEffect({
+                    scope: storePath,
+                    identities: [finalGapSessionId],
+                    assertAllowed: () => {},
+                    onInterrupt: () => {
+                      finalGapIdentityFenced = isSessionMutationActive(storePath, [
+                        finalGapSessionId,
+                      ]);
+                      releaseFinalGapAdmission();
+                    },
+                  });
+                  releaseFinalGapAdmission = finalGapAdmission.release;
+                });
+              },
+            });
+            releasePostDrainAdmission = postDrainAdmission.release;
+          })
+          .finally(releaseReplacementAdmission);
+      },
+    });
+    releaseReplacementAdmission = replacementAdmission.release;
+
+    const { resolve: signalMutationStarted, promise: mutationStarted } = createDeferred();
+    const { resolve: releaseMutation, promise: mutationGate } = createDeferred();
+    const blockingMutation = runSessionMutation({
+      scope: storePath,
+      identities: [sessionKey, staleSessionId],
+      run: async () => {
+        signalMutationStarted();
+        await mutationGate;
+      },
+    });
+    await mutationStarted;
+
+    const { resolve: signalWriterStarted, promise: writerStarted } = createDeferred();
+    const { resolve: releaseWriter, promise: writerGate } = createDeferred();
+    const blockingWriter = runExclusiveSessionStoreWrite(storePath, async () => {
+      signalWriterStarted();
+      await writerGate;
+    });
+    await writerStarted;
+
+    const prepareCleanup = resetCleanup.prepareSessionResetCleanupGuard;
+    const cleanupSpy = vi
+      .spyOn(resetCleanup, "prepareSessionResetCleanupGuard")
+      .mockImplementation(async (params) => {
+        const cleanup = await prepareCleanup(params);
+        if (params.expectedSession?.sessionId === replacementSessionId) {
+          // Finalizers can replace the parent during awaited cleanup preparation.
+          cleanupPrepared.resolve();
+          await postDrainFinalization.catch((error: unknown) => {
+            cleanup.release();
+            throw error;
+          });
+        }
+        return cleanup;
+      });
+    const initialization = initSessionState({
+      ctx: telegramTurn(sessionKey, body, "user-rollover-revalidation"),
+      cfg: {
+        session: { store: storePath, reset: { mode: "idle", idleMinutes: 1 } },
+      } as OpenClawConfig,
+    });
+    const replaceSession = runExclusiveSessionStoreWrite(storePath, async () => {
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: { sessionId: replacementSessionId, updatedAt: Date.now() },
+      });
+    });
+
+    try {
+      releaseWriter();
+      await blockingWriter;
+      await replaceSession;
+      releaseMutation();
+      await blockingMutation;
+
+      const result = await initialization;
+      await postDrainFinalization;
+      await finalGapRebind;
+      expect(replacementInterrupted).toBe(expectedInterruption);
+      if (expectedInterruption) {
+        expect(replacementIdentityFenced).toBe(true);
+        expect(postDrainIdentityFenced).toBe(true);
+        expect(finalGapIdentityFenced).toBe(true);
+        expect(result.sessionId).toBe(finalGapSessionId);
+      } else {
+        expect(result.sessionId).toBe(replacementSessionId);
+      }
+    } finally {
+      releaseWriter();
+      releaseMutation();
+      cleanupPrepared.resolve();
+      cleanupSpy.mockRestore();
+      replacementAdmission.release();
+      postDrainAdmission?.release();
+      finalGapAdmission?.release();
+      await Promise.allSettled([blockingWriter, replaceSession, blockingMutation, initialization]);
+      await postDrainFinalization.catch(() => {});
+      await finalGapRebind.catch(() => {});
+    }
   });
 }

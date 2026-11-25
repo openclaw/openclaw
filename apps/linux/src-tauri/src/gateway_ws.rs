@@ -10,6 +10,7 @@ use crate::gateway_sleep::SleepPrepareOutcome;
 use crate::quickchat::QUICKCHAT_LABEL;
 #[cfg(test)]
 use futures_util::{SinkExt, StreamExt};
+use openclaw_gateway_client::protocol::{MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION};
 #[cfg(test)]
 use openclaw_gateway_client::AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE;
 use openclaw_gateway_client::{
@@ -56,9 +57,6 @@ const AUTH_PASSWORD_MISSING_DETAIL_CODE: &str = "AUTH_PASSWORD_MISSING";
 const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
-// Mirrors packages/gateway-protocol/src/version.ts. The Gateway rejects other ranges.
-const MIN_PROTOCOL_VERSION: u32 = 4;
-const MAX_PROTOCOL_VERSION: u32 = 4;
 const INLINE_WIDGETS_CLIENT_CAPABILITY: &str = "inline-widgets";
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -653,8 +651,7 @@ impl GatewayClient {
                         .ok()
                         .and_then(|notice| notice.clone())
                         .unwrap_or_else(|| {
-                            "Connect the native app to this Gateway before opening its dashboard."
-                                .into()
+                            "Connect the app to this Gateway before opening it.".into()
                         }));
                 }
                 changed.await;
@@ -727,11 +724,12 @@ impl GatewayClient {
             || config.ownership != GatewayOwnership::Remote
             || !crate::gateway_windows::matches_route(dashboard, &expected)
         {
-            return Err("The native Gateway connection changed. Reconnect the dashboard.".into());
+            return Err("The Gateway connection changed. Reload this window.".into());
         }
-        let session = state.native_control_session.as_ref().ok_or(
-            "The native Gateway has not accepted dashboard authentication. Reconnect the app.",
-        )?;
+        let session = state
+            .native_control_session
+            .as_ref()
+            .ok_or("The Gateway has not accepted this window's sign-in. Reconnect the app.")?;
         let store = self
             .inner
             .identity
@@ -1615,9 +1613,9 @@ fn connection_notice(
     reconnect_paused: bool,
 ) -> Option<String> {
     let fallback = match state {
-        GatewayConnectionState::PairingRequired => "Approve this device in the dashboard (Nodes)",
+        GatewayConnectionState::PairingRequired => "Approve this device in OpenClaw (Nodes)",
         GatewayConnectionState::CredentialRequired => {
-            "Gateway requires a credential — open the dashboard on the gateway host"
+            "Gateway requires a credential — open OpenClaw on the gateway host"
         }
         _ if reconnect_paused => "Gateway connection paused — reopen Quick Chat to retry",
         _ => return None,
@@ -1649,13 +1647,13 @@ fn connect_params(
     signed_at_ms: u64,
     inline_widgets_available: bool,
 ) -> Result<Value, String> {
-    let mut client_caps = vec![AGENT_KIND_CLIENT_CAPABILITY];
+    let mut client_caps = vec![AGENT_KIND_CLIENT_CAPABILITY, "health-summary"];
     if inline_widgets_available {
         client_caps.push(INLINE_WIDGETS_CLIENT_CAPABILITY);
     }
     let mut params = json!({
-        "minProtocol": MIN_PROTOCOL_VERSION,
-        "maxProtocol": MAX_PROTOCOL_VERSION,
+        "minProtocol": MIN_CLIENT_PROTOCOL_VERSION,
+        "maxProtocol": PROTOCOL_VERSION,
         "client": {
             "id": CLIENT_ID,
             "version": env!("CARGO_PKG_VERSION"),
@@ -1988,7 +1986,7 @@ fn validate_hello(payload: Value) -> Result<ValidatedHello, String> {
     }
     let hello: HelloOk = serde_json::from_value(payload)
         .map_err(|error| format!("Invalid Gateway hello response: {error}"))?;
-    if hello.kind != "hello-ok" || hello.protocol != MAX_PROTOCOL_VERSION {
+    if hello.kind != "hello-ok" || hello.protocol != PROTOCOL_VERSION {
         return Err("Gateway negotiated an unsupported protocol.".to_string());
     }
     for required in ["agents.list", "chat.send"] {
@@ -2111,7 +2109,7 @@ pub(crate) mod tests {
                     "ok": true,
                     "payload": {
                         "type": "hello-ok",
-                        "protocol": MAX_PROTOCOL_VERSION,
+                        "protocol": PROTOCOL_VERSION,
                     },
                 })
                 .to_string()
@@ -2731,7 +2729,7 @@ pub(crate) mod tests {
                     let payload = match frame["method"].as_str().expect("request method") {
                         "connect" => json!({
                             "type": "hello-ok",
-                            "protocol": MAX_PROTOCOL_VERSION,
+                            "protocol": PROTOCOL_VERSION,
                             "features": { "methods": ["agents.list", "chat.send"] },
                             "auth": {},
                             "policy": { "tickIntervalMs": 30_000 },
@@ -3848,12 +3846,13 @@ esac
             true,
         )
         .expect("connect params");
-        assert_eq!(params["minProtocol"], MIN_PROTOCOL_VERSION);
-        assert_eq!(params["maxProtocol"], MAX_PROTOCOL_VERSION);
+        assert_eq!(params["minProtocol"], MIN_CLIENT_PROTOCOL_VERSION);
+        assert_eq!(params["maxProtocol"], PROTOCOL_VERSION);
         assert_eq!(
             params["caps"],
             json!([
                 AGENT_KIND_CLIENT_CAPABILITY,
+                "health-summary",
                 INLINE_WIDGETS_CLIENT_CAPABILITY
             ])
         );
@@ -3881,16 +3880,32 @@ esac
             false,
         )
         .expect("pinned connect params");
-        // Pinning only withdraws inline widgets; agent-kind is unconditional.
-        assert_eq!(pinned_params["caps"], json!([AGENT_KIND_CLIENT_CAPABILITY]));
+        // Pinning only withdraws inline widgets; other capabilities are unconditional.
+        assert_eq!(
+            pinned_params["caps"],
+            json!([AGENT_KIND_CLIENT_CAPABILITY, "health-summary"])
+        );
         std::fs::remove_dir_all(directory).expect("remove connect fixture");
+    }
+
+    #[test]
+    fn operator_hello_rejects_the_previous_node_only_protocol() {
+        let hello = validate_hello(json!({
+            "type": "hello-ok",
+            "protocol": PROTOCOL_VERSION - 1,
+            "features": { "methods": ["agents.list", "chat.send"] },
+            "auth": {}
+        }));
+        assert!(
+            matches!(hello, Err(message) if message == "Gateway negotiated an unsupported protocol.")
+        );
     }
 
     #[test]
     fn hello_tick_policy_sets_two_interval_watchdog() {
         let hello = validate_hello(json!({
             "type": "hello-ok",
-            "protocol": MAX_PROTOCOL_VERSION,
+            "protocol": PROTOCOL_VERSION,
             "features": { "methods": ["agents.list", "chat.send"] },
             "auth": { "deviceToken": "test-device-token" },
             "policy": { "tickIntervalMs": 1_250 },
@@ -4111,7 +4126,7 @@ esac
             let notice = connection_notice(state, &failure.connect_details, true);
             assert_eq!(
                 notice.as_deref(),
-                Some("Gateway requires a credential — open the dashboard on the gateway host")
+                Some("Gateway requires a credential — open OpenClaw on the gateway host")
             );
             assert_eq!(
                 serde_json::to_value(GatewayStateEvent::new(
@@ -4125,7 +4140,7 @@ esac
                 json!({
                     "state": "credential-required",
                     "gatewayGeneration": 1,
-                    "notice": "Gateway requires a credential — open the dashboard on the gateway host"
+                    "notice": "Gateway requires a credential — open OpenClaw on the gateway host"
                 })
             );
         }
@@ -4190,7 +4205,7 @@ esac
                 true,
             )
             .as_deref(),
-            Some("Gateway requires a credential — open the dashboard on the gateway host")
+            Some("Gateway requires a credential — open OpenClaw on the gateway host")
         );
         assert_eq!(
             connection_notice(

@@ -1,16 +1,5 @@
 import { isBlockedHostnameOrIp } from "../api.js";
 
-type VoiceCallWebhookExposureConfig = {
-  provider?: string;
-  publicUrl?: string;
-  tunnel?: {
-    provider?: string;
-  };
-  tailscale?: {
-    mode?: string;
-  };
-};
-
 export function providerRequiresPublicWebhook(providerName: string | undefined): boolean {
   return providerName === "twilio" || providerName === "telnyx" || providerName === "plivo";
 }
@@ -22,11 +11,19 @@ export function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
 }
 
 /** Resolve a human-readable webhook exposure status for doctor/setup surfaces. */
-export function resolveWebhookExposureStatus(config: VoiceCallWebhookExposureConfig) {
+export function resolveWebhookExposureStatus(config: {
+  provider?: string;
+  publicUrl?: string;
+  tunnel?: {
+    provider?: string;
+  };
+  tailscale?: {
+    mode?: string;
+  };
+}) {
   if (config.provider === "mock") {
     return {
       ok: true,
-      configured: true,
       message: "Mock provider does not need a public webhook",
     };
   }
@@ -35,13 +32,11 @@ export function resolveWebhookExposureStatus(config: VoiceCallWebhookExposureCon
     if (isProviderUnreachableWebhookUrl(config.publicUrl)) {
       return {
         ok: false,
-        configured: true,
         message: `Public webhook URL is local/private and cannot be reached by ${config.provider ?? "the provider"}: ${config.publicUrl}`,
       };
     }
     return {
       ok: true,
-      configured: true,
       message: `Public webhook URL configured: ${config.publicUrl}`,
     };
   }
@@ -49,7 +44,6 @@ export function resolveWebhookExposureStatus(config: VoiceCallWebhookExposureCon
   if (config.tunnel?.provider && config.tunnel.provider !== "none") {
     return {
       ok: true,
-      configured: true,
       message: "Webhook exposure configured through tunnel",
     };
   }
@@ -57,14 +51,12 @@ export function resolveWebhookExposureStatus(config: VoiceCallWebhookExposureCon
   if (config.tailscale?.mode && config.tailscale.mode !== "off") {
     return {
       ok: true,
-      configured: true,
       message: "Webhook exposure configured through Tailscale",
     };
   }
 
   return {
     ok: false,
-    configured: false,
     message: "Set publicUrl or configure tunnel/tailscale so the provider can reach webhooks",
   };
 }

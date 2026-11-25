@@ -9,12 +9,12 @@ export type PreparedToolSchemaNormalization = {
   readonly inputJson: string;
 };
 
-type SchemaCacheEntry<T> = {
-  key: string;
-  value: T;
-};
-
 let preparedSchemas: ReadonlyMap<object, PreparedToolSchemaNormalization> | undefined;
+
+/** Request preparation already detached and depth-bounded these schemas. */
+export function isPreparedToolSchemaNormalization(schema: unknown): boolean {
+  return schema !== null && typeof schema === "object" && preparedSchemas?.has(schema) === true;
+}
 
 const MAX_CACHE_ENTRIES_PER_SCHEMA = 8;
 
@@ -33,7 +33,7 @@ export function withPreparedToolSchemaNormalization<T>(
 }
 
 function createBoundedSchemaCache<T>() {
-  const schemas = new WeakMap<object, Array<SchemaCacheEntry<T>>>();
+  const schemas = new WeakMap<object, Array<{ key: string; value: T }>>();
   return {
     get(source: object, key: string): T | undefined {
       return schemas.get(source)?.find((entry) => entry.key === key)?.value;

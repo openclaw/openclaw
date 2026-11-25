@@ -39,13 +39,19 @@ export type VectorSearch<Row> = {
   query: (native: { match: RawBuilder<boolean>; distance: RawBuilder<number> }) => {
     toOperationNode(): RootOperationNode;
   };
+  /** Optional scoped prefilter projecting one unique `id`; undefined keeps exact search. */
+  candidates?: (native: {
+    match: RawBuilder<boolean>;
+    distance: RawBuilder<number>;
+    limit: number;
+  }) => { toOperationNode(): RootOperationNode } | undefined;
   scopeCount: { toOperationNode(): RootOperationNode };
   isRow: (value: unknown) => value is Row;
   signal?: AbortSignal;
   extensionPath?: string;
 };
 
-/** @experimental Approximate L2 candidates with cosine reranking; feature owners retain exact fallback. */
+/** @experimental Engine-native candidates with cosine reranking; feature owners retain exact fallback. */
 export interface VectorCapability {
   idSet(index: VectorIndex, ids: readonly string[]): RawBuilder<string>;
   prepareExists(index: VectorIndex): (id: string) => boolean;

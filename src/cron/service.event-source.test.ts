@@ -1,22 +1,27 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeCronJobCommits } from "../../test/helpers/cron/runtime-mutation.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import * as workerAdmission from "../infra/sqlite-worker-store.js";
+import { enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
+import { CommandLane } from "../process/lanes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { CronEventInput, CronEventRunOptions } from "./event-source.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
   setupCronServiceSuite,
 } from "./service.test-harness.js";
 import { locked } from "./service/locked.js";
+import { resetCronProviderBackoff } from "./service/provider-backoff.js";
 import {
   commitCronRunRequests,
   drainCronRunQueue,
@@ -77,32 +82,27 @@ async function fixture(overrides: Partial<CronServiceDeps> = {}) {
   const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
     status: "ok",
   }));
-  const { cron, state } = createCronServiceWithStateForTest({
-    scheduler: createTestGatewayScheduler(),
-    storePath,
-    cronEnabled: true,
-    defaultAgentId: "main",
-    nowMs: () => Date.now(),
-    log: logger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob,
-    ...overrides,
-  });
+  const { cron, state } = createCronServiceWithStateForTest(
+    cronTestDeps({
+      storePath,
+      defaultAgentId: "main",
+      log: logger,
+      runIsolatedAgentJob,
+      ...overrides,
+    }),
+  );
   services.push(cron);
   await cron.start();
-  const input: CronJobCreate = {
+  const input: CronJobCreate = cronTestInput({
     name: "event handler",
-    enabled: true,
     schedule: {
       kind: "event",
       source: "mcp-events",
       options: { server: "test", name: "changed", arguments: { a: 1, b: 2 } },
     },
-    sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "Summarize the received change.", toolsAllow: ["read"] },
-  };
+  });
   const job = await cron.add(input);
   const queue = eventQueue(job);
   const run = (options: CronEventRunOptions) => cron.runEvent(job.id, options);
@@ -220,6 +220,79 @@ describe("event automation durable admission", () => {
     }
   });
 
+  it("parks the transferred event and resumes its original payload and receipt", async () => {
+    vi.spyOn(process, "availableMemory").mockReturnValue(1024 ** 3);
+    const finish = createDeferredCore();
+    const reachedModel = vi.fn();
+    const f = await fixture({
+      runIsolatedAgentJob: async ({ job, message, providerRunSlot, abortSignal }) => {
+        if (job.schedule.kind !== "event") {
+          await finish.promise;
+          return { status: "ok" };
+        }
+        if (providerRunSlot && !providerRunSlot.tryStart("event-provider")) {
+          const signal = expectDefined(abortSignal, "event run signal");
+          await providerRunSlot.wait("event-provider", signal);
+        }
+        reachedModel(message);
+        return { status: "ok" };
+      },
+    });
+    setCommandLaneConcurrency(CommandLane.CronNested, 16);
+    const sessions = Array.from({ length: 9 }, () =>
+      enqueueCommandInLane(CommandLane.CronNested, async () => await finish.promise),
+    );
+    try {
+      for (let index = 0; index < 8; index++) {
+        const base = await f.cron.add(cronTestInput({ name: `base-${index}` }));
+        await f.cron.enqueueRun(base.id, "force");
+      }
+      await vi.waitFor(async () => {
+        const { jobs } = await loadCronStore(f.storePath);
+        expect(jobs.filter((job) => job.state.runningAtMs !== undefined)).toHaveLength(8);
+      });
+      emitAgentEvent({
+        runId: "event-provider-attempt",
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          errorObservation: { provider: "event-provider", failoverReason: "rate_limit" },
+        },
+      });
+      const { event, options } = await f.claim("parked");
+      const run = f.run(options);
+      const transfer = vi.fn();
+      void run.then(transfer, transfer);
+      await vi.waitFor(() =>
+        expect(transfer).toHaveBeenCalledWith(expect.objectContaining({ kind: "transferred" })),
+      );
+      const receipt = await run;
+      if (receipt.kind !== "transferred") {
+        throw new Error("expected the event to transfer before model selection");
+      }
+      await vi.waitFor(async () => {
+        const { jobs } = await loadCronStore(f.storePath);
+        const parked = jobs.find(({ id }) => id === f.job.id);
+        expect(parked?.state.runSlotWaitReceiptId).toBe(receipt.receiptId);
+      });
+      expect(reachedModel).not.toHaveBeenCalled();
+      expect(await f.queue.enqueue(event.eventId, event)).toMatchObject({
+        kind: "completed",
+        record: { metadata: { receiptId: receipt.receiptId } },
+      });
+      finish.resolve();
+      await waitForEventRun(f.cron, receipt);
+      expect(reachedModel).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("original event"),
+      );
+    } finally {
+      finish.resolve();
+      resetCronProviderBackoff();
+      await drainCronRunQueue(f.state);
+      await Promise.all(sessions);
+    }
+  });
+
   it("keeps untransferred event claims out of the scheduler's unguarded drain", async () => {
     const f = await fixture();
 
@@ -298,9 +371,9 @@ describe("event automation durable admission", () => {
           await entered.promise;
         } else {
           cronStore.noteCronJobsStoreCommit(cronStoreKey(f.storePath));
-          const load = cronStore.loadCronJobsStoreWithConfigJobs;
+          const load = cronStore.loadCronJobsStoreWithConfigJobsByKey;
           const delayed = vi
-            .spyOn(cronStore, "loadCronJobsStoreWithConfigJobs")
+            .spyOn(cronStore, "loadCronJobsStoreWithConfigJobsByKey")
             .mockImplementationOnce(async (...args) => {
               const loaded = await load(...args);
               entered.resolve();

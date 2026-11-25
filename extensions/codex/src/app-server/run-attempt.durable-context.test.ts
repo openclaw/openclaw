@@ -1,5 +1,6 @@
 import path from "node:path";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it, vi } from "vitest";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
@@ -23,7 +24,10 @@ import {
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import * as settledTurnContext from "./settled-turn-context.js";
-import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
+import {
+  attachSqliteSessionTarget,
+  readTranscriptMessagesByIdentity,
+} from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
@@ -57,12 +61,133 @@ function createDurableHarness(
       if (method === "turn/start") {
         return turnStartResult(`turn-${++turns}`);
       }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
       return undefined;
     },
     { persistedThreads: persisted ? [threadId] : [] },
   );
   return { harness, turns: () => turns, threads: () => threads };
 }
+
+it.each([false, true])(
+  "carries a temporary completion into the resumed owner once (host admitted: %s)",
+  async (hostAdmitted) => {
+    const { params, target } = await createDurableParams("completion-continuity");
+    const ownerThread = "thread-owner";
+    const completionThread = "thread-owner-completion";
+    const { harness, threads } = createDurableHarness(ownerThread, false, (count) =>
+      count === 1 ? ownerThread : completionThread,
+    );
+    let closeHost = () => {};
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const finish = async (threadId: string, turn: number, text: string) => {
+      const turnId = `turn-${turn}`;
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId,
+          turnId,
+          item: { type: "agentMessage", id: `answer-${turn}`, phase: "final_answer", text },
+        },
+      });
+      await harness.completeTurn({ threadId, turnId });
+    };
+    try {
+      params.prompt = "OWNER_READY";
+      const owner = runCodexAppServerAttempt(params);
+      await owner.waitForTurnAccepted();
+      await finish(ownerThread, 1, "OWNER_ACKNOWLEDGED");
+      expect((await owner).terminal).toEqual({ kind: "ok" });
+      await nativeHookRelayUnregisterQueue.flush();
+      const binding = await readCodexAppServerBinding(params.sessionFile);
+      expect(binding).toMatchObject({ threadId: ownerThread });
+
+      vi.setSystemTime(Date.now() + 1_000);
+      params.runId = "completion-run";
+      params.prompt = "Child completed with unique result PONG-QUARTZ-731.";
+      params.pluginHarnessToolPolicyRestricted = true;
+      params.pluginHarnessToolPolicyScope = "turn";
+      if (hostAdmitted) {
+        const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+        params.userTurnTranscriptRecorder = createRecorder({
+          input: {
+            text: params.prompt,
+            provenance: {
+              kind: "inter_session",
+              sourceChannel: "internal",
+              sourceTool: "agent_harness_task",
+            },
+            display: false,
+            idempotencyKey: "announce:child:user",
+          },
+          target: { ...target, sessionEntry: undefined },
+        });
+        await params.userTurnTranscriptRecorder.persistApproved();
+        closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+      }
+      const completion = runCodexAppServerAttempt(params);
+      await completion.waitForTurnAccepted();
+      expect(
+        harness.requests.findLast((item) => item.method === "turn/start")?.params,
+      ).toMatchObject({
+        threadId: completionThread,
+      });
+      await finish(completionThread, 2, "CHILD_RESULT_RECORDED");
+      expect((await completion).terminal).toEqual({ kind: "ok" });
+      await nativeHookRelayUnregisterQueue.flush();
+      expect(await readCodexAppServerBinding(params.sessionFile)).toEqual(binding);
+      const transcript = await readTranscriptMessagesByIdentity(params);
+      expect(transcript).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            __openclaw: expect.objectContaining({ mirrorOrigin: "codex-app-server" }),
+          }),
+          expect.objectContaining({
+            role: "assistant",
+            idempotencyKey: expect.stringContaining(completionThread),
+          }),
+        ]),
+      );
+      closeHost();
+
+      for (const turn of [3, 4]) {
+        vi.setSystemTime(Date.now() + 1_000);
+        const nextParams = createParams(params.sessionFile, params.workspaceDir, {
+          runId: `owner-run-${turn}`,
+          prompt:
+            turn === 3 ? "What was the child's unique result?" : "Continue without repeating it.",
+        });
+        nextParams.sessionTarget = params.sessionTarget;
+        const next = runCodexAppServerAttempt(nextParams);
+        await next.waitForTurnAccepted();
+        const request = harness.requests.findLast((item) => item.method === "turn/start");
+        expect(request?.params).toMatchObject({ threadId: ownerThread });
+        const input = JSON.stringify(request?.params);
+        await finish(ownerThread, turn, "OWNER_CONTINUED");
+        expect((await next).terminal).toEqual({ kind: "ok" });
+        await nativeHookRelayUnregisterQueue.flush();
+        if (turn === 3) {
+          expect(input).toContain("PONG-QUARTZ-731");
+          expect(input).toContain("CHILD_RESULT_RECORDED");
+          expect(input).toContain("OpenClaw assembled context for this turn:");
+        } else {
+          expect(input).not.toContain("PONG-QUARTZ-731");
+          expect(input).not.toContain("CHILD_RESULT_RECORDED");
+        }
+        expect(input).not.toContain("OWNER_READY");
+        expect(input).not.toContain("OWNER_ACKNOWLEDGED");
+      }
+      expect(threads()).toBe(2);
+    } finally {
+      closeHost();
+      harness.close();
+      vi.useRealTimers();
+    }
+  },
+);
 
 it("hands off durable notes once on resume without replaying transient context", async () => {
   const { params, target } = await createDurableParams("notes");
@@ -98,7 +223,7 @@ it("hands off durable notes once on resume without replaying transient context",
       details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
     },
     { idempotencyKey: "covered", content: "ALREADY_COVERED_NOTE", timestamp: cutoff },
-    { idempotencyKey: "codex-app-server:synthetic", content: "NATIVE_MIRROR_NOTE" },
+    { idempotencyKey: "codex-app-server:thread-existing:synthetic", content: "NATIVE_MIRROR_NOTE" },
   ]) {
     manager.appendMessage({ ...note, ...override });
   }

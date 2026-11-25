@@ -44,8 +44,10 @@ export function createCliRuntimeCapture(): CliRuntimeCapture {
   };
 }
 
-export function createCliTtyMock() {
-  const streams = [process.stdin, process.stdout].map((stream) => ({
+export function createCliTtyMock(
+  targets: Array<NodeJS.ReadStream | NodeJS.WriteStream> = [process.stdin, process.stdout],
+) {
+  const streams = targets.map((stream) => ({
     stream,
     descriptor: Object.getOwnPropertyDescriptor(stream, "isTTY"),
   }));

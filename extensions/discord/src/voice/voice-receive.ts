@@ -44,9 +44,6 @@ import type { DiscordCaptureReceiptReader } from "./transcripts-source.js";
 import { DiscordVoiceRecording } from "./voice-recording.js";
 
 const logger = createSubsystemLogger("discord/voice");
-// UDP cannot apply backpressure; bound pending packets as well as their encoded bytes.
-const MAX_PENDING_OPUS_PACKETS = 1_000;
-const MAX_PENDING_OPUS_BYTES = 1024 * 1024;
 
 export class DiscordVoiceReceive {
   readonly daveRecoveryAttempts = new Map<string, number>();
@@ -58,7 +55,7 @@ export class DiscordVoiceReceive {
       accountId: string;
       admissionAllowFrom?: string[];
       botUserId?: string;
-      cfg: OpenClawConfig;
+      readConfig: () => OpenClawConfig;
       client: Client;
       discordConfig: DiscordAccountConfig;
       sessions: ReadonlyMap<string, VoiceSessionEntry>;
@@ -178,6 +175,7 @@ export class DiscordVoiceReceive {
   private responseContext(entry: VoiceSessionEntry, userId: string) {
     return {
       ...this.params,
+      cfg: this.params.readConfig(),
       entry,
       userId,
       enqueuePlayback: (playbackEntry: VoiceSessionEntry, task: () => Promise<void>) => {
@@ -232,12 +230,10 @@ export class DiscordVoiceReceive {
     // without destroying packets already received under the source subscription.
     const input = new PassThrough({ objectMode: true });
     let failed = false;
-    let pendingPackets = 0;
-    let pendingBytes = 0;
     let resetReceiveRecovery = false;
     const acceptPacket = (frame: DiscordAudioFrame) => {
-      const packetBytes = frame.packet.byteLength;
-      if (failed || !packetBytes || stream.destroyed) {
+      const { pcm } = frame;
+      if (failed || !frame.packet.byteLength || stream.destroyed) {
         stream.acknowledge(frame);
         return;
       }
@@ -246,29 +242,18 @@ export class DiscordVoiceReceive {
         stream.acknowledge(frame);
         return;
       }
-      if (
-        pendingPackets >= MAX_PENDING_OPUS_PACKETS ||
-        packetBytes > MAX_PENDING_OPUS_BYTES - pendingBytes
-      ) {
-        onError(new Error("Discord voice receive backlog exceeded; try speaking again."));
-        input.destroy();
-        stream.destroy();
-        return;
-      }
       // Reset in worker-message order, before asynchronous recording/admission.
       // A queued healthy frame must not erase another speaker's later failure.
-      if (!resetReceiveRecovery && frame.pcm.byteLength > 0 && this.params.isEntryCurrent(entry)) {
+      if (!resetReceiveRecovery && pcm.byteLength > 0 && this.params.isEntryCurrent(entry)) {
         resetReceiveRecovery = true;
         this.resetDecryptFailureState(entry);
       }
-      pendingPackets += 1;
-      pendingBytes += packetBytes;
       const receipt: DiscordVoiceAudioReceipt = {
         capture,
         startedAt: frame.receivedAt,
         recordingEpoch: frame.recordingEpoch,
       };
-      input.write({ pcm: Buffer.from(frame.pcm), packetBytes, receipt, frame });
+      input.write({ pcm: Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength), receipt, frame });
     };
     const endInput = () => input.end();
     let aborted = false;
@@ -312,7 +297,7 @@ export class DiscordVoiceReceive {
       : undefined;
     const recording = new DiscordVoiceRecording({
       entry,
-      cfg: this.params.cfg,
+      readConfig: this.params.readConfig,
       userId,
       isInputComplete: () => !failed,
       minimumSeconds: () => (aborted ? 0.2 : MIN_SEGMENT_SECONDS),
@@ -350,7 +335,6 @@ export class DiscordVoiceReceive {
         for await (const decoded of input) {
           const frame: {
             pcm: Buffer;
-            packetBytes: number;
             receipt: DiscordVoiceAudioReceipt;
             frame: DiscordAudioFrame;
           } = decoded;
@@ -358,8 +342,6 @@ export class DiscordVoiceReceive {
             if (failed) {
               continue;
             }
-            pendingPackets -= 1;
-            pendingBytes -= frame.packetBytes;
             const { pcm, receipt } = frame;
             if (!receipt.capture && conversation && !conversation.ingress) {
               const admitted = await waitForVoiceCaptureAdmission({
@@ -476,6 +458,7 @@ export class DiscordVoiceReceive {
   ): Promise<DiscordVoiceIngressContext | null> {
     return await resolveDiscordVoiceIngressContextWithParticipants({
       ...this.params,
+      cfg: this.params.readConfig(),
       entry,
       userId,
     });

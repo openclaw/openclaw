@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok } from "@openclaw/normalization-core/result";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import {
@@ -10,12 +11,14 @@ import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { AgentDatabaseOperations } from "../../state/openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { retainConversationBindingFacts } from "./conversation-binding-facts.js";
 import type { ConversationIdentity } from "./conversation-identity.js";
+import { normalizeStoredConversationRef } from "./conversation-record-policy.js";
 import type { ConversationReadQuery, ConversationRecord } from "./conversation-registry.types.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { withConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
@@ -26,6 +29,7 @@ import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
+import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const conversationAuthority = { assertCurrent() {}, authorize() {} };
@@ -139,6 +143,76 @@ function readConversationsAsync(
   return withConversationRead(scope, ({ reader, database }) =>
     reader.readConversations({ query, env: database.env }),
   );
+}
+
+/** Capture once; final effects consume the conversation writer's published current bindings. */
+export async function captureConversationBindingFacts(
+  scope: ConversationRegistryScope,
+  conversationRefs: readonly string[],
+) {
+  const refs = [...new Set(conversationRefs.map(normalizeStoredConversationRef))];
+  const memory = captureSessionActorStorageOwner(
+    { agentId: scope.databaseAgentId ?? scope.agentId, storePath: scope.storePath, env: scope.env },
+    conversationAuthority,
+  );
+  if (memory) {
+    let active = true;
+    return {
+      currentSessionKey(conversationRef: string): string | null {
+        if (!active) {
+          throw new Error("Conversation binding reader was released");
+        }
+        const input = { conversationRef, currentBindingOnly: true, limit: 1 };
+        const rows =
+          memory.binding &&
+          memory.agentId === memory.binding.agentId &&
+          memory.path === memory.binding.path
+            ? memory.binding.actor.storage!.readCurrent(
+                { type: "session.conversation.read", input },
+                memory.authority,
+              )
+            : (
+                memory.owner ??
+                memorySessionActorOwners.read({
+                  agentId: memory.agentId,
+                  path: memory.path,
+                })
+              )?.readConversations(input, memory.authority);
+        return rows?.[0]?.sessionKey ?? null;
+      },
+      release() {
+        active = false;
+      },
+    };
+  }
+  let releaseFacts: (() => void) | undefined;
+  let retained: ReturnType<typeof retainSessionHistoryWorkerDatabase> | undefined;
+  const release = () => {
+    releaseFacts?.();
+    retained?.release();
+  };
+  try {
+    return await withConversationRead(scope, async ({ reader, database, assertCurrent }) => {
+      const facts = retainConversationBindingFacts(refs, database.path);
+      releaseFacts = () => facts.release();
+      retained = retainSessionHistoryWorkerDatabase(database);
+      const snapshot = await reader.readConversationBindings({
+        conversationRefs: refs,
+        env: database.env,
+      });
+      facts.acknowledge(snapshot);
+      return {
+        currentSessionKey(conversationRef: string) {
+          assertCurrent();
+          return facts.currentSessionKey(conversationRef);
+        },
+        release,
+      };
+    });
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 export function pinConversationDatabaseScope(input: ConversationRegistryScope) {
@@ -290,9 +364,17 @@ export async function registerConversationAddresses(
       });
     },
   };
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const captured = captureOpenClawAgentDatabaseExecutionAsync(options).then(
+    (execution) => ok(execution),
+    (error: unknown) => err<never, unknown>(error),
+  );
   try {
     return await runOpenClawAgentWorkerWrite(options, async () => {
+      const acquired = await captured;
+      if (!acquired.ok) {
+        throw acquired.error;
+      }
+      const execution = acquired.value;
       const eligible = selectCurrent();
       input.identities = input.identities.filter((_, index) => eligible[index]);
       if (input.identities.length === 0) {
@@ -310,7 +392,10 @@ export async function registerConversationAddresses(
             return withConversationPublication(
               source.createAdmission(binding),
               () => binding.assertCurrent(),
-              () => execution.captureGenerationClaim(),
+              () => ({
+                ...execution.captureGenerationClaim(),
+                canonicalPath: execution.fileIdentity!.nativeLocation,
+              }),
               () => [
                 ...new Set(
                   input.identities.map((identity) =>
@@ -325,7 +410,10 @@ export async function registerConversationAddresses(
       );
     });
   } finally {
-    await execution.release();
+    const acquired = await captured;
+    if (acquired.ok) {
+      await acquired.value.release();
+    }
   }
 }
 
@@ -365,11 +453,19 @@ export async function withConversationAuthority<T>(
     return await select(facts)();
   }
   const { options } = pinConversationDatabaseScope(scope);
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const captured = captureOpenClawAgentDatabaseExecutionAsync(options).then(
+    (execution) => ok(execution),
+    (error: unknown) => err<never, unknown>(error),
+  );
   let consumed: Promise<{ ok: true; value: T } | { ok: false; error: unknown }> | undefined;
   try {
     try {
       await runOpenClawAgentWorkerWrite(options, async () => {
+        const acquired = await captured;
+        if (!acquired.ok) {
+          throw acquired.error;
+        }
+        const execution = acquired.value;
         const settled = await execution.runExisting(
           {
             assertCurrent() {},
@@ -416,7 +512,10 @@ export async function withConversationAuthority<T>(
         }
       });
     } finally {
-      await execution.release();
+      const acquired = await captured;
+      if (acquired.ok) {
+        await acquired.value.release();
+      }
     }
   } catch (cause) {
     if (!consumed) {
@@ -485,6 +584,30 @@ export async function resolveCurrentConversationSessionAsync(
   return conversation?.sessionKey && conversation.sessionId
     ? { sessionKey: conversation.sessionKey, sessionId: conversation.sessionId }
     : undefined;
+}
+
+/** Finds an unambiguous live owner using recorded delivery coordinates, never inferred peer kind. */
+export async function resolveCurrentConversationByDelivery(
+  scope: ConversationRegistryScope,
+  address: { channel: string; accountId: string; target: string; threadId?: string },
+): Promise<{ conversation?: ConversationRecord; ambiguous?: true }> {
+  const conversations = await readConversationsAsync(scope, {
+    channel: address.channel,
+    deliveryAddress: address,
+    currentBindingOnly: true,
+  });
+  const conversation = conversations[0];
+  if (
+    conversations.some(
+      (candidate) =>
+        candidate.sessionKey !== conversation?.sessionKey ||
+        candidate.sessionId !== conversation?.sessionId ||
+        candidate.conversationRef !== conversation?.conversationRef,
+    )
+  ) {
+    return { ambiguous: true };
+  }
+  return { conversation };
 }
 
 /** Reads only the primary address bound to this exact current session window. */

@@ -2,7 +2,10 @@ import type { Model } from "@openclaw/llm-core";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
 import { isGoogleGemini3ThinkingLevelModel } from "../internal/google-model-family.js";
 import type { ProviderContext } from "../provider-types.js";
-import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  detectOpenAICompletionsCompat,
+  isNativeOpenAIEndpoint,
+} from "./openai-completions-compat.js";
 import { requiresReasoningContentReplay } from "./openai-completions-reasoning-replay.js";
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
@@ -34,13 +37,14 @@ function injectToolCallThoughtSignatures(
   context: ProviderContext,
   model: OpenAIModeModel,
 ): void {
-  if (!isGoogleOpenAICompatModel(model)) {
-    return;
-  }
+  // Other compatible endpoints (LiteLLM in front of Gemini) get back only signatures issued on
+  // this route, in LiteLLM's provider_specific_fields; provider adapters may move them.
+  const google = isGoogleOpenAICompatModel(model);
   const sigById = new Map<string, string>();
-  const fallbackSig = isGoogleGemini3ThinkingLevelModel(model.id)
-    ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
-    : undefined;
+  const fallbackSig =
+    google && isGoogleGemini3ThinkingLevelModel(model.id)
+      ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
+      : undefined;
   for (const msg of context.messages ?? []) {
     if (msg.role !== "assistant") {
       continue;
@@ -57,7 +61,8 @@ function injectToolCallThoughtSignatures(
       if (typeof id === "string" && typeof sig === "string" && sig.length > 0) {
         const isSameRoute =
           msg.api === model.api && msg.provider === model.provider && msg.model === model.id;
-        if (!isSameRoute && !fallbackSig) {
+        // Encrypted reasoning details (JSON) replay through reasoning_details instead.
+        if ((!isSameRoute && !fallbackSig) || (!google && sig.trimStart().startsWith("{"))) {
           continue;
         }
         sigById.set(id, isSameRoute ? sig : (fallbackSig ?? sig));
@@ -83,7 +88,12 @@ function injectToolCallThoughtSignatures(
       if (!sig) {
         continue;
       }
-      Object.assign(toolCall, { extra_content: { google: { thought_signature: sig } } });
+      Object.assign(
+        toolCall,
+        google
+          ? { extra_content: { google: { thought_signature: sig } } }
+          : { provider_specific_fields: { thought_signature: sig } },
+      );
     }
   }
 }
@@ -129,38 +139,12 @@ function sanitizeOpenRouterReasoningReplayFields(record: ReasoningReplayMessage)
   delete record.reasoning_text;
 }
 
-function shouldPreserveReasoningContentReplay(
-  model: OpenAIModeModel,
-  compat: { requiresReasoningContentOnAssistantMessages: boolean; thinkingFormat: string },
-): boolean {
-  if (
-    compat.requiresReasoningContentOnAssistantMessages ||
-    compat.thinkingFormat === "deepseek" ||
-    compat.thinkingFormat === "zai" ||
-    shouldTrustReasoningContentReplayMetadata(model)
-  ) {
-    return true;
-  }
-  return requiresReasoningContentReplay(model.id);
-}
-
 function shouldPreserveOpenRouterReasoningReplay(model: OpenAIModeModel): boolean {
   if (model.provider !== "openrouter") {
     return true;
   }
   const normalizedModelId = model.id.trim().toLowerCase();
   return !(normalizedModelId.startsWith("anthropic/") || normalizedModelId.startsWith("x-ai/"));
-}
-
-function shouldTrustReasoningContentReplayMetadata(model: OpenAIModeModel): boolean {
-  if (!model.reasoning) {
-    return false;
-  }
-  const provider = model.provider.trim().toLowerCase();
-  if (provider === "openai") {
-    return false;
-  }
-  return shouldPreserveOpenRouterReasoningReplay(model);
 }
 
 // OpenAI Chat Completions assistant-message input does not define reasoning
@@ -179,7 +163,14 @@ export function applyCompletionsReplay(
   injectToolCallThoughtSignatures(outgoingMessages, context, model);
   const preserveOpenRouterReasoning =
     compat.thinkingFormat === "openrouter" && shouldPreserveOpenRouterReasoningReplay(model);
-  const preserveReasoningContent = shouldPreserveReasoningContentReplay(model, compat);
+  const preserveReasoningContent =
+    compat.requiresReasoningContentOnAssistantMessages ||
+    compat.thinkingFormat === "deepseek" ||
+    compat.thinkingFormat === "zai" ||
+    (model.reasoning &&
+      !isNativeOpenAIEndpoint(model) &&
+      shouldPreserveOpenRouterReasoningReplay(model)) ||
+    requiresReasoningContentReplay(model.id);
   for (const message of outgoingMessages) {
     if (message.role !== "assistant") {
       continue;
@@ -188,10 +179,22 @@ export function applyCompletionsReplay(
       sanitizeOpenRouterReasoningReplayFields(message);
     } else {
       const record: ReasoningReplayMessage = message;
+      const requiresReasoningContent =
+        model.compat?.requiresReasoningContentOnAssistantMessages === true;
+      if (preserveReasoningContent && requiresReasoningContent) {
+        // Only an explicit endpoint contract overrides the server's emitted field name.
+        for (const field of ["reasoning_content", "reasoning", "reasoning_text"] as const) {
+          if (typeof record[field] === "string" && record[field].length > 0) {
+            record.reasoning_content = record[field];
+            break;
+          }
+        }
+      }
       for (const field of COMPLETIONS_REASONING_REPLAY_FIELDS) {
         if (
           preserveReasoningContent &&
-          field === "reasoning_content" &&
+          field !== "reasoning_details" &&
+          (!requiresReasoningContent || field === "reasoning_content") &&
           typeof record[field] === "string"
         ) {
           continue;

@@ -14,6 +14,7 @@ const shellSpies = vi.hoisted(() => ({
   process: vi.fn(async () => ({ content: [], details: {} })),
 }));
 
+// mock-isolation: observe pinned arguments without executing real shell commands or process tools.
 vi.mock("./bash-tools.js", () => ({
   createExecTool: (defaults?: ExecToolDefaults) => {
     shellSpies.defaults(defaults);

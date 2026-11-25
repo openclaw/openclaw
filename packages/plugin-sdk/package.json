@@ -84,9 +84,9 @@
       "types": "./dist/src/plugin-sdk/gateway-method-runtime.d.ts",
       "default": "./src/gateway-method-runtime.ts"
     },
-    "./heartbeat-runtime": {
-      "types": "./dist/src/plugin-sdk/heartbeat-runtime.d.ts",
-      "default": "./src/heartbeat-runtime.ts"
+    "./gateway-request-authority": {
+      "types": "./dist/src/plugin-sdk/gateway-request-authority.d.ts",
+      "default": "./src/gateway-request-authority.ts"
     },
     "./model-session-runtime": {
       "types": "./dist/src/plugin-sdk/model-session-runtime.d.ts",

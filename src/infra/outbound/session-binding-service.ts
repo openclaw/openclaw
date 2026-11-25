@@ -208,7 +208,6 @@ function assertAdapterSelectionCurrent(
     throw new SessionBindingError(
       "BINDING_ADAPTER_UNAVAILABLE",
       `Session binding owner changed for ${ref.channel}:${ref.accountId}`,
-      { channel: ref.channel, accountId: ref.accountId },
     );
   }
 }
@@ -495,10 +494,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
   bind: async (input) => {
     const assertCurrent = input.assertCurrent;
     const normalizedConversation = normalizeConversationRef(input.conversation);
-    const scope = {
-      channel: normalizedConversation.channel,
-      accountId: normalizedConversation.accountId,
-    };
     const adapter = resolveAdapterForChannelAccount(normalizedConversation);
     const genericCapabilities = adapter
       ? null
@@ -507,7 +502,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
       throw new SessionBindingError(
         adapter ? "BINDING_CAPABILITY_UNSUPPORTED" : "BINDING_ADAPTER_UNAVAILABLE",
         `Session binding adapter ${adapter ? "does not support binding" : "unavailable"} for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-        scope,
       );
     }
     const placement =
@@ -520,7 +514,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
       throw new SessionBindingError(
         "BINDING_CAPABILITY_UNSUPPORTED",
         `Session binding placement "${placement}" is not supported for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-        { ...scope, placement },
       );
     }
     const assertBindingCurrent = () => {
@@ -541,7 +534,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
       throw new SessionBindingError(
         "BINDING_CREATE_FAILED",
         "Session binding adapter failed to bind target conversation",
-        { ...scope, placement },
       );
     }
     return bound;

@@ -5,7 +5,7 @@ import {
   createTestSessionCapability,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createSessionActivity } from "../pages/activity/session-activity-owner.ts";
-import { handlePageGatewayEvent } from "../pages/chat/chat-state-events.ts";
+import { handlePageGatewayEvent } from "../pages/chat/chat-state-events.test-support.ts";
 import { createSessionEventState } from "../pages/chat/chat-state.test-support.ts";
 import { getChatSessionProjection } from "../pages/chat/history-merge.ts";
 import { createTestGatewayClient } from "./gateway-client.ts";

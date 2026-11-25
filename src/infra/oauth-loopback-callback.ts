@@ -1,4 +1,3 @@
-import type { LookupAddress } from "node:dns";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createDeferredCore } from "../shared/deferred.js";
 import { oauthErrorHtml, renderOAuthPage } from "../shared/oauth-page.js";
@@ -11,6 +10,8 @@ type OAuthLoopbackCallbackResult =
   | { type: "oauth_error"; error: string; errorDescription?: string };
 
 export type OAuthLoopbackCallbackServer = {
+  /** Bound redirect; differs from the requested one only when it asked for port 0. */
+  redirectUrl: string;
   waitForCallback: () => Promise<OAuthLoopbackCallbackResult>;
   complete: (response: RenderedResponse & { status: number }) => Promise<void>;
   close: () => Promise<void>;
@@ -18,10 +19,6 @@ export type OAuthLoopbackCallbackServer = {
 
 type RenderedResponse = { body: string; contentType: string };
 type CorsOriginResolver = (originHeader: string | string[] | undefined) => string | undefined;
-type LoopbackLookup = (
-  hostname: string,
-  options: { all: true; verbatim: true },
-) => Promise<LookupAddress[]>;
 
 function unbracket(hostname: string): string {
   return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
@@ -37,20 +34,14 @@ function isLoopbackAddress(address: string): boolean {
   );
 }
 
-function resolveLoopbackHostname(
-  hostname: string,
-  lookupOverride?: LoopbackLookup,
-): string[] | Promise<string[]> {
+function resolveLoopbackHostname(hostname: string): string[] | Promise<string[]> {
   if (hostname === "127.0.0.1" || hostname === "::1") {
     return [hostname];
   }
   if (hostname !== "localhost") {
     throw new Error("OAuth callback redirect must use localhost, 127.0.0.1, or ::1");
   }
-  const loadLookup: Promise<LoopbackLookup> = lookupOverride
-    ? Promise.resolve(lookupOverride)
-    : import("node:dns/promises").then(({ lookup }) => lookup as LoopbackLookup);
-  return loadLookup.then(async (lookup) => {
+  return import("node:dns/promises").then(async ({ lookup }) => {
     const addresses = [
       ...new Set(
         (await lookup("localhost", { all: true, verbatim: true })).map(({ address }) => address),
@@ -66,7 +57,6 @@ function resolveLoopbackHostname(
 function resolveBindAddresses(
   redirectUrl: URL,
   bindHostname?: string,
-  lookup?: LoopbackLookup,
   bindOnlyHostname?: string,
 ): string[] | Promise<string[]> {
   if (bindOnlyHostname !== undefined) {
@@ -77,23 +67,15 @@ function resolveBindAddresses(
     return [hostname];
   }
   const redirectHostname = unbracket(redirectUrl.hostname);
-  const redirectAddresses = resolveLoopbackHostname(redirectHostname, lookup);
+  const redirectAddresses = resolveLoopbackHostname(redirectHostname);
   const requestedHostname = bindHostname ? unbracket(bindHostname) : redirectHostname;
   if (requestedHostname === redirectHostname) {
     return redirectAddresses;
   }
-  const requestedAddresses = resolveLoopbackHostname(requestedHostname, lookup);
+  const requestedAddresses = resolveLoopbackHostname(requestedHostname);
   return Promise.all([redirectAddresses, requestedAddresses]).then(([redirect, requested]) => [
     ...new Set([...requested, ...redirect]),
   ]);
-}
-
-function resolveOAuthLoopbackPort(redirectUrl: URL): number {
-  const port = redirectUrl.port ? Number(redirectUrl.port) : 80;
-  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
-    throw new Error("OAuth callback redirect must use a valid TCP port");
-  }
-  return port;
 }
 
 function prepareResponse(
@@ -135,11 +117,14 @@ export async function startOAuthLoopbackCallbackServer(params: {
   bindHostname?: string;
   bindOnlyHostname?: string;
   deferResponse?: boolean;
-  lookup?: LoopbackLookup;
-  createServer?: typeof import("node:http").createServer;
   resolveCorsOrigin?: CorsOriginResolver;
   renderSuccess?: () => RenderedResponse;
   renderError?: (message: string) => RenderedResponse;
+  /**
+   * When set, a provider refusal (`error=`) keeps the listener open so the user can go back
+   * and allow access; the refusal is reported here instead of settling the wait.
+   */
+  onRefusal?: (error: string) => void;
 }): Promise<OAuthLoopbackCallbackServer> {
   const redirectUrl = new URL(params.redirectUrl);
   const redirectHostname = unbracket(redirectUrl.hostname);
@@ -166,7 +151,6 @@ export async function startOAuthLoopbackCallbackServer(params: {
   const resolvedAddresses = resolveBindAddresses(
     redirectUrl,
     params.bindHostname,
-    params.lookup,
     params.bindOnlyHostname,
   );
   const addresses = Array.isArray(resolvedAddresses)
@@ -176,9 +160,10 @@ export async function startOAuthLoopbackCallbackServer(params: {
         params.signal,
         () => new Error("OAuth callback cancelled"),
       );
-  const port = resolveOAuthLoopbackPort(redirectUrl);
+  // URL parsing bounds the port; 0 asks the first bind for a free one.
+  let port = redirectUrl.port ? Number(redirectUrl.port) : 80;
   const callbackPath = redirectUrl.pathname || "/";
-  const createServer = params.createServer ?? (await import("node:http")).createServer;
+  const { createServer } = await import("node:http");
   const servers: Server[] = [];
   let received = false;
   let settled = false;
@@ -191,9 +176,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
   const close = () =>
     binding ? Promise.resolve() : (closePromise ??= closeHttpServers(servers, { force: true }));
   const cleanup = () => {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
+    clearTimeout(timeout);
     params.signal?.removeEventListener("abort", onAbort);
   };
   const settleError = (error: unknown) => {
@@ -240,7 +223,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
       body: renderOAuthPage({
         title: "Authorization received",
         heading: "Authorization received",
-        message: "Return to the terminal while OpenClaw finishes.",
+        message: "Return to OpenClaw while it finishes signing in.",
       }),
       contentType: "text/html; charset=utf-8",
     }));
@@ -300,6 +283,13 @@ export async function startOAuthLoopbackCallbackServer(params: {
           url.searchParams.get("state") !== params.expectedState
         ) {
           respond(response, 400, renderError("Invalid OAuth state."));
+        } else if (url.searchParams.has("error") && params.onRefusal) {
+          respond(
+            response,
+            400,
+            renderError("Sign-in was not allowed. Go back to the sign-in page and allow access."),
+          );
+          params.onRefusal(url.searchParams.get("error")!);
         } else if (url.searchParams.has("error")) {
           const error = url.searchParams.get("error")!;
           const errorDescription = url.searchParams.get("error_description") ?? undefined;
@@ -352,6 +342,15 @@ export async function startOAuthLoopbackCallbackServer(params: {
         server.once("error", reject);
         server.listen(port, address, resolve);
       });
+      if (port === 0) {
+        const bound = server.address();
+        if (!bound || typeof bound === "string") {
+          throw new Error("OAuth callback failed to bind a TCP port");
+        }
+        // Later loopback families must serve the same redirect as the first bind.
+        port = bound.port;
+        redirectUrl.port = String(port);
+      }
       server.removeAllListeners("error");
       server.on("error", settleError);
       if (settled) {
@@ -369,6 +368,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
     timeout = setTimeout(() => settleError(new Error("OAuth callback timeout")), params.timeoutMs);
   }
   return {
+    redirectUrl: redirectUrl.toString(),
     waitForCallback: () => callback.promise,
     complete,
     close: async () => {

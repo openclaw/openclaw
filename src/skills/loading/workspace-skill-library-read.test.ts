@@ -14,14 +14,12 @@ import * as librarySelection from "../library/selection.js";
 import { saveSkillLibrary } from "../library/service.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import {
-  prepareWorkspaceSkills,
-  resolveWorkspaceSkillPromptEntries,
-} from "./workspace-skill-loader.js";
+import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
 
 // Plugin command discovery owns separate storage; this regression measures Library reads.
-vi.mock("../../plugins/bundle-commands.js", () => ({
-  loadEnabledClaudeBundleCommands: () => [],
+vi.mock("../../plugins/plugin-registry-contributions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/plugin-registry-contributions.js")>()),
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
 }));
 
 const dirs = useStateDatabaseTempDirs();
@@ -81,17 +79,13 @@ async function fixture() {
 }
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
-type Surface = "workspace" | "prompt";
-
-async function prepare(surface: Surface, test: Fixture, assertCurrent?: () => void) {
-  return surface === "workspace"
-    ? prepareWorkspaceSkills(test.workspaceDir, test.loadOptions, assertCurrent)
-    : (
-        await resolveWorkspaceSkillPromptEntries(test.workspaceDir, {
-          ...test.loadOptions,
-          assertCurrent,
-        })
-      ).eligible;
+async function prepare(test: Fixture, assertCurrent?: () => void) {
+  return (
+    await resolveWorkspaceSkillPromptEntries(test.workspaceDir, {
+      ...test.loadOptions,
+      assertCurrent,
+    })
+  ).eligible;
 }
 
 function holdLibraryRead(afterRead = false) {
@@ -166,73 +160,62 @@ it("prepares cold and warm pinned commands without parent SQL and preserves filt
   }
 });
 
-it.each(["workspace", "prompt"] as const)(
-  "%s refresh retries retain captured Library root and pin values",
-  async (surface) => {
-    const test = await fixture();
-    const originalPin = { ...test.pin };
-    const otherRoot = dirs.make("workspace-library-other-");
-    const hold = holdLibraryRead();
-    await test.run(async () => {
-      const pending = prepare(surface, test);
-      await hold(pending, async () => {
-        process.env.OPENCLAW_STATE_DIR = otherRoot;
-        test.pin.revision = test.updated.entry.revision;
-        test.pin.name = "changed-during-preparation";
-        test.loadOptions.librarySelections.push({
-          ...test.pin,
-          name: "added-during-preparation",
-        });
-        await writeSkill({
-          dir: path.join(test.workspaceDir, "skills", "arrived"),
-          name: "arrived",
-          description: "Arrived during preparation",
-        });
-        bumpSkillsSnapshotVersion({ workspaceDir: test.workspaceDir, reason: "manual" });
+it("refresh retries retain captured Library root and pin values", async () => {
+  const test = await fixture();
+  const originalPin = { ...test.pin };
+  const otherRoot = dirs.make("workspace-library-other-");
+  const hold = holdLibraryRead();
+  await test.run(async () => {
+    const pending = prepare(test);
+    await hold(pending, async () => {
+      process.env.OPENCLAW_STATE_DIR = otherRoot;
+      test.pin.revision = test.updated.entry.revision;
+      test.pin.name = "changed-during-preparation";
+      test.loadOptions.librarySelections.push({
+        ...test.pin,
+        name: "added-during-preparation",
       });
-      const entries = await pending;
-      expect(entries.map(({ skill }) => skill.name)).toEqual(["arrived", originalPin.name]);
-      expect(entries[1]?.skill.description).toBe("Saved procedure");
-      expect(entries[1]?.skill.filePath).toBe(
-        path.join(
-          test.root,
-          "skill-library",
-          originalPin.skillId,
-          "revisions",
-          originalPin.revision,
-          "SKILL.md",
-        ),
-      );
-      expect(fs.readFileSync(entries[1]!.skill.filePath, "utf8")).toBe(content);
-      expect(fs.existsSync(path.join(otherRoot, "state", "openclaw.sqlite"))).toBe(false);
+      await writeSkill({
+        dir: path.join(test.workspaceDir, "skills", "arrived"),
+        name: "arrived",
+        description: "Arrived during preparation",
+      });
+      bumpSkillsSnapshotVersion({ workspaceDir: test.workspaceDir, reason: "manual" });
     });
-  },
-);
+    const entries = await pending;
+    expect(entries.map(({ skill }) => skill.name)).toEqual(["arrived", originalPin.name]);
+    expect(entries[1]?.skill.description).toBe("Saved procedure");
+    expect(entries[1]?.skill.filePath).toBe(
+      path.join(
+        test.root,
+        "skill-library",
+        originalPin.skillId,
+        "revisions",
+        originalPin.revision,
+        "SKILL.md",
+      ),
+    );
+    expect(fs.readFileSync(entries[1]!.skill.filePath, "utf8")).toBe(content);
+    expect(fs.existsSync(path.join(otherRoot, "state", "openclaw.sqlite"))).toBe(false);
+  });
+});
 
-it.each([
-  { surface: "workspace", warm: false },
-  { surface: "prompt", warm: true },
-] as const)(
-  "$surface refuses an invalidated caller after Library preparation (warm=$warm)",
-  async ({ surface, warm }) => {
-    const test = await fixture();
-    await test.run(async () => {
-      if (warm) {
-        await prepare(surface, test);
+it("refuses an invalidated caller after warm Library preparation", async () => {
+  const test = await fixture();
+  await test.run(async () => {
+    await prepare(test);
+    const hold = holdLibraryRead(true);
+    const closed = new Error("Synthetic Library caller was invalidated");
+    let current = true;
+    const pending = prepare(test, () => {
+      if (!current) {
+        throw closed;
       }
-      const hold = holdLibraryRead(true);
-      const closed = new Error("Synthetic Library caller was invalidated");
-      let current = true;
-      const pending = prepare(surface, test, () => {
-        if (!current) {
-          throw closed;
-        }
-      });
-      await expect(
-        hold(pending, () => {
-          current = false;
-        }),
-      ).rejects.toBe(closed);
     });
-  },
-);
+    await expect(
+      hold(pending, () => {
+        current = false;
+      }),
+    ).rejects.toBe(closed);
+  });
+});

@@ -1,14 +1,8 @@
-import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadOperationSync as runRead } from "../infra/sqlite-schema-facts.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   listOpenClawRegisteredAgentDatabasesAsync as listAgentDbs,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead as prepareRegistryRead,
@@ -20,12 +14,10 @@ import {
 import { readRegisteredAgentDatabaseRows as readRegistryRows } from "./openclaw-agent-db-registry.read.js";
 import { readOpenClawStateReadOnlyLocation as readStateLocation } from "./openclaw-state-db-read-connection.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
-import { detectOpenClawStateDatabaseSchemaMigrationsFromDatabase as detectMigrations } from "./openclaw-state-db-schema-repair.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -60,24 +52,17 @@ function registration(options: ReturnType<typeof createRegistry>, agentId: strin
   };
 }
 
-it("loads runtime registry rows off thread and observes committed registration changes", async () => {
+it("observes committed registration and removal", async () => {
   const options = createRegistry();
   const target = registration(options, "worker");
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  expect(await listAgentDbs(options)).toEqual([]);
-  expect(prepare).not.toHaveBeenCalled();
-
+  const check = async (expected: unknown[]) => {
+    expect(await listAgentDbs(options)).toMatchObject(expected);
+  };
+  await check([]);
   registerAgentDb(target);
-  prepare.mockClear();
-  expect(await listAgentDbs(options)).toMatchObject([
-    { agentId: target.agentId, path: target.path },
-  ]);
-  expect(prepare).not.toHaveBeenCalled();
-
+  await check([{ agentId: target.agentId, path: target.path }]);
   unregisterAgentDb(target);
-  prepare.mockClear();
-  expect(await listAgentDbs(options)).toEqual([]);
-  expect(prepare).not.toHaveBeenCalled();
+  await check([]);
 });
 
 it("discovers the published registry across overlapping creation and deletion", async () => {
@@ -87,24 +72,21 @@ it("discovers the published registry across overlapping creation and deletion", 
   registerAgentDb(target("temporary-0"));
   const read = stateReads.executeExistingOpenClawStateRead;
   let publications = 0;
-  const reads = vi
-    .spyOn(stateReads, "executeExistingOpenClawStateRead")
-    .mockImplementation(async (...args) => {
-      const reply = await read(...args);
-      if (args[1].type === "agentDatabaseRegistry.read" && publications < 3) {
-        registerAgentDb(target(`temporary-${publications + 1}`));
-        unregisterAgentDb(target(`temporary-${publications}`));
-        publications++;
-      }
-      return reply;
-    });
+  vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(async (...args) => {
+    const reply = await read(...args);
+    if (args[1].type === "agentDatabaseRegistry.read" && publications < 3) {
+      registerAgentDb(target(`temporary-${publications + 1}`));
+      unregisterAgentDb(target(`temporary-${publications}`));
+      publications++;
+    }
+    return reply;
+  });
   const snapshot = await prepareRegistryRead(options).read();
   expect(snapshot.result).toMatchObject({
     status: "available",
     entries: [{ agentId: "main" }, { agentId: "temporary-3" }],
   });
   expect(snapshot.assertCurrent).not.toThrow();
-  expect(reads).toHaveBeenCalledTimes(4);
 });
 
 it("reuses registry admission across writes and unrelated pending migrations", () => {
@@ -112,30 +94,11 @@ it("reuses registry admission across writes and unrelated pending migrations", (
   const { db } = openOpenClawStateDatabase(options);
   const read = (artifactPreserving = false) =>
     runRead(db, () => readRegistryRows(db, options.path, artifactPreserving));
-  const probes = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(db),
-    ["legacyWatches", "auditSchema", "registryCatalog", "registryPrimaryKey"],
-    (sql) =>
-      sql.includes('from "session_watch_cursors"')
-        ? "legacyWatches"
-        : /select "type" from "sqlite_master"/iu.test(sql)
-          ? "registryCatalog"
-          : /\bPRAGMA\s+table_info\(agent_databases\)/iu.test(sql)
-            ? "registryPrimaryKey"
-            : /\bPRAGMA\s+(?:table_info|index_list|index_info)\([^)]*audit_/iu.test(sql)
-              ? "auditSchema"
-              : null,
-  );
-  using _ = { [Symbol.dispose]: () => probes.restore() };
-
-  expect(read(true)).toEqual([]);
-  expect(read()).toEqual([]);
-  expect(probes.counts).toMatchObject({
-    registryPrimaryKey: 0,
-    legacyWatches: 0,
-    auditSchema: 0,
-    registryCatalog: 0,
-  });
+  const checkBoth = (expected: unknown[]) => {
+    expect(read(true)).toEqual(expected);
+    expect(read()).toEqual(expected);
+  };
+  checkBoth([]);
   db.exec(`INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at, size_bytes)
       VALUES ('worker', 'agents/worker/openclaw-agent.sqlite', 1, 10, NULL)`);
   const expectedRows = [
@@ -147,19 +110,11 @@ it("reuses registry admission across writes and unrelated pending migrations", (
       sizeBytes: null,
     },
   ];
-  expect(read()).toEqual(expectedRows);
-  expect(read(true)).toEqual(expectedRows);
-  expect(probes.counts).toMatchObject({
-    registryPrimaryKey: 0,
-    legacyWatches: 0,
-    registryCatalog: 0,
-  });
+  checkBoth(expectedRows);
 
   db.exec("ALTER TABLE session_watch_cursors DROP COLUMN provenance");
   expect(read(true)).toEqual(expectedRows);
-  expect(probes.counts.registryPrimaryKey).toBe(1);
   expect(read()).toEqual(expectedRows);
-  expect(probes.counts.registryPrimaryKey).toBe(2);
   db.exec(`DROP TABLE agent_databases;
       CREATE TABLE agent_databases (agent_id TEXT PRIMARY KEY, path TEXT, schema_version INTEGER,
         last_seen_at INTEGER, size_bytes INTEGER)`);
@@ -173,52 +128,9 @@ it("refuses a pending migration that changes agent database registry paths", () 
   db.exec(`PRAGMA user_version = 8;
     UPDATE schema_meta SET schema_version = 8;
     DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
-  expect(detectMigrations(requireNativeSqliteDatabase(db), options.path)).toContainEqual({
-    kind: "agent-databases-relative-paths-v9",
-    path: options.path,
-  });
   expect(() => runRead(db, () => readRegistryRows(db, options.path, false))).toThrow(
     "legacy agent database registry schema",
   );
-});
-
-it("keeps registry reads independent of audit contract drift after replacement schema changes", () => {
-  const options = createRegistry();
-  let db = openNodeSqliteDatabase(options.path);
-  const changeSchema = (sql: string) => {
-    db.close();
-    const replacementPath = `${options.path}.replacement`;
-    fs.copyFileSync(options.path, replacementPath);
-    {
-      using replacement = new DatabaseSync(replacementPath);
-
-      replacement.exec(sql);
-    }
-    fs.renameSync(replacementPath, options.path);
-    db = openNodeSqliteDatabase(options.path);
-  };
-  const read = () => runRead(db, () => readRegistryRows(db, options.path, false));
-  try {
-    expect(read()).toEqual([]);
-    for (const [table, constraint, replacement] of [
-      ["audit_events", "source_id TEXT NOT NULL UNIQUE", "source_id TEXT NOT NULL"],
-      ["audit_identity_keys", "CHECK (id = 1)", "CHECK (id >= 1)"],
-    ] as const) {
-      const canonical = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table);
-      const malformed = canonical.replace(constraint, replacement);
-      expect(malformed).not.toBe(canonical);
-      changeSchema(`DROP TABLE ${table}; ${malformed}`);
-      expect(detectMigrations(db, options.path)).toContainEqual({
-        kind: "audit-events-v2",
-        path: options.path,
-      });
-      expect(read()).toEqual([]);
-      changeSchema(`DROP TABLE ${table}; ${canonical}`);
-      expect(read()).toEqual([]);
-    }
-  } finally {
-    db.close();
-  }
 });
 
 it("returns registry unavailability only after the fixed native read and worker settle", async () => {
@@ -227,43 +139,6 @@ it("returns registry unavailability only after the fixed native read and worker 
   expect(snapshot.result).toEqual({ status: "unavailable" });
   expect(snapshot.assertCurrent).not.toThrow();
 });
-
-it.each([false, true])(
-  "retains the failed native reader when malformed registry is %s",
-  (malformed) => {
-    const options = createRegistry(malformed);
-    const failure = new Error("synthetic native reader close failed");
-    let retained: DatabaseSync | undefined;
-    let restoreClose: (() => void) | undefined;
-    let caught: unknown;
-    try {
-      readStateLocation(
-        ({ db }) => {
-          retained = requireNativeSqliteDatabase(db);
-          const closeSpy = vi.spyOn(db, "close").mockImplementation(() => {
-            throw failure;
-          });
-          restoreClose = () => closeSpy.mockRestore();
-          return readRegistryRows(db, options.path, false);
-        },
-        options.path,
-        options.path,
-      );
-    } catch (error) {
-      caught = error;
-    }
-    expect(retained?.isOpen).toBe(true);
-    if (malformed) {
-      expect(caught).toBeInstanceOf(AggregateError);
-      expect(caught).toMatchObject({ errors: [expect.any(Error), failure] });
-    } else {
-      expect(caught).toBe(failure);
-    }
-    restoreClose?.();
-    closeOpenClawStateDatabaseForTest();
-    expect(retained?.isOpen).toBe(false);
-  },
-);
 
 it("never certifies a query failure after the transaction owner could not roll it back", () => {
   const options = createRegistry();

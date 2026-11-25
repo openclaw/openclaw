@@ -15,14 +15,11 @@ import {
   isDefinitiveRunLifecycle,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import {
-  resolveAgentDir,
-  resolveDefaultAgentId,
-  resolveSessionAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentVerboseDefault, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { claimPendingEmbeddedAgentQuestionAnswer } from "../agents/embedded-agent-runner/runs.js";
-import { resolveThinkingDefault } from "../agents/model-selection.js";
+import { NO_MODEL_CONFIGURED_MESSAGE, resolveThinkingDefault } from "../agents/model-selection.js";
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import {
   readPreparedModelCatalog,
@@ -52,18 +49,18 @@ import {
 } from "../gateway/agent-event-assistant-text.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../gateway/chat-display-projection.js";
 import {
-  capLiveAssistantText,
-  shouldSuppressAssistantEventForLiveChat,
-} from "../gateway/live-chat-projector.js";
-import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
-import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   createChatHistoryActivityProjection,
   createChatHistoryByteCounter,
+  getMaxChatHistoryMessagesBytes,
   replaceOversizedChatHistoryMessages,
-} from "../gateway/server-methods/chat-history-budget.js";
+} from "../gateway/chat-history-budget.js";
+import { enrichChatHistoryCompactionMarkers } from "../gateway/chat-history-response-page.js";
+import {
+  capLiveAssistantText,
+  shouldSuppressAssistantEventForLiveChat,
+} from "../gateway/live-chat-projector.js";
 import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
-import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-response-page.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
@@ -149,13 +146,13 @@ import type {
 } from "./tui-backend.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
 
+const BTW_NO_CONTEXT_MESSAGE = "/btw requires an active session with existing context.";
+
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
 
   onEvent?: (evt: TuiEvent) => void;
   onConnected?: () => void;
-  onDisconnected?: (reason: string) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
 
   private readonly deps = createDefaultDeps();
   private readonly localSenderId = randomUUID();
@@ -207,7 +204,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.sessionProjection = (async () => {
       const config = await captureRuntimeConfigAsyncReader()();
       const { runSessionStartupMigration } =
-        await import("../config/sessions/startup-migration.js");
+        await import("../config/sessions/startup-migration-runtime.js");
       await runSessionStartupMigration({
         cfg: config,
         env: process.env,
@@ -290,8 +287,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
       opts = { ...options, message: command.args };
     }
-    const sideCommand = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(opts.message.trim());
-    const question = !explicitFollowup ? sideCommand?.[1]?.trim() || undefined : undefined;
+    const question = command?.command.key === "btw" ? command.args : undefined;
     const isQueueCommand = !explicitFollowup && command?.command.key === "queue";
     const agentId = resolveSessionAgentId({
       sessionKey: opts.sessionKey,
@@ -464,7 +460,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars();
     const historyPage = await readChatHistoryPage({
       entry,
-      provider: resolvedSessionModel.provider,
+      provider: resolvedSessionModel?.provider,
       sessionId,
       storePath,
       sessionAgentId,
@@ -504,7 +500,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       : undefined;
 
     let thinkingLevel = entry?.thinkingLevel;
-    if (!thinkingLevel) {
+    if (!thinkingLevel && resolvedSessionModel) {
       const catalog = await readPreparedModelCatalog({
         config: cfg,
         agentId: sessionAgentId,
@@ -535,7 +531,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             lifecycleRevision: entry.lifecycleRevision,
           })
         : undefined;
-    const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    const verboseLevel = entry?.verboseLevel ?? resolveAgentVerboseDefault(cfg, sessionAgentId);
     if (sessionInfo) {
       sessionInfo.thinkingLevel = thinkingLevel;
       sessionInfo.verboseLevel = verboseLevel;
@@ -703,18 +699,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
       key: params.sessionKey,
       ...loadOptions,
     });
-    if (!entry?.sessionId) {
-      throw new Error("/btw requires an active session with existing context.");
-    }
     const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
+    if (!entry?.sessionId || !resolvedModel) {
+      throw new Error(resolvedModel ? BTW_NO_CONTEXT_MESSAGE : NO_MODEL_CONFIGURED_MESSAGE);
+    }
     const timeoutSeconds = timeoutSecondsFromMs(params.timeoutMs);
     const { runBtwSideQuestion } = await import("../agents/btw.js");
     const reply = await runBtwSideQuestion({
       cfg,
       agentId: sessionAgentId,
       agentDir: resolveAgentDir(cfg, sessionAgentId),
-      provider: resolvedModel.provider,
-      model: resolvedModel.model,
+      ...resolvedModel,
       question: params.question,
       sessionEntry: entry,
       sessionStore: store,
@@ -1127,10 +1122,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     try {
       if (queuedAfter) {
         try {
-          await Promise.race([
-            waitForQueuedLocalRun(queuedAfter, runId),
-            waitForAbortSignal(controller.signal),
-          ]);
+          await waitForAbortSignal(controller.signal, waitForQueuedLocalRun(queuedAfter, runId));
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           this.emitChatTerminal(

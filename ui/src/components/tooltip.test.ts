@@ -62,6 +62,17 @@ function interactiveTooltipContent(tooltip: TooltipElement) {
   return tooltip.shadowRoot?.querySelector(".tooltip-rich-content");
 }
 
+// Fake timers cannot advance CSS animations; motion contracts live in tooltip.browser.test.ts.
+beforeEach(() => {
+  document.documentElement.style.setProperty("--openclaw-tooltip-popup-show-duration", "0ms");
+  document.documentElement.style.setProperty("--openclaw-tooltip-popup-hide-duration", "0ms");
+});
+
+afterEach(() => {
+  document.documentElement.style.removeProperty("--openclaw-tooltip-popup-show-duration");
+  document.documentElement.style.removeProperty("--openclaw-tooltip-popup-hide-duration");
+});
+
 describe("openclaw-tooltip", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -105,6 +116,34 @@ describe("openclaw-tooltip", () => {
         focusTrigger(trigger);
         await expectOpenCount(1);
         expect(tooltipPlacement(tooltip)).toBe(placement);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it.each([
+    [undefined, "right"],
+    ["bottom", "bottom"],
+  ] as const)(
+    "resolves placement %s inside a right-hint rail as %s",
+    async (placement, expected) => {
+      // Pin a wide viewport: narrow screens intentionally map side placements below.
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn(() => ({ matches: false })),
+      );
+      try {
+        const rail = document.createElement("nav");
+        rail.dataset.tooltipPlacement = "right";
+        const { tooltip, trigger } = createTooltip("New conversation");
+        tooltip.placement = placement;
+        rail.append(tooltip);
+        document.body.append(rail);
+        await commitTooltip(tooltip);
+        focusTrigger(trigger);
+        await expectOpenCount(1);
+        expect(tooltipPlacement(tooltip)).toBe(expected);
       } finally {
         vi.unstubAllGlobals();
       }
@@ -452,7 +491,13 @@ describe("openclaw-tooltip", () => {
     vi.advanceTimersByTime(1);
     await expectOpenCount(1);
 
+    // The card's padding keeps it open, not only its slotted content.
+    const surface = currentTooltipSurface(tooltip)!;
     dispatchMousePointer(trigger, "pointerleave");
+    dispatchMousePointer(surface, "pointerenter");
+    vi.advanceTimersByTime(300);
+    await expectOpenCount(1);
+    dispatchMousePointer(surface, "pointerleave");
     vi.advanceTimersByTime(299);
     await expectOpenCount(1);
     vi.advanceTimersByTime(1);
@@ -471,10 +516,11 @@ describe("openclaw-tooltip", () => {
 
   it("refreshes the rich description when assigned descendants change", async () => {
     const { tooltip, trigger, card } = createRichTooltip("");
+    const sibling = createTooltip("Unrelated details");
     const detail = document.createElement("span");
     detail.textContent = "Initial detail";
     card.append(detail);
-    document.body.append(tooltip);
+    document.body.append(tooltip, sibling.tooltip);
     await commitTooltip(tooltip);
 
     const descriptionId = trigger.getAttribute("aria-describedby") ?? "";
@@ -483,6 +529,8 @@ describe("openclaw-tooltip", () => {
     tooltip.remove();
     document.body.append(tooltip);
     await commitTooltip(tooltip);
+    // Retiring a sibling must not discard queued content records when shared observation rebuilds.
+    sibling.tooltip.remove();
     detail.textContent = "Updated detail";
     await Promise.resolve();
     expect(document.getElementById(descriptionId)?.textContent).toBe("Updated detail");
@@ -638,6 +686,34 @@ describe("title tooltips", () => {
     await settleTooltip(tooltip!);
     expect(tooltipIsOpen(tooltip!)).toBe(true);
     expect(tooltip!.content).toBe(title);
+  });
+
+  it("opens adapted titles on their rail's declared side", async () => {
+    // Pin a wide viewport: narrow screens intentionally map side placements below.
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: false })),
+    );
+    try {
+      const rail = document.createElement("nav");
+      rail.dataset.tooltipPlacement = "right";
+      const trigger = document.createElement("button");
+      trigger.title = "Pages";
+      rail.append(trigger);
+      document.body.append(rail);
+
+      dispatchMousePointer(trigger, "pointerover");
+
+      const tooltip = document.querySelector<TooltipElement>("openclaw-tooltip");
+      expect(tooltip).not.toBeNull();
+      await commitTooltip(tooltip!);
+      vi.advanceTimersByTime(150);
+      await settleTooltip(tooltip!);
+      expect(tooltipIsOpen(tooltip!)).toBe(true);
+      expect(tooltipPlacement(tooltip!)).toBe("right");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("shares delay and exclusivity with explicit tooltips without moving titled nodes", async () => {

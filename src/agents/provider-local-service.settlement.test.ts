@@ -69,14 +69,17 @@ async function finishShutdown(lease: { release(): void } | undefined, pending?: 
 it.each(["child close", "tree signal completion", "already-exited child close"])(
   "keeps provider shutdown owned until %s after PID disappearance",
   async (heldFact) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const alive = vi.spyOn(processTree, "isChildProcessTreeAlive").mockReturnValue(true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    let treeAlive = true;
+    vi.spyOn(processTree, "isChildProcessTreeAlive").mockImplementation(() => treeAlive);
+    vi.spyOn(processTree, "isChildProcessTreeAliveAsync").mockImplementation(async () => treeAlive);
+    vi.spyOn(processTree, "isProcessGroupGoneByKernel").mockImplementation(() => !treeAlive);
     const signaled = createDeferred();
     let completeSignal: (() => void) | undefined;
     vi.spyOn(processTree, "signalChildProcessTree").mockImplementation(
       (_child, _signal, onComplete) => {
         completeSignal = onComplete;
-        alive.mockReturnValue(false);
+        treeAlive = false;
         exit();
         if (heldFact === "child close") {
           onComplete?.();
@@ -89,7 +92,7 @@ it.each(["child close", "tree signal completion", "already-exited child close"])
 
     const lease = await readyService("settlement-fixture");
     if (heldFact === "already-exited child close") {
-      alive.mockReturnValue(false);
+      treeAlive = false;
       exit();
       signaled.resolve();
     }
@@ -115,7 +118,7 @@ it.each(["child close", "tree signal completion", "already-exited child close"])
 
 it("does not regain Windows PID authority during shutdown retry before child exit", async () => {
   await withMockedPlatform("win32", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const alive = vi.spyOn(processTree, "isChildProcessTreeAlive").mockReturnValue(true);
     const signal = vi
       .spyOn(processTree, "signalChildProcessTree")
@@ -154,7 +157,7 @@ it.each([
   { completion: "bounded helper timeout", forcedDurationMs: 3_000 },
 ])("joins Windows shutdown until $completion", async ({ completion, forcedDurationMs }) => {
   await withMockedPlatform("win32", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     let forcedHelper: ChildProcess | undefined;
     mocks.spawn.mockImplementation((command: string, args: string[]) => {
       if (command === process.execPath) {

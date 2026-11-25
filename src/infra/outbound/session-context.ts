@@ -23,6 +23,10 @@ export type OutboundSessionContext = {
    * `auto-reply/reply/get-reply.ts`). Followup, ACP, command, and cron
    * delivery paths each have their own canonical value to forward; consult
    * the relevant runner.
+   *
+   * Destination history treats this key as the producing conversation: a
+   * confirmed send back into it is not recorded again. Sends without a
+   * producing turn must leave it unset and use `policyKey` instead.
    */
   key?: string;
   /**

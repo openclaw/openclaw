@@ -1,6 +1,5 @@
 import type { TtsSpeakResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { chunkText } from "../../../packages/markdown-core/src/chunk-text.js";
 import { DEFAULT_MAX_TEXT_LENGTH } from "../../../src/tts/tts-limits.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { base64ToBytes } from "./bytes-base64.ts";
@@ -79,6 +78,7 @@ export class GatewaySpeechPlayback {
       this.cancel = () => resolve(undefined);
     });
     try {
+      const { chunkText } = await import("../../../packages/markdown-core/src/chunk-text.js");
       for (const textChunk of chunkText(text, maxTextLength)) {
         if (generation !== this.generation || !isCurrent()) {
           return;

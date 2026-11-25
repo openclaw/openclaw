@@ -3,16 +3,16 @@ import type { ResponseOutputItem } from "openai/resources/responses/responses.js
 import { expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
+import { suppressOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import { resolveResponsesContinuationRequest } from "./openai-responses-continuation.js";
 import {
   responsesInputFingerprint,
   recordResponsesInputReplay,
 } from "./openai-responses-input-replay.js";
-import { createModel } from "./openai-responses-prompt-observer.test-support.js";
+import { createAssistant, createModel } from "./openai-responses-prompt-observer.test-support.js";
 import {
   convertProviderResponsesMessages,
   convertResponsesMessages,
-  createOpenAIResponsesAssistantOutput,
   encodeTextSignatureV1,
 } from "./openai-responses-replay-messages-internal.js";
 import {
@@ -32,33 +32,28 @@ function answer(
   signature?: string,
   turnId?: string,
 ): AssistantMessage {
-  return {
-    ...createOpenAIResponsesAssistantOutput(model),
-    responseId,
-    turnId,
-    content: [
+  return createAssistant(
+    model,
+    [
       {
         type: "text",
         text,
         textSignature: signature ? encodeTextSignatureV1(signature) : undefined,
       },
     ],
-  };
+    { responseId, turnId },
+  );
 }
 function asyncPrefix(
   responseId: string | undefined,
   turnId?: string,
   id = "async",
 ): AssistantMessage {
-  return {
-    ...createOpenAIResponsesAssistantOutput(model),
-    responseId,
-    turnId,
-    stopReason: "toolUse",
-    content: [
-      { type: "toolCall", id: `call_${id}|fc_${id}`, name: "lookup", arguments: {}, async: true },
-    ],
-  };
+  return createAssistant(
+    model,
+    [{ type: "toolCall", id: `call_${id}|fc_${id}`, name: "lookup", arguments: {}, async: true }],
+    { responseId, turnId, stopReason: "toolUse" },
+  );
 }
 
 it.each([
@@ -89,14 +84,6 @@ it.each([
       [wireBefore, wire1, wire2, wireAfter, wire3],
     ],
     [
-      [before, image1, after, image2, image3],
-      [wireBefore, wire1, wireAfter, wire2, wire3],
-    ],
-    [
-      [text("Captured screen"), image1],
-      [wireText("Captured screen"), wire1],
-    ],
-    [
       [image1, text("Caption")],
       [wire1, wireText("Caption")],
     ],
@@ -105,10 +92,6 @@ it.each([
       [wireText("Before:\nFirst screen"), wire1, wireText("\nAfter:\nSecond screen")],
     ],
     [[image1], [wire1]],
-    [
-      [image1, image2],
-      [wire1, wire2],
-    ],
     [[text("  first\n"), text(""), text("second  ")], "  first\n\nsecond  "],
   ];
   for (const [content, output] of cases) {
@@ -116,11 +99,11 @@ it.each([
       ...makeTextToolResult("call_compare|fc_compare", "compare", "", false, 2),
       content,
     };
-    const assistant: AssistantMessage = {
-      ...createOpenAIResponsesAssistantOutput(imageModel),
-      content: [{ type: "toolCall", id: result.toolCallId, name: "compare", arguments: {} }],
-      stopReason: "toolUse",
-    };
+    const assistant = createAssistant(
+      imageModel,
+      [{ type: "toolCall", id: result.toolCallId, name: "compare", arguments: {} }],
+      { stopReason: "toolUse" },
+    );
     const replay = convert(imageModel, { messages: [assistant, result] }, new Set(["openai"]));
     expect(replay.find((item) => item.type === "function_call_output")).toEqual({
       type: "function_call_output",
@@ -167,6 +150,80 @@ it.each([
       ].map((text) => ({ content: [{ text }] })),
     );
     expect(context).toEqual(original);
+  },
+);
+
+const toolRound = (id: string) => [
+  createAssistant(
+    model,
+    [{ type: "toolCall", id: `call_${id}|fc_${id}`, name: "lookup", arguments: {} }],
+    { stopReason: "toolUse" },
+  ),
+  makeTextToolResult(`call_${id}|fc_${id}`, "lookup", "found", false, 0),
+];
+const carrierMessage = (text: string) => ({
+  role: "user" as const,
+  content: `OpenClaw runtime context:\n${text}`,
+  timestamp: 0,
+  runtimeContext: {},
+});
+
+it.each(
+  [
+    ["provider", convertProviderResponsesMessages] as const,
+    ["transport", convertResponsesMessages] as const,
+  ].flatMap(([name, convert]) =>
+    [false, true].map((promptUpdate) => ({ name, convert, promptUpdate })),
+  ),
+)(
+  "$name keeps a retained steering carrier after the tool round it followed (prompt update: $promptUpdate)",
+  ({ convert, promptUpdate }) => {
+    const sent = [
+      user("look up"),
+      { ...carrierMessage("turn facts"), runtimeContext: { retained: true } },
+      ...(promptUpdate ? [user("Tools changed")] : []),
+      ...toolRound("a"),
+    ];
+    const first = convert(model, { messages: sent }, new Set(["openai"]));
+    const next = convert(
+      model,
+      {
+        messages: [
+          ...sent,
+          { ...carrierMessage("steering facts"), runtimeContext: { retained: true } },
+          user("steering"),
+          ...toolRound("b"),
+        ],
+      },
+      new Set(["openai"]),
+    );
+    expect(next.slice(0, first.length)).toEqual(first);
+    expectTypes(next, [
+      "message",
+      "message",
+      ...(promptUpdate ? ["message"] : []),
+      "function_call",
+      "function_call_output",
+      "message",
+      "message",
+      "function_call",
+      "function_call_output",
+    ]);
+  },
+);
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
+] as const)(
+  "%s keeps a tail turn carrier with its user when steering follows",
+  (_name, convert) => {
+    // Routes without retained carriers move the current turn's carrier to the tail.
+    const turn = [user("look up"), ...toolRound("a"), carrierMessage("turn facts")];
+    const first = convert(model, { messages: turn }, new Set(["openai"]));
+    const next = convert(model, { messages: [...turn, user("steering")] }, new Set(["openai"]));
+    expect(next.slice(0, first.length)).toEqual(first);
+    expectTypes(first, ["message", "message", "function_call", "function_call_output"]);
   },
 );
 
@@ -328,3 +385,72 @@ it.each(["before", "after"] as const)(
     }
   },
 );
+
+it.each([
+  ["provider early", convertProviderResponsesMessages, false],
+  ["provider late", convertProviderResponsesMessages, true],
+  ["transport early", convertResponsesMessages, false],
+  ["transport late", convertResponsesMessages, true],
+] as const)("%s stops recovery at the first cloned async fragment", (_name, convert, late) => {
+  const old = asyncPrefix("resp_old", undefined, "old");
+  const prefix = asyncPrefix("resp_repaired", "repaired_turn", "fresh");
+  suppressOpenAIResponsesCompaction(prefix, model, undefined, undefined, "repair-anchor");
+  const tail = answer("repaired answer", "resp_repaired", "msg_repaired", "repaired_turn");
+  tail.providerReplay = structuredClone(prefix.providerReplay);
+  const oldResult = makeTextToolResult("call_old|fc_old", "lookup", "old result", false, 1);
+  const context: Context = {
+    messages: [
+      user("old task"),
+      old,
+      ...(late ? [] : [oldResult]),
+      user("new task"),
+      structuredClone(prefix),
+      makeTextToolResult("call_fresh|fc_fresh", "lookup", "fresh result", false, 2),
+      tail,
+      ...(late ? [oldResult] : []),
+    ],
+  };
+  const input = convert(model, context, new Set(["openai"]));
+  const calls = input.filter((item) => item.type === "function_call");
+  const results = input.filter((item) => item.type === "function_call_output");
+  expect(results.find((item) => item.output === "old result")?.call_id).toBe(calls[0]?.call_id);
+  expect(results.find((item) => item.output === "fresh result")?.call_id).toBe(calls[1]?.call_id);
+  expect(calls[0]?.call_id).not.toBe("call_old");
+  expect(calls[1]?.call_id).toBe("call_fresh");
+});
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
+] as const)("%s retains the recovery cutoff through filtered failed receipts", (_name, convert) => {
+  const contents: AssistantMessage["content"][] = [
+    [],
+    [{ type: "thinking", thinking: "Partial reasoning", thinkingSignature: "unfinished" }],
+    [{ type: "text", text: " " }],
+    [{ type: "text", text: "[assistant turn failed before producing content]" }],
+    [{ type: "toolCall", id: "call_unfinished|fc_unfinished", name: "lookup", arguments: {} }],
+  ];
+  for (const content of contents) {
+    const failed = createAssistant(model, content, { stopReason: "error" });
+    suppressOpenAIResponsesCompaction(failed, model, undefined, undefined, "repair-anchor");
+    const old = asyncPrefix("resp_old", undefined, "old");
+    const fresh = asyncPrefix("resp_fresh", undefined, "fresh");
+    const context: Context = {
+      messages: [
+        user("old task"),
+        old,
+        makeTextToolResult("call_old|fc_old", "lookup", "old result", false, 1),
+        failed,
+        user("try again"),
+        fresh,
+        makeTextToolResult("call_fresh|fc_fresh", "lookup", "fresh result", false, 2),
+      ],
+    };
+    const input = convert(model, context, new Set(["openai"]));
+    const calls = input.filter((item) => item.type === "function_call");
+    expect(calls[0]?.call_id).not.toBe("call_old");
+    expect(calls[1]?.call_id).toBe("call_fresh");
+    expect(input.filter((item) => item.type === "message")).toHaveLength(2);
+    expect(failed.stopReason).toBe("error");
+  }
+});

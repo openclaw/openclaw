@@ -1,6 +1,4 @@
 import { quickJsWorkerTestEntrypoint } from "../../extensions/code-mode-quickjs/src/worker-entrypoint.test-support.ts";
-import { codexCatalogPageWorkerEntrypoint } from "../../extensions/codex/catalog-page-worker-entrypoint.ts";
-import { codexHistoryWorkerEntrypoint } from "../../extensions/codex/session-history-worker-entrypoint.ts";
 import { discordAudioTestEntrypoints } from "../../extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts";
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
 import { memoryForgetFaultEntrypoint } from "../../extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts";
@@ -30,13 +28,14 @@ import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-co
 import { agentProcessTestEntrypoints } from "../../src/agents/process-runtime.test-support.ts";
 import { sdkStateOwnerFixtureEntrypoint } from "../../src/agents/sandbox/sdk-state-owner-runtime.test-support.ts";
 import { managedWorktreeGcEntrypoint } from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
-import { clawProjectBuildEntrypoint } from "../../src/claws/project-runtime.test-support.ts";
 import {
   adminStateOwnerFixtureEntrypoint,
   cliMessageExitEntrypoints,
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
   localStateOwnerFixtureEntrypoint,
+  logsConsoleEntrypoints,
+  oneShotExitProbeEntrypoints,
   updateExecutorEntrypoints,
   stateDirGatewayFixtureEntrypoint,
   updateCandidateExitEntrypoints,
@@ -94,10 +93,15 @@ import { agentDatabaseModuleIdentityEntrypoints } from "../../src/state/openclaw
 import { agentWorkerStoreFixtureEntrypoint } from "../../src/state/openclaw-agent-worker-store.runtime.test-support.ts";
 import {
   agentDatabaseHeldRuntimeEntrypoint,
+  agentDeletionRecoveryHoldPostgresRuntimeEntrypoint,
+  cronOwnerInspectionPostgresRuntimeEntrypoint,
+  stateLeasePostgresRuntimeEntrypoint,
   stateLeaseProcessExitRuntimeEntrypoint,
   stateLeaseRetentionRuntimeEntrypoint,
 } from "../../src/state/openclaw-state-lease-runtime.test-support.ts";
 import { groqSetupSdkEntrypoints } from "../../src/system-agent/setup-inference-groq-sdk.test-support.ts";
+import { clientVoiceEntryRuntimeEntrypoint } from "../../src/talk/client-voice-session-runtime.test-support.ts";
+import { templateProjectBuildEntrypoint } from "../../src/templates/project-runtime.test-support.ts";
 import { tempDirEntrypoint } from "../../src/test-helpers/temp-dir-runtime.test-support.ts";
 import { transcriptLibraryTimezoneEntrypoint } from "../../src/transcripts/library-timezone-runtime.test-support.ts";
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
@@ -201,6 +205,7 @@ export const preservedModuleBuildSources = [
   "src/agents/agent-bundle-mcp-manager.ts",
   "src/agents/agent-bundle-mcp-manager-api.ts",
   "src/agents/mcp-auth-profile.integration.test-support.ts",
+  "src/agents/mcp-auth-profile-authorization.ts",
   "src/agents/mcp-auth-profile.ts",
   "src/agents/mcp-auth-profile.runtime.ts",
   "src/agents/auth-profiles/oauth.ts",
@@ -221,7 +226,9 @@ export const preservedModuleBuildSources = [
   "src/cli/update-finalization-output.test-support.ts",
   "src/cli/program/register.maintenance.ts",
   "src/cli/one-shot-exit.ts",
+  "src/cli/cron-cli.ts",
   "src/cli/runtime-cleanup-scope.ts",
+  "src/cli/run-main-service-installation.ts",
   "src/cli/runtime-cleanup.ts",
   "src/state/openclaw-state-db-cache.ts",
   "src/infra/worker-native-lifecycle.ts",
@@ -258,6 +265,8 @@ export const preservedModuleBuildSources = [
 
 // Source-relative script readers retain their exact input bytes in the prepared layout.
 export const preservedModuleBuildAssets = [
+  "src/infra/runtime-worker-loader.mjs",
+  "scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt",
   "test/fixtures/acp/owner-agent.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/agents.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-discord.json",
@@ -278,12 +287,17 @@ export const preservedModuleBuildAssets = [
   "scripts/e2e/lib/upgrade-survivor/config-recipe/tools-tool-search.json",
   "scripts/e2e/parallels/parallels-exec.py",
   ".github/workflows/plugin-npm-release.yml",
+  "scripts/plugin-npm-release-admission.py",
   "scripts/lib/vitest-worker-bootstrap.mts",
   "scripts/lib/vitest-worker-descriptor.mts",
 ];
 
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
+  "state/openclaw-state-read-maintenance.test-support":
+    "src/state/openclaw-state-read-maintenance.test-support.ts",
+  "plugins/test-helpers/installed-plugin-index":
+    "src/plugins/test-helpers/installed-plugin-index.ts",
   "legacy-config-binding-repair.runtime":
     "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts",
   ...createRuntimeProcessBuildEntries([
@@ -302,7 +316,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(proxyCaptureNativeProcessEntrypoints),
     ...Object.values(serviceProcessEnvEntrypoints),
     workerBundleArchiveEntrypoint,
-    clawProjectBuildEntrypoint,
+    templateProjectBuildEntrypoint,
     tempDirEntrypoint,
     ...Object.values(deliveryQueueProcessEntrypoints),
     ...Object.values(externalProxyTestEntrypoints),
@@ -314,8 +328,6 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(discordAudioTestEntrypoints),
     ...Object.values(realtimeAudioTestEntrypoints),
     quickJsWorkerTestEntrypoint,
-    codexCatalogPageWorkerEntrypoint,
-    codexHistoryWorkerEntrypoint,
     nativeWorkerTestEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
@@ -358,6 +370,8 @@ export const vitestWorkerBuildEntries = {
     ...groqSetupSdkEntrypoints,
     ...Object.values(cliRecoveryEntrypoints),
     ...Object.values(cliMessageExitEntrypoints),
+    ...Object.values(logsConsoleEntrypoints),
+    ...Object.values(oneShotExitProbeEntrypoints),
     windowsProcessOwnershipEntrypoint,
     windowsProcessJobRetentionEntrypoint,
     ...Object.values(updateCandidateExitEntrypoints),
@@ -390,6 +404,10 @@ export const vitestWorkerBuildEntries = {
     updatePreflightTeamReportsEntrypoint,
     workboardSqliteBackendEntrypoint,
     ...Object.values(agentDatabaseModuleIdentityEntrypoints),
+    agentDeletionRecoveryHoldPostgresRuntimeEntrypoint,
+    clientVoiceEntryRuntimeEntrypoint,
+    cronOwnerInspectionPostgresRuntimeEntrypoint,
+    stateLeasePostgresRuntimeEntrypoint,
     stateLeaseProcessExitRuntimeEntrypoint,
     stateLeaseRetentionRuntimeEntrypoint,
     agentDatabaseHeldRuntimeEntrypoint,
@@ -399,11 +417,24 @@ export const vitestWorkerBuildEntries = {
   "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
   "infra/package-update-activation.process.test-support":
     "src/infra/package-update-activation.process.test-support.ts",
+  // The journaled kill sweep seals the built recovery helper, which only a compiled graph has.
+  "infra/package-update-release-switch.process.test-support":
+    "src/infra/package-update-release-switch.process.test-support.ts",
+  // The killed updater claims its lease and opens state through the same compiled workers.
+  "infra/update-run-kill.process.test-support": "src/infra/update-run-kill.process.test-support.ts",
   // Keep provider preparation in the same compiled graph as payload rendering;
   // a source-injected plugin would miss duplicated registry scope state.
   "plugins/provider-hook-runtime": "src/plugins/provider-hook-runtime.ts",
   // Real provider preparation uses packaged JavaScript, avoiding per-child source transforms.
   "extensions/anthropic/index": "extensions/anthropic/index.ts",
+  // CLI preflight must share its native host graph with the real Teams Doctor/setup contracts.
+  "extensions/msteams/index": "extensions/msteams/index.ts",
+  "extensions/msteams/config-doctor-api": "extensions/msteams/config-doctor-api.ts",
+  "extensions/msteams/doctor-contract-api": "extensions/msteams/doctor-contract-api.ts",
+  "extensions/msteams/setup-entry": "extensions/msteams/setup-entry.ts",
+  "extensions/msteams/setup-plugin-api": "extensions/msteams/setup-plugin-api.ts",
+  "extensions/msteams/secret-contract-api": "extensions/msteams/secret-contract-api.ts",
+  "extensions/msteams/configured-state": "extensions/msteams/configured-state.ts",
   "test-support/anthropic-preparation": "test/scripts/anthropic-preparation-probe.ts",
   "test-support/provider-hook-scope": "test/scripts/provider-hook-scope.test-support.ts",
   // Exercise native writes through the existing plugin facade in the private graph.

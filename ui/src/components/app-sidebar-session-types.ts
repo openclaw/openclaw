@@ -14,6 +14,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus } from "../api/types.ts";
+import type { SidebarZoneEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import type { SessionRowAttention } from "../lib/session-attention.ts";
@@ -28,9 +29,9 @@ import {
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
-import type { SessionPlacementState } from "./session-row-badges.ts";
 
 type SidebarAttentionRequest = {
   kind: "question" | "approval";
@@ -91,7 +92,7 @@ export type SidebarToolActivity = {
   text?: string;
 };
 
-export type SidebarRecentSession = {
+export type SidebarRecentSession = Readonly<{
   key: string;
   agentId?: string;
   sessionId?: string;
@@ -117,6 +118,8 @@ export type SidebarRecentSession = {
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  backgroundProcessCount?: number;
+  subagentRunState?: GatewaySessionRow["subagentRunState"];
   /** Defaults to logical activity for rows without a live activity projection. */
   isRunVisuallyActive?: boolean;
   /** Raw Gateway liveness used for operations even when display status is terminal. */
@@ -149,7 +152,7 @@ export type SidebarRecentSession = {
   worktreeId?: string;
   workspaceKind?: "worktree" | "checkout";
   execNode?: string;
-  placementState?: SessionPlacementState;
+  placementState?: NonNullable<GatewaySessionRow["placement"]>["state"];
   placementProviderId?: string;
   placementProfileId?: string;
   placementMachine?: SessionPlacementMachine;
@@ -158,6 +161,7 @@ export type SidebarRecentSession = {
   cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
+  snapshot?: import("./sidebar-snapshot-data.ts").SidebarSnapshotSession["state"];
   outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   unread: boolean;
@@ -180,7 +184,6 @@ export type SidebarRecentSession = {
     | "unreadHiddenRuns"
     | "queuedChildCount"
     | "runningChildCount"
-    | "failedChildCount"
     | "workspaceConflictCount"
   >;
   agentStatusNote?: string;
@@ -191,12 +194,11 @@ export type SidebarRecentSession = {
   spawnedBy?: string;
   forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   status?: SessionRunStatus;
+  lastRunError?: string;
   createdAt?: number;
   startedAt?: number;
   updatedAt?: number | null;
   endedAt?: number;
-  runtimeMs?: number;
-  runtimeSampledAt?: number;
   childSessionKeys: readonly string[];
   /** Detail queries retain their original parents when hidden runs are skipped. */
   childLoadParentKeys?: readonly string[];
@@ -205,8 +207,7 @@ export type SidebarRecentSession = {
   loadingChildren: boolean;
   containsActiveDescendant: boolean;
   runningChildCount: number;
-  failedChildCount: number;
-};
+}>;
 
 export type SidebarSessionHovercardRow = Pick<
   SidebarRecentSession,
@@ -219,8 +220,10 @@ export type SidebarSessionHovercardRow = Pick<
   | "endedAt"
   | "hasAutomation"
   | "hasActiveRun"
+  | "gatewayHasActiveRun"
+  | "hasActiveSubagentRun"
+  | "lastRunError"
   | "label"
-  | "lastMessagePreview"
   | "expandedParticipants"
   | "participantCount"
   | "participants"
@@ -234,6 +237,23 @@ export type SidebarSessionHovercardRow = Pick<
 > &
   Partial<Pick<SidebarRecentSession, "attention">>;
 
+/**
+ * A child shows its parent as working while its own run is visible, or while it is a
+ * yielded subagent waiting on its own command. Processes left by an ended or idle child
+ * stay on that child's row.
+ */
+export function childShowsParentWorking(
+  child: Pick<
+    SidebarRecentSession,
+    "isRunVisuallyActive" | "hasActiveRun" | "backgroundProcessCount" | "subagentRunState"
+  >,
+): boolean {
+  return (
+    (child.isRunVisuallyActive ?? child.hasActiveRun) ||
+    (child.subagentRunState === "paused" && (child.backgroundProcessCount ?? 0) > 0)
+  );
+}
+
 export const enum RowVisibilityReason {
   Any = 0,
   ActiveRun = 1,
@@ -245,14 +265,14 @@ export function rowDemandsVisibility(
   reason: RowVisibilityReason = RowVisibilityReason.Any,
 ) {
   return reason === RowVisibilityReason.ActiveRun
-    ? row.hasActiveRun
+    ? row.hasActiveRun || (row.backgroundProcessCount ?? 0) > 0 || row.runningChildCount > 0
     : reason === RowVisibilityReason.Attention
       ? row.attention.kind !== "none"
       : row.visuallyActive ||
         row.containsActiveDescendant ||
         row.hasActiveRun ||
+        (row.backgroundProcessCount ?? 0) > 0 ||
         row.runningChildCount > 0 ||
-        row.failedChildCount > 0 ||
         (row.workspaceConflictCount ?? 0) > 0 ||
         row.unread ||
         (row.unreadChildCount ?? 0) > 0 ||
@@ -286,6 +306,7 @@ export type SidebarSessionGroupMenuState = {
 };
 
 export type SidebarSessionSortMode = (typeof SIDEBAR_SESSION_SORT_OPTIONS)[number]["mode"];
+export const DEFAULT_SIDEBAR_SESSION_SORT_MODE: SidebarSessionSortMode = "updated";
 export type SidebarSessionStatusFilter = (typeof SIDEBAR_SESSION_STATUS_OPTIONS)[number];
 export type SidebarEmptyGroupsMode = "filtering" | "always" | "never";
 export type SidebarSessionOwnerFilter = {
@@ -334,8 +355,17 @@ export type SidebarSessionPatch = Pick<
   | "communication"
 >;
 
-export const SIDEBAR_SESSION_PAGE_SIZE = 10;
-export const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
+export const SIDEBAR_SESSION_PAGE_SIZE = 15;
+
+export function sidebarSessionPagination(grouping: SidebarSessionsGrouping, sectionId: string) {
+  return {
+    initialLimit: grouping === "none" && sectionId === "ungrouped" ? 30 : SIDEBAR_SESSION_PAGE_SIZE,
+    key:
+      sectionId.startsWith("agent:") || sectionId.startsWith("catalog")
+        ? sectionId
+        : `${grouping}:${sectionId}`,
+  };
+}
 
 export function sidebarSessionMetaId(key: string): string {
   return `sidebar-session-meta-${encodeURIComponent(key)}`;
@@ -393,16 +423,21 @@ function sidebarSessionOwnerFilterStorageKey(gatewayUrl: string, selfUserId: str
   return `${SIDEBAR_SESSION_OWNER_FILTER_STORAGE_PREFIX}${gatewayOriginScope(gatewayUrl)}:${encodeURIComponent(selfUserId)}`;
 }
 
+/** Without a saved choice, guests start on Involving me and everyone else on All owners. */
 export function loadStoredSidebarSessionOwnerFilter(
   gatewayUrl: string,
   selfUserId: string,
+  options: { guest?: boolean } = {},
 ): SidebarSessionOwnerFilter {
+  const fallback = options.guest
+    ? { ownerId: null, involvingMe: true }
+    : { ownerId: null, involvingMe: false };
   try {
     const stored = getSafeLocalStorage()?.getItem(
       sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId),
     );
     if (stored === null || stored === undefined) {
-      return { ownerId: selfUserId, involvingMe: false };
+      return fallback;
     }
     const ownerId = stored?.startsWith("owner:") ? stored.slice("owner:".length).trim() : "";
     return {
@@ -410,8 +445,8 @@ export function loadStoredSidebarSessionOwnerFilter(
       involvingMe: stored === "involving-me",
     };
   } catch {
-    // A disabled store still uses the signed-in owner default.
-    return { ownerId: selfUserId, involvingMe: false };
+    // A disabled store still uses the default.
+    return fallback;
   }
 }
 
@@ -419,7 +454,9 @@ export function loadStoredSidebarSessionSortMode(): SidebarSessionSortMode {
   const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY);
   // "people" stays readable here even when the gateway later hides the
   // capability; effectiveSessionSortMode() downgrades it at render time.
-  return stored === "updated" || stored === "people" ? stored : "created";
+  return stored === "created" || stored === "updated" || stored === "people"
+    ? stored
+    : DEFAULT_SIDEBAR_SESSION_SORT_MODE;
 }
 
 function loadStoredSidebarStringSet(
@@ -562,3 +599,16 @@ export const SIDEBAR_SESSION_STATUS_OPTIONS = ["active", "snoozed", "archived", 
 export function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;
 }
+
+/** Hidden pins remain discoverable in their lifecycle views without a duplicate in Pinned. */
+export function isListedInPinnedSection(
+  row: Pick<SidebarRecentSession, "key" | "archived" | "snoozedUntil">,
+  pinnedKeys: ReadonlySet<string>,
+): boolean {
+  return pinnedKeys.has(row.key) && row.archived !== true && !isSessionSnoozed(row, Date.now());
+}
+
+export type SidebarPinZone = {
+  entries: readonly SidebarZoneEntry[];
+  sessionRows: ReadonlyMap<string, SidebarRecentSession>;
+};

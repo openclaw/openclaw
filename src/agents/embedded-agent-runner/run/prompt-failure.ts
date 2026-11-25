@@ -5,6 +5,7 @@ import {
   buildAgentRunTerminalOutcomeFromAttempt,
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
+import { withAgentTerminalSnapshot } from "../../agent-terminal-snapshot.js";
 import { parseImageSizeError } from "../../embedded-agent-helpers/image-errors.js";
 import { pickFallbackThinkingLevel } from "../../embedded-agent-helpers/thinking.js";
 import {
@@ -17,7 +18,7 @@ import {
   resolveFailoverStatus,
 } from "../../failover-error.js";
 import { classifyFailoverReason } from "../../failover/classify.js";
-import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
+import { classifyRateLimitWindow, resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
 import { log } from "../logger.js";
@@ -255,6 +256,11 @@ export async function handleEmbeddedPromptFailure(input: {
           profileId: failedProfileId,
           reason: promptProfileFailureReason,
           modelId: preparedRuntime.modelId,
+          retryAfterMs: resolveRetryAfterMs(
+            formatErrorMessage(terminal.promptError),
+            Date.now(),
+            terminal.promptError,
+          ),
         })
         .catch((error: unknown) => {
           log.warn(`prompt profile failure mark failed: ${String(error)}`);
@@ -309,16 +315,19 @@ export async function handleEmbeddedPromptFailure(input: {
     const fallbackReason = failoverDecision.reason;
     const status = resolveFailoverStatus(fallbackReason, promptErrorDetails.code);
     recordFailoverDecision("fallback_model", fallbackReason, status);
-    throw (
+    throw withAgentTerminalSnapshot(
       retryExhaustionFailure ??
-      (normalizedPromptFailover?.reason === fallbackReason ? normalizedPromptFailover : null) ??
-      new FailoverError(errorText, {
-        ...failoverContext,
-        reason: fallbackReason,
-        provider: preparedRuntime.provider,
-        model: preparedRuntime.modelId,
-        status,
-      })
+        (normalizedPromptFailover?.reason === fallbackReason ? normalizedPromptFailover : null) ??
+        new FailoverError(errorText, {
+          ...failoverContext,
+          reason: fallbackReason,
+          provider: preparedRuntime.provider,
+          model: preparedRuntime.modelId,
+          status,
+        }),
+      terminalOutcome.status === "error" && terminal.promptErrorSource === "prompt"
+        ? normalizedAttempt.attempt.agentTerminal
+        : undefined,
     );
   }
   if (failoverDecision.action === "surface_error") {
@@ -334,7 +343,12 @@ export async function handleEmbeddedPromptFailure(input: {
       })
     );
   }
-  throw retryExhaustionFailure ?? toErrorObject(terminal.promptError, "Prompt failed");
+  throw withAgentTerminalSnapshot(
+    retryExhaustionFailure ?? toErrorObject(terminal.promptError, "Prompt failed"),
+    terminalOutcome.status === "error" && terminal.promptErrorSource === "prompt"
+      ? normalizedAttempt.attempt.agentTerminal
+      : undefined,
+  );
 }
 
 function resolveBlockedPromptResult(

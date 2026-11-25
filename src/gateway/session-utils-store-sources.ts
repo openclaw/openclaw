@@ -1,26 +1,21 @@
 import path from "node:path";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
-import {
-  captureSessionStoreReadCandidate,
-  type SessionStoreReadCandidate,
-} from "../config/sessions/session-store-read-candidates.js";
-import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
-import { shouldSkipDiscoveryError } from "../config/sessions/targets-path-validation.js";
+import type { SessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
+import { captureSessionStoreTargetInventory } from "../config/sessions/session-store-target-routing.js";
+import { prepareSessionStoreCandidatesInWorker } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveSessionStoreCompatibilityAgentId,
 } from "../config/sessions/targets.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   readOpenClawAgentDatabaseRegistryToken,
 } from "../state/openclaw-agent-db-registry-listing.js";
-import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
 import {
   openClawStateDatabaseCache,
   registerOpenClawStateDatabaseAsyncResource,
@@ -56,8 +51,8 @@ type SourceMemo = {
   observations: Map<string, { close(): void }>;
   dirty?: boolean;
   refreshing?: boolean;
-  pathsCurrent?: () => boolean;
-  observedThisTurn?: boolean;
+  pathsCurrent?: () => Promise<void>;
+  pathsNeedValidation?: boolean;
   prepared: Promise<GatewaySessionStoreSourceRequest | undefined>;
 };
 const sourcePreparations = new Map<string, SourceMemo>();
@@ -98,8 +93,12 @@ function observeSourcePath(memo: SourceMemo, pathname: string, used: Set<string>
     if (!memo.observations.has(observationKey)) {
       memo.observations.set(
         observationKey,
-        observeOwnedDirectory(directory, (filename) => {
-          if (!memo.current || memo.observedThisTurn) {
+        observeOwnedDirectory(directory, (filename, event) => {
+          // Content writes do not replace the prepared source identities.
+          if (event === "change" && filename !== undefined) {
+            return;
+          }
+          if (!memo.current) {
             return;
           }
           if (
@@ -108,19 +107,9 @@ function observeSourcePath(memo: SourceMemo, pathname: string, used: Set<string>
               ? filename.toLowerCase() === name.toLowerCase()
               : filename === name)
           ) {
-            // One fallback sweep can notify every ancestor of the same source.
-            memo.observedThisTurn = true;
-            queueMicrotask(() => {
-              memo.observedThisTurn = false;
-            });
-            // The next read refreshes facts without retiring shared watches.
-            try {
-              if (memo.pathsCurrent && !memo.pathsCurrent()) {
-                memo.dirty = true;
-              }
-            } catch {
-              memo.dirty = true;
-            }
+            // Notifications can arrive in bursts across turns. Validate once on the
+            // next read, not synchronously for every ancestor/recovery notification.
+            memo.pathsNeedValidation = true;
           }
         }),
       );
@@ -132,14 +121,13 @@ function observeSourcePath(memo: SourceMemo, pathname: string, used: Set<string>
 /** Retain discovery facts and watches; ordinary reads refresh invalidated facts in place. */
 export async function prepareGatewaySessionStoreReadSourcesAsync(
   params: SourcePreparationParams,
-  signal?: AbortSignal,
 ): Promise<{ request: GatewaySessionStoreSourceRequest | undefined }> {
-  signal?.throwIfAborted();
+  const currentSource = { ...params.currentSource };
   const routing = captureSessionStoreRouting(params.cfg);
   const env = captureSessionTranscriptStorageEnvironment(params.env);
   const registryOptions = { env, path: path.resolve(params.registryPath) };
   const registry = readOpenClawAgentDatabaseRegistryToken(registryOptions);
-  const key = JSON.stringify([routing, env, params.currentSource, registryOptions.path]);
+  const key = JSON.stringify([routing, env, currentSource, registryOptions.path]);
   let memo = sourcePreparations.get(key);
   if (!memo) {
     memo = {
@@ -154,36 +142,52 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
     };
     sourcePreparations.set(key, memo);
   }
-  // One refresh owns the used-watch set; publications during it share its outcome.
-  if (!memo.refreshing && (memo.dirty || memo.registry !== registry)) {
+  // The same pending owner covers both path validation and a replacement preparation.
+  if (!memo.refreshing && (memo.pathsNeedValidation || memo.dirty || memo.registry !== registry)) {
     const selected = memo;
+    const previous = selected.prepared;
     const used = new Set<string>();
     selected.refreshing = true;
-    selected.dirty = false;
-    selected.registry = registry;
-    selected.prepared = prepareSourceRequest(
-      { ...params, registryPath: registryOptions.path },
-      routing,
-      env,
-      selected,
-      (pathname) => observeSourcePath(selected, pathname, used),
-    )
-      .then(
-        (request) => {
-          // Reuse common watches before dropping paths absent from the refreshed roster.
-          for (const [observationKey, observation] of selected.observations) {
-            if (!used.has(observationKey)) {
-              observation.close();
-              selected.observations.delete(observationKey);
-            }
+    selected.pathsNeedValidation = false;
+    selected.prepared = (async () => {
+      if (!selected.dirty && selected.registry === registry) {
+        try {
+          await selected.pathsCurrent?.();
+          if (
+            !selected.pathsNeedValidation &&
+            selected.registry === readOpenClawAgentDatabaseRegistryToken(registryOptions)
+          ) {
+            return await previous;
           }
-          return request;
-        },
-        (error: unknown) => {
-          retireSourcePreparation(key, selected);
-          throw error;
-        },
-      )
+        } catch {
+          // Changed physical paths require a new preparation under the same pending owner.
+        }
+      }
+      if (!selected.current) {
+        throw storeChanged();
+      }
+      selected.dirty = false;
+      selected.registry = registry;
+      const request = await prepareSourceRequest(
+        { ...params, currentSource, registryPath: registryOptions.path },
+        routing,
+        env,
+        selected,
+        (pathname) => observeSourcePath(selected, pathname, used),
+      );
+      // Reuse common watches before dropping paths absent from the refreshed roster.
+      for (const [observationKey, observation] of selected.observations) {
+        if (!used.has(observationKey)) {
+          observation.close();
+          selected.observations.delete(observationKey);
+        }
+      }
+      return request;
+    })()
+      .catch((error: unknown) => {
+        retireSourcePreparation(key, selected);
+        throw error;
+      })
       .finally(() => {
         selected.refreshing = false;
       });
@@ -192,12 +196,7 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
       retireSourcePreparation(oldestKey, oldest);
     }
   }
-  const request = await racePromiseWithAbortSignal(
-    memo.prepared,
-    signal,
-    (aborted) => aborted.reason,
-  );
-  signal?.throwIfAborted();
+  const request = await memo.prepared;
   if (!memo.current) {
     throw storeChanged();
   }
@@ -211,34 +210,35 @@ async function prepareSourceRequest(
   memo: SourceMemo,
   observe: (pathname: string) => void,
 ): Promise<GatewaySessionStoreSourceRequest | undefined> {
-  const paths = createOpenClawAgentDatabasePathMatcher();
-  memo.pathsCurrent = () => paths.isCurrent();
-  paths(params.registryPath, params.registryPath);
-  observe(params.registryPath);
-  const inventory = prepareSessionStoreTargetInventory(
-    sessionStoreRoutingConfig(routing),
-    routing.agentIds,
-    env,
-  );
   const { currentSource } = params;
-  paths(currentSource.path, currentSource.path);
-  observe(currentSource.path);
+  const prepared = await prepareSessionStoreCandidatesInWorker({
+    observePaths: {
+      inventory: captureSessionStoreTargetInventory(
+        sessionStoreRoutingConfig(routing),
+        routing.agentIds,
+        env,
+      ),
+      requiredPaths: [currentSource.path],
+    },
+  });
+  if (!memo.current) {
+    throw storeChanged();
+  }
+  if (!("observations" in prepared) || !prepared.observations) {
+    throw new Error("Session discovery worker did not return its path observations");
+  }
+  let observations = prepared.observations;
+  memo.pathsCurrent = async () => {
+    await prepareSessionStoreCandidatesInWorker({ observePaths: { observations } });
+  };
   const candidates = new Map<string, SessionStoreReadCandidate>();
   const capture = (candidate: SessionStoreReadCandidate) => {
-    try {
-      paths(candidate.path, candidate.path);
-    } catch (error) {
-      if (!shouldSkipDiscoveryError(error)) {
-        throw error;
-      }
-      return;
-    }
     observe(candidate.path);
     observe(candidate.physicalPath);
     candidates.set(JSON.stringify(candidate), candidate);
   };
-  inventory.candidates.forEach(capture);
-  capture(captureSessionStoreReadCandidate(currentSource.path));
+  observe(currentSource.path);
+  prepared.candidates.forEach(capture);
   const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({
     env,
     path: params.registryPath,
@@ -257,15 +257,25 @@ async function prepareSourceRequest(
           schemaVersion,
         }))
       : undefined;
-  for (const registered of registeredDatabases ?? []) {
-    if (registered.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
-      capture(captureSessionStoreReadCandidate(registered.path));
+  const registeredPaths = (registeredDatabases ?? [])
+    .filter((registered) => registered.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION)
+    .map((registered) => registered.path);
+  if (registeredPaths.length > 0) {
+    const registered = await prepareSessionStoreCandidatesInWorker({
+      observePaths: { paths: registeredPaths, observations },
+    });
+    if (!memo.current) {
+      throw storeChanged();
     }
+    if (!("observations" in registered) || !registered.observations) {
+      throw new Error("Session discovery worker did not return its path observations");
+    }
+    observations = registered.observations;
+    registered.candidates.forEach(capture);
   }
-  // Observation was installed after capture; close that admission window before publication.
-  if (!paths.isCurrent()) {
-    throw storeChanged();
-  }
+  // Validate physical identities; later notifications only dirty the next read.
+  memo.pathsNeedValidation = false;
+  await memo.pathsCurrent();
   registry.assertCurrent();
   memo.registry = readOpenClawAgentDatabaseRegistryToken({ env, path: params.registryPath });
   return registeredDatabases

@@ -7,23 +7,51 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import type { RestartRecoveryOperatorSource } from "../../gateway/operator-run-recovery-source.codec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import * as schedule from "../schedule.js";
+import { cronScriptFailureMetadata } from "../script-failure.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronJob } from "../types.js";
-import { needsCronTimerMaintenance } from "./jobs-scheduling.js";
+import type { CronStoredJob } from "../types.js";
+import { needsCronTimerMaintenance, resolveJobErrorBackoffUntilMs } from "./jobs-scheduling.js";
 import type { CronServiceDeps, DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult } from "./timer-outcomes.js";
+import { isRunnableJob } from "./timer-runnable.js";
 import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const timerRegressionFixtures = setupCronRegressionFixtures({ prefix: "cron-outcomes-" });
 const startedAt = Date.parse("2026-10-05T00:00:00.000Z");
+const meaningfulResult = {
+  outcome: "progress",
+  summary: "First report ready.",
+  atMs: startedAt + 10,
+};
+
+it("retains the last meaningful result across quiet checks and execution failures", () => {
+  const { job, apply } = outcomeFixture(startedAt);
+  apply({ status: "ok", result: { outcome: "progress", summary: "First report ready." } });
+  expect(job.state.lastMeaningfulResult).toEqual(meaningfulResult);
+  for (const outcome of [
+    { status: "ok", result: { outcome: "no_change" } },
+    {
+      status: "error",
+      error: "Run failed",
+      result: { outcome: "done", summary: "Premature result." },
+    },
+  ] as const) {
+    apply({ ...outcome, startedAt: startedAt + 100, endedAt: startedAt + 120 });
+    expect(job.state.lastRunAtMs).toBe(startedAt + 100);
+    expect(job.state.lastDurationMs).toBe(20);
+    expect(job.state.lastMeaningfulResult).toEqual(meaningfulResult);
+  }
+});
 
 function outcomeFixture(
   runAt: number,
-  overrides: Partial<CronJob> = {},
+  overrides: Partial<CronStoredJob> = {},
   deps: Partial<Parameters<typeof createCronServiceState>[0]> = {},
 ) {
   const job = {
@@ -44,18 +72,78 @@ function outcomeFixture(
   });
   const deferredNotifications: DeferredCronNotifications = [];
   const apply = (
-    result: Omit<Parameters<typeof applyJobResult>[2], "startedAt" | "endedAt"> &
+    result: Omit<Parameters<typeof applyJobResult>[2], "startedAt" | "endedAt" | "errorReason"> &
       Partial<Pick<Parameters<typeof applyJobResult>[2], "startedAt" | "endedAt">>,
     options: Partial<Parameters<typeof applyJobResult>[3]> = {},
   ) =>
     applyJobResult(
       state,
       job,
-      { startedAt: runAt, endedAt: runAt + 10, ...result },
+      {
+        startedAt: runAt,
+        endedAt: runAt + 10,
+        ...result,
+        errorReason: resolveCronRunErrorReason(
+          result.error,
+          result.provider,
+          result.errorClassification,
+        ),
+      },
       { deferredNotifications, ...options },
     );
   return { state, job, apply, deferredNotifications };
 }
+
+function restartFailure() {
+  return {
+    status: "error",
+    error: "Gateway restarting.",
+    errorClassification: { kind: "aborted" },
+    interruptedByRestart: true,
+    endedAt: startedAt + 1,
+  } as const;
+}
+
+it.each(["aborted", "internal_error"] as const)(
+  "a key-linked watcher whose condition ends with %s stays enabled",
+  (code) => {
+    const operatorSource: RestartRecoveryOperatorSource = {
+      version: 1,
+      agentId: "main",
+      sessionKey: "agent:main:watcher-owner",
+      sourceRunId: "creator-run",
+      snapshot: {
+        profileId: "fixture-operator",
+        scopes: ["operator.write"],
+        assignedRole: null,
+        githubLogin: null,
+        grant: null,
+        aliasBindingIds: [],
+        authPolicy: {
+          generation: "",
+          grantGeneration: "fixture-generation",
+          role: "operator",
+          authMethod: "token",
+        },
+        controlUiAdmin: true,
+        localOperator: false,
+        sourceIngress: "control-ui",
+      },
+    };
+    const { job, apply } = outcomeFixture(startedAt, {
+      trigger: { script: "return { fire: false }" },
+      operatorSource: { source: operatorSource, executionRevision: "fixture-revision" },
+    });
+    apply({
+      status: "error",
+      error: `cron trigger evaluation failed (${code})`,
+      ...cronScriptFailureMetadata("trigger", code),
+    });
+    expect(job.enabled).toBe(true);
+    expect(job.state.nextRunAtMs).toBeDefined();
+    expect(job.state.autoDisabled).toBeUndefined();
+  },
+);
 
 it.each([false, true])("never invents an event retry slot during outcome replay=%s", (replay) => {
   const { job, apply } = outcomeFixture(startedAt, {
@@ -73,35 +161,96 @@ it.each([false, true])("never invents an event retry slot during outcome replay=
   expect(job.state.sourceIdentity).toBe("source-generation");
 });
 
-it.each([0, 9, 10])("preserves %i failures after recurring-run cancellation", (priorErrors) => {
-  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
-    state: { consecutiveErrors: priorErrors },
-    failureAlert: { after: 1, cooldownMs: 0 },
-  });
-  apply({
-    status: "error",
-    error: "Gateway restarting.",
-    errorClassification: { kind: "aborted" },
-    endedAt: startedAt + 1,
-  });
+it.each([
+  { priorErrors: 0, restart: false },
+  { priorErrors: 9, restart: false },
+  { priorErrors: 10, restart: false },
+  { priorErrors: 0, restart: true },
+  { priorErrors: 9, restart: true },
+])(
+  "preserves $priorErrors failures after interruption (restart: $restart)",
+  ({ priorErrors, restart }) => {
+    const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+      state: { consecutiveErrors: priorErrors },
+      failureAlert: { after: 1, cooldownMs: 0 },
+    });
+    apply({ ...restartFailure(), interruptedByRestart: restart });
 
-  expect(job).toMatchObject({
-    enabled: true,
-    state: {
-      lastError: "Gateway restarting.",
-      lastRunStatus: "error",
-      consecutiveErrors: priorErrors,
-    },
-  });
-  expect(job.state.autoDisabled).toBeUndefined();
-  expect(job.state.failureAlertIncident).toBeUndefined();
-  // Interrupted runs retain error scheduling, including its minimum backoff.
-  const nextRunAtMs = startedAt + (priorErrors === 0 ? 60_000 : 3_600_001);
-  expect(job.state.nextRunAtMs).toBe(nextRunAtMs);
-  expect(needsCronTimerMaintenance(job, startedAt + 60_000)).toBe(false);
-  expect(needsCronTimerMaintenance(job, nextRunAtMs)).toBe(false);
-  expect(deferredNotifications).toEqual([]);
-});
+    expect(job).toMatchObject({
+      enabled: true,
+      state: {
+        lastError: restart ? "cron: job interrupted by gateway restart" : "Gateway restarting.",
+        lastRunStatus: "error",
+        consecutiveErrors: priorErrors,
+      },
+    });
+    expect(job.state.autoDisabled).toBeUndefined();
+    expect(job.state.failureAlertIncident).toBeUndefined();
+    // Interrupted runs retain error scheduling, including its minimum backoff.
+    const nextRunAtMs = startedAt + (priorErrors === 0 ? (restart ? 30_001 : 60_000) : 3_600_001);
+    expect(job.state.nextRunAtMs).toBe(nextRunAtMs);
+    expect(needsCronTimerMaintenance(job, startedAt + 60_000)).toBe(false);
+    expect(needsCronTimerMaintenance(job, nextRunAtMs)).toBe(false);
+    expect(isRunnableJob({ job, nowMs: nextRunAtMs - 1 })).toBe(false);
+    expect(isRunnableJob({ job, nowMs: nextRunAtMs })).toBe(true);
+    expect(deferredNotifications).toEqual([]);
+  },
+);
+
+it.each([
+  { priorErrors: 2.5, delayMs: 60_000, nextErrors: 3 },
+  { priorErrors: "invalid", delayMs: 30_000, nextErrors: 1 },
+  { priorErrors: Number.NaN, delayMs: 30_000, nextErrors: 1 },
+  { priorErrors: Infinity, delayMs: 30_000, nextErrors: 1 },
+  { priorErrors: 0, delayMs: 30_000, nextErrors: 1 },
+  { priorErrors: undefined, delayMs: 30_000, nextErrors: 1 },
+])(
+  "uses the admission floor for a restart with $priorErrors failures",
+  ({ priorErrors, delayMs, nextErrors }) => {
+    const { job, apply, deferredNotifications } = outcomeFixture(startedAt);
+    Object.assign(job.state, { consecutiveErrors: priorErrors });
+    apply(restartFailure());
+
+    const nextRunAtMs = startedAt + 1 + delayMs;
+    expect(job.state.nextRunAtMs).toBe(nextRunAtMs);
+    expect(resolveJobErrorBackoffUntilMs(job)).toBe(nextRunAtMs);
+    expect(job.state.consecutiveErrors).toBe(priorErrors);
+    expect(isRunnableJob({ job, nowMs: nextRunAtMs - 1 })).toBe(false);
+    expect(isRunnableJob({ job, nowMs: nextRunAtMs })).toBe(true);
+    expect(job.enabled).toBe(true);
+    expect(deferredNotifications).toEqual([]);
+
+    expect(() =>
+      apply({
+        status: "error",
+        error: "Synthetic failure",
+        startedAt: nextRunAtMs,
+        endedAt: nextRunAtMs + 1,
+      }),
+    ).not.toThrow();
+    expect(job.state.consecutiveErrors).toBe(nextErrors);
+    expect(job.enabled).toBe(true);
+    expect(job.state.nextRunAtMs).toBeGreaterThan(nextRunAtMs);
+  },
+);
+
+it.each([false, true])(
+  "preserves every cadence after a restart retry (explicit anchor: %s)",
+  (explicitAnchor) => {
+    const everyMs = 12 * 60 * 60 * 1_000;
+    const { job, apply } = outcomeFixture(startedAt, {
+      createdAtMs: startedAt,
+      schedule: { kind: "every", everyMs, ...(explicitAnchor ? { anchorMs: startedAt } : {}) },
+      state: { consecutiveErrors: 0 },
+    });
+    apply(restartFailure());
+    const retryAtMs = startedAt + 30_001;
+    expect(job.state.nextRunAtMs).toBe(retryAtMs);
+    apply({ status: "ok", startedAt: retryAtMs, endedAt: retryAtMs + 10 });
+    expect(job.state.consecutiveErrors).toBe(0);
+    expect(job.state.nextRunAtMs).toBe(startedAt + everyMs);
+  },
+);
 
 it("preserves every cadence after a transient recurring retry succeeds", () => {
   const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");
@@ -140,22 +289,17 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
     await saveCronStore(store.storePath, { version: 1, jobs });
 
     const order: string[] = [];
-    const enqueueSystemEvent = vi.fn(() => {
+    const enqueueSessionEvent = vi.fn(() => {
       const persisted = openOpenClawStateDatabase()
         .db.prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
         .get(cronStoreKey(store.storePath), malformed.id) as { enabled: number };
       expect(persisted.enabled).toBe(0);
       order.push("notify");
     });
-    const requestHeartbeat = vi.fn(() => {
-      expect(order.at(-1)).toBe("notify");
-      order.push("heartbeat");
-    });
     const state = createCronServiceState({
       storePath: store.storePath,
       nowMs: () => now,
-      enqueueSystemEvent,
-      requestHeartbeat,
+      enqueueSessionEvent,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
     if (path === "startup catch-up") {
@@ -164,7 +308,7 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
       await onTimer(state);
     }
 
-    expect(order).toEqual(["notify", "heartbeat"]);
+    expect(order).toEqual(["notify"]);
     expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
     expect(
       (await loadCronStore(store.storePath)).jobs.find((job) => job.id === malformed.id),
@@ -172,8 +316,8 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
   },
 );
 
-it("records failure diagnostics and auto-disables on the tenth consecutive failure", async () => {
-  const enqueueSystemEvent = vi.fn();
+it("records failure diagnostics and keeps the job scheduled on its tenth consecutive failure", async () => {
+  const enqueueSessionEvent = vi.fn();
   const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
     async () => undefined,
   );
@@ -193,7 +337,7 @@ it("records failure diagnostics and auto-disables on the tenth consecutive failu
   const { state, job, apply, deferredNotifications } = outcomeFixture(
     startedAt,
     { state: { consecutiveErrors: 8 }, failureAlert: { after: 10, cooldownMs: 0 } },
-    { enqueueSystemEvent, sendCronFailureAlert, log },
+    { enqueueSessionEvent, sendCronFailureAlert, log },
   );
   apply({ status: "error", error: "ninth failure", diagnostics: structuredClone(diagnostics) });
   expect(job.enabled).toBe(true);
@@ -218,83 +362,17 @@ it("records failure diagnostics and auto-disables on the tenth consecutive failu
     startedAt: startedAt + 60_000,
     endedAt: startedAt + 60_010,
   });
-  expect(job.enabled).toBe(false);
-  expect(job.state.nextRunAtMs).toBeUndefined();
-  expect(job.state.autoDisabled).toEqual({
-    reason: "consecutive-failures",
-    atMs: startedAt + 60_010,
-    consecutiveErrors: 10,
-  });
+  expect(job.enabled).toBe(true);
+  expect(job.state.nextRunAtMs).toBeGreaterThan(startedAt + 60_010);
+  expect(job.state.autoDisabled).toBeUndefined();
   expect(deferredNotifications).toHaveLength(1);
   await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
   expect(sendCronFailureAlert).toHaveBeenCalledOnce();
   expect(sendCronFailureAlert.mock.calls[0]?.[0].payload.text).toContain(
-    'Automation "outcome" was auto-disabled after 10 consecutive run failures.',
+    'Automation "outcome" failed 10 times in a row',
   );
-  expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  expect(enqueueSessionEvent).not.toHaveBeenCalled();
 });
-
-it.each([
-  { name: "alerts disabled for the job", overrides: { failureAlert: false } },
-  { name: "no failure route", overrides: { delivery: { mode: "none" } } },
-] as const)("keeps the owning-agent notice with $name", async ({ overrides }) => {
-  const enqueueSystemEvent = vi.fn();
-  const sendCronFailureAlert = vi.fn(async () => undefined);
-  const { state, job, apply, deferredNotifications } = outcomeFixture(
-    startedAt,
-    { ...overrides, state: { consecutiveErrors: 9 } } as Partial<CronJob>,
-    { enqueueSystemEvent, sendCronFailureAlert, defaultAgentId: "main" },
-  );
-
-  apply({ status: "error", error: "tenth failure" });
-  expect(job.state.autoDisabled?.reason).toBe("consecutive-failures");
-  expect(deferredNotifications.map(({ kind }) => kind)).toEqual(["auto-disabled"]);
-  await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
-  expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining("was auto-disabled after 10 consecutive run failures"),
-    expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
-  );
-  expect(sendCronFailureAlert).not.toHaveBeenCalled();
-});
-
-it.each([
-  {
-    name: "webhook route, no earlier alert",
-    failureAlert: { after: 20, mode: "webhook", to: "https://alerts.example.com/hook" },
-    repairPending: false,
-  },
-  { name: "announce route, no earlier alert", failureAlert: { after: 20 }, repairPending: false },
-  { name: "announce route, pending repair", failureAlert: { after: 2 }, repairPending: true },
-] as const)(
-  "sends an owned job's auto-disable notice through its route, not a repair turn ($name)",
-  ({ failureAlert, repairPending }) => {
-    const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
-      owner: { agentId: "main", sessionKey: "agent:main:main" },
-      failureAlert: { ...failureAlert },
-      state: {
-        consecutiveErrors: 9,
-        failureAlertIncident: repairPending
-          ? {
-              scope: "run",
-              repair: { atMs: startedAt - 60_000, deadlineAtMs: startedAt + 60_000 },
-            }
-          : undefined,
-      },
-    } as Partial<CronJob>);
-
-    apply({ status: "error", error: "tenth failure" });
-
-    expect(job.enabled).toBe(false);
-    expect(deferredNotifications.map(({ kind }) => kind)).toEqual(["failure-alert"]);
-    const [notification] = deferredNotifications;
-    expect(notification?.kind === "failure-alert" && notification.payload.text).toContain(
-      "was auto-disabled after 10 consecutive run failures",
-    );
-    if (repairPending) {
-      expect(job.state.failureAlertIncident?.repair?.alerted).toBe(true);
-    }
-  },
-);
 
 it.each([
   { name: "stale", options: { scheduleOwnership: "stale" } },
@@ -446,4 +524,80 @@ it.each(["ok", "error"] as const)("force run preserves the every cadence after %
   expect(job.state.lastRunAtMs).toBe(nowMs);
   expect(job.state.lastStatus).toBe(status);
   expect(job.state.nextRunAtMs).toBe(expectedNextMs);
+});
+
+function parentPause(
+  reason: "archived" | "removed" = "archived",
+  parentSessionKey = "agent:main:dashboard:parent",
+) {
+  return {
+    status: "skipped",
+    error: `paused: parent ${reason}`,
+    parentUnavailable: { reason, parentSessionKey },
+  } as const;
+}
+
+const pauseNotice = expect.objectContaining({
+  kind: "auto-disabled",
+  text: "paused: parent archived",
+});
+
+it("pauses a parent-linked job once when its parent conversation is gone", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt);
+  apply(parentPause());
+  expect(job.enabled).toBe(false);
+  expect(job.state.nextRunAtMs).toBeUndefined();
+  expect(deferredNotifications).toEqual([pauseNotice]);
+  // A second settled outcome for the already-paused job sends nothing new.
+  apply(parentPause());
+  expect(deferredNotifications).toHaveLength(1);
+});
+
+it("sends one notice when an alert route also reports skipped runs", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+    failureAlert: { after: 1, cooldownMs: 0, includeSkipped: true },
+  });
+  apply(parentPause());
+  expect(job.enabled).toBe(false);
+  expect(deferredNotifications).toEqual([pauseNotice]);
+});
+
+it.each(["legacy", "owner"] as const)(
+  "sends a %s pause notice to the agent, not its gone conversation",
+  async (origin) => {
+    const parentSessionKey = "agent:ops:dashboard:parent";
+    const enqueueSessionEvent = vi.fn();
+    const { state, apply, deferredNotifications } = outcomeFixture(
+      startedAt,
+      {
+        agentId: undefined,
+        ...(origin === "owner"
+          ? { owner: { sessionKey: parentSessionKey } }
+          : { sessionKey: parentSessionKey }),
+      },
+      { enqueueSessionEvent },
+    );
+    apply(parentPause("archived", parentSessionKey));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+      "paused: parent archived",
+      expect.objectContaining({ agentId: "ops", sessionKey: undefined, createIfMissing: true }),
+    );
+  },
+);
+
+it("sends the pause notice for a one-shot job too", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+    schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+  });
+  apply(parentPause("removed"));
+  expect(job.enabled).toBe(false);
+  expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toHaveLength(1);
+});
+
+it("leaves a newer operator edit alone when a pause result is stale", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt);
+  apply(parentPause(), { scheduleOwnership: "stale" });
+  expect(job.enabled).toBe(true);
+  expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toEqual([]);
 });

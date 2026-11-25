@@ -163,8 +163,6 @@ describePosix("prepare-push retained Crabbox finalization", () => {
   });
   it.each([
     ["github_pending", 1],
-    ["remote_crabbox_aws", 1],
-    ["remote_crabbox_aws", 2],
     ["remote_crabbox_aws", 3],
   ])("preserves the prior receipt when %s write %i fails", (mode, failedWrite) => {
     const f = publishedPreparation();

@@ -31,10 +31,13 @@ vi.mock("node:module", async (importOriginal) => {
   });
 });
 
-vi.mock("node:fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs")>()),
-  existsSync: vi.fn(() => false),
-}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { existsSync: vi.fn(() => false) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 // mock-isolation: Exercise entrypoint dispatch without running the CLI.
 vi.mock("./cli/run-main.js", () => ({ runCli: vi.fn(async () => undefined) }));
@@ -47,8 +50,9 @@ vi.mock("./entry.version-fast-path.js", () => ({
 }));
 // mock-isolation: Import this entrypoint as the main module in the fixture.
 vi.mock("./infra/is-main.js", () => ({ isMainModule: vi.fn(() => true) }));
-vi.mock("./infra/package-lifecycle.js", () => ({
-  completePendingPackageLifecycle: vi.fn(async () => true),
+vi.mock("./infra/package-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./infra/package-lifecycle.js")>()),
+  completePendingPackageLifecycle: vi.fn(async () => {}),
 }));
 vi.mock("./library.js", () => ({
   applyTemplate: vi.fn(),
@@ -84,9 +88,10 @@ describe("legacy package executable entrypoint", () => {
     vi.clearAllMocks();
     vi.resetModules();
     // Module resets retain mock factories; each entry case needs a fresh import witness.
-    vi.doMock("./cli/failure-output.js", () => {
+    vi.doMock("./cli/failure-output.js", async (importOriginal) => {
       lifecycleImports.failureOutput();
       return {
+        ...(await importOriginal<typeof import("./cli/failure-output.js")>()),
         formatCliFailureLines: vi.fn(() => []),
         formatCliJsonFailure: vi.fn(),
         isExpectedCliError: vi.fn(() => false),
@@ -95,7 +100,7 @@ describe("legacy package executable entrypoint", () => {
     vi.mocked(isMainModule).mockReturnValue(true);
     vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(false);
     vi.mocked(existsSync).mockReturnValue(false);
-    vi.mocked(completePendingPackageLifecycle).mockResolvedValue(true);
+    vi.mocked(completePendingPackageLifecycle).mockResolvedValue(undefined);
     vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", undefined);
     vi.stubEnv("NODE_COMPILE_CACHE", undefined);
     vi.stubEnv("OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED", undefined);
@@ -273,7 +278,6 @@ describe("legacy package executable entrypoint", () => {
       if (fails) {
         throw new Error("postinstall failed");
       }
-      return true;
     });
     vi.mocked(tryHandleRootVersionFastPath).mockImplementation(() => {
       calls.push("version");

@@ -4,10 +4,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { captureCommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
+import { getCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createAdminIngressFixture } from "../../channels/message-access/operator-authority.test-support.js";
-import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import {
   SessionWorkStartChangedError,
   SessionWorkStartInvalidatedError,
@@ -19,11 +18,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { deriveDeliveryQueueRetentionColumns } from "../../infra/delivery-queue-retention-columns.js";
 import { loadDeliveryQueueEntries } from "../../infra/delivery-queue-sqlite.js";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-namespaces.js";
-import { drainPendingDeliveriesCore } from "../../infra/outbound/delivery-queue-recovery.js";
 import { loadUnfinishedDeliveries as loadPendingDeliveries } from "../../infra/outbound/delivery-queue-storage.js";
-import { createRecoveryLog } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import {
   createPluginRegistryFixture,
@@ -47,16 +43,21 @@ import {
   resolveUserChannelAuthorizationPolicy,
 } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
-import { deliverAgentCommandResult } from "./delivery.js";
+import {
+  deliverFinal,
+  matrixPlugin,
+  persistMarker,
+  recoveryFor,
+  textReceipt,
+} from "./delivery.test-support.js";
 
 const COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME = "outbound-command-owner-v1";
 const privatePaths = vi.hoisted(() => ({ root: undefined as string | undefined }));
@@ -147,16 +148,7 @@ it.each(
       ingress,
       "admin ingress",
     );
-    const recover = () =>
-      drainPendingDeliveriesCore({
-        drainKey: "restart-final",
-        logLabel: "Restart final",
-        cfg,
-        log: createRecoveryLog(),
-        stateDir: state.stateDir,
-        deliver: deliverOutboundPayloads,
-        selectEntry: () => ({ match: true, bypassBackoff: true }),
-      });
+    const recover = recoveryFor(cfg, state.stateDir, "restart-final");
     const admin = admins[0]!;
     let grantId = "86633673-b1dd-4500-85e2-b6e6e490810f";
     const grantLifetime = new AbortController();
@@ -196,11 +188,11 @@ it.each(
       unlinkUserChannelIdentity(admin.profile.id, admin.identity);
       await activatePolicy({});
     }
-    const assertOwnerCurrent = expectDefined(
-      captureCommandOwnerAssertion(await context(admin.identity.senderId)),
-      "Channel owner assertion was not admitted",
+    const owner = expectDefined(
+      getCommandOwnerAuthority(await context(admin.identity.senderId)),
+      "Channel owner was not admitted",
     );
-    assertOwnerCurrent();
+    expect(owner.isCurrent()).toBe(true);
     // Confirm every database selector before the first session/queue write.
     expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
     const databasePaths: [string, string][] = [
@@ -232,17 +224,9 @@ it.each(
         },
       });
     }
-    const marker = await persistPendingFinalDeliveryMarker({
-      ...target,
-      deliver: true,
-      sessionStore: { [sessionKey]: entry },
-      sessionEntry: entry,
-      suppressVisibleSessionEffects: false,
-      sessionReboundDuringRun: false,
-      payloads,
+    const marker = await persistMarker(target, entry, payloads, {
       deliveryContext: { channel: "matrix", to: "!restart:example" },
-      runOwnedSessionId: entry.sessionId,
-      commandOwnerReference: assertOwnerCurrent.recoveryReference,
+      commandOwnerReference: owner.recoveryReference ?? null,
     });
     expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(true);
     const entered = createDeferred();
@@ -262,40 +246,20 @@ it.each(
         await activatePolicy({});
       }
     };
-    const plugin = createOutboundTestPlugin({
-      id: "matrix",
-      outbound: {
-        deliveryMode: "direct",
-        sendText: async () => {
-          throw new Error("message adapter owns send");
-        },
+    const plugin = matrixPlugin(
+      async ({ text, onPlatformSendDispatch, assertDirectAdapterHandoff }) => {
+        if (handoff === "onPlatformSendDispatch") {
+          await hold();
+        }
+        await onPlatformSendDispatch?.();
+        if (handoff === "assertDirectAdapterHandoff") {
+          await hold();
+        }
+        assertDirectAdapterHandoff?.();
+        writes.push(text);
+        return textReceipt(`delivered-final-${writes.length}`);
       },
-    });
-    plugin.message = {
-      id: "matrix",
-      durableFinal: { capabilities: { text: true } },
-      send: {
-        text: async ({ text, onPlatformSendDispatch, assertDirectAdapterHandoff }) => {
-          if (handoff === "onPlatformSendDispatch") {
-            await hold();
-          }
-          await onPlatformSendDispatch?.();
-          if (handoff === "assertDirectAdapterHandoff") {
-            await hold();
-          }
-          assertDirectAdapterHandoff?.();
-          writes.push(text);
-          const messageId = `delivered-final-${writes.length}`;
-          return {
-            messageId,
-            receipt: createMessageReceiptFromOutboundResults({
-              results: [{ channel: "matrix", messageId }],
-              kind: "text",
-            }),
-          };
-        },
-      },
-    };
+    );
     const channelRegistry = createTestRegistry([{ pluginId: "matrix", source: "test", plugin }]);
     if (grantFixture) {
       grantFixture.registry.registry.channels.push(...channelRegistry.channels);
@@ -305,10 +269,8 @@ it.each(
     }
     const controller = new AbortController();
     let custodyError: Error | undefined;
-    const delivery = deliverAgentCommandResult({
+    const delivery = deliverFinal(target, {
       cfg,
-      deps: {},
-      runtime: { log: () => {}, error: () => {}, exit: () => {} },
       opts: {
         message: "continue",
         deliver: true,
@@ -319,12 +281,10 @@ it.each(
         runId: "recovery-run",
         abortSignal: controller.signal,
       },
-      outboundSession: { agentId: "main", key: sessionKey },
       sessionEntry: marker.sessionEntry,
       result: { meta: { durationMs: 1 } },
       payloads,
       assertDeliveryCurrent: () => {
-        assertOwnerCurrent();
         if (custodyError) {
           throw custodyError;
         }
@@ -363,7 +323,6 @@ it.each(
         !ownerRevoked;
       if (ownerRevoked) {
         setUserProfileRole(admin.profile.id, "member");
-        expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
       }
       if (boundary === "restart-owner-retired") {
         retire();
@@ -426,7 +385,6 @@ it.each(
       }
       if (lateRevocation) {
         setUserProfileRole(admin.profile.id, "member");
-        expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
       }
       if (boundary.endsWith("reference")) {
         const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
@@ -465,18 +423,17 @@ it.each(
       }
       const mayRecover =
         recoverable &&
-        (!configured || boundary === "restart-configured-allowed") &&
-        (!boundary.startsWith("restart-retained-") || boundary === "restart-retained-lifecycle");
+        (!configured ||
+          boundary === "restart-configured-allowed" ||
+          boundary === "restart-configured-handoff-removed") &&
+        (!boundary.startsWith("restart-retained-") ||
+          boundary === "restart-retained-lifecycle" ||
+          boundary === "restart-retained-grant-handoff-replaced" ||
+          boundary === "restart-retained-recovered-handoff-revoked");
       held = false;
+      // Recovery admits once. Policy changes inside the adapter affect the next
+      // start, not the admitted batch; writer and cancellation fences still apply.
       await recover();
-      if (
-        boundary === "restart-retained-recovered-handoff-revoked" ||
-        boundary === "restart-configured-handoff-removed"
-      ) {
-        expect(writes).toEqual([]);
-        expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(1);
-        await recover();
-      }
       expect(writes).toEqual(mayRecover ? ["Captured final answer", "Final detail"] : []);
       expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(0);
       if (recoverable) {
@@ -485,7 +442,11 @@ it.each(
       }
       if (mayRecover) {
         expect(loadSessionEntry(target)?.pendingFinalDelivery?.deliveries).toEqual([
-          { id: expect.any(String), state: "delivered" },
+          {
+            id: expect.any(String),
+            state: "delivered",
+            receipt: { platformMessageId: "delivered-final-2", resultCount: 2 },
+          },
         ]);
       }
       // Re-enter recovery after settlement; neither success nor revocation may replay.

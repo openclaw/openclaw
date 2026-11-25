@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -23,8 +24,10 @@ import type {
   SessionEntryMaintenanceInput,
   SqliteSessionReclamationPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
+import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import * as candidates from "./session-accessor.sqlite-maintenance-candidates.js";
+import { prepareSessionEntryMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-store.js";
 import {
   prepareSessionMaintenanceInWorker,
   reclaimSessionMaintenanceInTransaction,
@@ -63,6 +66,110 @@ function createStore(entryCount: number, updatedAt = Date.now()) {
   }, options);
   return { database, options, storePath };
 }
+
+it("bounds expired-session SQL per maintenance request and drains the same archived set", async () => {
+  const { database, options, storePath } = createStore(500, Date.now() - 90 * DAY_MS);
+  const operation = await createPlanningOperation(options, {
+    maxAgeEntries: 64,
+    maxCapEntries: 64,
+    maintenance: resolveMaintenanceConfigFromInput({
+      mode: "enforce",
+      maxEntries: 1000,
+      pruneAfter: "30d",
+      preserveRecent: "1d",
+    }),
+  });
+  const statements = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["sql"],
+    () => "sql",
+  );
+  const preparedCounts: number[] = [];
+  const preparedRows: number[] = [];
+  const writerCounts: number[] = [];
+  const archived: string[] = [];
+  try {
+    for (let pass = 0; pass < 10; pass += 1) {
+      let before = statements.counts.sql;
+      const beforeRows = statements.rowCounts.sql;
+      const prepared = runSqliteReadSnapshotSync(database.db, () =>
+        prepareSessionEntryMaintenanceInDatabase(
+          database,
+          operation.input,
+          () => operation.input.preservation,
+        ),
+      );
+      preparedCounts.push(statements.counts.sql - before);
+      preparedRows.push(statements.rowCounts.sql - beforeRows);
+      before = statements.counts.sql;
+      const plan = runOpenClawAgentWriteTransaction((current) => prepared.apply(current), options);
+      writerCounts.push(statements.counts.sql - before);
+      expect(plan.archived).toBeLessThanOrEqual(64);
+      archived.push(...plan.archivedEntries.map((entry) => entry.sessionKey));
+      if (!plan.ageContinuation) {
+        break;
+      }
+      operation.input.ageContinuation = plan.ageContinuation;
+    }
+    expect(archived.toSorted()).toEqual(
+      Array.from({ length: 500 }, (_, index) => key(index)).toSorted(),
+    );
+    expect(Math.max(...preparedCounts)).toBeLessThanOrEqual(24);
+    expect(Math.max(...preparedRows)).toBeLessThanOrEqual(256);
+    expect(Math.max(...writerCounts)).toBeLessThanOrEqual(96);
+  } finally {
+    statements.restore();
+  }
+  expect(
+    Array.from(
+      { length: 500 },
+      (_, index) => loadSessionEntry({ storePath, sessionKey: key(index) })?.archiveReason,
+    ),
+  ).toEqual(Array.from({ length: 500 }, () => "age-retention"));
+});
+
+it("pins age eligibility across pages and immediately revisits the next due boundary", async () => {
+  const now = Date.now();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
+  const { options, storePath } = createStore(64, now - 2_000);
+  runOpenClawAgentWriteTransaction((database) => {
+    writeSessionEntry(database, key(64), { sessionId: "cadence-64", updatedAt: now - 999 });
+  }, options);
+  const operation = await createPlanningOperation(options, {
+    maxAgeEntries: 64,
+    maxCapEntries: 64,
+    maintenance: {
+      ...resolveMaintenanceConfigFromInput(),
+      pruneAfterMs: 1_000,
+      archiveDashboardAfterMs: null,
+      preserveRecentMs: null,
+      maxEntries: 1_000,
+    },
+  });
+  const pass = () => {
+    const result = reclaimSessionMaintenanceInTransaction(operation, {});
+    if (result.kind !== "maintenance-plan") {
+      throw new Error("Expected an admitted age-retention page");
+    }
+    return result;
+  };
+  const first = pass();
+  expect(first.value.archived).toBe(64);
+  expect(first.value.ageContinuation).toMatchObject({ at: now });
+  operation.input.ageContinuation = first.value.ageContinuation;
+  vi.setSystemTime(now + 5);
+  const last = pass();
+  expect(last.value).toMatchObject({ archived: 0, entryRemovals: [] });
+  expect(last.value.ageContinuation).toBeUndefined();
+  expect(last.nextAt).toBe(now + 2);
+  expect(loadSessionEntry({ storePath, sessionKey: key(64) })?.archivedAt).toBeUndefined();
+
+  delete operation.input.ageContinuation;
+  const next = pass();
+  expect(next.value.archivedEntries).toEqual([{ sessionKey: key(64), sessionId: "cadence-64" }]);
+  expect(loadSessionEntry({ storePath, sessionKey: key(64) })?.archiveReason).toBe("age-retention");
+});
 
 async function createPlanningOperation(
   options: ReturnType<typeof createStore>["options"],
@@ -250,6 +357,48 @@ it("reports a maintenance deadline without an unused revision snapshot", () => {
     reads.restore();
   }
 });
+
+it.each([
+  [null, null],
+  [0, null],
+  [null, 7 * DAY_MS],
+  [0, 7 * DAY_MS],
+])(
+  "skips disabled dashboard expiry scans (%s) with recent protection %s",
+  (dashboardAge, recentAge) => {
+    const now = Date.now();
+    const { database, options } = createStore(1, now - 2 * DAY_MS);
+    runOpenClawAgentWriteTransaction((current) => {
+      writeSessionEntry(current, "agent:main:dashboard:disabled", {
+        sessionId: "disabled-dashboard",
+        updatedAt: now - 3 * DAY_MS,
+        lastActivityAt: now - DAY_MS,
+      });
+    }, options);
+    const maintenance: ResolvedSessionMaintenanceConfig = {
+      ...resolveMaintenanceConfigFromInput(),
+      pruneAfterMs: 0,
+      archiveDashboardAfterMs: dashboardAge,
+      preserveRecentMs: recentAge,
+    };
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["dashboard", "activity"],
+      (sql) =>
+        /\bage_namespaces\b/.test(sql) ? "dashboard" : /\bage_rows\b/.test(sql) ? "activity" : null,
+    );
+    try {
+      const fact = runOpenClawAgentWriteTransaction(
+        (current) => ageFacts.recordSessionEntryMaintenanceAgeFact(current, maintenance, now),
+        options,
+      );
+      expect(fact.next.at).toBe(recentAge == null ? Infinity : now + 5 * DAY_MS + 1);
+      expect(queries.counts).toEqual({ dashboard: 0, activity: recentAge == null ? 0 : 1 });
+    } finally {
+      queries.restore();
+    }
+  },
+);
 
 it.each([
   { scenario: "a write crosses the cap", count: 2, maxEntries: 2, force: false },
@@ -519,6 +668,104 @@ it.each([
     Math.min(expected[scenario], now + ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS),
   );
 });
+
+it.each(["dashboard", "recent"] as const)(
+  "bounds %s activity reads without changing exact deadlines or protected entries",
+  (kind) => {
+    const { options } = createStore(0);
+    const now = Date.now();
+    const maximum = now - 5 * DAY_MS;
+    const maintenance: ResolvedSessionMaintenanceConfig = {
+      ...resolveMaintenanceConfigFromInput(),
+      pruneAfterMs: 30 * DAY_MS,
+      archiveDashboardAfterMs: kind === "dashboard" ? 7 * DAY_MS : null,
+      preserveRecentMs: kind === "recent" ? 7 * DAY_MS : null,
+    };
+    runOpenClawAgentWriteTransaction((database) => {
+      const write = (sessionKey: string, entry: Partial<SessionEntry> = {}, alias = false) =>
+        writeSessionEntry(
+          database,
+          sessionKey,
+          { sessionId: sessionKey, updatedAt: now - 8 * DAY_MS, ...entry },
+          alias ? { allowStoredAliases: true, canonicalPreviousEntry: null } : undefined,
+        );
+      write("agent:main:main", { updatedAt: now - 100 * DAY_MS });
+      write(key(0), { updatedAt: now - 28 * DAY_MS });
+      write("agent:zeta:dashboard:activity", { lastActivityAt: now - 6 * DAY_MS });
+      write("agent:main:dashboard:started", { sessionStartedAt: now - 6 * DAY_MS + 1 });
+      write("AGENT:MAIN:DASHBOARD:ALIAS", { lastInteractionAt: now - 6 * DAY_MS - 1 }, true);
+      const protectedKey = "agent:main:dashboard:protected:thread:t1";
+      write(protectedKey, {
+        updatedAt: now - 9 * DAY_MS,
+        lastActivityAt: now - 7 * DAY_MS + 1,
+      });
+      for (const [name, delta] of [
+        ["before", -1],
+        ["equal", 0],
+        ["after", 1],
+      ] as const) {
+        write(`agent:main:dashboard:${name}`, { updatedAt: maximum + delta });
+      }
+      write("AGENT:MAIN:DASHBOARD:EQUAL", { updatedAt: maximum }, true);
+      write("agent:main:dashboard:archived", { archivedAt: now });
+      const queries = readSessionMaintenanceAgeQueries(database.db);
+      const rows = Array.from(
+        kind === "dashboard" ? queries.dashboardsBefore(maximum) : queries.activityBefore(maximum),
+      );
+      const expected = [
+        "agent:zeta:dashboard:activity",
+        "agent:main:dashboard:started",
+        "AGENT:MAIN:DASHBOARD:ALIAS",
+        protectedKey,
+        "agent:main:dashboard:before",
+        ...(kind === "recent" ? ["agent:main:main", key(0)] : []),
+      ];
+      expect(rows.map((row) => row.session_key).toSorted()).toEqual(expected.toSorted());
+      if (kind === "recent") {
+        expect(
+          rows.filter((row) => row.updated_at === now - 8 * DAY_MS).map((row) => row.session_key),
+        ).toEqual([
+          "agent:zeta:dashboard:activity",
+          "agent:main:dashboard:started",
+          "AGENT:MAIN:DASHBOARD:ALIAS",
+        ]);
+      }
+      expect(
+        ageFacts.recordSessionEntryMaintenanceAgeFact(database, maintenance, now).next.at,
+      ).toBe(now + DAY_MS);
+      expect(readExactSessionEntryRow(database, protectedKey)?.entry.archivedAt).toBeUndefined();
+    }, options);
+  },
+);
+
+it.each([0, Number.MAX_SAFE_INTEGER])(
+  "retains activity deadlines when prune age %s cannot supply an exact SQL bound",
+  (pruneAfterMs) => {
+    const { options } = createStore(0);
+    const now = Date.now();
+    const maintenance: ResolvedSessionMaintenanceConfig = {
+      ...resolveMaintenanceConfigFromInput(),
+      pruneAfterMs,
+      archiveDashboardAfterMs: 7 * DAY_MS,
+      preserveRecentMs: 7 * DAY_MS,
+    };
+    runOpenClawAgentWriteTransaction((database) => {
+      writeSessionEntry(database, "agent:zeta:dashboard:active", {
+        sessionId: "active-dashboard",
+        updatedAt: now - 8 * DAY_MS,
+        lastActivityAt: now - 6 * DAY_MS,
+      });
+      writeSessionEntry(database, key(0), {
+        sessionId: "recent-ordinary",
+        updatedAt: now - 8 * DAY_MS,
+        lastActivityAt: now - 6 * DAY_MS - 1,
+      });
+      expect(
+        ageFacts.recordSessionEntryMaintenanceAgeFact(database, maintenance, now).next.at,
+      ).toBe(now + DAY_MS);
+    }, options);
+  },
+);
 
 it.each([
   "local entry",

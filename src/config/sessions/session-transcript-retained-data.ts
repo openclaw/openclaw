@@ -2,10 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql, type AliasableExpression } from "kysely";
 import {
+  jsonNativeFieldsValid,
   jsonPathValue,
   jsonRemovePaths,
   jsonSetPath,
-  jsonValid,
 } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
@@ -21,6 +21,7 @@ import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readNextTranscriptSeq } from "./session-accessor.sqlite-transcript-state.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import {
+  TRANSCRIPT_PAYLOAD_COLUMNS,
   transcriptEventJsonSql,
   transcriptEventNavigationSql,
   transcriptEventWithoutCustomDataBytesSql,
@@ -35,14 +36,17 @@ export function transcriptRetainedDataBytesSql(
     return transcriptEventReadBytesSql();
   }
   const event = transcriptEventNavigationSql(database);
-  return /* kysely-allow-raw: mirror the retained-data projection's SQLite-first member matching. */ sql<number>`CASE WHEN ${jsonValid(database, event)} THEN
+  return /* kysely-allow-raw: mirror the retained-data projection's SQLite-first member matching. */ sql<number>`CASE WHEN ${jsonNativeFieldsValid(database, event)} THEN
     CASE WHEN ${jsonPathValue(database, event, sql.lit("$.type"))} = 'custom'
       AND ${jsonPathValue(database, event, sql.lit("$.id"))} IN (${sql.join(retainedIds)})
       THEN ${transcriptEventWithoutCustomDataBytesSql(database)} ELSE ${transcriptEventReadBytesSql()} END
     ELSE ${transcriptEventReadBytesSql()} END`;
 }
 
-/** Custom data is opaque to topology and indexing; cleanup keeps it in SQLite. */
+/**
+ * Custom data is opaque to topology and indexing; cleanup keeps it in SQLite.
+ * Rows native fields cannot decode keep their data and stay on the exact-byte path.
+ */
 export function projectTranscriptRetainedDataSql(
   database: EngineConnection,
   event: AliasableExpression<string>,
@@ -50,7 +54,7 @@ export function projectTranscriptRetainedDataSql(
 ): AliasableExpression<string> {
   return retainedIds.length === 0
     ? event
-    : /* kysely-allow-raw: bound cleanup planning to navigation while retaining opaque custom data in its original row. */ sql<string>`CASE WHEN ${jsonValid(database, event)} THEN
+    : /* kysely-allow-raw: bound cleanup planning to navigation while retaining opaque custom data in its original row. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(database, event)} THEN
         CASE WHEN ${jsonPathValue(database, event, sql.lit("$.type"))} = 'custom'
           AND ${jsonPathValue(database, event, sql.lit("$.id"))} IN (${sql.join(retainedIds)})
         THEN ${jsonRemovePaths(database, event, [sql.lit("$.data")])} ELSE ${event} END
@@ -137,22 +141,7 @@ export function copyRetainedTranscriptPayload(
         database.db,
         db
           .insertInto("transcript_events")
-          .columns([
-            "session_id",
-            "seq",
-            "event_json",
-            "event_zstd",
-            "event_utf8_bytes",
-            "navigation_json",
-            "navigation_type",
-            "navigation_custom_type",
-            "navigation_display",
-            "message_role",
-            "navigation_last_type",
-            "navigation_last_custom_type",
-            "navigation_valid",
-            "created_at",
-          ])
+          .columns(TRANSCRIPT_PAYLOAD_COLUMNS)
           .expression(
             db
               .selectFrom("transcript_events")

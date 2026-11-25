@@ -6,16 +6,26 @@ import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { hasDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
+  readMigrationArtifactIdentity,
+  sameMigrationArtifact,
+} from "../infra/session-sqlite-migration-artifact.js";
+import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
+import {
+  assertSafeSessionSqliteMigrationDirectory,
   findLatestFailedSessionSqliteMigrationManifest,
   resolveSessionSqliteMigrationRunsDir,
+  writeSessionSqliteMigrationManifest,
   type SessionSqliteMigrationTargetInput,
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   resolveTargetSqliteOptions,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
-import { classifySqliteFtsIntegrityFindings } from "../infra/sqlite-index-schema.js";
-import { assertSqliteIntegrity, SqliteIntegrityError } from "../infra/sqlite-integrity.js";
+import {
+  assertSqliteIntegrity,
+  classifySqliteFtsIntegrityFindings,
+  SqliteIntegrityError,
+} from "../infra/sqlite-integrity.js";
 import {
   inspectSqliteRecoveryFiles,
   moveSqliteFilesAside,
@@ -28,7 +38,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
-import { OPENCLAW_AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
+import { AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
@@ -36,6 +46,7 @@ import {
   readActiveSqliteTranscriptFiles,
   summarizeDoctorSessionSqliteReport,
 } from "./doctor-session-sqlite-diagnostics.js";
+import { readLegacySessionRecords } from "./doctor-session-sqlite-discovery.js";
 import {
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
@@ -69,12 +80,23 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     ...target,
     sqlitePath: resolveTargetSqlitePath(target, params.env),
   }));
-  const failedRun = findLatestFailedSessionSqliteMigrationManifest(params.env, trustedTargets);
+  const { failedRun, recoveredCorruptTargets } = await withAgentDatabaseMaintenanceLease(
+    { env: params.env },
+    async (maintenance) => {
+      rebindRestoredLegacyRegistries(params.recoveryInventory, trustedTargets, maintenance);
+      const latestFailed = findLatestFailedSessionSqliteMigrationManifest(
+        params.env,
+        trustedTargets,
+      );
+      return {
+        failedRun: latestFailed,
+        recoveredCorruptTargets: latestFailed
+          ? []
+          : await recoverCorruptSqliteTargets(params.targets, params.env, maintenance),
+      };
+    },
+  );
   if (!failedRun) {
-    const recoveredCorruptTargets = await withAgentDatabaseMaintenanceLease(
-      { env: params.env },
-      (maintenance) => recoverCorruptSqliteTargets(params.targets, params.env, maintenance),
-    );
     const retainedReports: DoctorSessionSqliteTargetReport[] = [...recoveredCorruptTargets];
     for (const target of trustedTargets) {
       const recovered = recoveredCorruptTargets.find(
@@ -159,12 +181,12 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   const reportTarget =
     targetReports[0] ?? createSyntheticRecoverTargetReport(params.env, failedRun.manifestPath);
   reportTarget.restore = restore;
-  reportTarget.issues.push(
-    ...restore.conflicts.map((conflict) => ({
+  for (const conflict of restore.conflicts) {
+    reportTarget.issues.push({
       code: "restore_conflict",
       message: `${conflict.sourcePath}: ${conflict.reason}`,
-    })),
-  );
+    });
+  }
   const report = summarizeDoctorSessionSqliteReport(
     "recover",
     targetReports.length > 0 ? targetReports : [reportTarget],
@@ -192,6 +214,91 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     trustedTargets,
   );
   return report;
+}
+
+/** Explicit recovery can acknowledge a same-path copy without granting archive disposal. */
+function rebindRestoredLegacyRegistries(
+  inventory: ReturnType<typeof collectRecoveryInventory> | undefined,
+  targets: readonly SessionSqliteMigrationTargetInput[],
+  maintenance: OpenClawStateLeaseContext,
+): void {
+  for (const [archivePath, refs] of inventory?.references ?? []) {
+    const first = refs[0]!;
+    if (first.move.kind !== "legacy-store") {
+      continue;
+    }
+    const target = targets.find(
+      (candidate) =>
+        candidate.agentId === first.target.agentId &&
+        candidate.storePath === first.target.storePath &&
+        candidate.sqlitePath === first.target.sqlitePath,
+    );
+    if (
+      !target ||
+      refs.some(
+        (ref) =>
+          !ref.trusted ||
+          ref.consumedByRestore ||
+          !ref.run.manifest.completedAt ||
+          ref.run.manifest.failedAt ||
+          ref.target.validationBeforeArchive !== "passed" ||
+          ref.target.agentId !== target.agentId ||
+          ref.target.storePath !== target.storePath ||
+          ref.target.sqlitePath !== target.sqlitePath ||
+          ref.move.kind !== "legacy-store" ||
+          !ref.target.completedMoves.some((move) => move.archivePath === archivePath),
+      )
+    ) {
+      continue;
+    }
+    const moves = refs.flatMap((ref) =>
+      [...ref.target.plannedMoves, ...ref.target.completedMoves].filter(
+        (move) => move.archivePath === archivePath,
+      ),
+    );
+    let identity: ReturnType<typeof readMigrationArtifactIdentity>;
+    try {
+      assertSafeSessionSqliteMigrationDirectory(path.dirname(archivePath));
+      identity = readMigrationArtifactIdentity(archivePath);
+      if (
+        moves.every(
+          (move) => move.artifact && sameMigrationArtifact(move.artifact.identity, identity),
+        ) ||
+        !moves.every(
+          (move) =>
+            move.kind === "legacy-store" &&
+            move.artifact?.disposal.state === "retained" &&
+            (["dev", "mtimeNs", "size", "sha256"] as const).every(
+              (key) => move.artifact!.identity[key] === identity[key],
+            ),
+        )
+      ) {
+        continue;
+      }
+      const issues: DoctorSessionSqliteIssue[] = [];
+      readLegacySessionRecords(target, issues, { sourcePath: archivePath });
+      if (
+        issues.length ||
+        !sameMigrationArtifact(readMigrationArtifactIdentity(archivePath), identity)
+      ) {
+        continue;
+      }
+    } catch {
+      // Normal historical discovery reports the original refusal without changing its receipt.
+      continue;
+    }
+    for (const run of new Set(refs.map((ref) => ref.run))) {
+      maintenance.assertOwned();
+      for (const ref of refs.filter((candidate) => candidate.run === run)) {
+        for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
+          if (move.archivePath === archivePath) {
+            move.artifact!.identity = identity;
+          }
+        }
+      }
+      writeSessionSqliteMigrationManifest(run);
+    }
+  }
 }
 
 async function recoverCorruptSqliteTargets(
@@ -314,7 +421,7 @@ function inspectSqliteForRecovery(
     if (database && error instanceof SqliteIntegrityError && error.findings) {
       try {
         ftsOnly = Boolean(
-          classifySqliteFtsIntegrityFindings(database, error.findings, OPENCLAW_AGENT_FTS_SCHEMAS),
+          classifySqliteFtsIntegrityFindings(database, error.findings, AGENT_FTS_SCHEMAS),
         );
       } catch {
         // An unreadable file is never eligible for derived-index repair.

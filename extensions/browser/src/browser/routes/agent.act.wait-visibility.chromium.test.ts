@@ -1,12 +1,12 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Browser, Page } from "playwright-core";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as navigationGuard from "../navigation-guard.js";
 import { getPlaywrightCore } from "../playwright-core.runtime.js";
+import { atBarrier, gate, runRoute } from "./agent-route.test-support.js";
 import { createExistingSessionAgentSharedModule } from "./existing-session.test-support.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 
 const browserState = vi.hoisted(() => ({ page: undefined as Page | undefined }));
 vi.mock("../chrome-mcp.js", async (importOriginal) => ({
@@ -49,13 +49,9 @@ describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
       registerBrowserAgentActRoutes(app, {
         state: () => ({ resolved: { evaluateEnabled: true } }),
       } as never);
-      const handler = expectDefined(postHandlers.get("/act"), "Missing /act route");
-      const response = createBrowserRouteResponse();
-      await handler(
-        { params: {}, query: {}, body: { kind: "wait", selector, timeoutMs: 250, ...extra } },
-        response.res,
-      );
-      return response;
+      return runRoute(postHandlers.get("/act"), {
+        body: { kind: "wait", selector, timeoutMs: 250, ...extra },
+      });
     }
 
     it.each([
@@ -129,38 +125,31 @@ describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
     it("readmits a changed URL before running the predicate after an awaited policy check", async () => {
       await page.goto("about:blank#before");
       await page.setContent(button());
-      const readmissionStarted = createDeferred<void>();
-      const readmissionAllowed = createDeferred<void>();
-      const observedUrls: string[] = [];
+      const readmission = gate();
       const policy = vi
         .spyOn(navigationGuard, "assertBrowserNavigationResultAllowed")
         .mockImplementation(async ({ url }) => {
-          observedUrls.push(url);
           if (url === "about:blank#before") {
             await page.evaluate(() => history.replaceState(null, "", "#after"));
           } else {
-            readmissionStarted.resolve();
-            await readmissionAllowed.promise;
+            expect(url).toBe("about:blank#after");
+            await readmission.block();
           }
         });
-      const pending = waitForSelector("#target", { timeoutMs: 2_000, fn: markPredicate });
-      try {
-        await Promise.race([
-          readmissionStarted.promise,
-          pending.then(() => {
-            throw new Error("Wait completed before the changed URL was readmitted");
-          }),
-        ]);
-        expect(await page.title()).toBe("");
-        readmissionAllowed.resolve();
-        expect((await pending).statusCode).toBe(200);
-        expect(observedUrls).toEqual(["about:blank#before", "about:blank#after"]);
-        expect(await page.title()).toBe("predicate ran");
-      } finally {
-        readmissionAllowed.resolve();
-        await pending.catch(() => {});
+      onTestFinished(async () => {
         policy.mockRestore();
         await page.goto("about:blank");
+      });
+      const pending = waitForSelector("#target", { timeoutMs: 2_000, fn: markPredicate });
+      try {
+        await atBarrier(readmission.entered, pending, "Wait completed before URL readmission");
+        expect(await page.title()).toBe("");
+        readmission.resolve();
+        expect((await pending).statusCode).toBe(200);
+        expect(await page.title()).toBe("predicate ran");
+      } finally {
+        readmission.resolve();
+        await pending.catch(() => {});
       }
     });
 
@@ -170,29 +159,22 @@ describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
       await page.evaluate(() => {
         Object.defineProperty(window, "globalThis", {
           value: { document, location: { href: "https://spoof.example" } },
-          configurable: true,
-          writable: true,
         });
       });
-      const observedUrls: string[] = [];
       const policy = vi
         .spyOn(navigationGuard, "assertBrowserNavigationResultAllowed")
         .mockImplementation(async ({ url }) => {
-          observedUrls.push(url);
-          if (url === "about:blank") {
-            throw new Error("Actual document URL denied");
-          }
+          expect(url).toBe("about:blank");
+          throw new Error("Actual document URL denied");
         });
-      try {
-        await expect(waitForSelector("#target", { fn: markPredicate })).rejects.toThrow(
-          "Actual document URL denied",
-        );
-        expect(observedUrls).toEqual(["about:blank"]);
-        expect(await page.title()).toBe("");
-      } finally {
+      onTestFinished(async () => {
         policy.mockRestore();
         await page.goto("about:blank");
-      }
+      });
+      await expect(waitForSelector("#target", { fn: markPredicate })).rejects.toThrow(
+        "Actual document URL denied",
+      );
+      expect(await page.title()).toBe("");
     });
   },
 );

@@ -7,11 +7,8 @@ import { hasRecordedUsageCost, normalizeUsage } from "../agents/usage.js";
 import { isToolCallContentType } from "../chat/tool-content.js";
 import type { CostBreakdown, ParsedTranscriptEntry } from "./session-cost-usage.types.js";
 
-const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
-  if (!usageRaw || usageRaw.usageReport?.state === "unavailable") {
-    return undefined;
-  }
-  const cost = usageRaw.cost;
+const extractCostBreakdown = (usageRaw?: UsageLike): CostBreakdown | undefined => {
+  const cost = usageRaw?.cost;
   if (!cost) {
     return undefined;
   }
@@ -67,7 +64,10 @@ export const parseUsageCostTranscriptRecord = (
 
   const usageRaw =
     (message.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
-  const usage = usageRaw ? (normalizeUsage(usageRaw) ?? undefined) : undefined;
+  // Usage reports count only measured turns. A turn whose provider usage is unknown (a failed or
+  // interrupted request) adds no tokens or cost; it still counts as a message.
+  const reported = usageRaw?.usageReport?.state === "unavailable" ? undefined : usageRaw;
+  const usage = reported ? (normalizeUsage(reported) ?? undefined) : undefined;
 
   const provider =
     (typeof message.provider === "string" ? message.provider : undefined) ??
@@ -76,7 +76,7 @@ export const parseUsageCostTranscriptRecord = (
     (typeof message.model === "string" ? message.model : undefined) ??
     (typeof entry.model === "string" ? entry.model : undefined);
 
-  const costBreakdown = extractCostBreakdown(usageRaw);
+  const costBreakdown = extractCostBreakdown(reported);
   const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
   const durationMs = asFiniteNumber(message.durationMs ?? entry.durationMs);
   const toolNames: string[] = [];
@@ -155,7 +155,6 @@ export function needsUsageCostEstimate(
   // Recorded estimates include request-time service tiers the current catalog cannot recover.
   return (
     Boolean(entry?.usage) &&
-    entry?.usage?.usageReport?.state !== "unavailable" &&
     !((entry?.costTotal ?? 0) > 0 || hasRecordedUsageCost(entry?.costBreakdown))
   );
 }
@@ -174,6 +173,23 @@ function hasAmbiguousRequestTier(usage: NormalizedUsage, cost: ModelCostConfig):
   return promptTokens > context.promptTokens && promptTokens >= secondTier.range[0];
 }
 
+/** Prices one transcript row's counters, or returns undefined when their sum hides request tiers. */
+export function estimateTranscriptUsageCost(
+  usage: NormalizedUsage,
+  cost: ModelCostConfig,
+): ReturnType<typeof calculateUsageCost> | undefined {
+  if (hasAmbiguousRequestTier(usage, cost)) {
+    return undefined;
+  }
+  const estimated = calculateUsageCost(usage, cost);
+  return Number.isFinite(estimated.total) ? estimated : undefined;
+}
+
+/** Whether the catalog price can change this entry's estimate; read before applying it. */
+export function usageCostEstimateUsesPricing(entry: UsageCostEstimateEntry): boolean {
+  return entry.costTotal === undefined || computeUsageTokenTotals(entry.usage).totalTokens > 0;
+}
+
 export function applyUsageCostEstimate(
   entry: UsageCostEstimateEntry,
   resolveCost: UsageCostResolver,
@@ -184,11 +200,7 @@ export function applyUsageCostEstimate(
     entry.costTotal = undefined;
     entry.costBreakdown = undefined;
   } else if (entry.costTotal === undefined || totalTokens > 0) {
-    const estimated =
-      cost && !hasAmbiguousRequestTier(entry.usage, cost)
-        ? calculateUsageCost(entry.usage, cost)
-        : undefined;
-    entry.costBreakdown = estimated && Number.isFinite(estimated.total) ? estimated : undefined;
+    entry.costBreakdown = cost ? estimateTranscriptUsageCost(entry.usage, cost) : undefined;
     entry.costTotal = entry.costBreakdown?.total;
   }
   return entry;

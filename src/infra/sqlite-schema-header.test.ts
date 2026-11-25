@@ -1,6 +1,5 @@
 import childProcess, { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { Duplex } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -10,16 +9,26 @@ import {
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgentSchemaInspectionWorker } from "../state/openclaw-agent-schema-inspection-worker.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-readonly-location.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
+import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-schema-header-inspection.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >();
+  const overrides = { fork: vi.fn(actual.fork) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
     vi.restoreAllMocks();
-    syncBuiltinESMExports();
+    vi.mocked(childProcess.fork).mockReset();
     vi.unstubAllEnvs();
     cleanup();
   }),
@@ -103,21 +112,12 @@ describe("schema-header native reader lifetime", () => {
       CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT);
       INSERT INTO schema_meta VALUES('primary','committed');
       PRAGMA user_version=7;
-      CREATE TABLE payload(data BLOB);
-      WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<32)
-      INSERT INTO payload SELECT zeroblob(8192) FROM n;
     `);
       database.close();
-      const crashed = runSqliteChild(
-        pathname,
-        `
-      import { DatabaseSync } from 'node:sqlite';
-      const db = new DatabaseSync(process.argv[1]);
-      db.exec("PRAGMA synchronous=FULL; PRAGMA cache_size=2; PRAGMA cache_spill=ON; BEGIN IMMEDIATE; PRAGMA user_version=8; UPDATE schema_meta SET app_version='uncommitted'; UPDATE payload SET data=zeroblob(16384);");
-      process.kill(process.pid, 'SIGKILL');
-    `,
-      );
-      expect(crashed.signal, crashed.stderr).toBe("SIGKILL");
+      createHotSqliteRollbackJournal({
+        path: pathname,
+        mutationSql: "PRAGMA user_version=8; UPDATE schema_meta SET app_version='uncommitted'",
+      });
       const before = readFamily(pathname, "-journal");
       const cacheRoot = dirs.make("sqlite-header-journal-cache-");
       vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
@@ -128,7 +128,7 @@ describe("schema-header native reader lifetime", () => {
         writerAppVersion: "committed",
       });
       expect(readFamily(pathname, "-journal")).toEqual(before);
-      expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+      expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
     },
   );
   it.each([false, true])(
@@ -264,8 +264,9 @@ describe("schema-header native reader lifetime", () => {
         vi.stubEnv(key, value);
       }
       let nativePipe: Duplex | undefined;
-      const fork = childProcess.fork;
-      vi.spyOn(childProcess, "fork").mockImplementation((modulePath, args, options) => {
+      const { fork } =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      vi.mocked(childProcess.fork).mockImplementation((modulePath, args, options) => {
         const child = fork(modulePath, args, {
           ...options,
           stdio: ["ignore", "ignore", "ignore", "ipc", "pipe"],
@@ -278,7 +279,6 @@ describe("schema-header native reader lifetime", () => {
         nativePipe = pipe;
         return child;
       });
-      syncBuiltinESMExports();
       const release = () => {
         if (!nativePipe) {
           throw new Error("Native inspection fixture pipe was not observed");

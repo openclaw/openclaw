@@ -70,6 +70,7 @@ export class TerminalSessionManager {
   private readonly emit: TerminalEventSink;
   private readonly getBufferedAmount: (connId: string) => number | undefined;
   private readonly spawn: typeof spawnTerminalPty;
+  readonly gatewayLocalTerminalBlockReason: string | undefined;
   private readonly withOpenAdmission: TerminalSessionManagerOptions["withOpenAdmission"];
   private readonly maxSessions: number;
   private detachGraceMs: number;
@@ -88,6 +89,9 @@ export class TerminalSessionManager {
     this.emit = options.emit;
     this.getBufferedAmount = options.getBufferedAmount ?? (() => undefined);
     this.spawn = options.spawn ?? spawnTerminalPty;
+    this.gatewayLocalTerminalBlockReason = options.disableGatewayLocalTerminals
+      ? "Gateway-local terminals are disabled by deployment policy; contact the Gateway deployment administrator to enable them."
+      : undefined;
     this.withOpenAdmission = options.withOpenAdmission;
     this.maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
     this.detachGraceMs = options.detachGraceMs ?? 0;
@@ -106,6 +110,16 @@ export class TerminalSessionManager {
   }
 
   private async openAdmitted(request: TerminalOpenRequest): Promise<TerminalOpenOutcome> {
+    if (
+      this.gatewayLocalTerminalBlockReason &&
+      (request.executionHost !== "node" || !request.createBackend)
+    ) {
+      return {
+        ok: false,
+        code: "disabled",
+        message: this.gatewayLocalTerminalBlockReason,
+      };
+    }
     if (request.signal?.aborted) {
       return { ok: false, code: "closed", message: this.openAbortMessage(request.signal) };
     }
@@ -159,6 +173,7 @@ export class TerminalSessionManager {
       backend = request.createBackend
         ? await request.createBackend()
         : await spawn({
+            executionIntent: "gateway-internal",
             file: request.shell,
             args: request.args,
             cwd: request.cwd,
@@ -586,8 +601,7 @@ export class TerminalSessionManager {
     session.reaper = setTimeout(() => {
       // Silent: nobody owns the stream, so there is no socket to notify.
       this.finalize(session, "disconnected", {}, { silent: true });
-    }, remainingMs);
-    session.reaper.unref?.();
+    }, remainingMs).unref();
   }
 
   private enforceDetachedCap(): void {

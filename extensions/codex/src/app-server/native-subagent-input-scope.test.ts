@@ -20,9 +20,7 @@ describe("Codex native input target scope", () => {
     ["unrelated child", "active"],
   ] as const)("rejects %s input with %s target state", async (kind, status) => {
     const client = createClient();
-    const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime(), {
-      recoveryPollDelaysMs: [],
-    });
+    const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime());
     const sender = await monitor.registerParent({
       parentThreadId: "parent-thread",
       modelSource: undefined,

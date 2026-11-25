@@ -1,5 +1,7 @@
+import assert from "node:assert/strict";
 import { once, type EventEmitter } from "node:events";
 import net, { type Server } from "node:net";
+import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
@@ -11,16 +13,12 @@ export async function listenLoopback(server: Server) {
   server.listen(0, "127.0.0.1");
   await listening;
   const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected TCP test address");
-  }
+  assert(address && typeof address !== "string", "expected TCP test address");
   return address.port;
 }
 
-export function closeServer(server: Server) {
-  return new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
+export async function closeServer(server: Server) {
+  await promisify(server.close.bind(server))();
 }
 
 export function waitForClose(emitter: EventEmitter) {
@@ -60,9 +58,7 @@ export function createSocketServer(
     accept(socket);
   });
   cleanup.push(async () => {
-    for (const peer of peers) {
-      peer.destroy();
-    }
+    peers.forEach((peer) => peer.destroy());
     await closeServer(server);
   });
   return { server, peers };
@@ -87,16 +83,12 @@ export function setupDesktopDiagnostics(
       }
       await Promise.all(cleanup.splice(0).map((run) => run()));
       await flushLogger();
-      for (const capture of captures) {
-        await capture.flush();
-      }
+      await Promise.all(captures.map((capture) => capture.flush()));
       if (vi.isFakeTimers()) {
         expect(vi.getTimerCount()).toBe(0);
       }
     } finally {
-      for (const capture of captures.splice(0)) {
-        capture.cleanup();
-      }
+      captures.splice(0).forEach((capture) => capture.cleanup());
       resetLogger();
       if (!restoreBeforeCleanup) {
         vi.restoreAllMocks();

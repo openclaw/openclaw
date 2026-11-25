@@ -3,18 +3,46 @@ import { expect, it } from "vitest";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import { requestChatSend } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
 
+it("holds a direct transport send used by realtime chat during route admission", async () => {
+  const host = makeChatHost({ isRouteSessionPending: () => true, requestHandlers: {} });
+  await expect(
+    requestChatSend(host, { message: "Unconfirmed talk turn", runId: "talk-turn" }),
+  ).rejects.toThrow();
+  expect(host.request).not.toHaveBeenCalled();
+  await requestChatSend(host, {
+    message: "Independent confirmed outbox",
+    runId: "background-turn",
+    sessionKey: "agent:main:other",
+  });
+  expect(host.request).toHaveBeenCalledWith(
+    "chat.send",
+    expect.objectContaining({ sessionKey: "agent:main:other" }),
+    expect.anything(),
+  );
+});
+
 it("holds direct and restored queued sends after startup until route revalidation", async () => {
   let pending = false;
+  const sessionKey = "agent:main:chat:b1c2cd3c-1234-4321-9876-123456789abc";
+  const original = makeChatHost({
+    sessionKey,
+    connected: false,
+    chatMessage: "Restored queued turn",
+    requestHandlers: {},
+  });
+  await handleSendChat(original);
+  expect(original.chatQueue).toHaveLength(1);
+  pending = true;
   const host = makeChatHost({
     isRouteSessionPending: () => pending,
     sessionKey: "agent:main:chat:b1c2cd3c-1234-4321-9876-123456789abc",
-    connected: false,
-    chatMessage: "Restored queued turn",
     requestHandlers: {
       "chat.startup": { messages: [] },
       "chat.history": {
@@ -31,11 +59,10 @@ it("holds direct and restored queued sends after startup until route revalidatio
       "chat.send": { runId: "queued-send", status: "started" },
     },
   });
-  await handleSendChat(host);
+  expect(new ChatComposerPersistence(() => host).restore()).toBe(true);
   expect(host.chatQueue).toHaveLength(1);
+  expect(host.chatQueue[0]?.id).toBe(original.chatQueue[0]?.id);
   host.chatMessage = "Keep this draft";
-  pending = true;
-  host.connected = true;
   await loadChatHistory(host, { startup: true, deferBranches: true });
   await handleSendChat(host);
   await resumeStoredChatOutboxes(host);

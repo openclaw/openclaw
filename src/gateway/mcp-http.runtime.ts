@@ -18,6 +18,7 @@ import {
   listCoreToolFactoryDescriptors,
 } from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/tool-policy.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
@@ -68,6 +69,8 @@ type McpLoopbackScopeParams = {
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+  /** Run-owned configured MCP tools; only an exclusive CLI run supplies them. */
+  bundledTools?: readonly AnyAgentTool[];
   /** Host-selected coding owners for pre-grant projection only. */
   defaultMediatedToolNames?: readonly string[];
   messageActionTurnCapability?: string;
@@ -333,17 +336,16 @@ async function constructMcpLoopbackTools(
   if (includeNodeExecTool) {
     excludeToolNames.delete("exec");
   }
-  const skillWorkshop = params.skillLibraryAuthoring
-    ? { libraryAuthoring: params.skillLibraryAuthoring }
-    : undefined;
   const scopeOptions: Parameters<typeof resolveGatewayScopedTools>[0] = {
     ...context,
     messageActionTurnCapability: params.messageActionTurnCapability,
     memoryAudience: params.memoryAudience,
+    toolsAllow,
     cfg: params.cfg,
     authProfileStore: params.authProfileStore,
     onYield: params.onYield,
-    skillWorkshop,
+    skillLibraryAuthoring: params.skillLibraryAuthoring,
+    bundledTools: params.bundledTools,
     nativeCronCreatorToolAllowlist: context.nativeCronCreatorToolAllowlist ?? undefined,
     agentDir: params.authProfileStoreAgentDir,
     conversationReadOrigin: "delegated",
@@ -359,17 +361,19 @@ async function constructMcpLoopbackTools(
   };
   const scoped = await resolveGatewayScopedTools(scopeOptions, params.assertCurrent);
   params.assertCurrent();
+  const permissionTools = scoped.permissionTools ?? scoped.tools;
   const tools =
     mode === "exact"
-      ? applyGrantToolsAllow(scoped.tools, toolsAllow)
-      : applyPolicyToolsAllow(scoped.tools, toolsAllow);
+      ? applyGrantToolsAllow(permissionTools, toolsAllow)
+      : applyPolicyToolsAllow(permissionTools, toolsAllow);
   const toolSchema = buildMcpToolSchema(tools);
   scoped.captureFinalCronCreatorTools?.(new Set(toolSchema.map((tool) => tool.name)));
+  const presentedNames = new Set(scoped.tools.map((tool) => tool.name));
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,
-    tools,
-    toolSchema,
+    tools: tools.filter((tool) => presentedNames.has(tool.name)),
+    toolSchema: toolSchema.filter((tool) => presentedNames.has(tool.name)),
     sessionFacts,
   };
 }

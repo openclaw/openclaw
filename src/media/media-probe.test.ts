@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { MediaProbeKind, MediaProbeResult } from "./media-probe.js";
 
 const { runFfprobe } = vi.hoisted(() => ({
@@ -12,17 +13,18 @@ vi.mock("./ffmpeg-exec.js", () => ({
   runFfprobe,
 }));
 
+const stdinFile = { fd: 17, source: { path: "/probe", dev: 1n, ino: 2n } };
 let testDir = "";
 let songPath = "";
 let clipPath = "";
 let voicePath = "";
 let probeMediaFilesWithinBudget: typeof import("./media-probe.js").probeMediaFilesWithinBudget;
-let probePlaybackMediaFileDescriptor: typeof import("./media-probe.js").probePlaybackMediaFileDescriptor;
+let probePlaybackMediaFile: typeof import("./media-probe.js").probePlaybackMediaFile;
 let probeVideoDimensions: typeof import("./media-probe.js").probeVideoDimensions;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ probeMediaFilesWithinBudget, probePlaybackMediaFileDescriptor, probeVideoDimensions } =
+  ({ probeMediaFilesWithinBudget, probePlaybackMediaFile, probeVideoDimensions } =
     await import("./media-probe.js"));
   testDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-probe-"));
   songPath = path.join(testDir, "song.mp3");
@@ -79,7 +81,10 @@ describe("probeMediaFile", () => {
         "0",
         "fd:",
       ],
-      { stdinFileDescriptor: expect.any(Number), timeoutMs: expect.any(Number) },
+      {
+        stdinFile: expect.objectContaining({ source: expect.objectContaining({ path: songPath }) }),
+        timeoutMs: expect.any(Number),
+      },
     );
   });
 
@@ -91,7 +96,7 @@ describe("probeMediaFile", () => {
     { rotation: -90, width: 1280, height: 720 },
     { rotation: -180, width: 720, height: 1280 },
   ])("returns display dimensions for selected stream rotation $rotation", async (testCase) => {
-    runFfprobe.mockResolvedValue(
+    runFfprobe.mockResolvedValueOnce(
       JSON.stringify({
         format: { duration: "10" },
         streams: [
@@ -111,14 +116,6 @@ describe("probeMediaFile", () => {
       width: testCase.width,
       height: testCase.height,
     });
-    await expect(probeVideoDimensions(Buffer.from("video"))).resolves.toEqual({
-      width: testCase.width,
-      height: testCase.height,
-    });
-    await expect(probePlaybackMediaFileDescriptor(17, "video")).resolves.toMatchObject({
-      width: 720,
-      height: 1280,
-    });
   });
 
   it.each([
@@ -131,7 +128,7 @@ describe("probeMediaFile", () => {
   ])(
     "returns display dimensions for SAR $sampleAspectRatio at rotation $rotation",
     async (testCase) => {
-      runFfprobe.mockResolvedValue(
+      runFfprobe.mockResolvedValueOnce(
         JSON.stringify({
           streams: [
             {
@@ -146,26 +143,10 @@ describe("probeMediaFile", () => {
       );
       const display = { width: testCase.width, height: testCase.height };
       await expect(probeMediaFile(clipPath, "video")).resolves.toEqual(display);
-      await expect(probeVideoDimensions(Buffer.from("video"))).resolves.toEqual(display);
-      await expect(probePlaybackMediaFileDescriptor(17, "video")).resolves.toMatchObject({
-        width: 720,
-        height: 576,
-      });
     },
   );
 
-  it("probes an inherited descriptor through stdin", async () => {
-    runFfprobe.mockResolvedValueOnce(JSON.stringify({ format: { duration: "2" } }));
-
-    await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toEqual({
-      durationMs: 2000,
-    });
-    expect(runFfprobe).toHaveBeenCalledWith(expect.arrayContaining(["-fd", "0", "fd:"]), {
-      stdinFileDescriptor: 17,
-    });
-  });
-
-  it("returns duration and first audio/video codecs in one playback probe", async () => {
+  it("keeps encoded dimensions and selected audio/video facts in one playback probe", async () => {
     runFfprobe.mockResolvedValueOnce(
       JSON.stringify({
         format: { duration: "3.25" },
@@ -185,6 +166,8 @@ describe("probeMediaFile", () => {
             duration: "3",
             width: 1920,
             height: 1080,
+            sample_aspect_ratio: "4:3",
+            side_data_list: [{ rotation: 90 }],
             disposition: { default: 1, attached_pic: 0 },
           },
           {
@@ -198,10 +181,12 @@ describe("probeMediaFile", () => {
       }),
     );
 
-    await expect(probePlaybackMediaFileDescriptor(17, "video")).resolves.toEqual({
+    await expect(probePlaybackMediaFile(stdinFile, "video")).resolves.toEqual({
       durationMs: 4000,
       width: 1920,
       height: 1080,
+      videoSampleAspectRatio: 4 / 3,
+      videoRotation: 90,
       videoCodec: "hevc",
       videoProfile: "main 10",
       videoPixelFormat: "yuv420p10le",
@@ -210,6 +195,9 @@ describe("probeMediaFile", () => {
       audioStreamIndex: 3,
     });
     expect(runFfprobe).toHaveBeenCalledOnce();
+    expect(runFfprobe).toHaveBeenCalledWith(expect.arrayContaining(["-fd", "0", "fd:"]), {
+      stdinFile,
+    });
   });
 
   it.each([
@@ -227,13 +215,13 @@ describe("probeMediaFile", () => {
         .mockRejectedValueOnce(Object.assign(new Error("ffprobe failed"), { stderr }))
         .mockResolvedValueOnce(JSON.stringify({ format: { duration: "2" } }));
 
-      await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toEqual({
+      await expect(probePlaybackMediaFile(stdinFile, "audio")).resolves.toEqual({
         durationMs: 2000,
       });
       expect(runFfprobe).toHaveBeenNthCalledWith(
         2,
         expect.arrayContaining(["-protocol_whitelist", "pipe", "pipe:0"]),
-        { stdinFileDescriptor: 17 },
+        { stdinFile },
       );
     },
   );
@@ -244,7 +232,7 @@ describe("probeMediaFile", () => {
   ])("does not retry an unrelated ffprobe option failure: %s", async (stderr) => {
     runFfprobe.mockRejectedValue(Object.assign(new Error("ffprobe failed"), { stderr }));
 
-    await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toBeNull();
+    await expect(probePlaybackMediaFile(stdinFile, "audio")).resolves.toBeNull();
     expect(runFfprobe).toHaveBeenCalledOnce();
   });
 
@@ -276,56 +264,59 @@ describe("probeMediaFile", () => {
 });
 
 describe("probeMediaFilesWithinBudget", () => {
-  it("caps probes and leaves excess results empty", async () => {
-    runFfprobe.mockResolvedValue(JSON.stringify({ format: { duration: "1" } }));
-    const results = await probeMediaFilesWithinBudget(
-      Array.from({ length: 10 }, () => ({ filePath: songPath, kind: "audio" as const })),
-      { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
-    );
-
-    expect(runFfprobe).toHaveBeenCalledTimes(8);
-    expect(results.slice(0, 8).every((result) => result.durationMs === 1000)).toBe(true);
-    expect(results.slice(8).every((result) => result.durationMs === undefined)).toBe(true);
-    expect(runFfprobe.mock.calls[0]?.[1]).toMatchObject({ timeoutMs: expect.any(Number) });
-  });
-
-  it("limits concurrent probes", async () => {
+  it("caps concurrent probes and leaves excess results empty", async () => {
+    const inputs = Array.from({ length: 10 }, () => ({
+      filePath: songPath,
+      kind: "audio" as const,
+    }));
+    const entered = createDeferred();
+    const release = createDeferred();
     let active = 0;
     let maxActive = 0;
     runFfprobe.mockImplementation(async () => {
       active += 1;
       maxActive = Math.max(maxActive, active);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      if (active === 2) {
+        entered.resolve();
+      }
+      await release.promise;
       active -= 1;
-      return "{}";
+      return JSON.stringify({ format: { duration: "1" } });
     });
 
-    await probeMediaFilesWithinBudget(
-      Array.from({ length: 4 }, () => ({ filePath: songPath, kind: "audio" as const })),
-      { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
-    );
-    expect(maxActive).toBe(2);
+    const probing = probeMediaFilesWithinBudget(inputs, {
+      budgetMs: 3000,
+      concurrency: 2,
+      maxProbes: 8,
+    });
+    try {
+      await awaitGateBeforeSettlement(entered.promise, probing, "Two probes must run concurrently");
+      expect(runFfprobe).toHaveBeenCalledTimes(2);
+      release.resolve();
+      const results = await probing;
+
+      expect(maxActive).toBe(2);
+      expect(runFfprobe).toHaveBeenCalledTimes(8);
+      expect(results).toEqual([...Array.from({ length: 8 }, () => ({ durationMs: 1000 })), {}, {}]);
+    } finally {
+      release.resolve();
+      await probing;
+    }
   });
 
   it("keeps completed metadata when the shared batch budget expires", async () => {
-    const nowSpy = vi
+    using _ = vi
       .spyOn(performance, "now")
       .mockReturnValueOnce(1000)
       .mockReturnValueOnce(1000)
       .mockReturnValue(4000);
     runFfprobe.mockResolvedValue(JSON.stringify({ format: { duration: "1" } }));
-    try {
-      const results = await probeMediaFilesWithinBudget(
-        Array.from({ length: 4 }, () => ({ filePath: songPath, kind: "audio" as const })),
-        { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
-      );
-      expect(runFfprobe).toHaveBeenCalledTimes(2);
-      expect(results).toEqual([{ durationMs: 1000 }, { durationMs: 1000 }, {}, {}]);
-    } finally {
-      nowSpy.mockRestore();
-    }
+    const results = await probeMediaFilesWithinBudget(
+      Array.from({ length: 4 }, () => ({ filePath: songPath, kind: "audio" as const })),
+      { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
+    );
+    expect(runFfprobe).toHaveBeenCalledTimes(2);
+    expect(results).toEqual([{ durationMs: 1000 }, { durationMs: 1000 }, {}, {}]);
   });
 
   it.each([60_000, -60_000])(
@@ -333,39 +324,44 @@ describe("probeMediaFilesWithinBudget", () => {
     async (stepMs) => {
       let elapsedMs = 0;
       let offset = 0;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => 1000 + elapsedMs + offset);
-      const monotonicClock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      using _ = vi.spyOn(Date, "now").mockImplementation(() => 1000 + elapsedMs + offset);
+      using monotonicClock = vi.spyOn(performance, "now");
+      monotonicClock.mockImplementation(() => elapsedMs);
       runFfprobe.mockImplementation(async () => {
         elapsedMs += 250;
         offset = stepMs;
         return JSON.stringify({ format: { duration: "1" } });
       });
-      try {
-        const results = await probeMediaFilesWithinBudget(
-          Array.from({ length: 4 }, () => ({ filePath: songPath, kind: "audio" as const })),
-          { budgetMs: 3000, concurrency: 2, maxProbes: 4 },
-        );
-        expect(runFfprobe).toHaveBeenCalledTimes(4);
-        expect(results).toEqual(Array.from({ length: 4 }, () => ({ durationMs: 1000 })));
-        expect(runFfprobe.mock.calls.map(([, options]) => options?.timeoutMs)).toEqual([
-          3000, 3000, 2500, 2500,
-        ]);
-      } finally {
-        monotonicClock.mockRestore();
-        clock.mockRestore();
-      }
+      const results = await probeMediaFilesWithinBudget(
+        Array.from({ length: 4 }, () => ({ filePath: songPath, kind: "audio" as const })),
+        { budgetMs: 3000, concurrency: 2, maxProbes: 4 },
+      );
+      expect(results).toEqual(Array.from({ length: 4 }, () => ({ durationMs: 1000 })));
+      expect(runFfprobe.mock.calls.map(([, options]) => options?.timeoutMs)).toEqual([
+        3000, 3000, 2500, 2500,
+      ]);
     },
   );
 });
 
 describe("probeVideoDimensions", () => {
-  it("keeps buffer callers on the canonical probe path", async () => {
+  it("returns rotated anamorphic display dimensions through the buffer probe", async () => {
     const buffer = Buffer.from("video");
     runFfprobe.mockResolvedValueOnce(
-      JSON.stringify({ streams: [{ codec_type: "video", width: 720, height: 1280 }] }),
+      JSON.stringify({
+        streams: [
+          {
+            codec_type: "video",
+            width: 720,
+            height: 576,
+            sample_aspect_ratio: "64:45",
+            side_data_list: [{ rotation: -90 }],
+          },
+        ],
+      }),
     );
 
-    await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 720, height: 1280 });
+    await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 576, height: 1024 });
     expect(runFfprobe).toHaveBeenCalledWith(
       [
         "-v",

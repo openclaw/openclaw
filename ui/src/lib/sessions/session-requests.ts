@@ -1,10 +1,7 @@
 import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import type {
-  SessionsDeleteResult,
   SessionsSetInvolvementParams,
   SessionsListParams,
-  SessionsPatchManyParams,
-  SessionsPatchManyResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   expandSessionRowFacts,
@@ -16,11 +13,10 @@ import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts
 import type { SessionPatch } from "./patch.ts";
 import { appendSessionResults } from "./reconcile.ts";
 import type {
-  SessionDeleteOptions,
   SessionListOptions,
   SessionRequestClient,
   SessionResetOptions,
-} from "./session-capability.ts";
+} from "./session-types.ts";
 
 /** Personal list choices share one RPC contract across all session menus. */
 export async function requestSessionInvolvement(
@@ -38,6 +34,17 @@ export const DEFAULT_SESSION_LIST_QUERY = {
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
 } as const satisfies SessionListOptions;
 
+/** User-facing session pickers (command palette, section editor) list the same sessions. */
+export const SESSION_SEARCH_SCOPE = {
+  includeGlobal: false,
+  includeUnknown: false,
+  configuredAgentsOnly: true,
+  excludeSubagents: true,
+  excludeCron: true,
+  excludeSystem: true,
+  excludeDock: true,
+} as const satisfies SessionListOptions;
+
 export function dashboardSessionListQuery(agentId?: string | null): SessionListOptions {
   const normalizedAgentId = agentId?.trim();
   return {
@@ -46,21 +53,6 @@ export function dashboardSessionListQuery(agentId?: string | null): SessionListO
     source: "dashboard",
     excludeDock: true,
     hasBoard: true,
-    archivedFilter: "all",
-    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
-  };
-}
-
-/** Progress cards resolve an explicit cross-session target independently of
- *  dashboard gallery membership: the Gateway filters hasBoard against each
- *  session's own board inventory, so a running target without its own board
- *  would disappear from a gallery-filtered roster and render as paused. */
-export function sessionProgressTargetQuery(agentId?: string | null): SessionListOptions {
-  const normalizedAgentId = agentId?.trim();
-  return {
-    ...DEFAULT_SESSION_LIST_QUERY,
-    source: "dashboard",
-    excludeDock: false,
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
   };
@@ -115,6 +107,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
     "includeOwnerSessionCounts",
     "ownerFirst",
     "involvingMe",
+    "searchTitlesOnly",
   ] as const) {
     if (options[key] === true) {
       params[key] = true;
@@ -164,9 +157,15 @@ export function normalizeManagedSessionListQuery(
   });
 }
 
-export function sessionListQueryKey(options: SessionListOptions): string {
-  const { source: _source, ...query } = normalizeManagedSessionListQuery(options);
+export function sessionListRequestKey(
+  params: Readonly<SessionsListParams & { pageSize?: number }>,
+): string {
+  const { source: _source, ...query } = params;
   return JSON.stringify(query);
+}
+
+export function sessionListQueryKey(options: SessionListOptions): string {
+  return sessionListRequestKey(normalizeManagedSessionListQuery(options));
 }
 
 export async function requestSessionList(
@@ -192,8 +191,7 @@ export async function requestSessionListParams(
 ): Promise<SessionsListResult | null> {
   const { pageSize, ...params } = query;
   const read = async (request: SessionsListParams) => {
-    const { source: _source, ...membership } = request;
-    const key = JSON.stringify(membership);
+    const key = sessionListRequestKey(request);
     const cache = sessionWireRows.get(client);
     const conditional = request.rowMode !== undefined;
     const previous = conditional ? cache?.get(key) : undefined;
@@ -297,36 +295,6 @@ export function requestSessionPatch(
   return patch.archived === true
     ? client.request<SessionsPatchResult>("sessions.patch", params, SESSION_ARCHIVE_REQUEST_OPTIONS)
     : client.request<SessionsPatchResult>("sessions.patch", params);
-}
-
-export function requestSessionPatchMany(
-  client: SessionRequestClient,
-  params: SessionsPatchManyParams,
-): Promise<SessionsPatchManyResult> {
-  return params.patch.archived === true
-    ? client.request<SessionsPatchManyResult>(
-        "sessions.patchMany",
-        params,
-        SESSION_ARCHIVE_REQUEST_OPTIONS,
-      )
-    : client.request<SessionsPatchManyResult>("sessions.patchMany", params);
-}
-
-export function requestSessionDelete(
-  client: SessionRequestClient,
-  key: string,
-  options: SessionDeleteOptions = {},
-): Promise<SessionsDeleteResult> {
-  return client.request<SessionsDeleteResult>(
-    "sessions.delete",
-    {
-      ...buildSessionRequestParams(key, options.agentId),
-      deleteTranscript: options.deleteTranscript ?? true,
-      ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
-      ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
-    },
-    SESSION_ARCHIVE_REQUEST_OPTIONS,
-  );
 }
 
 export function requestSessionReset(

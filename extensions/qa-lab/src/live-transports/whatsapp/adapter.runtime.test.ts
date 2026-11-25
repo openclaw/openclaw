@@ -5,16 +5,12 @@ import type {
   WhatsAppQaDriverObservedMessage,
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../../bus-state.js";
-import type { QaGatewayStopResult } from "../../gateway-child.js";
 import { createQaTransportAdapter } from "../../qa-transport-registry.js";
-import { runQaFlowSuiteCleanupPlan } from "../../suite.js";
 import { createTempDirHarness } from "../../temp-dir.test-helper.js";
 import { whatsappQaCliRegistration } from "./cli.js";
-import { createArchive, createDriver, phones } from "./runtime.test-support.js";
+import { createArchive, createDriver, observedMessage, phones } from "./runtime.test-support.js";
 import type { WhatsAppQaRuntimeEnv } from "./whatsapp-live.contracts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -51,11 +47,6 @@ vi.mock("./whatsapp-live.driver.js", async (importOriginal) => ({
   startWhatsAppQaDriverSessionWithRetry: mocks.startDriver,
 }));
 
-vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
-  return { ...actual, runExec: vi.fn(actual.runExec) };
-});
-
 const tempDirs = createTempDirHarness();
 const fakeAuth = '{"fixture":"not-a-whatsapp-session"}\n';
 let fixtureRoot: string;
@@ -83,6 +74,17 @@ async function expectResourcesRetained(sutAuthDir: string) {
   for (const dir of [sutAuthDir, path.join(expectDefined(authRoot, "auth root"), "driver-auth")]) {
     await expect.soft(fs.readFile(path.join(dir, "creds.json"), "utf8")).resolves.toBe(fakeAuth);
   }
+}
+
+async function expectLeaseReleased(tickMs = 100) {
+  expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
+  expect(mocks.release).toHaveBeenCalledOnce();
+  await expect(fs.stat(expectDefined(authRoot, "auth root"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  mocks.heartbeat.mockClear();
+  await vi.advanceTimersByTimeAsync(tickMs);
+  expect(mocks.heartbeat).not.toHaveBeenCalled();
 }
 
 beforeEach(async () => {
@@ -137,31 +139,39 @@ afterEach(async () => {
 });
 
 describe("WhatsApp QA adapter cleanup through the suite", () => {
+  it("reports a driver polling failure through the transport wait boundary", async () => {
+    const transport = await createAdapter();
+    const driver = await mocks.startDriver.mock.results[0]!.value;
+    const failure = new Error("driver polling failed");
+    vi.spyOn(driver, "getObservedMessages").mockImplementation(() => {
+      throw failure;
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(transport.adapter.waitForCondition(() => true)).rejects.toBe(failure);
+  });
+
   it.each([
-    ["none", undefined, undefined],
-    ["gateway stop", undefined, "gateway stop"],
-    ["driver close", mocks.closeDriver, "transport before gateway stop"],
-    ["heartbeat request", undefined, undefined],
-    ["heartbeat stop", mocks.heartbeatStop, "transport after gateway stop"],
-    ["lease release", mocks.release, "transport after gateway stop"],
+    ["none", undefined],
+    ["driver close", mocks.closeDriver],
+    ["heartbeat request", undefined],
+    ["heartbeat stop", mocks.heartbeatStop],
+    ["lease release", mocks.release],
   ] as const)(
-    "keeps lease and auth until terminal Gateway teardown (failure: %s)",
-    async (failureAt, fail, phase) => {
+    "keeps lease and auth between cleanup phases (failure: %s)",
+    async (failureAt, fail) => {
       const transport = await createAdapter();
       const cfg = transport.adapter.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-      const sutAuthDir = await fs.realpath(
-        expectDefined(cfg.channels?.whatsapp?.accounts?.sut?.authDir, "SUT auth directory"),
+      const sutAuthDir = expectDefined(
+        cfg.channels?.whatsapp?.accounts?.sut?.authDir,
+        "SUT auth directory",
       );
       await expectResourcesRetained(sutAuthDir);
       if (failureAt === "heartbeat request") {
         mocks.heartbeat.mockRejectedValueOnce(new Error("heartbeat request failed"));
       }
-      const lastReply: WhatsAppQaDriverObservedMessage = {
-        kind: "text",
-        fromPhoneE164: "+15550000002",
-        observedAt: new Date().toISOString(),
-        text: "last reply before cleanup",
-      };
+      const lastReply = observedMessage("last-reply", { text: "last reply before cleanup" });
       observed.push(lastReply);
       await vi.advanceTimersByTimeAsync(500);
       expect(transport.adapter.state.getSnapshot().messages.map(({ text }) => text)).toEqual([
@@ -175,64 +185,28 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
 
       const failure = new Error(`${failureAt} failed`);
       fail?.mockRejectedValueOnce(failure);
-      const gatewayStopped = createDeferred<void>();
-      const stopStarted = createDeferred<void>();
-      const stopGateway = vi.fn(async (): Promise<QaGatewayStopResult> => {
-        stopStarted.resolve();
-        await gatewayStopped.promise;
-        if (failureAt === "gateway stop") {
-          throw failure;
-        }
-        return { process: "confirmed-stopped", errors: [] };
-      });
-      const cleanup = runQaFlowSuiteCleanupPlan({
-        cleanupTransportBeforeGatewayStop: transport.cleanupBeforeGatewayStop,
-        cleanupTransportAfterGatewayStop: transport.cleanupAfterGatewayStop,
-        stopGateway,
-        disposeAgentHarnesses: async () => {},
-        finishLab: async () => {},
-      });
-      try {
-        // The active polling sleep must drain before the driver or Gateway closes.
-        await vi.advanceTimersByTimeAsync(499);
-        expect(mocks.closeDriver).not.toHaveBeenCalled();
-        expect(stopGateway).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        await stopStarted.promise;
-        expect(mocks.closeDriver).toHaveBeenCalledOnce();
-        await expectResourcesRetained(sutAuthDir);
-        mocks.heartbeat.mockClear();
-        observed.push({ ...lastReply, text: "must not poll after cleanup" });
-        await vi.advanceTimersByTimeAsync(1_000);
-        if (failureAt !== "heartbeat request") {
-          expect
-            .soft(mocks.heartbeat, "heartbeat continues while Gateway stop is pending")
-            .toHaveBeenCalled();
-        }
-        expect(transport.adapter.state.getSnapshot().messages).toHaveLength(1);
-      } finally {
-        gatewayStopped.resolve();
-        await cleanup;
+      const before = transport.cleanupBeforeGatewayStop();
+      const drained =
+        failureAt === "driver close"
+          ? expect(before).rejects.toBe(failure)
+          : expect(before).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(499);
+      expect(mocks.closeDriver).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await drained;
+      await expectResourcesRetained(sutAuthDir);
+      mocks.heartbeat.mockClear();
+      observed.push({ ...lastReply, text: "must not poll after cleanup" });
+      await vi.advanceTimersByTimeAsync(1_000);
+      if (failureAt !== "heartbeat request") {
+        expect(mocks.heartbeat).toHaveBeenCalled();
       }
-      const failures = await cleanup;
-      expect(failures).toEqual(phase ? [{ phase, error: failure }] : []);
-      if (failureAt === "gateway stop") {
-        await expectResourcesRetained(sutAuthDir);
-        mocks.heartbeat.mockClear();
-        await vi.advanceTimersByTimeAsync(100);
-        expect
-          .soft(mocks.heartbeat, "failed Gateway stop must retain heartbeat")
-          .toHaveBeenCalled();
-      } else {
-        expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
-        expect(mocks.release).toHaveBeenCalledOnce();
-        await expect(fs.stat(expectDefined(authRoot, "auth root"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-        mocks.heartbeat.mockClear();
-        await vi.advanceTimersByTimeAsync(100);
-        expect(mocks.heartbeat).not.toHaveBeenCalled();
-      }
+      expect(transport.adapter.state.getSnapshot().messages).toHaveLength(1);
+      const after = transport.cleanupAfterGatewayStop();
+      await (fail && failureAt !== "driver close"
+        ? expect(after).rejects.toBe(failure)
+        : expect(after).resolves.toBeUndefined());
+      await expectLeaseReleased();
       if (fail) {
         await expect(transport.cleanupWithoutGateway()).rejects.toBe(failure);
         expect(mocks.closeDriver).toHaveBeenCalledOnce();
@@ -249,7 +223,6 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
     await expect(createAdapter()).rejects.toThrow("auth root creation failed");
 
     expect(mocks.startDriver).not.toHaveBeenCalled();
-    expect(runExec).not.toHaveBeenCalled();
     expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
     expect(mocks.release).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(100);
@@ -258,61 +231,14 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
 
   it("does not leave a pending auth unpack able to recreate the root after rollback", async () => {
     credentialPayload.driverAuthArchiveBase64 = Buffer.from("not a tar archive").toString("base64");
-    const mkdir = fs.mkdir.bind(fs);
-    const resumeSutMkdir = createDeferred<void>();
-    const driverUnpackFailed = createDeferred<void>();
-    const sutExtracted = createDeferred<void>();
-    let pendingSutUnpack: Promise<void> | undefined;
-    vi.spyOn(fs, "mkdir").mockImplementation(async (dir, options) => {
-      if (path.basename(String(dir)) === "sut-auth") {
-        pendingSutUnpack = sutExtracted.promise;
-        await resumeSutMkdir.promise;
-      }
-      return await mkdir(dir, options);
-    });
-    const realRunExec = expectDefined(vi.mocked(runExec).getMockImplementation(), "real exec");
-    vi.mocked(runExec).mockImplementation(async (command, args, options) => {
-      const archive = args[1];
-      if (command === "tar" && archive && path.basename(archive) === "driver-auth.tgz") {
-        authRoot = await fs.realpath(path.dirname(archive));
-      }
-      try {
-        return await realRunExec(command, args, options);
-      } finally {
-        if (archive && path.basename(archive) === "driver-auth.tgz") {
-          driverUnpackFailed.resolve();
-        }
-        if (args[0] === "-xzf" && archive && path.basename(archive) === "sut-auth.tgz") {
-          sutExtracted.resolve();
-        }
-      }
-    });
-
-    const initialization = expect(createAdapter()).rejects.toThrow(/tar/);
-    try {
-      await driverUnpackFailed.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      // Either avoid starting the second unpack or drain it before releasing resources.
-      if (pendingSutUnpack) {
-        expect
-          .soft(mocks.release, "rollback must retain the lease while auth staging is pending")
-          .not.toHaveBeenCalled();
-      }
-    } finally {
-      // If rollback already started, finish it before allowing the delayed writer to resume.
-      if (mocks.release.mock.calls.length > 0) {
-        await initialization;
-      }
-      resumeSutMkdir.resolve();
-      await pendingSutUnpack;
-      await initialization;
-    }
+    const roots = vi.spyOn(fs, "mkdtemp");
+    const mkdir = vi.spyOn(fs, "mkdir");
+    await expect(createAdapter()).rejects.toThrow(/tar/);
+    authRoot = await roots.mock.results[0]!.value;
+    // Sequential staging must never start a second writer after the first unpack fails.
+    expect(mkdir.mock.calls.some(([dir]) => path.basename(String(dir)) === "sut-auth")).toBe(false);
     expect(mocks.startDriver).not.toHaveBeenCalled();
-    expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
-    expect(mocks.release).toHaveBeenCalledOnce();
-    await expect(fs.stat(expectDefined(authRoot, "auth root"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectLeaseReleased();
   });
 
   it.each([
@@ -331,14 +257,7 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
       await expect(createAdapter()).rejects.toThrow(
         failureAt === "none" ? "driver initialization failed" : `${failureAt} failed`,
       );
-      expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
-      expect(mocks.release).toHaveBeenCalledOnce();
-      await expect(fs.stat(expectDefined(authRoot, "auth root"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      mocks.heartbeat.mockClear();
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(mocks.heartbeat).not.toHaveBeenCalled();
+      await expectLeaseReleased(1_000);
     },
   );
 });

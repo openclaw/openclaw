@@ -9,9 +9,13 @@ import {
   readAuthProfilesForAgent,
   setupAuthTestEnv,
 } from "../../test/helpers/auth-wizard.js";
-import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+} from "../agents/auth-profiles/store-runtime.js";
 import type { OAuthCredentials } from "../llm/utils/oauth/types.js";
 import {
+  upsertApiKeyProfile,
   upsertApiKeyProfileAsync,
   writeOAuthCredentials,
 } from "../plugins/provider-auth-helpers.js";
@@ -177,6 +181,30 @@ describe("upsertApiKeyProfile secret refs", () => {
     const parsed = await readEffectiveAuthProfiles(agentDir);
     expectFields(parsed.profiles[profileId], { type: "api_key", ...expected });
   }
+
+  it("persists the deprecated synchronous API-key write before returning", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-sync-");
+    lifecycle.track(env);
+    const profileId = upsertApiKeyProfile({
+      provider: "openai",
+      input: "synthetic-sync-key",
+      agentDir: env.agentDir,
+      profileId: "openai:sync",
+      metadata: { label: "sync" },
+    });
+    expect(profileId).toBe("openai:sync");
+    expectFields(
+      ensureAuthProfileStore(env.agentDir, { readOnly: true, syncExternalCli: false }).profiles[
+        profileId
+      ],
+      {
+        type: "api_key",
+        provider: "openai",
+        key: "synthetic-sync-key",
+        metadata: { label: "sync" },
+      },
+    );
+  });
 
   it("handles plaintext, ref mode, and inline env-ref provider keys", async () => {
     const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-");

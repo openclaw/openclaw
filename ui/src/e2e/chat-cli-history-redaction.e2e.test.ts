@@ -56,7 +56,10 @@ suite.define(() => {
       } as AgentMessage;
       const mergedMessages = mergeImportedChatHistoryMessages({
         localMessages: [localUserMessage],
-        importedMessages: await readClaudeCliSessionMessagesAsync({ cliSessionId, homeDir }),
+        importedMessages: await readClaudeCliSessionMessagesAsync({
+          cliSessionId,
+          projectsDir: path.join(homeDir, ".claude", "projects"),
+        }),
       });
 
       expect(mergedMessages).toHaveLength(2);
@@ -82,7 +85,7 @@ suite.define(() => {
         sessionKey: "agent:main:session-a",
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-      await waitForRequests(gateway, "chat.startup", 1);
+      await waitForRequests(gateway, "sessions.messages.subscribe", 1);
       const thread = page.locator(".chat-thread");
       const prefixes = ["CLI user copy", "CLI imported-only reply"];
       for (const prefix of prefixes) {
@@ -94,87 +97,5 @@ suite.define(() => {
       }
       expect(await thread.textContent()).toContain(secret);
     });
-  });
-
-  it("preserves tool source in Activity while bounding the visible preview", async () => {
-    await suite.withPage(
-      { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },
-      async ({ page }) => {
-        const sessionKey = "agent:main:main";
-        const command = "app.api.key=synthetic-source-value-1234567890";
-        const source = [
-          "API_TOKEN = computeToken()",
-          command,
-          "spring.datasource.password=synthetic-db-value-1234567890",
-          "Read output continues here.\n".repeat(100),
-        ].join("\n");
-        const gateway = await installMockGateway(page, {
-          sessionKey,
-          sessions: [{ key: sessionKey, kind: "direct", hasActiveRun: true, status: "running" }],
-          historyMessages: [
-            { role: "user", content: "Inspect the original tool source.", timestamp: 1 },
-            {
-              role: "assistant",
-              timestamp: 2,
-              content: [
-                {
-                  type: "toolCall",
-                  id: "source-call",
-                  name: "custom_tool",
-                  arguments: { message: command },
-                },
-              ],
-            },
-            {
-              role: "toolResult",
-              toolCallId: "source-call",
-              toolName: "custom_tool",
-              timestamp: 3,
-              content: [{ type: "text", text: "Source read complete." }],
-            },
-            { role: "assistant", content: "The original tool source is available.", timestamp: 4 },
-          ],
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await page.getByText("The original tool source is available.", { exact: true }).waitFor();
-        for (const group of await page
-          .locator('.chat-activity-group__summary[aria-expanded="false"]')
-          .all()) {
-          await group.click();
-        }
-        const toolRow = page.locator(".chat-tool-msg-summary").first();
-        await toolRow.waitFor();
-        const collapsedText = await toolRow.textContent();
-        await page.goto(`${suite.server.baseUrl}activity?view=live`);
-        await page.locator(".activity-empty").waitFor();
-        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
-        await gateway.emitGatewayEvent("agent", {
-          runId: "synthetic-source-run",
-          seq: 1,
-          stream: "tool",
-          ts: 1_700_000_000_000,
-          sessionKey,
-          data: {
-            phase: "result",
-            name: "read",
-            toolCallId: "synthetic-read",
-            result: { content: [{ type: "text", text: source }] },
-          },
-        });
-        const entry = page.locator(".activity-entry").filter({ hasText: "read" });
-        await entry.locator("summary").click();
-        const preview = entry.locator(".activity-entry__preview");
-        const note = entry.locator(".activity-entry__note");
-        await preview.waitFor();
-        await note.waitFor();
-        expect(collapsedText).toContain(command);
-        const visible = await preview.textContent();
-        expect(visible).toContain("API_TOKEN = computeToken()");
-        expect(visible).toContain(command);
-        expect(visible).toContain("spring.datasource.password=synthetic-db-value-1234567890");
-        expect(visible!.length).toBeLessThan(source.length);
-        expect(await note.textContent()).toBe("Preview truncated.");
-      },
-    );
   });
 });

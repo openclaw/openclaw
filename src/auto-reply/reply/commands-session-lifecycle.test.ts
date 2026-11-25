@@ -106,6 +106,9 @@ vi.mock("../../channels/plugins/index.js", () => ({
 vi.mock("../../channels/plugins/registry.js", () => ({
   getChannelPlugin: (channelId: string) =>
     hoisted.registry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
+  getLoadedChannelPlugin: (channelId: string) =>
+    hoisted.registry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
+  normalizeChannelId: (raw?: string | null) => raw?.trim().toLowerCase() || null,
 }));
 // mock-isolation: Observe binding effects without opening the live outbound binding store.
 vi.mock("../../infra/outbound/session-binding-service.js", () => ({
@@ -265,6 +268,7 @@ describe("/session conversation bindings", () => {
   ])("unbinds only the current $name conversation", async ({ createParams, createBinding }) => {
     const binding = createBinding();
     hoisted.resolveBinding.mockReturnValue(binding);
+    hoisted.unbind.mockResolvedValue([binding]);
     const result = await handleSessionCommand(createParams("/session unbind"), true);
     expect(result?.reply?.text).toBe("✅ Conversation unbound.");
     expect(hoisted.unbind).toHaveBeenCalledExactlyOnceWith({
@@ -272,6 +276,15 @@ describe("/session conversation bindings", () => {
       scope: binding.conversation,
       reason: "manual",
     });
+  });
+
+  it("reports an unbind that removed no binding", async () => {
+    hoisted.resolveBinding.mockReturnValue(threadBinding());
+    const result = await handleSessionCommand(threadParams("/session unbind"), true);
+    expect(result?.reply?.text).toBe(
+      "⚠️ No binding was removed; this conversation may still be bound.",
+    );
+    expect(hoisted.unbind).toHaveBeenCalledOnce();
   });
 
   it.each([

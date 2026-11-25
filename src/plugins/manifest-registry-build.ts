@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
@@ -38,8 +39,7 @@ import {
   PLUGIN_MANIFEST_FILENAME,
   type PluginManifest,
 } from "./manifest.js";
-import { checkMinHostVersion } from "./min-host-version.js";
-import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
+import { checkOpenClawPackageCompatibility } from "./package-compat.js";
 import {
   pluginCacheExistsSync,
   pluginCacheRealpathSync,
@@ -124,25 +124,17 @@ function dedupePluginDiagnostics(
   diagnostics: PluginDiagnostic[],
   discoveryDiagnostics: ReadonlySet<PluginDiagnostic>,
 ): PluginDiagnostic[] {
-  const seen = new Set<string>();
-  const deduped: PluginDiagnostic[] = [];
-  for (const diagnostic of diagnostics) {
-    // Discovery diagnostics belong to package roots; generated compatibility warnings belong to ids.
-    const key = JSON.stringify([
+  // Discovery diagnostics belong to package roots; generated compatibility warnings belong to ids.
+  return dedupeByKey(diagnostics, (diagnostic) =>
+    JSON.stringify([
       diagnostic.level,
       diagnostic.pluginId ?? "",
       diagnostic.message,
       diagnostic.level === "error" || discoveryDiagnostics.has(diagnostic)
         ? (diagnostic.source ?? "")
         : "",
-    ]);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(diagnostic);
-  }
-  return deduped;
+    ]),
+  );
 }
 
 function isStaleForeignBundledPin(params: {
@@ -187,30 +179,6 @@ function resolveDuplicatePrecedenceRank(params: {
     return 4;
   }
   return 5;
-}
-
-function isIntentionalInstalledBundledDuplicate(params: {
-  left: PluginCandidate;
-  right: PluginCandidate;
-  env: NodeJS.ProcessEnv;
-  installRecords: Record<string, PluginInstallRecord>;
-}): boolean {
-  return (
-    [
-      [params.left, params.right],
-      [params.right, params.left],
-    ] as const
-  ).some(
-    ([installed, bundled]) =>
-      matchesInstalledPluginRecord({
-        candidate: installed,
-        env: params.env,
-        installRecords: params.installRecords,
-      }) &&
-      !isStaleForeignBundledPin({ candidate: installed, env: params.env }) &&
-      bundled.origin === "bundled" &&
-      !isBundledPluginInsideDevSourceRoot({ rootDir: bundled.rootDir, env: params.env }),
-  );
 }
 
 function isSameGlobalPackageDuplicate(left: PluginCandidate, right: PluginCandidate): boolean {
@@ -359,46 +327,30 @@ export function buildPluginManifestRegistry(
           env,
           installRecords: getInstallRecords(),
         });
-      const minHostVersionCheck = checkMinHostVersion({
-        currentVersion: currentHostVersion,
-        minHostVersion: candidate.packageManifest?.install?.minHostVersion,
+      const compatibility = checkOpenClawPackageCompatibility({
+        currentHostVersion,
+        packageMetadata: candidate.packageManifest,
         allowLegacyBareSemver: allowLegacyBareMinHostVersion,
       });
-      if (!minHostVersionCheck.ok) {
+      if (!compatibility.ok) {
         diagnostics.push({
-          level: minHostVersionCheck.kind === "invalid" ? "error" : "warn",
+          level:
+            compatibility.kind === "invalid" || compatibility.kind === "invalid_plugin_api"
+              ? "error"
+              : "warn",
+          ...(compatibility.kind === "incompatible_plugin_api"
+            ? { configDisposition: "preserve" as const }
+            : {}),
           pluginId: effectivePluginId,
           source: packageManifestSource,
           message:
-            minHostVersionCheck.kind === "invalid"
-              ? `plugin manifest invalid | ${minHostVersionCheck.error}`
-              : minHostVersionCheck.kind === "unknown_host_version"
-                ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
-                : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
-        });
-        continue;
-      }
-      const packagePluginApiRangeCheck = resolvePackagePluginApiRange(candidate.packageManifest);
-      if (!packagePluginApiRangeCheck.ok) {
-        diagnostics.push({
-          level: "error",
-          pluginId: effectivePluginId,
-          source: packageManifestSource,
-          message: `plugin manifest invalid | ${packagePluginApiRangeCheck.error}`,
-        });
-        continue;
-      }
-      const packagePluginApiRange = packagePluginApiRangeCheck.range;
-      if (
-        packagePluginApiRange &&
-        !satisfiesPluginApiRange(currentHostVersion, packagePluginApiRange)
-      ) {
-        diagnostics.push({
-          level: "warn",
-          configDisposition: "preserve",
-          pluginId: effectivePluginId,
-          source: packageManifestSource,
-          message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
+            compatibility.kind === "invalid" || compatibility.kind === "invalid_plugin_api"
+              ? `plugin manifest invalid | ${compatibility.error}`
+              : compatibility.kind === "unknown_host_version"
+                ? `plugin requires OpenClaw >=${compatibility.requirement.minimumLabel}, but this host version could not be determined; skipping load`
+                : compatibility.kind === "incompatible"
+                  ? `plugin requires OpenClaw >=${compatibility.requirement.minimumLabel}, but this host is ${compatibility.currentVersion}; skipping load`
+                  : `plugin requires plugin API ${compatibility.range}, but this host is ${currentHostVersion}; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
         });
         continue;
       }
@@ -499,13 +451,21 @@ export function buildPluginManifestRegistry(
       if (candidateWins) {
         seenIds.set(effectivePluginId, { candidate, record });
       }
+      const existingCandidate = existing.candidate;
+      const installRecords = getInstallRecords();
       if (
-        isIntentionalInstalledBundledDuplicate({
-          left: candidate,
-          right: existing.candidate,
-          env,
-          installRecords: getInstallRecords(),
-        })
+        (
+          [
+            [candidate, existingCandidate],
+            [existingCandidate, candidate],
+          ] as const
+        ).some(
+          ([installed, bundled]) =>
+            matchesInstalledPluginRecord({ candidate: installed, env, installRecords }) &&
+            !isStaleForeignBundledPin({ candidate: installed, env }) &&
+            bundled.origin === "bundled" &&
+            !isBundledPluginInsideDevSourceRoot({ rootDir: bundled.rootDir, env }),
+        )
       ) {
         continue;
       }
@@ -539,7 +499,7 @@ export function buildPluginManifestRegistry(
           ? `stale plugin install record: "${effectivePluginId}" is pinned to ${overriddenCandidate.rootDir}, which belongs to a different OpenClaw installation. This installation's bundled plugin is being used instead. No uninstall is needed to use the bundled plugin. Uninstalling, even with \`--keep-files\`, removes plugin configuration; re-enabling does not restore it.`
           : explicitOverride
             ? `duplicate plugin id resolved by explicit config-selected plugin; ${overriddenCandidate.origin} plugin will be overridden by config plugin (${winnerCandidate.source})`
-            : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
+            : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source}); ignored plugin source: ${overriddenCandidate.source}`,
       });
       continue;
     }

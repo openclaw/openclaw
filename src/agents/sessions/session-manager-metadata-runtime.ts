@@ -1,5 +1,4 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import type {
   SessionMetadataOperations,
   SessionMetadataWorkerOperations,
@@ -45,11 +44,7 @@ export async function withSessionMetadataWorker<T>(
   if ("withMetadata" in database) {
     return await database.withMetadata(assertCurrent, operation, controls);
   }
-  let cliWriter: CliHistoryWriter | undefined;
-  const assertMetadataCurrent = () => {
-    assertCurrent();
-    cliWriter?.assertCurrent();
-  };
+  const assertMetadataCurrent = assertCurrent;
   const admission = captureSessionMessageAdmission(assertMetadataCurrent, controls);
   await runOpenClawAgentWorkerWrite(options, () =>
     database.prepare(
@@ -82,7 +77,7 @@ export async function withSessionMetadataWorker<T>(
   try {
     const value = await operation({
       execute: async (command, commandOptions) => {
-        cliWriter = prepareSessionManagerMetadataCommand(command, database.path, admission.control);
+        prepareSessionManagerMetadataCommand(command, admission.control);
         assertMetadataCurrent();
         const reply = await worker.execute(command, assertMetadataCurrent, commandOptions);
         if (!reply.ok) {

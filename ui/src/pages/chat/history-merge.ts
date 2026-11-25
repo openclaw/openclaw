@@ -83,10 +83,9 @@ function isInitialSubmissionReceipt(
     submission?.kind === "initial" &&
     identity?.role === "user" &&
     !identity.isImported &&
-    ((submission.consumedByEventId && identity.id === submission.consumedByEventId) ||
-      ((identity.id !== null || identity.sequence !== null) &&
-        (identity.idempotencyKey === submission.pendingRunId ||
-          identity.idempotencyKey === `${submission.pendingRunId}:user`)))
+    (identity.id !== null || identity.sequence !== null) &&
+    (identity.idempotencyKey === submission.pendingRunId ||
+      identity.idempotencyKey === `${submission.pendingRunId}:user`)
   );
 }
 
@@ -495,9 +494,10 @@ export function selectChatInputDisplay(
           !sendKeys.has(`${item.sendRunId}:user`)),
     ),
     pendingInputs: unseenInputs.filter(
-      (input) => !input.queued && asNullableRecord(input.message)?.display !== false,
+      (input) =>
+        (!input.queued || input.steerNow) && asNullableRecord(input.message)?.display !== false,
     ),
-    queuedInputs: unseenInputs.filter((input) => input.queued),
+    queuedInputs: unseenInputs.filter((input) => input.queued && !input.steerNow),
   };
 }
 

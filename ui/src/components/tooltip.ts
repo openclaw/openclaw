@@ -1,5 +1,6 @@
 import { listen } from "../lib/reactive/listener.ts";
 import { isTooltipTriggerElement } from "./tooltip-content.ts";
+import { observeTooltipContent } from "./tooltip-mutations.ts";
 import { TooltipOwner, consumeTooltipEscape, type TooltipPolicyProps } from "./tooltip-owner.ts";
 
 export { consumeTooltipEscape };
@@ -74,7 +75,7 @@ export class TooltipProvider extends HTMLElement {
 
 const defaults = {
   content: "",
-  placement: "top",
+  placement: undefined,
   closeDelay: 100,
   hoverDismissDelay: undefined,
   delay: undefined,
@@ -122,7 +123,7 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
   readonly #surface: HTMLDivElement;
   readonly #rich: HTMLSpanElement;
   readonly #owner: TooltipOwner;
-  readonly #children: MutationObserver;
+  #stopChildren: (() => void) | undefined;
   #stopListeners: (() => void)[] = [];
   #runtime: TooltipRuntime | undefined;
   #pendingUpdate: Promise<boolean> | undefined;
@@ -176,7 +177,6 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
       requestOpen: (open) => this.#requestOpen(open),
     });
     this.#surface.id = this.#owner.id;
-    this.#children = new MutationObserver(() => this.#owner.refresh());
   }
 
   get updateComplete(): Promise<boolean> {
@@ -190,12 +190,22 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
     this.#stopListeners = [
       listen(this.#triggerSlot, "slotchange", () => this.#owner.refresh()),
       listen(this.#contentSlot, "slotchange", () => this.#owner.contentChanged()),
-      listen(this.#rich, "pointerenter", (event) => this.#owner.handleContentPointerEnter(event)),
-      listen(this.#rich, "pointerleave", (event) => this.#owner.handleContentPointerLeave(event)),
+      // The whole visible card, padding included, keeps rich content open.
+      listen(this.#surface, "pointerenter", (event) =>
+        this.#owner.handleContentPointerEnter(event),
+      ),
+      listen(this.#surface, "pointerleave", (event) =>
+        this.#owner.handleContentPointerLeave(event),
+      ),
       listen(this.#rich, "focusin", () => this.#owner.handleFocusIn()),
       listen(this.#rich, "focusout", (event) => this.#owner.handleFocusOut(event)),
     ];
-    this.#children.observe(this, { childList: true });
+    this.#stopChildren = observeTooltipContent(
+      this.ownerDocument,
+      [this],
+      () => this.#owner.refresh(),
+      { subtree: false },
+    );
     this.#owner.refresh();
   }
 
@@ -206,7 +216,8 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
   disconnectedCallback() {
     this.#wanted = false;
     this.#stopListeners.splice(0).forEach((stop) => stop());
-    this.#children.disconnect();
+    this.#stopChildren?.();
+    this.#stopChildren = undefined;
     this.#owner.dispose();
     this.#runtime?.dispose();
     this.#runtime = undefined;

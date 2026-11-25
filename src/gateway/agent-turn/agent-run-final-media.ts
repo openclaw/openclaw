@@ -26,6 +26,7 @@ import {
   enrichAssistantTranscriptMediaForRun,
   publishAssistantTranscriptRewrite,
 } from "../server-methods/chat-transcript-persistence.js";
+import { readCommittedSourceReplyContent } from "../server-methods/chat-transcript-source-reply-owner.js";
 import { withGatewaySessionEntry } from "../session-utils-store.js";
 import {
   capturePlacementReplicaRead,
@@ -158,11 +159,26 @@ export async function finalizeAgentRunMedia(
         sessionId: reply.sessionId,
         storePath: reply.storePath,
       };
+      const committedSourceContent = await Promise.all(
+        plan.map(({ payload }) =>
+          readCommittedSourceReplyContent({
+            scope,
+            payload,
+            abortSignal: params.abortSignal,
+            assertCurrent: prepared.assertCurrent,
+          }),
+        ),
+      );
+      prepared.assertCurrent();
+      const uncommitted = plan.filter((_, index) => !committedSourceContent[index]);
+      if (!uncommitted.some(({ parts }) => parts.mediaUrls.length > 0)) {
+        return;
+      }
       const { persistedAssistantContent: content, mediaBySource } =
         await prepareWebchatReplyMediaForDisplay({
           scope: prepared,
           storePath: scope.storePath,
-          inputs: plan.map((entry) => ({ kind: "prepared", plan: entry })),
+          inputs: uncommitted.map((entry) => ({ kind: "prepared", plan: entry })),
           abortSignal: params.abortSignal,
           includeSensitiveMedia: false,
           includeSensitiveDisplay: false,
@@ -183,7 +199,7 @@ export async function finalizeAgentRunMedia(
               expectedLifecycleRevision: reply.lifecycleRevision ?? null,
               content,
               mediaBySource,
-              mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),
+              mediaUrls: uncommitted.flatMap((entry) => entry.parts.mediaUrls),
             }),
         );
         if (!rewritten) {

@@ -5,12 +5,13 @@ import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-lis
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionRequest as sessionRpc } from "./hydration-family.test-support.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { sessionRpc, patchReceipt, sessionRow } from "./session-rpc.test-support.ts";
+import { patchReceipt, sessionRow } from "./session-rpc.test-support.ts";
 
 const sidebarQuery = {
   archivedFilter: "all" as const,
@@ -19,7 +20,7 @@ const sidebarQuery = {
   includeLastMessage: true,
 };
 
-function fixture(handlers: Parameters<typeof sessionRpc>[0], release: () => void) {
+function fixture(handlers: Record<string, (params?: unknown) => unknown>, release: () => void) {
   vi.useFakeTimers();
   const errors: unknown[] = [];
   const request = sessionRpc(handlers);
@@ -179,10 +180,9 @@ it.each([
 });
 
 it.each([
-  { name: "swarm and pin overlap", swarm: true, pin: true },
-  { name: "no swarm decoration", swarm: false, pin: true },
-  { name: "no pin overlay", swarm: true, pin: false },
-])("retains a newer list preview with $name", async ({ swarm, pin }) => {
+  { name: "a pin overlay", pin: true },
+  { name: "no pin overlay", pin: false },
+])("retains a newer list preview with $name", async ({ pin }) => {
   const parentKey = "agent:main:main";
   const groupId = "swarm:agent:main:main:turn-42";
   const initial = sessionRow("worker-session", {
@@ -230,21 +230,6 @@ it.each([
     h.sessions.refresh({ agentId: "main", force: true, includeLastMessage: true });
   const row = () => h.sessions.state.result?.sessions.find((entry) => entry.key === initial.key);
   await refresh();
-  if (swarm) {
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        ...parent,
-        sessionKey: parentKey,
-        reason: "swarm-note",
-        swarmGroupId: groupId,
-        kind: "log",
-        text: "Work is progressing",
-      },
-    });
-    expect(row()).toHaveProperty("swarmLog", "Work is progressing");
-  }
   if (pin) {
     void h.patch(initial, { pinned: true });
     await pinDispatched.promise;
@@ -263,7 +248,4 @@ it.each([
     .result?.sessions.find((entry) => entry.key === initial.key);
   expect(managed).toMatchObject({ lastMessagePreview: fresh.lastMessagePreview, pinned: pin });
   expect(row()).toMatchObject({ lastMessagePreview: fresh.lastMessagePreview, pinned: pin });
-  if (swarm) {
-    expect(row()).toHaveProperty("swarmLog", "Work is progressing");
-  }
 });

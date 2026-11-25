@@ -8,7 +8,9 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { observePluginStateReads } from "../plugin-state/plugin-state-fixtures.test-support.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -136,6 +138,78 @@ it(
 
 describe("plugin doctor session identity evidence", () => {
   it(
+    "reads each legacy session index once for a Codex detection page",
+    inDoctorState(async ({ env, stateDir }) => {
+      setRuntimeConfigSnapshot({});
+      await putSession(env, "agent:main:retained", "retained-session");
+      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(storePath, JSON.stringify({ retained: { sessionId: "legacy-session" } }));
+      const context = doctorContext(env);
+      const rows = Array.from({ length: 512 }, (_, index) => {
+        const sessionId = `absent-${index}`;
+        const value = {
+          version: 1,
+          state: "active",
+          sessionId,
+          binding: {
+            threadId: "parent",
+            cwd: "/synthetic",
+            appServerRuntimeFingerprint: "fixture",
+          },
+          nativeSubagentAssignments: {
+            version: 1,
+            assignments: [
+              {
+                runId: `codex-thread:child-${index}:turn:first-turn`,
+                childThreadId: `child-${index}`,
+                nativeTurnId: "first-turn",
+                nativeParentThreadId: "parent",
+                owner: {
+                  parentThreadId: "parent",
+                  sessionId,
+                  lifecycleRevision: "lifecycle",
+                  connectionFingerprint: "a".repeat(64),
+                },
+              },
+            ],
+          },
+        };
+        return {
+          key: `session:main:${sessionId}`,
+          value,
+          valueJson: JSON.stringify(value),
+          createdAt: 1,
+          expiresAt: null,
+        };
+      });
+      context.readPluginStateEntriesInKeyRange = (_namespace, range) => (range.after ? [] : rows);
+      const contract = await loadBundledPluginFacade<{
+        stateMigrations: PluginDoctorStateMigration[];
+      }>({
+        pluginId: "codex",
+        artifactBasename: "doctor-contract-api.js",
+      });
+      const migration = contract.stateMigrations.find(
+        ({ id }) => id === "codex-native-assignment-repair",
+      );
+      if (!migration) {
+        throw new Error("Missing registered Codex native assignment repair");
+      }
+      const reads = vi.spyOn(fs, "readFileSync");
+      expect(
+        await migration.detectLegacyState({
+          config: {},
+          env,
+          stateDir,
+          oauthDir: path.join(stateDir, "credentials"),
+          context,
+        }),
+      ).not.toBeNull();
+      expect(reads.mock.calls.filter(([file]) => file === storePath)).toHaveLength(1);
+    }),
+  );
+  it(
     "preserves ambiguity for two current keys",
     inDoctorState(async ({ env }) => {
       setRuntimeConfigSnapshot({});
@@ -175,13 +249,14 @@ describe("plugin doctor session identity evidence", () => {
   it.each([
     ["entry_json", "{broken", "broken-session"],
     ["current_session_id", "wrong-session", "wrong-session"],
-  ])("keeps corrupt %s fixed-store rows unknown", async (column, value, sessionId) => {
+  ])("keeps uncertified repair %s fixed-store rows unknown", async (column, value, sessionId) => {
     await withDoctorState(async ({ env, root }) => {
       const storePath = path.join(root, "fixed.sqlite");
       const sessionKey = "agent:main:broken";
       await putSession(env, sessionKey, "broken-session", storePath);
-      const database = openOpenClawAgentDatabase({ agentId: "main", env, path: storePath }).db;
-      database
+      const database = openOpenClawAgentDatabase({ agentId: "main", env, path: storePath });
+      markCanonicalSessionValidationPending(database, [sessionKey]);
+      database.db
         .prepare(`UPDATE session_nodes SET ${column} = ? WHERE session_key = ?`)
         .run(value, sessionKey);
       const context = doctorContext(env, { config: { session: { store: storePath } } });
@@ -360,6 +435,44 @@ describe("Telegram registered SQLite offset repair", () => {
         return backup;
       });
   }
+  it(
+    "publishes repaired rows to an already warm keyed store",
+    inDoctorState(async ({ env }) => {
+      seed(openOpenClawStateDatabase({ env }).db);
+      const context = doctorContext(env, {
+        pluginId: "telegram",
+        repairAuthority: {
+          assertCurrent() {},
+          assertOwnedInTransaction(database) {
+            expect(database.isTransaction).toBe(true);
+          },
+        },
+      });
+      const store = context.openPluginStateKeyedStore({ namespace, maxEntries: 10 });
+      expect(await store.entries()).toHaveLength(2);
+      expect(await store.lookup("first")).toEqual(JSON.parse(firstOriginal.raw));
+      const observed = context.readPluginStateEntriesInKeyRange!(namespace, {
+        prefix: "",
+        limit: 10,
+      });
+      await context.repairPluginStateEntries!(
+        namespace,
+        observed.map((entry, index) => ({ entry, value: { repaired: index + 1 } })),
+      );
+
+      const dispatch = observePluginStateReads();
+      expect(await store.entries()).toEqual(
+        originals.map((entry, index) => ({
+          key: entry.key,
+          value: { repaired: index + 1 },
+          createdAt: entry.createdAt,
+          ...(entry.expiresAt === null ? {} : { expiresAt: entry.expiresAt }),
+        })),
+      );
+      expect(await store.lookup("first")).toEqual({ repaired: 1 });
+      expect(dispatch).not.toHaveBeenCalled();
+    }),
+  );
   it(
     "normalizes once with backup, without credentials",
     inDoctorState(async ({ env, stateDir }) => {

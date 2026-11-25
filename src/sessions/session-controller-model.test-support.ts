@@ -1,9 +1,5 @@
-/**
- * Reference specification for the executable pilot, NOT a runtime controller.
- * It observes one retained ReplyOperation, V2 steering and its finishing writer.
- * Mailbox custody below is a target contract; the pilot does not migrate queues,
- * durable replay, command stop/children/hooks or lifecycle mutation scheduling.
- */
+// Independent reference models for controller scheduling, steering, and durable
+// input custody. Runtime behavior is exercised by adapters in the test file.
 export type PilotInput = Readonly<{ id: string; authority: string }>;
 export type PilotCustody = "offered" | "accepted" | "indeterminate" | "rejected" | "failed";
 export type PilotEvent =
@@ -14,7 +10,7 @@ export type PilotEvent =
   | { type: "receipt"; id: string; outcome: "accepted" | "indeterminate" | "rejected" };
 export type PilotEffect =
   | { type: "cancel" }
-  | { type: "inject"; input: PilotInput; generation: number }
+  | { type: "inject"; input: PilotInput }
   | { type: "reject"; id: string };
 export type PilotState = Readonly<{
   generation: number;
@@ -26,9 +22,7 @@ export type PilotState = Readonly<{
   compacting: boolean;
   injectionAvailable: boolean;
   authority: string;
-  inputs: Readonly<
-    Record<string, { input: PilotInput; generation: number; custody: PilotCustody }>
-  >;
+  inputs: Readonly<Record<string, { generation: number; custody: PilotCustody }>>;
 }>;
 
 export function initialPilotState(): PilotState {
@@ -51,49 +45,43 @@ export function stepPilot(
   event: PilotEvent,
 ): { state: PilotState; effects: PilotEffect[] } {
   const unchanged = { state, effects: [] };
+  const update = (patch: Partial<PilotState>, effects: PilotEffect[] = []) => ({
+    state: { ...state, ...patch },
+    effects,
+  });
   switch (event.type) {
     case "run":
-      return state.phase === "preparing"
-        ? { state: { ...state, phase: "running" }, effects: [] }
-        : unchanged;
+      return state.phase === "preparing" ? update({ phase: "running" }) : unchanged;
     case "finish":
-      return state.phase === "running"
-        ? { state: { ...state, phase: "finishing" }, effects: [] }
-        : unchanged;
+      return state.phase === "running" ? update({ phase: "finishing" }) : unchanged;
     case "stop":
-      // This is exact-parent cancellation only. A command stop is NOT modeled as
-      // a no-op: queues, children and hooks retain their separate command owner.
+      // Command-level queues, children and hooks have a separate cancellation owner.
       return state.phase === "preparing" || state.phase === "running"
-        ? { state: { ...state, phase: "terminal", cancelled: true }, effects: [{ type: "cancel" }] }
+        ? update({ phase: "terminal", cancelled: true }, [{ type: "cancel" }])
         : unchanged;
     case "complete":
-      return { state: { ...state, phase: "terminal", slot: false }, effects: [] };
+      return update({ phase: "terminal", slot: false });
     case "delivery-settled":
-      return state.slot ? unchanged : { state: { ...state, writer: false }, effects: [] };
+      return state.slot ? unchanged : update({ writer: false });
     case "revoke":
-      return { state: { ...state, live: false }, effects: [] };
+      return update({ live: false });
     case "injection-available":
-      return { state: { ...state, injectionAvailable: event.available }, effects: [] };
+      return update({ injectionAvailable: event.available });
     case "compact":
-      return { state: { ...state, compacting: event.active }, effects: [] };
+      return update({ compacting: event.active });
     case "replace":
       return state.slot
         ? unchanged
-        : {
-            state: {
-              ...initialPilotState(),
-              generation: state.generation + 1,
-              inputs: state.inputs,
-            },
-            effects: [],
-          };
+        : update({
+            ...initialPilotState(),
+            generation: state.generation + 1,
+            inputs: state.inputs,
+          });
     case "offer": {
       if (state.inputs[event.input.id]) {
         return unchanged;
       }
-      // V2 admits during automatic compaction; no blanket compacting/busy gate.
-      // freezeAbort commits cancellation policy, not a fabricated backend capability.
-      // Real attempt settlement closes its sink separately; exercise both orders.
+      // Compaction does not close V2 injection; actual attempt settlement does.
       const targetAvailable =
         state.slot &&
         (state.phase === "running" || state.phase === "finishing") &&
@@ -101,22 +89,14 @@ export function stepPilot(
       const allowed = targetAvailable && state.live && event.input.authority === state.authority;
       const custody: PilotCustody =
         targetAvailable && !state.live ? "failed" : allowed ? "offered" : "rejected";
-      return {
-        state: {
-          ...state,
-          inputs: {
-            ...state.inputs,
-            [event.input.id]: {
-              input: event.input,
-              generation: state.generation,
-              custody,
-            },
-          },
+      return update(
+        {
+          inputs: { ...state.inputs, [event.input.id]: { generation: state.generation, custody } },
         },
-        effects: allowed
-          ? [{ type: "inject", input: event.input, generation: state.generation }]
+        allowed
+          ? [{ type: "inject", input: event.input }]
           : [{ type: "reject", id: event.input.id }],
-      };
+      );
     }
     case "receipt": {
       const entry = state.inputs[event.id];
@@ -129,10 +109,7 @@ export function stepPilot(
         (state.phase === "running" || state.phase === "finishing") &&
         entry.generation === state.generation;
       const custody = current ? event.outcome : "failed";
-      return {
-        state: { ...state, inputs: { ...state.inputs, [event.id]: { ...entry, custody } } },
-        effects: [],
-      };
+      return update({ inputs: { ...state.inputs, [event.id]: { ...entry, custody } } });
     }
   }
   return event satisfies never;
@@ -147,18 +124,15 @@ export type PilotMailboxEvent = { type: "enqueue"; input: PilotInput; overflow: 
 export function stepPilotMailbox(
   state: PilotMailbox,
   event: PilotMailboxEvent,
-): {
-  state: PilotMailbox;
-  effects: readonly { type: "retire"; id: string }[];
-} {
+): { state: PilotMailbox } {
   if (
     state.waiting.some((input) => input.id === event.input.id) ||
     state.retired.includes(event.input.id)
   ) {
-    return { state, effects: [] };
+    return { state };
   }
   if (state.capacity <= 0 || state.waiting.length < state.capacity) {
-    return { state: { ...state, waiting: [...state.waiting, event.input] }, effects: [] };
+    return { state: { ...state, waiting: [...state.waiting, event.input] } };
   }
   const victim = event.overflow === "new" ? event.input : state.waiting[0];
   if (!victim) {
@@ -170,7 +144,6 @@ export function stepPilotMailbox(
       waiting: event.overflow === "new" ? state.waiting : [...state.waiting.slice(1), event.input],
       retired: [...state.retired, victim.id],
     },
-    effects: [{ type: "retire", id: victim.id }],
   };
 }
 
@@ -195,8 +168,7 @@ export function modelParentMailbox(inputs: readonly PilotParentInput[]): PilotPa
   });
 }
 
-/** Seed is printed with the complete event prefix on failure; no external property-test dependency. */
-export function pilotRandom(seed: number): (bound: number) => number {
+function pilotRandom(seed: number): (bound: number) => number {
   let value = (seed ^ 0x9e3779b9) >>> 0;
   return (bound) => {
     // Mix all bits; low-bit LCG sampling otherwise alternates binary choices.
@@ -207,7 +179,6 @@ export function pilotRandom(seed: number): (bound: number) => number {
   };
 }
 
-/** State-aware bounded interleavings; output itself is a standalone replay corpus. */
 export function generatePilotSequence(seed: number, length = 48): PilotEvent[] {
   const random = pilotRandom(seed);
   const events: PilotEvent[] = [];
@@ -275,4 +246,85 @@ export function generatePilotSequence(seed: number, length = 48): PilotEvent[] {
     add({ type: "delivery-settled" });
   }
   return events;
+}
+
+type DurablePilotInput = Readonly<{ id: string; recoverable: boolean }>;
+export type DurablePilotEvent =
+  | { type: "append"; input: DurablePilotInput }
+  | { type: "claim" | "adopt" | "resend"; id: string }
+  | { type: "crash" }
+  | { type: "replay"; dispatchAvailable: boolean };
+type DurablePilotCustody = "queued" | "consumed" | "restart-unrecoverable";
+export type DurablePilotState = Readonly<
+  Record<string, { recoverable: boolean; custody: DurablePilotCustody }>
+>;
+
+export function stepDurablePilot(
+  state: DurablePilotState,
+  event: DurablePilotEvent,
+): DurablePilotState {
+  switch (event.type) {
+    case "append":
+      return {
+        ...state,
+        [event.input.id]: { recoverable: event.input.recoverable, custody: "queued" },
+      };
+    case "adopt":
+      return { ...state, [event.id]: { ...state[event.id]!, custody: "consumed" } };
+    case "replay": {
+      let blocked = false;
+      return Object.fromEntries(
+        Object.entries(state).map(([id, input]) => {
+          if (input.custody !== "queued" || blocked) {
+            return [id, input];
+          }
+          if (input.recoverable && !event.dispatchAvailable) {
+            // FIFO custody remains with this row and every later waiting input.
+            blocked = true;
+            return [id, input];
+          }
+          return [
+            id,
+            {
+              ...input,
+              custody: input.recoverable ? "consumed" : "restart-unrecoverable",
+            },
+          ];
+        }),
+      );
+    }
+    default:
+      return state;
+  }
+}
+
+/** Every seed includes a lost commit confirmation and a claimed-but-unadopted input. */
+export function generateDurablePilotSequence(seed: number): DurablePilotEvent[] {
+  const random = pilotRandom(seed);
+  const inputs = Array.from({ length: 4 }, (_, index) => ({
+    id: `durable-${seed}-${index}`,
+    recoverable: index !== 3,
+  }));
+  for (let index = inputs.length - 1; index > 0; index--) {
+    const other = random(index + 1);
+    [inputs[index], inputs[other]] = [inputs[other]!, inputs[index]!];
+  }
+  const committed = inputs.find((input) => input.recoverable)!;
+  const claimed = inputs.find((input) => input.recoverable && input !== committed)!;
+  const resends: DurablePilotEvent[] = inputs
+    .filter((input) => input.recoverable)
+    .map(({ id }) => ({ type: "resend", id }));
+  return [
+    ...inputs.map((input): DurablePilotEvent => ({ type: "append", input })),
+    { type: "claim", id: committed.id },
+    { type: "adopt", id: committed.id },
+    { type: "claim", id: claimed.id },
+    { type: "crash" },
+    { type: "replay", dispatchAvailable: false },
+    { type: "replay", dispatchAvailable: true },
+    ...resends,
+    { type: "crash" },
+    { type: "replay", dispatchAvailable: true },
+    ...resends,
+  ];
 }

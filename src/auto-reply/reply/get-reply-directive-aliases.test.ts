@@ -6,6 +6,7 @@ import {
 } from "../../agents/embedded-agent-subscribe.openai-responses.test-helpers.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import { makeConfiguredModel } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -33,15 +34,13 @@ const mocks = vi.hoisted(() => ({
 }));
 const modelRef = { provider: "anthropic", model: "claude-opus-4-6" };
 
-const directiveModel: ModelDefinitionConfig = {
+const directiveModel: ModelDefinitionConfig = makeConfiguredModel({
   id: "claude-opus-4-6",
   name: "Directive fixture",
   reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
   maxTokens: 8192,
-};
+});
 const directiveCatalog = [{ provider: "anthropic", ...directiveModel }];
 const directiveMetadata = createPluginMetadataSnapshotFixture();
 const preparedDirectiveCatalog: ModelCatalogSnapshot = {
@@ -225,7 +224,6 @@ describe("reply directive resolution", () => {
         typingSignals: createTypingSignaler({
           typing: makeTypingController(),
           mode: "never",
-          isHeartbeat: false,
         }),
         blockStreamingEnabled: resolved.blockStreamingEnabled,
         blockReplyPipeline: null,
@@ -337,20 +335,35 @@ describe("reply directive resolution", () => {
     expect(sessionEntry).toEqual(createSessionEntry());
   });
 
-  it("still routes model directives after unknown skill references", async () => {
-    const body = "Please use $missing_skill then /model anthropic/claude-opus-4-6";
+  it.each([
+    {
+      body: "Please use $missing_skill then /model anthropic/claude-opus-4-6",
+      cleanedBody: "Please use $missing_skill then /model anthropic/claude-opus-4-6",
+      selectsModel: false,
+    },
+    {
+      body: "/model anthropic/claude-opus-4-6 Please use $missing_skill",
+      cleanedBody: "Please use $missing_skill",
+      selectsModel: true,
+    },
+  ])(
+    "keeps unknown skill references independent of slash admission: $body",
+    async ({ body, cleanedBody, selectsModel }) => {
+      const { result } = await resolveModelDirective({
+        body,
+        cfg: { commands: { text: true } } as OpenClawConfig,
+        surface: "webchat",
+      });
 
-    const { result } = await resolveModelDirective({
-      body,
-      cfg: { commands: { text: true } } as OpenClawConfig,
-      surface: "webchat",
-    });
-
-    expect(continued(result)).toMatchObject({
-      directives: { hasModelDirective: true, rawModelDirective: "anthropic/claude-opus-4-6" },
-      cleanedBody: "Please use $missing_skill then",
-    });
-  });
+      expect(continued(result)).toMatchObject({
+        directives: {
+          hasModelDirective: selectsModel,
+          rawModelDirective: selectsModel ? "anthropic/claude-opus-4-6" : undefined,
+        },
+        cleanedBody,
+      });
+    },
+  );
 
   it.each([
     {

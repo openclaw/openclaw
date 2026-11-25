@@ -42,6 +42,7 @@ import {
   buildTelegramProviderDeliveryResult,
   prepareTelegramOutbound,
   reportTelegramProviderDelivery,
+  resolveTelegramMessageEffectParams,
 } from "./send-outbound.js";
 import { createTelegramPreparedSender, type TelegramPreparedSendPart } from "./send-prepared.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -171,6 +172,11 @@ export async function sendMessageTelegram(
         opts.assertPlatformSendAuthorized?.();
       },
     });
+    const messageEffectParams = resolveTelegramMessageEffectParams(chatId, opts.messageEffectId);
+    // One effect per delivery: keep it on every attempt, including fallbacks,
+    // until Telegram accepts the first message.
+    const pendingMessageEffectParams = () =>
+      sender.parts.length === 0 ? messageEffectParams : undefined;
     const buildMediaReceipt = () => {
       const deliveries = new Map(deliveryResults.map((delivery) => [delivery.messageId, delivery]));
       const results = sender.parts.map((part) => {
@@ -197,7 +203,9 @@ export async function sendMessageTelegram(
         };
       });
       const receipt = createMessageReceiptFromOutboundResults({ results, kind: "media" });
-      receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+      receipt.parts.forEach((part, index) => {
+        part.index = index;
+      });
       const replyToId = receipt.parts.find((part) => part.replyToId)?.replyToId;
       if (replyToId) {
         receipt.replyToId = replyToId;
@@ -216,6 +224,7 @@ export async function sendMessageTelegram(
       recordDeliveredPromptContext,
       singleUseReplyTo,
       buildThreadParams,
+      pendingMessageEffectParams,
       sender,
       textMode,
       tableMode,
@@ -313,6 +322,7 @@ export async function sendMessageTelegram(
       const mediaParams = {
         ...(htmlCaption ? { caption: htmlCaption, parse_mode: "HTML" as const } : {}),
         ...baseMediaParams,
+        ...pendingMessageEffectParams(),
         ...(opts.silent === true ? { disable_notification: true } : {}),
         ...(videoDimensions
           ? { width: videoDimensions.width, height: videoDimensions.height }

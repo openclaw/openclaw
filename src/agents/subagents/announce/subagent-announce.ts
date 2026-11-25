@@ -11,15 +11,12 @@ import { waitForSessionRunEnd } from "../../../sessions/session-controller.nativ
 import { isSessionRunActive } from "../../../sessions/session-controller.queries.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { createLazyPromise } from "../../../shared/lazy-promise.js";
-import {
-  type DeliveryContext,
-  normalizeDeliveryContext,
-} from "../../../utils/delivery-context.shared.js";
+import { subagentCompletionForOutcome } from "../../../shared/subagent-completion.js";
+import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
-import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -29,8 +26,8 @@ import {
   type AgentInternalEvent,
 } from "../../internal-events.js";
 import {
+  buildSubagentPrivateCompletionInstruction,
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
-  SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
 } from "../completion/subagent-completion-instructions.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
@@ -42,17 +39,13 @@ import {
   resolveRequesterForChildSession,
   shouldIgnorePostCompletionAnnounceForSession,
 } from "../registry/subagent-registry-read.js";
+import type { PendingFinalDeliveryPayload } from "../registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { getSubagentTerminalReplySummary } from "../registry/subagent-run-payload-facts.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
-import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
-import {
-  hasAnnounceSendEvidence,
-  isPermanentAnnounceDeliveryError,
-  SourceOwnerChangedError,
-  summarizeDeliveryError,
-} from "./subagent-announce-delivery-retry.js";
+import { summarizeDeliveryError } from "./subagent-announce-delivery-retry.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
@@ -63,13 +56,11 @@ import {
   withSubagentRequesterSource,
 } from "./subagent-announce-delivery.runtime.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
-import {
-  sourceOwnerChangedResult,
-  type SubagentAnnounceDeliveryResult,
-} from "./subagent-announce-dispatch.js";
+import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
+  type DeliveryContext,
 } from "./subagent-announce-origin.js";
 import {
   readChildCompletionFindings,
@@ -91,12 +82,16 @@ const loadSubagentRegistryRuntime = createLazyPromise(
 
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 
-export type SubagentAnnounceFlowOutcome = NonNullable<
-  SubagentAnnounceDeliveryResult["disposition"]
->;
+/** Anything not delivered, queued or held by a waiting requester settles into requester history. */
+export type SubagentAnnounceFlowOutcome =
+  | "delivered"
+  | "session_queued"
+  | "requester_waiting"
+  | "undelivered";
 
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
+  requesterOrigin: DeliveryContext | undefined;
   completionTarget?: "parent";
   modelRouteChange?: string;
   preserveModelRouteNotice: boolean;
@@ -107,7 +102,7 @@ function buildAnnounceReplyInstruction(params: {
       ? " Preserve any runtime-authored model-route change notice in your update."
       : " Keep runtime-authored model-route change notices internal on this shared surface.";
   if (params.completionTarget === "parent") {
-    return SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION;
+    return buildSubagentPrivateCompletionInstruction(params.requesterOrigin);
   }
   if (params.requesterIsSubagent) {
     return `${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} Convert the reviewed outcome into a concise internal orchestration update for your parent agent in your own words.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
@@ -115,32 +110,16 @@ function buildAnnounceReplyInstruction(params: {
   return `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}${modelRouteInstruction} Otherwise send a truthful user-facing update unless this exact result is already visible to the user in this same turn. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim.`;
 }
 
-type SubagentAnnounceFlowParams = {
-  childSessionKey: string;
+type SubagentAnnounceFlowParams = Omit<PendingFinalDeliveryPayload, "requesterDisplayKey"> & {
   childAgentId?: string;
   childSessionIdentity?: { sessionId: string; lifecycleRevision?: string };
-  childRunId: string;
   runTimeoutSeconds?: number;
-  requesterSessionKey: string;
   requesterAgentId?: string;
-  requesterOrigin?: DeliveryContext;
-  task: string;
   timeoutMs: number;
   cleanup: "delete" | "keep";
   roundOneReply?: string;
-  terminalReply?: AgentRunTerminalReplySnapshot;
   /** Cached pre-wake result for legacy runs without terminal facts. */
   fallbackReply?: string;
-  startedAt?: number;
-  endedAt?: number;
-  label?: string;
-  outcome?: SubagentRunOutcome;
-  expectsCompletionMessage?: boolean;
-  completionTarget?: "parent";
-  completionRequesterSessionId?: string;
-  completionRequesterLifecycleRevision?: string;
-  spawnMode?: SpawnSubagentMode;
-  wakeOnDescendantSettle?: boolean;
   /** Deliver only frozen terminal facts; never inspect or mutate the child session. */
   suppressChildSessionEffects?: boolean;
   /** Refresh database currency before child-session reads or effects. */
@@ -153,6 +132,7 @@ type SubagentAnnounceFlowParams = {
   /** Exact source reserved synchronously by the durable registry handoff. */
   controllerInput?: SessionControllerInput;
   signal?: AbortSignal;
+  onAccepted?: () => void;
   onExecutionStarted?: () => void;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onBeforeDeleteChildSession?: () => boolean | Promise<boolean>;
@@ -174,7 +154,7 @@ export async function runSubagentAnnounceFlow(
 async function runSubagentAnnounceFlowBound(
   params: SubagentAnnounceFlowParams,
 ): Promise<SubagentAnnounceFlowOutcome> {
-  let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
+  let announceOutcome: SubagentAnnounceFlowOutcome = "undelivered";
   let deliveryResultReported = false;
   const reportDeliveryResult = async (delivery: SubagentAnnounceDeliveryResult) => {
     if (deliveryResultReported) {
@@ -183,7 +163,13 @@ async function runSubagentAnnounceFlowBound(
     deliveryResultReported = true;
     // A receipt observer may fail after handoff. Keep the transport outcome
     // authoritative so cleanup does not replay work the requester already consumed.
-    announceOutcome = delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
+    announceOutcome = delivery.delivered
+      ? "delivered"
+      : delivery.reason === "completion_handoff_pending" && delivery.path === "none"
+        ? "requester_waiting"
+        : delivery.path === "queued"
+          ? "session_queued"
+          : "undelivered";
     await params.onDeliveryResult?.(delivery);
   };
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -235,9 +221,9 @@ async function runSubagentAnnounceFlowBound(
       const settled = await waitForSessionRunEnd(childSessionId, settleTimeoutMs);
       if (!settled && isSessionRunActive(childSessionId)) {
         shouldDeleteChildSession = false;
-        // Keep delete cleanup retryable until the active child can be removed.
-        if (outcome?.status !== "timeout" || params.cleanup === "delete") {
-          return "retryable";
+        // Keep the child session until the active child can be removed.
+        if (outcome.status !== "timeout" || params.cleanup === "delete") {
+          return "undelivered";
         }
       }
     }
@@ -275,20 +261,26 @@ async function runSubagentAnnounceFlowBound(
       }
 
       const childSessionCurrent = await prepareChildSessionEffects();
+      const assertChildSessionCurrent = () => {
+        if (!childSessionEffectsAllowed()) {
+          throw new Error("Subagent child-session effects are no longer current.");
+        }
+      };
       const pendingChildDescendantRuns =
         !childSessionCurrent || !childSessionEffectsAllowed()
           ? 0
-          : Math.max(
-              0,
-              await countPendingDescendantRuns(params.childSessionKey, () => {
-                if (!childSessionEffectsAllowed()) {
-                  throw new Error("Subagent child-session effects are no longer current.");
-                }
-              }),
-            );
+          : await countPendingDescendantRuns(params.childSessionKey, assertChildSessionCurrent);
       if (pendingChildDescendantRuns > 0) {
+        // Settled descendant delivery may retain cleanup but cannot hold this completion.
         shouldDeleteChildSession = false;
-        return "retryable";
+        const unsettledDescendantRuns = await countPendingDescendantRuns(
+          params.childSessionKey,
+          assertChildSessionCurrent,
+          { excludeSettledDelivery: true },
+        );
+        if (unsettledDescendantRuns > 0) {
+          return "undelivered";
+        }
       }
 
       if (
@@ -389,7 +381,10 @@ async function runSubagentAnnounceFlowBound(
         reply = timeoutProgress;
       }
     }
-    if (!params.terminalReply && (!ownResult || !childRun?.completion?.terminalReply)) {
+    if (
+      !params.terminalReply &&
+      (!ownResult || !childRun || !getSubagentTerminalReplySummary(childRun))
+    ) {
       if (
         !legacySilent &&
         !reply &&
@@ -472,7 +467,7 @@ async function runSubagentAnnounceFlowBound(
         if (!parentSessionAlive) {
           if (params.completionTarget === "parent") {
             shouldDeleteChildSession = false;
-            return "retryable";
+            return "undelivered";
           }
           const fallback = await resolveRequesterForChildSession(
             targetRequesterSessionKey,
@@ -480,7 +475,7 @@ async function runSubagentAnnounceFlowBound(
           );
           if (!fallback?.requesterSessionKey) {
             shouldDeleteChildSession = false;
-            return "retryable";
+            return "undelivered";
           }
           targetRequesterSessionKey = fallback.requesterSessionKey;
           targetRequesterAgentId = fallback.requesterAgentId;
@@ -551,6 +546,7 @@ async function runSubagentAnnounceFlowBound(
             : undefined;
         const replyInstruction = buildAnnounceReplyInstruction({
           requesterIsSubagent,
+          requesterOrigin: directOrigin,
           completionTarget: params.completionTarget,
           modelRouteChange,
           // Nested and local operator parents may report the route fact. External
@@ -586,6 +582,13 @@ async function runSubagentAnnounceFlowBound(
           requesterAgentId: targetRequesterAgentId,
           triggerMessage,
           internalEvents,
+          subagentCompletions: [
+            subagentCompletionForOutcome(
+              { runId: params.childRunId, sessionKey: params.childSessionKey, label: params.label },
+              outcome.status,
+              killed,
+            ),
+          ].filter((completion) => completion !== undefined),
           requesterSessionOrigin: targetRequesterOrigin,
           completionDirectOrigin,
           directOrigin,
@@ -599,11 +602,10 @@ async function runSubagentAnnounceFlowBound(
           requesterIsSubagent,
           expectsCompletionMessage,
           completionTarget: params.completionTarget,
-          completionRequesterSessionId: params.completionRequesterSessionId,
-          completionRequesterLifecycleRevision: params.completionRequesterLifecycleRevision,
           directIdempotencyKey,
           onDeliveryResult: reportDeliveryResult,
           signal: params.signal,
+          onAccepted: params.onAccepted,
           onExecutionStarted: params.onExecutionStarted,
           resolveGatewayContext: params.resolveGatewayContext,
           controllerInput: params.controllerInput,
@@ -617,21 +619,13 @@ async function runSubagentAnnounceFlowBound(
     if (hasSqliteWorkerOutcomeUnknown(err)) {
       throw err;
     }
-    defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
+    defaultRuntime.error(`Subagent announce failed: ${String(err)}`);
     if (!deliveryResultReported) {
-      await reportDeliveryResult(
-        err instanceof SourceOwnerChangedError
-          ? sourceOwnerChangedResult()
-          : {
-              delivered: false,
-              path: "none",
-              error: summarizeDeliveryError(err),
-              disposition:
-                hasAnnounceSendEvidence(err) || isPermanentAnnounceDeliveryError(err)
-                  ? "permanent_failure"
-                  : "retryable",
-            },
-      );
+      await reportDeliveryResult({
+        delivered: false,
+        path: "none",
+        error: summarizeDeliveryError(err),
+      });
     }
   } finally {
     if (params.controllerInput && !params.controllerInput.custody.rpcAdopted) {

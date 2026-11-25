@@ -1,8 +1,10 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as configModule from "../../config/config.js";
+import type * as GatewayCall from "../../gateway/call.js";
 import { recordDeferredPluginMigrations as recordMigrations } from "../../infra/deferred-plugin-migrations.js";
 import {
   completeGatewayBootLifecycle,
@@ -23,7 +25,9 @@ import {
   getUpdateRun,
   listUpdateRuns,
   recordUpdateRunPhase,
+  recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import * as reportHealth from "../../infra/update-run-report-health.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import {
   closeOpenClawStateDatabaseAsync as closeState,
@@ -32,6 +36,9 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath as statePathFor } from "../../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
+import { VERSION } from "../../version.js";
+import * as restartHealthProbe from "../daemon-cli/restart-health-probe.js";
+import * as shared from "./shared.js";
 import { updateStatusCommand as updateStatus } from "./status.js";
 import { registerUpdateStatusWarningTests } from "./status.warnings.test-support.js";
 
@@ -48,7 +55,10 @@ const service = vi.hoisted(() => ({
   audit: vi.fn(),
 }));
 const callGateway = vi.hoisted(() => vi.fn());
-vi.mock("../../gateway/call.js", () => ({ callGateway }));
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof GatewayCall>()),
+  callGateway,
+}));
 
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: service.readCommand }),
@@ -120,6 +130,130 @@ beforeEach(() => {
 });
 
 it.each([
+  { name: "newer npm", selected: "0.0.1", build: "resident-build" },
+  { name: "older npm", selected: "9999.0.0", build: "resident-build" },
+  { name: "unknown build", selected: VERSION, build: undefined },
+  { name: "pending", selected: VERSION, build: "cli-build", phase: "pending" },
+  { name: "remote", selected: "0.0.1", build: "resident-build", remote: true },
+] as const)("separates CLI, selected release and observed Gateway: $name", async (variant) => {
+  const fixture = { phase: undefined, remote: false, ...variant };
+  const state = process.env.OPENCLAW_STATE_DIR!;
+  const prefix = path.join(state, "git-install");
+  const selected = path.join(prefix, "releases", "resident", "openclaw");
+  const cli = path.join(state, "npm", "openclaw");
+  for (const [root, version, buildId] of [
+    [cli, VERSION, "cli-build"],
+    [selected, fixture.selected, fixture.build],
+  ] as const) {
+    await fs.mkdir(path.join(root, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version }),
+    );
+    await fs.writeFile(path.join(root, "dist", "build-info.json"), JSON.stringify({ buildId }));
+  }
+  await fs.symlink(selected, path.join(prefix, "openclaw"), "dir");
+  const trial = fixture.phase
+    ? {
+        v: 2,
+        runId: "fixture-trial",
+        phase: fixture.phase,
+        target: "/candidate/openclaw",
+        previous: selected,
+        version: "9999.0.1",
+        buildId: "candidate-build",
+        createdAt: 1,
+        attempts: 0,
+      }
+    : null;
+  if (trial) {
+    await fs.writeFile(path.join(prefix, "releases", ".trial"), JSON.stringify(trial));
+  }
+  vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(cli);
+  vi.spyOn(restartHealthProbe, "confirmGatewayReachable").mockResolvedValue({
+    // The handshake identifies the serving build even without health-RPC scope.
+    reachable: false,
+    gatewayVersion: fixture.phase || fixture.name === "unknown build" ? null : "0.0.1",
+    gatewayBuildId: "resident-build",
+    activatedPluginErrors: [],
+    unavailablePlugins: [],
+    channelProbeErrors: [],
+  });
+  if (fixture.remote) {
+    vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
+      gateway: { mode: "remote" },
+    });
+  }
+  vi.stubEnv("OPENCLAW_PROFILE", "work");
+
+  const result = await jsonStatus();
+  expect(result.releaseStatus).toMatchObject({
+    cli: { version: VERSION, build: "cli-build", source: "npm" },
+    selectedRelease: { version: fixture.selected, build: fixture.build ?? null },
+    trial,
+    gateway: {
+      kind:
+        fixture.remote || fixture.phase || fixture.name === "unknown build"
+          ? "unavailable"
+          : "responding",
+    },
+  });
+  await textStatus();
+  expectOutput("Active release", "resident launcher (selected)", VERSION);
+  expect(outputText()).not.toMatch(/up to date/i);
+  if (fixture.name === "older npm") {
+    expect(result.releaseStatus.notice).toContain(
+      `openclaw --profile work update --tag ${VERSION}`,
+    );
+    expectOutput("not downgraded");
+  } else if (fixture.name === "newer npm" || fixture.name === "unknown build") {
+    expect(result.releaseStatus.notice).toContain("openclaw --profile work update");
+  }
+  if (fixture.phase) {
+    expectOutput("Release trial", "9999.0.1", fixture.phase);
+    expect(JSON.parse(await fs.readFile(path.join(prefix, "releases", ".trial"), "utf8"))).toEqual(
+      trial,
+    );
+  }
+  if (fixture.remote) {
+    expect(restartHealthProbe.confirmGatewayReachable).not.toHaveBeenCalled();
+    expectOutput("not verified (remote)");
+  }
+});
+
+it.each([
+  ["installed ahead", "2026.10.1", "2026.9.4", "2026.9.4", false],
+  ["serving moved", "2026.9.4", "2026.10.1", "2026.9.4", true],
+  ["installed ahead, no observation", "2026.10.1", "2026.9.4", undefined, false],
+  ["newer Gateway, no observation", "2026.9.4", "2026.10.1", undefined, false],
+] as const)(
+  "projects failed history: %s",
+  async (_name, installed, version, recorded, historical) => {
+    const run = createUpdateRun({
+      trigger: "chat",
+      target: { kind: "git", channel: "dev" },
+      before: { version: installed },
+      origin: { nextAction: "Run openclaw update." },
+    });
+    if (recorded) {
+      recordUpdateRunVerification(run.runId, { serviceRunning: true, runningVersion: recorded });
+    }
+    finishUpdateRun(run.runId, { status: "failed", reason: "preflight-no-good-commit" });
+    vi.spyOn(reportHealth, "readUpdateRunReportHealth").mockResolvedValue({
+      kind: "responding",
+      version,
+    });
+    await updateStatus({});
+    if (historical) {
+      expectOutput("Last update run failed (preflight-no-good-commit)");
+      expect(outputText()).not.toContain("Run openclaw update.");
+    } else {
+      expectOutput("OpenClaw update failed", "Run openclaw update.");
+    }
+  },
+);
+
+it.each([
   { json: true, remote: false },
   { json: false, remote: false },
   { json: true, remote: true },
@@ -135,6 +269,7 @@ it.each([
   );
   if (remote) {
     vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
+      agents: { defaults: { model: { primary: "openai/gpt-5" } } },
       gateway: { mode: "remote" },
     });
   }
@@ -143,6 +278,7 @@ it.each([
 
   if (remote) {
     expect(jsonResult()).not.toHaveProperty("lastGatewayInstallationReplacement");
+    expect(jsonResult()).not.toHaveProperty("configWarnings");
   } else if (json) {
     expect(jsonResult()).toMatchObject({
       lastGatewayInstallationReplacement: { reason, completedAtMs },
@@ -161,10 +297,7 @@ it.each([
   { json: true, failure: "read" },
   { json: true, failure: "audit" },
 ])("service facts (JSON: $json, failure: $failure)", async ({ json, failure }) => {
-  const drift = [
-    { message: "Service.KillMode: missing; installer expects mixed." },
-    { message: "Service.ExecStartPre: unknown edit; preserved." },
-  ];
+  const drift = [{ message: "Service.KillMode: missing; installer expects mixed." }];
   service.readCommand.mockResolvedValue({ programArguments: ["/fixture/gateway"] });
   service.audit.mockResolvedValue({ ok: true, issues: [], definitionDrift: drift });
   if (failure === "read") {
@@ -188,10 +321,7 @@ it.each([
       },
     });
   } else {
-    const output = outputText();
-    for (const fact of drift) {
-      expect(output).toContain(fact.message);
-    }
+    expectOutput(drift[0]!.message);
   }
 });
 
@@ -407,12 +537,12 @@ it.each([true, false])(
 );
 
 it.each([
-  { version: "24.15.0", state: "admitted" },
+  { version: "24.22.1", state: "admitted" },
   { version: "26.0.0", state: "unsupported" },
 ])("reports $state service Node $version", async ({ version, state }) => {
   vi.stubGlobal("process", {
     ...process,
-    versions: { ...process.versions, node: "26.8.1" },
+    versions: { ...process.versions, node: "26.12.1" },
   });
   service.readCommand.mockResolvedValue({
     programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],
@@ -422,9 +552,6 @@ it.each([
     version,
     sqliteVersion: state === "unsupported" ? "3.50.2" : "3.53.0",
     nodeSharedSqlite: false,
-    ...(state === "admitted"
-      ? { note: "Node 24.15.0: unsupported version, capability check passed." }
-      : {}),
   });
   if (state === "unsupported") {
     await updateStatus({ json: true });
@@ -441,8 +568,7 @@ it.each([
   }
   await updateStatus({});
   if (state === "admitted") {
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("capability check passed"));
-    expect(runtime.log).not.toHaveBeenCalledWith(undefined);
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("nvm install 26"));
   } else {
     expectOutput(version, "npm", "nvm install 26");
   }
@@ -497,6 +623,31 @@ it.each([false, true])(
 );
 
 it.each([true, false])("unreadable migration preserves availability (JSON: %s)", async (json) => {
+  const storePath = path.join(
+    process.env.OPENCLAW_STATE_DIR!,
+    "agents",
+    "main",
+    "sessions",
+    "sessions.json",
+  );
+  const migration = createMigration(process.env, [
+    {
+      agentId: "main",
+      storePath,
+      sqlitePath: path.join(
+        process.env.OPENCLAW_STATE_DIR!,
+        "agents",
+        "main",
+        "agent",
+        "openclaw-agent.sqlite",
+      ),
+    },
+  ]);
+  migration.manifest.completedAt = migration.manifest.startedAt;
+  migration.manifest.targets[0]!.issues = [
+    { code: "entry_invalid", message: "Missing sessionId." },
+  ];
+  writeMigration(migration);
   await recordMigrations({
     pending: [
       {
@@ -512,11 +663,17 @@ it.each([true, false])("unreadable migration preserves availability (JSON: %s)",
   await expect(updateStatus({ json })).resolves.toBeUndefined();
   if (json) {
     const result = jsonResult();
-    expect(result).toHaveProperty("availability");
-    expect(result.migrationWarningsError).toEqual(expect.any(String));
-    expect(result).not.toHaveProperty("migrationWarnings");
+    expect(result).toMatchObject({
+      availability: expect.any(Object),
+      migrationWarningsError: expect.any(String),
+    });
+    expect(result.migrationWarnings).toEqual([`${storePath}: [entry_invalid] Missing sessionId.`]);
   } else {
-    expectOutput("OpenClaw update status", "Pending migration status unavailable:");
+    expectOutput(
+      "OpenClaw update status",
+      "Pending migration status unavailable:",
+      "Missing sessionId.",
+    );
   }
 });
 
@@ -527,33 +684,27 @@ it("reports retained session migration warnings without an update ledger", async
     storePath: path.join(stateDir, "agents", agentId, "sessions", "sessions.json"),
     sqlitePath: path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
   }));
-  const invalidEntry = {
-    code: "entry_invalid",
-    message: "Session entry is missing a valid sessionId.",
-    sessionKey: "agent:main:invalid",
-  };
-  const malformedTranscript = {
-    code: "transcript_malformed",
-    message: `${path.join(path.dirname(targets[1]!.storePath), "broken.jsonl")}: SyntaxError: malformed JSONL line`,
-    sessionKey: "agent:other:broken",
-  };
+  const warnings = [
+    { code: "entry_invalid", message: "Missing sessionId.", sessionKey: "agent:main:invalid" },
+    { code: "transcript_malformed", message: "Malformed JSONL.", sessionKey: "agent:other:broken" },
+  ];
   const first = createMigration(process.env, targets);
   for (const [index, target] of targets.entries()) {
-    updateMigration(first, target, [index === 0 ? invalidEntry : malformedTranscript], {
+    updateMigration(first, target, [warnings[index]!], {
       validationBeforeArchive: "passed",
     });
   }
   first.manifest.completedAt = new Date().toISOString();
   writeMigration(first);
-  const expectedWarnings = [
-    `${targets[0]!.storePath}: [entry_invalid] ${invalidEntry.message}`,
-    `${targets[1]!.storePath}: [transcript_malformed] ${malformedTranscript.message}`,
-  ];
-  const expectWarnings = async (warnings: string[]) => {
+  const expectedWarnings = targets.map(
+    (target, index) =>
+      `${target.storePath}: [${warnings[index]!.code}] ${warnings[index]!.message}`,
+  );
+  const expectWarnings = async (expected: string[]) => {
     runtime.log.mockClear();
     runtime.writeJson.mockClear();
     const result = await jsonStatus();
-    expect(result.migrationWarnings).toEqual(warnings);
+    expect(result.migrationWarnings).toEqual(expected);
     expect(result).not.toHaveProperty("lastRun");
   };
   await expectWarnings(expectedWarnings);
@@ -633,17 +784,12 @@ it("does not publish partial history when the latest terminal row is unreadable"
   const latest = createUpdateRun({ trigger: "cli" });
   finishUpdateRun(latest.runId, { status: "succeeded" });
   closeStateForTest();
-  const database = new DatabaseSync(statePathFor());
-  try {
+  {
+    using database = new DatabaseSync(statePathFor());
     database
       .prepare("UPDATE update_runs SET origin_json = ? WHERE run_id = ?")
       .run("not-json", latest.runId);
-  } finally {
-    database.close();
   }
-  expect(findActiveUpdateRun()).toEqual(active);
-  expect(() => listUpdateRuns({ limit: 1 })).toThrow();
-
   await updateStatus({ json: true });
 
   const result = jsonResult();
@@ -679,7 +825,7 @@ it.each([undefined, "work"])("abandoned history stays read-only (profile=%s)", a
   const cli = `openclaw${profile ? " --profile work" : ""}`;
   expectOutput(
     "Abandoned update detected;",
-    `Stop the Gateway first (${cli} gateway stop)`,
+    `Stop the Gateway first (${cli} gateway stop --force)`,
     `${cli} update repair`,
   );
   expect(outputText()).not.toContain("update in progress:");

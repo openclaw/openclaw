@@ -1,9 +1,9 @@
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../infra/node-commands.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { assertionSucceeds } from "../shared/assertion.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import { NodeInvokeNotPendingError } from "./node-registry.invoke-stream.js";
@@ -49,9 +49,6 @@ export async function openGatewayNodeDuplex(options: {
       `Node command "${params.command}" must be registered exactly once by plugin "${scope.pluginId}" and declare duplex: true or "optional".`,
     );
   }
-  const isPluginCurrent = capturePluginLifecycleAuthority(registry, record, {
-    scopedRuntime: true,
-  });
   const callerIdentity = scope.client?.internal?.agentRuntimeIdentity;
   const context = getInProcessGatewayRequestContext(resolveGatewayContext);
   if (!context?.nodeRegistry) {
@@ -68,11 +65,12 @@ export async function openGatewayNodeDuplex(options: {
     ),
     assertCurrent() {
       if (
-        isPluginCurrent?.() !== true ||
         (resolveGatewayContext && resolveGatewayContext() !== context) ||
         (callerIdentity && context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true)
       ) {
-        throw new Error("Plugin Gateway runtime authority is no longer current.");
+        throw new Error(
+          "Plugin Gateway runtime or delegated run ended. Open a new node duplex channel.",
+        );
       }
     },
   });
@@ -96,19 +94,13 @@ export async function openOwnedGatewayNodeDuplex(options: {
     try {
       signal.throwIfAborted();
       options.assertCurrent();
+      params.assertCurrent?.();
     } catch (error) {
       controller.abort(error);
       throw error;
     }
   };
-  const isRuntimeCurrent = () => {
-    try {
-      assertRuntimeCurrent();
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const isRuntimeCurrent = () => assertionSucceeds(assertRuntimeCurrent);
   assertRuntimeCurrent();
   const endpoint = createNodeDuplexEndpoint({
     requireReady: true,

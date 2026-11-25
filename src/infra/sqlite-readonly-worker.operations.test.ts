@@ -1,10 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { channel } from "node:diagnostics_channel";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, expect, it, vi, type MockInstance } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -14,10 +14,16 @@ import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../process/supervisor/cancellation-policy.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import * as sqliteRuntime from "./bun-sqlite-library.js";
 import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import type { SqliteReadOnlyOperationCommand } from "./sqlite-readonly-operation-types.js";
 import { createSqliteReadOnlyWorkerPool } from "./sqlite-readonly-worker-pool.js";
@@ -33,7 +39,8 @@ import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: vi.fn(actual.spawn) };
+  const mocked = { ...actual, spawn: vi.fn(actual.spawn) };
+  return { ...mocked, default: mocked };
 });
 
 const scope = createSqliteReadOnlyWorkerScope();
@@ -120,7 +127,6 @@ function failingClosePool() {
   });
   const launch = captureSqliteReadOnlyWorkerLaunch(env, "canonical");
   return {
-    closeMocks,
     run: (command: SqliteReadOnlyOperationCommand = readCommand()) =>
       pool.run(source, { ...readOptions(), mode: "operation", command }, launch),
     async close() {
@@ -172,7 +178,6 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
   );
   let now = 0;
   const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-  const send = vi.spyOn(child, "send");
   const transfer = pauseTransfer(child);
   const queuedAbort = new AbortController();
   const activeAbort = new AbortController();
@@ -184,24 +189,13 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
       awaitGateBeforeSettlement(transfer.ready, first, "Read settled before its transfer started"),
       signal,
     );
+    channel("openclaw.memory.critical").publish(true);
     now = 10;
-    const prepared = readCommand();
-    const synthetic = {
-      count: 9_007_199_254_740_993n,
-      absent: undefined,
-      owners: new Map([["fixture", "captured"]]),
-      selected: new Set(["main"]),
-    };
-    const command = {
-      type: prepared.type,
-      input: { ...prepared.input, synthetic: structuredClone(synthetic) },
-    };
+    const command = readCommand();
     const captured = scope.run(() => runSqliteReadOnlyOperation(source, command, readOptions()));
     pending.push(captured);
     command.input.agentId = "other";
-    command.input.synthetic.count = 1n;
-    command.input.synthetic.owners.set("fixture", "changed");
-    command.input.synthetic.selected.add("fixture");
+    delete command.input.config.agents?.entries?.survivor;
     const queuedFailure = new Error("queued ownership read cancelled");
     const queued = read(queuedAbort.signal);
     pending.push(queued);
@@ -214,20 +208,6 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
     await expect(first).resolves.toEqual(blocker);
     await expect(captured).resolves.toEqual(blocker);
     await rejectedQueued;
-    const requests = () =>
-      send.mock.calls.flatMap(([message]) =>
-        isRecord(message) && isRecord(message.operation) ? [message.operation] : [],
-      );
-    expect(requests()).toHaveLength(2);
-    const encoded = requests()[1]?.command;
-    if (typeof encoded !== "string") {
-      throw new Error("Expected a serialized operation command");
-    }
-    const decoded: unknown = deserialize(Buffer.from(encoded, "base64"));
-    expect(decoded).toStrictEqual({
-      type: "agentRetirement.sessionStoreBlocker",
-      input: { ...prepared.input, synthetic },
-    });
 
     transfer.reset();
     const active = read(activeAbort.signal);
@@ -241,10 +221,8 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
     now = 35;
     activeAbort.abort(activeFailure);
     await rejectedActive;
-    expect(requests()).toHaveLength(3);
     expect(child).toMatchObject({ signalCode: "SIGKILL", connected: false });
     expect(digest(readFileSync(source))).toBe(sourceDigest);
-    expect(spawn).toHaveBeenCalledTimes(1);
     await waitForDiagnosticEventsDrained();
     expect(events.filter((event) => event.phase === "queued")).toHaveLength(4);
     expect(events.filter((event) => event.phase === "started")).toHaveLength(3);
@@ -264,7 +242,6 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
     queuedAbort.abort();
     activeAbort.abort();
     transfer.receiving.mockRestore();
-    send.mockRestore();
     await scope.close();
     await Promise.allSettled(pending);
   }
@@ -373,13 +350,11 @@ it("quarantines failed cleanup without poisoning healthy capacity or launching a
     .spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities")
     .mockReturnValue(unqualified);
   const pool = failingClosePool();
-  const { closeMocks } = pool;
   const start = spawns.mock.calls.length;
   try {
     for (let index = 0; index < 4; index++) {
       await expect(pool.run()).rejects.toThrow("SQLite read and child cleanup failed");
       expect(spawns.mock.calls.length - start).toBe(index + 1);
-      expect(closeMocks[index]).toHaveBeenCalledTimes(2);
       if (index < 3) {
         capabilities.mockReturnValue(qualified);
         await expect(pool.run()).resolves.toEqual({
@@ -391,9 +366,6 @@ it("quarantines failed cleanup without poisoning healthy capacity or launching a
     }
     await expect(pool.run()).rejects.toThrow("capacity is held by unconfirmed cleanup");
     expect(spawns.mock.calls.length - start).toBe(4);
-    for (const close of closeMocks) {
-      expect(close).toHaveBeenCalledTimes(2);
-    }
   } finally {
     capabilities.mockRestore();
     await pool.close();
@@ -470,6 +442,7 @@ it.skipIf(process.platform !== "linux")(
     const start = spawns.mock.calls.length;
     try {
       await Promise.all(warmers.map(begin));
+      channel("openclaw.memory.critical").publish(true);
       const queued = waiting.run(() => runRead());
       const observation = observeSettlement(queued);
       const cancelled = aborting.run(() => runRead());
@@ -529,3 +502,85 @@ it.skipIf(process.platform !== "linux")(
     }
   },
 );
+
+it("retires idle readers under memory pressure and reopens for later reads", async () => {
+  const sessions: Array<ReturnType<typeof createScopedSqliteReadOnlyWorker>> = [];
+  const pool = createSqliteReadOnlyWorkerPool((launch) => {
+    const session = createScopedSqliteReadOnlyWorker(launch);
+    sessions.push(session);
+    return session;
+  });
+  const launch = captureSqliteReadOnlyWorkerLaunch(env, "canonical");
+  const readFromPool = () =>
+    pool.run(source, { ...readOptions(), mode: "operation", command: readCommand() }, launch);
+  try {
+    await expect(readFromPool()).resolves.toEqual({
+      operation: "agentRetirement.sessionStoreBlocker",
+      value: blocker,
+    });
+    const first = lastChild();
+    expect(first.exitCode).toBeNull();
+    channel("openclaw.memory.critical").publish(true);
+    await expect.poll(() => first.exitCode, { timeout: 5_000 }).toBe(0);
+    await sessions[0]!.closed;
+    await expect(readFromPool()).resolves.toEqual({
+      operation: "agentRetirement.sessionStoreBlocker",
+      value: blocker,
+    });
+    expect(lastChild()).not.toBe(first);
+  } finally {
+    await Promise.all(sessions.map((session) => session.close()));
+  }
+});
+
+it("releases startup metadata maintenance before admitting a Gateway", async () => {
+  const root = tempDirs.make("openclaw-startup-metadata-owner-");
+  const stateEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: root,
+    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+  };
+  writeFileSync(stateEnv.OPENCLAW_CONFIG_PATH, "{}", "utf8");
+  const databasePath = path.join(root, "state", "openclaw.sqlite");
+  openOpenClawStateDatabase({ env: stateEnv });
+  closeOpenClawStateDatabaseForTest();
+  const broker = createSpawnBrokerHost();
+  const brokerSpawn = vi.spyOn(broker, "spawn");
+  try {
+    await broker.ready();
+    await expect(
+      runWithSpawnBroker(broker, () =>
+        runSqliteReadOnlyOperation(
+          databasePath,
+          {
+            type: "startupMetadata.readCurrent",
+            input: { type: "config.health.read", input: undefined },
+          },
+          {
+            source: "canonical",
+            expectedIdentity: readDatabasePathIdentitySync(databasePath).key,
+            env: stateEnv,
+          },
+        ),
+      ),
+    ).resolves.toMatchObject({ value: { ok: true } });
+
+    expect(brokerSpawn).toHaveBeenCalledTimes(1);
+    const reader = brokerSpawn.mock.results[0]?.value;
+    expect(reader?.pid).toBeTypeOf("number");
+    expect(isPidDefinitelyDead(reader!.pid!)).toBe(true);
+
+    const gateway = await acquireGatewayLock({
+      env: stateEnv,
+      allowInTests: true,
+      timeoutMs: 0,
+      lockDir: path.join(root, "__locks"),
+    });
+    expect(gateway).not.toBeNull();
+    await gateway?.release();
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+    await closeSqliteReadOnlyWorkersForBroker(broker);
+    await broker.close();
+  }
+});

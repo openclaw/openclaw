@@ -35,10 +35,7 @@ describe("JSONL edit emission", () => {
       return;
     }
     expect(() => setJsonlOcPath(ast, parseOcPath("oc://events/L2"), line.value)).toThrow(
-      expect.objectContaining({
-        code: "OC_EMIT_SENTINEL",
-        path: "oc://events/L2/outer/0/token",
-      }),
+      `emit refused to write "${REDACTED_SENTINEL}" sentinel literal at oc://events/L2/outer/0/token`,
     );
   });
 

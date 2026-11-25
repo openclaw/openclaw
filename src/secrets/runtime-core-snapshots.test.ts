@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -15,6 +16,8 @@ import { captureEnv } from "../test-utils/env.js";
 import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
 import {
   activateSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+  preflightActiveSecretsRuntimeSnapshotRefresh,
   clearSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
@@ -93,6 +96,59 @@ describe("secrets runtime snapshot core lanes", () => {
     clearSecretsRuntimeSnapshot();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+  });
+
+  it("materializes number TTS refs and preserves strict startup and reload failures", async () => {
+    const ref = envRef("VOICE_CALL_NUMBER_KEY");
+    const configWithRef = (apiKey: SecretRef, enabled = true) =>
+      asConfig({
+        agents: { entries: { main: {} } },
+        plugins: {
+          load: { paths: [fileURLToPath(new URL("../../extensions/voice-call", import.meta.url))] },
+          entries: {
+            "voice-call": {
+              enabled,
+              config: {
+                enabled: true,
+                provider: "mock",
+                numbers: {
+                  "+15550001111": { tts: { providers: { openai: { apiKey } } } },
+                  "+15550002222": {
+                    tts: { providers: { openai: { apiKey: "literal-route-key" } } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+    const prepareVoiceCall = (value: string | undefined, enabled = true) =>
+      prepare({
+        config: configWithRef(ref, enabled),
+        env: { VOICE_CALL_NUMBER_KEY: value, VOICE_CALL_MISSING_KEY: undefined },
+        includeAuthStoreRefs: false,
+        allowUnavailableSecretOwners: true,
+        loadablePluginOrigins: new Map([["voice-call", "config"]]),
+      });
+    await expect(prepareVoiceCall(undefined)).rejects.toThrow(/VOICE_CALL_NUMBER_KEY/);
+    const disabled = await prepareVoiceCall(undefined, false);
+    expect(disabled.config.plugins?.entries?.["voice-call"]?.config).toMatchObject({
+      numbers: { "+15550001111": { tts: { providers: { openai: { apiKey: ref } } } } },
+    });
+    const active = await prepareVoiceCall("resolved-route-key");
+    expect(active.config.plugins?.entries?.["voice-call"]?.config).toMatchObject({
+      numbers: {
+        "+15550001111": { tts: { providers: { openai: { apiKey: "resolved-route-key" } } } },
+        "+15550002222": { tts: { providers: { openai: { apiKey: "literal-route-key" } } } },
+      },
+    });
+    activateSecretsRuntimeSnapshot(active);
+    await expect(
+      preflightActiveSecretsRuntimeSnapshotRefresh({
+        sourceConfig: configWithRef(envRef("VOICE_CALL_MISSING_KEY")),
+      }),
+    ).rejects.toThrow(/VOICE_CALL_MISSING_KEY/);
+    expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(active.config);
   });
 
   it("resolves config env refs for core config surfaces", async () => {

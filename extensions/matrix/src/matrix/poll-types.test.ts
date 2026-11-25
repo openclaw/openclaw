@@ -11,10 +11,7 @@ const parsedPoll = {
   question: "Lunch?",
   kind: "m.poll.disclosed" as const,
   maxSelections: 1,
-  answers: [
-    { id: "a1", text: "Pizza" },
-    { id: "a2", text: "Sushi" },
-  ],
+  answers: ["Pizza", "Sushi"].map((text, index) => ({ id: `a${index + 1}`, text })),
 };
 
 const vote = (
@@ -32,23 +29,14 @@ const vote = (
 });
 
 const wirePoll = {
-  question: { "m.text": "Lunch?" },
-  kind: "m.poll.disclosed" as const,
+  question: { "m.text": parsedPoll.question },
+  kind: parsedPoll.kind,
   max_selections: 1,
-  answers: [
-    { id: "answer1", "m.text": "Yes" },
-    { id: "answer2", "m.text": "No" },
-  ],
+  answers: parsedPoll.answers.map(({ id, text }) => ({ id, "m.text": text })),
 };
 
 it("parses legacy m.poll payloads", () => {
-  const summary = parsePollStart({ "m.poll": wirePoll });
-
-  expect(summary?.question).toBe("Lunch?");
-  expect(summary?.answers).toEqual([
-    { id: "answer1", text: "Yes" },
-    { id: "answer2", text: "No" },
-  ]);
+  expect(parsePollStart({ "m.poll": wirePoll })).toEqual(parsedPoll);
 });
 
 it("caps invalid remote max selections to the available answer count", () => {
@@ -59,25 +47,23 @@ it("caps invalid remote max selections to the available answer count", () => {
   expect(parsed?.maxSelections).toBe(2);
 });
 
-it("drops malformed answers instead of throwing on sender-controlled content", () => {
-  const malformed: Array<[string, unknown, unknown?]> = [
-    ["answers is a string", "nope"],
-    ["answers entries null", [null]],
-    ["answer id non-string", [{ id: 42, "m.text": "a" }]],
-    ["answer text non-string", [{ id: "a1", "m.text": 42 }]],
-    ["question text non-string", [{ id: "a1", "m.text": "a" }], 42],
-  ];
-  for (const [label, answers, text = "Q?"] of malformed) {
-    const poll = { question: { "m.text": text }, answers };
-    expect(parsePollStart({ "m.poll.start": poll } as never), label).toBeNull();
-  }
+it.each([
+  { question: wirePoll.question, answers: "nope" },
+  { question: { "m.text": 42 }, answers: wirePoll.answers },
+])("rejects malformed poll content: %j", (poll) => {
+  expect(parsePollStart({ "m.poll.start": poll } as never)).toBeNull();
 });
 
 it("keeps well-formed answers when other entries are malformed", () => {
   const parsed = parsePollStart({
     "m.poll.start": {
-      question: { "m.text": "Lunch?" },
-      answers: [null, { id: "a1", "m.text": "Yes" }, { id: 42, "m.text": "dropped" }],
+      ...wirePoll,
+      answers: [
+        null,
+        { id: "a1", "m.text": "Yes" },
+        { id: 42, "m.text": "dropped" },
+        { id: "bad-text", "m.text": 42 },
+      ],
     },
   } as never);
 
@@ -91,18 +77,23 @@ it("buildPollStartContent: preserves the requested multiselect cap instead of wi
     maxSelections: 2,
   });
 
-  expect(content["m.poll.start"]?.max_selections).toBe(2);
-  expect(content["m.poll.start"]?.kind).toBe("m.poll.undisclosed");
+  expect(content["org.matrix.msc3381.poll.start"]).toMatchObject({
+    max_selections: 2,
+    kind: "org.matrix.msc3381.poll.undisclosed",
+    question: { "org.matrix.msc1767.text": "Lunch?" },
+    answers: [
+      { id: "answer1", "org.matrix.msc1767.text": "Pizza" },
+      { id: "answer2", "org.matrix.msc1767.text": "Sushi" },
+      { id: "answer3", "org.matrix.msc1767.text": "Tacos" },
+    ],
+  });
   expect(content["m.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
   expect(content["org.matrix.msc1767.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
 });
 
 it("poll relation parsing: extracts poll relation targets", () => {
-  expect(
-    resolvePollReferenceEventId({
-      "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-    }),
-  ).toBe("$poll");
+  const relation = { rel_type: "m.reference", event_id: "$poll" };
+  expect(resolvePollReferenceEventId({ "m.relates_to": relation })).toBe("$poll");
 });
 
 it("counts only the latest valid response from each sender", () => {
@@ -117,10 +108,7 @@ it("counts only the latest valid response from each sender", () => {
     ],
   });
 
-  expect(summary?.entries).toEqual([
-    { id: "a1", text: "Pizza", votes: 1 },
-    { id: "a2", text: "Sushi", votes: 1 },
-  ]);
+  expect(summary?.entries).toEqual(parsedPoll.answers.map((answer) => ({ ...answer, votes: 1 })));
   expect(summary?.totalVotes).toBe(2);
 });
 
@@ -156,17 +144,13 @@ it.each([
 });
 
 it("formats disclosed poll results with vote totals", () => {
-  const text = formatPollResultsAsText({
-    question: "Lunch?",
-    kind: "m.poll.disclosed",
-    entries: [
-      { id: "a1", text: "Pizza", votes: 1 },
-      { id: "a2", text: "Sushi", votes: 0 },
-    ],
+  const formatted = formatPollResultsAsText({
+    ...parsedPoll,
+    entries: parsedPoll.answers.map(({ id, text }, index) => ({ id, text, votes: 1 - index })),
     totalVotes: 1,
     closed: false,
   });
 
-  expect(text).toContain("1. Pizza (1 vote)");
-  expect(text).toContain("Total voters: 1");
+  expect(formatted).toContain("1. Pizza (1 vote)");
+  expect(formatted).toContain("Total voters: 1");
 });

@@ -1,5 +1,4 @@
 import type { GatewaySessionRow } from "../api/types.ts";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { registerSessionPlacementEnglish } from "../i18n/locales/en-session-placement.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
@@ -7,12 +6,13 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../lib/session-owner.ts";
 import { customSnoozeStorageKey, readCustomSnooze } from "../lib/sessions/custom-snooze.ts";
-import type { SessionCommunicationMenuAction } from "./session-communication-options.ts";
-import { createSessionMenuSettings } from "./session-menu-settings.ts";
+import {
+  createSessionMenuSettings,
+  type SessionCommunicationMenuAction,
+} from "./session-menu-settings.ts";
 import { createSessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
 
-registerSessionOrganizationEnglish();
 registerSessionPlacementEnglish();
 
 export type SessionMenuData = {
@@ -73,24 +73,6 @@ export type SessionManagementAction =
 
 export type SessionManagementActionKind = SessionManagementAction["kind"];
 
-export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
-  label: "",
-  sessionId: null,
-  pinned: false,
-  unread: false,
-  archived: false,
-  snoozedUntil: null,
-  category: null,
-  icon: null,
-  color: null,
-  categoryClearReturnsToGroups: false,
-};
-
-type SessionMenuActionsHost = {
-  readonly updateComplete: Promise<boolean>;
-  focusCurrentView(): void;
-};
-
 export type SessionMenuActionsState = {
   involvingMeContext?: boolean;
   session: SessionMenuData;
@@ -126,7 +108,7 @@ export class SessionMenuActions {
   }
 
   constructor(
-    private readonly host: SessionMenuActionsHost,
+    readonly focusCurrentView: () => void,
     private readonly readState: () => SessionMenuActionsState,
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
@@ -296,10 +278,6 @@ export class SessionMenuActions {
       return true;
     }
     return false;
-  }
-
-  focusCurrentView(): void {
-    void this.host.updateComplete.then(() => this.host.focusCurrentView());
   }
 
   handleKeydown(event: KeyboardEvent, appearancePicker: { showIconGrid: () => void }): boolean {

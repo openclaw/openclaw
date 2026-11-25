@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import {
   enqueueMessageInjection,
   MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionClosedError,
   withMessageInjectionAdmission,
 } from "../../auto-reply/reply/message-injection-authority.js";
 import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
@@ -9,15 +10,14 @@ import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import {
   mergePreparedUserTurnMessageForRuntime,
   readModelPromptProjection,
 } from "../../sessions/user-turn-transcript.message.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.types.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { notifyListeners } from "../../shared/listeners.js";
 import { attachSteeringRuntimeContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
@@ -209,12 +209,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     if (msg.stopReason === "error" && this.retryCount > 0) {
-      this.emit({
-        type: "auto_retry_end",
-        success: false,
-        attempt: this.retryCount,
-        finalError: msg.errorMessage,
-      });
+      this.emit({ type: "auto_retry_end" });
       this.retryCount = 0;
     }
 
@@ -305,7 +300,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
           );
         }
         if (options.streamingBehavior === "followUp") {
-          await this.queueFollowUp(expandedText, currentImages);
+          this.queueFollowUp(expandedText, currentImages);
         } else {
           const notify = this.queueSteer(
             this.createSteeringMessage(expandedText, currentImages),
@@ -515,6 +510,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     canInject?: () => boolean,
     currentInboundContext?: CurrentInboundPromptContext,
     prepareInjection?: () => Promise<void>,
+    onAccepted?: () => void,
   ): Promise<void> {
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
@@ -539,9 +535,10 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       try {
         await withMessageInjectionAdmission(prepareInjection, () => {
           if (canInject && !canInject()) {
-            throw new Error("active session is finalizing");
+            throw new MessageInjectionClosedError();
           }
           notify = this.queueSteer(message, expandedText);
+          onAccepted?.();
         });
       } catch (error) {
         failure = { error };
@@ -575,7 +572,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       this.throwIfExtensionCommand(text);
     }
 
-    await this.queueFollowUp(this.expandPrompt(text), images);
+    this.queueFollowUp(this.expandPrompt(text), images);
   }
 
   private createSteeringMessage(
@@ -590,7 +587,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     queueIdentity?: string,
     currentInboundContext?: CurrentInboundPromptContext,
   ): AgentMessage {
-    const runtimeMessage = this.createUserMessage(text, images, transcriptContext?.message);
+    // Cold replay adds this same source envelope; include it before the first model request.
+    const runtimeMessage = this.createUserMessage(
+      annotateInterSessionPromptText(text, transcriptContext?.message.provenance),
+      images,
+      transcriptContext?.message,
+    );
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;
@@ -615,7 +617,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   }
 
   /** Queue pre-expanded follow-up input without an extension-command check. */
-  private async queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+  private queueFollowUp(text: string, images?: ImageContent[]): void {
     const message = this.createUserMessage(text, images);
     this.trackQueuedUserMessage(message, "followUp", text);
     this.emitQueueUpdate();

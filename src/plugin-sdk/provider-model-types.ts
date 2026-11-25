@@ -21,10 +21,10 @@ export type ProviderFastModePolicyContext = {
 
 export type {
   ModelApi,
-  ModelCompatConfig,
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "../config/types.models.js";
+export type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 
 export type ProviderModelRouteSource = {
   api?: ModelApi | null;
@@ -133,4 +133,6 @@ export type ProviderNativeWebSearchPolicyContext = {
   modelId?: string;
   api?: string;
   baseUrl?: string;
+  /** Secret-free selected-route facts; omission cannot establish eligibility. */
+  modelParams?: Record<string, unknown>;
 };

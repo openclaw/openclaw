@@ -1,7 +1,9 @@
 import { vi } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
+import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "./session-pull-requests.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 
 export function createHello(scopes: string[] = ["operator.read"]): GatewayHelloOk {
   return {
@@ -15,17 +17,14 @@ export function createHello(scopes: string[] = ["operator.read"]): GatewayHelloO
 export function createGatewayHarness() {
   const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ subscribed: true });
   const client = { request } as unknown as GatewayBrowserClient;
-  let snapshot: ApplicationGatewaySnapshot = {
+  let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
     hello: createHello(),
-    canvasPluginSurfaceUrl: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
+  const metadata = createGatewayMetadataObserver((current) => current === snapshot);
   const snapshotListeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const unsubscribeSnapshots = vi.fn();
@@ -70,17 +69,19 @@ export function createGatewayHarness() {
     unsubscribeSnapshots,
     unsubscribeEvents,
     emit(payload: unknown, event = "controlUi.sessionPullRequests.changed") {
-      for (const listener of eventListeners) {
-        listener({
-          type: "event",
-          event,
-          payload,
-          seq: 1,
-        });
+      const frame = metadata.receive({ type: "event", event, payload, seq: 1 }, snapshot);
+      if (frame) {
+        for (const listener of eventListeners) {
+          listener(frame);
+        }
       }
     },
     setSnapshot(next: ApplicationGatewaySnapshot) {
+      const previous = snapshot;
       snapshot = next;
+      if (!metadata.synchronize(previous, next)) {
+        return;
+      }
       for (const listener of snapshotListeners) {
         listener(snapshot);
       }

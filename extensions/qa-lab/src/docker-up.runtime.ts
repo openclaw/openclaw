@@ -10,24 +10,18 @@ import {
   resolveHostPort,
   waitForDockerServiceHealth,
   waitForHealth,
-  type FetchLike,
 } from "./docker-runtime.js";
 
 const QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 
 async function isQaLabDockerHealthReachable(url: string) {
-  let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
-    response = await fetchHealthUrl(url, {
+    const response = await fetchHealthUrl(url, {
       signal: AbortSignal.timeout(QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS),
     });
     return response.ok;
   } catch {
     return false;
-  } finally {
-    try {
-      await response?.body?.cancel?.();
-    } catch {}
   }
 }
 

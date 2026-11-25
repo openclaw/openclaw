@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
+import { createRetainedOperation } from "./retained-operation.js";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
 import {
   createWorkerComputeCapacity,
@@ -9,11 +10,18 @@ import {
 } from "./worker-task-capacity.js";
 import { WorkerTaskError } from "./worker-task-error.js";
 import type { WorkerTaskHost } from "./worker-task-host.js";
+import {
+  retainCurrentWorkerNativeSection,
+  withWorkerTaskNativeSectionScope,
+  type WorkerNativeSectionState,
+} from "./worker-task-native-sections.js";
 import { WorkerTaskPoolCore } from "./worker-task-pool-core.js";
 import type { WorkerTaskPoolOptions, WorkerTaskResponse } from "./worker-task-pool.types.js";
 
 class FixtureWorker extends EventEmitter implements WorkerLifecycle {
   readonly inputs: Array<{ taskId: number; input: unknown }> = [];
+  nativeSections?: WorkerNativeSectionState;
+  terminalFailure?: Error;
   readonly terminate = vi.fn(async () => {
     this.threadId = -1;
     this.emit("exit", 0);
@@ -26,6 +34,9 @@ class FixtureWorker extends EventEmitter implements WorkerLifecycle {
   postMessage(value: unknown) {
     assert(value !== null && typeof value === "object" && "taskId" in value && "input" in value);
     assert(typeof value.taskId === "number", "Expected a worker task input");
+    if ("nativeSections" in value && value.nativeSections instanceof SharedArrayBuffer) {
+      this.nativeSections = new Int32Array(value.nativeSections);
+    }
     this.inputs.push({ taskId: value.taskId, input: value.input });
   }
 
@@ -66,6 +77,7 @@ afterEach(async () => {
 function createPool({
   maxWorkers = 1,
   requiresReady,
+  retainedTransport,
   failure: initialFailure,
   computeCapacity = createWorkerComputeCapacity(4),
   ...options
@@ -74,6 +86,7 @@ function createPool({
   "maxWorkers" | "maxPendingTasks" | "maxPendingBytes" | "sharedCompute" | "onRotationComplete"
 > & {
   requiresReady?: false;
+  retainedTransport?: true;
   failure?: "error" | "exit" | "constructor";
   computeCapacity?: WorkerComputeCapacity;
 } = {}) {
@@ -121,10 +134,13 @@ function createPool({
       idleTimeoutMs: 0,
     },
     host,
+    undefined,
+    { retainedTransport },
   );
   pools.push(pool);
   return {
     pool,
+    host,
     workers,
     complete: () => workers.at(-1)!.complete(),
     attempts: () => attempts,
@@ -136,6 +152,145 @@ function createPool({
 
 const unavailable = { code: "unavailable" };
 const rejected = { status: "rejected", reason: expect.objectContaining(unavailable) };
+
+it.each([false, true])(
+  "flushes diagnostics after native sections and before direct exit (flush fails=%s)",
+  async (rejectFlush) => {
+    const { pool, workers, host } = createPool();
+    const started = Promise.withResolvers<void>();
+    const flush = createRetainedOperation<void>(() => {});
+    const flushDiagnostics = vi.fn(() => {
+      started.resolve();
+      return flush.operation;
+    });
+    host.flushWorkerDiagnostics = flushDiagnostics;
+    const task = pool.run("active native work", {}).catch(() => undefined);
+    const worker = workers[0]!;
+    assert(worker.nativeSections);
+    const release = withWorkerTaskNativeSectionScope(
+      worker.nativeSections,
+      () => true,
+      retainCurrentWorkerNativeSection,
+    );
+    const closing = pool.close();
+    await Promise.resolve();
+    expect(flushDiagnostics).not.toHaveBeenCalled();
+    expect(worker.terminate).not.toHaveBeenCalled();
+    release();
+    await started.promise;
+    expect(worker.terminate).not.toHaveBeenCalled();
+    if (rejectFlush) {
+      flush.reject(new Error("telemetry unavailable"));
+    } else {
+      flush.resolve();
+    }
+    await closing;
+    await task;
+    expect(flushDiagnostics).toHaveBeenCalledOnce();
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  },
+);
+
+it("services the diagnostic flush before native stop without Promise reactions", () => {
+  const { pool, host } = createPool();
+  const worker = new FixtureWorker(1);
+  const stopped = createRetainedOperation<void>(() => {});
+  const stop = vi.fn(() => {
+    worker.threadId = -1;
+    worker.emit("exit", 0);
+    stopped.resolve();
+    return stopped.operation;
+  });
+  const native = Object.assign(worker, {
+    started: true,
+    executionStopped: false,
+    service() {},
+    stop,
+  });
+  host.createWorker = () => ({ worker: native, native });
+  let delivered = false;
+  const flush = createRetainedOperation<void>(() => {
+    if (delivered) {
+      flush.resolve();
+    }
+  });
+  const flushDiagnostics = vi.fn(() => flush.operation);
+  host.flushWorkerDiagnostics = flushDiagnostics;
+  void pool.run("ready to retire", {});
+  worker.emit("started");
+  worker.complete();
+  const rotating = pool.startRotate();
+  rotating.service();
+  expect(rotating.read().status).toBe("pending");
+  expect(stop).not.toHaveBeenCalled();
+  delivered = true;
+  rotating.service();
+  expect(rotating.read().status).toBe("fulfilled");
+  expect(flushDiagnostics).toHaveBeenCalledExactlyOnceWith(worker, "rotation");
+  expect(stop).toHaveBeenCalledOnce();
+});
+
+it.each(["joined", "refused"] as const)(
+  "settles a lost task channel through %s retirement without Promise reactions",
+  async (ending) => {
+    const { pool, host } = createPool({ retainedTransport: true });
+    const worker = new FixtureWorker(1);
+    const channelFailure = new Error("task channel lost");
+    const stopFailure = new Error("native stop refused");
+    const stopped = createRetainedOperation<void>(() => {});
+    const retried = createRetainedOperation<void>(() => {});
+    const stop = vi.fn(() => {
+      worker.terminalFailure = nativeFailure;
+      if (ending === "refused" && stop.mock.calls.length === 1) {
+        stopped.reject(stopFailure);
+        return stopped.operation;
+      }
+      native.executionStopped = true;
+      worker.threadId = -1;
+      worker.emit("execution-exit", 1);
+      worker.emit("exit", 1);
+      const completion = ending === "refused" ? retried : stopped;
+      completion.resolve();
+      return completion.operation;
+    });
+    const native = Object.assign(worker, {
+      started: true,
+      executionStopped: false,
+      taskChannelFailure: channelFailure,
+      service() {},
+      stop,
+    });
+    host.createWorker = () => ({ worker: native, native });
+    const task = pool.startTask("read", {});
+    try {
+      worker.emit("started");
+      worker.ready();
+      worker.emit("error", channelFailure);
+      expect(task.read().status).toBe("pending");
+      task.service();
+      const outcome = task.read();
+      expect(outcome.status).toBe("rejected");
+      assert(outcome.status === "rejected");
+      if (ending === "refused") {
+        expect(outcome.error).toBeInstanceOf(AggregateError);
+        assert(outcome.error instanceof AggregateError);
+        expect(outcome.error.errors).toEqual([
+          expect.objectContaining({ cause: nativeFailure }),
+          stopFailure,
+        ]);
+        expect(pool.getSnapshot().pendingTasks).toBe(1);
+        expect(stop).toHaveBeenCalledOnce();
+        await expect(task.release().result).rejects.toBe(stopFailure);
+      } else {
+        expect(outcome.error).toMatchObject({ cause: nativeFailure });
+      }
+      await task.release().result;
+      expect(pool.getSnapshot().pendingTasks).toBe(0);
+    } finally {
+      await task.release().result.catch(() => task.release().result);
+    }
+  },
+);
 
 async function expectOverload(result: Promise<string>) {
   const error = await result.catch((reason: unknown) => reason);

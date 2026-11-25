@@ -36,7 +36,7 @@ async function resolveHelloWithModelDefaults(params: {
   body?: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
-  agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
+  agentCfg?: { reasoningDefault?: "off" | "on" | "stream"; verboseDefault?: "off" | "on" | "full" };
   commandAuthorized?: boolean;
   ctx?: Parameters<typeof buildTestCtx>[0];
   sessionCtx?: Partial<TemplateContext>;
@@ -318,5 +318,18 @@ describe("resolveReplyDirectives", () => {
     const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults(params);
     await expectContinueResult(result, { resolvedReasoningLevel: expected });
     expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["this agent's default over the global default", "main", undefined, "full"],
+    ["the global default when only another agent overrides it", "ops", undefined, "on"],
+    ["a session override over this agent's default", "main", "off", "off"],
+  ] as const)("resolves verbose to %s", async (_name, entryId, sessionVerbose, expected) => {
+    mocks.listAgentEntries.mockReturnValue([{ id: entryId, verboseDefault: "full" }]);
+    const { result } = await resolveHelloWithModelDefaults({
+      agentCfg: { verboseDefault: "on" },
+      sessionEntry: makeSessionEntry(sessionVerbose ? { verboseLevel: sessionVerbose } : {}),
+    });
+    await expectContinueResult(result, { resolvedVerboseLevel: expected });
   });
 });

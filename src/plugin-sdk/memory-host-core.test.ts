@@ -378,26 +378,12 @@ describe("memory-host-core helpers", () => {
     async () => {
       const workspaceAlias = path.join(fixtureRoot, "workspace-alias");
       const aliasCfg = workspaceConfig(workspaceAlias);
-      const originalOpen = fs.open.bind(fs);
       const firstRead = createDeferred();
       const releaseFirstRead = createDeferred();
-      let shouldBlockFirstRead = true;
-      const openSpy = vi
-        .spyOn(fs, "open")
-        .mockImplementation(async (...args: Parameters<typeof fs.open>) => {
-          const target = args[0];
-          if (
-            shouldBlockFirstRead &&
-            typeof target === "string" &&
-            path.basename(target) === "memory-host-events.jsonl" &&
-            path.resolve(target).startsWith(`${path.resolve(workspaceDir)}${path.sep}`)
-          ) {
-            shouldBlockFirstRead = false;
-            firstRead.resolve();
-            await releaseFirstRead.promise;
-          }
-          return await originalOpen(...args);
-        });
+      const openSpy = onExportOpen(await resolveExpectedExportPath(), 1, async () => {
+        firstRead.resolve();
+        await releaseFirstRead.promise;
+      });
 
       try {
         await fs.symlink(workspaceDir, workspaceAlias);

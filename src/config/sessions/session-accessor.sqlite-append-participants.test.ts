@@ -51,7 +51,7 @@ it("reuses current participants across transcript appends and publishes new acto
       for (let index = 0; index < 100; index++) {
         const result = await append(index);
         expect(result).toMatchObject({
-          appendedCount: 1,
+          messages: [{ appended: true }],
           sessionEntry: {
             participants: [{ identity: { type: "agent", id: "existing" } }],
             participantCount: 1,
@@ -69,7 +69,7 @@ it("reuses current participants across transcript appends and publishes new acto
         promptedAt: 2,
       });
       expect(await append(100)).toMatchObject({
-        appendedCount: 1,
+        messages: [{ appended: true }],
         sessionEntry: {
           participants: ["existing", "new"].map((id) => ({ identity: { type: "agent", id } })),
           participantCount: 2,

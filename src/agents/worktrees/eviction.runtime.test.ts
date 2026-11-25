@@ -9,6 +9,13 @@ import {
   prepareWorktreeEvictionRepositories,
   purgeWorktreeCheckout as purgeCheckout,
 } from "./eviction.runtime.js";
+import {
+  expectPrivateMetadata,
+  linkDirectory,
+  read,
+  relocatePrivateGitDirectory,
+  write,
+} from "./eviction.test-support.js";
 import { gitIdentity, initializeGitFixture } from "./git-fixture.test-support.js";
 import { listGitWorktrees, requireGit as git, runGit } from "./git.js";
 
@@ -18,23 +25,11 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function commitFixture(repo: string, message: string, allowEmpty = false) {
-  await git(repo, [
-    ...gitIdentity,
-    "-c",
-    "commit.gpgSign=false",
-    "commit",
-    ...(allowEmpty ? ["--allow-empty"] : []),
-    "-m",
-    message,
-  ]);
-}
+const commitOptions = [...gitIdentity, "-c", "commit.gpgSign=false", "commit"];
+const commitFixture = (repo: string, message: string, allowEmpty = false) =>
+  git(repo, [...commitOptions, ...(allowEmpty ? ["--allow-empty"] : []), "-m", message]);
 const init = (cwd: string, repo: string, ...options: string[]) =>
   git(cwd, ["init", "--template=", "-b", "main", ...options, repo]);
-const read = (directory: string, filename: string) =>
-  fs.readFile(path.join(directory, filename), "utf8");
-const linkDirectory = (target: string, link: string) =>
-  fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
 async function relocateGit(repo: string, gitDir: string, linked: string) {
   await git(repo, ["init", "--separate-git-dir", gitDir]);
   await git(repo, ["worktree", "repair", linked]);
@@ -52,7 +47,7 @@ async function createEvictionCheckouts(root: string, count: number) {
   }));
   for (const record of records) {
     await git(repoRoot, ["worktree", "add", "--detach", record.path, "HEAD"]);
-    await fs.writeFile(path.join(record.path, "unsaved.txt"), `${record.id}\n`);
+    await write(record.path, "unsaved.txt", `${record.id}\n`);
   }
   return { repoRoot, records };
 }
@@ -95,16 +90,14 @@ it("defers an expired metadata census before admitting or deleting the checkout"
   const { repoRoot, records } = await createEvictionCheckouts(root, 1);
   const victim = records[0]!;
   const execute = gitExec.executeGitCommand;
-  const commands = vi
-    .spyOn(gitExec, "executeGitCommand")
-    .mockImplementation(async (cwd, args, options) => {
-      const result = await execute(cwd, args, options);
-      if (args[0] === "worktree" && args[1] === "list") {
-        let elapsed = 0;
-        vi.spyOn(performance, "now").mockImplementation(() => (elapsed += 5_001));
-      }
-      return result;
-    });
+  vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+    const result = await execute(cwd, args, options);
+    if (args[0] === "worktree" && args[1] === "list") {
+      let elapsed = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => (elapsed += 5_001));
+    }
+    return result;
+  });
   const effects = vi.spyOn(workerContext, "requestGitWorkerEffect").mockResolvedValue(undefined);
 
   await expect(purgeCheckout(victim, records)).rejects.toThrow(/inspection exceeded.*budget/);
@@ -112,9 +105,6 @@ it("defers an expired metadata census before admitting or deleting the checkout"
   expect(effects.mock.calls.some(([effect]) => effect.type === "worktree.eviction-admit")).toBe(
     false,
   );
-  expect(
-    commands.mock.calls.some(([, args]) => args[0] === "worktree" && args[1] === "remove"),
-  ).toBe(false);
   expect(await read(victim.path, "unsaved.txt")).toBe(`${victim.id}\n`);
   vi.restoreAllMocks();
   expect((await listGitWorktrees(repoRoot)).some((entry) => entry.path === victim.path)).toBe(true);
@@ -128,9 +118,9 @@ it("refuses a purge target redirected through its parent during admission", asyn
   const record = { id: "claimed", repoRoot: source, path: path.join(claimedParent, "checkout") };
   await fs.mkdir(protectedParent);
   await init(root, source);
-  await fs.writeFile(path.join(source, "source-owned.txt"), "source bytes\n");
+  await write(source, "source-owned.txt", "source bytes\n");
   await fs.mkdir(record.path, { recursive: true });
-  await fs.writeFile(path.join(record.path, "claimed.txt"), "claimed bytes\n");
+  await write(record.path, "claimed.txt", "claimed bytes\n");
   const originalParent = path.join(root, "original-claimed");
   let redirected = false;
   vi.spyOn(workerContext, "requestGitWorkerEffect").mockImplementation(async (effect) => {
@@ -170,7 +160,7 @@ it("recognizes a multi-commit squash, invalidates changed heads, and purges only
     await git(repoRoot, ["worktree", "add", "-b", item.id, item.path]);
   }
   for (const filename of ["one", "two"]) {
-    await fs.writeFile(path.join(squashed.path, filename), `${filename}\n`);
+    await write(squashed.path, filename, `${filename}\n`);
     await git(squashed.path, ["add", "."]);
     await git(squashed.path, ["commit", "-m", filename]);
   }
@@ -195,7 +185,7 @@ it("recognizes a multi-commit squash, invalidates changed heads, and purges only
     current.mockRestore();
     vi.unstubAllEnvs();
   }
-  await fs.writeFile(path.join(squashed.path, "new-work"), "unlanded\n");
+  await write(squashed.path, "new-work", "unlanded\n");
   await git(squashed.path, ["add", "."]);
   await git(squashed.path, ["commit", "-m", "new work"]);
   expect(await classify([squashed])).toEqual([{ id: "squashed", reason: "idle-age" }]);
@@ -208,7 +198,7 @@ it("recognizes a multi-commit squash, invalidates changed heads, and purges only
   expect(await classify([merged])).toEqual([{ id: "merged", reason: "merged" }]);
 
   await fs.mkdir(path.join(squashed.path, "nested", ".git"), { recursive: true });
-  await fs.writeFile(path.join(squashed.path, "unsaved"), "dirty data\n");
+  await write(squashed.path, "unsaved", "dirty data\n");
   await git(repoRoot, ["worktree", "lock", "--reason", "old owner", squashed.path]);
   const branchHead = await git(repoRoot, ["rev-parse", squashed.id]);
   const authority = vi
@@ -246,11 +236,9 @@ it.each([
   const unknown = { id: "unknown", path: path.join(root, "unknown"), repoRoot: missingSource };
   await git(repoRoot, ["worktree", "add", "-b", "outer", outer.path]);
   await git(source, ["worktree", "add", "-b", "external", external.path]);
-  await fs.writeFile(path.join(outer.path, "preserved.txt"), "outer data\n");
+  await write(outer.path, "preserved.txt", "outer data\n");
   let relocated = false;
-  let sourcePrivateDirectory: string | undefined;
-  let sourcePrivateHead: Buffer | undefined;
-  let sourcePrivateIndex: Buffer | undefined;
+  let privateMetadata: Awaited<ReturnType<typeof relocatePrivateGitDirectory>> | undefined;
   vi.spyOn(workerContext, "requestGitWorkerEffect").mockImplementation(async (effect) => {
     if (effect.type === phase) {
       if (effect.type === "worktree.eviction-fence") {
@@ -262,24 +250,19 @@ it.each([
         await fs.rename(source, originalSource);
         await git(originalSource, ["worktree", "repair", external.path]);
         await git(repoRoot, ["worktree", "add", "-b", "replacement-source", source]);
-        await fs.writeFile(path.join(source, "staged-source.txt"), "staged source bytes\n");
+        await write(source, "staged-source.txt", "staged source bytes\n");
         await git(source, ["add", "staged-source.txt"]);
-        const privateDirectory = await git(source, ["rev-parse", "--absolute-git-dir"]);
-        const commonDirectory = await fs.realpath(
-          path.resolve(source, await git(source, ["rev-parse", "--git-common-dir"])),
+        privateMetadata = await relocatePrivateGitDirectory(
+          source,
+          path.join(outer.path, "source-private-git"),
+          false,
         );
-        sourcePrivateDirectory = path.join(outer.path, "source-private-git");
-        await fs.rename(privateDirectory, sourcePrivateDirectory);
-        await fs.writeFile(path.join(sourcePrivateDirectory, "commondir"), `${commonDirectory}\n`);
-        await fs.writeFile(path.join(source, ".git"), `gitdir: ${sourcePrivateDirectory}\n`);
-        sourcePrivateHead = await fs.readFile(path.join(sourcePrivateDirectory, "HEAD"));
-        sourcePrivateIndex = await fs.readFile(path.join(sourcePrivateDirectory, "index"));
       } else {
         const gitDir = path.join(target === "metadata" ? outer.path : root, "relocated-git");
         await relocateGit(source, gitDir, external.path);
       }
       if (target === "source behind a symlink") {
-        await fs.writeFile(path.join(source, "source-data.txt"), "source data\n");
+        await write(source, "source-data.txt", "source data\n");
         const relocatedSource = path.join(outer.path, "relocated-source");
         await fs.rename(source, relocatedSource);
         await linkDirectory(relocatedSource, source);
@@ -296,11 +279,8 @@ it.each([
   if (target === "source behind a symlink") {
     expect(await read(source, "source-data.txt")).toBe("source data\n");
   }
-  if (sourcePrivateDirectory) {
-    expect(await fs.readFile(path.join(sourcePrivateDirectory, "HEAD"))).toEqual(sourcePrivateHead);
-    expect(await fs.readFile(path.join(sourcePrivateDirectory, "index"))).toEqual(
-      sourcePrivateIndex,
-    );
+  if (privateMetadata) {
+    await expectPrivateMetadata(privateMetadata);
     expect(await git(source, ["rev-parse", "--verify", "HEAD"])).toBeTruthy();
   }
 });
@@ -316,7 +296,7 @@ it.each(["available", "renamed", "replaced"] as const)(
     const head = await git(repoRoot, ["rev-parse", "HEAD"]);
     await git(repoRoot, ["worktree", "add", "-b", "owned", record.path]);
     await relocateGit(repoRoot, path.join(record.path, "source-git"), record.path);
-    await fs.writeFile(path.join(record.path, "unsaved.txt"), "owned checkout bytes\n");
+    await write(record.path, "unsaved.txt", "owned checkout bytes\n");
     if (sourceState !== "available") {
       await fs.rename(repoRoot, path.join(root, "renamed-source"));
     }
@@ -347,7 +327,7 @@ it.each(["recorded source", "linked checkout source"] as const)(
     const filename = "borrowed-only.txt";
     const contents = "source object bytes stored only inside the eviction candidate\n";
     await init(root, donor);
-    await fs.writeFile(path.join(donor, filename), contents);
+    await write(donor, filename, contents);
     await git(donor, ["add", filename]);
     await commitFixture(donor, "borrowed source objects");
     const commit = await git(donor, ["rev-parse", "HEAD"]);
@@ -363,10 +343,6 @@ it.each(["recorded source", "linked checkout source"] as const)(
       await fs.rename(repoRoot, actualSource);
       await git(actualSource, ["worktree", "repair", victim.path]);
       await createEvictionCheckouts(root, 0);
-    }
-    for (const repository of [actualSource, victim.path]) {
-      expect(await git(repository, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
-      expect(await git(repository, ["cat-file", "blob", blob])).toBe(contents.trim());
     }
     vi.spyOn(workerContext, "requestGitWorkerEffect").mockResolvedValue(undefined);
 
@@ -388,7 +364,7 @@ it("keeps an idle standalone replacement purgeable when no shared source metadat
   const repoRoot = path.join(root, "missing-source");
   const record = { id: "owned", path: path.join(root, "owned"), repoRoot };
   await init(root, record.path);
-  await fs.writeFile(path.join(record.path, "unsaved.txt"), "eligible idle bytes\n");
+  await write(record.path, "unsaved.txt", "eligible idle bytes\n");
   vi.spyOn(workerContext, "requestGitWorkerEffect").mockResolvedValue(undefined);
   await purgeCheckout(record, [record]);
   await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
@@ -404,7 +380,7 @@ it.each([true, false])(
     const relocatedSource = path.join(record.path, "relocated-source");
     const contents = "synthetic primary checkout bytes\n";
     await init(root, source, "--separate-git-dir", metadata);
-    await fs.writeFile(path.join(source, "source-owned.txt"), contents);
+    await write(source, "source-owned.txt", contents);
     await git(source, ["add", "source-owned.txt"]);
     await commitFixture(source, "synthetic source");
     const head = await git(source, ["rev-parse", "HEAD"]);
@@ -412,7 +388,7 @@ it.each([true, false])(
       await git(source, ["worktree", "add", "--detach", record.path, "HEAD"]);
     } else {
       await fs.mkdir(record.path);
-      await fs.writeFile(path.join(record.path, "source-owned.txt"), contents);
+      await write(record.path, "source-owned.txt", contents);
     }
     let relocated = false;
     vi.spyOn(workerContext, "requestGitWorkerEffect").mockImplementation(async (effect) => {

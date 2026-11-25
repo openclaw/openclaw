@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
+import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-catalog.types.js";
 import { readMcpAppToolExtensions } from "../../agents/mcp-app-extension-metadata.js";
 import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";

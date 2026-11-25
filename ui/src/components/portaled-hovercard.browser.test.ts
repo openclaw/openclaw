@@ -4,72 +4,38 @@ import { createPortaledHovercard, createPortaledHovercardOwner } from "./portale
 // Root test shards also collect browser files under jsdom, which has no layout or hit-testing.
 const hasPopoverApi = typeof HTMLElement.prototype.showPopover === "function";
 
-type PlacementCase = {
-  name: string;
-  viewport: [number, number];
-  anchor: [number, number];
-  placement: "horizontal" | "vertical";
-  cardHeight: number;
-  expected: { side: string; x: number; y: number; overlaps: boolean };
-};
+function placementCase(
+  name: string,
+  viewport: [number, number],
+  anchor: [number, number],
+  placement: "horizontal" | "vertical",
+  side: string,
+  x: number,
+  y: number,
+  cardHeight = 136,
+  overlaps = false,
+) {
+  return { name, viewport, anchor, placement, cardHeight, expected: { side, x, y, overlaps } };
+}
 
-const cases: PlacementCase[] = [
-  {
-    name: "narrow horizontal card below the row",
-    viewport: [390, 844],
-    anchor: [14, 384],
-    placement: "horizontal",
-    cardHeight: 136,
-    expected: { side: "bottom", x: 14, y: 424, overlaps: false },
-  },
-  {
-    name: "narrow horizontal card above the bottom row",
-    viewport: [390, 844],
-    anchor: [14, 744],
-    placement: "horizontal",
-    cardHeight: 136,
-    expected: { side: "top", x: 14, y: 598, overlaps: false },
-  },
-  {
-    name: "desktop horizontal card on the right",
-    viewport: [1440, 900],
-    anchor: [14, 384],
-    placement: "horizontal",
-    cardHeight: 136,
-    expected: { side: "right", x: 306, y: 384, overlaps: false },
-  },
-  {
-    name: "desktop horizontal card on the left",
-    viewport: [1440, 900],
-    anchor: [1120, 384],
-    placement: "horizontal",
-    cardHeight: 136,
-    expected: { side: "left", x: 816, y: 384, overlaps: false },
-  },
-  {
-    name: "existing vertical card below the row",
-    viewport: [390, 844],
-    anchor: [14, 384],
-    placement: "vertical",
-    cardHeight: 136,
-    expected: { side: "bottom", x: 14, y: 424, overlaps: false },
-  },
-  {
-    name: "existing vertical card above the bottom row",
-    viewport: [390, 844],
-    anchor: [14, 744],
-    placement: "vertical",
-    cardHeight: 136,
-    expected: { side: "top", x: 14, y: 598, overlaps: false },
-  },
-  {
-    name: "existing horizontal clamp when neither axis has room",
-    viewport: [390, 844],
-    anchor: [14, 384],
-    placement: "horizontal",
-    cardHeight: 520,
-    expected: { side: "left", x: 12, y: 312, overlaps: true },
-  },
+const cases = [
+  placementCase("narrow horizontal below", [390, 844], [14, 384], "horizontal", "bottom", 14, 424),
+  placementCase("narrow horizontal above", [390, 844], [14, 744], "horizontal", "top", 14, 598),
+  placementCase("desktop right", [1440, 900], [14, 384], "horizontal", "right", 306, 384),
+  placementCase("desktop left", [1440, 900], [1120, 384], "horizontal", "left", 816, 384),
+  placementCase("vertical below", [390, 844], [14, 384], "vertical", "bottom", 14, 424),
+  placementCase("vertical above", [390, 844], [14, 744], "vertical", "top", 14, 598),
+  placementCase(
+    "neither axis fits",
+    [390, 844],
+    [14, 384],
+    "horizontal",
+    "left",
+    12,
+    312,
+    520,
+    true,
+  ),
 ];
 
 describe.skipIf(!hasPopoverApi)("portaled hovercard placement", () => {
@@ -105,7 +71,7 @@ describe.skipIf(!hasPopoverApi)("portaled hovercard placement", () => {
       box.left < row.right && box.right > row.left && box.top < row.bottom && box.bottom > row.top,
     ).toBe(expected.overlaps);
     expect(card.dataset.side).toBe(expected.side);
-    expect({ x: box.x, y: box.y, width: box.width, height: box.height }).toEqual({
+    expect(box).toMatchObject({
       x: expected.x,
       y: expected.y,
       width: 294,

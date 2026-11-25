@@ -2,7 +2,7 @@
  * Merges bundled plugin MCP servers with user-configured MCP servers for agent
  * runtimes.
  */
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -51,20 +51,18 @@ export function loadStaticBundleMcpConfig(
   };
 }
 
-export function prepareOwnedBundleMcpDataDirs(params: {
+export async function prepareOwnedBundleMcpDataDirs(params: {
   config: BundleMcpConfig;
   prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership>;
-}): MergedBundleMcpConfig {
+}) {
   const mcpServers = { ...params.config.mcpServers };
-  const prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership> = {};
   const diagnostics: BundleMcpDiagnostic[] = [];
   for (const [serverName, ownership] of Object.entries(params.prepareDataDirsByServer)) {
     if (!Object.hasOwn(mcpServers, serverName)) {
       continue;
     }
     try {
-      fs.mkdirSync(ownership.dataDir, { recursive: true });
-      prepareDataDirsByServer[serverName] = ownership;
+      await fs.mkdir(ownership.dataDir, { recursive: true });
     } catch (error) {
       delete mcpServers[serverName];
       diagnostics.push({
@@ -73,7 +71,7 @@ export function prepareOwnedBundleMcpDataDirs(params: {
       });
     }
   }
-  return { config: { mcpServers }, diagnostics, prepareDataDirsByServer };
+  return { config: { mcpServers }, diagnostics };
 }
 
 /**

@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexWebSearchProvider as createContractCodexWebSearchProvider } from "../web-search-contract-api.js";
 import { codexModel as baseModel } from "./app-server/bounded-turn.test-harness.js";
 import {
@@ -11,9 +11,12 @@ import {
 } from "./app-server/codex-app-server.test-fixtures.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
+import * as shared from "./app-server/shared-client.js";
 import { createCodexWebSearchProvider } from "./web-search-provider.js";
 // Loads the provider's lazy runtime at collection, outside the first test's deadline.
 import "./web-search-provider.runtime.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function threadStartResult(model: string) {
   const result = baseThreadStartResult("thread-1", "/tmp/openclaw-agent");
@@ -53,6 +56,17 @@ function createFakeClient(options?: {
             item: {
               id: "search-1",
               type: "webSearch",
+              results: [
+                {
+                  type: "text_result",
+                  url: "https://example.com/source",
+                  title: "Source",
+                  snippet: "Provider prose, not fetched evidence",
+                  future_field: true,
+                },
+                { url: "javascript:alert(1)" },
+                { url: "https://example.com/source", title: "Source" },
+              ],
               query,
               action: { type: "search", query, queries: [query] },
             },
@@ -110,9 +124,9 @@ function createSearchTool(provider: ReturnType<typeof createCodexWebSearchProvid
 
 function searchFixture(options?: Parameters<typeof createFakeClient>[0], pluginConfig?: unknown) {
   const fixture = createFakeClient(options);
+  vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockResolvedValue(fixture.client);
   const tool = createSearchTool(
     createCodexWebSearchProvider({
-      clientFactory: async () => fixture.client,
       resolvePluginConfig: () => pluginConfig,
     }),
   );
@@ -120,6 +134,32 @@ function searchFixture(options?: Parameters<typeof createFakeClient>[0], pluginC
 }
 
 describe("codex web search provider", () => {
+  it("uses the selected model and exact profile instead of the native default", async () => {
+    const { client, requests } = createFakeClient({
+      models: [baseModel("gpt-5.5"), baseModel("gpt-5.4")],
+    });
+    let selectedProfile: string | null | undefined;
+    vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(async (options) => {
+      selectedProfile = options?.authProfileId;
+      return client;
+    });
+    const provider = createCodexWebSearchProvider();
+    const result = await createSearchTool(provider)?.execute(
+      { query },
+      {
+        modelSelection: { provider: "openai", model: "gpt-5.4", authProfileId: "openai:research" },
+      },
+    );
+    expect(selectedProfile).toBe("openai:research");
+    expect(requests.find((request) => request.method === "thread/start")?.params).toMatchObject({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    });
+    expect(result).toMatchObject({
+      model: "gpt-5.4",
+      citations: [{ url: "https://example.com/source", title: "Source" }],
+    });
+  });
   it("registers a selectable keyless provider contract", () => {
     const provider = createContractCodexWebSearchProvider();
 
@@ -146,6 +186,10 @@ describe("codex web search provider", () => {
   it("runs an isolated grounded Codex search with configured restrictions", async () => {
     const { client, requests } = createFakeClient();
     let isolatedStartOptions: CodexAppServerStartOptions | undefined;
+    vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(async (options) => {
+      isolatedStartOptions = options?.startOptions;
+      return client;
+    });
     const provider = createCodexWebSearchProvider({
       resolvePluginConfig: () => ({
         appServer: {
@@ -162,16 +206,14 @@ describe("codex web search provider", () => {
           clearEnv: ["CODEX_HOME", "KEEP_CLEARED"],
         },
       }),
-      clientFactory: async (options) => {
-        isolatedStartOptions = options?.startOptions;
-        return client;
-      },
     });
     const tool = createSearchTool(provider);
 
     const result = await tool?.execute({ query });
 
     expect(result).toMatchObject({
+      kind: "answer",
+      citations: [{ url: "https://example.com/source", title: "Source" }],
       query,
       provider: "codex",
       model: "gpt-5.5",
@@ -202,7 +244,7 @@ describe("codex web search provider", () => {
         "features.code_mode": false,
         "features.code_mode_only": false,
         "features.hooks": false,
-        "features.standalone_web_search": false,
+        "features.standalone_web_search": true,
         notify: [],
         web_search: "live",
         "tools.web_search.allowed_domains": ["example.com"],
@@ -244,13 +286,12 @@ describe("codex web search provider", () => {
     const release = createDeferred<void>();
     const denial = new Error("search caller no longer authorized");
     let current = true;
-    const provider = createCodexWebSearchProvider({
-      clientFactory: async () => {
-        entered.resolve();
-        await release.promise;
-        return client;
-      },
+    vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+      return client;
     });
+    const provider = createCodexWebSearchProvider();
     const tool = provider.createTool({ config, searchConfig: config.tools?.web?.search });
     const pending = tool!.execute(
       { query: "synthetic authority probe" },
@@ -285,7 +326,7 @@ describe("codex web search provider", () => {
     {
       name: "ungrounded answer",
       options: { emitWebSearch: false },
-      error: "Codex hosted search completed without invoking web search.",
+      error: "Codex native search completed without invoking web search.",
     },
   ])("fails closed for $name", async ({ options, pluginConfig, error, methods }) => {
     const { tool, requests } = searchFixture(options, pluginConfig);

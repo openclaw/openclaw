@@ -6,6 +6,7 @@ import {
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as setupRuntime from "openclaw/plugin-sdk/setup";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { resolveIMessageAccount } from "./accounts.js";
 import { imessagePlugin } from "./channel.js";
 import * as channelRuntimeModule from "./channel.runtime.js";
@@ -31,18 +32,6 @@ const timeout = { timeoutMs: 1000 };
 
 type CommandResult = Awaited<ReturnType<typeof processRuntime.runCommandWithTimeout>>;
 type RpcClient = Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>;
-
-function commandResult(overrides: Partial<CommandResult> = {}): CommandResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
 
 function privateStatusResult(overrides: Record<string, unknown> = {}): Partial<CommandResult> {
   return {
@@ -198,9 +187,7 @@ describe("imessage setup status", () => {
     [true, undefined, "Using existing imsg at imsg; Homebrew does not manage this binary."],
   ] as const)("prepares imsg with detected=%s", async (detected, path, noteText) => {
     setupToolsMocks.detectBinary.mockResolvedValueOnce(detected);
-    installIMessageCliMock.mockResolvedValueOnce(
-      path ? { ok: true, cliPath: path, version: "0.13.0" } : { ok: true },
-    );
+    installIMessageCliMock.mockResolvedValueOnce(path ? { ok: true, cliPath: path } : { ok: true });
     const result = await prepareIMessage({
       platform: "darwin",
       ...(detected

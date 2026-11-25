@@ -506,7 +506,8 @@ it.each([
     );
     expect(fs.existsSync(mainPath)).toBe(false);
     expect(
-      detectSharedAuthStoreMigration({ stateDir, env, doctorOnlyStateMigrations: true }).held,
+      (await detectSharedAuthStoreMigration({ stateDir, env, doctorOnlyStateMigrations: true }))
+        .held,
     ).not.toBe(true);
     if (location === "configured-new-owner") {
       cfg.agents = { entries: { main: { agentDir: customAgentDirectory } } };
@@ -558,8 +559,7 @@ it.each([
       expect(catalogs).toMatchObject({ detected: 0, migrated: 0, warnings: [] });
       expect(await maybeRepairCodexSessionRoutes({ cfg, env, shouldRepair: true })).toMatchObject({
         scannedStores: 0,
-        repairedStores: 0,
-        repairedSessions: 0,
+        changes: [],
       });
       const leaseId = claimOpenClawAgentDatabaseLease({
         agentId: "retired",

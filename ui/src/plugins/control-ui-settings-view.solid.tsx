@@ -7,10 +7,14 @@ import type {
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
+import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createControlUiSettingsComponents } from "./control-ui-settings-components.solid.tsx";
+
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 /**
  * Facts that end a mounted view. Connection state and the transport epoch reach the
@@ -40,7 +44,7 @@ function sameLifetime(a: ReturnType<typeof viewLifetime>, b: ReturnType<typeof v
 export function ControlUiSettingsPresentation(props: {
   application: ApplicationContext;
   placement: ControlUiSettingsView["placement"];
-  readSnapshot: () => ControlUiSettingsSnapshot;
+  readSnapshot: () => ControlUiSettingsSnapshot | null;
   subscribe: (listener: () => void) => () => void;
   navigate: ControlUiSettingsContext["navigate"];
   refreshAgents: () => void;
@@ -69,13 +73,17 @@ export function ControlUiSettingsPresentation(props: {
   };
   const fail = (error: unknown) => {
     retire();
-    container?.append(formatUiError(error, "Settings presentation could not load."));
+    container?.append(formatUiError(error, t("pluginUi.settingsLoadFailed")));
   };
   const sync = () => {
     if (!active || !container) {
       return;
     }
     const snapshot = props.readSnapshot();
+    if (!snapshot) {
+      retire();
+      return;
+    }
     const identity = viewLifetime(props.application, snapshot);
     if (owner && sameLifetime(owner.identity, identity)) {
       try {
@@ -91,27 +99,30 @@ export function ControlUiSettingsPresentation(props: {
     owner = next;
     const current = () => {
       lifetime.throwIfAborted();
+      const currentSnapshot = props.readSnapshot();
       if (
+        !currentSnapshot ||
         !active ||
         owner !== next ||
-        !sameLifetime(identity, viewLifetime(props.application, props.readSnapshot()))
+        !sameLifetime(identity, viewLifetime(props.application, currentSnapshot))
       ) {
         throw new Error("This Settings presentation has ended.");
       }
+      return currentSnapshot;
     };
     void props.application.plugins
       .loadSettingsView(props.placement, next.abort.signal)
       .then((loaded) => {
         lifetime = loaded.signal;
-        current();
+        const loadedSnapshot = current();
         const context: ControlUiSettingsContext = {
-          props: props.readSnapshot(),
+          props: loadedSnapshot,
           signal: lifetime,
           components: createControlUiSettingsComponents(lifetime),
           async request<T>(method: string, params?: unknown) {
-            current();
+            const requestSnapshot = current();
             const gateway = props.application.gateway.snapshot;
-            const epoch = props.readSnapshot().connectionEpoch;
+            const epoch = requestSnapshot.connectionEpoch;
             if (
               !gateway.client ||
               gateway.phase !== "connected" ||
@@ -120,9 +131,8 @@ export function ControlUiSettingsPresentation(props: {
               throw new Error("The Gateway is offline or operator access is unavailable.");
             }
             const result = await gateway.client.request<T>(method, params);
-            current();
             // The view survives reconnects; replies from an earlier transport epoch do not.
-            if (props.readSnapshot().connectionEpoch !== epoch) {
+            if (current().connectionEpoch !== epoch) {
               throw new Error("The Gateway connection changed before this request completed.");
             }
             return result;
@@ -163,7 +173,7 @@ export function ControlUiSettingsPresentation(props: {
           { once: true },
         );
         next.update = mounted.update;
-        mounted.update(props.readSnapshot());
+        mounted.update(current());
       })
       .catch((error: unknown) => {
         if (owner === next && !next.abort.signal.aborted) {

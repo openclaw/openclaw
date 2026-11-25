@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import {
@@ -8,7 +9,10 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import * as transcriptWorkers from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as registryListing from "../state/openclaw-agent-db-registry-listing.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -21,6 +25,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   withOpenClawTestState,
@@ -29,7 +34,7 @@ import {
 const { observedDirectories, releasedDirectories } = vi.hoisted(() => ({
   observedDirectories: [] as Array<{
     directory: string;
-    notify: (filename?: string) => void;
+    notify: (filename?: string, event?: string) => void;
     active: boolean;
   }>,
   // The shared owner closes a native watch when a directory's last observation leaves.
@@ -37,7 +42,7 @@ const { observedDirectories, releasedDirectories } = vi.hoisted(() => ({
 }));
 // mock-isolation: Deliver directory changes deterministically without native watcher timing.
 vi.mock("../infra/owned-directory-observation.js", () => ({
-  observeOwnedDirectory(directory: string, notify: (filename?: string) => void) {
+  observeOwnedDirectory(directory: string, notify: (filename?: string, event?: string) => void) {
     const observation = { directory, notify, active: true };
     observedDirectories.push(observation);
     return {
@@ -96,6 +101,8 @@ function expectRegistered(
     expect.arrayContaining([expect.objectContaining(source(database))]),
   );
 }
+const sourcesOf = (prepared: Awaited<ReturnType<typeof prepareSourcesAsync>>) =>
+  resolveSources(expectDefined(prepared.request, "source routing request")).sources;
 function mainSources() {
   const main = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
   return { main, params: sourceParams(source(main)) };
@@ -212,8 +219,6 @@ it.each([false, true])(
       if (fixed) {
         databases.push(openStore("added"));
       }
-      readdir.mockClear();
-      realpath.mockClear();
       const second = await prepare();
       expect(Object.keys(first.sources)).toEqual(agentIds);
       expect(Object.keys(second.sources)).toEqual([...agentIds, "added"]);
@@ -241,44 +246,24 @@ it("binds source addresses before asynchronous callers yield", async () => {
   });
 });
 
-it.each(["alias", "missing-parent"] as const)(
-  "omits a replaced captured %s from worker source selection",
-  async (kind) => {
-    await withState(async () => {
-      const parent = state.path("source-parent");
-      const replacement = state.path("replacement-store");
-      fs.mkdirSync(replacement);
-      let currentSource;
-      if (kind === "alias") {
-        const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-        fs.copyFileSync(database.path, path.join(replacement, path.basename(database.path)));
-        fs.symlinkSync(path.dirname(database.path), parent, linkType);
-        currentSource = {
-          agentId: database.agentId,
-          path: path.join(parent, path.basename(database.path)),
-        };
-      } else {
-        fs.mkdirSync(parent);
-        currentSource = { agentId: "main", path: path.join(parent, "sessions.sqlite") };
-      }
-      const registryPath = openOpenClawStateDatabase().path;
-      const prepared = await prepareSourcesAsync(
-        sourceParams(currentSource, { session: { store: currentSource.path } }),
-      );
-      const request = expectDefined(prepared.request, "source routing request");
-      expect(resolveSources(request).sources.main).toEqual([currentSource]);
-      if (kind === "alias") {
-        fs.unlinkSync(parent);
-        fs.symlinkSync(replacement, parent, linkType);
-      } else {
-        fs.renameSync(parent, `${parent}.previous`);
-        fs.symlinkSync(replacement, parent, linkType);
-      }
-      invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
-      expect(resolveSources(request).sources.main).toEqual([]);
-    });
-  },
-);
+it("omits a replaced missing parent from worker source selection", async () => {
+  await withState(async () => {
+    const parent = state.path("source-parent");
+    const replacement = state.path("replacement-store");
+    fs.mkdirSync(replacement);
+    fs.mkdirSync(parent);
+    const currentSource = { agentId: "main", path: path.join(parent, "sessions.sqlite") };
+    const registryPath = openOpenClawStateDatabase().path;
+    const prepared = await prepareSourcesAsync(
+      sourceParams(currentSource, { session: { store: currentSource.path } }),
+    );
+    expect(sourcesOf(prepared).main).toEqual([currentSource]);
+    fs.renameSync(parent, `${parent}.previous`);
+    fs.symlinkSync(replacement, parent, linkType);
+    invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
+    expect(sourcesOf(prepared).main).toEqual([]);
+  });
+});
 
 it("captures fixed, missing, and retired routing without main-thread SQL", async () => {
   await withState(async () => {
@@ -311,8 +296,7 @@ it("captures fixed, missing, and retired routing without main-thread SQL", async
     }
     const request = expectDefined(prepared.request, "source routing request");
     expect(JSON.stringify(request)).not.toContain("not-a-routing-field");
-    const { sources } = resolveSources(request);
-    expect(sources).toEqual({
+    expect(sourcesOf(prepared)).toEqual({
       main: [currentSource],
       ops: [{ agentId: "ops", path: ops.path }],
       future: [{ agentId: "future", path: path.join(storeDir, "shared.future.sqlite") }],
@@ -338,86 +322,143 @@ it.each([false, true])(
         env: state.env,
         path: path.join(storeDir, "main", "history.sqlite"),
       });
+      const gate = recovers ? holdRegistryRead() : undefined;
       const pending = prepareSourcesAsync(sourceParams(source(main), cfg));
-      if (recovers) {
-        fs.unlinkSync(blockedPath);
-        fs.mkdirSync(blockedPath);
+      void pending.catch(() => undefined);
+      try {
+        if (gate) {
+          await awaitGateBeforeSettlement(
+            gate.entered.promise,
+            pending,
+            "Registry read not reached",
+          );
+          fs.unlinkSync(blockedPath);
+          fs.mkdirSync(blockedPath);
+          gate.resume.resolve();
+        }
+        const prepared = await pending;
+        expect(sourcesOf(prepared)).toEqual({
+          main: [{ agentId: "main", path: main.path }],
+          blocked: [],
+        });
+      } finally {
+        gate?.resume.resolve();
+        gate?.spy.mockRestore();
+        await pending.catch(() => undefined);
       }
-      const prepared = await pending;
-      const request = expectDefined(prepared.request, "source routing request");
-      expect(resolveSources(request).sources).toEqual({
-        main: [{ agentId: "main", path: main.path }],
-        blocked: [],
-      });
     });
   },
 );
 
 it("retains source preparation until directory or registry ownership changes", async () => {
   await withState(async () => {
-    const { main, params, alias, replacement } = aliasSources();
-    const first = await prepareSourcesAsync(params);
-    const realpath = vi.spyOn(fs.realpathSync, "native");
-    const stat = vi.spyOn(fs, "statSync");
-    const readdir = vi.spyOn(fs, "readdirSync");
-    syncBuiltinESMExports();
-    const warm = await prepareSourcesAsync(params);
-    expect(warm.request).toEqual(first.request);
-    expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
+    expect(isMainThread).toBe(true);
+    const gateway = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(state.env),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: state.configPath,
+        role: "gateway",
+        processNamespace: readGatewayLockProcessNamespace(),
+      },
+    });
+    try {
+      const { main, params, alias, replacement } = aliasSources();
+      const realpath = vi.spyOn(fs.realpathSync, "native");
+      const stat = vi.spyOn(fs, "statSync");
+      const readdir = vi.spyOn(fs, "readdirSync");
+      syncBuiltinESMExports();
+      const prepare = transcriptWorkers.prepareSessionStoreCandidatesInWorker;
+      let notified = false;
+      const validation = vi
+        .spyOn(transcriptWorkers, "prepareSessionStoreCandidatesInWorker")
+        .mockImplementation(async (input) => {
+          const result = await prepare(input);
+          if (
+            "observePaths" in input &&
+            input.observePaths.observations &&
+            !input.observePaths.paths &&
+            !input.observePaths.inventory
+          ) {
+            // An unchanged path notification can arrive after native validation completed.
+            notifyAlias(alias);
+            notified = true;
+          }
+          return result;
+        });
+      const first = await prepareSourcesAsync(params).finally(() => validation.mockRestore());
+      expect(notified).toBe(true);
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
+      const warm = await prepareSourcesAsync(params);
+      expect(warm.request).toEqual(first.request);
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
 
-    const directory = observedDirectories.find(
-      (entry) => entry.active && entry.directory === path.dirname(main.path),
-    );
-    expect(directory).toBeDefined();
-    directory!.notify("unrelated.txt");
-    directory!.notify(path.basename(main.path));
-    const revalidationReads = realpath.mock.calls.length;
-    for (const entry of observedDirectories) {
-      if (entry.active && entry.directory.startsWith(state.root)) {
-        entry.notify();
+      // Registry commits publish their own revision; file activity must not rescan agent paths.
+      for (const entry of observedDirectories) {
+        if (entry.active && entry.directory === path.dirname(params.registryPath)) {
+          entry.notify(path.basename(params.registryPath));
+        }
+      }
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+      await Promise.resolve();
+
+      const directory = observedDirectories.find(
+        (entry) => entry.active && entry.directory === path.dirname(main.path),
+      );
+      expect(directory).toBeDefined();
+      directory!.notify("unrelated.txt");
+      for (let index = 0; index < 100; index++) {
+        directory!.notify(path.basename(main.path), "change");
+        directory!.notify(`${path.basename(main.path)}-wal`, "change");
+      }
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
+      // Separate turns must not repeatedly resolve the same unchanged source paths.
+      for (let turn = 0; turn < 5; turn++) {
+        directory!.notify(path.basename(main.path), "rename");
+        for (const entry of observedDirectories) {
+          if (entry.active && entry.directory.startsWith(state.root)) {
+            entry.notify();
+          }
+        }
+        expect((await prepareSourcesAsync(params)).request).toBe(first.request);
+      }
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+      expect((await prepareSourcesAsync(params)).request).toBe(first.request);
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+      realpath.mockClear();
+      stat.mockClear();
+      readdir.mockClear();
+      await prepareSourcesAsync(params);
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+      releasedDirectories.length = 0;
+      replaceAlias(alias, replacement);
+      expect(sourcesOf(first).main).toEqual([]);
+      realpath.mockClear();
+      stat.mockClear();
+      readdir.mockClear();
+      expect((await prepareSourcesAsync(params)).request).not.toBe(first.request);
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+      expect(releasedDirectories).not.toContain(path.dirname(alias));
+    } finally {
+      try {
+        await closeOpenClawAgentDatabasesAsync();
+      } finally {
+        gateway.release();
       }
     }
-    expect(realpath.mock.calls.length).toBe(revalidationReads);
-    await Promise.resolve();
-    replaceAlias(alias, replacement);
-    const request = expectDefined(first.request, "source routing request");
-    expect(resolveSources(request).sources.main).toEqual([]);
-    await prepareSourcesAsync(params);
-    expect(realpath).toHaveBeenCalled();
-
-    const ops = openOpenClawAgentDatabase({ agentId: "ops", env: state.env });
-    const registered = await prepareSourcesAsync(params);
-    expectRegistered(registered, ops);
   });
 });
 
-async function prepareMainSources() {
-  const { main, params } = mainSources();
-  const prepared = await prepareSourcesAsync(params);
-  releasedDirectories.length = 0;
-  return { main, params, prepared, registryPath: params.registryPath };
-}
-
-it("retains source preparation when another state database closes", async () => {
+it("reuses shared watches, prunes retired sources, and closes only with its state database", async () => {
   await withState(async () => {
-    const { main, params, prepared, registryPath } = await prepareMainSources();
+    const { main, params } = mainSources();
+    const prepared = await prepareSourcesAsync(params);
+    releasedDirectories.length = 0;
     const other = openOpenClawStateDatabase({ path: state.path("other-state", "state.sqlite") });
     await closeOpenClawStateDatabaseByPathAsync(other.path);
     expect((await prepareSourcesAsync(params)).request).toBe(prepared.request);
     expect(releasedDirectories).toEqual([]);
-
-    await closeOpenClawStateDatabaseByPathAsync(registryPath);
-    expect(
-      observedDirectories.some(
-        (entry) => entry.active && entry.directory === path.dirname(main.path),
-      ),
-    ).toBe(false);
-  });
-});
-
-it("reuses shared watches and prunes retired registry source directories", async () => {
-  await withState(async () => {
-    const { params } = await prepareMainSources();
     const ops = openOpenClawAgentDatabase({
       agentId: "ops",
       env: state.env,
@@ -436,107 +477,143 @@ it("reuses shared watches and prunes retired registry source directories", async
         (entry) => entry.active && entry.directory === path.dirname(ops.path),
       ),
     ).toBe(false);
+    await closeOpenClawStateDatabaseByPathAsync(params.registryPath);
+    expect(
+      observedDirectories.some(
+        (entry) => entry.active && entry.directory === path.dirname(main.path),
+      ),
+    ).toBe(false);
   });
 });
 
-it("keeps shared directories observed after a source path changes", async () => {
-  await withState(async () => {
-    const { params, alias, replacement } = aliasSources();
-    const first = await prepareSourcesAsync(params);
-    releasedDirectories.length = 0;
-    replaceAlias(alias, replacement);
-    const request = expectDefined(first.request, "source routing request");
-    expect(resolveSources(request).sources.main).toEqual([]);
-    await prepareSourcesAsync(params);
-    expect(releasedDirectories).not.toContain(path.dirname(alias));
-  });
-});
-
-it("does not resume directory observation after its root closes during preparation", async () => {
-  await withState(async () => {
-    const { params } = mainSources();
-    const { entered, resume, spy } = holdRegistryRead();
-    const pending = prepareSourcesAsync(params);
-    void pending.catch(() => undefined);
-    try {
-      await awaitGateBeforeSettlement(entered.promise, pending, "Registry read not reached");
-      await closeOpenClawStateDatabaseAsync();
-      const observationCount = observedDirectories.length;
-      expect(observedDirectories.some((entry) => entry.active)).toBe(false);
-      resume.resolve();
-      await expect(pending).rejects.toThrow("Session store changed");
-      expect(observedDirectories).toHaveLength(observationCount);
-    } finally {
-      resume.resolve();
-      spy.mockRestore();
-      await pending.catch(() => undefined);
-    }
-  });
-});
-
-it("cancels one waiter while retaining shared source preparation", async ({ signal }) => {
-  await withState(async () => {
-    const { main, params } = mainSources();
-    const { entered, resume, spy } = holdRegistryRead();
-    const controller = new AbortController();
-    const first = prepareSourcesAsync(params, controller.signal);
-    void first.catch(() => undefined);
-    let second: ReturnType<typeof prepareSourcesAsync> | undefined;
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, first, "Registry read not reached"),
-        signal,
-      );
-      second = prepareSourcesAsync(params);
-      const reason = new Error("Caller cancelled source discovery");
-      controller.abort(reason);
-      await withinTest(expect(first).rejects.toBe(reason), signal);
-      resume.resolve();
-      const prepared = await withinTest(second, signal);
-      expectRegistered(prepared, main);
-      expect(spy).toHaveBeenCalledOnce();
-    } finally {
-      resume.resolve();
-      spy.mockRestore();
-      await Promise.allSettled([first, second]);
-    }
-  });
-});
-
-it("shares a pending registry rejection and recovers on the next request", async ({ signal }) => {
-  await withState(async () => {
-    const { main, params } = mainSources();
-    const { entered, resume, spy } = holdRegistryRead();
-    const first = prepareSourcesAsync(params);
-    void first.catch(() => undefined);
-    let second: ReturnType<typeof prepareSourcesAsync> | undefined;
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, first, "Registry read not reached"),
-        signal,
-      );
-      invalidateRegisteredAgentDatabasesMemo({ path: params.registryPath });
-      second = prepareSourcesAsync(params);
-      const settled = Promise.allSettled([first, second]);
-      resume.resolve();
-      const [one, two] = await withinTest(settled, signal);
-      if (one.status !== "rejected" || two.status !== "rejected") {
-        throw new Error("Both source readers must retain the invalidated registry rejection");
+it.each(["inventory", "registry", "registered-extension", "validation"] as const)(
+  "does not resume directory observation after its root closes during %s preparation",
+  async (phase) => {
+    await withState(async () => {
+      const { params } = mainSources();
+      if (phase === "validation") {
+        await prepareSourcesAsync(params);
+        notifyAlias(params.currentSource.path);
       }
-      expect(one.reason).toMatchObject({ name: "AgentDatabaseRegistryChangedError" });
-      expect(two.reason).toBe(one.reason);
-      expect(spy).toHaveBeenCalledOnce();
-      expect(observedDirectories.some((entry) => entry.active)).toBe(false);
+      const gate = (() => {
+        if (phase === "registry") {
+          return holdRegistryRead();
+        }
+        const entered = createDeferred();
+        const resume = createDeferred();
+        const prepare = transcriptWorkers.prepareSessionStoreCandidatesInWorker;
+        let calls = 0;
+        const spy = vi
+          .spyOn(transcriptWorkers, "prepareSessionStoreCandidatesInWorker")
+          .mockImplementation(async (...args) => {
+            const call = ++calls;
+            const result = await prepare(...args);
+            if (call !== (phase === "registered-extension" ? 2 : 1)) {
+              return result;
+            }
+            if (phase === "registered-extension") {
+              expect(args[0]).toMatchObject({
+                observePaths: { paths: expect.arrayContaining([params.currentSource.path]) },
+              });
+              expect(result.candidates).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({ path: params.currentSource.path }),
+                ]),
+              );
+            }
+            entered.resolve();
+            await resume.promise;
+            return result;
+          });
+        return { entered, resume, spy };
+      })();
+      const registry =
+        phase === "registry"
+          ? gate.spy
+          : vi.spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead");
+      const preparations =
+        phase === "registry"
+          ? vi.spyOn(transcriptWorkers, "prepareSessionStoreCandidatesInWorker")
+          : gate.spy;
+      const pending = prepareSourcesAsync(params);
+      void pending.catch(() => undefined);
+      try {
+        await awaitGateBeforeSettlement(
+          gate.entered.promise,
+          pending,
+          "Source preparation not reached",
+        );
+        if (phase === "validation") {
+          // A notification during validation requires replacement preparation, not warm reuse.
+          notifyAlias(params.currentSource.path);
+        }
+        await closeOpenClawStateDatabaseAsync();
+        const observationCount = observedDirectories.length;
+        const registryCount = registry.mock.calls.length;
+        const preparationCount = preparations.mock.calls.length;
+        if (phase === "registered-extension") {
+          expect(preparationCount).toBe(2);
+        }
+        expect(observedDirectories.some((entry) => entry.active)).toBe(false);
+        gate.resume.resolve();
+        await expect(pending).rejects.toThrow("Session store changed");
+        expect(observedDirectories).toHaveLength(observationCount);
+        expect(registry).toHaveBeenCalledTimes(registryCount);
+        expect(preparations).toHaveBeenCalledTimes(preparationCount);
+      } finally {
+        gate.resume.resolve();
+        registry.mockRestore();
+        preparations.mockRestore();
+        await pending.catch(() => undefined);
+      }
+    });
+  },
+);
 
-      const recovered = await withinTest(prepareSourcesAsync(params), signal);
-      expectRegistered(recovered, main);
-      const request = expectDefined(recovered.request, "source routing request");
-      expect(resolveSources(request).sources.main).toEqual([source(main)]);
-      expect(spy).toHaveBeenCalledTimes(2);
-    } finally {
-      resume.resolve();
-      spy.mockRestore();
-      await Promise.allSettled([first, second]);
-    }
-  });
-});
+it.for([false, true])(
+  "shares pending source outcomes and recovers (invalidated: %s)",
+  async (invalidated, { signal }) => {
+    await withState(async () => {
+      const { main, params } = mainSources();
+      const { entered, resume, spy } = holdRegistryRead();
+      const first = prepareSourcesAsync(params);
+      void first.catch(() => undefined);
+      let second: ReturnType<typeof prepareSourcesAsync> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, first, "Registry read not reached"),
+          signal,
+        );
+        if (invalidated) {
+          invalidateRegisteredAgentDatabasesMemo({ path: params.registryPath });
+        }
+        second = prepareSourcesAsync(params);
+        const settled = Promise.allSettled([first, second]);
+        resume.resolve();
+        if (invalidated) {
+          const [one, two] = await withinTest(settled, signal);
+          if (one.status !== "rejected" || two.status !== "rejected") {
+            throw new Error("Both source readers must retain the invalidated registry rejection");
+          }
+          expect(one.reason).toMatchObject({ name: "AgentDatabaseRegistryChangedError" });
+          expect(two.reason).toBe(one.reason);
+          expect(spy).toHaveBeenCalledOnce();
+          expect(observedDirectories.some((entry) => entry.active)).toBe(false);
+          const recovered = await withinTest(prepareSourcesAsync(params), signal);
+          expectRegistered(recovered, main);
+          expect(sourcesOf(recovered).main).toEqual([source(main)]);
+          expect(spy).toHaveBeenCalledTimes(2);
+        } else {
+          const prepared = await withinTest(second, signal);
+          expect(await withinTest(first, signal)).toEqual(prepared);
+          expectRegistered(prepared, main);
+          expect(spy).toHaveBeenCalledOnce();
+        }
+      } finally {
+        resume.resolve();
+        spy.mockRestore();
+        await Promise.allSettled([first, second]);
+      }
+    });
+  },
+);

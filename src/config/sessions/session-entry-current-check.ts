@@ -1,18 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
+import {
+  canShareSqliteDatabaseAdmissions,
+  retainSqliteDatabaseAdmissionForPath,
+} from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
-import {
-  resolveCurrentConversationSession,
-  resolveCurrentConversationSessionAsync,
-} from "./conversation-registry.js";
+import { captureConversationBindingFacts } from "./conversation-registry.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import {
   isSessionIdSelectionPublished,
   retainPreparedSessionEntryPredicate,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
-import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type {
   SessionEntryCurrentCheck,
@@ -40,7 +40,6 @@ import {
   isSessionStoreReadCandidateCurrent,
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
-import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type ConversationCondition = {
@@ -150,8 +149,12 @@ async function prepareSessionEntryCurrentCheck(
     }),
   }));
   const entryOnly = alternatives.every((alternative) => alternative.conversations.length === 0);
+  let admission: ReturnType<typeof retainSqliteDatabaseAdmissionForPath>;
   let entryPredicate: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let predicateRevision = 0;
+  const bindings = new Map<string, Awaited<ReturnType<typeof captureConversationBindingFacts>>>();
+  const bindingKey = (conversationScope: { agentId: string; storePath: string }) =>
+    JSON.stringify([conversationScope.agentId, conversationScope.storePath]);
   return withSessionEntryReadOnlyInWorker(
     scope,
     assertActive,
@@ -187,6 +190,12 @@ async function prepareSessionEntryCurrentCheck(
         env: scope.env,
       };
       const identity = incognito ? undefined : readDatabasePathIdentitySync(target.storePath);
+      if (entryOnly && identity?.key.startsWith("file:") && canShareSqliteDatabaseAdmissions()) {
+        admission = retainSqliteDatabaseAdmissionForPath(identity.canonicalPath);
+        if (!admission) {
+          refuse();
+        }
+      }
       const readSource = identity?.key.startsWith("file:")
         ? {
             agentId: owner.scope?.databaseAgentId ?? params.agentId,
@@ -195,11 +204,30 @@ async function prepareSessionEntryCurrentCheck(
             databaseBirthtime: identity.birthtime,
           }
         : undefined;
+      const groups = new Map<
+        string,
+        { scope: (typeof alternatives)[number]["conversations"][number]["scope"]; refs: string[] }
+      >();
+      for (const { conversations } of alternatives) {
+        for (const conversation of conversations) {
+          const key = bindingKey(conversation.scope);
+          const group = groups.get(key) ?? { scope: conversation.scope, refs: [] };
+          group.refs.push(conversation.predicate.conversationRef);
+          groups.set(key, group);
+        }
+      }
+      for (const [key, group] of groups) {
+        bindings.set(key, await captureConversationBindingFacts(group.scope, group.refs));
+      }
       const selectedStore = owner.selectedStore;
       let active = true;
       const release = () => {
         active = false;
+        admission?.release();
         entryPredicate?.release();
+        for (const binding of bindings.values()) {
+          binding.release();
+        }
       };
       const sourceIsCurrent = () => {
         if (!active) {
@@ -208,6 +236,10 @@ async function prepareSessionEntryCurrentCheck(
         if (incognito) {
           incognito.assertCurrent();
           return true;
+        }
+        // Retained sources follow admission; source preparation checks aliases and file replacement.
+        if (admission) {
+          return admission.isCurrent();
         }
         try {
           if (
@@ -224,10 +256,7 @@ async function prepareSessionEntryCurrentCheck(
             return false;
           }
           const current = readDatabasePathIdentitySync(target.storePath);
-          return (
-            !identity?.key.startsWith("file:") ||
-            (current.key === identity.key && current.birthtime === identity.birthtime)
-          );
+          return current.key === identity?.key && current.birthtime === identity?.birthtime;
         } catch {
           return false;
         }
@@ -239,22 +268,25 @@ async function prepareSessionEntryCurrentCheck(
         if (fields.length > 0) {
           const currentMatches = entryPredicate
             ? entryPredicate.isCurrent()
-            : matchesSelectedEntry(
-                incognito ? incognito.read(target.sessionKey) : loadSessionEntryReadOnly(readScope),
-              );
+            : matchesSelectedEntry(incognito?.read(target.sessionKey));
           if (!currentMatches) {
             return false;
           }
         }
-        return alternatives.some(
-          (alternative) =>
-            alternative.isActive?.() !== false &&
-            alternative.conversations.every(
-              ({ scope: conversationScope, predicate }) =>
-                (resolveCurrentConversationSession(conversationScope, predicate.conversationRef)
-                  ?.sessionKey ?? null) === predicate.sessionKey,
-            ),
-        );
+        try {
+          return alternatives.some(
+            (alternative) =>
+              alternative.isActive?.() !== false &&
+              alternative.conversations.every(
+                ({ scope: conversationScope, predicate }) =>
+                  bindings
+                    .get(bindingKey(conversationScope))!
+                    .currentSessionKey(predicate.conversationRef) === predicate.sessionKey,
+              ),
+          );
+        } catch {
+          return false;
+        }
       };
       const assertCurrent = () => {
         if (!check()) {
@@ -292,30 +324,11 @@ async function prepareSessionEntryCurrentCheck(
               preparedEntry: entryPredicate,
               assertCurrent,
               assertHostCurrent: assertScopeCurrent,
-              async prepareConversations(readConversations) {
+              async prepareConversations() {
                 const predicates = alternatives.map((alternative) =>
                   alternative.conversations.map(({ predicate }) => predicate),
                 );
-                const refs = [
-                  ...new Set(
-                    predicates.flatMap((alternative) =>
-                      alternative.map(({ conversationRef }) => conversationRef),
-                    ),
-                  ),
-                ];
-                const rows = await readConversations(refs);
-                if (
-                  !alternatives.some(
-                    (alternative, index) =>
-                      alternative.isActive?.() !== false &&
-                      predicates[index]!.every(
-                        (predicate) =>
-                          (rows.get(predicate.conversationRef) ?? null) === predicate.sessionKey,
-                      ),
-                  )
-                ) {
-                  refuse();
-                }
+                assertCurrent();
                 let matches: readonly number[] | undefined;
                 const accepted: number[] = [];
                 return {
@@ -357,92 +370,9 @@ async function prepareSessionEntryCurrentCheck(
               },
             }
           : undefined;
-      const isCurrentAsync: AsyncSessionSourceCheck = Object.assign(
-        async () => {
-          if (incognito || entryPredicate || (entryOnly && fields.length === 0)) {
-            return check();
-          }
-          const sameStore =
-            readSource &&
-            alternatives.every((alternative) =>
-              alternative.conversations.every(
-                ({ locator }) => locator?.physicalPath === readSource.path,
-              ),
-            );
-          let matches: readonly number[];
-          if (sameStore && readSource) {
-            const result = await withSessionHistoryWorkerDatabase(
-              {
-                agentId: readSource.agentId,
-                path: readSource.path,
-                env: scope.env,
-              },
-              (reader) =>
-                reader.readExactEntries({
-                  sessionKeys: [],
-                  env: scope.env ?? process.env,
-                  sourceChecks: [
-                    {
-                      source: readSource,
-                      sessionKey: target.sessionKey,
-                      fields,
-                      expected: selected,
-                      conversationAlternatives: alternatives.map((alternative) =>
-                        alternative.conversations.map(({ predicate }) => predicate),
-                      ),
-                    },
-                  ],
-                }),
-            );
-            if (result.sourceValidation?.refusedSource) {
-              return false;
-            }
-            matches = result.sourceValidation?.conversationMatches[0]?.alternatives ?? [];
-          } else {
-            const current = await withSessionEntryReadOnlyInWorker(
-              readScope,
-              () => {},
-              async (currentRead) => {
-                if (!currentRead.ok) {
-                  throw currentRead.error;
-                }
-                return currentRead.value;
-              },
-            );
-            if (!matchesSelectedEntry(current)) {
-              return false;
-            }
-            const matching = await Promise.all(
-              alternatives.map(async (alternative, index) => {
-                const bindings = await Promise.all(
-                  alternative.conversations.map(
-                    async ({ scope: conversationScope, predicate }) =>
-                      (
-                        await resolveCurrentConversationSessionAsync(
-                          conversationScope,
-                          predicate.conversationRef,
-                        )
-                      )?.sessionKey ?? null,
-                  ),
-                );
-                return bindings.every(
-                  (key, position) =>
-                    key === alternative.conversations[position]!.predicate.sessionKey,
-                )
-                  ? index
-                  : undefined;
-              }),
-            );
-            matches = matching.filter((index): index is number => index !== undefined);
-          }
-          return (
-            params.isActive?.() !== false &&
-            sourceIsCurrent() &&
-            matches.some((index) => alternatives[index]?.isActive?.() !== false)
-          );
-        },
-        { sessionSource: preparedSource },
-      );
+      const isCurrentAsync: AsyncSessionSourceCheck = Object.assign(async () => check(), {
+        sessionSource: preparedSource,
+      });
       const assertCurrentAsync = async () => {
         if (!(await isCurrentAsync())) {
           refuse();
@@ -459,7 +389,7 @@ async function prepareSessionEntryCurrentCheck(
       };
     },
     (_database, identity) => {
-      if (!entryOnly || fields.length === 0 || !identity.key.startsWith("file:")) {
+      if (fields.length === 0 || !identity.key.startsWith("file:")) {
         return;
       }
       // Join the existing publication owner before the initial read can yield.
@@ -476,7 +406,11 @@ async function prepareSessionEntryCurrentCheck(
       predicateRevision = entryPredicate.captureRevision();
     },
   ).catch((error: unknown) => {
+    admission?.release();
     entryPredicate?.release();
+    for (const binding of bindings.values()) {
+      binding.release();
+    }
     throw error;
   });
 }

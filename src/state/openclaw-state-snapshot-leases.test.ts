@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { expect, it } from "vitest";
-import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { assertDoctorAgentLeaseAdmission } from "../commands/doctor-agent-lease-refusal.js";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import { createBackupArchive } from "../infra/backup-create.js";
 import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
 import { createOpenClawSnapshotCopy } from "../snapshot/openclaw-snapshot-copy.js";

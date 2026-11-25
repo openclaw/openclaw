@@ -34,10 +34,16 @@ import {
   SESSION_NAVIGATION_INTENT_EVENT,
 } from "../../lib/sessions/navigation-handoff.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
-import { settleChatPage, setNavigationContext, stubMatchMedia } from "./chat-page.test-support.ts";
-import "./chat-page.ts";
+import "./chat-page.tsx";
+import {
+  settleChatPage,
+  setNavigationContext,
+  stubMatchMedia,
+  showSession,
+} from "./chat-page.test-support.ts";
 import { registerChatPane } from "./chat-pane-elements.ts";
 import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
@@ -73,14 +79,12 @@ function command(detail: UiCommandDetail) {
   return event;
 }
 function stubFrames() {
-  const frames = new Map<number, FrameRequestCallback>();
-  let nextFrame = 0;
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-    frames.set(++nextFrame, callback);
-    return nextFrame;
-  });
+  const framesClock = createFrameClock();
+  const frames = framesClock.frames;
+
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation(framesClock.request);
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation((frame) => {
-    frames.delete(frame);
+    framesClock.cancel(frame);
   });
   return frames;
 }
@@ -121,15 +125,6 @@ function expectPresentation(
     active: pane?.active,
     hidden: pane?.getAttribute("aria-hidden"),
   }).toMatchObject(expected);
-}
-
-async function showSession(
-  page: HTMLElementTagNameMap["openclaw-chat-page"],
-  sessionKey: string,
-): Promise<void> {
-  page.data = { sessionKey };
-  await settleChatPage(page);
-  await settleChatPage(page);
 }
 
 async function mountRetainedPage(sessionKey: string, ...warmSessionKeys: string[]) {
@@ -389,21 +384,10 @@ describe("chat page retained sessions", () => {
     async ({ retainedSessionKey, routeSessionKey }) => {
       const { navigation, page, paneFor } = await mountRetainedPage(retainedSessionKey);
       const pane = expectDefined(paneFor(retainedSessionKey), "retained main chat pane");
-      const receivedDrafts: Array<string | undefined> = [];
-      const focusRequests: boolean[] = [];
-
-      Object.defineProperties(pane, {
-        draft: {
-          configurable: true,
-          get: () => receivedDrafts.at(-1),
-          set: (value: string | undefined) => receivedDrafts.push(value),
-        },
-        focusComposer: {
-          configurable: true,
-          get: () => focusRequests.at(-1) ?? false,
-          set: (value: boolean) => focusRequests.push(value),
-        },
-      });
+      const draft = vi.fn<(value: string | undefined) => void>();
+      const focus = vi.fn<(value: boolean) => void>();
+      Object.defineProperty(pane, "draft", { configurable: true, set: draft });
+      Object.defineProperty(pane, "focusComposer", { configurable: true, set: focus });
 
       page.data = {
         sessionKey: routeSessionKey,
@@ -415,8 +399,10 @@ describe("chat page retained sessions", () => {
       await settleChatPage(page);
 
       expect(paneFor(retainedSessionKey)).toBe(pane);
-      expect(receivedDrafts.filter((draft) => draft !== undefined)).toEqual(["What can you do?"]);
-      expect(focusRequests).toContain(true);
+      expect(
+        draft.mock.calls.map(([value]) => value).filter((value) => value !== undefined),
+      ).toEqual(["What can you do?"]);
+      expect(focus).toHaveBeenCalledWith(true);
       expect(navigation.replace).toHaveBeenCalledOnce();
 
       page.data = { sessionKey: routeSessionKey };
@@ -645,7 +631,7 @@ describe("chat page retained sessions", () => {
     const commit = vi.fn(() => true);
     try {
       // The router advances history before a cold route replaces the visible Chat page.
-      window.history.pushState(null, "", "/agents");
+      window.history.pushState(null, "", "/sessions");
       expect(page.presented).toBe(true);
       runSessionNavigationIntent(paneB, {
         commit,
@@ -697,10 +683,8 @@ describe("chat page retained sessions", () => {
       });
 
       expect(returnToA).toHaveBeenCalledOnce();
-      expect(paneA.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
-      expect(paneA.hasAttribute("inert")).toBe(false);
-      expect(paneB.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
-      expect(paneB.hasAttribute("inert")).toBe(true);
+      expectPresentation(paneA, { visible: true, inert: false });
+      expectPresentation(paneB, { visible: false, inert: true });
     } finally {
       page.remove();
       history.replaceState(null, "", originalHref);

@@ -1,14 +1,22 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
-import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
+import {
+  normalizeOptionalAgentRuntimeId,
+  OPENCLAW_AGENT_RUNTIME_ID,
+} from "../agents/agent-runtime-id.js";
 import {
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
+import {
+  buildAllowedModelSet,
+  resolveConfiguredModelPolicyAllow,
+} from "../agents/model-selection-shared.js";
 import {
   modelKey,
   normalizeProviderId,
@@ -17,11 +25,14 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { hasSessionActiveAutoModelFallback } from "../config/sessions/model-override-provenance.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
+import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
 import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contract-registry.js";
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
+import { prepareProviderModelPolicySurfaces } from "../plugins/provider-model-routes.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
@@ -57,12 +68,13 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
 }) {
   const { agentId } = params;
   const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
-  const configuredModelRefs = new Set([modelKey(primary.provider, primary.model)]);
+  const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
+  const configuredModelRefs = new Set(primary ? [modelKey(primary.provider, primary.model)] : []);
   const fallbacks =
     resolveAgentModelFallbacksOverride(params.cfg, agentId) ??
     resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
   for (const fallback of fallbacks) {
-    const parsed = parseModelRef(fallback, primary.provider, {
+    const parsed = parseModelRef(fallback, defaultProvider, {
       allowManifestNormalization: false,
       allowPluginNormalization: false,
     });
@@ -70,16 +82,30 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
       configuredModelRefs.add(modelKey(parsed.provider, parsed.model));
     }
   }
-  const runtime = resolveAgentHarnessPolicy({
-    provider: primary.provider,
-    modelId: primary.model,
-    config: params.cfg,
-    agentId,
-    sessionKey: params.sessionKey,
-  }).runtime;
+  // No configured model selects no plugin harness.
+  const runtime = primary
+    ? resolveAgentHarnessPolicy({
+        provider: primary.provider,
+        modelId: primary.model,
+        config: params.cfg,
+        agentId,
+        sessionKey: params.sessionKey,
+      }).runtime
+    : OPENCLAW_AGENT_RUNTIME_ID;
   return {
-    defaultProvider: primary.provider,
+    defaultProvider,
     configuredModelRefs: [...configuredModelRefs],
+    // An absent policy is not an explicit unrestricted selection policy.
+    modelPolicy:
+      resolveConfiguredModelPolicyAllow({ cfg: params.cfg, agentId }).configPath === null
+        ? undefined
+        : buildAllowedModelSet({
+            cfg: params.cfg,
+            catalog: [],
+            agentId,
+            defaultProvider,
+            defaultModel: primary,
+          }),
     runtime,
   };
 }
@@ -221,7 +247,21 @@ function scanEntryForOwner(params: {
 
   if (directOverrideIsOwned && !directOverrideIsConfigured) {
     if (directOverrideSource === "auto") {
-      addReason(reasons, "auto model override");
+      const activeFallback = hasSessionActiveAutoModelFallback({
+        providerOverride: normalizeString(params.entry.providerOverride),
+        modelOverride: normalizeString(params.entry.modelOverride),
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: normalizeString(
+          params.entry.modelOverrideFallbackOriginProvider,
+        ),
+        modelOverrideFallbackOriginModel: normalizeString(
+          params.entry.modelOverrideFallbackOriginModel,
+        ),
+      });
+      // Child selections carry self-origin provenance; only a moved origin is fallback residue.
+      if (activeFallback || !params.route.modelPolicy?.allows(directOverride)) {
+        addReason(reasons, "auto model override");
+      }
     } else if (!routeAllowsOwner) {
       return {
         manualReview: {
@@ -280,6 +320,19 @@ function scanEntryForOwner(params: {
 }
 
 /** Streams session entries into compact plugin-owned route-state findings. */
+/** Prepare the route-state owners and model policies the synchronous scanner reads. */
+export async function preparePluginSessionStateDoctorScan(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<void> {
+  await preparePluginDoctorContractModules({
+    config: params.cfg,
+    env: params.env,
+    surfaces: ["sessionRouteStateOwners"],
+  });
+  await prepareProviderModelPolicySurfaces();
+}
+
 export function createPluginSessionStateDoctorScanner(params: {
   agentId?: string;
   cfg: OpenClawConfig;

@@ -1,10 +1,16 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { ReplyExpectation } from "../agents/reply-completion.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { SessionControllerInput } from "../sessions/session-controller.contracts.js";
-import type { RequesterSettleWakeReplay } from "./agent-turn/internal-facade.types.js";
+import type { SubagentCompletion } from "../shared/subagent-completion.js";
+import type {
+  AgentTurnStartOwner,
+  RequesterSettleWakeReplay,
+} from "./agent-turn/internal-facade.types.js";
+import type { PreparedSessionRun } from "./in-process-session-run.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   GatewayAgentRunTaskOwner,
@@ -17,6 +23,8 @@ import type {
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 export type PrepareInProcessAgentExecutionOptions = {
+  /** Captured by the host from an authorized existing fork source; never a wire field. */
+  sessionRun?: PreparedSessionRun;
   agentId: string;
   pluginRuntimeOwnerId: string;
   resolveGatewayContext?: GatewayContextResolver;
@@ -29,6 +37,7 @@ export type DispatchGatewayMethodInProcessOptions = {
   /** Trusted input-owner policy; not accepted from the wire request. */
   replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
+  subagentCompletions?: readonly SubagentCompletion[];
   allowSyntheticModelOverride?: boolean;
   agentToolCaller?: TrustedAgentToolCaller;
   agentRunTracking?: GatewayAgentRunTaskOwner;
@@ -41,6 +50,7 @@ export type DispatchGatewayMethodInProcessOptions = {
   nodeInvokeStream?: GatewayNodeInvokeStream;
   nodeInvokeApprovalSessionKey?: string;
   onAccepted?: (payload: unknown) => void;
+  onStartOwner?: (owner: AgentTurnStartOwner) => void;
   onExecution?: (execution: Promise<void>) => void;
   onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
@@ -64,7 +74,9 @@ export type DispatchGatewayMethodInProcessOptions = {
 };
 
 export type ResolvedInProcessGatewayDispatch = {
-  /** Source custody after an accepted transfer, independent of its authorizing invocation. */
+  /** Gateway instance lifetime; accepted execution checks its own retained principal. */
+  assertGatewayCurrent: () => void;
+  /** Original source grant and Gateway lifetime, rechecked during turn admission. */
   assertSourceCurrent: () => void;
   assertContextCurrent: () => void;
   assertCreatedInputSourceCurrent?: () => void;
@@ -74,6 +86,7 @@ export type ResolvedInProcessGatewayDispatch = {
   delegatedToolPolicyHandoffId?: string;
   isWebchatConnect: NonNullable<GatewayRequestOptions["isWebchatConnect"]>;
   operatorSourceClient: NonNullable<GatewayRequestOptions["client"]>;
+  parentHttpRequestAuthority?: PluginRuntimeGatewayRequestScope["parentHttpRequestAuthority"];
   hasCurrentClientAuthority?: GatewayRequestOptions["hasCurrentClientAuthority"];
 };
 

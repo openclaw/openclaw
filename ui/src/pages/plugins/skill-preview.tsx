@@ -1,86 +1,116 @@
-import { createMemo, onCleanup } from "solid-js";
+import { Loading, Show, lazy, onSettled } from "solid-js";
 import type {
   PluginsSkillsReadParams,
   PluginsSkillsReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
+import "../../components/modal-dialog.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
-import "../../components/file-preview-modal-registration.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import "./custom-elements.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCapabilitySection as PluginCapabilitySection } from "./overview.tsx";
-import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 import "./skill-preview.css";
+import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 
-registerEnglishCatalog(registerFilePreviewEnglish);
 registerEnglishCatalog(registerPluginManagementEnglish);
 
-export type PluginSkillPreviewState = {
-  request: PluginsSkillsReadParams;
-  loading: boolean;
-  error: string | null;
-  result: PluginsSkillsReadResult | null;
-  activePath: string;
-  pendingPaths: Set<string>;
-  fileErrors: Map<string, string>;
+const PluginSkillDocument = lazy(() => import("./skill-preview-document.tsx"), {
+  export: "PluginSkillDocument",
+});
+
+type SkillRequest =
+  | Omit<Extract<PluginsSkillsReadParams, { source: "installed" }>, "path">
+  | Omit<Extract<PluginsSkillsReadParams, { source: "catalog" }>, "path">;
+
+type SkillDocument =
+  | { status: "loading" }
+  | { status: "ready"; content: string }
+  | { status: "error"; message: string; retryable: boolean };
+
+type SkillPreviewIdentity = { description?: string; publisher?: string };
+const skillSummarySegmenter = new Intl.Segmenter(undefined, { granularity: "sentence" });
+type PluginSkillPreviewState = {
+  request: SkillRequest;
+  identity?: SkillPreviewIdentity;
+  document: SkillDocument;
 };
 
-export function createPluginPreview(
+export function createPluginPreview(gateway: Pick<GatewayPageBinding, "capture" | "isCurrent">) {
+  // Preview changes must not rerender the invoking row while the modal owns its focus.
+  const { owner, view } = projectCallbackOwner(
+    (notify) => createPluginPreviewOwner(gateway, notify),
+    (preview) => preview.state,
+  );
+  return Object.assign(owner, { read: view.read });
+}
+
+function createPluginPreviewOwner(
   gateway: Pick<GatewayPageBinding, "capture" | "isCurrent">,
   onChange: () => void,
 ) {
   let active: PluginSkillPreviewState | null = null;
   let toolAbort = new AbortController();
-  onCleanup(() => {
-    toolAbort.abort();
+  onSettled(() => () => {
     active = null;
+    toolAbort.abort();
   });
   const preview = {
     get state() {
       return active;
     },
-    async open(request: PluginsSkillsReadParams): Promise<void> {
-      preview.close();
-      const connection = gateway.capture();
-      const state: PluginSkillPreviewState = {
-        request: { ...request },
-        loading: Boolean(connection),
-        error: connection ? null : t("pluginsPage.connectToManage"),
-        result: null,
-        activePath: "SKILL.md",
-        pendingPaths: new Set(),
-        fileErrors: new Map(),
+    async open(request: SkillRequest, identity?: SkillPreviewIdentity): Promise<void> {
+      toolAbort.abort();
+      toolAbort = new AbortController();
+      const pending: PluginSkillPreviewState = {
+        request,
+        identity,
+        document: { status: "loading" },
       };
-      active = state;
+      active = pending;
       onChange();
+      const connection = gateway.capture();
+      let skill: SkillDocument;
+      let selected = request;
       if (!connection) {
-        return;
-      }
-      const current = () => active === state && gateway.isCurrent(connection);
-      try {
-        const result = await connection.client.request<PluginsSkillsReadResult>(
-          "plugins.skills.read",
-          request,
-        );
-        if (current()) {
-          state.result = result;
-          state.activePath = result.entryPath;
+        skill = { status: "error", message: t("pluginsPage.connectToManage"), retryable: true };
+      } else {
+        try {
+          // Omitting path reads the declared entry body, without reading sibling bodies.
+          const result = await connection.client.request<PluginsSkillsReadResult>(
+            "plugins.skills.read",
+            request,
+          );
+          const entry = result.files.find((file) => file.path === result.entryPath);
           if (result.version) {
-            state.request = { ...state.request, version: result.version };
+            selected = { ...request, version: result.version };
           }
+          if (entry?.status === "ready" && entry.content !== undefined) {
+            skill = { status: "ready", content: entry.content };
+          } else {
+            const tooLarge = entry?.status === "too-large";
+            skill = {
+              status: "error",
+              message: t(
+                tooLarge
+                  ? "pluginsPage.skillPreview.tooLarge"
+                  : "pluginsPage.skillPreview.unavailable",
+              ),
+              retryable: !tooLarge,
+            };
+          }
+        } catch (error) {
+          skill = { status: "error", message: formatUiError(error), retryable: true };
         }
-      } catch (error) {
-        if (current()) {
-          state.error = formatUiError(error);
-        }
-      } finally {
-        if (current()) {
-          state.loading = false;
-          onChange();
-        }
+      }
+      if (active === pending && (!connection || gateway.isCurrent(connection))) {
+        active = { request: selected, identity, document: skill };
+        onChange();
       }
     },
 
@@ -90,75 +120,16 @@ export function createPluginPreview(
     },
 
     retry(): void {
-      if (active?.result) {
-        void preview.select(active.activePath);
-      } else if (active) {
-        void preview.open(active.request);
+      if (active?.document.status === "error" && active.document.retryable) {
+        void preview.open(active.request, active.identity);
       }
     },
-    async select(path: string): Promise<void> {
-      const state = active;
-      const file = state?.result?.files.find((candidate) => candidate.path === path);
-      if (!state || !file) {
-        return;
-      }
-      state.activePath = path;
-      onChange();
-      if (
-        state.pendingPaths.has(path) ||
-        (file.status !== "deferred" && file.status !== "unavailable")
-      ) {
-        return;
-      }
-      const connection = gateway.capture();
-      if (!connection) {
-        state.fileErrors.set(path, t("pluginsPage.connectToManage"));
-        return;
-      }
-      const current = () => active === state && gateway.isCurrent(connection);
-      state.pendingPaths.add(path);
-      state.fileErrors.delete(path);
-      try {
-        const result = await connection.client.request<PluginsSkillsReadResult>(
-          "plugins.skills.read",
-          { ...state.request, path },
-        );
-        if (!current() || !state.result) {
-          return;
-        }
-        const selected = result.files.find((candidate) => candidate.path === path);
-        if (
-          result.version !== state.result.version ||
-          result.rootPath !== state.result.rootPath ||
-          !selected ||
-          selected.status === "deferred"
-        ) {
-          throw new Error(t("filePreview.bundle.unavailable"));
-        }
-        // Merge only this requested body. Late sibling responses never replace the
-        // foreground selection or discard already loaded bodies in this preview.
-        state.result = {
-          ...state.result,
-          files: state.result.files.map((candidate) =>
-            candidate.path === path ? selected : candidate,
-          ),
-        };
-      } catch (error) {
-        if (current()) {
-          state.fileErrors.set(path, formatUiError(error));
-        }
-      } finally {
-        if (current()) {
-          state.pendingPaths.delete(path);
-          onChange();
-        }
-      }
-    },
+
     /** Dismissal, route changes and connection changes retire outstanding reads. */
     close(this: void): void {
+      active = null;
       toolAbort.abort();
       toolAbort = new AbortController();
-      active = null;
       onChange();
     },
   };
@@ -166,74 +137,164 @@ export function createPluginPreview(
 }
 
 export function PluginSkillPreview(props: {
-  preview: ReturnType<typeof createPluginPreview>;
+  preview: ReturnType<typeof createPluginPreviewOwner>;
   state: PluginSkillPreviewState | null;
 }) {
-  const state = () => props.state;
-  const files = createMemo(
-    () =>
-      state()?.result?.files.map((file) => ({
-        path: file.path,
-        size: "",
-        contents: file.content ?? "",
-        message:
-          file.status !== "ready" && file.status !== "deferred"
-            ? t(`filePreview.bundle.${file.status}`)
-            : undefined,
-      })) ?? [],
-  );
-  const fileError = createMemo(() => {
-    const current = state();
-    const file = current?.result?.files.find((entry) => entry.path === current.activePath);
-    return (
-      current?.fileErrors.get(current.activePath) ??
-      (file?.status === "unavailable" ? t("filePreview.bundle.unavailable") : "")
-    );
-  });
-  const incomplete = createMemo(() => {
-    const result = state()?.result;
-    return (
-      result &&
-      (!result.inventoryComplete ||
-        result.files.some((file) => file.status === "unavailable" || file.status === "too-large"))
-    );
-  });
   return (
-    <>
-      {props.state && (
-        <openclaw-file-preview-modal
-          prop:label={props.state.request.skillName}
-          prop:files={files()}
-          prop:directories={props.state.result?.directories ?? []}
-          prop:activePath={props.state.activePath}
-          layout="document"
-          prop:loading={props.state.loading}
-          prop:fileLoading={props.state.pendingPaths.has(props.state.activePath)}
-          prop:error={
-            props.state.error ??
-            (props.state.pendingPaths.has(props.state.activePath) ? "" : fileError())
+    <Show when={props.state}>
+      {(state) => {
+        const skill = () => state().document;
+        const error = () => {
+          const current = skill();
+          return current.status === "error" ? current : undefined;
+        };
+        const document = () => {
+          const current = skill();
+          return current.status === "ready" ? current : undefined;
+        };
+        const close = () => props.preview.close();
+        const summary = () => {
+          const description = state().identity?.description?.trim();
+          if (!description) {
+            return undefined;
           }
-          prop:notice={incomplete() ? t("filePreview.bundle.incomplete") : ""}
-          onFile-preview-select={(event: CustomEvent<string>) =>
-            void props.preview.select(event.detail)
+          for (const { segment } of skillSummarySegmenter.segment(description)) {
+            return segment.trim();
           }
-          onFile-preview-retry={() => props.preview.retry()}
-          onFile-preview-close={() => props.preview.close()}
-        />
-      )}
-    </>
+          return undefined;
+        };
+        return (
+          <openclaw-modal-dialog
+            label={state().request.skillName}
+            style={{ "--openclaw-modal-width": "680px" }}
+            onModal-cancel={close}
+          >
+            <div
+              class="oc-dialog"
+              style={{
+                height: "min(660px, 82dvh, var(--openclaw-modal-height-limit))",
+                "overflow-wrap": "anywhere",
+              }}
+            >
+              <header
+                class="oc-dialog__header"
+                style={{
+                  "align-items": "start",
+                  margin: "0 var(--overlay-modal-padding)",
+                  padding: "18px 0 14px",
+                  "border-block-end": "1px solid var(--border)",
+                }}
+              >
+                <div class="plugin-catalog-row__main" style={{ gap: "12px" }}>
+                  <span
+                    class="plugin-capability__icon"
+                    aria-hidden="true"
+                    style={{
+                      width: "40px",
+                      height: "40px",
+                      flex: "none",
+                      border: "0",
+                      "border-radius": "calc(10px * var(--openclaw-corner-radius-scale))",
+                      background: "color-mix(in srgb, var(--text) 5%, transparent)",
+                      color: "var(--muted)",
+                    }}
+                  >
+                    <Icon name="bookOpenText" />
+                  </span>
+                  <div class="plugin-catalog-row__text" style={{ gap: "3px" }}>
+                    <div
+                      class="plugin-card-title-row"
+                      style={{ "flex-wrap": "wrap", gap: "2px 8px" }}
+                    >
+                      <h2
+                        class="oc-dialog__title"
+                        style={{
+                          "font-size": "var(--control-ui-text-lg)",
+                          "min-height": "0",
+                          "line-height": "1.2",
+                        }}
+                      >
+                        {state().request.skillName}
+                      </h2>
+                      <Show when={state().identity?.publisher}>
+                        {(publisher) => <span class="plugin-card-author">@{publisher()}</span>}
+                      </Show>
+                    </div>
+                    <Show when={summary()}>
+                      {(description) => (
+                        <p
+                          class="installed-plugins-card__summary"
+                          style={{ "min-height": "0", "line-height": "1.35", overflow: "hidden" }}
+                        >
+                          {description()}
+                        </p>
+                      )}
+                    </Show>
+                  </div>
+                </div>
+                <IconButton
+                  size={28}
+                  class="oc-dialog__close"
+                  icon="x"
+                  label={t("common.close")}
+                  tooltip={false}
+                  onClick={close}
+                />
+              </header>
+              <div
+                class="oc-dialog__body plugin-skill-dialog__body"
+                aria-busy={skill().status === "loading" ? "true" : "false"}
+              >
+                <Show when={skill().status === "loading"}>
+                  <PanelLoadingSkeleton variant="document" label={t("common.loading")} compact />
+                </Show>
+                <Show when={error()}>
+                  {(failure) => (
+                    <InlineAlert tone="danger" role="alert">
+                      {failure().message}
+                    </InlineAlert>
+                  )}
+                </Show>
+                <Show when={document()}>
+                  {(ready) => (
+                    <Loading
+                      fallback={
+                        <PanelLoadingSkeleton
+                          variant="document"
+                          label={t("common.loading")}
+                          compact
+                        />
+                      }
+                    >
+                      <PluginSkillDocument content={ready().content} />
+                    </Loading>
+                  )}
+                </Show>
+              </div>
+              <Show when={error()?.retryable}>
+                <openclaw-modal-actions class="oc-dialog__footer">
+                  <button type="button" class="btn" onClick={() => props.preview.retry()}>
+                    {t("common.retry")}
+                  </button>
+                </openclaw-modal-actions>
+              </Show>
+            </div>
+          </openclaw-modal-dialog>
+        );
+      }}
+    </Show>
   );
 }
 
 export function renderPluginSkillsSection(
   skills: ReadonlyArray<{ name: string; description?: string }>,
-  onOpen: (name: string) => void,
+  onOpen: (skill: { name: string; description?: string }) => void,
 ) {
   return (
     <div class="plugin-skills-section">
       {PluginCapabilitySection(
         t("pluginsPage.detailTabs.skills"),
-        skills.map((skill) => ({ ...skill, onOpen: () => onOpen(skill.name) })),
+        skills.map((skill) => ({ ...skill, onOpen: () => onOpen(skill) })),
         () => (
           <Icon name="bookOpenText" />
         ),

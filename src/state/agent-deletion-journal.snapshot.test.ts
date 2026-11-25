@@ -1,15 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createGatewayRetainedStoreMatcher } from "../config/sessions/combined-store-paths.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   beginAgentDeletionJournal as beginJournal,
   removeAgentDeletionJournal as removeJournal,
 } from "../test-utils/agent-deletion-journal.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState as withState } from "../test-utils/openclaw-test-state.js";
-import { createRetainedAgentDatabaseMatcherFromSnapshot as retainedMatcher } from "./agent-deletion-discovery.js";
-import { reconstructAgentDeletionJournal } from "./agent-deletion-journal-recovery.js";
+import {
+  createRetainedAgentDatabaseMatcherFromSnapshot as retainedMatcher,
+  listRetainedDeletedAgentIdsForCleanup,
+} from "./agent-deletion-discovery.js";
+import {
+  reconstructAgentDeletionJournal,
+  recordAgentDeletionRecoveryHolds,
+  resolveAgentDeletionRecoveryHolds,
+} from "./agent-deletion-journal-recovery.js";
+import { getPreparedAgentDeletionDiscovery } from "./agent-deletion-journal-status.js";
 import {
   completeAgentDeletionJournalInDatabase as completeJournal,
   updateAgentDeletionJournalPathsInDatabase as updateJournalPaths,
@@ -17,11 +27,15 @@ import {
 import { prepareAgentDatabaseDeletionSnapshotRead as prepareSnapshot } from "./agent-deletion-journal.read.js";
 import { readAgentDatabaseDeletionWorkerSnapshot } from "./agent-deletion-journal.snapshot.worker.js";
 import { journalInput, withoutHostSql } from "./agent-deletion-journal.test-support.js";
+import * as ownerRead from "./openclaw-agent-db-owner-read.js";
 import {
   registerOpenClawAgentDatabase as registerDatabase,
   unregisterOpenClawAgentDatabase as unregisterDatabase,
 } from "./openclaw-agent-db-registry.js";
-import { openOpenClawAgentDatabase as openAgentDb } from "./openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase as openAgentDb,
+} from "./openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
@@ -30,6 +44,26 @@ import {
   runOpenClawStateWriteTransaction as writeState,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath as stateSqlitePath } from "./openclaw-state-db.paths.js";
+
+it("observes committed cleanup IDs without decoding retained paths or using host SQL", async () => {
+  await withState({ scenario: "minimal" }, async (state) => {
+    const options = { env: state.env };
+    const read = () => withoutHostSql(() => listRetainedDeletedAgentIdsForCleanup(state.env));
+    beginJournal(journalInput(state, "retained"), options);
+    beginJournal({ ...journalInput(state, "removed"), deleteFiles: true }, options);
+    expect(await read()).toEqual(new Set());
+    writeState((writer) => {
+      completeJournal(writer, "retained", "delete-retained");
+      completeJournal(writer, "removed", "delete-removed");
+      writer.db
+        .prepare("UPDATE agent_deletion_journal SET database_paths_json = '[1]' WHERE agent_id = ?")
+        .run("retained");
+    }, options);
+    expect(await read()).toEqual(new Set(["retained"]));
+    expect(removeJournal("retained", "delete-retained", options)).toBe(true);
+    expect(await read()).toEqual(new Set());
+  });
+});
 
 it.each(["runtime", "runtime-discovery", "maintenance", "legacy"] as const)(
   "reads journal facts once per %s snapshot, including committed cleanup",
@@ -278,17 +312,75 @@ it.each(["runtime", "runtime-discovery", "maintenance"] as const)(
       const prepared = prepareSnapshot({ env: state.env }, purpose);
       await withoutHostSql(async () => {
         const { snapshot, assertCurrent } = await prepared.read();
-        expect(snapshot?.retainedDeletions).toEqual(
-          purpose === "maintenance"
-            ? { status: "present", entries: [], held: [held] }
-            : { status: "empty" },
-        );
+        expect(snapshot?.retainedDeletions).toEqual({
+          status: "present",
+          entries: [],
+          held: [held],
+        });
         const isRetained = retainedMatcher(state.env, () => [], snapshot, "database", purpose);
-        expect(isRetained(held.path, held.agentId)).toBe(
-          purpose === "maintenance" ? "held" : undefined,
-        );
+        expect(isRetained(held.path, held.agentId)).toBe("held");
         expect(assertCurrent).not.toThrow();
       });
     });
   },
 );
+
+it("refreshes held custom-store discovery before inspecting owners and after restoration", async () => {
+  await withState({ scenario: "minimal" }, async (state) => {
+    const options = { env: state.env };
+    const cfg = {
+      agents: { ownership: "explicit" as const, entries: { main: {}, held: {} } },
+      session: { store: state.statePath("custom-{agentId}.sqlite") },
+    };
+    const main = openAgentDb({
+      ...options,
+      agentId: "main",
+      path: state.statePath("custom-main.sqlite"),
+    });
+    const held = openAgentDb({
+      ...options,
+      agentId: "held",
+      path: state.statePath("custom-held.sqlite"),
+    });
+    const heldPath = held.path;
+    runSqliteImmediateTransactionSync(held.db, () => {
+      held.db.exec(
+        "PRAGMA user_version=41; UPDATE schema_meta SET schema_version=41 WHERE meta_key='primary'",
+      );
+    });
+    await closeOpenClawAgentDatabaseByPathAsync(heldPath);
+    unregisterDatabase({ ...options, agentId: "held", path: heldPath });
+    const prepared = prepareSnapshot(options, "runtime-discovery");
+    await prepared.read();
+    const statePath = stateSqlitePath(state.env);
+    expect(getPreparedAgentDeletionDiscovery(statePath)).toEqual({ status: "empty" });
+    writeState(
+      (database) =>
+        recordAgentDeletionRecoveryHolds(database, [{ agentId: "held", path: heldPath }]),
+      options,
+    );
+    expect(getPreparedAgentDeletionDiscovery(statePath)).toBeUndefined();
+    const { snapshot } = await prepared.readWithCurrentAdmission();
+    expect(getPreparedAgentDeletionDiscovery(statePath)).toEqual({
+      status: "present",
+      entries: [],
+      held: [{ agentId: "held", path: heldPath }],
+    });
+    const inspectOwner = vi.spyOn(ownerRead, "inspectOpenClawAgentDatabaseOwner");
+    try {
+      const matches = createGatewayRetainedStoreMatcher(cfg, { env: state.env, snapshot });
+      expect(matches(main.path, "main")).toBeUndefined();
+      expect(matches(heldPath, "held")).toBe("held");
+      expect(inspectOwner.mock.calls.map(([pathname]) => pathname)).not.toContain(heldPath);
+    } finally {
+      inspectOwner.mockRestore();
+    }
+    writeState(
+      (database) => resolveAgentDeletionRecoveryHolds(database, "held", [heldPath]),
+      options,
+    );
+    expect(getPreparedAgentDeletionDiscovery(statePath)).toBeUndefined();
+    await prepared.readWithCurrentAdmission();
+    expect(getPreparedAgentDeletionDiscovery(statePath)).toEqual({ status: "empty" });
+  });
+});

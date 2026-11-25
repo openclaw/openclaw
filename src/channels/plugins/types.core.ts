@@ -32,6 +32,7 @@ import type { ChannelMessageActionName } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";
+export type { ChannelMeta } from "./channel-meta.types.js";
 export type { ChannelLegacyStateMigrationPlan } from "./legacy-state-migration.types.js";
 export type { ChannelSetupInput } from "./setup-input.js";
 
@@ -75,7 +76,9 @@ export type ChannelMessageToolSchemaContribution = {
   /**
    * Actions whose validation depends on this schema fragment. Cross-channel
    * discovery can hide only these actions when the fragment is current-channel
-   * scoped. Omit to keep the legacy conservative behavior.
+   * scoped. A non-empty list also omits the fragment when none of these actions
+   * is advertised in the final tool schema. Omit to keep the legacy
+   * conservative behavior.
    */
   actions?: readonly ChannelMessageActionName[] | null;
   visibility?: "current-channel" | "all-configured";
@@ -114,33 +117,6 @@ export type ChannelAccountState =
 export type ChannelHeartbeatDeps = {
   webAuthExists?: () => Promise<boolean>;
   hasActiveWebListener?: (accountId?: string) => boolean;
-};
-
-/** User-facing metadata used in docs, pickers, and setup surfaces. */
-export type ChannelMeta = {
-  id: ChannelId;
-  label: string;
-  selectionLabel: string;
-  docsPath: string;
-  docsLabel?: string;
-  blurb: string;
-  order?: number;
-  aliases?: readonly string[];
-  selectionDocsPrefix?: string;
-  selectionDocsOmitLabel?: boolean;
-  selectionExtras?: readonly string[];
-  detailLabel?: string;
-  systemImage?: string;
-  markdownCapable?: boolean;
-  exposure?: {
-    configured?: boolean;
-    setup?: boolean;
-    docs?: boolean;
-  };
-  quickstartAllowFrom?: boolean;
-  forceAccountBinding?: boolean;
-  preferSessionLookupForAnnounceTarget?: boolean;
-  preferOver?: readonly string[];
 };
 
 /** Snapshot row returned by channel status and lifecycle surfaces. */
@@ -285,7 +261,17 @@ export type ChannelSecurityContext<ResolvedAccount = unknown> = {
   account: ResolvedAccount;
 };
 
+/** Display-only native references; never recipients, routing, or sender authority. */
+export type ChannelDisplayMention = {
+  start: number;
+  end: number;
+  senderId: string;
+  fallbackLabel?: string;
+};
+
 export type ChannelMentionAdapter = {
+  /** Return ordered, non-overlapping native ranges using canonical sender IDs. */
+  readDisplayMentions?: (text: string) => readonly ChannelDisplayMention[];
   stripRegexes?: (params: {
     ctx: MsgContext;
     cfg: OpenClawConfig | undefined;
@@ -335,6 +321,8 @@ export type ChannelThreadingAdapter = {
    * target lookup.
    */
   threadAddressing?: "address" | "message";
+  /** True only if omitting this thread id sends to the exact same transport destination. */
+  isThreadAddressedByTarget?: (params: { to: string; threadId: string | number }) => boolean;
   matchesToolContextTarget?: (params: {
     target: string;
     toolContext: ChannelThreadingToolContext;
@@ -490,7 +478,10 @@ export type ChannelMessagingAdapter = {
   directTargetStyle?: "user-prefixed";
   /** Equality rule for ids carried by prefixed outbound targets. */
   targetIdComparison?: "case-sensitive" | "lowercase";
-  /** Bare numeric conversation/topic shorthand is valid for this channel. */
+  /**
+   * Bare numeric `<chat>:<topic>` shorthand is valid for this channel.
+   * @deprecated Implement `resolveSessionConversation`; core honors this only when that hook is absent.
+   */
   numericTopicShorthand?: true;
   normalizeTarget?: (raw: string) => string | undefined;
   defaultMarkdownTableMode?: MarkdownTableMode;
@@ -643,6 +634,8 @@ export type ChannelMessagingAdapter = {
     };
     replyToId?: string | null;
     threadId?: string | number | null;
+    /** Revalidates transport authority before new route-discovery network requests. */
+    assertDirectAdapterHandoff?: () => void;
   }) => ChannelOutboundSessionRoute | Promise<ChannelOutboundSessionRoute | null> | null;
 };
 
@@ -730,6 +723,11 @@ export type ChannelMessageActionContext = {
   onPlatformSendDispatch?: () => Promise<void>;
   /** Revalidate the same owner synchronously after waits and immediately before platform I/O. */
   assertDirectAdapterHandoff?: () => void;
+  /**
+   * Host-owned cancellation for the originating invocation. Plugins may drop
+   * work that was never issued; platform I/O already dispatched settles normally.
+   */
+  abortSignal?: AbortSignal;
   /** Ephemeral-authority sends must not enter replayable recovery. */
   skipQueue?: boolean;
 };
@@ -868,6 +866,7 @@ export type ChannelPollContext = Pick<
   | "silent"
   | "isAnonymous"
   | "gatewayClientScopes"
+  | "signal"
   | "onPlatformSendDispatch"
   | "assertDirectAdapterHandoff"
 > & {

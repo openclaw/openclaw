@@ -45,6 +45,16 @@ export function loadPluginMetadataSnapshotRuntime(
   return reader(params);
 }
 
+/** Resolve only when needed, preserving the canonical owner's selection and errors. */
+export function resolvePluginMetadataSnapshotRequiredRuntime(
+  params: Parameters<SnapshotLoaderModule["resolvePluginMetadataSnapshot"]>[0],
+): ReturnType<SnapshotLoaderModule["resolvePluginMetadataSnapshot"]> {
+  const reader =
+    snapshotReaderSlot.resolvePluginMetadataSnapshot ??
+    loadRequiredSnapshotReaders().resolvePluginMetadataSnapshot;
+  return reader(params);
+}
+
 /** Reuse the canonical manifest reader instead of importing its graph again from an SDK. */
 export function listOpenClawPluginManifestMetadataRuntime(
   env?: Parameters<MetadataPolicyReaders["listOpenClawPluginManifestMetadata"]>[0],

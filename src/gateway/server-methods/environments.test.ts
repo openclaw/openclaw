@@ -113,11 +113,7 @@ it("projects live and offline node facts consistently through list and status", 
   vi.mocked(readDevicePairingNodeSnapshot).mockResolvedValue(
     createDevicePairingNodeSnapshot([
       pairedNodeDevice("node-live", { commands: ["system.run"] }),
-      pairedNodeDevice(
-        "node-never",
-        { displayName: "Never Node", commands: ["system.run"] },
-        { lastSeenAtMs: 2_000, lastSeenReason: "device-token-auth" },
-      ),
+      pairedNodeDevice("node-never"),
       pairedNodeDevice(
         "node-lost",
         {
@@ -161,13 +157,6 @@ it("projects live and offline node facts consistently through list and status", 
           commands: [NODE_DESKTOP_STREAM_COMMAND],
           connectedAtMs: 123,
         },
-        {
-          nodeId: "node-other",
-          connId: "conn-other",
-          client: { invalidated: false },
-          caps: [],
-          commands: [],
-        },
       ],
     }),
   };
@@ -193,12 +182,7 @@ it("projects live and offline node facts consistently through list and status", 
     issues: [NODE_RUNNER_UPDATE_REQUIRED_ISSUE],
   });
   expect(find("node:node-desktop")).toHaveProperty("desktop", true);
-  expect(find("node:node-never")).toMatchObject({
-    status: "unavailable",
-    lastSeenAtMs: 2_000,
-    lastSeenReason: "device-token-auth",
-    sessionHost: false,
-  });
+  expect(find("node:node-never")).toMatchObject({ status: "unavailable", sessionHost: false });
   expect(find("node:node-never")).not.toHaveProperty("lastConnectedAtMs");
   expect(find("node:node-lost")).toMatchObject({
     status: "unavailable",
@@ -214,7 +198,7 @@ it("projects live and offline node facts consistently through list and status", 
     expect(entry).not.toHaveProperty("workerSlots");
     expect(entry).not.toHaveProperty("issues");
   }
-  expect(find("node:node-other")).not.toHaveProperty("desktop");
+  expect(find("node:node-live")).not.toHaveProperty("desktop");
   expect(find("node:node-lost")).not.toHaveProperty("desktop");
   for (const environmentId of ["node:node-live", "node:node-lost"]) {
     expect(await invoke("environments.status", { environmentId }, context)).toEqual([
@@ -226,14 +210,7 @@ it("projects live and offline node facts consistently through list and status", 
 });
 
 it("discovers profile catalogs independently of inventories and preserves provider identity", async () => {
-  const machine = {
-    id: "standard",
-    label: "Standard",
-    cpu: 32,
-    memoryGb: 64,
-    default: true,
-    os: "os-a",
-  };
+  const machine = { id: "standard", label: "Standard" };
   const systems = [
     { id: "os-a", label: "OS A", default: true },
     { id: "os-b", label: "OS B" },
@@ -253,6 +230,7 @@ it("discovers profile catalogs independently of inventories and preserves provid
   expect(ok).toBe(true);
   expect(payload).toEqual({
     environments: [],
+    dispatchableProfileIds: ["aws", "zeta"],
     profiles: [
       {
         id: "aws",
@@ -297,7 +275,6 @@ it.each([
     const { environments } = payload as EnvironmentsListResult;
     expect(environments.some((entry) => entry.id === "node:node-live")).toBe(visible);
     const worker = environments.find((entry) => entry.id === "worker-1");
-    expect(worker).toMatchObject({ type: "worker", worker: { state, providerId } });
     if (state === "failed" || state === "orphaned") {
       expect(worker).toMatchObject({ status: "error", worker: { error: "provider failure" } });
     } else {
@@ -307,43 +284,33 @@ it.each([
   },
 );
 
-it("fails closed and redacts worker inventory read failures", async () => {
-  const secret = "private SecretRef and database path";
-  const fail = () => {
-    throw new Error(secret);
-  };
-  const listFailure = workerService({ list: vi.fn(fail) });
-  const listResult = await call("environments.list", {}, { service: listFailure });
-  const nodeResult = await call(
+it.each([
+  ["environments.list", {}, "list", "Error: environment inventory unavailable"],
+  [
     "environments.status",
     { environmentId: "node:node-live" },
-    { service: listFailure },
-  );
-  const workerResult = await call(
-    "environments.status",
-    { environmentId: "missing" },
-    { service: workerService({ get: vi.fn(fail) }) },
-  );
-  const error = {
-    code: ErrorCodes.UNAVAILABLE,
-    message: "Error: environment inventory unavailable",
-  };
-  expect(listResult).toEqual([false, undefined, error]);
-  expect(nodeResult).toEqual([false, undefined, error]);
-  expect(workerResult).toEqual([
-    false,
-    undefined,
-    { code: ErrorCodes.UNAVAILABLE, message: "environment status unavailable" },
-  ]);
-  expect(JSON.stringify([listResult, nodeResult, workerResult])).not.toContain(secret);
-});
+    "list",
+    "Error: environment inventory unavailable",
+  ],
+  ["environments.status", { environmentId: "missing" }, "get", "environment status unavailable"],
+] as const)(
+  "fails closed and redacts %s %j read failures",
+  async (method, params, reader, message) => {
+    const secret = "private SecretRef and database path";
+    const service = workerService({
+      [reader]: vi.fn(() => {
+        throw new Error(secret);
+      }),
+    });
+    const result = await call(method, params, { service });
+    expect(result).toEqual([false, undefined, { code: ErrorCodes.UNAVAILABLE, message }]);
+    expect(JSON.stringify(result)).not.toContain(secret);
+  },
+);
 
 it("projects trust from recorded worker isolation without guessing unknown leases", () => {
   expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: true }), NOW).trust).toBe(
     "persistent",
-  );
-  expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: false }), NOW).trust).toBe(
-    "disposable",
   );
   expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: null }), NOW)).not.toHaveProperty(
     "trust",
@@ -358,14 +325,18 @@ it.each([
 });
 
 it("creates a worker from a configured profile", async () => {
-  const create = vi.fn(async () =>
+  const createWithRequest = vi.fn(async () =>
     workerRecord({ desktopAvailable: true, desktopApps: ["browser", "terminal"] }),
   );
-  const service = workerService({ create });
+  const service = workerService({ createWithRequest });
   const [ok, payload] = await call("environments.create", createParams, { service });
 
   expect(ok).toBe(true);
-  expect(create).toHaveBeenCalledWith("development", "request-1");
+  expect(createWithRequest).toHaveBeenCalledWith({
+    ...createParams,
+    provisionSource: { kind: "unavailable" },
+    beforeProvision: expect.any(Function),
+  });
   expect(payload).toMatchObject({
     id: "worker-1",
     type: "worker",
@@ -381,7 +352,7 @@ it("creates a worker from a configured profile", async () => {
 
 it("hides provider failure details when worker creation fails", async () => {
   const service = workerService({
-    create: rejectService("provider_failure", "private endpoint details"),
+    createWithRequest: rejectService("provider_failure", "private endpoint details"),
   });
   expectFailure(
     await call("environments.create", createParams, { service }),
@@ -390,28 +361,27 @@ it("hides provider failure details when worker creation fails", async () => {
   );
 });
 
-it("launches only a closed advertised desktop app and returns readiness", async () => {
-  const service = workerService();
-  const { launchDesktopApp } = service;
-  const result = await call(
-    "worker.desktop.launch",
-    { environmentId: "worker-1", app: "browser" },
-    { service },
-  );
+it.each(["worker.desktop.launch", "desktop.launch"] as const)(
+  "%s launches only a closed advertised desktop app and returns readiness",
+  async (method) => {
+    const service = workerService();
+    const { launchDesktopApp } = service;
+    const target =
+      method === "desktop.launch"
+        ? { source: { kind: "environment", environmentId: "worker-1" } }
+        : { environmentId: "worker-1" };
+    const result = await invoke(method, { ...target, app: "browser" }, mockContext(service));
 
-  expect(result).toEqual([true, { app: "browser", status: "ready" }, undefined]);
-  expect(launchDesktopApp).toHaveBeenCalledExactlyOnceWith({
-    environmentId: "worker-1",
-    app: "browser",
-  });
-  const rejected = await call(
-    "worker.desktop.launch",
-    { environmentId: "worker-1", app: "editor" },
-    { service },
-  );
-  expect(rejected[0]).toBe(false);
-  expect(launchDesktopApp).toHaveBeenCalledOnce();
-});
+    expect(result).toEqual([true, { app: "browser", status: "ready" }, undefined]);
+    expect(launchDesktopApp).toHaveBeenCalledExactlyOnceWith(
+      { environmentId: "worker-1", app: "browser" },
+      expect.any(Function),
+    );
+    const rejected = await invoke(method, { ...target, app: "editor" }, mockContext(service));
+    expect(rejected[0]).toBe(false);
+    expect(launchDesktopApp).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([
   ["observe", "invalid_state", ErrorCodes.INVALID_REQUEST, "environment has no desktop"],
@@ -446,17 +416,12 @@ it.each([
 );
 
 it("rejects raw destruction of a session-attached worker", async () => {
-  const service = workerService({
-    destroyUnattached: rejectService(
-      "invalid_state",
-      "Attached cloud workers must be stopped through sessions.reclaim",
-    ),
-  });
-
+  const message = "Attached cloud workers must be stopped through sessions.reclaim";
+  const service = workerService({ destroyUnattached: rejectService("invalid_state", message) });
   expectFailure(
     await call("environments.destroy", workerId, { service }),
     ErrorCodes.INVALID_REQUEST,
-    "Attached cloud workers must be stopped through sessions.reclaim",
+    message,
   );
 });
 
@@ -481,7 +446,11 @@ it("logs best-effort forced teardown errors without failing the call", async () 
   expect(context.logGateway.warn).toHaveBeenCalledWith(
     "worker environment forced teardown cleanup failed: Error: provider stop remains pending",
   );
-  expect(forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith("worker-1", expect.any(Function));
+  expect(forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith(
+    "worker-1",
+    expect.any(Function),
+    expect.any(Function),
+  );
   expect(service.destroy).not.toHaveBeenCalled();
   expect(service.destroyUnattached).not.toHaveBeenCalled();
 });

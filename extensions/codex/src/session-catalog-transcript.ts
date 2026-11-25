@@ -1,15 +1,19 @@
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog-paging";
 import { z } from "zod";
+import { readItem } from "./app-server/event-projector-values.js";
 import { jsonObjectSchema } from "./app-server/json-schema.js";
-import type { CodexThreadItem } from "./app-server/protocol.js";
+import { isJsonObject, type CodexThreadItem } from "./app-server/protocol.js";
 import {
   CatalogParamsError,
   MAX_TRANSCRIPT_PAGE_BYTES,
   parseTranscriptPage,
   readControlCursor,
 } from "./session-catalog-parsing.js";
-import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
+import {
+  codexCatalogDisplayFacts,
+  toGenericTranscriptItem,
+} from "./session-catalog-transcript-item.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
 type TranscriptRequest = { threadId: string; cursor?: string; limit: number };
@@ -35,6 +39,23 @@ export function parseCodexCatalogTranscriptPage(value: unknown): TranscriptPage 
   return transcriptPageSchema.parse(value);
 }
 
+/** Enrich local and released-node source pages once, without changing their rows or cursor. */
+export function projectCodexCatalogTranscriptPageForDisplay(page: TranscriptPage): TranscriptPage {
+  const projected: TranscriptPage = {
+    ...page,
+    items: page.items.map((item) => {
+      const native = isJsonObject(item.raw) ? readItem(item.raw) : undefined;
+      if (!native) {
+        return item;
+      }
+      // The source owns bounded text and identity; display facts do not replace them.
+      return { ...item, ...codexCatalogDisplayFacts(native) };
+    }),
+  };
+  // Released nodes already chose their cursor. Never remove their source rows.
+  return fitDisplayInputsToNodeTransport(projected) ? projected : page;
+}
+
 function projectTranscriptPage(
   entries: { item: CodexThreadItem }[],
   limit: number,
@@ -58,6 +79,30 @@ function pageFitsNodeTransport(page: TranscriptPage): boolean {
   );
 }
 
+function fitDisplayInputsToNodeTransport(page: TranscriptPage): boolean {
+  if (pageFitsNodeTransport(page)) {
+    return true;
+  }
+  // Inputs duplicate native raw fields; optional presentation must not evict
+  // source history or make a previously readable single item unreadable.
+  for (const item of page.items) {
+    if (item.toolDetails !== undefined) {
+      delete item.toolDetails;
+      item.truncated = true;
+    }
+  }
+  if (pageFitsNodeTransport(page)) {
+    return true;
+  }
+  for (const item of page.items) {
+    if (item.toolInput !== undefined) {
+      delete item.toolInput;
+      item.toolInputOmitted = true;
+    }
+  }
+  return pageFitsNodeTransport(page);
+}
+
 function encodeTurnItemCursor(turnCursor: string, itemId: string): string {
   return (
     TURN_ITEM_CURSOR_PREFIX +
@@ -75,7 +120,7 @@ function decodeTurnItemCursor(cursor?: string): { turnCursor?: string; itemId?: 
       Buffer.from(cursor.slice(TURN_ITEM_CURSOR_PREFIX.length), "base64url").toString(),
     );
   } catch {
-    throw new CatalogParamsError("invalid Codex transcript item cursor");
+    throw new CatalogParamsError("invalid Codex chat history item cursor");
   }
   if (
     !Array.isArray(value) ||
@@ -85,7 +130,7 @@ function decodeTurnItemCursor(cursor?: string): { turnCursor?: string; itemId?: 
     typeof value[1] !== "string" ||
     !value[1]
   ) {
-    throw new CatalogParamsError("invalid Codex transcript item cursor");
+    throw new CatalogParamsError("invalid Codex chat history item cursor");
   }
   return { turnCursor: value[0], itemId: value[1] };
 }
@@ -109,7 +154,7 @@ export async function readLegacyCodexTranscriptPage(
   const anchorIndex = itemId ? source.findIndex(({ item }) => item.id === itemId) : -1;
   if (itemId && anchorIndex < 0) {
     throw new CatalogParamsError(
-      "Codex transcript changed; refresh the session before loading older items",
+      "Codex chat history changed; refresh the session before loading older items",
     );
   }
   const remaining = source.slice(anchorIndex + 1);
@@ -124,14 +169,14 @@ export async function readLegacyCodexTranscriptPage(
         : nativeCursor
       : undefined;
     if (partial && !cursor) {
-      throw new Error("Codex app-server did not provide a transcript continuation anchor");
+      throw new Error("Codex app-server did not provide a chat history continuation anchor");
     }
     return { items, ...(cursor ? { nextCursor: cursor } : {}) };
   };
   let bounded = result();
   while (!pageFitsNodeTransport(bounded)) {
     if (items.length <= 1) {
-      throw new Error("Codex transcript item exceeds the safe response size");
+      throw new Error("Codex chat history item exceeds the safe response size");
     }
     items.pop();
     bounded = result();
@@ -156,7 +201,7 @@ export async function readCodexCatalogTranscriptPage(
       sortDirection: "desc",
       ...(request.cursor ? { cursor: request.cursor } : {}),
     });
-    const nextCursor = readControlCursor(page.nextCursor, "transcript next response");
+    const nextCursor = readControlCursor(page.nextCursor, "chat history next response");
     const items = projectTranscriptPage(page.data, limit);
     const result = { items, ...(nextCursor ? { nextCursor } : {}) };
     const fittingCount = items.length - (pageFitsNodeTransport(result) ? 0 : 1);
@@ -164,7 +209,7 @@ export async function readCodexCatalogTranscriptPage(
       return result;
     }
     if (fittingCount < 1) {
-      throw new Error("Codex transcript item exceeds the safe response size");
+      throw new Error("Codex chat history item exceeds the safe response size");
     }
     // The native cursor must describe exactly the delivered entries. Never slice and retain it.
     limit = fittingCount;

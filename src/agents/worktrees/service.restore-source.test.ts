@@ -1,13 +1,12 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as gitExec from "../../infra/git-exec.js";
 import * as gitWorker from "../../infra/git-worker.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import * as allocation from "./allocation.js";
+import { git } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
 import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
 import {
@@ -24,16 +23,12 @@ import type {
   WorktreeSourceStage,
 } from "./types.js";
 
-const execFileAsync = promisify(execFile);
-const git = async (cwd: string, ...args: string[]) =>
-  (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 const directories = useStateDatabaseTempDirs();
 const initialize = useManagedWorktreeTestRepository();
 let repo: string;
 let env: NodeJS.ProcessEnv;
 let owner: ManagedWorktreeService;
 let removed: ManagedWorktreeRecord;
-let oldSnapshot: string;
 let provisionedMode: number;
 let allocationDepth: number;
 let checkoutDepth: number;
@@ -41,7 +36,7 @@ let snapshotFailure: Error | undefined;
 const events: string[] = [];
 
 const withRollback: NonNullable<CreateManagedWorktreeParams["withRollback"]> = async (run) => {
-  expect(allocationDepth).toBe(1);
+  expect(allocationDepth).toBe(0);
   checkoutDepth += 1;
   try {
     return await run(() => expect(checkoutDepth).toBe(1));
@@ -88,7 +83,6 @@ beforeEach(async () => {
   const created = await owner.create({ repoRoot: repo, name: "restored", baseRef: "HEAD" });
   await owner.remove({ id: created.id, reason: "initial capture" });
   removed = getRegistryWorktree(env, created.id)!;
-  oldSnapshot = await git(repo, "rev-parse", removed.snapshotRef!);
   allocationDepth = checkoutDepth = 0;
   events.length = 0;
   snapshotFailure = undefined;
@@ -107,7 +101,7 @@ beforeEach(async () => {
   });
   const claim = runLease.claimWorktreeRemoval;
   vi.spyOn(runLease, "claimWorktreeRemoval").mockImplementation((...args) => {
-    expect(allocationDepth).toBe(1);
+    expect(allocationDepth).toBe(0);
     expect(checkoutDepth).toBe(1);
     events.push("removal-claimed");
     return claim(...args);
@@ -184,7 +178,9 @@ it.each(["captured", "failed"] as const)(
       });
       expect(record?.removedAt).toBeGreaterThanOrEqual(started);
       expect(record?.removedAt).toBeLessThanOrEqual(Date.now());
-      expect(await git(repo, "rev-parse", removed.snapshotRef!)).not.toBe(oldSnapshot);
+      expect(await git(repo, "rev-parse", record!.snapshotRef!)).toBe(
+        await git(repo, "rev-parse", "HEAD"),
+      );
       expect(await getRegistryWorktreeProvisionedState(env, removed.id)).toEqual([
         { path: "local.env", mode: provisionedMode, chunks: 1 },
       ]);

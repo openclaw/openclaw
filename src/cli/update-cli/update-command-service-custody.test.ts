@@ -11,6 +11,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import {
   forceKillChildProcessTree,
   isChildProcessTreeAlive,
@@ -20,6 +21,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import * as execCommands from "../../process/exec.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
+import { assertUpdateCandidateExecutor } from "./update-command-candidate-validation.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
   withUpdateCommandExecutorChild,
@@ -405,6 +407,52 @@ it.skipIf(process.platform === "win32").each(["cooperative", "forced"] as const)
 );
 
 it.each([
+  { candidate: "without entrypoint", condition: "missing Gateway entrypoint" },
+  { candidate: "exiting 1", condition: "code=1, termination=exit" },
+  { candidate: "without target binding", condition: "missing targetRootBinding" },
+] as const)(
+  "candidate refusal names the failed executor check: $candidate",
+  async ({ candidate, condition }) => {
+    const { scratch: root } = await nativeFixture(true);
+    if (candidate !== "without entrypoint") {
+      await fs.mkdir(path.join(root, "dist"));
+      await fs.writeFile(
+        path.join(root, "dist", "index.mjs"),
+        `
+        // EOF follows the parent's committed PID binding.
+        const {finished}=await import("node:stream/promises");
+        await finished(process.stdin.resume(),{cleanup:true});
+        ${
+          candidate === "exiting 1"
+            ? "process.exitCode=1;"
+            : `process.stdout.write(${JSON.stringify(JSON.stringify({ updateExecutor: "root-spawner-v1" }))});`
+        }
+      `,
+      );
+    }
+    const runId = randomUUID();
+    const failure = await withUpdateCommandExecutor(runId, async (executor) =>
+      assertUpdateCandidateExecutor({
+        root,
+        env: process.env,
+        run: { runId, env: process.env, executorFence: await executor.enter(root) },
+        shouldRestart: true,
+        serviceOwned: true,
+        timeoutMs: 20_000,
+        assertCurrent: () => {},
+      }),
+    ).catch((error: unknown) => error);
+    const message = `Target runtime cannot fence update-owned native commands (executor check: ${condition}); refusing before Gateway stop or package activation.`;
+    expect(failure).toBeInstanceOf(UpdatePreMutationError);
+    expect(failure).toMatchObject({
+      reason: "target-native-unsupported",
+      message,
+      failureFacts: [{ check: "target-native-unsupported", message }],
+    });
+  },
+);
+
+it.each([
   { retained: true, advertised: undefined },
   { retained: true, advertised: "true" },
   { retained: true, advertised: true },
@@ -449,7 +497,9 @@ it.each([
       expect(await fs.readFile(privateInput, "utf8")).toBe("received");
       expect(await fs.readFile(effect, "utf8")).toBe("owned");
     } else {
-      await expect(work).rejects.toThrow("cannot fence");
+      await expect(work).rejects.toThrow(
+        "cannot fence update-owned native commands (executor check: missing retainedOwnerBinding).",
+      );
       expect(fsSync.existsSync(privateInput)).toBe(false);
       expect(fsSync.existsSync(effect)).toBe(false);
     }

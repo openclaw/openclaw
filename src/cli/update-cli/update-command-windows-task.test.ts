@@ -4,7 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   resumeScheduledTaskAutoStartAfterUpdate as resumeAutoStart,
   suspendScheduledTaskAutoStartForUpdate as suspendAutoStart,
-} from "../../daemon/schtasks.js";
+} from "../../daemon/schtasks-control.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
@@ -18,8 +18,8 @@ import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { useExecutorFixture } from "./update-command-executor.test-support.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
-vi.mock("../../daemon/schtasks.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/schtasks.js")>()),
+vi.mock("../../daemon/schtasks-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/schtasks-control.js")>()),
   resumeScheduledTaskAutoStartAfterUpdate: vi.fn(),
   suspendScheduledTaskAutoStartForUpdate: vi.fn(),
 }));

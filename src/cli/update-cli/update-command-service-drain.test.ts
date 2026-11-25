@@ -17,17 +17,28 @@ import type { PortUsage } from "../../infra/ports-types.js";
 import { gatewayHello } from "./update-command-service-fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({
+  auth: vi.fn(),
   call: vi.fn(),
   managerTimeout: vi.fn(),
   legacyLock: vi.fn(),
   portUsage: vi.fn(),
+  processStat: vi.fn(),
+}));
+vi.mock("../../gateway/call-device-auth.js", async (actual) => ({
+  ...(await actual<typeof import("../../gateway/call-device-auth.js")>()),
+  resolveReadOnlyLocalGatewayAuth: mocks.auth,
 }));
 vi.mock("../../gateway/call.js", () => ({ callGatewayCli: mocks.call }));
 vi.mock("../../infra/gateway-lock-legacy.js", () => ({
   readLegacyGatewayLockIdentity: mocks.legacyLock,
 }));
 vi.mock("../../infra/ports-inspect.js", () => ({ inspectPortUsage: mocks.portUsage }));
-vi.mock("../../daemon/systemd-maintenance.js", () => ({
+vi.mock("../../shared/pid-alive.js", async (actual) => ({
+  ...(await actual<typeof import("../../shared/pid-alive.js")>()),
+  readLinuxProcessStat: mocks.processStat,
+}));
+vi.mock("../../daemon/systemd-stop-policy.js", async (actual) => ({
+  ...(await actual<typeof import("../../daemon/systemd-stop-policy.js")>()),
   readSystemdGatewayStopTimeout: mocks.managerTimeout,
 }));
 vi.mock("../../gateway/local-http-probe.js", () => ({
@@ -68,17 +79,35 @@ function failLaterObservations() {
   });
 }
 
+function portUsage(
+  status: PortUsage["status"] = "busy",
+  listeners: PortUsage["listeners"] = [{ pid: 42 }],
+): PortUsage {
+  return { port: 18789, status, listeners, hints: [] };
+}
+
+function expectResume() {
+  expect(mocks.call).toHaveBeenCalledWith(
+    expect.objectContaining({
+      method: "gateway.suspend.resume",
+      params: { suspensionId: "resident-suspension" },
+    }),
+  );
+}
+
+const delay = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+  mocks.auth.mockReset().mockResolvedValue({ token: "fixture-token" });
   mocks.call.mockReset();
   mocks.managerTimeout.mockReset().mockResolvedValue(330_000);
   mocks.legacyLock.mockReset().mockResolvedValue(undefined);
-  mocks.portUsage.mockReset().mockResolvedValue({
-    port: 18789,
-    status: "busy",
-    listeners: [{ pid: 42 }],
-    hints: [],
-  });
+  mocks.portUsage.mockReset().mockResolvedValue(portUsage());
+  mocks.processStat.mockReset().mockReturnValue(null);
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -102,9 +131,8 @@ function draining(
   retryAfterMs = 100,
 ): Extract<GatewaySuspendPrepareResult, { status: "draining" }> {
   return {
+    ...ready(),
     status: "draining",
-    suspensionId: "resident-suspension",
-    expiresAtMs: Date.now() + 120_000,
     retryAfterMs,
     activeCount: 1,
     blockers: [{ kind, count: 1, message }],
@@ -161,7 +189,7 @@ function fixture(
       return options.resident ?? { pid: 42, shutdownBudget: { timeoutMs: 25_000 } };
     }
     if (request.method === "system.info") {
-      return { pid: 42, processInstanceId: "resident-instance" };
+      return { pid: options.resident?.pid ?? 42, processInstanceId: "resident-instance" };
     }
     if (request.method === "gateway.suspend.prepare") {
       const observed = expectDefined(
@@ -273,7 +301,7 @@ it.each([
     mocks.call.mockRejectedValue(
       Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
     );
-    mocks.portUsage.mockResolvedValue({ port: 18789, status: port, listeners: [], hints: [] });
+    mocks.portUsage.mockResolvedValue(portUsage(port, []));
     if (!skip) {
       await expectNormalDeadline(f);
       return;
@@ -295,9 +323,35 @@ it("retains stop authority after checking an offline Gateway port", async () => 
   );
   mocks.portUsage.mockImplementation(async () => {
     f.loseAuthority();
-    return { port: 18789, status: "free", listeners: [], hints: [] };
+    return portUsage("free", []);
   });
   expect(await f.outcome(false)).toMatchObject({ message: "service operation authority lost" });
+  expect(f.stop).not.toHaveBeenCalled();
+});
+
+it("stops an offline Gateway without waiting on unavailable client credentials", async () => {
+  const f = fixture();
+  f.params.state.running = false;
+  f.params.state.runtime = { status: "stopped" };
+  mocks.auth.mockRejectedValue(new Error("Client credential directory is unsafe."));
+  mocks.portUsage.mockResolvedValue(portUsage("free", []));
+
+  const running = f.run();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.stop).toHaveBeenCalledOnce();
+  await expect(running).resolves.toBe("stopped");
+  expect(f.warn).not.toHaveBeenCalled();
+  expect(mocks.auth).not.toHaveBeenCalled();
+});
+
+it("keeps explicit drain requirements for an offline Gateway with unavailable credentials", async () => {
+  const f = fixture();
+  f.params.state.running = false;
+  f.params.state.runtime = { status: "stopped" };
+  mocks.auth.mockRejectedValue(new Error("Client credential directory is unsafe."));
+  mocks.portUsage.mockResolvedValue(portUsage("free", []));
+
+  expect(await f.outcome()).toMatchObject({ message: "Client credential directory is unsafe." });
   expect(f.stop).not.toHaveBeenCalled();
 });
 
@@ -366,9 +420,7 @@ it.each(["session-mutation", "backup"] as const)(
           if ((request.timeoutMs ?? 0) < 2) {
             throw new Error("observation timed out during connection");
           }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 2);
-          });
+          await delay(2);
         }
         return await call(request);
       });
@@ -379,43 +431,7 @@ it.each(["session-mutation", "backup"] as const)(
     expect(f.stop).not.toHaveBeenCalled();
     expect(f.warn).not.toHaveBeenCalled();
     expect(f.events.at(-1)).toBe("resume");
-    expect(mocks.call).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "gateway.suspend.resume",
-        params: { suspensionId: "resident-suspension" },
-      }),
-    );
-  },
-);
-
-it.each(["ready", "draining"] as const)(
-  "requires the %s suspension before an immutable stop despite adequate native budgets",
-  async (phase) => {
-    const f = fixture({
-      resident: { pid: 42, shutdownBudget: { timeoutMs: 325_000 } },
-      observations: [phase === "ready" ? ready() : draining("embedded-run", "1 active turn")],
-    });
-    const running = f.interrupt();
-    await vi.advanceTimersByTimeAsync(0);
-    if (phase === "draining") {
-      expect(f.stop).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
-      expect(mocks.call).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "gateway.suspend.handoff",
-          params: {
-            suspensionId: "resident-suspension",
-            target: { pid: 42, processInstanceId: "resident-instance" },
-            commit: true,
-          },
-        }),
-      );
-      expect(f.events.indexOf("handoff")).toBeLessThan(f.events.indexOf("stop"));
-    }
-    await expect(running).resolves.toBe("stopped");
-    expect(f.events.indexOf("handoff")).toBeLessThan(f.events.indexOf("stop"));
-    expect(f.events[1]).toBe(`observe:${phase}`);
-    expect(f.stop).toHaveBeenCalledOnce();
+    expectResume();
   },
 );
 
@@ -437,6 +453,30 @@ it.each([
   await expect(running).resolves.toBe("stopped");
 });
 
+it("keeps the handoff transport open while late writes settle within the drain budget", async () => {
+  const f = fixture({ observations: [{ ...ready(), expiresAtMs: Date.now() + 45_000 }] });
+  wrapCall((request, call) => {
+    if (request.method !== "gateway.suspend.handoff") {
+      return call(request);
+    }
+    return new Promise((resolve, reject) => {
+      const deadline = setTimeout(
+        () => reject(new Error("transport deadline")),
+        request.timeoutMs ?? undefined,
+      );
+      setTimeout(() => {
+        clearTimeout(deadline);
+        resolve(call(request));
+      }, 20_000);
+    });
+  });
+  const outcome = f.interrupt({ timeoutMs: undefined }).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(await outcome).toBe("stopped");
+  expect(f.events).toContain("handoff");
+  expect(f.events).not.toContain("resume");
+});
+
 it.each([
   { stage: "status", delayMs: 5_000, timeoutMs: 1_000, elapsedMs: 6_000 },
   { stage: "gateway.suspend.prepare", delayMs: 8_000, timeoutMs: undefined, elapsedMs: 30_000 },
@@ -454,9 +494,7 @@ it.each([
       }
       if (request.method === stage && !delayed) {
         delayed = true;
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, delayMs);
-        });
+        await delay(delayMs);
       }
       return await call(request);
     });
@@ -491,12 +529,7 @@ it.each(["expired", "replaced"] as const)(
     expect(f.events.filter((event) => event.startsWith("observe:"))).toHaveLength(
       reason === "expired" ? 1 : 2,
     );
-    expect(mocks.call).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "gateway.suspend.resume",
-        params: { suspensionId: "resident-suspension" },
-      }),
-    );
+    expectResume();
   },
 );
 
@@ -608,6 +641,69 @@ it.each(["authority", "boot"] as const)(
   },
 );
 
+// The resident launcher (release installs, and runtime recovery of a Gateway whose
+// Node fails admission) is systemd's main process; its child serves (#202954).
+// When no listener names its process (no lsof or ss, or ss cannot see the owner),
+// the kernel parent of the reporting process still binds it to the service.
+const unattributedPort: PortUsage = {
+  port: 18789,
+  status: "busy",
+  listeners: [],
+  hints: [
+    "Port is in use but process details are unavailable (install lsof or run as an admin user).",
+  ],
+  errors: ["spawn lsof ENOENT", "spawn ss ENOENT"],
+};
+it.each([
+  { port: portUsage("busy", [{ pid: 43, ppid: 42 }]), parent: null, explicit: false, stops: true },
+  { port: portUsage("busy", [{ pid: 43, ppid: 42 }]), parent: null, explicit: true, stops: true },
+  { port: portUsage("busy", [{ pid: 43, ppid: 7 }]), parent: null, explicit: false, stops: false },
+  { port: portUsage("busy", [{ pid: 44, ppid: 42 }]), parent: null, explicit: false, stops: false },
+  // Attributed listener evidence is not overridden by the kernel parent.
+  { port: portUsage("busy", [{ pid: 44, ppid: 42 }]), parent: 42, explicit: false, stops: false },
+  { port: unattributedPort, parent: 42, explicit: false, stops: true },
+  { port: unattributedPort, parent: 42, explicit: true, stops: true },
+  { port: unattributedPort, parent: 7, explicit: false, stops: false },
+  { port: unattributedPort, parent: 7, explicit: true, stops: false },
+  { port: unattributedPort, parent: null, explicit: false, stops: false },
+  // ss lists the socket but cannot name its owner (another account's process).
+  {
+    port: portUsage("busy", [{ address: "127.0.0.1:18789" }]),
+    parent: 42,
+    explicit: false,
+    stops: true,
+  },
+  {
+    port: portUsage("busy", [{ address: "127.0.0.1:18789" }, { pid: 44, ppid: 42 }]),
+    parent: 42,
+    explicit: false,
+    stops: false,
+  },
+])(
+  "drains resident 43 under launcher 42: listeners $port.listeners, kernel parent $parent (explicit=$explicit, stops=$stops)",
+  async ({ port, parent, explicit, stops }) => {
+    const f = fixture({ resident: { pid: 43 } });
+    mocks.portUsage.mockResolvedValue(port);
+    mocks.processStat.mockImplementation((pid: number) =>
+      pid === 43 && parent !== null ? { parentPid: parent, startedAt: 1 } : null,
+    );
+    const running = explicit ? f.interrupt() : f.run();
+    if (stops) {
+      await expect(running).resolves.toBe("stopped");
+      expect(f.events).toEqual(
+        explicit
+          ? ["status", "observe:ready", "handoff", "stop"]
+          : ["status", "observe:ready", "stop"],
+      );
+      return;
+    }
+    await expect(running).rejects.toThrow(
+      explicit ? "the resident process identity could not be verified" : "Gateway process changed",
+    );
+    expect(f.stop).not.toHaveBeenCalled();
+  },
+);
+
 const juneStaleConnection = "gateway closed (1011): gateway message handler unavailable";
 const legacyResident = { pid: 42, state: "alive", path: "/tmp/openclaw-fixture/gateway.lock" };
 
@@ -682,17 +778,17 @@ it.each<{
   {
     name: "unknown port",
     legacy: legacyResident,
-    usage: { port: 18789, status: "unknown", listeners: [], hints: [] },
+    usage: portUsage("unknown", []),
   },
   {
     name: "unattributed listener",
     legacy: legacyResident,
-    usage: { port: 18789, status: "busy", listeners: [{}], hints: [] },
+    usage: portUsage("busy", [{}]),
   },
   {
     name: "mixed listeners",
     legacy: legacyResident,
-    usage: { port: 18789, status: "busy", listeners: [{ pid: 42 }, { pid: 43 }], hints: [] },
+    usage: portUsage("busy", [{ pid: 42 }, { pid: 43 }]),
   },
 ])(
   "keeps the June deadline without owned listener attribution: $name",
@@ -753,14 +849,12 @@ it.each([
     mocks.call.mockRejectedValue(staleConnectionError(juneStaleConnection));
     mocks.legacyLock.mockResolvedValue(legacyResident);
     if (phase === "listener") {
-      mocks.portUsage
-        .mockResolvedValueOnce({ port: 18789, status: "busy", listeners: [{ pid: 42 }], hints: [] })
-        .mockImplementationOnce(async () => {
-          if (change === "authority") {
-            f.loseAuthority();
-          }
-          return { port: 18789, status: "busy", listeners: [{ pid: 43 }], hints: [] };
-        });
+      mocks.portUsage.mockResolvedValueOnce(portUsage()).mockImplementationOnce(async () => {
+        if (change === "authority") {
+          f.loseAuthority();
+        }
+        return portUsage("busy", [{ pid: 43 }]);
+      });
     } else {
       mocks.legacyLock.mockResolvedValueOnce(legacyResident).mockImplementationOnce(async () => {
         if (change === "lock") {

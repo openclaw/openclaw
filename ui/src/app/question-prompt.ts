@@ -1,13 +1,14 @@
 import type { QuestionRecord } from "@openclaw/gateway-client/browser";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   QuestionAnswers,
   QuestionRequestedEvent,
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { registerListener } from "../../../src/shared/listeners.js";
-import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
@@ -20,27 +21,21 @@ import {
   type QuestionClientResolutionOwner,
 } from "./question-prompt-client.ts";
 import { parseQuestion } from "./question-prompt-parse.ts";
-import {
-  clearSecretQuestionDrafts,
-  parseQuestionSubmissionResult,
-  prepareQuestionSecretStoreSubmission,
-} from "./question-prompt-secret-store.ts";
+import { clearSecretQuestionDrafts } from "./question-prompt-secret-store.ts";
 
 export type QuestionDraft = {
   selected: Set<string>;
   freeText: string;
 };
 
-type QuestionPromptStatus = QuestionRecord["status"] | "unavailable";
-
 export type QuestionPrompt = Pick<
   QuestionRecord,
-  "id" | "questions" | "createdAtMs" | "expiresAtMs"
+  "id" | "questions" | "createdAtMs" | "expiresAtMs" | "resolvedBy"
 > & {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  status: QuestionPromptStatus;
+  status: QuestionRecord["status"] | "unavailable";
   answers?: QuestionAnswers;
   submittedAnswers?: QuestionAnswers;
   answeredElsewhere: boolean;
@@ -66,20 +61,6 @@ type QuestionPromptState = QuestionClientResolutionOwner & {
 };
 
 const REFRESH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
-
-function parseQuestionAnswers(value: unknown): QuestionAnswers | null {
-  if (!isRecord(value) || !isRecord(value.answers)) {
-    return null;
-  }
-  const answers: QuestionAnswers["answers"] = {};
-  for (const [questionId, answerValue] of Object.entries(value.answers)) {
-    if (!/^[a-z][a-z0-9_]*$/.test(questionId) || !isStringArray(answerValue)) {
-      return null;
-    }
-    answers[questionId] = [...answerValue];
-  }
-  return { answers };
-}
 
 function questionAnswersEqual(
   left: QuestionAnswers | undefined,
@@ -119,7 +100,7 @@ function parseQuestionRecord(payload: QuestionRecord): QuestionRecord | null {
 }
 
 export function createQuestionPromptState(onChange: () => void = () => {}): QuestionPromptState {
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   let snapshot: QuestionPrompt[] = [];
   const state: QuestionPromptState = {
     client: null,
@@ -138,11 +119,9 @@ export function createQuestionPromptState(onChange: () => void = () => {}): Ques
         (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
       );
       onChange();
-      for (const listener of listeners) {
-        listener();
-      }
+      listeners.publish();
     },
-    subscribe: (listener) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
     onQuestionResolution: (resolution) => recordQuestionResolution(state, resolution),
   };
   return state;
@@ -239,6 +218,7 @@ function applyQuestionResolution(
   resolved: QuestionResolvedEvent,
 ): void {
   prompt.status = resolved.status;
+  prompt.resolvedBy = resolved.resolvedBy;
   clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
   prompt.answers = resolved.status === "answered" ? resolved.answers : undefined;
   const matchesSubmittedAnswer =
@@ -544,24 +524,29 @@ async function resolveQuestionPrompt(
     return;
   }
   prompt.submitting = true;
-  const submission = prepareQuestionSecretStoreSubmission(
-    id,
-    prompt.questions,
-    resolution,
-    prompt.secretStoreAllowedHostsDraft,
-  );
-  prompt.submittedAnswers = submission.submittedAnswers;
   prompt.error = null;
   prompt.revision = ++state.revision;
   state.onChange();
   try {
+    const { prepareQuestionSecretStoreSubmission, parseQuestionSubmissionResult } =
+      await import("./question-prompt-submission.ts");
+    if (state.client !== client || state.clientGeneration !== clientGeneration) {
+      return;
+    }
+    const submission = prepareQuestionSecretStoreSubmission(
+      id,
+      prompt.questions,
+      resolution,
+      prompt.secretStoreAllowedHostsDraft,
+    );
+    prompt.submittedAnswers = submission.submittedAnswers;
     const result = await requestQuestionGateway(
       client,
       "question.resolve",
       submission.requestParams,
       prompt.expiresAtMs,
     );
-    const resolved = parseQuestionSubmissionResult(result, parseQuestionAnswers);
+    const resolved = parseQuestionSubmissionResult(result);
     if (!resolved || resolved.status !== (submission.submittedAnswers ? "answered" : "cancelled")) {
       throw new Error("invalid question.resolve response");
     }

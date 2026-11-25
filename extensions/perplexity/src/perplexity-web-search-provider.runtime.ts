@@ -1,7 +1,9 @@
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   readProviderJsonResponse,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
   externalContentStamp,
   buildSearchCacheKey,
@@ -88,30 +90,6 @@ function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
   return model.startsWith("perplexity/") ? model.slice("perplexity/".length) : model;
 }
 
-function buildPerplexityRequestHeaders(params: {
-  apiKey: string;
-  baseUrl?: string;
-  acceptJson?: boolean;
-}): Record<string, string> {
-  const defaultHeaders = {
-    "Content-Type": "application/json",
-    ...(params.acceptJson ? { Accept: "application/json" } : {}),
-    Authorization: `Bearer ${params.apiKey}`,
-  };
-  return (
-    resolveProviderRequestHeaders({
-      provider: "perplexity",
-      // The direct Perplexity API is this provider's default endpoint. Other hosts such as
-      // OpenRouter keep their own endpoint so the policy attributes them as that vendor.
-      baseUrl:
-        params.baseUrl && !isDirectPerplexityBaseUrl(params.baseUrl) ? params.baseUrl : undefined,
-      capability: "other",
-      transport: "http",
-      defaultHeaders,
-    }) ?? defaultHeaders
-  );
-}
-
 function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
   const topLevel = (data.citations ?? []).filter((url): url is string =>
     Boolean(normalizeOptionalString(url)),
@@ -136,101 +114,6 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
     }
   }
   return uniqueStrings(citations);
-}
-
-type PerplexitySearchRequest = {
-  query: string;
-  apiKey: string;
-  timeoutSeconds: number;
-  signal?: AbortSignal;
-} & (
-  | {
-      transport: "search_api";
-      count: number;
-      country?: string;
-      searchDomainFilter?: string[];
-      searchRecencyFilter?: string;
-      searchLanguageFilter?: string[];
-      searchAfterDate?: string;
-      searchBeforeDate?: string;
-      maxTokens?: number;
-      maxTokensPerPage?: number;
-    }
-  | {
-      transport: "chat_completions";
-      baseUrl: string;
-      model: string;
-      freshness?: string;
-    }
-);
-
-async function runPerplexitySearch(params: PerplexitySearchRequest) {
-  const structured = params.transport === "search_api";
-  const label = structured ? "Perplexity Search" : "Perplexity";
-  const endpoint = structured
-    ? PERPLEXITY_SEARCH_ENDPOINT
-    : `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
-  const body = structured
-    ? {
-        query: params.query,
-        max_results: params.count,
-        ...(params.country ? { country: params.country } : {}),
-        ...(params.searchDomainFilter?.length
-          ? { search_domain_filter: params.searchDomainFilter }
-          : {}),
-        ...(params.searchRecencyFilter
-          ? { search_recency_filter: params.searchRecencyFilter }
-          : {}),
-        ...(params.searchLanguageFilter?.length
-          ? { search_language_filter: params.searchLanguageFilter }
-          : {}),
-        ...(params.searchAfterDate ? { search_after_date_filter: params.searchAfterDate } : {}),
-        ...(params.searchBeforeDate ? { search_before_date_filter: params.searchBeforeDate } : {}),
-        ...(params.maxTokens !== undefined ? { max_tokens: params.maxTokens } : {}),
-        ...(params.maxTokensPerPage !== undefined
-          ? { max_tokens_per_page: params.maxTokensPerPage }
-          : {}),
-      }
-    : {
-        model: resolvePerplexityRequestModel(params.baseUrl, params.model),
-        messages: [{ role: "user", content: params.query }],
-        ...(params.freshness ? { search_recency_filter: params.freshness } : {}),
-      };
-  const headers = buildPerplexityRequestHeaders({
-    apiKey: params.apiKey,
-    ...(structured ? { acceptJson: true } : { baseUrl: params.baseUrl }),
-  });
-  return withTrustedWebSearchEndpoint(
-    {
-      url: endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-      init: { method: "POST", headers, body: JSON.stringify(body) },
-    },
-    async (res) => {
-      if (!res.ok) {
-        return await throwWebSearchApiError(res, label, { headers, signal: params.signal });
-      }
-      if (structured) {
-        const data = await readProviderJsonResponse<PerplexitySearchApiResponse>(res, label);
-        return (data.results ?? []).slice(0, params.count).map((entry) => ({
-          title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
-          url: entry.url ?? "",
-          description: entry.snippet ? wrapWebContent(entry.snippet, "web_search") : "",
-          published: entry.date ?? undefined,
-          siteName: resolveSiteName(entry.url) || undefined,
-        }));
-      }
-      const data = await readProviderJsonResponse<PerplexitySearchResponse>(res, label);
-      const content = data.choices?.[0]?.message?.content;
-      if (typeof content !== "string" || !content.trim()) {
-        throw new Error(
-          "Perplexity search returned no final answer. Retry the query or choose another search provider.",
-        );
-      }
-      return { content, citations: extractPerplexityCitations(data) };
-    },
-  );
 }
 
 export async function executePerplexitySearch(
@@ -344,6 +227,7 @@ export async function executePerplexitySearch(
 
   const cacheKey = buildSearchCacheKey([
     "perplexity",
+    sha256Hex(runtime.apiKey),
     runtime.transport,
     runtime.baseUrl,
     runtime.model,
@@ -366,31 +250,81 @@ export async function executePerplexitySearch(
 
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
-  const result = await runPerplexitySearch({
-    query,
-    apiKey: runtime.apiKey,
-    timeoutSeconds,
-    signal,
-    ...(runtime.transport === "chat_completions"
-      ? {
-          transport: runtime.transport,
-          baseUrl: runtime.baseUrl,
-          model: runtime.model,
-          freshness,
-        }
-      : {
-          transport: runtime.transport,
-          count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-          country,
-          searchDomainFilter: domainFilter,
-          searchRecencyFilter: freshness,
-          searchLanguageFilter: language ? [language] : undefined,
-          searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
-          searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
-          maxTokens,
-          maxTokensPerPage,
-        }),
-  });
+  const searchCount = structured ? resolveSearchCount(count, DEFAULT_SEARCH_COUNT) : 0;
+  const searchLanguageFilter = language ? [language] : undefined;
+  const searchAfterDate = structured && dateAfter ? isoToPerplexityDate(dateAfter) : undefined;
+  const searchBeforeDate = structured && dateBefore ? isoToPerplexityDate(dateBefore) : undefined;
+  const label = structured ? "Perplexity Search" : "Perplexity";
+  const endpoint = structured
+    ? PERPLEXITY_SEARCH_ENDPOINT
+    : `${runtime.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
+  const body = structured
+    ? {
+        query,
+        max_results: searchCount,
+        ...(country ? { country } : {}),
+        ...(domainFilter?.length ? { search_domain_filter: domainFilter } : {}),
+        ...(freshness ? { search_recency_filter: freshness } : {}),
+        ...(searchLanguageFilter?.length ? { search_language_filter: searchLanguageFilter } : {}),
+        ...(searchAfterDate ? { search_after_date_filter: searchAfterDate } : {}),
+        ...(searchBeforeDate ? { search_before_date_filter: searchBeforeDate } : {}),
+        ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
+        ...(maxTokensPerPage !== undefined ? { max_tokens_per_page: maxTokensPerPage } : {}),
+      }
+    : {
+        model: resolvePerplexityRequestModel(runtime.baseUrl, runtime.model),
+        messages: [{ role: "user", content: query }],
+        ...(freshness ? { search_recency_filter: freshness } : {}),
+      };
+  const defaultHeaders = {
+    "Content-Type": "application/json",
+    ...(structured ? { Accept: "application/json" } : {}),
+    Authorization: `Bearer ${runtime.apiKey}`,
+  };
+  const headers =
+    omitNullRequestHeaders(
+      resolveProviderRequestHeaders({
+        provider: "perplexity",
+        // The direct Perplexity API is this provider's default endpoint. Other hosts such as
+        // OpenRouter keep their own endpoint so the policy attributes them as that vendor.
+        baseUrl:
+          !structured && !isDirectPerplexityBaseUrl(runtime.baseUrl) ? runtime.baseUrl : undefined,
+        capability: "other",
+        transport: "http",
+        defaultHeaders,
+      }),
+    ) ?? defaultHeaders;
+  const result = await withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds,
+      signal,
+      init: { method: "POST", headers, body: JSON.stringify(body) },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, label, { headers, signal });
+      }
+      if (structured) {
+        const data = await readProviderJsonResponse<PerplexitySearchApiResponse>(res, label);
+        return (data.results ?? []).slice(0, searchCount).map((entry) => ({
+          title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+          url: entry.url ?? "",
+          description: entry.snippet ? wrapWebContent(entry.snippet, "web_search") : "",
+          published: entry.date ?? undefined,
+          siteName: resolveSiteName(entry.url) || undefined,
+        }));
+      }
+      const data = await readProviderJsonResponse<PerplexitySearchResponse>(res, label);
+      const content = data.choices?.[0]?.message?.content;
+      if (typeof content !== "string" || !content.trim()) {
+        throw new Error(
+          "Perplexity search returned no final answer. Retry the query or choose another search provider.",
+        );
+      }
+      return { content, citations: extractPerplexityCitations(data) };
+    },
+  );
   const resultFields = Array.isArray(result)
     ? { results: result }
     : {

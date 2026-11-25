@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../utils.js";
@@ -19,7 +20,6 @@ import { getActivePluginRegistry } from "./runtime.js";
 import {
   createPluginToolMatcherScope,
   normalizePluginToolMatcher,
-  pluginToolMatcherCoversTool,
   type PluginToolMatcherScope,
 } from "./tool-hook-matcher.js";
 
@@ -267,7 +267,7 @@ export async function runTrustedToolPolicies(
     if (matcher === null) {
       return trustedPolicyFailureResult(registration, "policy matcher is unreadable");
     }
-    if (!pluginToolMatcherCoversTool(matcher, event.toolName)) {
+    if (matcher && !matcher.includes(normalizeLowercaseStringOrEmpty(event.toolName))) {
       continue;
     }
 

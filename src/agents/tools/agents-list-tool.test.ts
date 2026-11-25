@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createAgentsListTool } from "./agents-list-tool.js";
 
 const loadConfigMock = vi.fn<() => OpenClawConfig>();
+type AgentsConfig = NonNullable<OpenClawConfig["agents"]>;
+function configureAgents(
+  defaults: AgentsConfig["defaults"],
+  entries: AgentsConfig["entries"] = { main: {} },
+) {
+  loadConfigMock.mockReturnValue({ agents: { defaults, entries } });
+}
 
 vi.mock("../../config/config.js", async () => {
   const actual =
@@ -41,33 +47,25 @@ describe("agents_list tool", () => {
   });
 
   it("returns model and agent runtime metadata for allowed agents", async () => {
-    loadConfigMock.mockReturnValue({
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4.5",
-          subagents: { allowAgents: ["codex"] },
-        },
-        entries: {
-          main: {},
-          codex: {
-            name: "Codex",
-            model: "openai/gpt-5.5",
-            models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-            },
+    configureAgents(
+      { model: "anthropic/claude-opus-4.5", subagents: { allowAgents: ["codex"] } },
+      {
+        main: {},
+        codex: {
+          name: "Codex",
+          model: "openai/gpt-5.5",
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
           },
         },
       },
-    } satisfies OpenClawConfig);
+    );
 
     const tool = createAgentsListTool({ agentSessionKey: "agent:main:main" });
     expect(tool.outputSchema).toMatchObject({
       type: "object",
       required: ["requester", "allowAny", "agents"],
     });
-    expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ agents: Array<{ configured: boolean; id: string; agentRuntime?: { id: string; source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session" | "session-key" }; model?: string; name?: string }>; allowAny: boolean; requester: string }',
-    );
     await expectAgents(
       [expectedAgent("openai/gpt-5.5", { id: "codex", source: "model" }, "codex", "Codex")],
       tool,
@@ -91,23 +89,16 @@ describe("agents_list tool", () => {
     "reports canonical model and runtime for $selection",
     async ({ primary, model, agentRuntime }) => {
       // Alias expansion must not redirect an explicitly named registered provider.
-      loadConfigMock.mockReturnValue({
-        agents: {
-          defaults: {
-            model: {
-              primary,
-            },
-            models: {
-              "openai/gpt-5.6-sol": {
-                alias: primary,
-                agentRuntime: { id: "codex" },
-              },
-            },
-            subagents: { allowAgents: ["main"] },
+      configureAgents({
+        model: { primary },
+        models: {
+          "openai/gpt-5.6-sol": {
+            alias: primary,
+            agentRuntime: { id: "codex" },
           },
-          entries: { main: {} },
         },
-      } as unknown as OpenClawConfig);
+        subagents: { allowAgents: ["main"] },
+      });
 
       await expectAgents([expectedAgent(model, agentRuntime)]);
     },
@@ -124,12 +115,7 @@ describe("agents_list tool", () => {
   });
 
   it("returns requester as the only target when no subagent allowlist is configured", async () => {
-    loadConfigMock.mockReturnValue({
-      agents: {
-        defaults: { model: "openai/gpt-5.6-sol" },
-        entries: { main: {}, codex: {} },
-      },
-    } satisfies OpenClawConfig);
+    configureAgents({ model: "openai/gpt-5.6-sol" }, { main: {}, codex: {} });
 
     await expectAgents([expectedAgent("openai/gpt-5.6-sol", { id: "codex", source: "implicit" })]);
   });

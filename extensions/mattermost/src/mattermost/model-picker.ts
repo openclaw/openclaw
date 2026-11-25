@@ -177,23 +177,16 @@ export function parseMattermostModelPickerContext(
   return null;
 }
 
-export function buildMattermostAllowedModelRefs(data: ModelsProviderData): Set<string> {
-  const refs = new Set<string>();
-  for (const provider of data.providers) {
-    for (const model of data.byProvider.get(provider) ?? []) {
-      refs.add(`${provider}/${model}`);
-    }
-  }
-  return refs;
-}
-
 export async function resolveMattermostModelPickerCurrentModel(params: {
   cfg: OpenClawConfig;
   route: { agentId: string; sessionKey: string };
   data: ModelsProviderData;
   sessionEntry: SessionEntry | undefined;
-}): Promise<string> {
-  const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
+}): Promise<string | undefined> {
+  const resolvedDefault = params.data.resolvedDefault;
+  const fallback = resolvedDefault
+    ? `${resolvedDefault.provider}/${resolvedDefault.model}`
+    : undefined;
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
@@ -209,13 +202,13 @@ export async function resolveMattermostModelPickerCurrentModel(params: {
       sessionEntry,
       sessionKey: params.route.sessionKey,
       parentSessionKey: sessionEntry?.parentSessionKey,
-      defaultProvider: params.data.resolvedDefault.provider,
+      defaultProvider: resolvedDefault?.provider,
       loadSessionEntry,
     });
     if (!override?.model) {
       return fallback;
     }
-    const provider = (override.provider || params.data.resolvedDefault.provider).trim();
+    const provider = (override.provider || resolvedDefault?.provider || "").trim();
     return provider ? `${provider}/${override.model}` : fallback;
   } catch {
     return fallback;

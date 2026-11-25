@@ -4,7 +4,12 @@ import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  resolveMattermostReplyToMode,
+  type ResolvedMattermostAccount,
+} from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   createMattermostClient,
@@ -13,13 +18,22 @@ import {
   sendMattermostTyping,
   type MattermostChannel,
 } from "./client.js";
-import { resolveMattermostModelPickerEntry } from "./model-picker.js";
+import {
+  renderMattermostModelSummaryView,
+  renderMattermostModelsPickerView,
+  renderMattermostProviderPickerView,
+  resolveMattermostModelPickerCurrentModel,
+  resolveMattermostModelPickerEntry,
+} from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
+  MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
+import { resolveMattermostThreadSessionContext } from "./monitor-context.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import {
+  buildPreparedModelsProviderData,
   isRequestBodyLimitError,
   logTypingFailure,
   readRequestBodyWithLimit,
@@ -39,7 +53,6 @@ import {
   type MattermostCommandResponse,
   type MattermostSlashCommandPayload,
 } from "./slash-commands.js";
-import { deliverMattermostSlashModelPicker } from "./slash-model-picker.js";
 
 type SlashHttpHandlerParams = {
   account: ResolvedMattermostAccount;
@@ -50,7 +63,6 @@ type SlashHttpHandlerParams = {
   /** Map from trigger to original command name (for skill commands that start with oc_). */
   triggerMap?: ReadonlyMap<string, string>;
   log?: (msg: string) => void;
-  bodyTimeoutMs?: number;
 };
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -83,12 +95,11 @@ export function sendSlashCommandResponse(res: ServerResponse, status: number, te
 export async function readSlashCommandBody(
   req: IncomingMessage,
   res: ServerResponse,
-  timeoutMs = BODY_READ_TIMEOUT_MS,
 ): Promise<string | undefined> {
   try {
     return await readRequestBodyWithLimit(req, {
       maxBytes: MAX_BODY_BYTES,
-      timeoutMs,
+      timeoutMs: BODY_READ_TIMEOUT_MS,
       // Let rejection reach Mattermost before closing the connection.
       destroyOnLimit: false,
     });
@@ -266,172 +277,12 @@ async function fetchCurrentMattermostCommandUncached(params: {
   }
 }
 
-async function fetchCurrentMattermostCommand(params: {
-  accountId: string;
-  client: ReturnType<typeof createMattermostClient>;
-  registered: MattermostRegisteredCommand;
-  log?: (msg: string) => void;
-}): Promise<MattermostCommandResponse | null> {
-  const key = commandLookupKey(params.client, params.registered, params.accountId);
-  const existing = commandLookupInflight.get(key);
-  if (existing) {
-    return await existing.promise;
-  }
-
-  const lookup = fetchCurrentMattermostCommandUncached(params).finally(() => {
-    commandLookupInflight.delete(key);
-  });
-  commandLookupInflight.set(key, { accountId: params.accountId, promise: lookup });
-  return await lookup;
-}
-
-async function validateMattermostSlashCommandToken(params: {
-  accountId: string;
-  client: ReturnType<typeof createMattermostClient>;
-  registeredCommand: MattermostRegisteredCommand;
-  payload: MattermostSlashCommandPayload;
-  log?: (msg: string) => void;
-}): Promise<boolean> {
-  const lookupKey = commandLookupKey(params.client, params.registeredCommand, params.accountId);
-  if (hasCachedCommandValidationFailure(lookupKey)) {
-    return false;
-  }
-  if (!commandLookupInflight.has(lookupKey)) {
-    const reservation = reserveCommandValidationLookup({
-      key: lookupKey,
-      accountId: params.accountId,
-    });
-    if (!reservation.allowed) {
-      if (reservation.shouldLog) {
-        params.log?.(
-          `mattermost: slash command validation lookup rate-limited for /${params.registeredCommand.trigger}`,
-        );
-      }
-      return false;
-    }
-  }
-  const current = await fetchCurrentMattermostCommand({
-    accountId: params.accountId,
-    client: params.client,
-    registered: params.registeredCommand,
-    log: params.log,
-  });
-  if (!current || isDeletedMattermostCommand(current)) {
-    cacheCommandValidationFailure(lookupKey, params.accountId);
-    return false;
-  }
-  if (
-    current.id !== params.registeredCommand.id ||
-    current.team_id !== params.registeredCommand.teamId ||
-    current.trigger !== params.registeredCommand.trigger ||
-    current.method !== MATTERMOST_SLASH_POST_METHOD ||
-    current.url !== params.registeredCommand.url
-  ) {
-    cacheCommandValidationFailure(lookupKey, params.accountId);
-    return false;
-  }
-  if (!current.token || !safeEqualSecret(params.payload.token, current.token)) {
-    cacheCommandValidationFailure(lookupKey, params.accountId);
-    return false;
-  }
-  commandValidationFailureCache.delete(lookupKey);
-  return true;
-}
-
 type SlashInvocationAuth =
   | Extract<Awaited<ReturnType<typeof authorizeMattermostCommandInvocation>>, { ok: true }>
   | { ok: false; denyText: string };
 
-async function authorizeSlashInvocation(params: {
-  account: ResolvedMattermostAccount;
-  cfg: OpenClawConfig;
-  client: ReturnType<typeof createMattermostClient>;
-  commandText: string;
-  channelId: string;
-  senderId: string;
-  senderName: string;
-  log?: (msg: string) => void;
-}): Promise<SlashInvocationAuth> {
-  const { account, cfg, client, commandText, channelId, senderId, senderName, log } = params;
-  const core = getMattermostRuntime();
-
-  let channelInfo: MattermostChannel | null = null;
-  try {
-    channelInfo = await fetchMattermostChannel(client, channelId);
-  } catch (err) {
-    log?.(
-      `mattermost: slash channel lookup failed (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
-    );
-  }
-
-  if (!channelInfo) {
-    return {
-      ok: false,
-      denyText: "Temporary error: unable to determine channel type. Please try again.",
-    };
-  }
-
-  const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
-    cfg,
-    surface: "mattermost",
-  });
-  const hasControlCommand = core.channel.text.hasControlCommand(commandText, cfg);
-  const storeAllowFrom = normalizeMattermostAllowList(
-    await core.channel.pairing
-      .readAllowFromStore({
-        channel: "mattermost",
-        accountId: account.accountId,
-      })
-      .catch(() => []),
-  );
-  const decision = await authorizeMattermostCommandInvocation({
-    account,
-    cfg,
-    senderId,
-    senderName,
-    channelId,
-    channelInfo,
-    storeAllowFrom,
-    allowTextCommands,
-    hasControlCommand,
-  });
-
-  if (!decision.ok) {
-    if (decision.denyReason === "dm-pairing") {
-      const { code } = await core.channel.pairing.upsertPairingRequest({
-        channel: "mattermost",
-        accountId: account.accountId,
-        id: senderId,
-        meta: { name: senderName },
-      });
-      return {
-        ok: false,
-        denyText: core.channel.pairing.buildPairingReply({
-          channel: "mattermost",
-          idLine: `Your Mattermost user id: ${senderId}`,
-          code,
-        }),
-      };
-    }
-
-    const denyText =
-      decision.denyReason === "unknown-channel"
-        ? "Temporary error: unable to determine channel type. Please try again."
-        : decision.denyReason === "dm-disabled"
-          ? "This bot is not accepting direct messages."
-          : decision.denyReason === "channels-disabled"
-            ? "Slash commands are disabled in channels."
-            : decision.denyReason === "channel-no-allowlist"
-              ? "Slash commands are not configured for this channel (no allowlist)."
-              : "Unauthorized.";
-    return { ok: false, denyText };
-  }
-
-  return decision;
-}
-
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
-  const { account, cfg, runtime, registeredCommands, triggerMap, log, bodyTimeoutMs } = params;
+  const { account, cfg, runtime, registeredCommands, triggerMap, log } = params;
 
   return async (
     req: IncomingMessage,
@@ -446,7 +297,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    const body = bufferedBody ?? (await readSlashCommandBody(req, res, bodyTimeoutMs));
+    const body = bufferedBody ?? (await readSlashCommandBody(req, res));
     if (body === undefined) {
       return;
     }
@@ -478,13 +329,65 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
     });
 
-    const tokenIsCurrent = await validateMattermostSlashCommandToken({
-      accountId: account.accountId,
-      client,
-      registeredCommand,
-      payload,
-      log,
-    });
+    const validationAccountId = account.accountId;
+    const admittedCommand = registeredCommand;
+    const token = payload.token;
+    async function validateMattermostSlashCommandToken(): Promise<boolean> {
+      const lookupKey = commandLookupKey(client, admittedCommand, validationAccountId);
+      if (hasCachedCommandValidationFailure(lookupKey)) {
+        return false;
+      }
+      if (!commandLookupInflight.has(lookupKey)) {
+        const reservation = reserveCommandValidationLookup({
+          key: lookupKey,
+          accountId: validationAccountId,
+        });
+        if (!reservation.allowed) {
+          if (reservation.shouldLog) {
+            log?.(
+              `mattermost: slash command validation lookup rate-limited for /${admittedCommand.trigger}`,
+            );
+          }
+          return false;
+        }
+      }
+      let current: MattermostCommandResponse | null;
+      const existing = commandLookupInflight.get(lookupKey);
+      if (existing) {
+        current = await existing.promise;
+      } else {
+        const lookup = fetchCurrentMattermostCommandUncached({
+          client,
+          registered: admittedCommand,
+          log,
+        }).finally(() => {
+          commandLookupInflight.delete(lookupKey);
+        });
+        commandLookupInflight.set(lookupKey, { accountId: validationAccountId, promise: lookup });
+        current = await lookup;
+      }
+      if (!current || isDeletedMattermostCommand(current)) {
+        cacheCommandValidationFailure(lookupKey, validationAccountId);
+        return false;
+      }
+      if (
+        current.id !== admittedCommand.id ||
+        current.team_id !== admittedCommand.teamId ||
+        current.trigger !== admittedCommand.trigger ||
+        current.method !== MATTERMOST_SLASH_POST_METHOD ||
+        current.url !== admittedCommand.url
+      ) {
+        cacheCommandValidationFailure(lookupKey, validationAccountId);
+        return false;
+      }
+      if (!current.token || !safeEqualSecret(token, current.token)) {
+        cacheCommandValidationFailure(lookupKey, validationAccountId);
+        return false;
+      }
+      commandValidationFailureCache.delete(lookupKey);
+      return true;
+    }
+    const tokenIsCurrent = await validateMattermostSlashCommandToken();
     if (!tokenIsCurrent) {
       sendSlashCommandResponse(res, 401, "Unauthorized: invalid command token.");
       return;
@@ -498,16 +401,86 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     const senderId = payload.user_id;
     const senderName = payload.user_name ?? senderId;
 
-    const auth = await authorizeSlashInvocation({
-      account,
-      cfg,
-      client,
-      commandText,
-      channelId,
-      senderId,
-      senderName,
-      log,
-    });
+    async function authorizeSlashInvocation(): Promise<SlashInvocationAuth> {
+      const core = getMattermostRuntime();
+
+      let channelInfo: MattermostChannel | null = null;
+      try {
+        channelInfo = await fetchMattermostChannel(client, channelId);
+      } catch (err) {
+        log?.(
+          `mattermost: slash channel lookup failed (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
+        );
+      }
+
+      if (!channelInfo) {
+        return {
+          ok: false,
+          denyText: "Temporary error: unable to determine channel type. Please try again.",
+        };
+      }
+
+      const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+        cfg,
+        surface: "mattermost",
+      });
+      const hasControlCommand = core.channel.text.hasControlCommand(commandText, cfg);
+      const storeAllowFrom = normalizeMattermostAllowList(
+        await core.channel.pairing
+          .readAllowFromStore({
+            channel: "mattermost",
+            accountId: account.accountId,
+          })
+          .catch(() => []),
+      );
+      const decision = await authorizeMattermostCommandInvocation({
+        account,
+        cfg,
+        senderId,
+        senderName,
+        channelId,
+        channelInfo,
+        storeAllowFrom,
+        allowTextCommands,
+        hasControlCommand,
+      });
+
+      if (!decision.ok) {
+        if (decision.denyReason === "dm-pairing") {
+          const { code } = await core.channel.pairing.upsertPairingRequest({
+            channel: "mattermost",
+            accountId: account.accountId,
+            id: senderId,
+            meta: { name: senderName },
+          });
+          return {
+            ok: false,
+            denyText: code
+              ? core.channel.pairing.buildPairingReply({
+                  channel: "mattermost",
+                  idLine: `Your Mattermost user id: ${senderId}`,
+                  code,
+                })
+              : MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
+          };
+        }
+
+        const denyText =
+          decision.denyReason === "unknown-channel"
+            ? "Temporary error: unable to determine channel type. Please try again."
+            : decision.denyReason === "dm-disabled"
+              ? "This bot is not accepting direct messages."
+              : decision.denyReason === "channels-disabled"
+                ? "Slash commands are disabled in channels."
+                : decision.denyReason === "channel-no-allowlist"
+                  ? "Slash commands are not configured for this channel (no allowlist)."
+                  : "Unauthorized.";
+        return { ok: false, denyText };
+      }
+
+      return decision;
+    }
+    const auth = await authorizeSlashInvocation();
 
     if (!auth.ok) {
       sendSlashCommandResponse(res, 200, auth.denyText);
@@ -517,24 +490,208 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     // Acknowledge immediately — we'll send the actual reply asynchronously
     sendSlashCommandResponse(res, 200, "Processing...");
 
+    let replyRootId: string | undefined;
+
     try {
-      await handleSlashCommandAsync({
-        account,
+      const { kind, chatType, channelDisplay, roomLabel, commandAuthorized } = auth;
+      const teamId = payload.team_id;
+      const triggerId = payload.trigger_id;
+      const core = getMattermostRuntime();
+
+      const channelRoute = core.channel.routing.resolveAgentRoute({
         cfg,
-        runtime,
-        client,
-        commandText,
-        channelId,
-        senderId,
-        senderName,
-        teamId: payload.team_id,
-        triggerId: payload.trigger_id,
-        kind: auth.kind,
-        chatType: auth.chatType,
-        channelDisplay: auth.channelDisplay,
-        roomLabel: auth.roomLabel,
-        commandAuthorized: auth.commandAuthorized,
-        log,
+        channel: "mattermost",
+        accountId: account.accountId,
+        teamId,
+        peer: {
+          kind,
+          id: kind === "direct" ? senderId : channelId,
+        },
+      });
+      const thread = resolveMattermostThreadSessionContext({
+        baseSessionKey: channelRoute.sessionKey,
+        kind,
+        replyToMode: resolveMattermostReplyToMode(account, kind),
+        threadRootId: payload.root_id,
+      });
+      const route = { ...channelRoute, sessionKey: thread.sessionKey };
+      replyRootId = thread.effectiveReplyToId;
+
+      const fromLabel =
+        kind === "direct"
+          ? `Mattermost DM from ${senderName}`
+          : `Mattermost message in ${roomLabel} from ${senderName}`;
+
+      const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
+      const messageSid = triggerId ?? `slash-${Date.now()}`;
+      const pickerEntry = resolveMattermostModelPickerEntry(commandText);
+      if (pickerEntry) {
+        const accountId = account.accountId;
+        const sessionEntry = await getSessionEntryAsync({
+          agentId: route.agentId,
+          storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+          sessionKey: route.sessionKey,
+          readConsistency: "latest",
+        });
+        const recordModelPickerExchange = (replyText: string) =>
+          recordDeliveredCommandExchange({
+            config: cfg,
+            agentId: route.agentId,
+            sessionKey: route.sessionKey,
+            expectedSessionId: sessionEntry?.sessionId,
+            commandText,
+            commandId: `mattermost:${accountId}:${channelId}:${messageSid}`,
+            replyId: "model-picker",
+            replyText,
+          });
+        const data = await buildPreparedModelsProviderData(cfg, route.agentId, { sessionEntry });
+        if (data.providers.length === 0) {
+          const delivered = await sendMessageMattermost(
+            `channel:${channelId}`,
+            [data.refreshWarning, "No models available."].filter(Boolean).join("\n\n"),
+            { cfg, accountId, replyToId: replyRootId },
+          );
+          await recordModelPickerExchange(delivered.content);
+          return;
+        }
+
+        const currentModel = await resolveMattermostModelPickerCurrentModel({
+          cfg,
+          route,
+          data,
+          sessionEntry,
+        });
+        const viewParams = { ownerUserId: senderId, data, currentModel };
+        const view =
+          pickerEntry.kind === "summary"
+            ? renderMattermostModelSummaryView(viewParams)
+            : pickerEntry.kind === "providers"
+              ? renderMattermostProviderPickerView(viewParams)
+              : renderMattermostModelsPickerView({
+                  ...viewParams,
+                  provider: pickerEntry.provider,
+                  page: 1,
+                });
+        const delivered = await sendMessageMattermost(
+          `channel:${channelId}`,
+          [data.refreshWarning, view.text].filter(Boolean).join("\n\n"),
+          { cfg, accountId, buttons: view.buttons, replyToId: replyRootId },
+        );
+        await recordModelPickerExchange(
+          [
+            delivered.content,
+            ...view.buttons.map((row) => row.map((button) => button.text).join(", ")),
+          ].join("\n"),
+        );
+        runtime.log?.(`delivered model picker to ${to}`);
+        return;
+      }
+
+      const ctxPayload = finalizeInboundContext({
+        Body: commandText,
+        BodyForAgent: commandText,
+        RawBody: commandText,
+        CommandBody: commandText,
+        From:
+          kind === "direct"
+            ? `mattermost:${senderId}`
+            : kind === "group"
+              ? `mattermost:group:${channelId}`
+              : `mattermost:channel:${channelId}`,
+        To: to,
+        SessionKey: route.sessionKey,
+        ParentSessionKey: thread.parentSessionKey,
+        AccountId: route.accountId,
+        ChatType: chatType,
+        ConversationRouteContextObserved: true,
+        ConversationRoutePeerId: kind === "direct" ? senderId : channelId,
+        ConversationLabel: fromLabel,
+        GroupSpace: teamId,
+        GroupSubject: kind !== "direct" ? channelDisplay || roomLabel : undefined,
+        SenderName: senderName,
+        SenderId: senderId,
+        Provider: "mattermost" as const,
+        Surface: "mattermost" as const,
+        MessageSid: messageSid,
+        Timestamp: Date.now(),
+        WasMentioned: true,
+        CommandAuthorized: commandAuthorized,
+        InboundAccessAuthorized: true,
+        CommandSource: "native" as const,
+        OriginatingChannel: "mattermost" as const,
+        OriginatingTo: to,
+        ReplyToId: replyRootId,
+        MessageThreadId: replyRootId,
+      });
+
+      const textLimit = core.channel.text.resolveTextChunkLimit(
+        cfg,
+        "mattermost",
+        account.accountId,
+        {
+          fallbackLimit: account.textChunkLimit ?? 4000,
+        },
+      );
+      const tableMode = core.channel.text.resolveMarkdownTableMode({
+        cfg,
+        channel: "mattermost",
+        accountId: account.accountId,
+      });
+
+      await core.channel.inbound.dispatch({
+        cfg,
+        channel: "mattermost",
+        accountId: account.accountId,
+        route: {
+          agentId: route.agentId,
+          dmScope: route.dmScope,
+          sessionKey: route.sessionKey,
+        },
+        ctxPayload,
+        delivery: {
+          observeMessageSent: true,
+          deliver: async (replyPayload) => {
+            const result = await deliverMattermostReplyPayload({
+              core,
+              cfg,
+              payload: replyPayload,
+              channelId,
+              accountId: account.accountId,
+              agentId: route.agentId,
+              replyToId: replyRootId,
+              textLimit,
+              tableMode,
+              sendMessage: sendMessageMattermost,
+            });
+            if (result.visibleReplySent) {
+              runtime.log?.(`delivered slash reply to ${to}`);
+            }
+            return result;
+          },
+          onError: (err, info) => {
+            runtime.error?.(
+              `mattermost slash ${info.kind} reply failed (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
+            );
+          },
+        },
+        replyPipeline: {
+          typing: {
+            start: () => sendMattermostTyping(client, { channelId, parentId: replyRootId }),
+            onStartError: (err) => {
+              logTypingFailure({
+                log: (message) => log?.(message),
+                channel: "mattermost",
+                target: channelId,
+                error: err,
+              });
+            },
+          },
+        },
+        dispatcherOptions: { humanDelay: resolveHumanDelayConfig(cfg, route.agentId) },
+        replyOptions: {
+          disableBlockStreaming:
+            typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+        },
       });
     } catch (err) {
       log?.(
@@ -545,183 +702,11 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
           cfg,
           accountId: account.accountId,
+          replyToId: replyRootId,
         });
       } catch {
         // best-effort error reply
       }
     }
   };
-}
-
-async function handleSlashCommandAsync(params: {
-  account: ResolvedMattermostAccount;
-  cfg: OpenClawConfig;
-  runtime: RuntimeEnv;
-  client: ReturnType<typeof createMattermostClient>;
-  commandText: string;
-  channelId: string;
-  senderId: string;
-  senderName: string;
-  teamId: string;
-  kind: "direct" | "group" | "channel";
-  chatType: "direct" | "group" | "channel";
-  channelDisplay: string;
-  roomLabel: string;
-  commandAuthorized: boolean;
-  triggerId?: string;
-  log?: (msg: string) => void;
-}) {
-  const {
-    account,
-    cfg,
-    runtime,
-    client,
-    commandText,
-    channelId,
-    senderId,
-    senderName,
-    teamId,
-    kind,
-    chatType,
-    channelDisplay,
-    roomLabel,
-    commandAuthorized,
-    triggerId,
-    log,
-  } = params;
-  const core = getMattermostRuntime();
-
-  const route = core.channel.routing.resolveAgentRoute({
-    cfg,
-    channel: "mattermost",
-    accountId: account.accountId,
-    teamId,
-    peer: {
-      kind,
-      id: kind === "direct" ? senderId : channelId,
-    },
-  });
-
-  const fromLabel =
-    kind === "direct"
-      ? `Mattermost DM from ${senderName}`
-      : `Mattermost message in ${roomLabel} from ${senderName}`;
-
-  const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
-  const messageSid = triggerId ?? `slash-${Date.now()}`;
-  const pickerEntry = resolveMattermostModelPickerEntry(commandText);
-  if (pickerEntry) {
-    const hasModels = await deliverMattermostSlashModelPicker({
-      cfg,
-      route,
-      accountId: account.accountId,
-      channelId,
-      senderId,
-      commandText,
-      messageSid,
-      entry: pickerEntry,
-    });
-    if (hasModels) {
-      runtime.log?.(`delivered model picker to ${to}`);
-    }
-    return;
-  }
-
-  const ctxPayload = finalizeInboundContext({
-    Body: commandText,
-    BodyForAgent: commandText,
-    RawBody: commandText,
-    CommandBody: commandText,
-    From:
-      kind === "direct"
-        ? `mattermost:${senderId}`
-        : kind === "group"
-          ? `mattermost:group:${channelId}`
-          : `mattermost:channel:${channelId}`,
-    To: to,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: chatType,
-    ConversationRouteContextObserved: true,
-    ConversationRoutePeerId: kind === "direct" ? senderId : channelId,
-    ConversationLabel: fromLabel,
-    GroupSpace: teamId,
-    GroupSubject: kind !== "direct" ? channelDisplay || roomLabel : undefined,
-    SenderName: senderName,
-    SenderId: senderId,
-    Provider: "mattermost" as const,
-    Surface: "mattermost" as const,
-    MessageSid: messageSid,
-    Timestamp: Date.now(),
-    WasMentioned: true,
-    CommandAuthorized: commandAuthorized,
-    InboundAccessAuthorized: true,
-    CommandSource: "native" as const,
-    OriginatingChannel: "mattermost" as const,
-    OriginatingTo: to,
-  });
-
-  const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "mattermost", account.accountId, {
-    fallbackLimit: account.textChunkLimit ?? 4000,
-  });
-  const tableMode = core.channel.text.resolveMarkdownTableMode({
-    cfg,
-    channel: "mattermost",
-    accountId: account.accountId,
-  });
-
-  await core.channel.inbound.dispatch({
-    cfg,
-    channel: "mattermost",
-    accountId: account.accountId,
-    route: {
-      agentId: route.agentId,
-      dmScope: route.dmScope,
-      sessionKey: route.sessionKey,
-    },
-    ctxPayload,
-    delivery: {
-      observeMessageSent: true,
-      deliver: async (payload) => {
-        const result = await deliverMattermostReplyPayload({
-          core,
-          cfg,
-          payload,
-          channelId,
-          accountId: account.accountId,
-          agentId: route.agentId,
-          textLimit,
-          tableMode,
-          sendMessage: sendMessageMattermost,
-        });
-        if (result.visibleReplySent) {
-          runtime.log?.(`delivered slash reply to ${to}`);
-        }
-        return result;
-      },
-      onError: (err, info) => {
-        runtime.error?.(
-          `mattermost slash ${info.kind} reply failed (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
-        );
-      },
-    },
-    replyPipeline: {
-      typing: {
-        start: () => sendMattermostTyping(client, { channelId }),
-        onStartError: (err) => {
-          logTypingFailure({
-            log: (message) => log?.(message),
-            channel: "mattermost",
-            target: channelId,
-            error: err,
-          });
-        },
-      },
-    },
-    dispatcherOptions: { humanDelay: resolveHumanDelayConfig(cfg, route.agentId) },
-    replyOptions: {
-      disableBlockStreaming:
-        typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-    },
-  });
 }

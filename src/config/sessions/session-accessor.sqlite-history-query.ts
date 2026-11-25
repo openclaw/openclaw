@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type {
   SessionTranscriptDisplayDeltaResult,
@@ -10,13 +11,14 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPostgresSqlConnection, sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
+  boundHistoryAnchorPageRange,
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
   type TranscriptAnchorPageOptions,
   type TranscriptRecentReadLimits,
 } from "../../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindowOptions } from "../../sessions/transcript-read-window.js";
-import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
+import { isVisibleTranscriptRecord } from "../../sessions/transcript-record-visibility.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   TranscriptEvent,
@@ -62,14 +64,19 @@ import { createTranscriptRawDeltaCursor } from "./session-transcript-raw-cursor.
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { readTranscriptPayload } from "./transcript-payload.js";
 
-const recentHistoryWindows = new Map<
-  string,
-  {
-    database: CurrentTranscriptProjection["database"]["db"];
-    revision: string;
-    page: SessionTranscriptMessageEventPage;
-  }
->();
+const recentHistory = {
+  // Bun weakly retains named channels, so the cache owner must keep its subscription alive.
+  pressure: channel("openclaw.memory.critical"),
+  windows: new Map<
+    string,
+    {
+      database: CurrentTranscriptProjection["database"]["db"];
+      revision: string;
+      page: SessionTranscriptMessageEventPage;
+    }
+  >(),
+};
+recentHistory.pressure.subscribe(() => recentHistory.windows.clear());
 const historyWindowOwners = new WeakSet<CurrentTranscriptProjection["database"]["db"]>();
 
 function retainHistoryWindowOwner(database: CurrentTranscriptProjection["database"]["db"]): void {
@@ -78,9 +85,9 @@ function retainHistoryWindowOwner(database: CurrentTranscriptProjection["databas
   }
   registerNodeSqliteDisposeCallback(sqlPublicationAnchor(database), () => {
     // Closed handles must release cached pages and their connection-owned facts.
-    for (const [key, cached] of recentHistoryWindows) {
+    for (const [key, cached] of recentHistory.windows) {
       if (cached.database === database) {
-        recentHistoryWindows.delete(key);
+        recentHistory.windows.delete(key);
       }
     }
   });
@@ -196,7 +203,7 @@ function resolveRecentHistoryStart(
       }
       if (allowOversizedFirst && selectedCount === 0 && serializedBytes > SOURCE_PAGE_MAX_BYTES) {
         throw new Error(
-          `Transcript history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
+          `Chat history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
         );
       }
       if ((!allowOversizedFirst || selectedCount > 0) && bytes + serializedBytes > maxBytes) {
@@ -418,11 +425,11 @@ export function readRecentSessionTranscriptHistoryEventsFromProjection(
     options.maxBytes,
     Boolean(options.captureReadWindow),
   ]);
-  const cached = recentHistoryWindows.get(key);
+  const cached = recentHistory.windows.get(key);
   if (cached?.database === projection.database.db && cached.revision === revision) {
     return structuredClone(cached.page);
   }
-  recentHistoryWindows.delete(key);
+  recentHistory.windows.delete(key);
   return read((page, bytes) => {
     // Reuse the window's byte count, including a lone oversized event, without serializing again.
     if (bytes > 1024 * 1024) {
@@ -431,12 +438,12 @@ export function readRecentSessionTranscriptHistoryEventsFromProjection(
     try {
       const database = projection.database.db;
       retainHistoryWindowOwner(database);
-      recentHistoryWindows.set(key, {
+      recentHistory.windows.set(key, {
         database,
         revision,
         page: structuredClone(page),
       });
-      pruneMapToMaxSize(recentHistoryWindows, 16);
+      pruneMapToMaxSize(recentHistory.windows, 16);
     } catch {
       // Deep legacy JSON can be readable even when cloning exceeds the stack.
     }
@@ -622,7 +629,10 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
       true,
     );
     if (closedPage) {
-      return closedPage;
+      return {
+        ...closedPage,
+        ...(options.captureReadWindow ? { readWindow: captureHistoryReadWindow(history, []) } : {}),
+      };
     }
   }
   const windowChange = resolveHistoryReadWindowChange(
@@ -649,43 +659,58 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
     // Explicit anchors reopen the closed reset interval that still contains the
     // active-path row. Unanchored history and current-display lookup stay
     // latest-reset-relative; missing or off-path IDs stay not-found.
-    return (
-      (anchor &&
-        readHistoricalHistoryAnchorPage(projection, history.displaySource, anchor, options)) ?? {
-        events: [],
-        found: false,
-        hasOverreadContext: false,
-        offset: 0,
-        displaySource: history.displaySource,
-        totalMessages: history.total,
-      }
-    );
+    const historical =
+      anchor && readHistoricalHistoryAnchorPage(projection, history.displaySource, anchor, options);
+    if (historical) {
+      return {
+        ...historical,
+        ...(windowChange ? { windowReset: true } : {}),
+        ...(options.captureReadWindow ? { readWindow: captureHistoryReadWindow(history, []) } : {}),
+      };
+    }
+    return {
+      events: [],
+      found: false,
+      hasOverreadContext: false,
+      offset: 0,
+      displaySource: history.displaySource,
+      totalMessages: history.total,
+    };
   }
+
   const range = resolveHistoryAnchorPageRange(history.total, anchorSeq - 1, options);
   const limit = Math.min(options.maxBytes ?? SOURCE_PAGE_MAX_BYTES, SOURCE_PAGE_MAX_BYTES);
-  const { start } = resolveRecentHistoryStart(
+  const visible = resolveVisibleHistoryRange(history, range.readStart, range.endExclusive);
+  const sizes = new Map<number, number>();
+  let displayPosition = visible.boundedStart;
+  for (const row of iterateVisibleMessageMetadata(
     projection,
-    range.readStart,
-    range.endExclusive,
-    history,
+    visible.messageStart,
+    visible.messageEnd,
+    "asc",
+  )) {
+    while (visible.boundaries.has(displayPosition)) {
+      displayPosition++;
+    }
+    sizes.set(displayPosition++, row.serialized_bytes);
+  }
+  const { start, endExclusive } = boundHistoryAnchorPageRange(
+    range,
+    anchorSeq - 1,
     Math.max(1024, limit),
-    range.endExclusive - range.readStart,
+    (position) => visible.boundaries.get(position)?.serializedBytes ?? sizes.get(position) ?? 0,
     options.maxBytes === undefined,
   );
-  if (options.maxBytes === undefined && start !== range.readStart) {
-    throw new Error(
-      `Transcript history page exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte limit; request a smaller limit`,
-    );
-  }
-  const events = readVisibleHistoryRange(projection, start, range.endExclusive, history);
+  const events = readVisibleHistoryRange(projection, start, endExclusive, history);
   return {
     events,
-    ...(windowChange
-      ? { windowReset: true, readWindow: captureHistoryReadWindow(history, events) }
+    ...(windowChange ? { windowReset: true } : {}),
+    ...(windowChange || options.captureReadWindow
+      ? { readWindow: captureHistoryReadWindow(history, events) }
       : {}),
     found: true,
     hasOverreadContext: range.hasOverreadContext && start === range.readStart,
-    offset: range.offset,
+    offset: history.total - endExclusive,
     displaySource: history.displaySource,
     totalMessages: history.total,
   };

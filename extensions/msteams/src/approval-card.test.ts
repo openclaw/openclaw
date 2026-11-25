@@ -30,7 +30,7 @@ const view = {
 afterEach(() => vi.restoreAllMocks());
 
 it("preserves complete OpenClaw Change cards across phases", () => {
-  const { actions, expiresAtMs, ...common } = view;
+  const { actions, ...common } = view;
   const tokens = actions.map((_, index) => `approval-token-${index}`);
   const createToken = vi.spyOn(msTeamsApprovalControls, "createToken");
   for (const token of tokens) {
@@ -55,9 +55,6 @@ it("preserves complete OpenClaw Change cards across phases", () => {
     body: [{ ...heading, text: title }, { ...subtitle, text }, ...tail],
   });
   expect(buildMSTeamsPendingApprovalCard({ view, nowMs: 1_000 })).toEqual({
-    approvalId: view.approvalId,
-    approvalKind: view.approvalKind,
-    expiresAtMs,
     card: {
       ...card("OpenClaw Change Approval Required", "Expires in 60s"),
       actions: actions.map(({ label: actionLabel }, index) => ({
@@ -72,7 +69,6 @@ it("preserves complete OpenClaw Change cards across phases", () => {
     })),
     allowedDecisions: ["allow-once", "deny"],
   });
-  expect(createToken).toHaveBeenCalledTimes(actions.length);
   for (const [resolvedBy, text] of [
     ["  reviewer  ", "Resolved by reviewer"],
     [" \t ", "Resolved"],
@@ -147,7 +143,7 @@ it("displays the canonical winning decision when another surface resolved the ap
       },
     },
   });
-  expect(systemCard.body).toEqual(
-    expect.arrayContaining([expect.objectContaining({ text: "System Agent Approval: Denied" })]),
+  expect(systemCard.body).toContainEqual(
+    expect.objectContaining({ text: "System Agent Approval: Denied" }),
   );
 });

@@ -31,6 +31,12 @@ Measure every new or changed test file with
 `pnpm test <file> --maxWorkers=1`; report wall time and CI seconds once available;
 PRs state both.
 
+A PR may add up to 400 net test lines without a record. Above that, add a
+`config/test-lines-allocations/<change>.txt` record that covers the excess and
+state its necessity in the PR. See the
+[test-line budget](/ci/local-proof#test-line-budget) for the record format and
+comparison rules.
+
 - Seconds-long tests must prove a contract no cheaper layer can. Long end-to-end
   compositions belong in the release-only tier.
 - Target under 5 seconds of test time per file. Above 30 seconds, explain the
@@ -85,6 +91,15 @@ usually mean earlier-file shared-state leaks. Classify fixture state, missing
 completion signals, and product races. Repair the producer. If a removal caused
 the red, read its PR's accepted tradeoffs before restoring it. Choose repeat
 counts for the reproduced failure mode, not a fixed clean-run quota.
+
+The Control UI's non-isolated `unit` project reports per-test DOM leaks with
+`[ui-test-leak]` after fixture teardown. Reports name the test and leftover body
+children, body or HTML styles/classes, pointer captures, repository-owned global
+listeners, or fake timers. Node-environment tests still check fake timers. The
+guard currently reports without failing; fix the fixture or resource owner
+rather than adding an ignore list. Use `mountSolid` for owned render roots,
+dispose non-rendering owners, and restore document-wide state changed by a
+fixture. A unit report does not cover the separate real-browser project.
 
 ## Adding regressions (guidance)
 

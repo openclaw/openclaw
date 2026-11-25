@@ -5,7 +5,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { MessageChannel, receiveMessageOnPort, type Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS } from "../../gateway-shutdown-budget.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { findOpenFixtureFiles } from "../state/openclaw-state-ownership.test-support.js";
 import {
   classifyGatewayLockProcessNamespace,
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
@@ -31,6 +34,33 @@ afterEach(() => {
   vi.useRealTimers();
   vi.resetModules();
 });
+
+async function acquireGateway(prefix: string) {
+  const root = tempDirs.make(prefix);
+  const gateway = await acquireGatewayLock({
+    allowInTests: true,
+    env: { OPENCLAW_STATE_DIR: root },
+    timeoutMs: 0,
+  });
+  if (!gateway) {
+    throw new Error("Expected Gateway custody");
+  }
+  return { root, gateway };
+}
+
+function lockFixture(prefix: string, projection = false) {
+  const root = tempDirs.make(prefix);
+  const rootPath = path.join(root, "root.lock");
+  const projectionPath = path.join(root, "projection.lock");
+  const locks = {
+    [rootPath]: "root-owner",
+    ...(projection ? { [projectionPath]: "projection-owner" } : {}),
+  };
+  for (const [lockPath, raw] of Object.entries(locks)) {
+    fs.writeFileSync(lockPath, raw);
+  }
+  return { root, rootPath, projectionPath, locks };
+}
 
 function observeHeartbeatWorkers(
   fault?: "EIO" | "clock origin" | SharedArrayBuffer,
@@ -95,14 +125,7 @@ function observeHeartbeatWorkers(
 
 it.each([false, true])("keeps custody across worker clock origins (legacy=%s)", async (legacy) => {
   const { workers, ready } = observeHeartbeatWorkers("clock origin", legacy);
-  const gateway = await acquireGatewayLock({
-    allowInTests: true,
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-owner-clock-origin-") },
-    timeoutMs: 0,
-  });
-  if (!gateway) {
-    throw new Error("Expected Gateway custody");
-  }
+  const { gateway } = await acquireGateway("openclaw-owner-clock-origin-");
   try {
     await Promise.all(ready);
     expect(() => gateway.assertCurrent()).not.toThrow();
@@ -147,11 +170,11 @@ it("keeps the selected heartbeat generation alive through native retirement", as
       await Promise.all(ready);
       expect(fs.readFileSync(markerPath, "utf8")).toBe("selected");
       expect(heartbeat.inspect()).toBeGreaterThan(0);
-      heartbeat.stop();
+      await heartbeat.stop();
     }, release);
     expect(release).toHaveBeenCalledOnce();
   } finally {
-    heartbeat?.stop();
+    await heartbeat?.stop();
     await Promise.all(workers.map((worker) => worker.terminate()));
   }
 });
@@ -182,6 +205,12 @@ async function startRuntime(
     } satisfies GatewayStateOwnerHeartbeatData,
     parent.port2,
   );
+  const stop = async () => {
+    parent.port1.postMessage("stop");
+    await closed;
+    parent.port1.close();
+    events.port1.close();
+  };
   return {
     lastBeat,
     readEvents() {
@@ -192,12 +221,8 @@ async function startRuntime(
       }
       return messages;
     },
-    async stop() {
-      parent.port1.postMessage("stop");
-      await closed;
-      parent.port1.close();
-      events.port1.close();
-    },
+    stop,
+    [Symbol.asyncDispose]: stop,
   };
 }
 
@@ -217,15 +242,84 @@ it.each(["reparented", "unchanged ppid"])(
     const oldStamp = new Date(Date.now() - 30_000);
     fs.utimesSync(rootPath, oldStamp, oldStamp);
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-    const runtime = await startRuntime({ [rootPath]: raw });
+    await using runtime = await startRuntime({ [rootPath]: raw });
+    expect(runtime.readEvents()).toContain("parent-lost");
+    expect(kill.mock.calls).toEqual(kind === "unchanged ppid" ? [[process.ppid, 0]] : []);
+    expect(fs.statSync(rootPath).mtimeMs).toBeGreaterThan(oldStamp.getTime());
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(kill).toHaveBeenLastCalledWith(process.pid, "SIGKILL");
+  },
+);
+
+it.each(["resume", "replace", "stop"] as const)(
+  "keeps the main thread responsive during expired timer renewal: %s",
+  async (ending) => {
+    const { rootPath } = lockFixture("openclaw-owner-async-renewal-");
+    const held = new Set([{ lockPath: rootPath, verifyStillHeld: () => true }]);
+    const { workers, ready, beats } = observeHeartbeatWorkers();
+    const lost = vi.fn();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const heartbeat = startGatewayStateOwnerHeartbeat(held, lost);
+    const opened = createDeferredCore();
+    const resume = createDeferredCore();
+    const open = fs.promises.open.bind(fs.promises);
+    const openSync = fs.openSync;
+    let synchronousOpens = 0;
     try {
-      expect(runtime.readEvents()).toContain("parent-lost");
-      expect(kill).not.toHaveBeenCalled();
-      expect(fs.statSync(rootPath).mtimeMs).toBeGreaterThan(oldStamp.getTime());
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(kill).toHaveBeenLastCalledWith(process.pid, "SIGKILL");
+      await Promise.all(ready);
+      await workers[0]!.terminate();
+      vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
+        if (args[0] === rootPath) {
+          opened.resolve();
+          await resume.promise;
+        }
+        return open(...args);
+      });
+      vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+        if (pathname === rootPath) {
+          synchronousOpens++;
+        }
+        return openSync(pathname, flags, mode);
+      });
+      const stale = BigInt(Date.now() - 65_000);
+      Atomics.store(beats[0]!, 0, stale);
+      vi.advanceTimersByTime(60_000);
+      expect(synchronousOpens).toBe(0);
+      await opened.promise;
+      let responsive = false;
+      setTimeout(() => {
+        responsive = true;
+      }, 0);
+      vi.advanceTimersByTime(0);
+      expect(responsive).toBe(true);
+      expect(Atomics.load(beats[0]!, 0)).toBe(stale);
+      if (ending === "replace") {
+        fs.renameSync(rootPath, `${rootPath}.retired`);
+        fs.copyFileSync(`${rootPath}.retired`, rootPath);
+      } else if (ending === "stop") {
+        held.clear();
+        void heartbeat.stop();
+      }
+      resume.resolve();
+      if (ending === "resume") {
+        await vi.waitFor(() => expect(Atomics.load(beats[0]!, 0)).toBeGreaterThan(stale));
+        expect(lost).not.toHaveBeenCalled();
+      } else if (ending === "replace") {
+        await vi.waitFor(() => expect(lost).toHaveBeenCalledOnce());
+        expect(lost.mock.calls[0]?.[0]).toHaveProperty(
+          "message",
+          expect.stringContaining("removed or replaced"),
+        );
+        expect(Atomics.load(beats[0]!, 0)).toBe(stale);
+      } else {
+        await vi.waitFor(() => expect(vi.getTimerCount()).toBe(0));
+        expect(lost).not.toHaveBeenCalled();
+        expect(Atomics.load(beats[0]!, 0)).toBe(stale);
+      }
     } finally {
-      await runtime.stop();
+      resume.resolve();
+      await heartbeat.stop();
+      await Promise.all(workers.map((worker) => worker.terminate()));
     }
   },
 );
@@ -250,32 +344,21 @@ it.each([65_000, -5_000])(
   },
 );
 
-it.each([65_000, -5_000, "replacement"] as const)(
-  "rechecks parent custody after %s before fencing",
+it.each([65_000, -5_000] as const)(
+  "refuses expired custody after %s without synchronous filesystem recovery",
   async (age) => {
     const { workers, ready, beats } = observeHeartbeatWorkers();
-    const gateway = await acquireGatewayLock({
-      allowInTests: true,
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-owner-parent-gap-") },
-      timeoutMs: 0,
-    });
-    if (!gateway) {
-      throw new Error("Expected Gateway custody");
-    }
+    const { gateway } = await acquireGateway("openclaw-owner-parent-gap-");
     try {
       await Promise.all(ready);
-      await workers[0]!.terminate();
-      if (age === "replacement") {
-        fs.renameSync(gateway.lockPath, `${gateway.lockPath}.retired`);
-        fs.copyFileSync(`${gateway.lockPath}.retired`, gateway.lockPath);
-      }
-      Atomics.store(beats[0]!, 0, BigInt(Date.now() - (typeof age === "number" ? age : 65_000)));
-      if (age === "replacement") {
-        expect(() => gateway.assertCurrent()).toThrow("owner lock was removed or replaced");
-      } else {
-        expect(() => gateway.assertCurrent()).not.toThrow();
-        expect(Date.now() - Number(Atomics.load(beats[0]!, 0))).toBeLessThan(1_000);
-      }
+      Atomics.store(beats[0]!, 0, BigInt(Date.now() - age));
+      const open = vi.spyOn(fs, "openSync");
+      const stat = vi.spyOn(fs, "lstatSync");
+      expect(() => gateway.assertCurrent()).toThrow("renewal is overdue");
+      expect(open).not.toHaveBeenCalled();
+      expect(stat).not.toHaveBeenCalled();
+      open.mockRestore();
+      stat.mockRestore();
     } finally {
       await gateway.release();
       await Promise.all(workers.map((worker) => worker.terminate()));
@@ -315,48 +398,44 @@ it.each([
     const previous = new Date(Date.now() - 300_000);
     fs.utimesSync(rootPath, previous, previous);
     const seed = BigInt((clock === "monotonic" ? 500_000 : Date.now()) - age);
-    const runtime = await startRuntime({ [rootPath]: raw }, { clock: undefined, seed });
-    try {
-      expect(vi.getTimerCount()).toBe(shouldRenew ? 1 : 0);
-      expect(fs.statSync(rootPath).mtimeMs).toBe(shouldRenew ? Date.now() : previous.getTime());
-      if (!shouldRenew) {
-        expect(Atomics.load(runtime.lastBeat, 0)).toBe(seed);
-        expect(runtime.readEvents()).toEqual([
-          `${rootPath}: heartbeat clock could not be identified`,
-        ]);
-      }
-    } finally {
-      await runtime.stop();
+    await using runtime = await startRuntime({ [rootPath]: raw }, { clock: undefined, seed });
+    expect(vi.getTimerCount()).toBe(shouldRenew ? 1 : 0);
+    expect(fs.statSync(rootPath).mtimeMs).toBe(shouldRenew ? Date.now() : previous.getTime());
+    if (!shouldRenew) {
+      expect(Atomics.load(runtime.lastBeat, 0)).toBe(seed);
+      expect(runtime.readEvents()).toEqual([
+        `${rootPath}: heartbeat clock could not be identified`,
+      ]);
     }
   },
 );
 
 it("bounds persistent EIO renewal failures without losing healthy custody", async () => {
-  const rootPath = path.join(tempDirs.make("openclaw-owner-heartbeat-io-"), "root.lock");
-  fs.writeFileSync(rootPath, "root-owner");
+  const { rootPath, locks } = lockFixture("openclaw-owner-heartbeat-io-");
   vi.spyOn(fs, "futimesSync").mockImplementation(() => {
     throw Object.assign(new Error("synthetic EIO renewing owner"), { code: "EIO" });
   });
-  const runtime = await startRuntime({ [rootPath]: "root-owner" });
-  const initialBeat = Atomics.load(runtime.lastBeat, 0);
-  try {
+  {
+    await using runtime = await startRuntime(locks);
+    const initialBeat = Atomics.load(runtime.lastBeat, 0);
     vi.advanceTimersByTime(59_999);
     expect(vi.getTimerCount()).toBe(1);
     vi.advanceTimersByTime(1);
     const events = runtime.readEvents();
     expect(events).toContain(`${rootPath}: utimes renewal failed: synthetic EIO renewing owner`);
     expect(Atomics.load(runtime.lastBeat, 0)).toBe(initialBeat);
-    expect(events.at(-1)).toBe(`${rootPath}: utimes renewal failed: synthetic EIO renewing owner`);
+    expect(events.at(-1)).toEqual({
+      type: "lost",
+      lockPath: rootPath,
+      error: `${rootPath}: utimes renewal failed: synthetic EIO renewing owner`,
+    });
     expect(vi.getTimerCount()).toBe(0);
-  } finally {
-    await runtime.stop();
   }
   expect(vi.getTimerCount()).toBe(0);
 });
 
 it("keeps the failure deadline ahead of mtime expiry after a slow successful touch", async () => {
-  const rootPath = path.join(tempDirs.make("openclaw-owner-heartbeat-slow-"), "root.lock");
-  fs.writeFileSync(rootPath, "root-owner");
+  const { rootPath, locks } = lockFixture("openclaw-owner-heartbeat-slow-");
   const touch = fs.futimesSync;
   let first = true;
   vi.spyOn(fs, "futimesSync").mockImplementation((lockPath, atime, mtime) => {
@@ -368,7 +447,7 @@ it("keeps the failure deadline ahead of mtime expiry after a slow successful tou
     vi.advanceTimersByTime(40_000);
     touch(lockPath, atime, mtime);
   });
-  const runtime = await startRuntime({ [rootPath]: "root-owner" });
+  const runtime = await startRuntime(locks);
   try {
     vi.advanceTimersByTime(19_999);
     expect(vi.getTimerCount()).toBe(1);
@@ -383,29 +462,21 @@ it("keeps the failure deadline ahead of mtime expiry after a slow successful tou
 });
 
 it("renews physical custody when the wall clock moves behind the last heartbeat", async () => {
-  const rootPath = path.join(tempDirs.make("openclaw-owner-heartbeat-clock-"), "root.lock");
-  fs.writeFileSync(rootPath, "root-owner");
-  const runtime = await startRuntime({ [rootPath]: "root-owner" });
-  try {
-    vi.setSystemTime(Date.now() - 120_000);
-    vi.advanceTimersByTime(15_000);
-    expect(vi.getTimerCount()).toBe(1);
-    expect(Number(Atomics.load(runtime.lastBeat, 0))).toBe(Date.now());
-    expect(fs.statSync(rootPath).mtimeMs).toBe(Date.now());
-    expect(runtime.readEvents()).toEqual([null, null]);
-  } finally {
-    await runtime.stop();
-  }
+  const { rootPath, locks } = lockFixture("openclaw-owner-heartbeat-clock-");
+  await using runtime = await startRuntime(locks);
+  vi.setSystemTime(Date.now() - 120_000);
+  vi.advanceTimersByTime(15_000);
+  expect(vi.getTimerCount()).toBe(1);
+  expect(Number(Atomics.load(runtime.lastBeat, 0))).toBe(Date.now());
+  expect(fs.statSync(rootPath).mtimeMs).toBe(Date.now());
+  expect(runtime.readEvents()).toEqual([null, null]);
 });
 
 it("bounds shared custody by the oldest mtime after clock rollback between locks", async () => {
-  const root = tempDirs.make("openclaw-owner-heartbeat-between-locks-");
-  const rootPath = path.join(root, "root.lock");
-  const projectionPath = path.join(root, "projection.lock");
-  const locks = { [rootPath]: "root-owner", [projectionPath]: "projection-owner" };
-  for (const [lockPath, raw] of Object.entries(locks)) {
-    fs.writeFileSync(lockPath, raw);
-  }
+  const { rootPath, projectionPath, locks } = lockFixture(
+    "openclaw-owner-heartbeat-between-locks-",
+    true,
+  );
   const rootInode = fs.statSync(rootPath).ino;
   const touch = fs.futimesSync;
   let shiftClock = false;
@@ -420,31 +491,21 @@ it("bounds shared custody by the oldest mtime after clock rollback between locks
       }
     }
   });
-  const runtime = await startRuntime(locks);
-  try {
-    shiftClock = true;
-    vi.advanceTimersByTime(15_000);
-    const oldestMtime = Math.min(
-      fs.statSync(rootPath).mtimeMs,
-      fs.statSync(projectionPath).mtimeMs,
-    );
-    expect(fs.statSync(projectionPath).mtimeMs).toBeLessThan(fs.statSync(rootPath).mtimeMs);
-    expect(Number(Atomics.load(runtime.lastBeat, 0))).toBeLessThanOrEqual(oldestMtime);
-    expect(vi.getTimerCount()).toBe(1);
-  } finally {
-    await runtime.stop();
-  }
+  await using runtime = await startRuntime(locks);
+  shiftClock = true;
+  vi.advanceTimersByTime(15_000);
+  const oldestMtime = Math.min(fs.statSync(rootPath).mtimeMs, fs.statSync(projectionPath).mtimeMs);
+  expect(fs.statSync(projectionPath).mtimeMs).toBeLessThan(fs.statSync(rootPath).mtimeMs);
+  expect(Number(Atomics.load(runtime.lastBeat, 0))).toBeLessThanOrEqual(oldestMtime);
+  expect(vi.getTimerCount()).toBe(1);
 });
 
 it("never publishes renewed custody after a partial failure across clock rollback", async () => {
-  const root = tempDirs.make("openclaw-owner-heartbeat-captured-clock-");
-  const rootPath = path.join(root, "root.lock");
-  const projectionPath = path.join(root, "projection.lock");
-  const locks = { [rootPath]: "root-owner", [projectionPath]: "projection-owner" };
-  for (const [lockPath, raw] of Object.entries(locks)) {
-    fs.writeFileSync(lockPath, raw);
-  }
-  const runtime = await startRuntime(locks);
+  const { rootPath, projectionPath, locks } = lockFixture(
+    "openclaw-owner-heartbeat-captured-clock-",
+    true,
+  );
+  await using runtime = await startRuntime(locks);
   const initialBeat = Atomics.load(runtime.lastBeat, 0);
   const projectionInode = fs.statSync(projectionPath).ino;
   const touch = fs.futimesSync;
@@ -455,17 +516,13 @@ it("never publishes renewed custody after a partial failure across clock rollbac
     touch(fd, atime, mtime);
   });
   vi.setSystemTime(Date.now() - 120_000);
-  try {
-    vi.advanceTimersByTime(15_000);
-    expect(fs.statSync(rootPath).mtimeMs).toBe(Date.now());
-    expect(Atomics.load(runtime.lastBeat, 0)).toBe(initialBeat);
-    expect(vi.getTimerCount()).toBe(0);
-    expect(runtime.readEvents()).toContain(
-      `${projectionPath}: utimes renewal failed: synthetic projection renewal failure`,
-    );
-  } finally {
-    await runtime.stop();
-  }
+  vi.advanceTimersByTime(15_000);
+  expect(fs.statSync(rootPath).mtimeMs).toBe(Date.now());
+  expect(Atomics.load(runtime.lastBeat, 0)).toBe(initialBeat);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(runtime.readEvents()).toContain(
+    `${projectionPath}: utimes renewal failed: synthetic projection renewal failure`,
+  );
 });
 
 it("fences state admission with a visible reason when renewal still fails after the deadline", async () => {
@@ -491,17 +548,11 @@ it("fences state admission with a visible reason when renewal still fails after 
     if (!worker || !lastBeat) {
       throw new Error("Expected one heartbeat worker and its shared observation");
     }
-    vi.spyOn(fs, "futimesSync").mockImplementation(() => {
-      throw Object.assign(new Error("synthetic EIO"), { code: "EIO" });
-    });
     expect(() => gateway.assertCurrent()).not.toThrow();
     Atomics.store(lastBeat, 0, BigInt(Date.now() - 60_001));
+    expect(() => gateway.assertCurrent()).toThrow("renewal is overdue");
+    await vi.waitFor(() => expect(owner.signal.aborted).toBe(true), { timeout: 3_000 });
     const reason = "synthetic EIO";
-    expect(() => gateway.assertCurrent()).toThrow(reason);
-    expect(owner.signal.aborted).toBe(true);
-    expect(owner.signal.reason).toMatchObject({
-      message: expect.stringContaining(gateway.lockPath),
-    });
     expect(() => owner.assertCurrent()).toThrow(reason);
     expect(() => acquireStateDatabaseSchemaLease(databasePath)).toThrow(
       expect.objectContaining({
@@ -518,15 +569,7 @@ it("fences state admission with a visible reason when renewal still fails after 
 
 it("renews retained custody during synchronous work and never touches a successor", async () => {
   const { workers, ready } = observeHeartbeatWorkers();
-  const root = tempDirs.make("openclaw-owner-worker-");
-  const gateway = await acquireGatewayLock({
-    allowInTests: true,
-    env: { OPENCLAW_STATE_DIR: root },
-    timeoutMs: 0,
-  });
-  if (!gateway) {
-    throw new Error("Expected Gateway custody");
-  }
+  const { root, gateway } = await acquireGateway("openclaw-owner-worker-");
   const retained = acquireStateDatabaseSchemaLease(path.join(root, "state", "openclaw.sqlite"));
   try {
     await Promise.all(ready);
@@ -551,7 +594,7 @@ it("renews retained custody during synchronous work and never touches a successo
       if (namespace && "pidNsInode" in namespace) {
         expect(
           classifyGatewayLockProcessNamespace(
-            { ...namespace, pidNsInode: "foreign-observer" },
+            { processNamespace: { ...namespace, pidNsInode: "foreign-observer" } },
             file.lockPath,
           ),
         ).toBe("unknown");
@@ -586,21 +629,11 @@ it("renews retained custody during synchronous work and never touches a successo
 it("never renews a successor after suspension between verification and the timestamp syscall", async () => {
   const pause = new Int32Array(new SharedArrayBuffer(4));
   const { workers, ready } = observeHeartbeatWorkers(pause.buffer);
-  const root = tempDirs.make("openclaw-owner-paused-");
-  const gateway = await acquireGatewayLock({
-    allowInTests: true,
-    env: { OPENCLAW_STATE_DIR: root },
-    timeoutMs: 0,
-  });
-  if (!gateway) {
-    throw new Error("Expected Gateway custody");
-  }
+  const { root, gateway } = await acquireGateway("openclaw-owner-paused-");
   try {
     expect(await Promise.all(ready)).toEqual([["paused"]]);
-    const worker = workers[0];
-    if (!worker) {
-      throw new Error("Expected the paused heartbeat worker");
-    }
+    const worker = workers[0]!;
+    const owner = captureGatewayStateOwner(path.join(root, "state", "openclaw.sqlite"))!;
     const exited = once(worker, "exit");
     const held = fs.statSync(gateway.lockPath, { bigint: true });
     fs.renameSync(gateway.lockPath, `${gateway.lockPath}.retired`);
@@ -612,6 +645,8 @@ it("never renews a successor after suspension between verification and the times
     Atomics.store(pause, 0, 1);
     Atomics.notify(pause, 0);
     await exited;
+    expect(owner.signal.aborted).toBe(true);
+    expect(owner.signal.reason.message).toContain("owner lock was removed or replaced");
     expect(fs.statSync(gateway.lockPath, { bigint: true }).mtimeNs).toBe(successor.mtimeNs);
     expect(fs.readFileSync(gateway.lockPath, "utf8")).toBe("successor");
   } finally {
@@ -622,14 +657,41 @@ it("never renews a successor after suspension between verification and the times
   }
 });
 
+it.each(["root", "projection"] as const)(
+  "publishes physical %s loss from the heartbeat worker without host lock polling",
+  async (kind) => {
+    const { workers, ready } = observeHeartbeatWorkers();
+    const { root, gateway } = await acquireGateway("openclaw-owner-physical-loss-");
+    try {
+      const owner = captureGatewayStateOwner(path.join(root, "state", "openclaw.sqlite"))!;
+      await Promise.all(ready);
+      const open = vi.spyOn(fs, "openSync");
+      const stat = vi.spyOn(fs, "lstatSync");
+      for (let index = 0; index < 20; index++) {
+        gateway.assertCurrent();
+      }
+      expect(open).not.toHaveBeenCalled();
+      expect(stat).not.toHaveBeenCalled();
+      open.mockRestore();
+      stat.mockRestore();
+      const lockPath = kind === "root" ? gateway.lockPath : gateway.stateLockPath;
+      fs.writeFileSync(lockPath, "synthetic-successor");
+      await vi.waitFor(() => expect(owner.signal.aborted).toBe(true), { timeout: 3_000 });
+      expect(() => gateway.assertCurrent()).toThrow("removed or replaced");
+      await gateway.release();
+      expect(fs.readFileSync(lockPath, "utf8")).toBe("synthetic-successor");
+    } finally {
+      await gateway.release();
+      await Promise.all(workers.map((worker) => worker.terminate()));
+    }
+  },
+);
+
 it("keeps renewing the root when a projection disappears during its heartbeat", async () => {
-  const root = tempDirs.make("openclaw-owner-heartbeat-release-");
-  const rootPath = path.join(root, "root.lock");
-  const projectionPath = path.join(root, "projection.lock");
-  const locks = { [rootPath]: "root-owner", [projectionPath]: "projection-owner" };
-  for (const [lockPath, raw] of Object.entries(locks)) {
-    fs.writeFileSync(lockPath, raw);
-  }
+  const { rootPath, projectionPath, locks } = lockFixture(
+    "openclaw-owner-heartbeat-release-",
+    true,
+  );
   const touch = fs.futimesSync;
   vi.spyOn(fs, "futimesSync").mockImplementation((fd, atime, mtime) => {
     if (fs.existsSync(projectionPath) && fs.fstatSync(fd).ino === fs.statSync(projectionPath).ino) {
@@ -637,15 +699,85 @@ it("keeps renewing the root when a projection disappears during its heartbeat", 
     }
     touch(fd, atime, mtime);
   });
-  const runtime = await startRuntime(locks);
+  await using runtime = await startRuntime(locks);
+  expect(() => vi.advanceTimersByTime(GATEWAY_OWNER_HEARTBEAT_STALE_MS + 2_000)).not.toThrow();
+  expect(fs.existsSync(projectionPath)).toBe(false);
+  expect(Atomics.load(runtime.lastBeat, 0)).toBeGreaterThan(0n);
+  expect(vi.getTimerCount()).toBe(1);
+  expect(Date.now() - fs.statSync(rootPath).mtimeMs).toBeLessThan(15_000);
+  expect(runtime.readEvents().filter((event) => event !== null)).toEqual([
+    {
+      type: "lost",
+      lockPath: projectionPath,
+      error: `${projectionPath}: owner lock was removed or replaced`,
+    },
+  ]);
+});
+
+it.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
+  "closes deleted heartbeat locks before stop completes",
+  async () => {
+    const { root, locks } = lockFixture("openclaw-owner-close-", true);
+    const heartbeat = startGatewayStateOwnerHeartbeat(
+      new Set(Object.keys(locks).map((lockPath) => ({ lockPath, verifyStillHeld: () => true }))),
+      (error) => {
+        throw error;
+      },
+    );
+    try {
+      await once(heartbeat.worker, "message");
+      for (const lockPath of Object.keys(locks)) {
+        fs.unlinkSync(lockPath);
+      }
+      await heartbeat.stop();
+      expect(findOpenFixtureFiles(new Set([root]))).toEqual([]);
+    } finally {
+      await heartbeat.stop();
+    }
+  },
+);
+
+it("bounds an unresponsive heartbeat close and warns before forced termination", async () => {
+  const { rootPath } = lockFixture("openclaw-owner-close-timeout-");
+  const createWorker = workerCpu.createCpuTrackedWorker;
+  vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((_url, options) =>
+    createWorker(
+      new URL(
+        `data:text/javascript,${encodeURIComponent(`
+        import { parentPort } from "node:worker_threads";
+        parentPort.on("message", () => {});
+        parentPort.postMessage(null);
+      `)}`,
+      ),
+      options,
+    ),
+  );
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const heartbeat = startGatewayStateOwnerHeartbeat(
+    new Set([{ lockPath: rootPath, verifyStillHeld: () => true }]),
+    (error) => {
+      throw error;
+    },
+  );
   try {
-    expect(() => vi.advanceTimersByTime(GATEWAY_OWNER_HEARTBEAT_STALE_MS + 2_000)).not.toThrow();
-    expect(fs.existsSync(projectionPath)).toBe(false);
-    expect(Atomics.load(runtime.lastBeat, 0)).toBeGreaterThan(0n);
-    expect(vi.getTimerCount()).toBe(1);
-    expect(Date.now() - fs.statSync(rootPath).mtimeMs).toBeLessThan(15_000);
-    expect(runtime.readEvents().every((event) => event === null)).toBe(true);
+    await once(heartbeat.worker, "message");
+    const stopped = heartbeat.stop();
+    await vi.advanceTimersByTimeAsync(RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS - 1);
+    expect(heartbeat.worker.threadId).not.toBe(-1);
+    expect(warning).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await stopped;
+    await heartbeat.stop();
+    expect(heartbeat.worker.threadId).toBe(-1);
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("forcing termination"),
+      {
+        code: "GATEWAY_STATE_HEARTBEAT_CLOSE_TIMEOUT",
+      },
+    );
   } finally {
-    await runtime.stop();
+    await heartbeat.worker.terminate();
+    await heartbeat.stop();
   }
 });

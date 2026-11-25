@@ -11,8 +11,10 @@ import {
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { isProcessAlive as isProcessRunning } from "../../../test-support/process.test-support.js";
 import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
 import { defaultMantisCommandRunner, type MantisCommandRunner } from "./run-command.runtime.js";
+import { captureMantisDirectoryOwnership } from "./run-directory.runtime.js";
 import { runMantisBeforeAfter, type MantisBeforeAfterOptions } from "./run.runtime.js";
 import { successfulCommandResult, type StubCommandResult } from "./run.test-support.js";
 
@@ -41,15 +43,6 @@ const readText = (file: string) => fs.readFile(file, "utf8");
 const expectText = (file: string, text: string) => expect(readText(file)).resolves.toBe(text);
 const expectMissing = (file: string) =>
   expect(fs.lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
-
-function isProcessRunning(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 type SettledRun = { status: "fulfilled" } | { error: unknown; status: "rejected" };
 
@@ -336,6 +329,10 @@ process.exit(result.status ?? 1);
       await initializeGitRepo(repoRoot);
       const worktreeDir = path.join(repoRoot, ".artifacts", "missing-worktree", "baseline");
       await addWorktree(repoRoot, worktreeDir);
+      const ownership = await captureMantisDirectoryOwnership({
+        directoryPath: worktreeDir,
+        repoRoot,
+      });
       await fs.rm(worktreeDir, { force: true, recursive: true });
 
       await expect(
@@ -345,6 +342,7 @@ process.exit(result.status ?? 1);
           repoRoot,
           runner: defaultMantisCommandRunner,
           worktreeDir,
+          ownership,
         }),
       ).rejects.toThrow("baseline worktree cleanup left registered path");
 

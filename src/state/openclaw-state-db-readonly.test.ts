@@ -12,6 +12,7 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -58,6 +59,9 @@ function createClosedState(stateDir: string) {
   return options;
 }
 
+const snapshot = <T>(operation: () => T) =>
+  withArtifactPreservingStateReads(() => withSynchronousArtifactPreservingStateSnapshot(operation));
+
 function createWalFixture(root: string) {
   const options = createClosedState(root);
   const writer = new DatabaseSync(options.path);
@@ -85,65 +89,47 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it.each([undefined, "EACCES"])(
-  "keeps authoritative state availability (filesystem failure: %s)",
-  async (code) => {
-    await withTempDir("openclaw-state-availability-", async (root) => {
-      const options = createOptions(root);
-      if (code) {
-        const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
-          throw Object.assign(new Error("synthetic filesystem observation"), { code });
-        });
+it("keeps authoritative state availability through missing paths and filesystem failures", async () => {
+  await withTempDir("openclaw-state-availability-", async (root) => {
+    const options = createOptions(root);
+    const asyncRead = (selected = options) =>
+      withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(() => {
+        throw new Error("An unavailable source reached its read callback");
+      }, selected);
+    await expect(asyncRead()).resolves.toBeUndefined();
+    fs.writeFileSync(path.join(root, "file"), "not a directory");
+    await expect(
+      asyncRead({ ...options, path: path.join(root, "file", "state.sqlite") }),
+    ).rejects.toMatchObject({ code: "ENOTDIR" });
+    expect(
+      isOpenClawStateDatabaseDefinitelyAbsent({
+        ...options.env,
+        OPENCLAW_STATE_DIR: path.join(root, "file"),
+      }),
+    ).toBe(false);
+    expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(true);
+    openOpenClawStateDatabase(options);
+    const observeMissingPath = (retained: boolean) => {
+      const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
+        throw Object.assign(new Error("synthetic missing-path observation"), { code: "ENOENT" });
+      });
+      syncBuiltinESMExports();
+      try {
+        expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(!retained);
+        expect(probe).toHaveBeenCalledTimes(retained ? 0 : 1);
+      } finally {
+        probe.mockRestore();
         syncBuiltinESMExports();
-        try {
-          expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(false);
-          expect(probe).toHaveBeenCalledOnce();
-        } finally {
-          probe.mockRestore();
-          syncBuiltinESMExports();
-        }
-        return;
       }
-      expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(true);
-      openOpenClawStateDatabase(options);
-      const observeMissingPath = (retained: boolean) => {
-        const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
-          throw Object.assign(new Error("synthetic missing-path observation"), { code: "ENOENT" });
-        });
-        syncBuiltinESMExports();
-        try {
-          expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(!retained);
-          expect(probe).toHaveBeenCalledTimes(retained ? 0 : 1);
-        } finally {
-          probe.mockRestore();
-          syncBuiltinESMExports();
-        }
-      };
-      observeMissingPath(true);
-      closeOpenClawStateDatabaseForTest();
-      await withOpenClawStateDatabaseReadSnapshot(async () => observeMissingPath(true), options);
-      withArtifactPreservingStateReads(() =>
-        withSynchronousArtifactPreservingStateSnapshot(() => {
-          withExistingOpenClawStateDatabaseReadOnly(() => observeMissingPath(true), options);
-        }),
-      );
-      observeMissingPath(false);
-      expect(fs.existsSync(options.path)).toBe(true);
-    });
-  },
-);
-
-it("keeps fresh synchronous read callbacks from returning asynchronous work", async () => {
-  await withTempDir("openclaw-state-sync-read-", async (root) => {
-    const options = createClosedState(root);
-    let reader: DatabaseSync | undefined;
-    expect(() =>
-      withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-        reader = requireNativeSqliteDatabase(db);
-        return Promise.resolve(1);
-      }, options),
-    ).toThrow("SQLite source read must remain synchronous");
-    expect(reader?.isOpen).toBe(false);
+    };
+    observeMissingPath(true);
+    closeOpenClawStateDatabaseForTest();
+    await withOpenClawStateDatabaseReadSnapshot(async () => observeMissingPath(true), options);
+    snapshot(() =>
+      withExistingOpenClawStateDatabaseReadOnly(() => observeMissingPath(true), options),
+    );
+    observeMissingPath(false);
+    expect(fs.existsSync(options.path)).toBe(true);
   });
 });
 
@@ -309,7 +295,7 @@ it("requires Doctor for the exact dangling Workshop index without changing its s
         ),
       ),
     ).rejects.toThrow(/legacy-workshop-review-index.*openclaw doctor --fix/);
-    expect(fs.readFileSync(options.path)).toEqual(before);
+    expect(fs.readFileSync(options.path).equals(before), options.path).toBe(true);
   });
 });
 it("reuses an idle writer but isolates its transaction", async () => {
@@ -423,62 +409,64 @@ it.each([
   },
 );
 
-it("keeps missing and non-missing filesystem failures distinct for async reads", async () => {
-  await withTempDir("openclaw-state-readonly-missing-", async (stateDir) => {
-    const options = createOptions(stateDir);
-    const operation = vi.fn();
-    await expect(
-      withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(operation, options),
-    ).resolves.toBeUndefined();
-    fs.writeFileSync(path.join(stateDir, "file"), "not a directory");
-    await expect(
-      withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(operation, {
-        ...options,
-        path: path.join(stateDir, "file", "state.sqlite"),
-      }),
-    ).rejects.toMatchObject({ code: "ENOTDIR" });
-    expect(operation).not.toHaveBeenCalled();
-  });
-});
-
-it("shares only one synchronous metadata snapshot and refreshes committed WAL next time", async () => {
-  await withTempDir("openclaw-metadata-snapshot-", async (root) => {
-    const { writer, read, artifacts } = createWalFixture(root);
-    const prepare = vi.spyOn(sqliteReadOnly, "prepareSqliteReadOnlyLocationSync");
-    const scope = (operation: () => unknown) =>
-      withArtifactPreservingStateReads(() =>
-        withSynchronousArtifactPreservingStateSnapshot(operation),
-      );
-    try {
-      const before = artifacts();
-      scope(() => {
-        expect(read()).toBe("first");
-        expect(read()).toBe("first");
-      });
-      expect(prepare).toHaveBeenCalledTimes(1);
-      expect(artifacts()).toEqual(before);
-      scope(() => {
-        expect(read()).toBe("first");
-        writer.exec("UPDATE held SET value='second'");
-        expect(read()).toBe("first");
-      });
-      expect(prepare).toHaveBeenCalledTimes(2);
-      scope(() => expect(read()).toBe("second"));
-      expect(prepare).toHaveBeenCalledTimes(3);
-      expect(() =>
-        scope(() => {
-          read();
-          throw new Error("consumer failure");
-        }),
-      ).toThrow("consumer failure");
-      scope(() => expect(read()).toBe("second"));
-      expect(prepare).toHaveBeenCalledTimes(5);
-      expect(() => scope(() => Promise.resolve(1))).toThrow("must remain synchronous");
-    } finally {
-      writer.close();
-    }
-  });
-});
+it.each(["synchronous", "report"])(
+  "shares one %s snapshot reader and refreshes committed WAL next time",
+  async (mode) => {
+    await withTempDir("openclaw-metadata-snapshot-", async (root) => {
+      const { options, writer, read, artifacts } = createWalFixture(root);
+      const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+      const openedReaders = () =>
+        open.mock.calls.filter(
+          ([location, opts]) => location.includes("database.sqlite") && opts?.readOnly,
+        );
+      const run = (operation: () => unknown) =>
+        mode === "synchronous"
+          ? snapshot(operation)
+          : withArtifactPreservingStateReads(() =>
+              withOpenClawStateDatabaseReadSnapshot(async () => operation(), options),
+            );
+      try {
+        const before = artifacts();
+        await run(() => {
+          expect(read()).toBe("first");
+          expect(read()).toBe("first");
+        });
+        expect(openedReaders()).toHaveLength(1);
+        artifacts().forEach((data, i) => expect(data.equals(before[i]!), `SQLite ${i}`).toBe(true));
+        await run(() => {
+          expect(read()).toBe("first");
+          writer.exec("UPDATE held SET value='second'");
+          expect(read()).toBe("first");
+        });
+        expect(openedReaders()).toHaveLength(2);
+        await run(() => expect(read()).toBe("second"));
+        expect(openedReaders()).toHaveLength(3);
+        await expect(
+          Promise.resolve().then(() =>
+            run(() => {
+              read();
+              throw new Error("consumer failure");
+            }),
+          ),
+        ).rejects.toThrow("consumer failure");
+        await run(() => expect(read()).toBe("second"));
+        expect(openedReaders()).toHaveLength(5);
+        expect(
+          open.mock.results.every((result) => result.type !== "return" || !result.value.isOpen),
+        ).toBe(true);
+        if (mode === "synchronous") {
+          expect(() => snapshot(() => Promise.resolve(1))).toThrow("must remain synchronous");
+          expect(() =>
+            withExistingOpenClawStateDatabaseReadOnly(() => Promise.resolve(1), options),
+          ).toThrow("SQLite source read must remain synchronous");
+          expect(open.mock.results.every((r) => r.type !== "return" || !r.value.isOpen)).toBe(true);
+        }
+      } finally {
+        writer.close();
+      }
+    });
+  },
+);
 
 it("keeps the original synchronous snapshot while retained current reads see later commits", async () => {
   await withTempDir("openclaw-retained-inherited-snapshot-", async (root) => {
@@ -508,33 +496,31 @@ it("keeps the original synchronous snapshot while retained current reads see lat
       );
     };
     try {
-      withArtifactPreservingStateReads(() =>
-        withSynchronousArtifactPreservingStateSnapshot(() => {
-          expect(legacyRead()).toBe('"first"');
-          writer
-            .prepare(
-              "UPDATE config_machine_state SET value_json = ?, updated_at_ms = 2 WHERE state_key = ?",
-            )
-            .run('"second"', "retained.snapshot.fixture");
-          const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(() => {
-            throw new Error("Retained read prepared SQLite on the caller thread");
-          });
-          const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(() => {
-            throw new Error("Retained read executed SQLite on the caller thread");
-          });
-          try {
-            startRead();
-            startRead(true);
-            startRead();
-            expect(prepare).not.toHaveBeenCalled();
-            expect(exec).not.toHaveBeenCalled();
-          } finally {
-            prepare.mockRestore();
-            exec.mockRestore();
-          }
-          expect(legacyRead()).toBe('"first"');
-        }),
-      );
+      snapshot(() => {
+        expect(legacyRead()).toBe('"first"');
+        writer
+          .prepare(
+            "UPDATE config_machine_state SET value_json = ?, updated_at_ms = 2 WHERE state_key = ?",
+          )
+          .run('"second"', "retained.snapshot.fixture");
+        const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(() => {
+          throw new Error("Retained read prepared SQLite on the caller thread");
+        });
+        const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(() => {
+          throw new Error("Retained read executed SQLite on the caller thread");
+        });
+        try {
+          startRead();
+          startRead(true);
+          startRead();
+          expect(prepare).not.toHaveBeenCalled();
+          expect(exec).not.toHaveBeenCalled();
+        } finally {
+          prepare.mockRestore();
+          exec.mockRestore();
+        }
+        expect(legacyRead()).toBe('"first"');
+      });
       const replies = await Promise.all(pending);
       expect(
         replies.map((reply) => {
@@ -566,7 +552,7 @@ it("reads fresh authority without replacing an inherited discovery snapshot", as
       writer.exec("UPDATE held SET value='revoked'");
       const before = artifacts();
       expect(current()).toEqual(["revoked", "revoked"]);
-      expect(artifacts()).toEqual(before);
+      artifacts().forEach((data, i) => expect(data.equals(before[i]!), `SQLite ${i}`).toBe(true));
       expect(read()).toBe("first");
       expect(() =>
         withSynchronousArtifactPreservingStateSnapshot(
@@ -636,10 +622,7 @@ it.each(["admission", "cleanup"] as const)(
       const options = createClosedState(root);
       const failure = new Error("synthetic verification failure");
       const read = () => withExistingOpenClawStateDatabaseReadOnly(() => 1, options);
-      const scope = (operation = read) =>
-        withArtifactPreservingStateReads(() =>
-          withSynchronousArtifactPreservingStateSnapshot(operation),
-        );
+      const scope = (operation = read) => snapshot(operation);
       if (phase === "admission") {
         scope(() => {
           expect(read()).toBe(1);

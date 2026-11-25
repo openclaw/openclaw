@@ -68,6 +68,5 @@ export function registerPreActionCommandFixtures(programLocal: Command): void {
   command(channels, "add");
   command(channels, "send", ["--json"]);
   applyParentDefaultHelpAction(channels);
-  command(programLocal.command("plugins"), "install <spec>", ["--marketplace <marketplace>"]);
   command(programLocal.command("message"), "send", ["--json"]);
 }

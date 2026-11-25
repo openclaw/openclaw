@@ -5,6 +5,7 @@
 ## Ownership
 
 - Core owns shared message tools, action vocabulary, dispatch; channels own account, security, conversation, transport contracts. Keep typed command/approval/URL/action distinctions until encoding; never infer commands from raw strings.
+- A message tool field that only one channel reads belongs in that channel plugin's `describeMessageTool` schema, tied to the actions that use it. Core field groups hold only fields several channels share (#204742).
 
 ## Public Contracts
 
@@ -19,7 +20,7 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
 - Completed rows tombstone via `complete()`, never `delete`.
 - Complete at turn adoption, not settle. Deferred holds the claim; watchdog
   stays armed through deferral; watchdog timeouts use the shared retry disposition.
-- One retry policy: attempt floor **and** age gate (defaults 8 / 24h).
+- One retry policy: ordinary failures use attempt floor **and** age gate (defaults 8 / 24h); runtime recovery counts two real failed attempts per live queue, never backoff, and replays at the owner's next eligible time before retaining a failed row.
 - Claim refresh heartbeat while dispatching/deferred (`claimLeaseMs / 3`).
 - Never silently complete on transient failure — release/fail via disposition.
 - Pre-adoption supersede tombstones; post-adoption interruption is core-owned

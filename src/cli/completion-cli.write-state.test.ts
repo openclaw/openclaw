@@ -1,7 +1,8 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
@@ -9,11 +10,14 @@ import { expectInstalledCompletionProfile } from "./completion-profile.test-supp
 import {
   COMPLETION_SHELLS,
   formatCompletionReloadCommand,
+  isCompletionInstalled,
   resolveCompletionCachePath,
   resolveCompletionProfileHint,
   resolveCompletionProfilePath,
   type CompletionShell,
+  usesSlowDynamicCompletion,
 } from "./completion-runtime.js";
+import { formatCliFailureLines, isExpectedCliError } from "./failure-output.js";
 
 type PublishOutput = typeof import("./output-file.runtime.js").publishOutputFileAtomically;
 type SubcliGroups = typeof import("./program/register.subclis.js").getSubCliCompletionGroups;
@@ -157,20 +161,49 @@ describe("completion-cli write-state", () => {
     vi.unstubAllEnvs();
   });
 
-  it("publishes zsh completion atomically and preserves file/directory modes", async () => {
-    const { cachePath, cacheDir } = await seedCache();
+  it.each([
+    ["bash", false],
+    ["zsh", false],
+    ["bash", true],
+  ] as const)(
+    "prints recovery and preserves the %s profile (malformed UTF-8=%s)",
+    async (shell, malformed) => {
+      const profilePath = resolveCompletionProfilePath(shell);
+      if (malformed) {
+        await seedCache(shell);
+      }
+      const hook = `[ -f '${resolveCompletionCachePath(shell, "openclaw")}' ] && source '${resolveCompletionCachePath(shell, "openclaw")}'`;
+      const original = Buffer.from(
+        malformed ? `# caf\xe9\n# OpenClaw Completion\n${hook}\n` : "# existing shell settings\n",
+        "latin1",
+      );
+      await fs.writeFile(profilePath, original);
+      await expect(isCompletionInstalled(shell)).resolves.toBe(malformed);
+      await expect(usesSlowDynamicCompletion(shell)).resolves.toBe(false);
 
-    const expectedScript = await writeCache("zsh");
+      let caught: unknown;
+      try {
+        await runCompletion(["--shell", shell, "--install", "--yes"]);
+      } catch (error) {
+        caught = error;
+      }
 
-    await expect(fs.readFile(cachePath, "utf8")).resolves.toBe(expectedScript);
-    expect(publish).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filePath: cachePath,
-        tempPrefix: ".openclaw-completion-cache",
-      }),
-    );
-    await expectCacheModes(cachePath, cacheDir);
-  });
+      expect(isExpectedCliError(caught)).toBe(true);
+      const lines = formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: caught,
+        argv: ["node", "openclaw", "completion", "--shell", shell, "--install", "--yes"],
+      });
+      expect(lines.join("\n")).toMatch(
+        malformed
+          ? /left untouched[\s\S]*load the prepared cache/
+          : /openclaw completion --write-state/,
+      );
+      expect(lines.join("\n")).not.toContain("doctor");
+      await expect(fs.readFile(profilePath)).resolves.toEqual(original);
+      expectNoRegistration();
+    },
+  );
 
   it("preserves zsh completion when staged publication fails", async () => {
     const { cachePath, cacheDir } = await seedCache();
@@ -278,20 +311,77 @@ describe("completion-cli write-state", () => {
   });
 
   it("generates and installs completion after registering commands and plugins", async () => {
+    const { cachePath, cacheDir } = await seedCache();
+    const profilePath = resolveCompletionProfilePath("zsh");
+    await fs.writeFile(profilePath, "", { mode: 0o640 });
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    await runCompletion(["--shell", "zsh", "--write-state", "--install", "--yes"]);
+    const program = await runCompletion(["--shell", "zsh", "--write-state", "--install", "--yes"]);
 
-    const cachePath = resolveCompletionCachePath("zsh", "openclaw");
-    await expect(fs.readFile(cachePath, "utf8")).resolves.toContain("#compdef openclaw");
-    await expect(fs.readFile(resolveCompletionProfilePath("zsh"), "utf8")).resolves.toContain(
-      cachePath,
-    );
+    const { getCompletionScript } = await import("./completion-cli.js");
+    await expect(fs.readFile(cachePath, "utf8")).resolves.toBe(getCompletionScript("zsh", program));
+    await expectCacheModes(cachePath, cacheDir);
+    await expect(fs.readFile(profilePath, "utf8")).resolves.toContain(cachePath);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(profilePath)).mode & 0o777).toBe(0o640);
+    }
     expect(log).toHaveBeenCalledWith(
       "Completion installed. Restart your shell or run: source ~/.zshrc",
     );
     expectRegistrationWarning();
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "loads cached Unicode choices in Windows PowerShell",
+    async () => {
+      registerPlugins.mockImplementationOnce(async (program) => {
+        program.addOption(new Option("--fixture-value <value>").choices(["café空"]));
+        return {};
+      });
+      await runCompletion(["--shell", "powershell", "--write-state"]);
+      const cachePath = resolveCompletionCachePath("powershell", "openclaw");
+      const script = (await fs.readFile(cachePath, "utf8")).replace(/^\uFEFF/u, "");
+      // Stable releases cached UTF-8 without a BOM; reinstall must repair those exact bytes.
+      await fs.writeFile(cachePath, script, "utf8");
+      await runCompletion(["--shell", "powershell", "--install", "--yes"]);
+      expect(await fs.readFile(cachePath, "utf8")).toBe(`\uFEFF${script}`);
+      const loaded = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `
+        $ErrorActionPreference = 'Stop'
+        . $env:COMPLETION_FIXTURE_PATH
+        $matches = [System.Management.Automation.CommandCompletion]::CompleteInput(
+          'openclaw --fixture-value caf', 28, $null
+        ).CompletionMatches
+        @{
+          choices = @($matches | ForEach-Object {
+            [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_.ListItemText))
+          })
+          major = $PSVersionTable.PSVersion.Major
+        } | ConvertTo-Json -Compress
+      `,
+        ],
+        {
+          env: {
+            ...process.env,
+            COMPLETION_FIXTURE_PATH: resolveCompletionCachePath("powershell", "openclaw"),
+          },
+          encoding: "utf8",
+          timeout: 30_000,
+        },
+      );
+      expect(loaded.error).toBeUndefined();
+      expect(loaded.status, loaded.stderr).toBe(0);
+      expect(JSON.parse(loaded.stdout.trim())).toEqual({
+        choices: [Buffer.from("café空", "utf8").toString("base64")],
+        major: 5,
+      });
+    },
+  );
 
   it("keeps completion cache generation alive when a subcli fails to register", async () => {
     subcliGroups.mockReturnValueOnce([

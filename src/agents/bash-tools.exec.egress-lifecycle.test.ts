@@ -4,7 +4,6 @@ import { request as httpRequest } from "node:http";
 import { createServer, type Server } from "node:https";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -32,7 +31,12 @@ import {
   prepareAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
-import { deleteSession, getFinishedSession } from "./bash-process-registry.js";
+import {
+  deleteSession,
+  getFinishedSession,
+  getSession,
+  processSessionInstanceId,
+} from "./bash-process-registry.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { fullGatewayExec, runningSession } from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -44,31 +48,11 @@ import {
 } from "./tools/gateway-caller-context.js";
 
 // mock-isolation: Keep completion admission deferred while the real process and egress owners settle.
-vi.mock("../auto-reply/dispatch.js", () => ({
-  dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn<
-    typeof dispatchInboundMessageWithRoutedChannelDispatcher
-  >(async ({ replyOptions }) => {
-    const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, "completion lifecycle");
-    const signal = expectDefined(lifecycle.abortSignal, "completion cancellation");
-    lifecycle.onDeferred?.();
-    const onAbort = async () => {
-      try {
-        await lifecycle.onAbandoned?.();
-      } finally {
-        await lifecycle.onSettled?.();
-      }
-    };
-    signal.addEventListener("abort", () => void onAbort(), { once: true });
-    if (signal.aborted) {
-      await onAbort();
-    }
-    return {
-      deferredToActiveRun: "followup",
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    };
-  }),
-}));
+vi.mock("../auto-reply/dispatch.js", async () => {
+  const { createDeferredExecDispatchMock } =
+    await import("./bash-tools.exec-runtime.test-support.js");
+  return createDeferredExecDispatchMock("completion");
+});
 
 const sessionKey = "agent:probe:egress-lifecycle";
 let state: OpenClawTestState;
@@ -154,10 +138,8 @@ async function createInvocation(runId: string) {
 
 type Invocation = Awaited<ReturnType<typeof createInvocation>>;
 
-function hasExitEvent(sessionId: string): boolean {
-  return peekSystemEventEntries(sessionKey).some(
-    (event) => event.contextKey === `exec:${sessionId}`,
-  );
+function hasExitEvent(contextKey: string): boolean {
+  return peekSystemEventEntries(sessionKey).some((event) => event.contextKey === contextKey);
 }
 
 async function waitForOutput(owner: Invocation, sessionId: string, text: string) {
@@ -183,6 +165,7 @@ async function startWatcher(owner: Invocation, label: string, timeoutSeconds = 3
   await waitForOutput(owner, sessionId, "READY");
   return {
     sessionId,
+    contextKey: `exec:${processSessionInstanceId(expectDefined(getSession(sessionId), "running process"))}`,
     grant: await fs.readFile(grantPath, "utf8"),
     request: async (observer: Invocation, marker: string) => {
       await fs.writeFile(controlPath, marker);
@@ -335,12 +318,12 @@ describe.skipIf(process.platform === "win32")("background exec egress lifetime",
       { timeout: 10_000 },
     );
     // Observe settlement before polling can acknowledge an unwanted notification.
-    expect(hasExitEvent(killed.sessionId)).toBe(false);
+    expect(hasExitEvent(killed.contextKey)).toBe(false);
     const running = await later.process({ action: "poll", sessionId: survivor.sessionId });
     expect(running.details).toMatchObject({ status: "running" });
-    expect(hasExitEvent(survivor.sessionId)).toBe(false);
+    expect(hasExitEvent(survivor.contextKey)).toBe(false);
     await survivor.exit();
-    await vi.waitFor(() => expect(hasExitEvent(survivor.sessionId)).toBe(true), {
+    await vi.waitFor(() => expect(hasExitEvent(survivor.contextKey)).toBe(true), {
       timeout: 10_000,
     });
     const exited = await later.process({ action: "poll", sessionId: survivor.sessionId });
@@ -352,7 +335,7 @@ describe.skipIf(process.platform === "win32")("background exec egress lifetime",
     const owner = await createInvocation("egress-timeout");
     const watcher = await startWatcher(owner, "timeout", 3);
     await watcher.request(owner, "before-timeout");
-    await vi.waitFor(() => expect(hasExitEvent(watcher.sessionId)).toBe(true), {
+    await vi.waitFor(() => expect(hasExitEvent(watcher.contextKey)).toBe(true), {
       timeout: 10_000,
     });
     const result = await owner.process({ action: "poll", sessionId: watcher.sessionId });

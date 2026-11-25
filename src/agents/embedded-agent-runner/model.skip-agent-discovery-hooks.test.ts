@@ -1,33 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { expect, it, vi } from "vitest";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { guardModelFixtureAuth, guardModelFixtureWorkspace } from "./model.fixture.test-support.js";
 
-let state: OpenClawTestState;
-let auth: ReturnType<typeof guardModelFixtureAuth>;
-let workspace: ReturnType<typeof guardModelFixtureWorkspace>;
-beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "skip-agent-discovery" });
-  auth = guardModelFixtureAuth(state.root);
-  workspace = guardModelFixtureWorkspace(state.root);
-});
-afterEach(async () => {
-  try {
-    auth.verify();
-    workspace.verify();
-    expect(auth.spy).toHaveBeenCalled();
-  } finally {
-    auth.spy.mockRestore();
-    workspace.spy.mockRestore();
-    await state.cleanup();
-  }
-});
-
-const mocks = vi.hoisted(() => ({
+const discovery = vi.hoisted(() => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
+}));
+const hooks = vi.hoisted(() => ({
   applyProviderResolvedTransportWithPlugin: vi.fn(() => {
     throw new Error("transport hook should not run during skipAgentDiscovery");
   }),
@@ -38,87 +18,70 @@ const mocks = vi.hoisted(() => ({
   }),
   prepareProviderDynamicModel: vi.fn(async () => undefined),
   runProviderDynamicModel: vi.fn(
-    ({ context }: { context: { provider: string; modelId: string } }) => ({
-      id: context.modelId,
-      name: context.modelId,
-      provider: context.provider,
-      api: "ollama",
-      baseUrl: "http://127.0.0.1:11434",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 8192,
-      maxTokens: 1024,
-    }),
+    ({ context }: { context: { provider: string; modelId: string } }) =>
+      makeProviderModelFixture({
+        id: context.modelId,
+        provider: context.provider,
+        api: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        contextWindow: 8192,
+        maxTokens: 1024,
+      }),
   ),
   shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
 }));
 
 // mock-isolation: Discovery spies must observe the skip path without opening real auth or model stores.
 vi.mock("../agent-model-discovery.js", () => ({
-  discoverAuthStorage: mocks.discoverAuthStorage,
-  discoverModelsAsync: async (...args: Parameters<typeof mocks.discoverModels>) =>
-    mocks.discoverModels(...args),
+  discoverAuthStorage: discovery.discoverAuthStorage,
+  discoverModelsAsync: async (...args: Parameters<typeof discovery.discoverModels>) =>
+    discovery.discoverModels(...args),
 }));
 
 // mock-isolation: The skip-discovery fixture must exercise only selected dynamic hooks without discovering host auth providers.
-vi.mock("../../plugins/provider-external-auth-core.js", () => ({
-  createProviderExternalAuthResolver: () => ({
-    resolveExternalAuthProfilesWithPlugins: () => [],
-    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
-  }),
-}));
+vi.mock("../../plugins/provider-external-auth-core.js", async () =>
+  (await import("../../plugins/provider-external-auth.test-support.js")).createExternalAuthMock(),
+);
 
-vi.mock("../../plugins/provider-runtime.js", () => ({
-  applyProviderResolvedTransportWithPlugin: mocks.applyProviderResolvedTransportWithPlugin,
-  buildProviderUnknownModelHintWithPlugin: mocks.buildProviderUnknownModelHintWithPlugin,
-  normalizeProviderResolvedModelWithPlugin: mocks.normalizeProviderResolvedModelWithPlugin,
-  normalizeProviderTransportWithPlugin: mocks.normalizeProviderTransportWithPlugin,
-  prepareProviderDynamicModel: mocks.prepareProviderDynamicModel,
-  runProviderDynamicModel: mocks.runProviderDynamicModel,
-  shouldPreferProviderRuntimeResolvedModel: mocks.shouldPreferProviderRuntimeResolvedModel,
-}));
+// mock-isolation: Observe target-provider hooks without loading the host provider registry.
+vi.mock("../../plugins/provider-runtime.js", () => hooks);
 
-import { resolveModelAsync } from "./model.js";
+import { resolveModelAsync as resolve } from "./model.js";
 
-function expectWorkspaceHookCall(mock: { mock: { calls: unknown[][] } }) {
-  expect(mock).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      workspaceDir: state.workspaceDir,
-      context: expect.objectContaining({ workspaceDir: state.workspaceDir }),
-    }),
-  );
-}
-
-beforeEach(() => {
+it("resolveModelAsync skipAgentDiscovery uses only target-provider dynamic hooks", async () => {
+  const state = await createOpenClawTestState({ label: "skip-agent-discovery" });
+  const auth = guardModelFixtureAuth(state.root),
+    workspace = guardModelFixtureWorkspace(state.root);
   vi.clearAllMocks();
-});
-
-describe("resolveModelAsync skipAgentDiscovery runtime hooks", () => {
-  it("uses only target-provider dynamic hooks", async () => {
-    const result = await resolveModelAsync(
-      "ollama",
-      "llama3.2:latest",
-      state.agentDir(),
-      undefined,
-      {
-        skipAgentDiscovery: true,
-        workspaceDir: state.workspaceDir,
-      },
-    );
-
+  try {
+    const options = { skipAgentDiscovery: true, workspaceDir: state.workspaceDir };
+    const result = await resolve("ollama", "llama3.2:latest", state.agentDir(), undefined, options);
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
       provider: "ollama",
       id: "llama3.2:latest",
       api: "ollama",
     });
-    expect(mocks.discoverAuthStorage).not.toHaveBeenCalled();
-    expect(mocks.discoverModels).not.toHaveBeenCalled();
-    expectWorkspaceHookCall(mocks.prepareProviderDynamicModel);
-    expectWorkspaceHookCall(mocks.runProviderDynamicModel);
-    expectWorkspaceHookCall(mocks.normalizeProviderResolvedModelWithPlugin);
-    expect(mocks.applyProviderResolvedTransportWithPlugin).not.toHaveBeenCalled();
-    expect(mocks.normalizeProviderTransportWithPlugin).not.toHaveBeenCalled();
-  });
+    expect(discovery.discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discovery.discoverModels).not.toHaveBeenCalled();
+    expect(hooks.applyProviderResolvedTransportWithPlugin).not.toHaveBeenCalled();
+    expect(hooks.normalizeProviderTransportWithPlugin).not.toHaveBeenCalled();
+    const scope = expect.objectContaining({
+      workspaceDir: state.workspaceDir,
+      context: expect.objectContaining({ workspaceDir: state.workspaceDir }),
+    });
+    expect(hooks.prepareProviderDynamicModel).toHaveBeenCalledExactlyOnceWith(scope);
+    expect(hooks.runProviderDynamicModel).toHaveBeenCalledExactlyOnceWith(scope);
+    expect(hooks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledExactlyOnceWith(scope);
+  } finally {
+    try {
+      auth.verify();
+      workspace.verify();
+      expect(auth.spy).toHaveBeenCalled();
+    } finally {
+      auth.spy.mockRestore();
+      workspace.spy.mockRestore();
+      await state.cleanup();
+    }
+  }
 });

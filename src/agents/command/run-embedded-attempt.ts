@@ -3,7 +3,6 @@ import { buildTerminalAgentRunFailureReplyPayload } from "../../auto-reply/reply
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   buildAgentHookContextChannelFields,
@@ -21,9 +20,7 @@ import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
   markAutoFallbackPrimaryProbe,
-  resolveEffectiveModelFallbacks,
 } from "../agent-scope.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { buildRunEntryTerminal } from "../embedded-agent-runner/run-entry-terminal.js";
 import {
   runEmbeddedAgentEntry,
@@ -38,6 +35,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../media-generation-activity.js";
 import { findModelInCatalog, prepareModelRunCapabilities } from "../model-catalog-lookup.js";
+import { resolveEffectiveModelFallbacks } from "../model-selection-config.js";
 import {
   resolveConfiguredThinkingDefault,
   resolveThinkingSelection,
@@ -118,6 +116,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     effectiveTurnThinkLevel,
   } = params.modelSelection;
   const thinkingCatalog = params.modelSelection.thinkingCatalog;
+  let effectiveTurnThinkingCatalog = thinkingCatalog;
   let sessionEntry = params.sessionEntry;
   let lifecycleGeneration = params.lifecycleGeneration;
 
@@ -150,11 +149,10 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     attemptLifecycleState,
     () => {
       executionStarted = true;
-      return params.preparedRunAdmission.onRuntimeTurnStarted();
     },
   );
   const { suppressUserTurnPersistence, userTurnTranscriptRecorder } =
-    prepareCommandUserTurnTranscript(params, internalSessionTarget, sessionEntry);
+    prepareCommandUserTurnTranscript(params, internalSessionTarget, sessionEntry, runContext);
   const lifecycle = createAgentCommandLifecycle({
     runId,
     lifecycleGeneration: () => lifecycleGeneration,
@@ -240,6 +238,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             cfg,
             agentId: sessionAgentId,
             sessionKey,
+            selectedModel: { provider, model },
             hasSessionModelOverride:
               hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
             modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
@@ -278,6 +277,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           requestedRouteResolution: params.modelSelection.requestedRouteResolution,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          cyberAccessProgram: sessionEntryForAttempt?.cyberAccessProgram,
           userLockedAuthProfileId:
             resolveSessionAuthProfileOverrideSource(sessionEntryForAttempt) === "user"
               ? sessionEntryForAttempt?.authProfileOverride
@@ -354,7 +354,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         },
         runCandidate: async (providerOverride, modelOverride, runOptions) => {
           candidateAttempts += 1;
-          clearAgentRunTerminalWriteContext(params.preparedRunAdmission.operationalRunInstance);
           const candidateAccounting = compactionAccounting.beginCandidate(deferredLifecycle.signal);
           maintenanceAuthProfile = undefined;
           attemptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(sessionKey, sessionAgentId);
@@ -434,7 +433,9 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 cfg,
                 catalog: runtimeCatalog,
                 defaultProvider,
-                defaultModel: { provider: defaultProvider, model: defaultModel },
+                ...(defaultModel
+                  ? { defaultModel: { provider: defaultProvider, model: defaultModel } }
+                  : {}),
                 agentId: sessionAgentId,
                 allowManifestNormalization: true,
                 allowPluginNormalization: true,
@@ -452,6 +453,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             agentRuntime: candidateRuntime,
           });
           effectiveTurnThinkLevel = candidateThinkLevel;
+          effectiveTurnThinkingCatalog = candidateThinkingCatalog;
           try {
             const candidateResult = await attemptExecutionRuntime.runAgentAttempt({
               ...runOptions,
@@ -462,7 +464,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 [candidateThinkingCatalog, params.prepared.configuredThinkingCatalog],
                 [providerOverride, modelOverride, candidateRuntime],
               ),
-              configuredAuthProfileId,
+              configuredAuthProfileId: runOptions.authProfileId ?? configuredAuthProfileId,
               modelFallbacksOverride: runOptions.modelFallbacksOverride,
               originalProvider: provider,
               cfg,
@@ -476,9 +478,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               cwd,
               body,
               transcriptBody,
-              preserveCliSessionBinding:
-                isHeartbeatLifecycleRunKind(logicalTurnOpts.bootstrapContextRunKind) ||
-                params.preserveUserFacingSessionModelState,
+              preserveCliSessionBinding: params.preserveUserFacingSessionModelState,
               resolvedThinkLevel: candidateThinkLevel,
               thinkingExplicit: candidateConfiguredThinkLevel !== undefined,
               fastMode,
@@ -689,6 +689,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     sessionEntry,
     lifecycleGeneration,
     effectiveTurnThinkLevel,
+    effectiveTurnThinkingCatalog,
     maintenanceAuthProfile,
     compactionAccounting: compactionAccounting.fact,
     compactionRequestBudget: compactionAccounting.requestBudget,

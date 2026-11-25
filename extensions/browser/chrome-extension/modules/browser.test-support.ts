@@ -1,13 +1,5 @@
 import { vi } from "vitest";
 
-export function deferred<T>() {
-  let resolve = (_value: T) => {};
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
 export function chromeEvent<Args extends unknown[]>() {
   let listener: (...args: Args) => void = () => {
     throw new Error("Chrome event listener was not registered");

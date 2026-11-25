@@ -12,8 +12,6 @@ export async function executeStatusScanFromOverview(params: {
   pluginCompatibility: PluginCompatibilityNotice[];
 }) {
   const {
-    coldStart: _coldStart,
-    hasConfiguredChannels: _hasConfiguredChannels,
     skipColdStartNetworkChecks: _skipColdStartNetworkChecks,
     channelsStatus: _channelsStatus,
     runtimeDegradation: _runtimeDegradation,

@@ -35,20 +35,36 @@ function gateway(
   stop = owner.close,
   hookToken = "synthetic-hook",
 ) {
-  return { port: owner.port, hookToken, stopGateway: stop, cleanup: stop };
+  return {
+    port: owner.port,
+    hookToken,
+    startGateway: async () => {},
+    stopGateway: stop,
+    cleanup: stop,
+  };
 }
 
 function captureSuite() {
-  const bodies = new Map<string, { timeout: number; run: () => Promise<void> }>();
+  const bodies = new Map<string, () => Promise<void>>();
   const cleanups: Array<() => Promise<void>> = [];
   vi.doMock("vitest", () => ({
     afterAll: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
     describe: (_name: string, run: () => void) => run(),
-    it: (name: string, options: { timeout: number }, run: () => Promise<void>) =>
-      bodies.set(name, { timeout: options.timeout, run }),
+    it: (name: string, _options: unknown, run: () => Promise<void>) => bodies.set(name, run),
     expect,
   }));
   return { bodies, cleanups };
+}
+
+function mockHarness(connect: () => unknown, status: () => unknown = vi.fn()) {
+  // mock-isolation: Own acquisition and cleanup failures without spawning real Gateway processes.
+  vi.doMock("./gateway-e2e-harness.js", () => ({
+    stopGatewayInstance: (instance: { cleanup: () => Promise<void> }) => instance.cleanup(),
+    postJson: async () => ({ status: 200, json: { ok: true } }),
+    connectNode: connect,
+    waitForNodeStatus: vi.fn(),
+    connectGatewayStatusClient: status,
+  }));
 }
 const acquisitionName = "spins up two gateways and exercises WS + HTTP + node pairing";
 const passiveName = "preserves scheduler runtime across a scheduler-disabled Gateway edit";
@@ -98,42 +114,34 @@ it.each(["none", "gateway", "both"] as const)(
     };
     const { bodies, cleanups } = captureSuite();
     let nextInstance = 0;
-    vi.doMock("./gateway-e2e-harness.js", () => ({
-      spawnGatewayInstance: async () => instances[nextInstance++],
-      stopGatewayInstance: (instance: { cleanup: () => Promise<void> }) => instance.cleanup(),
-      postJson: async () => ({ status: 200, json: { ok: true } }),
-      connectNode: async () => ({
+    mockHarness(
+      async () => ({
         nodeId: "synthetic-node",
         client: { stopAndWait: stopClient },
       }),
-      waitForNodeStatus: async () => {},
-      connectGatewayStatusClient: async () => ({
+      async () => ({
         request: async () => {
           throw bodyError;
         },
         stopAndWait: stopClient,
       }),
-    }));
+    );
+    // mock-isolation: Inject owned fixtures instead of creating real Gateway state or processes.
     vi.doMock("./openclaw-test-instance.js", () => ({
-      createOpenClawTestInstance: async () => instances[2],
+      createOpenClawTestInstance: async () => instances[nextInstance++],
     }));
     let passive: Promise<unknown> | undefined;
     let cleanup: Promise<unknown> | undefined;
     try {
       await import("../gateway.multi.e2e.test.js");
-      const acquisitionBody = bodies.get(acquisitionName);
-      const passiveBody = bodies.get(passiveName);
-      expect(acquisitionBody).toBeDefined();
-      expect(passiveBody).toBeDefined();
-      await acquisitionBody!.run();
+      await bodies.get(acquisitionName)!();
       // The second body fails before spawning its scheduler but still owns a Gateway.
-      passive = passiveBody!.run().catch((error: unknown) => error);
+      passive = outcome(bodies.get(passiveName)!());
       await clientStarted.promise;
       expect(events).toEqual([]);
       heldClient.resolve();
       const passiveError = await passive;
-      cleanup = cleanups[0]!().catch((error: unknown) => error);
-      const cleanupError = await cleanup;
+      const cleanupError = await (cleanup = outcome(cleanups[0]!()));
       expect(events.filter((event) => event.startsWith("stop-"))).toEqual([
         "stop-2",
         "stop-0",
@@ -165,6 +173,9 @@ it.each(["none", "gateway", "both"] as const)(
     } finally {
       heldClient.resolve();
       await passive;
+      if (!cleanup && cleanups[0]) {
+        cleanup = outcome(cleanups[0]());
+      }
       await cleanup;
       await Promise.all(owners.map((owner) => owner.close()));
     }
@@ -207,28 +218,18 @@ it.each(["server", "node"] as const)(
       return failure.promise;
     };
     let serverIndex = 0;
-    vi.doMock("./gateway-e2e-harness.js", () => ({
-      spawnGatewayInstance: boundary === "server" ? acquire : async () => servers[serverIndex++],
-      stopGatewayInstance: (instance: { cleanup: () => Promise<void> }) => instance.cleanup(),
-      postJson: async () => ({ status: 200, json: { ok: true } }),
-      connectNode: boundary === "node" ? acquire : vi.fn(),
-      waitForNodeStatus: vi.fn(),
-      connectGatewayStatusClient: vi.fn(),
-    }));
+    mockHarness(boundary === "node" ? acquire : vi.fn());
+    // mock-isolation: Control late acquisition without creating real Gateway state or processes.
     vi.doMock("./openclaw-test-instance.js", () => ({
-      createOpenClawTestInstance: () => {
-        throw new Error("unselected suite must not start a Gateway");
-      },
+      createOpenClawTestInstance:
+        boundary === "server" ? acquire : async () => servers[serverIndex++],
     }));
     let bodyResult: Promise<unknown> | undefined;
     let cleanupResult: Promise<unknown> | undefined;
     try {
       // Exercise the real suite's acquisition ordering and teardown registry.
       await import("../gateway.multi.e2e.test.js");
-      const acquisitionBody = bodies.get(acquisitionName);
-      expect(acquisitionBody?.timeout).toBe(120_000);
-      expect(cleanups).toHaveLength(1);
-      bodyResult = outcome(acquisitionBody!.run());
+      bodyResult = outcome(bodies.get(acquisitionName)!());
       await started.promise;
       failure.reject(acquisitionError);
       await setImmediate();
@@ -255,6 +256,9 @@ it.each(["server", "node"] as const)(
       failure.reject(acquisitionError);
       await acquisitions;
       await bodyResult;
+      if (!cleanupResult && cleanups[0]) {
+        cleanupResult = outcome(cleanups[0]());
+      }
       await cleanupResult;
       await owner.close();
     }

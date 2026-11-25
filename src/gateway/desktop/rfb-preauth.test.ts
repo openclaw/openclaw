@@ -210,7 +210,6 @@ describe("RFB server-side pre-authentication", () => {
       serverScript: async (server) => {
         await writeArdOffer(server, keyLength);
         const response = await server.readExactly(128 + keyLength);
-        expect(response).toHaveLength(128 + keyLength);
 
         const clientPublic = BigInt(`0x${response.subarray(128).toString("hex")}`);
         const shared = clientPublic ** DH.privateKey % DH.modulus;
@@ -242,26 +241,25 @@ describe("RFB server-side pre-authentication", () => {
   });
 
   it("surfaces the ARD server SecurityResult reason", async () => {
+    const message = `RFB authentication failed: ${"account rejected".repeat(80)}`;
     await rejectArd(async (server) => {
       await writeArdOffer(server, 16);
       await server.readExactly(144);
-      const reason = Buffer.from("account rejected", "utf8");
+      const reason = Buffer.from("account rejected".repeat(80), "utf8");
       const status = Buffer.alloc(8);
       status.writeUInt32BE(1, 0);
       status.writeUInt32BE(reason.length, 4);
       await server.write(Buffer.concat([status, reason]));
-    }, "RFB authentication failed: account rejected");
+    }, message);
   });
-
-  it.each([
-    ["RFB 003.003\n", "RFB 003.003\n", true],
-    ["RFB 003.007\n", "RFB 003.007\n", false],
-  ])("matches the VncAuth DES vector with server version %j", async (banner, reply, legacy) => {
+  it.each([3, 7, 8])("matches the VncAuth DES vector with RFB 3.%i", async (minor) => {
+    const banner = Buffer.from(`RFB 003.00${minor}\n`);
+    const legacy = minor === 3;
     const challenge = Buffer.from("0123456789abcdef", "ascii");
     await runPreauth({
       serverScript: async (server) => {
-        await server.write(Buffer.from(banner));
-        expect(await server.readExactly(12)).toEqual(Buffer.from(reply));
+        await server.write(banner);
+        expect(await server.readExactly(12)).toEqual(banner);
         await server.write(legacy ? Buffer.from([0, 0, 0, 2]) : Buffer.from([1, 2]));
         if (!legacy) {
           expect(await server.readExactly(1)).toEqual(Buffer.from([2]));

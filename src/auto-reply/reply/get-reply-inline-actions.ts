@@ -3,6 +3,7 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -14,13 +15,13 @@ import {
   expandBundleCommandPromptTemplate,
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
-  listReservedChatSlashCommandNames,
   mergeExplicitSkillSelections as mergeSelections,
   resolveSkillCommandInvocation,
   skillCommandsToExplicitSelections as toSelections,
 } from "../../skills/discovery/chat-command-invocation.js";
 import type { ExplicitSkillSelection } from "../../skills/types.js";
 import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
+import { listReservedChatSlashCommandNames } from "../commands-registry.data.js";
 import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,
@@ -36,6 +37,7 @@ import {
   shouldSkipMessageByAbortCutoff,
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
+import { isBangCommandInput } from "./bash-command-input.js";
 import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
 import { matchSlashCommandToken, resolveSlashCommandName } from "./commands-slash-parse.js";
 import type { CommandDispatchParams } from "./commands-types.js";
@@ -130,8 +132,6 @@ export async function handleInlineActions(
     skillFilter?: string[];
   },
 ): Promise<InlineActionResult> {
-  // Native directive results also carry turn-local fast mode; commands resolve their own status.
-  const commandParams = { ...params, resolvedFastMode: undefined };
   const {
     ctx,
     sessionCtx,
@@ -301,15 +301,16 @@ export async function handleInlineActions(
     }
 
     const dispatch = skillInvocation.command.dispatch;
-    if (dispatch?.kind === "tool") {
+    if (dispatch?.kind === "tool" && !model) {
+      // Tool dispatch resolves the model's tool surface; there is no model to resolve it for.
+      return {
+        kind: "reply",
+        reply: markCommandReplyForDelivery({ text: NO_MODEL_CONFIGURED_MESSAGE }),
+      };
+    }
+    if (dispatch?.kind === "tool" && model) {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const { hasAnyAuthProfileStoreSourceAsync } =
-        await import("../../agents/auth-profiles/source-check.js");
-      const authSourceAgentDir = agentDir?.trim();
-      const authProfileStoreSource = authSourceAgentDir
-        ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
-        : false;
       const authorizedTools = await resolveSkillDispatchTools({
         message: {
           surface: ctx.Surface,
@@ -328,7 +329,6 @@ export async function handleInlineActions(
         cfg,
         agentId,
         agentDir,
-        authProfileStoreSource,
         sessionEntry: targetSessionEntry,
         sessionKey,
         workspaceDir,
@@ -394,8 +394,6 @@ export async function handleInlineActions(
         // The execution owner can observe revocation while arming cancellation.
         await opts?.awaitSessionDiffBaseline?.();
         opts?.abortSignal?.throwIfAborted();
-        opts?.operatorAuthority?.assertCurrent();
-        command.assertOwnerCurrent?.();
         const result = asOptionalObjectRecord(
           await tool.execute(toolCallId, toolArgs, opts?.abortSignal),
         );
@@ -489,7 +487,8 @@ export async function handleInlineActions(
   if (handleInlineStatus) {
     const { buildStatusReply } = await commandsRuntimeLoader.load();
     const inlineStatusReply = await buildStatusReply({
-      ...commandParams,
+      ...params,
+      resolvedFastMode: undefined,
       sessionEntry: targetSessionEntry,
       parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
       ...(await resolveModelLevels()),
@@ -505,10 +504,10 @@ export async function handleInlineActions(
     const { handleCommands } = await commandsRuntimeLoader.load();
     await opts?.awaitSessionDiffBaseline?.();
     opts?.abortSignal?.throwIfAborted();
-    opts?.operatorAuthority?.assertCurrent();
-    commandInput.assertOwnerCurrent?.();
     const result = await handleCommands({
-      ...commandParams,
+      ...params,
+      // Native directive results carry turn-local fast mode; commands resolve their own status.
+      resolvedFastMode: undefined,
       // Command handlers mutate the continuation context and retain the dispatch context.
       ctx: sessionCtx,
       rootCtx: ctx,
@@ -563,7 +562,8 @@ export async function handleInlineActions(
     (inlineCommand !== undefined ||
       directiveAck !== undefined ||
       inlineStatusRequested ||
-      command.commandBodyNormalized.trim().startsWith("/"));
+      command.commandBodyNormalized.trimStart().startsWith("/") ||
+      isBangCommandInput(command.commandBodyNormalized));
   if (shouldRunCommandHandlers) {
     const strippedBody = stripStructuralPrefixes(cleanedBody);
     const remainingBodyAfterInlineStatus = (

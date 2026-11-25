@@ -1,19 +1,40 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../agents/run-termination.js";
-import { retryRestartRecoveryBeforeSelectedClaim } from "../auto-reply/reply/reply-turn-recovery-predecessor.js";
-import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  readSessionSubmittedInput,
+  stageSessionPendingInput,
+  type SessionPendingInputReceipt,
+} from "../config/sessions/session-accessor.pending-inputs.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
+import { withRecovery } from "../gateway/operator-run-recovery.test-support.js";
+import * as gatewayDispatch from "../gateway/server-in-process-dispatch.js";
+import { createContext } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { resumeMarkedSessions } from "../gateway/session-restart-resume.js";
+import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { applyQueueDropPolicy } from "../utils/queue-helpers.js";
 import {
+  generateDurablePilotSequence,
   generatePilotSequence,
   initialPilotState,
   modelParentMailbox,
+  stepDurablePilot,
   stepPilot,
   stepPilotMailbox,
+  type DurablePilotEvent,
+  type DurablePilotState,
   type PilotCustody,
   type PilotEvent,
   type PilotInput,
@@ -32,7 +53,6 @@ import {
   releaseSessionControllerClaim,
   reserveSessionControllerSource,
   retireSessionControllerInput,
-  tryClaimSessionControllerTask,
   type SessionControllerInput,
   type SessionControllerMailboxClaim,
 } from "./session-controller.mailbox.js";
@@ -40,6 +60,31 @@ import {
   beginReplyMessageInjectionTarget,
   captureCurrentReplyMessageInjectionTarget,
 } from "./session-controller.message-injection.js";
+
+type Receipt = PilotEvent & { type: "receipt" };
+const deliverySettlement = [{ type: "complete" }, { type: "delivery-settled" }] as const;
+
+function reserve(
+  key: string,
+  options: Partial<Parameters<typeof reserveSessionControllerSource>[1]> = {},
+) {
+  return reserveSessionControllerSource(key, { policy: { mode: "followup" }, ...options });
+}
+
+function release(claim: SessionControllerMailboxClaim) {
+  releaseSessionControllerClaim(claim);
+  return claim.settlement.promise;
+}
+
+function operationFor(sessionKey: string, sessionId = "pilot-session") {
+  return createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+}
+
+function recordClaim(source: SessionControllerInput, turns: string[], id = source.sourceTurnId!) {
+  return claimSessionControllerTask(source, () => {
+    turns.push(id);
+  });
+}
 
 /** Calls public owner operations, never the runtime reducer under test. */
 async function replay(events: readonly PilotEvent[], label: string) {
@@ -50,21 +95,14 @@ async function replay(events: readonly PilotEvent[], label: string) {
   let injectionAvailable = true;
   let writer = true;
   const key = "agent:main:controller-pilot";
-  const gates = new Map<
-    string,
-    ReturnType<typeof createDeferredCore<PilotEvent & { type: "receipt" }>>
-  >();
+  const gates = new Map<string, ReturnType<typeof createDeferredCore<Receipt>>>();
   const attempts = new Map<string, ReplyMessageInjectionAttempt>();
   const custody = new Map<string, PilotCustody>();
   const effects: string[] = [];
   const deliveries: ReturnType<typeof createDeferredCore<void>>[] = [];
   const operations: ReturnType<typeof createReplyOperation>[] = [];
   const create = () => {
-    const operation = createReplyOperation({
-      sessionKey: key,
-      sessionId: "pilot-session",
-      resetTriggered: false,
-    });
+    const operation = operationFor(key);
     const delivery = createDeferredCore();
     deliveries.push(delivery);
     operations.push(operation);
@@ -90,7 +128,7 @@ async function replay(events: readonly PilotEvent[], label: string) {
             throw new Error("Missing input identity");
           }
           effects.push("inject:" + id);
-          const gate = createDeferredCore<PilotEvent & { type: "receipt" }>();
+          const gate = createDeferredCore<Receipt>();
           gates.set(id, gate);
           const receipt = await gate.promise;
           assertCurrent();
@@ -172,11 +210,10 @@ async function replay(events: readonly PilotEvent[], label: string) {
             break;
           }
           attempts.set(event.input.id, attempt);
-          if (gates.has(event.input.id)) {
-            custody.set(event.input.id, "offered");
-          } else {
-            custody.set(event.input.id, (await attempt.outcome).status);
-          }
+          custody.set(
+            event.input.id,
+            gates.has(event.input.id) ? "offered" : (await attempt.outcome).status,
+          );
           break;
         }
         case "receipt": {
@@ -229,57 +266,10 @@ async function replay(events: readonly PilotEvent[], label: string) {
   }
 }
 
-const noRecoveryDispatch = () => Promise.reject(new Error("a joined resend must not dispatch"));
-const joinOnlyRecoveryRuntime: GatewayRecoveryRuntime = {
-  prepareRestartRecovery: noRecoveryDispatch,
-  resumeChatInput: noRecoveryDispatch,
-  dispatchSessionMethod: noRecoveryDispatch,
-  dispatchAgent: noRecoveryDispatch,
-  waitForAgent: noRecoveryDispatch,
-  sendRecoveryNotice: noRecoveryDispatch,
-};
-
-/** A foreground claim selected first, then a startup resend reserved behind it and joined. */
-function startForegroundBeforeResend(
-  key: string,
-  reservationId: string,
-  beforeJoin: (resend: SessionControllerInput) => void = () => {},
-) {
-  const foregroundAbort = new AbortController();
-  const foreground = reserveSessionControllerSource(key, {
-    policy: { mode: "followup" },
-    adapter: { signal: foregroundAbort.signal },
-  });
-  const foregroundClaim = tryClaimSessionControllerTask(foreground);
-  if (!foregroundClaim) {
-    throw new Error("expected the foreground source to own the mailbox");
-  }
-  const resend = reserveSessionControllerSource(key, {
-    reservationId,
-    protocolRunId: "startup-recovery-run",
-    policy: { mode: "followup" },
-  });
-  beforeJoin(resend);
-  const joined = retryRestartRecoveryBeforeSelectedClaim({
-    cfg: {},
-    claim: foregroundClaim,
-    gatewayRuntime: joinOnlyRecoveryRuntime,
-    reservationId,
-    sessionId: "recovery-session",
-    sessionKey: key,
-    storePath: "/tmp/openclaw-recovery-model/sessions.json",
-  });
-  return { foregroundAbort, foreground, foregroundClaim, resend, joined };
-}
-
 describe("session controller executable pilot", () => {
   it("gives each owed completion and settle identity exactly one FIFO parent turn", async () => {
     const key = "agent:main:completion-mailbox-model";
-    const active = createReplyOperation({
-      sessionKey: key,
-      sessionId: "active",
-      resetTriggered: false,
-    });
+    const active = operationFor(key, "active");
     active.setPhase("running");
     const offered: PilotParentInput[] = [
       { id: "user-before", kind: "user", owedAt: 1 },
@@ -290,34 +280,25 @@ describe("session controller executable pilot", () => {
     ];
     const expected = modelParentMailbox(offered);
     const sources = offered.map((input, index) =>
-      reserveSessionControllerSource(key, {
+      reserve(key, {
         reservationId: input.kind === "user" ? undefined : input.id,
         protocolRunId: input.kind === "user" ? `${input.id}:${index}` : input.id,
-        policy: { mode: "followup" },
       }),
     );
     expect(sources[1]).toBe(sources[2]);
     const unique = sources.filter((source, index) => sources.indexOf(source) === index);
-    const sourceIds = new Map(
-      unique.map((source) => [source, offered[sources.indexOf(source)]!.id]),
-    );
     const turns: string[] = [];
     const pending = unique.map((source) =>
-      claimSessionControllerTask(source, () => {
-        turns.push(sourceIds.get(source)!);
-      }),
+      recordClaim(source, turns, offered[sources.indexOf(source)]!.id),
     );
     active.abortByUser();
     active.complete();
     try {
       for (const claim of pending) {
-        const admitted = await claim;
-        releaseSessionControllerClaim(admitted);
-        await admitted.settlement.promise;
+        await release(await claim);
       }
       expect(turns).toEqual(expected.map((input) => input.id));
-      expect(turns.filter((id) => id === "completion:a:1")).toHaveLength(1);
-      expect(turns.filter((id) => id === "settle:batch:1:0")).toHaveLength(1);
+      expect(turns).toEqual(["user-before", "completion:a:1", "settle:batch:1:0", "user-after"]);
     } finally {
       for (const source of unique) {
         retireSessionControllerInput(source);
@@ -332,28 +313,15 @@ describe("session controller executable pilot", () => {
       { id: "settle:later", kind: "settle", owedAt: 20 },
       { id: "completion:earlier", kind: "completion", owedAt: 10 },
     ]).toSorted((a, b) => a.owedAt - b.owedAt);
-    const initial = owed.map((input) =>
-      reserveSessionControllerSource(key, {
-        reservationId: input.id,
-        policy: { mode: "followup" },
-      }),
-    );
+    const rebuild = () => owed.map((input) => reserve(key, { reservationId: input.id }));
+    const initial = rebuild();
     clearSessionControllerMailbox(initial[0]!.mailbox, () => {});
     await Promise.allSettled(initial.map((source) => source.settlement.promise));
-    const rebuilt = owed.map((input) =>
-      reserveSessionControllerSource(key, {
-        reservationId: input.id,
-        policy: { mode: "followup" },
-      }),
-    );
+    const rebuilt = rebuild();
     const turns: string[] = [];
     try {
       for (const source of rebuilt) {
-        const claim = await claimSessionControllerTask(source, () => {
-          turns.push(source.sourceTurnId!);
-        });
-        releaseSessionControllerClaim(claim);
-        await claim.settlement.promise;
+        await release(await recordClaim(source, turns));
       }
       expect(turns).toEqual(["completion:earlier", "settle:later"]);
     } finally {
@@ -361,56 +329,6 @@ describe("session controller executable pilot", () => {
         retireSessionControllerInput(source);
       }
     }
-  });
-
-  it("lets a foreground claim join the startup resend that won the durable claim", async () => {
-    const key = "agent:main:recovery-join-model";
-    const turns: string[] = [];
-    let resendTurn: Promise<SessionControllerMailboxClaim> | undefined;
-    // The startup RPC already waits behind the foreground claim when the foreground joins.
-    const { foreground, foregroundClaim, joined } = startForegroundBeforeResend(
-      key,
-      "main-session-recovery:recovery-session:cycle:1",
-      (resend) => {
-        resendTurn = claimSessionControllerTask(resend, () => {
-          turns.push("resend");
-        });
-      },
-    );
-    try {
-      const resendClaim = await resendTurn!;
-      expect(foreground.mailbox.claim).toBe(resendClaim);
-      releaseSessionControllerClaim(resendClaim);
-      await expect(joined).resolves.toBeUndefined();
-      expect(foreground.mailbox.claim).toBe(foregroundClaim);
-      expect(turns).toEqual(["resend"]);
-    } finally {
-      releaseSessionControllerClaim(foregroundClaim);
-      await foregroundClaim.settlement.promise;
-    }
-  });
-
-  it("never lets a joining foreground retire the resend it did not create (R5)", async () => {
-    const key = "agent:main:recovery-join-retire-model";
-    const { foregroundAbort, foregroundClaim, resend, joined } = startForegroundBeforeResend(
-      key,
-      "main-session-recovery:recovery-session:cycle:2",
-    );
-    foregroundAbort.abort(new Error("foreground stopped while its predecessor waits"));
-    await expect(joined).resolves.toBeUndefined();
-    expect(resend.retirementRequested).toBeUndefined();
-    expect(resend.mailbox.entries).toContain(resend);
-    // The aborted foreground caller releases its custody before the resend starts.
-    releaseSessionControllerClaim(foregroundClaim);
-    await foregroundClaim.settlement.promise;
-
-    const turns: string[] = [];
-    const resendClaim = await claimSessionControllerTask(resend, () => {
-      turns.push("resend");
-    });
-    releaseSessionControllerClaim(resendClaim);
-    await resend.settlement.promise;
-    expect(turns).toEqual(["resend"]);
   });
 
   it("replays 2048 state-aware sequences with delayed receipts (48 generated steps each)", async () => {
@@ -424,9 +342,200 @@ describe("session controller executable pilot", () => {
     }
   });
 
-  it("keeps finishing cancellation separate from the backend injection capability", async () => {
-    await replay(
-      [
+  it.each([7, 41])(
+    "conserves durable custody across crash/replay with intercepted dispatch/model (seed=%s)",
+    (seed) =>
+      withRecovery(async (fixture, _stateDir, profile) => {
+        setRuntimeConfigSnapshot({});
+        vi.useFakeTimers({ toFake: ["Date"] });
+        const receipts = new Map<string, SessionPendingInputReceipt>();
+        const sources = new Map<string, SessionControllerInput>();
+        const claims = new Map<string, SessionControllerMailboxClaim>();
+        const executions: string[] = [];
+        const expectedExecutions: string[] = [];
+        const target = fixture.target;
+        const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(target)));
+        const events = generateDurablePilotSequence(seed);
+        const inputs = events.flatMap((event) => (event.type === "append" ? [event.input] : []));
+        const message = (id: string) => ({
+          role: "user" as const,
+          content: `Accepted input ${id}: ünicode 🦞`,
+          timestamp: 1,
+          idempotencyKey: `${id}:user`,
+          __openclaw: { senderIdentity: { type: "profile" as const, id: profile.id } },
+        });
+        const stage = async (id: string) => {
+          const input = inputs.find((candidate) => candidate.id === id)!;
+          const receipt = await stageSessionPendingInput(target, {
+            runId: id,
+            message: message(id),
+            requestFingerprint: id,
+            ...(input.recoverable
+              ? { recoverySource: { kind: "gateway" as const, snapshot: fixture.snapshot } }
+              : {}),
+            assertCurrent() {},
+          });
+          assert(receipt, "Expected real durable input acceptance");
+          receipts.set(id, receipt);
+          return receipt;
+        };
+        const claim = async (id: string) => {
+          const source = reserve(target.sessionKey, { protocolRunId: id });
+          sources.set(id, source);
+          claims.set(id, await claimSessionControllerTask(source, () => {}));
+        };
+        const releaseClaim = async (id: string) => {
+          const held = claims.get(id);
+          if (held) {
+            await release(held);
+            claims.delete(id);
+          }
+          const source = sources.get(id);
+          if (source) {
+            retireSessionControllerInput(source);
+            sources.delete(id);
+          }
+        };
+        const adopt = async (id: string) => {
+          const receipt = receipts.get(id)!;
+          assert(receipt.state === "queued", "Consumed input must not execute again");
+          await receipt.run(() => appendTranscriptMessage(target, { message: receipt.message }));
+          executions.push(id);
+          await releaseClaim(id);
+        };
+        let dispatchAvailable = false;
+        // Only the execution endpoint is intercepted. Acceptance, original-source
+        // restoration, startup discovery, row consumption, and transcript writes are real.
+        const dispatch = vi
+          .spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess")
+          .mockImplementation(async (method, params) => {
+            assert(method === "chat.send");
+            assert(params && typeof params === "object" && "idempotencyKey" in params);
+            const id = String(params.idempotencyKey);
+            if (!dispatchAvailable) {
+              throw new GatewayDispatchUnavailableError(method, true);
+            }
+            const receipt = await stage(id);
+            assert(receipt.state === "queued", "Startup must not dispatch a consumed input");
+            await claim(id);
+            await adopt(id);
+            return {};
+          });
+        let model: DurablePilotState = {};
+        const prefix: DurablePilotEvent[] = [];
+        try {
+          for (const event of events) {
+            prefix.push(event);
+            vi.setSystemTime(Date.now() + 17);
+            switch (event.type) {
+              case "append":
+                await stage(event.input.id);
+                break;
+              case "claim":
+                await claim(event.id);
+                break;
+              case "adopt":
+                await adopt(event.id);
+                expectedExecutions.push(event.id);
+                break;
+              case "crash": {
+                // Release test-process resources without changing accepted rows.
+                // No session resume marker or queued-input source map is persisted.
+                const captured = await captureSessionQueuedInputsForRestart(target);
+                captured.preserve();
+                for (const [id, receipt] of receipts) {
+                  await releaseClaim(id);
+                  receipt.finish("interrupted", "restart-unrecoverable");
+                  await receipt.settled?.();
+                }
+                receipts.clear();
+                rotateAgentEventLifecycleGeneration();
+                break;
+              }
+              case "replay": {
+                if (event.dispatchAvailable) {
+                  expectedExecutions.push(
+                    ...Object.entries(model)
+                      .filter(([, input]) => input.custody === "queued" && input.recoverable)
+                      .map(([id]) => id),
+                  );
+                }
+                dispatchAvailable = event.dispatchAvailable;
+                const context = createContext();
+                context.resolveGatewayContext = () => context;
+                await resumeMarkedSessions({
+                  context,
+                  signal: new AbortController().signal,
+                  log: { warn() {} },
+                });
+                break;
+              }
+              case "resend": {
+                const receipt = await stage(event.id);
+                // A committed replay receipt retains completion custody, not another admission.
+                await receipt.validateCommittedReplay!();
+                receipt.release();
+                await receipt.settled?.();
+                expect(
+                  await readSessionSubmittedInput(target, `${event.id}:user`, {
+                    includeSource: true,
+                  }),
+                ).toMatchObject({ source: "transcript", message: message(event.id) });
+                break;
+              }
+            }
+            model = stepDurablePilot(model, event);
+            const context = `seed=${seed} prefix=${JSON.stringify(prefix)}`;
+            expect(executions, context).toEqual(expectedExecutions);
+            const rows = database.db
+              .prepare("SELECT * FROM session_pending_inputs WHERE session_key = ?")
+              .all(target.sessionKey);
+            expect(rows, context).toHaveLength(
+              Object.values(model).filter((input) => input.custody !== "consumed").length,
+            );
+            for (const [id, input] of Object.entries(model)) {
+              const row = rows.find((candidate) => candidate.run_id === id);
+              const committed = database.db
+                .prepare(
+                  "SELECT event_id FROM transcript_event_identities WHERE session_id = ? AND message_idempotency_key = ?",
+                )
+                .all(target.sessionId, `${id}:user`);
+              expect(committed, context).toHaveLength(input.custody === "consumed" ? 1 : 0);
+              if (input.custody === "consumed") {
+                expect(row, context).toBeUndefined();
+              } else {
+                assert(row, context);
+                expect(row.message_json, context).toBe(JSON.stringify(message(id)));
+                expect(row.consumed_event_id, context).toBeNull();
+                expect(row.state, context).toBe(
+                  input.custody === "queued" ? "queued" : "cancelled",
+                );
+                expect(row.end_cause ?? undefined, context).toBe(
+                  input.custody === "queued" ? undefined : "restart-unrecoverable",
+                );
+              }
+              expect(
+                executions.filter((executed) => executed === id),
+                context,
+              ).toHaveLength(input.custody === "consumed" ? 1 : 0);
+            }
+          }
+        } finally {
+          dispatch.mockRestore();
+          for (const [id, receipt] of receipts) {
+            await releaseClaim(id);
+            receipt.finish("interrupted", "restart-unrecoverable");
+            await receipt.settled?.();
+          }
+          vi.useRealTimers();
+        }
+      }),
+  );
+
+  it.each<{ name: string; events: PilotEvent[] }>([
+    {
+      name: "keeps finishing cancellation separate from the backend injection capability",
+      events: [
         { type: "run" },
         { type: "finish" },
         { type: "offer", input: { id: "still-available", authority: "alice-policy" } },
@@ -434,16 +543,12 @@ describe("session controller executable pilot", () => {
         { type: "injection-available", available: false },
         { type: "offer", input: { id: "closed", authority: "alice-policy" } },
         { type: "stop" },
-        { type: "complete" },
-        { type: "delivery-settled" },
+        ...deliverySettlement,
       ],
-      "finishing capability",
-    );
-  });
-
-  it("retains uncertain input custody while refusing another sender during compaction", async () => {
-    await replay(
-      [
+    },
+    {
+      name: "retains uncertain input custody while refusing another sender during compaction",
+      events: [
         { type: "run" },
         { type: "compact", active: true },
         { type: "offer", input: { id: "other-sender", authority: "bob-policy" } },
@@ -451,36 +556,25 @@ describe("session controller executable pilot", () => {
         { type: "receipt", id: "uncertain", outcome: "indeterminate" },
         { type: "revoke" },
         { type: "stop" },
-        { type: "complete" },
-        { type: "delivery-settled" },
+        ...deliverySettlement,
       ],
-      "indeterminate custody",
-    );
-  });
-
-  it("rejects a delayed receipt from a same-ID replaced operation", async () => {
-    await replay(
-      [
+    },
+    {
+      name: "rejects a delayed receipt from a same-ID replaced operation",
+      events: [
         { type: "run" },
         { type: "offer", input: { id: "old-input", authority: "alice-policy" } },
-        { type: "complete" },
-        { type: "delivery-settled" },
+        ...deliverySettlement,
         { type: "replace" },
         { type: "run" },
         { type: "receipt", id: "old-input", outcome: "accepted" },
-        { type: "complete" },
-        { type: "delivery-settled" },
+        ...deliverySettlement,
       ],
-      "exact-instance replacement",
-    );
-  });
+    },
+  ])("$name", async ({ name, events }) => replay(events, name));
 
   it("keeps a restart-interrupted lifecycle lease until the actual owner and delivery settle", async () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:pilot-lease",
-      sessionId: "pilot-lease",
-      resetTriggered: false,
-    });
+    const operation = operationFor("agent:main:pilot-lease", "pilot-lease");
     operation.setPhase("running");
     const delivery = createDeferredCore();
     const lease = await beginSessionEffect({

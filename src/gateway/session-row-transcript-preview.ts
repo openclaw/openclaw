@@ -1,6 +1,7 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionRow } from "../../packages/gateway-protocol/src/index.js";
+import { isHeartbeatAcknowledgementText } from "../auto-reply/heartbeat.js";
 import {
   isSessionTranscriptTerminalModel,
   readSessionTranscriptTerminalModel,
@@ -43,11 +44,20 @@ export function projectSessionRowAssistantMessage(
 }
 
 export type SessionRowTranscriptProjection = {
+  hasMessages?: boolean;
   lastMessagePreview: string | null;
   lastAssistantMessage: SessionRowAssistantMessageUpdate;
   terminalModel: SessionTranscriptTerminalModel | null;
   indexedSeq: number | null;
 };
+
+export const EMPTY_SESSION_ROW_TRANSCRIPT_PROJECTION = {
+  hasMessages: false,
+  lastMessagePreview: null,
+  lastAssistantMessage: null,
+  terminalModel: null,
+  indexedSeq: null,
+} as const satisfies SessionRowTranscriptProjection;
 
 /** Undefined needs a bounded tail lookup; a complete projection can include empty fields. */
 export function projectSessionRowTranscriptFields(
@@ -67,6 +77,7 @@ export function projectSessionRowTranscriptFields(
     return undefined;
   }
   return {
+    hasMessages: true,
     lastMessagePreview: projected
       ? Buffer.from(projected.text, "utf16le").toString("utf16le")
       : null,
@@ -100,15 +111,20 @@ export function readStoredSessionRowTranscriptProjection(params: {
   try {
     const value: unknown = JSON.parse(params.json);
     return isRecord(value) &&
+      (value.hasMessages === undefined || typeof value.hasMessages === "boolean") &&
       (value.lastMessagePreview === null || typeof value.lastMessagePreview === "string") &&
       (value.lastAssistantMessage === undefined ||
         value.lastAssistantMessage === "unknown" ||
         value.lastAssistantMessage === "unchanged" ||
         value.lastAssistantMessage === null ||
-        isSessionRowAssistantMessage(value.lastAssistantMessage)) &&
+        // Cached text lacks forwarding/media facts. Rebuild acknowledgements from
+        // the bounded transcript; a legitimate forwarded literal remains visible.
+        (isSessionRowAssistantMessage(value.lastAssistantMessage) &&
+          !isHeartbeatAcknowledgementText(value.lastAssistantMessage.text))) &&
       (value.terminalModel === null || isSessionTranscriptTerminalModel(value.terminalModel)) &&
       value.indexedSeq === (params.indexedSeq ?? null)
       ? {
+          hasMessages: value.hasMessages,
           lastMessagePreview: value.lastMessagePreview,
           // A persisted append directive has no resident predecessor after a cold load.
           lastAssistantMessage:

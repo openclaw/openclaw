@@ -101,16 +101,6 @@ const proxyPolicy = {
 function nested(actions: BrowserActRequest[]): BrowserActRequest {
   return { kind: "batch", actions, stopOnError: false };
 }
-function expectProxyGuard() {
-  expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
-    action: expect.any(Function),
-    onPolicyCheckStarted: expect.any(Function),
-    onPolicyDenied: expect.any(Function),
-    page,
-    ...proxyPolicy,
-  });
-}
-
 function batch(
   actions: BrowserActRequest[],
   {
@@ -213,12 +203,17 @@ describe("executeActViaPlaywright batches", () => {
       });
 
       expect(result).toEqual({ targetId: "tab-1", results: [{ ok: true }] });
-      expectProxyGuard();
+      const guard = { page, signal: expect.any(AbortSignal), ...proxyPolicy };
+      expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
+        ...guard,
+        action: expect.any(Function),
+        onPolicyCheckStarted: expect.any(Function),
+        onPolicyDenied: expect.any(Function),
+      });
       expect(assertPageNavigationCompletedSafely).toHaveBeenLastCalledWith({
         ...target,
-        page,
+        ...guard,
         response: null,
-        ...proxyPolicy,
       });
     },
   );

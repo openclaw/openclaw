@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import * as fixture from "./chrome-mcp.chromium.test-support.js";
@@ -41,43 +40,37 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")("Chrome MCP frame l
               .getByRole("button", { name: "Frame button", exact: true });
             await frameButton.waitFor();
             if (crossOrigin) {
-              const session = await context.newCDPSession(page);
+              const frame = expectDefined(
+                page.frames().find((candidate) => candidate.url() === frameUrl),
+                "cross-origin frame",
+              );
+              const sessions = [await context.newCDPSession(page)];
               try {
-                const { targetInfos } = await session.send("Target.getTargets");
+                sessions.push(await context.newCDPSession(frame));
+                const { targetInfos } = await sessions[0]!.send("Target.getTargets");
                 expect(targetInfos).toContainEqual(
                   expect.objectContaining({ type: "iframe", url: frameUrl }),
                 );
-                const frame = expectDefined(
-                  page.frames().find((candidate) => candidate.url() === frameUrl),
-                  "cross-origin frame",
+                const roots = await Promise.all(
+                  sessions.map((client) => client.send("DOM.getDocument", { depth: -1 })),
                 );
-                const frameSession = await context.newCDPSession(frame);
-                try {
-                  const roots = await Promise.all(
-                    [session, frameSession].map((client) =>
-                      client.send("DOM.getDocument", { depth: -1 }),
-                    ),
-                  );
-                  const ids = roots.map(({ root }) => {
-                    const buttons = new Set<number>();
-                    const pending = [root];
-                    while (pending.length > 0) {
-                      const node = pending.pop()!;
-                      const labelIndex = node.attributes?.indexOf("aria-label") ?? -1;
-                      const name = labelIndex >= 0 ? node.attributes?.[labelIndex + 1] : undefined;
-                      if (node.nodeName === "BUTTON" && name) {
-                        buttons.add(node.backendNodeId);
-                      }
-                      pending.push(...(node.children ?? []));
+                const ids = roots.map(({ root }) => {
+                  const buttons = new Set<number>();
+                  const pending = [root];
+                  while (pending.length > 0) {
+                    const node = pending.pop()!;
+                    const labelIndex = node.attributes?.indexOf("aria-label") ?? -1;
+                    const name = labelIndex >= 0 ? node.attributes?.[labelIndex + 1] : undefined;
+                    if (node.nodeName === "BUTTON" && name) {
+                      buttons.add(node.backendNodeId);
                     }
-                    return buttons;
-                  });
-                  expect([...ids[0]!].some((id) => ids[1]!.has(id))).toBe(true);
-                } finally {
-                  await frameSession.detach();
-                }
+                    pending.push(...(node.children ?? []));
+                  }
+                  return buttons;
+                });
+                expect([...ids[0]!].some((id) => ids[1]!.has(id))).toBe(true);
               } finally {
-                await session.detach();
+                await Promise.all(sessions.map((session) => session.detach()));
               }
             }
             const routes = fixture.mcpRoutes(profileName, profile);
@@ -114,11 +107,6 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")("Chrome MCP frame l
               labels: true,
               ...(clipToFrameRef ? { ref: frameRef } : {}),
             });
-            const proofDir = process.env.OPENCLAW_BROWSER_MCP_LABEL_PROOF_DIR;
-            if (proofDir && mode === "iframe") {
-              await fs.mkdir(proofDir, { recursive: true });
-              await page.screenshot({ path: path.join(proofDir, "iframe-after-operation.png") });
-            }
             if (mode === "removed iframe element") {
               expect(response.statusCode, JSON.stringify(response.body)).toBeGreaterThanOrEqual(
                 400,

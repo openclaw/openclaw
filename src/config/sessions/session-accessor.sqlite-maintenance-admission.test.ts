@@ -54,10 +54,21 @@ vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
         : actual.getOpenClawAgentDatabaseIfOpen(request),
   };
 });
-vi.mock("../../state/openclaw-agent-db-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-agent-db-identity.js")>()),
-  readOpenClawAgentDatabaseIdentity: () => ({ filename: options.path }),
-}));
+vi.mock("../../state/openclaw-agent-db-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-agent-db-identity.js")>();
+  return {
+    ...actual,
+    readOpenClawAgentDatabaseIdentity: (): ReturnType<
+      typeof actual.readOpenClawAgentDatabaseIdentity
+    > => ({
+      identity: "synthetic-file",
+      birthtime: undefined,
+      incarnation: "synthetic-connection",
+      filename: options.path,
+      canonicalPath: options.path,
+    }),
+  };
+});
 vi.mock("../../state/openclaw-agent-db-validation-cache.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/openclaw-agent-db-validation-cache.js")>()),
   getOpenClawAgentDatabaseValidation: () => undefined,
@@ -139,9 +150,9 @@ test("maintenance preparation yields to foreground writes and retains commit adm
       transport: { kind: "dedicated", channel: worker },
       operationId: 1,
       completion: "exit",
-      withWriteAdmission: async (run, admission) => {
+      withWriteAdmission: async (run, admission, operation) => {
         admissions.push(admission.admissionId);
-        await params.withWriteAdmission(run, admission);
+        await params.withWriteAdmission(run, admission, operation);
       },
       dispatch: () => worker.postMessage({ type: "start" }, []),
     }),

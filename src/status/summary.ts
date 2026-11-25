@@ -1,17 +1,16 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import type { SystemInfoResult } from "../../packages/gateway-protocol/src/schema/system-info.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { readStartupRecoveryWarning } from "../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { SessionEntrySummary } from "../config/sessions/session-accessor.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
@@ -20,39 +19,47 @@ import {
   type SessionEntry,
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import type { GatewayPluginReloadStatus } from "../gateway/server-plugin-reload-status.types.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
 import { getGatewayInstallationReplacement } from "../gateway/stale-install.js";
-import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
-import { resolveHeartbeatSummariesForAgents } from "../infra/heartbeat-summary-projection.js";
-import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
+import {
+  projectHeartbeatSummary,
+  readHeartbeatSummaryForStatus,
+  readHeartbeatSummarySnapshot,
+} from "../infra/heartbeat-summary-snapshot.js";
+import { hasResolvableProactiveOwnerRoute } from "../infra/outbound/targets.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { readModelReasoningWarning } from "../logging/diagnostic-session-state.js";
 import {
   listActiveDegradedPlugins,
   toPublicPluginVerificationDiagnostic,
 } from "../plugins/runtime-degraded-state.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSecretEgressCertificateStatus } from "../secrets/egress-proxy/registry.js";
 import {
   listActiveDegradedSecretOwners,
   redactSecretDegradationReason,
 } from "../secrets/runtime-degraded-state.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { readOpenClawStateWalHealth } from "../state/openclaw-state-db-cache.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { buildStatusCliProjection } from "./cli-projection.js";
+import { resolveMemoryPluginStatus } from "./memory-plugin.js";
 import {
   prepareStatusSessionStores,
   STATUS_RECENT_SESSION_LIMIT,
   type PreparedStatusSessionStores,
 } from "./session-stores.js";
 import type { HeartbeatStatus, SessionStatus } from "./types.js";
+import { collectUtilityModelWarnings } from "./utility-model-warnings.js";
 
 const channelSummaryModuleLoader = createLazyImportLoader(
   () => import("../infra/channel-summary.js"),
@@ -110,35 +117,29 @@ async function prepareSessionStatusDetails(
     resolveSessionRuntime,
     readSessionRuntimeMetadata,
     resolveSessionModelRef,
-    resolveStatusModelComparisonLabel,
     resolveStatusModelLookupRef,
     createStatusModelContextResolver,
   } = await loadStatusSummaryRuntimeModule();
   // Read runtime metadata once for every displayed row, including overlapping windows.
-  const metadata = await readSessionRuntimeMetadata(cfg, candidates);
-  const resolveModelContext = await createStatusModelContextResolver(cfg);
+  const [metadata, resolveModelContext] = await settleCurrentReadPreparations([
+    readSessionRuntimeMetadata(cfg, candidates),
+    createStatusModelContextResolver(cfg),
+  ] as const);
 
-  const resolved = resolveConfiguredStatusModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const configModel = resolved.model ?? DEFAULT_MODEL;
-  const configModelContext = await resolveModelContext(
-    resolved.provider ?? DEFAULT_PROVIDER,
-    configModel,
-  );
-  const configContextTokens =
-    resolveContextTokensForModel({
-      cfg,
-      provider: resolved.provider ?? DEFAULT_PROVIDER,
-      model: configModel,
-      ...configModelContext,
-      // Keep `status`/`status --json` startup read-only. These summary lookups
-      // use offline static catalogs but never start live provider discovery.
-      allowAsyncLoad: false,
-      allowCacheLookup: false,
-    }) ?? null;
+  const resolved = resolveConfiguredStatusModelRef({ cfg, defaultProvider: DEFAULT_PROVIDER });
+  const configModel = resolved?.model ?? null;
+  const configContextTokens = resolved
+    ? (resolveContextTokensForModel({
+        cfg,
+        provider: resolved.provider,
+        model: resolved.model,
+        ...(await resolveModelContext(resolved.provider, resolved.model)),
+        // Keep `status`/`status --json` startup read-only. These summary lookups
+        // use offline static catalogs but never start live provider discovery.
+        allowAsyncLoad: false,
+        allowCacheLookup: false,
+      }) ?? null)
+    : null;
 
   // Project each candidate once; agent and aggregate windows only select these facts.
   const sessionRows = new Map<SessionEntrySummary, SessionStatus>();
@@ -151,89 +152,106 @@ async function prepareSessionStatusDetails(
       const configuredForSession = resolveConfiguredStatusModelRef({
         cfg,
         defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
         agentId,
       });
-      const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
-      const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
+      const configuredSessionModelLabel =
+        configuredForSession && `${configuredForSession.provider}/${configuredForSession.model}`;
       const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
-      const model = resolvedModel.model ?? configuredSessionModel;
-      const lookupModel =
-        resolveStatusModelLookupRef({
-          provider: resolvedModel.provider,
-          model,
-          defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        }) ?? resolvedModel;
-      const lookupModelId = lookupModel.model ?? model;
-      const selectedModelLabel =
-        resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
-      const configuredSessionModelComparisonLabel = resolveStatusModelComparisonLabel({
-        provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        model: configuredSessionModel,
-        defaultProvider: DEFAULT_PROVIDER,
-      });
-      const selectedModelComparisonLabel = resolveStatusModelComparisonLabel({
-        provider: resolvedModel.provider,
-        model,
-        defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-      });
-      const runtimeMatchesConfiguredModel =
-        selectedModelComparisonLabel != null &&
-        configuredSessionModelComparisonLabel != null &&
-        areRuntimeModelRefsEquivalent(
-          selectedModelComparisonLabel,
-          configuredSessionModelComparisonLabel,
-          { config: cfg },
-        );
-      const contextModelProvider = runtimeMatchesConfiguredModel
-        ? configuredForSession.provider
-        : lookupModel.provider;
-      const modelSelectionDiffers =
-        selectedModelComparisonLabel != null &&
-        configuredSessionModelComparisonLabel != null &&
-        selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
-        !runtimeMatchesConfiguredModel &&
-        (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
-      // Session rows show the live selected model and warn for user-pinned
-      // differences as well as runtime fallback selections (#96126).
-      const runtime = resolveSessionRuntime({
-        cfg,
-        entry,
-        provider: lookupModel.provider,
-        model: lookupModelId,
-        agentId,
-        sessionKey: key,
-        acpMeta: metadata[index] ?? null,
-      });
-      const modelContext = await resolveModelContext(
-        lookupModel.provider,
-        lookupModelId,
-        agentId,
-        runtime.id,
-        entry,
-      );
-      const resolvedContextTokens = resolveContextTokensForModel({
-        cfg,
-        provider: lookupModel.provider,
-        model: lookupModelId,
-        ...modelContext,
-        allowAsyncLoad: false,
-        allowCacheLookup: false,
-      });
-      const contextTokens =
-        resolveProjectedSessionContextTokens({
-          entry,
-          provider: lookupModel.provider,
-          model: lookupModelId,
-          agentHarnessId: runtime.id,
-          resolvedContextTokens,
-          authoredContextTokens: resolveAuthoredModelContextTokens({
-            cfg,
-            provider: lookupModel.provider,
-            modelProvider: contextModelProvider,
-            model: lookupModelId,
-          }),
-        }) ?? null;
+      // A session with no stored and no configured model has no model facts to show.
+      const modelFacts = resolvedModel
+        ? await (async () => {
+            const model = resolvedModel.model;
+            const selectedLookupModel = resolveStatusModelLookupRef({
+              provider: resolvedModel.provider,
+              model,
+              defaultProvider: configuredForSession?.provider ?? DEFAULT_PROVIDER,
+            });
+            const lookupModel = selectedLookupModel ?? resolvedModel;
+            const lookupModelId = lookupModel.model ?? model;
+            const selectedModelLabel =
+              resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
+            const configuredLookupModel = resolveStatusModelLookupRef({
+              provider: configuredForSession?.provider ?? DEFAULT_PROVIDER,
+              model: configuredForSession?.model,
+              defaultProvider: DEFAULT_PROVIDER,
+            });
+            const configuredSessionModelComparisonLabel = configuredLookupModel
+              ? `${configuredLookupModel.provider}/${configuredLookupModel.model}`
+              : null;
+            const selectedModelComparisonLabel = selectedLookupModel
+              ? `${selectedLookupModel.provider}/${selectedLookupModel.model}`
+              : null;
+            const runtimeMatchesConfiguredModel =
+              selectedModelComparisonLabel != null &&
+              configuredSessionModelComparisonLabel != null &&
+              areRuntimeModelRefsEquivalent(
+                selectedModelComparisonLabel,
+                configuredSessionModelComparisonLabel,
+                { config: cfg },
+              );
+            const contextModelProvider =
+              (runtimeMatchesConfiguredModel ? configuredForSession?.provider : undefined) ??
+              lookupModel.provider;
+            const modelSelectionDiffers =
+              selectedModelComparisonLabel != null &&
+              configuredSessionModelComparisonLabel != null &&
+              selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
+              !runtimeMatchesConfiguredModel &&
+              (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
+            // Session rows show the live selected model and warn for user-pinned
+            // differences as well as runtime fallback selections (#96126).
+            const runtime = resolveSessionRuntime({
+              cfg,
+              entry,
+              provider: lookupModel.provider,
+              model: lookupModelId,
+              agentId,
+              sessionKey: key,
+              acpMeta: metadata[index] ?? null,
+            });
+            const modelContext = await resolveModelContext(
+              lookupModel.provider,
+              lookupModelId,
+              agentId,
+              runtime.id,
+              entry,
+            );
+            const resolvedContextTokens = resolveContextTokensForModel({
+              cfg,
+              provider: lookupModel.provider,
+              model: lookupModelId,
+              ...modelContext,
+              allowAsyncLoad: false,
+              allowCacheLookup: false,
+            });
+            const contextTokens =
+              resolveProjectedSessionContextTokens({
+                entry,
+                provider: lookupModel.provider,
+                model: lookupModelId,
+                agentHarnessId: runtime.id,
+                resolvedContextTokens,
+                authoredContextTokens: resolveAuthoredModelContextTokens({
+                  cfg,
+                  provider: lookupModel.provider,
+                  modelProvider: contextModelProvider,
+                  model: lookupModelId,
+                }),
+              }) ?? null;
+            return {
+              model,
+              selectedModelLabel,
+              modelSelectionReason: modelSelectionDiffers
+                ? hasUserPinnedModelSelection(entry)
+                  ? "session override"
+                  : "fallback selected"
+                : null,
+              runtimeLabel: runtime.label,
+              contextTokens,
+            };
+          })()
+        : undefined;
+      const contextTokens = modelFacts?.contextTokens ?? null;
       const total = resolveSessionTotalTokens(entry);
       const freshTotal = resolveFreshSessionTotalTokens(entry);
       const totalTokensFresh = freshTotal !== undefined;
@@ -268,15 +286,11 @@ async function prepareSessionStatusDetails(
         totalTokensFresh,
         remainingTokens: remaining,
         percentUsed: pct,
-        model,
-        configuredModel: configuredSessionModelLabel,
-        selectedModel: selectedModelLabel,
-        modelSelectionReason: modelSelectionDiffers
-          ? hasUserPinnedModelSelection(entry)
-            ? "session override"
-            : "fallback selected"
-          : null,
-        runtime: runtime.label,
+        model: modelFacts?.model ?? null,
+        configuredModel: configuredSessionModelLabel ?? null,
+        selectedModel: modelFacts?.selectedModelLabel ?? null,
+        modelSelectionReason: modelFacts?.modelSelectionReason ?? null,
+        runtime: modelFacts?.runtimeLabel,
         contextTokens,
         flags: buildFlags(entry),
       } satisfies SessionStatus;
@@ -322,30 +336,30 @@ export async function prepareStatusSummary(
       .then(({ hasConfiguredChannelsForReadOnlyScopeAsync }) =>
         hasConfiguredChannelsForReadOnlyScopeAsync(channelScopeConfig),
       ));
-  const linkContext = needsChannelPlugins
-    ? await linkChannelModuleLoader
-        .load()
-        .then(({ resolveLinkChannelContext }) =>
-          resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
-        )
-    : null;
-  const agentList = await listGatewayAgentsBasic(cfg);
-  // One roster-facts batch spans enrollment and the per-agent route inputs:
-  // outside it every resolveAgentConfig re-walks the roster and
-  // a large fleet stalls the loop for the whole projection (#137570).
+  // Receipts list the primary job first; retain it when converted siblings share an agent.
+  const [linkContext, agentList, heartbeat] = await settleCurrentReadPreparations([
+    needsChannelPlugins
+      ? linkChannelModuleLoader
+          .load()
+          .then(({ resolveLinkChannelContext }) =>
+            resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
+          )
+      : null,
+    listGatewayAgentsBasic(cfg),
+    readHeartbeatSummaryForStatus(() => readHeartbeatSummarySnapshot(cfg)),
+  ] as const);
+  const heartbeatJobs = new Map(heartbeat.jobs.toReversed().map((job) => [job.agentId, job]));
+  // Share the remaining per-agent main-session resolution across the fleet.
   const heartbeatInputs = withAgentRosterFactsBatch(cfg, () => {
-    const heartbeatSummaries = resolveHeartbeatSummariesForAgents(
-      cfg,
-      agentList.agents.map((agent) => agent.id),
-    );
-    return agentList.agents.map((agent, index) => {
-      const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
+    return agentList.agents.map((agent) => {
+      const job = heartbeatJobs.get(agent.id);
+      const summary = projectHeartbeatSummary(job, heartbeat.selectionWarning);
       let routeTarget:
         | {
             storePath: string;
             sessionKey: string;
             target: "last" | "owner";
-            heartbeat: Parameters<typeof hasResolvableHeartbeatOwnerRoute>[0]["heartbeat"];
+            policy: Parameters<typeof hasResolvableProactiveOwnerRoute>[0]["policy"];
           }
         | undefined;
       if (
@@ -353,21 +367,17 @@ export async function prepareStatusSummary(
         !agent.admissionRefusal &&
         (summary.target === "last" || summary.target === "owner")
       ) {
-        const heartbeatSession = resolveHeartbeatSessionKey(
-          cfg,
-          agent.id,
-          summary.session === undefined ? undefined : { session: summary.session },
-        );
-        // Only these enabled targets consume the session route. Keep the probe
-        // read-only so status cannot create, register, or migrate an absent store.
+        // A literal global row belongs to the job's selected agent store.
+        const sessionKey =
+          (job && resolveCronDeliverySessionKey(job)) ??
+          (cfg.session?.scope === "global"
+            ? "global"
+            : resolveAgentMainSessionKey({ cfg, agentId: agent.id }));
         routeTarget = {
-          storePath: heartbeatSession.storePath,
-          sessionKey: heartbeatSession.sessionKey,
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id }),
+          sessionKey,
           target: summary.target,
-          heartbeat: {
-            ...cfg.agents?.defaults?.heartbeat,
-            ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-          },
+          policy: job?.delivery,
         };
       }
       const status: HeartbeatStatus = {
@@ -427,51 +437,52 @@ export async function prepareStatusSummary(
         const route = deliveryContextFromSession(entry);
         status.waitingForRoute = !(route?.channel && route.to);
       } else {
-        status.waitingForRoute = !(await hasResolvableHeartbeatOwnerRoute({
+        status.waitingForRoute = !(await hasResolvableProactiveOwnerRoute({
           cfg,
           agentId: status.agentId,
           entry,
-          heartbeat: routeTarget.heartbeat,
+          policy: routeTarget.policy,
         }));
       }
     }
     heartbeatAgents.push(status);
   }
-  const channelSummary = needsChannelPlugins
-    ? await channelSummaryModuleLoader.load().then(({ buildChannelSummary }) =>
-        buildChannelSummary(cfg, {
-          colorize: true,
-          includeAllowFrom: true,
-          sourceConfig: options.sourceConfig,
-        }),
-      )
-    : [];
-  const now = Date.now();
-
-  const sessionStores =
+  const [channelSummary, sessionStores] = await settleCurrentReadPreparations([
+    needsChannelPlugins
+      ? channelSummaryModuleLoader.load().then(({ buildChannelSummary }) =>
+          buildChannelSummary(cfg, {
+            colorize: true,
+            includeAllowFrom: true,
+            sourceConfig: options.sourceConfig,
+          }),
+        )
+      : [],
     options.sessionStores ??
-    (await prepareStatusSessionStores(
-      cfg,
-      agentList.agents,
-      includeSensitive ? STATUS_RECENT_SESSION_LIMIT : 0,
-      { projection: options.sessionRowProjection },
-    ));
-  const sessionDetails = includeSensitive
-    ? await prepareSessionStatusDetails(cfg, now, sessionStores.candidates)
-    : undefined;
-  const hostDesktopStatus =
-    options.hostDesktopStatus ??
-    (
-      await (
-        await import("../gateway/desktop/host-source.js")
-      ).inspectHostDesktop({ config: cfg.desktop?.host })
-    ).status;
-  const secretEgressProxy = await getSecretEgressCertificateStatus();
+      prepareStatusSessionStores(
+        cfg,
+        agentList.agents,
+        includeSensitive ? STATUS_RECENT_SESSION_LIMIT : 0,
+        { projection: options.sessionRowProjection },
+      ),
+  ] as const);
+  // Join independent snapshots before publication revalidates surviving agents.
+  const [sessionDetails, hostDesktopStatus, secretEgressProxy] =
+    await settleCurrentReadPreparations([
+      includeSensitive
+        ? prepareSessionStatusDetails(cfg, Date.now(), sessionStores.candidates)
+        : undefined,
+      options.hostDesktopStatus ??
+        import("../gateway/desktop/host-source.js")
+          .then(({ inspectHostDesktop }) => inspectHostDesktop({ config: cfg.desktop?.host }))
+          .then(({ status }) => status),
+      Promise.resolve().then(getSecretEgressCertificateStatus),
+    ] as const);
   const databaseStores = options.includeCliProjection
     ? (
         await import("../infra/database-engine/admitted-diagnostics.js")
       ).describeAdmittedDatabaseStores(cfg)
     : undefined;
+  const utilityModelWarnings = collectUtilityModelWarnings(cfg);
   return {
     publish() {
       const publishedStores = sessionStores.publish();
@@ -525,7 +536,22 @@ export async function prepareStatusSummary(
               }
             : {}),
           ...(options.includeCliProjection
-            ? { cliProjection: buildStatusCliProjection(cfg, publishedAgentList) }
+            ? {
+                cliProjection: {
+                  agents: {
+                    defaultId: publishedAgentList.selectionRequired
+                      ? null
+                      : (publishedAgentList.defaultId ?? null),
+                    ownership: publishedAgentList.ownership,
+                    selectionRequired: publishedAgentList.selectionRequired,
+                    rows: publishedAgentList.agents.map(({ id, name }) =>
+                      name ? { id, name } : { id },
+                    ),
+                  },
+                  updateChannel: cfg.update?.channel ?? null,
+                  memoryPlugin: resolveMemoryPluginStatus(cfg),
+                },
+              }
             : {}),
           sqliteWal:
             sqliteWal && !includeSensitive ? { ...sqliteWal, error: undefined } : sqliteWal,
@@ -544,9 +570,25 @@ export async function prepareStatusSummary(
           },
           channelSummary,
           queuedSystemEvents,
-          startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
-          startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
+          startupMigrationWarning:
+            [readStartupMigrationWarning(includeSensitive), heartbeat.selectionWarning]
+              .filter(Boolean)
+              .join("\n") || undefined,
+          modelReasoningWarning: readModelReasoningWarning(includeSensitive),
           installationReplacementWarning: getGatewayInstallationReplacement()?.message,
+          ...(utilityModelWarnings.length
+            ? {
+                utilityModelWarnings: includeSensitive
+                  ? utilityModelWarnings
+                  : [
+                      {
+                        path: "utilityModel",
+                        message:
+                          "A configured utility model cannot enforce tool-free utility work. Choose a capable utility model or add capable utilityModel fallbacks.",
+                      },
+                    ],
+              }
+            : {}),
           secretEgressProxy,
           degradedSecretOwners: listActiveDegradedSecretOwners().map(
             ({ ownerKind, ownerId, state, degradationState, paths, reason }) => ({
@@ -563,6 +605,10 @@ export async function prepareStatusSummary(
             state,
             diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
           })),
+          // A plugin that failed to load stays off for this boot; the next start retries it.
+          failedPlugins: (getActivePluginRegistry()?.plugins ?? []).flatMap((plugin) =>
+            plugin.status === "error" && plugin.activated === true ? [plugin.id] : [],
+          ),
           sessions: {
             paths: includeSensitive ? publishedStores.paths : [],
             count: publishedStores.count,
@@ -588,12 +634,16 @@ export type StatusSummary = Omit<
     "heartbeat" | "channelSummary" | "queuedSystemEvents" | "sessions"
   > & {
     runtimeVersion?: string | null;
+    recentCrashes?: readonly import("../infra/gateway-crash.js").GatewayCrashRecord[];
     childRuntime?: {
       execPath: string;
       available: boolean;
     };
     eventLoop?: NonNullable<SystemInfoResult["eventLoop"]>;
     processMemory?: NonNullable<SystemInfoResult["processMemory"]>;
+    resources?: ReturnType<
+      typeof import("../gateway/server/resource-diagnostics.js").readGatewayResourceDiagnostics
+    >;
     pluginReload?: GatewayPluginReloadStatus;
     degradedSecretOwners?: Array<
       Omit<

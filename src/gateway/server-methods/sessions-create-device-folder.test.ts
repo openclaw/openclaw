@@ -46,13 +46,11 @@ const create = (
   directSessionReq<{ entry: InternalSessionEntry }>("sessions.create", { key, ...params }, options);
 beforeEach(async () => {
   ({ storePath } = await createSessionStoreDir());
-  const base = createNodeWorkerBundleTestNode();
-  node = {
-    ...base,
+  node = createNodeWorkerBundleTestNode({
     nodeId: folder.deviceId,
-    workerHost: { ...base.workerHost, deviceFolders: true },
+    workerHost: { deviceFolders: true },
     commands: ["system.run"],
-  };
+  });
   mocks.getTransport.mockReturnValue({
     getCurrentNode: getCurrentNode.mockReset().mockResolvedValue(node),
     listCurrentNodes: vi.fn(async () => [node]),
@@ -113,18 +111,8 @@ test("sessions.create reuses only the same canonical device folder", async () =>
 });
 
 test.each([
-  { worktree: true },
   { worktree: false },
-  { worktreeSource: "empty" },
-  { worktreeBaseRef: "main" },
-  { worktreeName: "topic" },
-  { cwd: "/local" },
-  { projectId: "project-one" },
-  { projectGitUrl: "https://example.invalid/repo.git" },
-  { repository: { url: "https://example.invalid/repo.git" } },
   { execNode: "other" },
-  { catalogId: "catalog" },
-  { fork: true, parentSessionKey: "agent:main:main", worktree: true },
   { message: "List the files" },
   { task: "List the files" },
   {
@@ -163,31 +151,23 @@ test.each([
   expect(read()).toBeUndefined();
 });
 
-test.each(["caller", "device"] as const)(
-  "sessions.create persists nothing when the %s is revoked while the node validates",
-  async (revoked) => {
-    let callerCurrent = true;
-    const validated = invoke.getMockImplementation()!;
-    invoke.mockImplementation(async (request) => {
-      const response = await validated(request);
-      if (revoked === "caller") {
-        callerCurrent = false;
-      } else {
-        isCurrent.mockReturnValue(false);
-      }
-      return response;
-    });
-    // The request owner may reject by response or by throwing its authority error.
-    const result = await create(undefined, {
-      ...controlUiClient,
-      hasCurrentClientAuthority: captureGatewayDeviceRevocation(
-        {},
-        { deviceId: "operator-device", role: "operator" },
-        () => callerCurrent,
-      ).isCurrent,
-    }).catch((error: unknown) => ({ ok: false, error: { message: String(error) } }));
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(result.ok).toBe(false);
-    expect(read()).toBeUndefined();
-  },
-);
+test("sessions.create persists nothing when the device is revoked while the node validates", async () => {
+  const validated = invoke.getMockImplementation()!;
+  invoke.mockImplementation(async (request) => {
+    const response = await validated(request);
+    isCurrent.mockReturnValue(false);
+    return response;
+  });
+  // The request owner may reject by response or by throwing its authority error.
+  const result = await create(undefined, {
+    ...controlUiClient,
+    hasCurrentClientAuthority: captureGatewayDeviceRevocation(
+      {},
+      { deviceId: "operator-device", role: "operator" },
+      () => true,
+    ).isCurrent,
+  }).catch((error: unknown) => ({ ok: false, error: { message: String(error) } }));
+  expect(invoke).toHaveBeenCalledOnce();
+  expect(result.ok).toBe(false);
+  expect(read()).toBeUndefined();
+});

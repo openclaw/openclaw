@@ -51,14 +51,12 @@ export function listLocalDatabaseDiagnosticStores() {
         }
         return {
           id: store.id,
-          label: store.label,
           resolvePath: owner.resolvePath,
           resolveSchemaVersion: owner.resolveSchemaVersion,
         };
       }),
     {
       id: "credentials",
-      label: "Local credentials",
       async resolveSchemaVersion() {
         const { CLIENT_CREDENTIAL_SCHEMA_VERSION } = await import("../client-credential-schema.js");
         return CLIENT_CREDENTIAL_SCHEMA_VERSION;

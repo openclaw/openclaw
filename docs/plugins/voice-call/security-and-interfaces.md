@@ -80,6 +80,10 @@ accepted command work, and pending reaper hangups before closing its resources.
 analysis to the last N records (default 200). Output includes min/max/avg,
 p50, and p95 for turn latency and listen-wait times.
 
+Custom `--file` inputs for `latency` and `tail` must be regular files (symlinks
+to regular files are supported). FIFOs and other nonregular inputs are rejected
+without waiting for a writer.
+
 Voice Call JSONL logs are retired pre-July state. Upgrade through OpenClaw
 2026.9.7 and run `openclaw doctor --fix` to import them into SQLite before
 updating. That release preserves call data, event ordering, and the original

@@ -41,8 +41,14 @@ function waitForChatRouteReady(document: Document, outlet: ControlUiReadinessOut
   };
 }
 
-async function navigateAndAnimate(options: RouteTransitionOptions) {
-  const { document, navigate, prefersReducedMotion, router, signal, to } = options;
+export async function navigateWithRouteTransition(options: RouteTransitionOptions): Promise<void> {
+  const { document, from, navigate, prefersReducedMotion, router, signal, to } = options;
+  if (from !== "new-session" || to !== "chat") {
+    return navigate();
+  }
+
+  // Navigation commits the URL while the outlet keeps the submitted prompt live.
+  // Only the entrance animation waits for the rendered chat composer.
   const outlet = options.getOutlet();
   const chatReady = waitForChatRouteReady(document, outlet);
   let canceled = false;
@@ -92,15 +98,4 @@ async function navigateAndAnimate(options: RouteTransitionOptions) {
     stopAbort?.();
     chatReady.cancel();
   }
-}
-
-export async function navigateWithRouteTransition(options: RouteTransitionOptions): Promise<void> {
-  const { from, navigate, to } = options;
-  if (from !== "new-session" || to !== "chat") {
-    return navigate();
-  }
-
-  // Navigation commits the URL while the outlet keeps the submitted prompt live.
-  // Only the entrance animation waits for the rendered chat composer.
-  return navigateAndAnimate(options);
 }

@@ -4,14 +4,14 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { projectChatOutboxQueue } from "./chat-outbox-projection.ts";
+import { createTestPageState } from "./chat-page-state.test-support.ts";
 import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
 
 it("publishes queue transitions without a redraw callback and preserves synchronous reads", () => {
-  const host = projectChatOutboxQueue(makeChatHost({ requestHandlers: {} }));
+  const host = createTestPageState(makeChatHost({ requestHandlers: {} }));
   const owner = chatOutboxOwner(host);
   onTestFinished(owner.subscribe(host));
   const read = vi.fn(() =>

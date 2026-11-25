@@ -26,6 +26,11 @@ import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import {
+  CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL,
+  readCodexNativeSubagentSubmissionAcknowledgement,
+  type CodexNativeSubagentSubmissionAcknowledgement,
+} from "./native-subagent-submission.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
@@ -189,7 +194,6 @@ export function createCodexNativeHookRelay(params: {
   attemptTimeoutMs: number;
   startupTimeoutMs: number;
   turnStartTimeoutMs: number;
-  loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   hostCapabilities: EmbeddedRunAttemptParams["hostCapabilities"];
   nativeProcessAuthority?: {
@@ -212,10 +216,15 @@ export function createCodexNativeHookRelay(params: {
   assertCurrentAsync?: () => Promise<void>;
   retainExecutionPolicy?: () => () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
+  onNativeSubagentSubmission?: (
+    receipt: CodexNativeSubagentSubmissionAcknowledgement,
+    assertCurrent: () => void,
+  ) => Promise<void>;
 }): CodexNativeHookRelay | undefined {
   if (params.options?.enabled === false) {
     return undefined;
   }
+  const onNativeSubagentSubmission = params.onNativeSubagentSubmission;
   const modelInputTools: CodexNativeModelInputTools = params.nativeModelAdmission?.tools ?? [
     "multi_agent_v1send_input",
   ];
@@ -241,6 +250,7 @@ export function createCodexNativeHookRelay(params: {
   let remoteCleanup: Promise<void> | undefined;
   const relay = registerNativeHookRelayForBundledRuntime({
     provider: "codex",
+    requireForegroundTurn: true,
     relayId: buildCodexNativeHookRelayId({
       agentId: params.agentId,
       sessionId: params.sessionId,
@@ -261,7 +271,6 @@ export function createCodexNativeHookRelay(params: {
     ...(params.requester ? { requester: params.requester } : {}),
     ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents: params.events,
-    preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,
       attemptTimeoutMs: params.attemptTimeoutMs,
@@ -270,6 +279,16 @@ export function createCodexNativeHookRelay(params: {
     }),
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
+    postToolUse: onNativeSubagentSubmission
+      ? {
+          toolNames: [CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL],
+          observe: (invocation, assertCurrent) =>
+            onNativeSubagentSubmission(
+              readCodexNativeSubagentSubmissionAcknowledgement(invocation.rawPayload),
+              assertCurrent,
+            ),
+        }
+      : undefined,
     executionAdmission:
       params.nativeProcessAuthority ||
       params.nativeModelAdmission ||
@@ -297,7 +316,7 @@ export function createCodexNativeHookRelay(params: {
                       } catch (error) {
                         return toErrorObject(
                           error,
-                          "Native spawn execution authority is no longer current",
+                          "Native subagent spawn was denied. Start a new turn to retry.",
                         ).message;
                       }
                     }

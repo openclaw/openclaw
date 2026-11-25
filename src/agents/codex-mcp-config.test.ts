@@ -1,18 +1,18 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BundleMcpConfig } from "../plugins/bundle-mcp.types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
-  buildCodexMcpServersConfig,
   loadCodexBundleMcpApprovalConfig,
   loadCodexBundleMcpThreadConfigCore,
 } from "./codex-mcp-config.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
-  loadExecApprovalsReadOnlyAsync: vi.fn(),
   bundleMcp: { config: { mcpServers: {} }, diagnostics: [] },
 }));
 const tempDirs: string[] = [];
@@ -33,10 +33,12 @@ const http = (url: string, options: Record<string, unknown> = {}) => ({
   url,
   ...options,
 });
-
-vi.mock("../infra/exec-approvals-store.js", () => ({
-  loadExecApprovalsReadOnlyAsync: mocks.loadExecApprovalsReadOnlyAsync,
-}));
+function expectServers(
+  loaded: Awaited<ReturnType<typeof load>>,
+  mcp_servers: Record<string, unknown>,
+) {
+  expect(loaded.configPatch).toEqual({ mcp_servers });
+}
 
 // mock-isolation: Supply bundle MCP configuration without loading plugin runtimes.
 vi.mock("../plugins/bundle-mcp.js", () => ({
@@ -44,7 +46,6 @@ vi.mock("../plugins/bundle-mcp.js", () => ({
 }));
 
 beforeEach(() => {
-  mocks.loadExecApprovalsReadOnlyAsync.mockReset().mockResolvedValue({ version: 1, agents: {} });
   mocks.bundleMcp = { config: { mcpServers: {} }, diagnostics: [] };
 });
 
@@ -52,96 +53,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
-describe("buildCodexMcpServersConfig", () => {
-  it("normalizes OpenClaw MCP servers into Codex app-server mcp_servers shape", () => {
-    expect(
-      buildCodexMcpServersConfig({
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:23119/mcp",
-            connectionTimeoutMs: 12_345,
-            requestTimeoutMs: 20_125,
-            supportsParallelToolCalls: true,
-            headers: {
-              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-              "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
-              "x-static": "static-value",
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      openclaw: {
-        url: "http://127.0.0.1:23119/mcp",
-        startup_timeout_sec: 12.345,
-        tool_timeout_sec: 20.125,
-        supports_parallel_tool_calls: true,
-        default_tools_approval_mode: "approve",
-        bearer_token_env_var: "OPENCLAW_MCP_TOKEN",
-        http_headers: { "x-static": "static-value" },
-        env_http_headers: { "x-session-key": "OPENCLAW_MCP_SESSION_KEY" },
-      },
-    });
-  });
-
-  it("keeps native timeout projection within OpenClaw timer bounds", () => {
-    expect(
-      buildCodexMcpServersConfig({
-        mcpServers: {
-          bounded: { command: "mcp", connectionTimeoutMs: 0.25, requestTimeoutMs: 1e306 },
-          defaults: { command: "mcp" },
-        },
-      }),
-    ).toEqual({
-      bounded: { command: "mcp", startup_timeout_sec: 0.001, tool_timeout_sec: 2_147_000 },
-      defaults: { command: "mcp" },
-    });
-  });
-});
-
 describe("loadCodexBundleMcpThreadConfigCore", () => {
-  it("projects durable grants only for configured bundle names and fingerprints their removal", async () => {
-    setServers({
-      configured: { command: "mcp" },
-      prompt: { command: "mcp" },
-      pluginOnly: { command: "mcp" },
-    });
-    mocks.loadExecApprovalsReadOnlyAsync.mockResolvedValue({
-      version: 1,
-      agents: {
-        main: {
-          mcpTools: ["configured", "prompt", "pluginOnly"].map((server) => ({
-            server,
-            tool: "write.raw_tool",
-            source: "allow-always",
-            addedAt: 1,
-          })),
-        },
-      },
-    });
-    const params = {
-      agentId: "main",
-      cfg: configured({
-        configured: { command: "mcp" },
-        prompt: { command: "mcp", codex: { defaultToolsApprovalMode: "prompt" } },
-      }),
-    };
-
-    const granted = await load(params);
-
-    expect(granted.configPatch?.mcp_servers).toEqual({
-      configured: { command: "mcp", tools: { "write.raw_tool": { approval_mode: "approve" } } },
-      prompt: { command: "mcp" },
-      pluginOnly: { command: "mcp" },
-    });
-    expect(mocks.loadExecApprovalsReadOnlyAsync).toHaveBeenCalledTimes(1);
-    mocks.loadExecApprovalsReadOnlyAsync.mockResolvedValue({ version: 1, agents: {} });
-    const revoked = await load(params);
-    expect(revoked.configPatch?.mcp_servers.configured).not.toHaveProperty("tools");
-    expect(revoked.fingerprint).not.toBe(granted.fingerprint);
-  });
-
   it("prepares Agent Plugins data dirs before projecting Codex thread config", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-agent-mcp-"));
     tempDirs.push(tempDir);
@@ -169,7 +81,31 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       broken: { default_tools_approval_mode: undefined },
     });
     await expect(fs.stat(dataDir)).rejects.toMatchObject({ code: "ENOENT" });
-    const loaded = await load();
+    const io = Promise.withResolvers<void>();
+    const mkdir = fs.mkdir;
+    using asyncMkdir = vi.spyOn(fs, "mkdir").mockImplementationOnce(async () => {
+      await io.promise;
+      return mkdir(dataDir, { recursive: true });
+    });
+    const mkdirSync = syncFs.mkdirSync;
+    using blockedMkdir = vi.spyOn(syncFs, "mkdirSync").mockImplementationOnce(() => {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      return mkdirSync(dataDir, { recursive: true });
+    });
+    let projected = false;
+    const loading = load().then((result) => {
+      projected = true;
+      return result;
+    });
+    try {
+      await setImmediate();
+      expect(projected).toBe(false);
+    } finally {
+      io.resolve();
+    }
+    const loaded = await loading;
+    expect(asyncMkdir).toHaveBeenCalledTimes(2);
+    expect(blockedMkdir).not.toHaveBeenCalled();
 
     expect((await fs.stat(dataDir)).isDirectory()).toBe(true);
     expect(loaded.configPatch?.mcp_servers.weather).toMatchObject({
@@ -186,37 +122,48 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
     ]);
   });
 
-  it("loads enabled bundled MCP servers as a Codex thread config patch", async () => {
+  it("projects typed args and bounded timeouts into the fingerprinted thread config", async () => {
+    const args = ["", " --flag "];
     const search = {
       url: "https://mcp.example.com/mcp",
       connectionTimeoutMs: 12_345,
       requestTimeoutMs: 20_125,
       supportsParallelToolCalls: true,
     };
-    setServers({ search: { type: "http", ...search } });
+    const servers = {
+      search: http(search.url, search),
+      bounded: { command: "mcp", connectionTimeoutMs: 0.25, requestTimeoutMs: 1e306 },
+      defaults: { command: "mcp" },
+      valid: { command: "mcp", args },
+      invalid: { command: "mcp", args: ["ok", 2] },
+    };
+    setServers(servers);
 
     const loaded = await load({
       cfg: { plugins: { entries: { "bundle-probe": { enabled: true } } } },
     });
 
-    expect(loaded.configPatch).toEqual({
-      mcp_servers: {
-        search: {
-          url: "https://mcp.example.com/mcp",
-          startup_timeout_sec: 12.345,
-          tool_timeout_sec: 20.125,
-          supports_parallel_tool_calls: true,
-        },
+    expectServers(loaded, {
+      search: {
+        url: "https://mcp.example.com/mcp",
+        startup_timeout_sec: 12.345,
+        tool_timeout_sec: 20.125,
+        supports_parallel_tool_calls: true,
       },
+      bounded: { command: "mcp", startup_timeout_sec: 0.001, tool_timeout_sec: 2_147_000 },
+      defaults: { command: "mcp" },
+      valid: { command: "mcp", args: ["", " --flag "] },
+      invalid: { command: "mcp" },
     });
+    expect(loaded.configPatch?.mcp_servers.valid?.args).not.toBe(args);
     expect(loaded.fingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(loaded.staticServerNames).toEqual(["search"]);
+    expect(loaded.staticServerNames).toEqual(["bounded", "defaults", "invalid", "search", "valid"]);
     for (const changedControls of [
       { connectionTimeoutMs: 25_000 },
       { requestTimeoutMs: 45_000 },
       { supportsParallelToolCalls: false },
     ]) {
-      setServers({ search: { ...search, ...changedControls } });
+      setServers({ ...servers, search: { ...search, ...changedControls } });
       const changed = await load();
       expect(changed.fingerprint).not.toBe(loaded.fingerprint);
     }
@@ -237,13 +184,11 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       },
     });
 
-    expect(loaded.configPatch).toEqual({
-      mcp_servers: {
-        constructor: { url: "https://constructor.example.com/mcp" },
-        docs: {
-          url: "https://docs.example.com/mcp",
-          disabled_tools: ["delete_all", "delete_page"],
-        },
+    expectServers(loaded, {
+      constructor: { url: "https://constructor.example.com/mcp" },
+      docs: {
+        url: "https://docs.example.com/mcp",
+        disabled_tools: ["delete_all", "delete_page"],
       },
     });
   });
@@ -253,18 +198,28 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
     const cfg = configured({ docs: { enabled: false, url: "https://configured.example.com/mcp" } });
 
     expect((await load({ cfg })).configPatch).toBeUndefined();
-    expect(
-      (
-        await load({
-          cfg,
-          toolOverrides: { mcpServers: { docs: true } },
-        })
-      ).configPatch,
-    ).toEqual({
-      mcp_servers: {
-        docs: { url: "https://bundled.example.com/mcp" },
-      },
+    // The session enables the configured server, which then owns the name.
+    const enabled = await load({ cfg, toolOverrides: { mcpServers: { docs: true } } });
+    expect(enabled.configPatch).toBeUndefined();
+    expect(enabled.userStaticServerNames).toEqual(["docs"]);
+  });
+
+  it("leaves a same-named bundled server to the enabled configured server (#194825)", async () => {
+    setServers({
+      gbrain: { command: "./.agents/gbrain-launcher", args: ["serve"] },
+      notes: http("https://notes.example.com/mcp"),
     });
+
+    const loaded = await load({
+      cfg: configured({
+        gbrain: { url: "http://127.0.0.1:3131/mcp", transport: "streamable-http" },
+      }),
+    });
+
+    // Codex would merge a bundled stdio `gbrain` into the configured HTTP one.
+    expectServers(loaded, { notes: { url: "https://notes.example.com/mcp" } });
+    expect(loaded.userStaticServerNames).toEqual(["gbrain"]);
+    expect(loaded.staticServerNames).toEqual(["gbrain", "notes"]);
   });
 
   it("returns an evaluated empty MCP config when no bundle MCP runtime is needed", async () => {
@@ -302,11 +257,7 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       setServers({ search });
       const withoutScopedConfig = await load({ cfg: {}, toolsEnabled: true });
 
-      expect(loaded.configPatch).toEqual({
-        mcp_servers: { search: { url: "https://mcp.example.com/mcp" } },
-      });
-      expect(JSON.stringify(loaded.configPatch)).not.toContain("unresolved.invalid");
-      expect(JSON.stringify(loaded.configPatch)).not.toContain("user-mail");
+      expectServers(loaded, { search: { url: "https://mcp.example.com/mcp" } });
       expect(loaded.configPatch).toEqual(withoutScopedConfig.configPatch);
       expect(loaded.fingerprint).toBe(withoutScopedConfig.fingerprint);
       expect(loaded.staticServerNames).toEqual(["search"]);

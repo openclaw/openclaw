@@ -4,8 +4,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   decodeChatHistoryPageCursor,
   resolveChatHistoryPageCursors,
-} from "../../gateway/server-methods/chat-history-page-cursor.js";
-import { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
+} from "../../gateway/chat-history-page-cursor.js";
+import { prepareChatHistoryResponsePage } from "../../gateway/chat-history-response-page.js";
 import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {

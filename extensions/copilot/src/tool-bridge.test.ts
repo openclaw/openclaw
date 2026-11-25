@@ -328,7 +328,7 @@ describe("createCopilotToolBridge", () => {
     });
   });
 
-  it("submits the exact conversation-policy-filtered catalog to the SDK", async () => {
+  it("keeps session tool definitions while refusing conversation-policy-denied calls", async () => {
     await withTempDir("openclaw-copilot-policy-", async (workspaceDir) => {
       const result = await createBridge({
         attemptParams: {
@@ -343,11 +343,28 @@ describe("createCopilotToolBridge", () => {
         sessionKey: "agent:agent-1:policy-session",
         workspaceDir,
       });
-      const names = result.promptToolPolicy.apply().tools.map((tool) => tool.name);
-
-      expect(names).toEqual(expect.arrayContaining(["read", "apply_patch"]));
-      for (const denied of ["exec", "process", "write", "edit", "ask_user"]) {
-        expect(names).not.toContain(denied);
+      try {
+        const { tools } = result.promptToolPolicy.apply();
+        expect(tools.map((tool) => tool.name)).toEqual(
+          expect.arrayContaining(["read", "apply_patch", "write"]),
+        );
+        expect(tools.map((tool) => tool.name)).not.toContain("ask_user");
+        const outputPath = path.join(workspaceDir, "denied.txt");
+        for (const denied of ["exec", "process", "write", "edit"]) {
+          await expect(
+            invoke(sdkToolNamed(result, denied), {
+              path: outputPath,
+              content: "must not be written",
+            }),
+          ).resolves.toMatchObject({
+            textResultForLlm: expect.stringContaining(
+              `${denied} is outside the tools this run allows.`,
+            ),
+          });
+        }
+        await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        result.cleanup?.();
       }
     });
   });
@@ -443,11 +460,9 @@ describe("createCopilotToolBridge tool conversion", () => {
         .mockResolvedValueOnce(textToolResult("Memory forgotten.", { action: "deleted" }));
       const terminal = createTerminalTracker("run-copilot-forget");
       const sdkTool = await toSdk(tool, { ...terminal, onToolCompleted });
-      const result = await invoke(
-        sdkTool,
-        memoryArgs,
-        makeInvocation({ toolCallId: "forget-1", toolName: "memory_forget" }),
-      );
+      const forget = (toolCallId: string) =>
+        invoke(sdkTool, memoryArgs, makeInvocation({ toolCallId, toolName: "memory_forget" }));
+      const result = await forget("forget-1");
       expect(terminal.lastError()).toMatchObject({ mutatingAction: owned });
       if (!owned) {
         expect(terminal.lastError()).not.toHaveProperty("ownerKey");
@@ -463,11 +478,7 @@ describe("createCopilotToolBridge tool conversion", () => {
       expect(result).toMatchObject({ resultType: "failure", error: message });
       expect(JSON.stringify(result)).not.toContain("memory-lancedb");
 
-      await invoke(
-        sdkTool,
-        memoryArgs,
-        makeInvocation({ toolCallId: "forget-2", toolName: "memory_forget" }),
-      );
+      await forget("forget-2");
       expect(terminal.lastError()).toBeUndefined();
     },
   );
@@ -511,6 +522,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     const pending = executeCatalog({
       tool: target,
       toolName: "memory_forget",
+      toolId: "openclaw:memory-lancedb:memory_forget",
       source: "openclaw",
       sourceName: "memory-lancedb",
       toolCallId: "catalog-forget-1",
@@ -592,6 +604,40 @@ describe("createCopilotToolBridge tool conversion", () => {
     await expect(Promise.all(runs.slice(1))).resolves.toEqual(
       [1, 2, 3, 4].map((index) => ({ resultType: "success", textResultForLlm: String(index) })),
     );
+  });
+
+  it("seals one-shot tool admission and joins calls already accepted", async () => {
+    const entered = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const bridge = await bridgeWithTools(
+      [
+        makeTool({
+          name: "pending",
+          execute: vi.fn(async () => {
+            entered.resolve();
+            await finish.promise;
+            return textToolResult("done");
+          }),
+        }),
+      ],
+      { config: directConfig },
+    );
+    const pending = run(bridge, "pending");
+    await entered.promise;
+    let settled = false;
+    const cleanup = bridge.settle?.().then(() => {
+      settled = true;
+    });
+    try {
+      await expect(run(bridge, "pending")).rejects.toThrow("attempt is closing");
+      expect(settled).toBe(false);
+    } finally {
+      finish.resolve();
+      await pending;
+      await cleanup;
+      bridge.cleanup?.();
+    }
+    expect(settled).toBe(true);
   });
 
   it("runs SDK-dispatched tools in the attempt's async context, not the pooled connection's", async () => {

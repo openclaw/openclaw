@@ -3,15 +3,37 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import * as toast from "../../lib/toast.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  click,
+  expectAbsent,
+  expectContent,
+  profile as makeProfile,
+} from "../../test-helpers/model-providers.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ModelProviderCard } from "./data.ts";
-import { ProviderProfiles, type ProviderProfilesViewProps } from "./profiles-view.tsx";
-import { card as viewCard, props as makeViewProps } from "./view.test-support.tsx";
+import {
+  ProviderAccountSummary,
+  ProviderProfiles,
+  showProfileLogoutSuccess,
+  type ProviderProfilesViewProps,
+} from "./profiles-view.tsx";
+import { ProviderRow } from "./provider-row.tsx";
+import { card as viewCard, props, text } from "./view.test-support.tsx";
 
-function makeProfile(profileId: string): ModelProviderCard["profiles"][number] {
-  return { profileId, type: "oauth", status: "ok" };
-}
+it("keeps visible sign-out success quiet and preserves warnings", () => {
+  const toastSpy = vi.spyOn(toast, "showToast").mockReturnValue(true);
+  showProfileLogoutSuccess();
+  expect(toastSpy).not.toHaveBeenCalled();
+  showProfileLogoutSuccess("A shared account is still in use.");
+  expect(toastSpy).toHaveBeenCalledWith({
+    message: "A shared account is still in use.",
+    severity: "warning",
+  });
+});
+
 function card(overrides: Partial<ModelProviderCard> = {}) {
   return viewCard({ apiKey: undefined, ...overrides });
 }
@@ -34,16 +56,7 @@ function rowFor(container: ParentNode, id: string) {
   return container.querySelector<HTMLElement>(`[data-profile-id="${id}"]`)!;
 }
 
-function props(overrides: Partial<ProviderProfilesViewProps> = {}): ProviderProfilesViewProps {
-  return {
-    ...makeViewProps(),
-    onAddAccount: () => undefined,
-    addAccountDisabled: false,
-    ...overrides,
-  };
-}
-
-function mount(providerCard: ModelProviderCard, viewProps = props()) {
+function mount(providerCard: ModelProviderCard, viewProps: ProviderProfilesViewProps = props()) {
   const [current, setCurrent] = createSignal({ card: providerCard, props: viewProps });
   const view = mountSolid(() => <ProviderProfiles {...current().props} card={current().card} />);
   const update = (nextCard: ModelProviderCard, nextProps = viewProps) => {
@@ -55,18 +68,13 @@ function mount(providerCard: ModelProviderCard, viewProps = props()) {
 }
 
 function reorderCard() {
-  const result = orderedCard(
+  return orderedCard(
     {
       "credential-owner": ["account:one", "account:two", "account:three"],
       "other-owner": ["account:other"],
     },
     { id: "route-one" },
   );
-  result.profiles = result.profiles.map((profile) => ({
-    ...profile,
-    email: `${profile.profileId.split(":")[1]}@example.com`,
-  }));
-  return result;
 }
 
 function pointer(target: Element, type: string, coordinates = { x: 20, y: 75 }) {
@@ -81,12 +89,16 @@ function pointer(target: Element, type: string, coordinates = { x: 20, y: 75 }) 
   target.dispatchEvent(event);
 }
 
+function movePointer(grip: Element) {
+  pointer(grip, "pointerdown");
+  pointer(grip, "pointermove", { x: 40, y: 285 });
+}
+
 function pointerFixture(viewProps: ProviderProfilesViewProps) {
   const providerCard = reorderCard();
   const { container, update } = mount(providerCard, viewProps);
   const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
   const target = rowFor(container, "account:three");
-  // Different row heights occur when account metadata wraps on narrow screens.
   let top = 0;
   const rows = [...container.querySelectorAll<HTMLElement>(rowSelector)];
   for (const [index, row] of rows.entries()) {
@@ -112,8 +124,56 @@ afterEach(() => {
   Reflect.deleteProperty(document, "elementFromPoint");
 });
 
+it("retains account summary focus while refreshed snapshots update account data and recovery", () => {
+  const profileId = "account:shared";
+  const cards = ["one", "two"].map((name) =>
+    card({
+      id: `route-${name}`,
+      profiles: [makeProfile(profileId, { source: "saved", email: `${name}@example.invalid` })],
+      profileProviderIds: { [profileId]: `owner-${name}` },
+    }),
+  );
+  cards[0]!.apiKey = { source: "env", envVar: "EXAMPLE_API_KEY" };
+  const originalUse = vi.fn();
+  const [current, setCurrent] = createSignal({
+    cards,
+    recovery: { authProvider: "owner-one", disabled: false, onUse: originalUse },
+  });
+  const { container } = mountSolid(() => <ProviderAccountSummary {...current()} />);
+  flush();
+  const rows = [...container.querySelectorAll(".model-provider-login__account")];
+  expect(rows).toHaveLength(2);
+  const button = rows[0]!.querySelector<HTMLButtonElement>("[data-models-use-account]")!;
+  expectAbsent(rows[1]!, "[data-models-use-account]");
+  button.focus();
+
+  const refreshed = structuredClone(cards);
+  refreshed[0]!.profiles[0]!.email = "updated-one@example.invalid";
+  refreshed[0]!.catalogStatus = "auth-rejected";
+  refreshed[0]!.apiKey = { source: "config" };
+  refreshed[1]!.profiles[0]!.email = "updated-two@example.invalid";
+  const latestUse = vi.fn();
+  setCurrent({
+    cards: refreshed,
+    recovery: { authProvider: "owner-one", disabled: false, onUse: latestUse },
+  });
+  flush();
+
+  const updatedRows = [...container.querySelectorAll(".model-provider-login__account")];
+  expect(updatedRows[0]).toBe(rows[0]);
+  expect(updatedRows[1]).toBe(rows[1]);
+  expectContent(rows[0]!, ["updated-one@example.invalid", "Account added"]);
+  expectContent(rows[1]!, ["updated-two@example.invalid"]);
+  expect(container.querySelector("p.muted")?.textContent).toBe("API key set in config");
+  expectContent(container, [], ["EXAMPLE_API_KEY"]);
+  expect(rows[0]!.querySelector("[data-models-use-account]")).toBe(button);
+  expect(document.activeElement).toBe(button);
+  button.click();
+  expect(latestUse).toHaveBeenCalledExactlyOnceWith(profileId);
+  expect(originalUse).not.toHaveBeenCalled();
+});
+
 it("shows account provenance and removes drag handles for config-locked priority", () => {
-  const onProfileOrderChange = vi.fn();
   const providerCard = orderedCard(
     {
       "openai-config": ["openai:configured", "openai:codex"],
@@ -128,22 +188,26 @@ it("shows account provenance and removes drag handles for config-locked priority
   providerCard.profiles[1]!.displayName = "Codex import";
   providerCard.profileOrders["openai-config"] = ["openai:configured"];
 
-  mount(providerCard, props({ onProfileOrderChange }));
+  mount(providerCard);
 
   expect(document.querySelectorAll(gripSelector)).toHaveLength(2);
   for (const id of ["openai:configured", "openai:codex"]) {
-    expect(rowFor(document, id).querySelector(gripSelector)).toBeNull();
+    expectAbsent(rowFor(document, id), gripSelector);
   }
-  expect(document.querySelector(".model-providers__profile-logout")).toBeNull();
-  expect(document.body.textContent).not.toContain("Saved in OpenClaw");
-  expect(document.body.textContent).toContain("Provider config");
-  expect(document.body.textContent).toContain("Codex import");
-  expect(document.body.textContent).toContain("Shared credential");
-  expect(document.body.textContent).toContain("Priority is managed by provider configuration");
+  expectAbsent(document, ".model-providers__profile-logout");
+  expectContent(
+    document.body,
+    [
+      "Provider config",
+      "Codex import",
+      "Shared account",
+      "Priority is managed by provider configuration",
+    ],
+    ["Saved in OpenClaw"],
+  );
   expect(
     [...document.querySelectorAll("button")].map((button) => button.textContent),
   ).not.toContain("Clear custom order");
-  expect(onProfileOrderChange).not.toHaveBeenCalled();
 });
 
 it.each<[string, ModelProviderCard, string?, number?]>([
@@ -183,12 +247,21 @@ it.each<[string, ModelProviderCard, string?, number?]>([
   ],
 ])("shows %s and blocks reordering", (message, providerCard, excluded, count = 0) => {
   const onProfileOrderChange = vi.fn();
-  const { container } = mount(providerCard, props({ onProfileOrderChange }));
+  const { container } = providerCard.apiKey
+    ? mountSolid(() => <ProviderRow {...props({ onProfileOrderChange })} card={providerCard} />)
+    : mount(providerCard, props({ onProfileOrderChange }));
+  if (providerCard.apiKey) {
+    click(container, ".provider-row__summary");
+    flush();
+  }
   const grips = [...container.querySelectorAll<HTMLButtonElement>(gripSelector)];
   expect(grips).toHaveLength(count);
-  expect(container.textContent).toContain(message);
+  expectContent(
+    container,
+    providerCard.apiKey ? ["API key", "From environment (OPENAI_API_KEY)"] : [message],
+  );
   if (excluded) {
-    expect(container.textContent).not.toContain(excluded);
+    expectContent(container, [], [excluded]);
   }
   if (count) {
     expect(grips.every((grip) => grip.disabled)).toBe(true);
@@ -208,8 +281,7 @@ it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "ot
     const exitSettings = vi.fn();
     const settingsShortcut = (event: KeyboardEvent) => event.defaultPrevented || exitSettings();
     document.addEventListener("keydown", settingsShortcut);
-    pointer(grip, "pointerdown");
-    pointer(grip, "pointermove", { x: 40, y: 285 });
+    movePointer(grip);
     expect(row.style.translate).toBe("20px 210px");
     if (ending === "Escape") {
       document.dispatchEvent(
@@ -237,8 +309,7 @@ it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "ot
     expect(rows.every((candidate) => candidate.style.translate === "")).toBe(true);
 
     hitTest.mockReturnValue(target);
-    pointer(grip, "pointerdown");
-    pointer(grip, "pointermove", { x: 40, y: 285 });
+    movePointer(grip);
     pointer(grip, "pointerup", { x: 40, y: 285 });
     expect(onProfileOrderChange).toHaveBeenCalledExactlyOnceWith("route-one", "credential-owner", [
       "account:two",
@@ -248,13 +319,33 @@ it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "ot
   },
 );
 
+it("names hidden identities by credential kind, numbering only repeated kinds", () => {
+  const { container } = mount(
+    card({
+      profiles: [
+        makeProfile("openai:token-a", { type: "token", status: "static" }),
+        makeProfile("openai:oauth"),
+        makeProfile("openai:token-b", { type: "token", status: "static" }),
+        makeProfile("openai:named", { type: "token", status: "static", email: "ops@example.com" }),
+      ],
+      profileOrders: {
+        openai: ["openai:token-a", "openai:oauth", "openai:token-b", "openai:named"],
+      },
+    }),
+  );
+  expect(
+    [...container.querySelectorAll(".model-providers__profile-copy strong")].map(
+      (identity) => identity.textContent,
+    ),
+  ).toEqual(["Access token 1", "Signed-in account", "Access token 2", "ops@example.com"]);
+});
+
 it("releases a removed row's drag without handling the next Escape", () => {
   const onProfileOrderChange = vi.fn();
   const { container, update, grip, row, rows, hitTest, providerCard } = pointerFixture(
     props({ onProfileOrderChange }),
   );
-  pointer(grip, "pointerdown");
-  pointer(grip, "pointermove", { x: 40, y: 285 });
+  movePointer(grip);
   expect(row.style.translate).toBe("20px 210px");
 
   update({
@@ -267,7 +358,7 @@ it("releases a removed row's drag without handling the next Escape", () => {
   });
   expect(row.isConnected).toBe(false);
   expect(rows.every((candidate) => candidate.style.translate === "")).toBe(true);
-  expect(container.querySelector(".model-providers__profiles--sorting")).toBeNull();
+  expectAbsent(container, ".model-providers__profiles--sorting");
   hitTest.mockClear();
   const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
   const stopPropagation = vi.spyOn(escape, "stopPropagation");
@@ -304,8 +395,7 @@ it("keeps focus on the drag handle through repeated keyboard moves", async () =>
   const { container, update } = mount(providerCard, viewProps);
   const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
   grip.focus();
-  const details = grip.closest(rowSelector)!.querySelector("details")!;
-  details.open = true;
+  const movedRow = grip.closest(rowSelector)!;
   expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(0);
   expect(grip.getAttribute("aria-keyshortcuts")).toBe("ArrowUp ArrowDown");
 
@@ -321,12 +411,255 @@ it("keeps focus on the drag handle through repeated keyboard moves", async () =>
         ),
       ).toEqual(order);
       expect(document.activeElement).toBe(grip);
-      expect(grip.closest(rowSelector)!.querySelector("details")).toBe(details);
-      expect(details).toMatchObject({ open: true });
+      expect(grip.closest(rowSelector)).toBe(movedRow);
       expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(3);
     });
   }
   grip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
   expect(onProfileOrderChange).toHaveBeenCalledTimes(2);
   expect(document.activeElement).toBe(grip);
+});
+
+const failed = makeProfile("openai:failed@example.com", {
+  logoutSupported: true,
+  email: "failed@example.com",
+  status: "expired",
+  reasonCode: "refresh_failed",
+});
+
+it.each([undefined, "auth-rejected"] as const)(
+  "keeps account-level recovery independent of provider outcome %s in both account surfaces",
+  (catalogStatus) => {
+    const expiring = makeProfile("example:short", {
+      status: "expiring",
+      expiry: { at: 4_000_000, remainingMs: 3_600_000, label: "1h" },
+    });
+    const expired = makeProfile("example:elapsed", {
+      status: "expired",
+      expiry: { at: 1, remainingMs: -1, label: "0m" },
+    });
+    const refreshing = makeProfile("example:refreshing", {
+      status: "expired",
+      reasonCode: "expired",
+    });
+    const healthy = makeProfile("example:healthy");
+    const missing = makeProfile("example:missing", {
+      status: "missing",
+      reasonCode: "missing_credential",
+    });
+    const external = makeProfile("example:external", {
+      expiry: expired.expiry,
+      status: "expired",
+      externallyManaged: true,
+      source: "external",
+    });
+    const staticToken = makeProfile("example:static", {
+      type: "token",
+      status: "expired",
+      reasonCode: "expired",
+    });
+    const providerCard = card({
+      id: "example",
+      catalogStatus,
+      profiles: [expiring, expired, refreshing, failed, missing, external, staticToken, healthy],
+    });
+    const { container } = mount(providerCard, {
+      ...props(),
+      canSignInAgain: () => true,
+      onSignInAgain: vi.fn(),
+    });
+    const buttons = container.querySelectorAll("[data-models-sign-in-again]");
+    expect(
+      [...buttons].map(
+        (button) => button.closest<HTMLElement>("[data-profile-id]")?.dataset.profileId,
+      ),
+    ).toEqual([failed.profileId, missing.profileId]);
+    const summary = mountSolid(() => <ProviderAccountSummary cards={[providerCard]} />).container;
+    flush();
+    for (const root of [container, summary]) {
+      expectContent(rowFor(root, expiring.profileId), [
+        "Access token expires in 1h",
+        "Access-token expiry alone does not mean you need to sign in again.",
+      ]);
+      expectContent(rowFor(root, expired.profileId), ["Access token expired"], ["Sign in again"]);
+      expectContent(rowFor(root, refreshing.profileId), ["Refreshing"], ["Sign in again"]);
+      expectContent(rowFor(root, failed.profileId), ["Sign-in expired"]);
+      expectContent(rowFor(root, missing.profileId), ["Not signed in"]);
+      expectContent(
+        rowFor(root, external.profileId),
+        [root === container ? "External CLI" : "Managed externally"],
+        ["Signed in"],
+      );
+      expectContent(
+        rowFor(root, staticToken.profileId),
+        ["Expired"],
+        ["Access-token expiry alone"],
+      );
+    }
+  },
+);
+
+it.each([
+  { labels: ["Week"], credits: 0 },
+  { labels: ["5h"], credits: undefined },
+  { labels: [], credits: 12.75 },
+  { labels: [], credits: undefined },
+  { labels: ["5h", "Week", "30d"], credits: 4 },
+])(
+  "reconciles reserved slots against reported windows $labels and credits $credits",
+  async ({ labels, credits }) => {
+    const slow = Promise.withResolvers<void>();
+    const client = createTestGatewayClient(async (_method, params) => {
+      if ((params as { profileId: string }).profileId === pair.openai[1]) {
+        await slow.promise;
+      }
+      return {
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: labels.map((label) => ({ label, usedPercent: 25 })),
+            billing:
+              credits === undefined ? [] : [{ type: "balance", amount: credits, unit: "credits" }],
+          },
+        ],
+      };
+    });
+    const { container } = mount(orderedCard(pair), {
+      ...props(),
+      accountUsage: { client, agentId: "main", revision: 0 },
+    });
+    const waiting = ".model-providers__usage-segment[aria-hidden=true]";
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".model-providers__credit > :empty")).toHaveLength(1),
+    );
+    // No returned account still looks pending, even if it omitted a common window entirely.
+    for (const slot of container.querySelectorAll(".model-providers__usage-track")) {
+      expect(slot.firstElementChild?.matches(waiting)).toBe(false);
+    }
+    expect(container.querySelectorAll(waiting)).toHaveLength(
+      new Set(["5h", "Week", ...labels]).size,
+    );
+    slow.resolve();
+    await waitForSolid(() =>
+      expect(
+        [...container.querySelectorAll(".model-providers__credit > span[aria-hidden=true]")].map(
+          (el) => el.textContent,
+        ),
+      ).toEqual(Array(2).fill(credits === undefined ? "—" : String(credits))),
+    );
+    expect(
+      [...container.querySelectorAll(".model-providers__usage-window[role=group]")].map(
+        (row) => row.ariaLabel,
+      ),
+    ).toEqual([...labels, "Credits"]);
+    expect(container.querySelector(".model-providers__usage-segment[aria-hidden=true]")).toBeNull();
+  },
+);
+
+it("moves a key across collapsed subscriptions and keeps credit and recovery details on the right account", async () => {
+  const healthy = makeProfile("openai:other", { email: "other@example.com" });
+  const key = makeProfile("openai:key", { type: "api_key", status: "static" });
+  const profiles = [failed, key, healthy];
+  const onSignInAgain = vi.fn(),
+    onRequestLogout = vi.fn(),
+    onProfileOrderChange = vi.fn();
+  const client = createTestGatewayClient(async (_method, params) => {
+    const partial = (params as { profileId: string }).profileId === failed.profileId;
+    return {
+      updatedAt: 1,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [],
+          plan: "Pro",
+          error: partial ? "Partial reading" : undefined,
+          billing: partial
+            ? [{ type: "balance", amount: 0, unit: "credits" }]
+            : [{ type: "spend", amount: 42, unit: "credits" }],
+        },
+      ],
+    };
+  });
+  const { container } = mount(
+    orderedCard(
+      { openai: profiles.map((p) => p.profileId) },
+      { profiles, logoutTargets: [{ provider: "openai", profileIds: [failed.profileId] }] },
+    ),
+    {
+      ...props(),
+      accountUsage: { client, agentId: "main", revision: 0 },
+      canSignInAgain: () => true,
+      onSignInAgain,
+      onRequestLogout,
+      onProfileOrderChange,
+    },
+  );
+  await waitForSolid(() => {
+    const credits = container.querySelectorAll(".model-providers__credit > span:nth-child(2)");
+    expect([...credits].map((cell) => cell.textContent)).toEqual(["0", "—"]);
+  });
+  expect(container.textContent).not.toContain("No live usage data");
+  const keyRow = rowFor(container, key.profileId);
+  const priority = keyRow.querySelector<HTMLSelectElement>("select")!;
+  expect(priority?.selectedOptions[0]?.textContent).toBe("Priority 2");
+  for (const [slot, expected] of [
+    [0, [key.profileId, failed.profileId, healthy.profileId]],
+    [2, [failed.profileId, healthy.profileId, key.profileId]],
+  ] as const) {
+    priority.selectedIndex = slot;
+    priority.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onProfileOrderChange).toHaveBeenLastCalledWith("openai", "openai", expected);
+  }
+  expect(rowFor(container, failed.profileId)).toBeNull();
+  const name = container.querySelector<HTMLButtonElement>(".model-providers__segment-name")!;
+  expect(name.textContent).toContain("Sign-in expired");
+  name.click();
+  flush();
+  const row = rowFor(container, failed.profileId);
+  expectContent(container.querySelector("small[role=status]")!, ["Partial reading"]);
+  expectAbsent(container, gripSelector);
+  click(row, "[data-models-sign-in-again]");
+  click(row, ".model-providers__profile-logout");
+  expect(onSignInAgain).toHaveBeenCalledOnce();
+  expect(onRequestLogout).toHaveBeenCalledWith(
+    expect.objectContaining({ target: { provider: "openai", profileIds: [failed.profileId] } }),
+  );
+  expectContent(row, ["Pro"], ["0 credits", "Sign-in expired", "Partial reading"]);
+  expect(rowFor(container, healthy.profileId)).toBeNull();
+});
+
+it("disables account recovery while busy or read-only and hides unavailable sign-in", () => {
+  const providerCard = card({ profiles: [failed] });
+  const viewProps = { ...props(), canSignInAgain: () => true, onSignInAgain: vi.fn() };
+  const { container, update } = mount(providerCard, viewProps);
+  const button = () => container.querySelector<HTMLButtonElement>("[data-models-sign-in-again]");
+  expect(button()?.textContent).toBe("Sign in again");
+  expect(button()?.getAttribute("aria-label")).toBe("Sign in again as failed@example.com");
+
+  // One sign-in at a time, and only with write access.
+  update(providerCard, { ...viewProps, loginBusy: true });
+  expect(button()?.disabled).toBe(true);
+  update(providerCard, { ...viewProps, canMutate: false, mutationBlockedReason: "Read-only" });
+  expect(button()?.disabled).toBe(true);
+  expect(button()?.title).toBe("Read-only");
+
+  // A provider without a startable sign-in keeps the status but offers no dead button.
+  update(providerCard, { ...viewProps, canSignInAgain: () => false });
+  expect(button()).toBeNull();
+  expect(text(rowFor(container, failed.profileId))).toContain("Sign-in expired");
+});
+
+it("starts the account's provider sign-in from its row", () => {
+  const providerCard = card({ profiles: [failed] });
+  const onConnect = vi.fn();
+  const { container } = mountSolid(() => (
+    <ProviderRow {...props({ onConnect, canConnect: () => true })} card={providerCard} />
+  ));
+  click(container, ".provider-row__summary");
+  flush();
+  click(rowFor(container, failed.profileId), "[data-models-sign-in-again]");
+  expect(onConnect).toHaveBeenCalledWith(providerCard);
 });

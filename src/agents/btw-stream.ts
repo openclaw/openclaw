@@ -1,21 +1,42 @@
+import { isAnthropicOAuthApiKey } from "@openclaw/ai/internal/anthropic";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  buildReplyUsageState,
+  recordReplyUsageState,
+} from "../auto-reply/reply/reply-usage-state.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { AssistantMessageEvent, Message, Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveModelCostConfig } from "../model-catalog/usage-pricing.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../plugins/hook-agent-context.js";
+import { estimateAggregateUsageCostAsync } from "../utils/usage-format.js";
+import { assertOperatorModelAllowed } from "./admitted-run-context.js";
 import { buildBtwQuestionPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
 import type { RunBtwSideQuestionParams } from "./btw-runtime.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { wrapStreamFnWithModelRequestGate } from "./embedded-agent-runner/model-request-hook.js";
+import { wrapStreamFnSanitizeMalformedToolCalls } from "./embedded-agent-runner/run/attempt-tool-call-replay-sanitization.js";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
-import { normalizeUsage, type NormalizedUsage } from "./usage.js";
+import { resolveTranscriptPolicy } from "./transcript-policy.js";
+import {
+  hasBillableUsage,
+  normalizeUsage,
+  toDiagnosticUsage,
+  type NormalizedUsage,
+} from "./usage.js";
 
 const log = createSubsystemLogger("agents/btw");
 
-export async function runLightweightBtwStream(input: {
+type SideQuestionStreamInput = {
   params: RunBtwSideQuestionParams;
   modelRegistry: Parameters<typeof getModelRegistryRuntime>[0];
   runtimeModel: Model;
@@ -24,11 +45,59 @@ export async function runLightweightBtwStream(input: {
   resolvedAuthProfileId?: string;
   sessionId: string;
   workspaceDir: string;
-  imageLimits: ImageSanitizationLimits;
-  messages: Message[];
-  inFlightPrompt?: string;
-  recordBtwUsage: (model: Model, usage?: NormalizedUsage) => void;
-}): Promise<ReplyPayload | undefined> {
+};
+
+export async function recordBtwUsage(
+  input: Pick<SideQuestionStreamInput, "params" | "runtimeModel" | "sessionId"> & {
+    agentId: string;
+  },
+  usage?: NormalizedUsage,
+): Promise<void> {
+  const { params, runtimeModel, sessionId, agentId } = input;
+  params.onUsage?.(usage);
+  if (params.onUsage) {
+    return;
+  }
+  if (!hasBillableUsage(usage)) {
+    return;
+  }
+  const usageState = buildReplyUsageState({
+    config: params.cfg,
+    turnUsd: await estimateAggregateUsageCostAsync({
+      usage,
+      prepareCost: () =>
+        resolveModelCostConfig({
+          provider: runtimeModel.provider,
+          model: runtimeModel.id,
+          config: params.cfg,
+          agentDir: params.agentDir,
+        }),
+    }),
+    agentId,
+    sessionId,
+    provider: runtimeModel.provider,
+    model: runtimeModel.id,
+    chatType: params.chatType,
+    usage,
+  });
+  // Delivery hooks use the reply correlation ID, not the side run's authority ID.
+  recordReplyUsageState(params.opts?.runId, usageState);
+  if (isDiagnosticsEnabled(params.cfg)) {
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      sessionKey: params.sessionKey,
+      sessionId,
+      channel: params.messageChannel,
+      agentId,
+      provider: runtimeModel.provider,
+      model: runtimeModel.id,
+      usage: toDiagnosticUsage(usage),
+      costUsd: usageState.turnUsd,
+    });
+  }
+}
+
+async function resolveSideQuestionStream(input: SideQuestionStreamInput & { agentId?: string }) {
   const {
     params,
     modelRegistry,
@@ -38,10 +107,6 @@ export async function runLightweightBtwStream(input: {
     resolvedAuthProfileId,
     sessionId,
     workspaceDir,
-    imageLimits,
-    messages,
-    inFlightPrompt,
-    recordBtwUsage,
   } = input;
   const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
 
@@ -59,7 +124,7 @@ export async function runLightweightBtwStream(input: {
     auth,
     apiRegistry: modelRegistryRuntime.apiRegistry,
   });
-  const { streamFn } = resolveEmbeddedAgentStream({
+  const resolved = resolveEmbeddedAgentStream({
     llmRuntime: modelRegistryRuntime.llmRuntime,
     currentStreamFn: modelRegistryRuntime.llmRuntime.streamSimple,
     providerStreamFn,
@@ -69,6 +134,46 @@ export async function runLightweightBtwStream(input: {
     resolvedApiKey: apiKey,
     authProfileId: resolvedAuthProfileId,
   });
+  return wrapStreamFnWithModelRequestGate(
+    resolved.streamFn,
+    {
+      runId: params.authorityRunId,
+      agentId: input.agentId ?? params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId,
+      workspaceDir,
+      modelProviderId: runtimeModel.provider,
+      modelId: runtimeModel.id,
+      ...buildAgentHookContextChannelFields(params),
+      ...buildAgentHookContextIdentityFields(params),
+    },
+    "side_question",
+  );
+}
+
+export async function runLightweightBtwStream(
+  input: SideQuestionStreamInput & {
+    imageLimits: ImageSanitizationLimits;
+    messages: Message[];
+    inFlightPrompt?: string;
+    agentId: string;
+  },
+): Promise<ReplyPayload | undefined> {
+  const { params, runtimeModel, apiKey, imageLimits, messages, inFlightPrompt } = input;
+  const streamFn = wrapStreamFnSanitizeMalformedToolCalls(
+    await resolveSideQuestionStream(input),
+    undefined,
+    resolveTranscriptPolicy({
+      provider: runtimeModel.provider,
+      modelId: runtimeModel.id,
+      modelApi: runtimeModel.api,
+      model: runtimeModel,
+      config: params.cfg,
+      workspaceDir: input.workspaceDir,
+      directApiKey: Boolean(apiKey) && !isAnthropicOAuthApiKey(apiKey),
+    }),
+    runtimeModel.provider,
+  );
 
   const chunker =
     params.opts?.onBlockReply && params.blockReplyChunking
@@ -203,7 +308,13 @@ export async function runLightweightBtwStream(input: {
     throw new Error("No BTW response generated.");
   }
 
-  recordBtwUsage(runtimeModel, normalizeUsage(finalMessage?.usage));
+  await recordBtwUsage(input, normalizeUsage(finalMessage?.usage));
+  params.assertCurrent?.();
+  params.opts?.abortSignal?.throwIfAborted();
+  assertOperatorModelAllowed(params.operatorAuthority, {
+    provider: runtimeModel.provider,
+    model: runtimeModel.id,
+  });
 
   // Preserve the complete answer when streaming could not deliver every block.
   if (emittedBlocks > 0 && !blockEmitFailed) {

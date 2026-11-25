@@ -149,7 +149,7 @@ function browserFixture(prefix: string) {
   return { root, browser, setup };
 }
 
-describe.skipIf(!hasPowerShell)("generated Windows PowerShell syntax", () => {
+describe.skipIf(!hasPowerShell)("generated Windows desktop scripts", () => {
   it("parses setup, nested app launchers, and enrollment using the installed PowerShell parser", async () => {
     const runtime = launcher({ status: 0, stdout: JSON.stringify(identity) });
     await runtime.launch(options);
@@ -166,9 +166,6 @@ foreach ($script in ([Console]::In.ReadToEnd() | ConvertFrom-Json)) { Check-Scri
 `;
     runPowerShell(parser, [setup, runtime.source()]);
   });
-});
-
-describe.skipIf(!hasPowerShell)("Windows browser launcher ownership", () => {
   it.each([
     { scenario: "reuse", passed: true, launches: 0 },
     { scenario: "reduced-environment", passed: true, launches: 1 },
@@ -238,9 +235,6 @@ try { & $launcher; $passed=$true; $message=$null } catch { $passed=$false; $mess
       launches,
     });
   });
-});
-
-describe.skipIf(!hasPowerShell)("Windows desktop VNC handover", () => {
   it("hands over authenticated VNC, preserves replay, and rejects changed or cancelled ownership", () => {
     function handover(scenario: string, error = "", stops = 0, launches = 0, kills = 0) {
       return { scenario, passed: !error, launches, stops, kills, error };

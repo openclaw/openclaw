@@ -34,6 +34,7 @@ import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sql
 import type {
   SqliteSessionEntryReplacement,
   SessionEntryReplacementCommit,
+  SessionEntryWorkerLifecycle,
 } from "./session-accessor.sqlite-replacement-types.js";
 import {
   commitSessionEntryReplacementsInWorker,
@@ -58,10 +59,13 @@ import {
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
-import { composeSessionSourceAssertion } from "./session-source-authority.js";
-import { maintenanceLane, projectionLane } from "./session-transcript-worker-resources.js";
+import { SessionEntryCreationNotCommittedError } from "./session-creation-operation.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+} from "./session-source-authority.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 
@@ -70,7 +74,12 @@ export type SessionEntryCanonicalReplacement = SessionEntryReplacement & {
 };
 
 type ReplacementProjectionOptions = {
+  memberSourceRoleImport?: SessionEntryReplacementCommit["memberSourceRoleImport"];
+  creationOperation?: SessionEntryReplacementCommit["creationOperation"];
+  fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
+  onCommittedEntries?: SessionEntryWorkerLifecycle["onCommittedEntries"];
   retainedExecution?: OpenClawAgentDatabaseExecution;
+  followRegistration?: SessionEntryCreateWithTranscriptOptions["followRegistration"];
   assertCommitAllowed?: () => void;
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
   ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
@@ -100,6 +109,7 @@ type ReplacementProjectionParams<T, TReplacement> = ReplacementProjectionOptions
 };
 
 type CreationProjection = {
+  certifyNotCommitted?: true;
   scope: ResolvedSqliteScope & { path: string; env: NodeJS.ProcessEnv };
   sessionKey: string;
   creationSnapshot: SessionCreationSnapshot & { databaseIdentity: string };
@@ -190,10 +200,14 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
     ];
   });
   const commit = async (assertSourceCurrent?: () => void) => {
+    const source = await prepareSessionSourceEffect(
+      composeSessionSourceAssertion([params.assertCommitAllowed, assertSourceCurrent]),
+    );
+    await using _ = { [Symbol.asyncDispose]: async () => source.release?.() };
     const config = params.skipMaintenance === false ? resolveMaintenanceConfig() : undefined;
     const preservation =
       config && config.mode !== "warn"
-        ? await prepareSessionMaintenancePreservation(memory.path)
+        ? await prepareSessionMaintenancePreservation(memory.path, { env: params.env })
         : undefined;
     try {
       readSessionActorStorageResult(
@@ -216,9 +230,15 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
           },
           {
             ...memory.authority,
+            workspaceEvidence: [
+              ...(memory.authority.workspaceEvidence ?? []),
+              ...(source.workspaceEvidence ?? []),
+            ],
+            readCustody: [...(memory.authority.readCustody ?? []), ...(source.readCustody ?? [])],
             assertCurrent() {
               memory.authority.assertCurrent();
-              assertSourceCurrent?.();
+              source.assertCurrent();
+              preservation?.capture();
             },
           },
           { committed: () => params.onLifecycleCommitted?.(false) },
@@ -311,7 +331,15 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     async (preparedScope) => {
       creation?.onWriterAdmitted?.();
       if (creation) {
-        params.assertCommitAllowed?.();
+        // This owner has not dispatched a writer yet. A failed final guard is
+        // affirmative nonexecution evidence, even after diagnostic admission.
+        try {
+          params.assertCommitAllowed?.();
+        } catch (error) {
+          throw creation.certifyNotCommitted
+            ? new SessionEntryCreationNotCommittedError(error)
+            : error;
+        }
       }
       const resolved = { ...preparedScope, env };
       const databaseOptions = {
@@ -320,6 +348,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       };
       const useWorker =
         creation !== undefined ||
+        params.memberSourceRoleImport !== undefined ||
         (isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions));
       const readNative = () =>
         withSqliteSessionDatabase(databaseOptions, (database) => ({
@@ -351,6 +380,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                     sessionKeys: params.sessionKeys ?? [],
                     projection: "replacement",
                     replacementSelection: {
+                      fieldPatch: params.fieldPatch,
                       sessionKeys: params.sessionKeys,
                       includeSessionWindowOwner: params.includeSessionWindowOwner,
                       includeLabelOwners: params.includeLabelOwners,
@@ -366,6 +396,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                       params.assertCommitAllowed?.();
                     },
                     params.retainedExecution,
+                    params.followRegistration,
                   );
                   result = await read();
                 }
@@ -374,13 +405,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                 }
                 return result.replacement;
               },
-              // Label owners can expand a keyed selection beyond the foreground read budget.
-              params.sessionKeys &&
-                params.sessionKeys.length + (params.includeSessionWindowOwner ? 1 : 0) <=
-                  MAX_SESSION_ROW_FACTS_KEYS &&
-                params.includeLabelOwners === undefined
-                ? projectionLane
-                : maintenanceLane,
+              sessionStoreLane,
             )
           : await readNative();
       const { entries, expectedRows, labelOwnerKeys } = snapshot;
@@ -451,7 +476,11 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       );
       // Read-only label owners need the same row CAS as targets: their label can
       // change between key selection and hydration, then change back during planning.
-      const validationKeys = new Set([...mutationKeys, ...labelOwnerKeys]);
+      const validationKeys = new Set([
+        ...mutationKeys,
+        ...labelOwnerKeys,
+        ...(params.fieldPatch ? (selectedKeys ?? []) : []),
+      ]);
 
       const deletedOwners = [...mutationKeys].flatMap((sessionKey) => {
         const entry = expectedRows.get(sessionKey)?.entry;
@@ -467,6 +496,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
             params.skipMaintenance === false
               ? await prepareSessionMaintenancePreservation(params.storePath, {
                   native: !useWorker,
+                  env: resolved.env,
                 })
               : undefined;
           try {
@@ -492,6 +522,9 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               },
             );
             const input: SessionEntryReplacementCommit = {
+              memberSourceRoleImport: params.memberSourceRoleImport,
+              creationOperation: params.creationOperation,
+              fieldPatch: params.fieldPatch,
               expectedRows,
               labelOwnerKeys,
               includeLabelOwners: params.includeLabelOwners,
@@ -514,10 +547,14 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                     (source) => {
                       const committed = runOpenClawAgentWriteTransaction(
                         (database) => {
-                          if (params.onLifecycleCommitted) {
-                            deferOpenClawAgentPostCommitPublication(database, () =>
-                              params.onLifecycleCommitted?.(result.pendingArchiveRecovery),
-                            );
+                          if (params.onLifecycleCommitted || params.onCommittedEntries) {
+                            deferOpenClawAgentPostCommitPublication(database, () => {
+                              params.onCommittedEntries?.(
+                                result.current,
+                                result.patchDiffBaselines,
+                              );
+                              params.onLifecycleCommitted?.(result.pendingArchiveRecovery);
+                            });
                           }
                           const result = commitSessionEntryReplacementsInDatabase(
                             database,
@@ -564,7 +601,11 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               assertCurrent,
               {
                 identityAgentId: resolved.agentId,
+                beforeCommit: (_publication, retained) => {
+                  preparedPreservation?.capture(retained);
+                },
                 onLifecycleCommitted: params.onLifecycleCommitted,
+                onCommittedEntries: params.onCommittedEntries,
                 afterCommitted: params.afterCommitted
                   ? (context) => params.afterCommitted!(operation.result, context)
                   : undefined,
@@ -582,7 +623,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     "session.entry-replacements",
     params.withCommit,
     admission ? () => prepareSqliteScope(target) : undefined,
-    "foreground",
+    params.fieldPatch ? "worker" : "foreground",
   );
   const committed = preparedWrite.result;
   await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
@@ -628,6 +669,7 @@ export async function applySessionEntryCreationReplacement(
 }
 
 export async function applySessionEntryExactReplacements<T>(params: {
+  memberSourceRoleImport?: SessionEntryReplacementCommit["memberSourceRoleImport"];
   consumePendingReset?: boolean;
   assertCommitAllowed?: () => void;
   activeSessionKey?: string;

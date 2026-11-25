@@ -1,7 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { providerConfig } from "../agents/model-auth.fixtures.test-support.js";
 import type { StreamFn } from "../agents/runtime/index.js";
+import { createQueuedAssistantStream } from "../agents/test-helpers/assistant-event-stream.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
   createMockUsage,
@@ -12,8 +14,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
+import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
 import { createOpenClawDatabaseMaintenanceScope as createMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withOpenClawTestState as withState } from "../test-utils/openclaw-test-state.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
@@ -48,7 +49,7 @@ afterEach(() => {
   fixture.stream.mockReset();
 });
 
-it("settles the real repair handoff without closing a parent lease before Doctor admission", async () => {
+it("settles the real repair turn without closing a parent lease before Doctor admission", async () => {
   await withState({ layout: "home" }, async (state) => {
     fixture.handoff = createManagedHandoffTestBinding(state.root);
     vi.stubEnv(
@@ -77,50 +78,35 @@ it("settles the real repair handoff without closing a parent lease before Doctor
     } finally {
       await seed.close();
     }
-    expect(leases()).toEqual([]);
+    expect(await leases()).toEqual([]);
     const config: OpenClawConfig = {
       plugins: { enabled: false },
       agents: { defaults: { skipBootstrap: true }, entries: { owner: { agentDir } } },
       tools: { toolSearch: { enabled: false } },
-      models: {
-        providers: {
-          fixture: {
-            baseUrl: "https://repair.invalid/v1",
-            api: "openai-responses",
-            models: [repairModel()],
-          },
-        },
-      },
+      ...providerConfig("fixture", {
+        baseUrl: "https://repair.invalid/v1",
+        api: "openai-responses",
+        models: [repairModel()],
+      }),
     };
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config);
-    fixture.stream.mockImplementation((model, context) => {
-      expect(context.tools?.map((tool) => tool.name)).toContain("request_update_maintenance");
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        stream.push({
+    fixture.stream.mockImplementation((model) =>
+      createQueuedAssistantStream((push) =>
+        push({
           type: "done",
-          reason: "toolUse",
+          reason: "stop",
           message: buildEmbeddedRunnerAssistant({
-            content: [
-              {
-                type: "toolCall",
-                id: "maintenance-request",
-                name: "request_update_maintenance",
-                arguments: { operation: "doctor-fix" },
-              },
-            ],
+            content: [{ type: "text", text: "Repair completed." }],
             api: model.api,
             provider: model.provider,
             model: model.id,
             usage: createMockUsage(1, 1),
-            stopReason: "toolUse",
+            stopReason: "stop",
           }),
-        });
-        stream.end();
-      });
-      return stream;
-    });
+        }),
+      ),
+    );
     // Keep cold loading outside the deterministic model-turn budget.
     await Promise.all([
       import("../agents/embedded-agent.js"),
@@ -134,20 +120,17 @@ it("settles the real repair handoff without closing a parent lease before Doctor
           turnInput(state, {
             config,
             authProfileId: "fixture:repair",
-            prompt: "Request Doctor repair using the maintenance tool.",
+            prompt: "Diagnose the failed update.",
             timeoutMs: 30000,
-            maintenanceHandoff: true,
           }),
         ),
       );
       expect(result, JSON.stringify(result)).toMatchObject({
         status: "completed",
-        envelope: { status: "ok" },
-        maintenance: { operation: "doctor-fix" },
+        envelope: { status: "ok", final: "Repair completed." },
       });
-      expect(fixture.stream).toHaveBeenCalledTimes(1);
       // These checks must precede fixture teardown: cleanup must not hide a leaked lease.
-      expect(leases().map((lease) => lease.agent_id)).toEqual(["independent"]);
+      expect((await leases()).map((lease) => lease.agent_id)).toEqual(["independent"]);
       const saved = load();
       expect(saved.usageStats?.["fixture:repair"]?.lastUsed).toBeGreaterThan(0);
       const admitDoctor = () =>
@@ -160,7 +143,7 @@ it("settles the real repair handoff without closing a parent lease before Doctor
         refusal: { kind: "deferred", reason: "agent-database-in-use" },
       });
       await parent.close();
-      expect(leases()).toEqual([]);
+      expect(await leases()).toEqual([]);
       const doctor = await admitDoctor();
       expect(doctor).toBeDefined();
       try {
@@ -168,7 +151,7 @@ it("settles the real repair handoff without closing a parent lease before Doctor
       } finally {
         await doctor?.release();
       }
-      expect(leases()).toEqual([]);
+      expect(await leases()).toEqual([]);
       expect(load()).toEqual(saved);
     } finally {
       await parent.close();

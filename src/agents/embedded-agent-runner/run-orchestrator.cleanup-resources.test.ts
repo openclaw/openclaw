@@ -14,10 +14,8 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { captureAsyncWorkTracker, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import { createAgentCleanupScope, runOwnedAgentCleanup } from "../run-cleanup-timeout.js";
@@ -75,6 +73,8 @@ it.each([
     const finishInitialWriter = createDeferred();
     let initialWriterDisposals = 0;
     const warnings: string[] = [];
+    const expectWarning = (...parts: string[]) =>
+      expect(warnings.some((warning) => parts.every((part) => warning.includes(part)))).toBe(true);
     const cleanupScope = createAgentCleanupScope();
     let selected: Registration | undefined;
     let nested: Promise<number> | undefined;
@@ -214,10 +214,9 @@ it.each([
       const runId = `candidate-cleanup-${mode}`;
       const operatorAuthority =
         mode === "model-denied"
-          ? createAdmittedRunOperatorAuthority({
+          ? createTestOperatorAuthority({
               profileId: "candidate-reader",
               scopes: ["operator.write"],
-              assertCurrent: () => {},
               modelPolicy: prepareOperatorModelPolicy({
                 cfg,
                 policy: {
@@ -295,9 +294,7 @@ it.each([
       expect.soft([selected.disposed, workSignal?.aborted ?? false]).toEqual([0, false]);
       expect(cleanupScope.outcome).toBe(mode === "dispose-failure" ? "closed" : "uncertain");
       if (mode !== "ordinary-error" && mode !== "dispose-failure") {
-        expect(
-          warnings.some((warning) => warning.includes("step=candidate-fixture timeoutMs=25")),
-        ).toBe(true);
+        expectWarning("step=candidate-fixture timeoutMs=25");
       }
       if (cliResources) {
         parentClose = withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
@@ -344,20 +341,10 @@ it.each([
         mode === "dispose-failure" ? "closed" : "uncertain",
       ]);
       if (mode === "late-failure") {
-        expect(
-          warnings.some(
-            (warning) =>
-              warning.includes("rejected after timeout") &&
-              warning.includes("candidate cleanup failure"),
-          ),
-        ).toBe(true);
+        expectWarning("rejected after timeout", "candidate cleanup failure");
       }
-      const reopened = new DatabaseSync(selected.file, { readOnly: true });
-      try {
-        expect(reopened.prepare("SELECT value FROM observations").get()?.value).toBe(42);
-      } finally {
-        reopened.close();
-      }
+      using reopened = new DatabaseSync(selected.file, { readOnly: true });
+      expect(reopened.prepare("SELECT value FROM observations").get()?.value).toBe(42);
     } finally {
       finishCleanup.resolve();
       finishNested.resolve();

@@ -5,17 +5,16 @@ import {
   withSessionActor,
 } from "../../config/sessions/session-actor-scope.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
 
 async function commitQueuedReplySessionActivity(params: {
   target: { agentId?: string; storePath: string; sessionKey: string };
   expected: SessionEntry;
   updatedAt: number;
-  assertCurrent: () => void;
   onCommittedEntry: (entry: SessionEntry | undefined) => void;
 }): Promise<void> {
-  const assertCurrent = () => params.assertCurrent();
+  const assertCurrent = () => {};
   const authority: SessionActorAuthority = {
     assertCurrent,
     authorize(_stage, facts) {
@@ -46,9 +45,10 @@ async function commitQueuedReplySessionActivity(params: {
         ),
       );
       if (outcome.kind !== "committed") {
-        throw new SqliteWorkerError(
+        throw wrapSqliteWorkerError(
           outcome.error.message,
           outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+          outcome.error,
         );
       }
       params.onCommittedEntry(outcome.receipt.postimage.entry);
@@ -79,9 +79,6 @@ export async function touchQueuedReplySessionActivity(
       target: { agentId: followupRun.run.agentId, storePath, sessionKey },
       expected: activeSessionEntry,
       updatedAt,
-      assertCurrent: () => {
-        followupRun.operatorAuthority?.assertCurrent();
-      },
       onCommittedEntry: (entry) => {
         onCommittedEntry(entry);
         if (entry) {

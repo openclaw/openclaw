@@ -3,8 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { resolvePreferredOpenClawTmpDir, tempWorkspaceSync } from "openclaw/plugin-sdk/temp-path";
+import { startSqliteReadOnlyLocationAsync } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { usesOpenClawMockKeychain } from "./chrome.profile-decoration.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
@@ -16,7 +15,6 @@ import {
   SUPPORTED_SYSTEM_BROWSERS,
   type CookieImportCounts,
   type KeychainSecretReader,
-  type PlaywrightCookie,
   type SystemBrowser,
 } from "./system-chrome-cookies.js";
 
@@ -69,7 +67,7 @@ function resolveSystemBrowserRoot(browser: SystemBrowser): string {
 /**
  * macOS App Data protection can park open() on another browser's files until someone answers a
  * consent prompt, possibly never on a headless host. Opening on the libuv pool keeps the Gateway
- * event loop running and settles consent before synchronous SQLite reads the file.
+ * event loop running and settles consent before the SQLite worker reads the file.
  */
 async function canOpenBrowserData(target: string): Promise<boolean> {
   try {
@@ -106,11 +104,7 @@ export function assertSystemCookiePlatform(operation = "cookie access"): void {
 export async function resolveSystemCookieSource(params: {
   browser?: string;
   systemProfile?: string;
-}): Promise<{
-  browser: SystemBrowser;
-  systemProfile: string;
-  cookiesFile: string;
-}> {
+}) {
   const browser = resolveSystemBrowser(params.browser);
   const systemProfile = params.systemProfile?.trim() || "Default";
   const root = resolveSystemBrowserRoot(browser);
@@ -191,17 +185,6 @@ export async function listSystemProfiles(browserInput?: string): Promise<SystemP
   return profiles;
 }
 
-/** Create a transactionally coherent snapshot while Chrome may be writing its WAL. */
-function snapshotCookieDatabase(source: string, databasePath: string): void {
-  const sourceDatabase = openNodeSqliteDatabase(source, { readOnly: true });
-  try {
-    sourceDatabase.exec("PRAGMA busy_timeout = 5000");
-    sourceDatabase.prepare("VACUUM INTO ?").run(databasePath);
-  } finally {
-    sourceDatabase.close();
-  }
-}
-
 /** Snapshot and decrypt cookies from one local macOS Chrome-family profile. */
 export async function readSystemProfileCookies(
   params: {
@@ -211,29 +194,25 @@ export async function readSystemProfileCookies(
     signal?: AbortSignal;
   },
   options: { readSecret?: KeychainSecretReader } = {},
-): Promise<{
-  browser: SystemBrowser;
-  systemProfile: string;
-  cookies: PlaywrightCookie[];
-  counts: CookieImportCounts;
-  domains: string[];
-}> {
+) {
   assertSystemCookiePlatform();
   const source = await resolveSystemCookieSource(params);
-  using snapshot = tempWorkspaceSync({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: "openclaw-system-cookies-",
-  });
-  const databasePath = snapshot.path("Cookies");
-  snapshotCookieDatabase(source.cookiesFile, databasePath);
-  const decrypted = await readChromeCookiesDatabase({
-    browser: source.browser,
-    databasePath,
-    domains: params.domains,
-    readSecret: options.readSecret,
+  const preparation = startSqliteReadOnlyLocationAsync(source.cookiesFile, {
     signal: params.signal,
   });
-  return { browser: source.browser, systemProfile: source.systemProfile, ...decrypted };
+  try {
+    const snapshot = await preparation.result;
+    const decrypted = await readChromeCookiesDatabase({
+      browser: source.browser,
+      databasePath: snapshot.location,
+      domains: params.domains,
+      readSecret: options.readSecret,
+      signal: params.signal,
+    });
+    return { browser: source.browser, systemProfile: source.systemProfile, ...decrypted };
+  } finally {
+    await preparation.startClose().result;
+  }
 }
 
 /** Import decrypted system-profile cookies into one managed OpenClaw profile. */

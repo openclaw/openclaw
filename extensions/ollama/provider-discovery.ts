@@ -13,15 +13,6 @@ import {
 } from "./src/discovery-shared.js";
 import { buildOllamaProvider, capLocalOllamaProviderContext } from "./src/provider-models.js";
 
-async function runOllamaDiscovery(ctx: ProviderCatalogContext) {
-  return await resolveOllamaDiscoveryResult({
-    ctx,
-    pluginConfig: resolvePluginConfigObject(ctx.config, OLLAMA_PROVIDER_ID) ?? {},
-    buildProvider: async (...args) =>
-      capLocalOllamaProviderContext(await buildOllamaProvider(...args)),
-  });
-}
-
 export const ollamaProviderDiscovery = {
   id: OLLAMA_PROVIDER_ID,
   label: "Ollama",
@@ -46,7 +37,14 @@ export const ollamaProviderDiscovery = {
   },
   catalog: {
     order: "late",
-    run: runOllamaDiscovery,
+    async run(ctx: ProviderCatalogContext) {
+      return await resolveOllamaDiscoveryResult({
+        ctx,
+        pluginConfig: resolvePluginConfigObject(ctx.config, OLLAMA_PROVIDER_ID) ?? {},
+        buildProvider: async (...args) =>
+          capLocalOllamaProviderContext(await buildOllamaProvider(...args)),
+      });
+    },
     getUnlistedConfiguredModelIds: getUnlistedOllamaConfiguredModelIds,
   },
 } satisfies ProviderPlugin;

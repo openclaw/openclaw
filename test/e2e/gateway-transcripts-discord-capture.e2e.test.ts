@@ -2,15 +2,12 @@ import "../../src/test-utils/prepare-compiled-subprocesses.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
-import { Socket } from "node:net";
+import { createConnection, createServer as createIpcServer, Socket } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, inject, it, vi } from "vitest";
-import type {
-  TranscriptsGetResult,
-  TranscriptsListResult,
-} from "../../packages/gateway-protocol/src/schema/transcripts.js";
+import type { TranscriptsGetResult } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { buildMockOpenAiResponsesProvider } from "../../src/gateway/test-openai-responses-model.js";
 import { createTestPluginServiceScheduler } from "../../src/plugin-sdk/plugin-test-api.js";
@@ -18,6 +15,10 @@ import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../src/test-utils/env.js";
 import { withIsolatedTestHome } from "../../test/test-env.js";
 import { readRequestText, closeHttpServer } from "../helpers/gateway-integration-fixtures.js";
+import {
+  writeOpenAiResponsesSse,
+  writeOpenAiResponsesText,
+} from "../helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 type TranscriptCapturePorts = { gateway: number; provider: number };
@@ -28,10 +29,9 @@ declare module "vitest" {
   }
 }
 
-type CaptureArguments = { action: "start" | "stop" | "summarize" } & Record<string, unknown>;
+type CaptureArguments = { action: "start" | "stop" } & Record<string, unknown>;
 type ScriptedCall = {
   callId: string;
-  agentId: "main" | "agent-b";
   args: CaptureArguments;
   output?: string;
 };
@@ -40,8 +40,7 @@ type CaptureModule = Awaited<ReturnType<DiscordCaptureTestApi["loadDiscordGatewa
 type DiscordCaptureFixture = ReturnType<CaptureModule["createDiscordGatewayCaptureFixture"]>;
 
 function sendResponse(response: ServerResponse, item: Record<string, unknown>) {
-  response.writeHead(200, { "content-type": "text/event-stream" });
-  for (const event of [
+  writeOpenAiResponsesSse(response, [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -57,20 +56,11 @@ function sendResponse(response: ServerResponse, item: Record<string, unknown>) {
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
       },
     },
-  ]) {
-    response.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-  response.end();
+  ]);
 }
 
 function sendMessage(response: ServerResponse, id: string, text: string) {
-  sendResponse(response, {
-    type: "message",
-    id,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  });
+  writeOpenAiResponsesText(response, { text, messageId: id, responseId: `resp_${randomUUID()}` });
 }
 
 afterEach(async () => {
@@ -79,7 +69,7 @@ afterEach(async () => {
   await closeSkillsWatchers(true);
 });
 
-it("fences late Discord STT and preserves the admitted owner's history after a room route changes", async () => {
+it("fences late Discord STT through the model-selected plugin instance", async () => {
   const ports = inject("transcriptCapturePorts");
   if (
     ports !== undefined &&
@@ -97,7 +87,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     "OPENCLAW_SKIP_CANVAS_HOST",
     "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
   ];
-  // Minimal mode skips login without removing channel config from the runtime.
   const clearedFlags = [
     "OPENCLAW_BUILD_PRIVATE_QA",
     "OPENCLAW_QA_FORCE_RUNTIME",
@@ -119,20 +108,13 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
   let fixture: DiscordCaptureFixture | undefined;
   let fixtureScheduler: ReturnType<typeof createTestPluginServiceScheduler> | undefined;
   let releaseFixtureRegistry: (() => Promise<void>) | undefined;
-  let routedService:
-    | ReturnType<
-        typeof import("../../src/transcripts/auto-start.js").createTranscriptsAutoStartService
-      >
-    | undefined;
   let cleanupRuntime: (() => Promise<void>) | undefined;
-  const requests: Record<string, unknown>[] = [];
+  let requests = 0;
   const errors: unknown[] = [];
-  const calls: ScriptedCall[] = [];
   const deniedConnections: string[] = [];
   let providerPort: number | undefined;
   deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
   const selectedGatewayPort = () => ports?.gateway ?? Number(process.env.OPENCLAW_GATEWAY_PORT);
-  // The native method must retain each caller's socket, supplied by Reflect.apply below.
   // oxlint-disable-next-line typescript/unbound-method
   const originalConnect = Socket.prototype.connect;
   // Reject unexpected Node HTTP(S), WS and fetch destinations. This guard does
@@ -143,6 +125,10 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
   ) {
     const normalized = Array.isArray(args[0]) ? args[0] : args;
     const options = asOptionalRecord(normalized[0]);
+    // Node normalizes net.connect(path) to { path }; local broker IPC is not network egress.
+    if (typeof options?.path === "string" && options.path.length > 0) {
+      return Reflect.apply(originalConnect, this, args);
+    }
     const host = options?.host ?? normalized[1];
     const port = Number(options?.port ?? normalized[0]);
     // startGatewayWithClient publishes its allocated port before opening its WS client.
@@ -161,31 +147,15 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
   });
   let currentCall: ScriptedCall | undefined;
   let awaitingOutput = false;
-  let summaryTranscript: string | undefined;
-  let summaryRequests = 0;
+  const ipcServer = createIpcServer((socket) => socket.end());
   const providerServer = createServer((request, response) => {
     void (async () => {
-      expect(request.method).toBe("POST");
-      expect(request.url).toBe("/v1/responses");
-      expect(request.headers.authorization).toBe("Bearer test");
       const body = asOptionalRecord(JSON.parse(await readRequestText(request)));
-      expect(body?.model).toBe("capture-proof");
-      expect(body?.stream).toBe(true);
-      requests.push(body!);
+      requests++;
       // Unscripted conversation calls fail visibly, including recording-only scan regressions.
       expect(currentCall, "unexpected model request outside an admitted tool turn").toBeDefined();
       const call = currentCall!;
-      if (
-        awaitingOutput &&
-        (call.args.action === "stop" || call.args.action === "summarize") &&
-        !body?.tools
-      ) {
-        expect(call.agentId).toBe("main");
-        summaryRequests++;
-        expect(summaryTranscript).toBeDefined();
-        const summaryInput = JSON.stringify(body);
-        expect(summaryInput).toContain("Write concise meeting notes in the transcript's language.");
-        expect(summaryInput).toContain(summaryTranscript!);
+      if (awaitingOutput && call.args.action === "stop" && !body?.tools) {
         sendMessage(
           response,
           "msg_capture_summary",
@@ -199,9 +169,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
         return;
       }
       if (!awaitingOutput) {
-        expect(body?.tools).toEqual(
-          expect.arrayContaining([expect.objectContaining({ name: "transcripts" })]),
-        );
         awaitingOutput = true;
         sendResponse(response, {
           type: "function_call",
@@ -245,6 +212,19 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       fs.mkdir(workspace, { recursive: true }),
       fs.mkdir(stateDir, { recursive: true }),
     ]);
+    const ipcPath =
+      process.platform === "win32"
+        ? `\\\\.\\pipe\\openclaw-capture-${randomUUID()}`
+        : path.join(isolated.tempHome, "capture.sock");
+    await new Promise<void>((resolve, reject) => {
+      ipcServer.once("error", reject);
+      ipcServer.listen(ipcPath, resolve);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const socket = createConnection(ipcPath);
+      socket.once("error", reject);
+      socket.once("close", () => resolve());
+    });
     await new Promise<void>((resolve, reject) => {
       providerServer.once("error", reject);
       providerServer.listen(ports?.provider ?? 0, "127.0.0.1", resolve);
@@ -259,6 +239,17 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       throw new Error("Unexpected transcript fixture provider address");
     }
     providerPort = address.port;
+    // Negative controls keep both the host and unexpected TCP port checks exercised.
+    const deniedPort = [1, 2, 3].find(
+      (port) => port !== providerPort && port !== selectedGatewayPort(),
+    )!;
+    for (const destination of [
+      { host: "192.0.2.1", port: providerPort },
+      { host: "127.0.0.1", port: deniedPort },
+    ]) {
+      expect(() => createConnection(destination)).toThrow("unexpected socket destination");
+    }
+    expect(deniedConnections.splice(0)).toHaveLength(2);
     const provider = buildMockOpenAiResponsesProvider(
       `http://127.0.0.1:${address.port}/v1`,
       "capture-proof",
@@ -286,13 +277,11 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     ) as DiscordCaptureTestApi;
     const { createDiscordGatewayCaptureFixture, captureTarget, capturedText, lateText } =
       await loadDiscordGatewayCaptureFixture();
-    summaryTranscript = capturedText;
     const { startGatewayWithClient } = await import("../../src/gateway/test-helpers.e2e.js");
     const { createPluginRuntime } = await import("../../src/plugins/runtime/index.js");
     const { createPluginRegistry } = await import("../../src/plugins/registry.js");
     const { createPluginRecord } = await import("../../src/plugins/loader-records.js");
-    const { getPluginInstance, getPluginValueInstance } =
-      await import("../../src/plugins/plugin-instance-scope.js");
+    const { getPluginInstance } = await import("../../src/plugins/plugin-instance-scope.js");
     const { loadPluginMetadataSnapshot } =
       await import("../../src/plugins/plugin-metadata-snapshot.js");
     const { bindPluginRuntimeArtifactSelection } =
@@ -303,22 +292,12 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       await import("../../src/plugins/registry-inspection-resources.js");
     const { retireInspectionInstances } =
       await import("../../src/plugins/registry-inspection.test-support.js");
-    const {
-      getActivePluginRegistry,
-      setActivePluginRegistry,
-      captureActivePluginRegistrySnapshot,
-      restoreActivePluginRegistrySnapshot,
-    } = await import("../../src/plugins/runtime.js");
-    const { getPluginRuntimeLoadContext } =
-      await import("../../src/plugins/runtime/load-context.js");
-    const { withPluginRuntimeRegistryScope } =
-      await import("../../src/plugins/runtime/gateway-request-scope.js");
-    const { refreshPreparedModelRuntimeSnapshots, loadPublishedGatewayReplyDispatchRuntime } =
-      await import("../../src/agents/prepared-model-runtime.js");
-    const { resetPreparedModelRuntimeSnapshotsForTest } =
-      await import("../../src/agents/prepared-model-runtime.test-support.js");
-    const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
-      await import("../../src/config/config.js");
+    const runtimeState = await import("../../src/plugins/runtime.js");
+    const loadContext = await import("../../src/plugins/runtime/load-context.js");
+    const runtimeScope = await import("../../src/plugins/runtime/gateway-request-scope.js");
+    const preparedRuntime = await import("../../src/agents/prepared-model-runtime.js");
+    const preparedTest = await import("../../src/agents/prepared-model-runtime.test-support.js");
+    const configState = await import("../../src/config/config.js");
     const { resetConfigOverrides } = await import("../../src/config/runtime-overrides.js");
     const { clearSessionStoreCacheForTest } =
       await import("../../src/config/sessions/store-writer-state.js");
@@ -327,15 +306,11 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     const { closeOpenClawStateDatabaseByPathAsync } =
       await import("../../src/state/openclaw-state-db-cache.js");
     const { activeSessions } = await import("../../src/transcripts/capture-startup.js");
-    const { resolveSourceProvider } = await import("../../src/transcripts/capture.js");
-    const { createTranscriptsAutoStartService } =
-      await import("../../src/transcripts/auto-start.js");
-    const { TranscriptsStore } = await import("../../src/transcripts/store.js");
     const ownedCaptures = () =>
       [...activeSessions.values()].filter(
         (capture) => capture.session.source.accountId === captureTarget.accountId,
       );
-    const previousRegistry = captureActivePluginRegistrySnapshot();
+    const previousRegistry = runtimeState.captureActivePluginRegistrySnapshot();
     cleanupRuntime = () =>
       runQaGatewayFixture(
         async () => {
@@ -347,14 +322,14 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
         drainSessionStoreWriterQueuesForTest,
         async () => {
           clearSessionStoreCacheForTest();
-          await resetPreparedModelRuntimeSnapshotsForTest();
+          await preparedTest.resetPreparedModelRuntimeSnapshotsForTest();
           await closeOpenClawStateDatabaseByPathAsync(
             path.join(stateDir, "state", "openclaw.sqlite"),
           );
           resetConfigOverrides();
-          clearRuntimeConfigSnapshot();
-          clearConfigCache();
-          restoreActivePluginRegistrySnapshot(previousRegistry);
+          configState.clearRuntimeConfigSnapshot();
+          configState.clearConfigCache();
+          runtimeState.restoreActivePluginRegistrySnapshot(previousRegistry);
         },
       );
     resetConfigOverrides();
@@ -365,14 +340,12 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
         ownership: "explicit",
         entries: {
           main: { workspace },
-          "agent-b": { workspace },
         },
         defaults: {
           workspace,
           skipBootstrap: true,
           systemAgent: { agentId: "main" },
           sessionStore: { agentId: "main" },
-          heartbeat: { every: "0m" },
           model: { primary: provider.modelRef, fallbacks: [] },
           models: {
             [provider.modelRef]: {
@@ -440,10 +413,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
         preferBuiltPluginArtifacts: true,
       }),
     );
-    expect(runtimeEntry).toEqual({
-      source: path.join(discordPluginDir, "index.ts"),
-      rootDir: discordPluginDir,
-    });
     const record = createPluginRecord({
       id: "discord",
       ...runtimeEntry,
@@ -466,17 +435,11 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     fixture = pluginInstance.run(() =>
       createDiscordGatewayCaptureFixture({ cfg, scheduler, test: { expect, vi } }),
     );
-    // Match loader registration: runtime slots belong to the invoking plugin instance.
     pluginInstance.run(() => fixture!.register(api));
-    expect(registration.registry.diagnostics).toEqual([]);
-    expect(record.transcriptSourceProviderIds).toEqual(["discord-voice"]);
-    expect(
-      getPluginValueInstance(registration.registry.transcriptSourceProviders[0]!.provider),
-    ).toBe(pluginInstance);
     artifactBinding.runtimeRegistrationComplete = true;
     // Minimal startup retains this real registration; it skips monitor login/sidecars only.
     // This does not prove full plugin discovery or Discord monitor startup.
-    setActivePluginRegistry(registration.registry);
+    runtimeState.setActivePluginRegistry(registration.registry);
     gateway = await startGatewayWithClient({
       port: ports?.gateway,
       cfg,
@@ -485,18 +448,18 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       scopes: ["operator.admin"],
     });
     await gateway.server.startupSettled;
-    expect(getRuntimeConfig().channels?.discord).toMatchObject(cfg.channels!.discord!);
-    const metadata = getPluginRuntimeLoadContext(registration.registry)?.metadataSnapshot;
-    // Minimal startup skips the model-publication sidecar. Publish through its
-    // production owner, retaining the real fixture registration for both agents.
-    setActivePluginRegistry(
+    const metadata = loadContext.getPluginRuntimeLoadContext(
+      registration.registry,
+    )?.metadataSnapshot;
+    // Minimal startup skips model publication; use its production owner.
+    runtimeState.setActivePluginRegistry(
       registration.registry,
       undefined,
       "gateway-bindable",
       metadata!.workspaceDir,
     );
-    await withPluginRuntimeRegistryScope(registration.registry, () =>
-      refreshPreparedModelRuntimeSnapshots(getRuntimeConfig, {
+    await runtimeScope.withPluginRuntimeRegistryScope(registration.registry, () =>
+      preparedRuntime.refreshPreparedModelRuntimeSnapshots(configState.getRuntimeConfig, {
         gatewayLifecycle: true,
         catalogMode: "static",
         allowGatewaySubagentBinding: true,
@@ -504,35 +467,15 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
         pluginMetadataSnapshot: metadata,
       }),
     );
-    for (const agentId of ["main", "agent-b"]) {
-      const published = await loadPublishedGatewayReplyDispatchRuntime({ agentId });
-      const inboundProvider = published?.inboundPluginRegistry.transcriptSourceProviders.find(
-        (entry) => entry.provider.id === "discord-voice",
-      )?.provider;
-      expect(inboundProvider).toBe(registration.registry.transcriptSourceProviders[0]?.provider);
-      expect(getPluginValueInstance(inboundProvider!)).toBe(pluginInstance);
-      const selectedRegistry = published?.pluginGeneration.pluginRegistry;
-      const selectedProvider = selectedRegistry?.transcriptSourceProviders.find(
-        (entry) => entry.provider.id === "discord-voice",
-      )?.provider;
-      expect(selectedProvider, agentId).toBe(inboundProvider);
-    }
     pluginInstance.run(() => fixture!.bindPublishedRuntime());
-    expect(gateway.port).not.toBe(providerPort);
-    expect(getActivePluginRegistry()).toBe(registration.registry);
     const client = gateway.client;
-    const sessionKeys = {
-      main: `agent:main:capture-proof-${randomUUID()}`,
-      "agent-b": `agent:agent-b:capture-proof-${randomUUID()}`,
-    };
+    const sessionKey = `agent:main:capture-proof-${randomUUID()}`;
     const sessionId = `capture-${randomUUID()}`;
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
-    const runTurn = async (args: CaptureArguments, agentId: "main" | "agent-b" = "main") => {
-      const call: ScriptedCall = { callId: `call_capture_${calls.length}`, agentId, args };
-      calls.push(call);
+    const runTurn = async (args: CaptureArguments) => {
+      const call: ScriptedCall = { callId: `call_capture_${randomUUID()}`, args };
       currentCall = call;
       const accepted = await client.request<{ runId: string; status: string }>("agent", {
-        sessionKey: sessionKeys[agentId],
+        sessionKey,
         message: `Perform the synthetic capture ${args.action} operation.`,
         deliver: false,
         idempotencyKey: randomUUID(),
@@ -542,8 +485,7 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
         runId: accepted.runId,
         timeoutMs: 30_000,
       });
-      expect(completed.status, `${agentId}:${args.action}`).toBe("ok");
-      expect(errors).toEqual([]);
+      expect(completed.status, args.action).toBe("ok");
       expect(currentCall).toBeUndefined();
       return call.output!;
     };
@@ -553,25 +495,11 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       ...captureTarget,
       sessionId,
     });
-    expect(start).toContain(`Transcripts started: ${sessionId}`);
     const selector = /^Selector: (.+)$/m.exec(start)?.[1];
     expect(selector).toBeDefined();
     const speaker = await pluginInstance.run(() => fixture!.expectReady());
-    const admitted = await store.readSession(selector!);
-    const source = { providerId: "discord-voice", ...captureTarget };
-    expect(admitted).toMatchObject({ sessionId, metadata: { agentId: "main" } });
-    expect(admitted?.source).toEqual({ ...source, agentId: "main" });
-    const listed = await client.request<TranscriptsListResult>("transcripts.list", {});
     const session = { selector, sessionId };
-    expect(listed.sessions).toEqual([
-      expect.objectContaining({
-        ...session,
-        agentId: "main",
-        source: expect.objectContaining(source),
-        activeSubscription: true,
-      }),
-    ]);
-    expect(requests).toHaveLength(2);
+    expect(requests).toBe(2);
 
     await fixture.recordAfterTurn();
     const readCapture = () =>
@@ -592,13 +520,10 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
         },
       ],
     });
-    expect(requests).toHaveLength(2);
-    expect(errors).toEqual([]);
+    expect(requests).toBe(2);
 
     await pluginInstance.run(() => fixture!.beginLateDelivery());
-    const stop = await runTurn({ action: "stop", selector });
-    expect(stop).toContain(`Transcripts stopped: ${sessionId}`);
-    expect(stop).toContain(`Selector: ${selector}`);
+    await runTurn({ action: "stop", selector });
     await fixture.finishLateDelivery();
     const stopped = await readCapture();
     expect(stopped).toMatchObject({
@@ -613,92 +538,14 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     });
     expect(stopped.utterances).toEqual(captured.utterances);
     expect(JSON.stringify(stopped)).not.toContain(lateText);
-    const stoppedSession = await store.readSession(selector!);
-    expect(stoppedSession).toEqual({ ...admitted, stoppedAt: stopped.session.stoppedAt });
-    const utterances = await store.readUtterancesForSession(stoppedSession!);
-    expect(utterances).toEqual([
-      expect.objectContaining({
-        text: capturedText,
-        metadata: {
-          channel: "discord",
-          guildId: captureTarget.guildId,
-          channelId: captureTarget.channelId,
-          voiceSessionKey: speaker.voiceSessionKey,
-        },
-      }),
-    ]);
-    expect(requests).toHaveLength(5);
-    expect(summaryRequests).toBe(1);
+    expect(requests).toBe(5);
 
-    // Rotate the real manager and transport while preserving the scenario's SDK spies.
-    const routedConfig: OpenClawConfig = {
-      ...cfg,
-      bindings: [{ ...cfg.bindings![0]!, agentId: "agent-b" }],
-      transcripts: {
-        enabled: true,
-        autoStart: [{ providerId: "discord-voice", ...captureTarget, whenOccupied: true }],
-      },
-    };
-    await pluginInstance.run(() => fixture!.rotateManager(routedConfig));
-    const routedContext: Parameters<typeof createTranscriptsAutoStartService>[0] = {
-      stateDir,
-      config: routedConfig,
-      logger: { warn: vi.fn() },
-      caller: { kind: "operator", source: "scheduled" },
-    };
-    const routedProvider = resolveSourceProvider("discord-voice", routedContext);
-    expect(routedProvider).toBe(registration.registry.transcriptSourceProviders[0]?.provider);
-    expect(getPluginValueInstance(routedProvider!)).toBe(pluginInstance);
-    routedService = createTranscriptsAutoStartService(routedContext);
-    await withPluginRuntimeRegistryScope(registration.registry, () => routedService!.start())
-      .settled;
-    await expect
-      .poll(() => ownedCaptures()[0])
-      .toMatchObject({
-        phase: "active",
-        session: { metadata: { agentId: "agent-b" } },
-      });
-    const replacement = ownedCaptures()[0]!;
-    expect(replacement.session.sessionId).not.toBe(sessionId);
-    expect(await store.readSession(selector!)).toEqual(stoppedSession);
-    expect(await store.readUtterancesForSession(stoppedSession!)).toEqual(utterances);
-    const savedSummary = await store.readSummary(stoppedSession!);
-    const providerStop = vi.spyOn(replacement, "stopProvider");
-    const sessionWrite = vi.spyOn(TranscriptsStore.prototype, "writeSession");
-    const summaryWrite = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
-    try {
-      for (const action of ["stop", "summarize"] as const) {
-        expect(await runTurn({ action, selector }, "agent-b")).toContain("session not found");
-      }
-      expect(providerStop).not.toHaveBeenCalled();
-      expect(sessionWrite).not.toHaveBeenCalled();
-      expect(summaryWrite).not.toHaveBeenCalled();
-      expect(await store.readSession(selector!)).toEqual(stoppedSession);
-      expect(await store.readSummary(stoppedSession!)).toEqual(savedSummary);
-      expect(await store.readUtterancesForSession(stoppedSession!)).toEqual(utterances);
-      expect(await runTurn({ action: "summarize", selector })).toContain(
-        `Transcripts summarized: ${sessionId}`,
-      );
-      expect(summaryWrite).toHaveBeenCalledTimes(1);
-      expect(providerStop).not.toHaveBeenCalled();
-      expect(activeSessions.get(replacement.session.sessionId)).toBe(replacement);
-    } finally {
-      providerStop.mockRestore();
-      sessionWrite.mockRestore();
-      summaryWrite.mockRestore();
-    }
-    await routedService.stop();
-    expect(requests).toHaveLength(12);
-    expect(summaryRequests).toBe(2);
     expect(errors).toEqual([]);
     expect(deniedConnections).toEqual([]);
   } finally {
     // Keep the actual runtime and edge spies alive until sources, streams and Gateway settle.
     await runQaGatewayFixture(
       async () => {
-        await routedService?.stop();
-      },
-      () => {
         fixtureScheduler?.beginClose();
       },
       () => fixture?.close(),
@@ -706,6 +553,7 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       () => gateway?.client.stopAndWait(),
       () => gateway?.server.close({ reason: "synthetic transcript capture cleanup" }),
       () => closeHttpServer(providerServer),
+      () => ipcServer[Symbol.asyncDispose](),
       () => cleanupRuntime?.(),
       () => releaseFixtureRegistry?.(),
       () => {

@@ -10,9 +10,33 @@ import {
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 const suite = createChatFlowE2eSuite();
-type SendMotionFrame = { y: number | null; opacity: string | null; same: boolean };
+type SendMotionFrame = {
+  y: number | null;
+  opacity: string | null;
+  same: boolean;
+  height: number | null;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  blockTop: number | null;
+  blockHeight: number | null;
+  transform: string | null;
+};
 type SendMotionScroll = { behavior?: ScrollBehavior; jump: number; remaining: number };
 type SendMotionProbe = { frames: SendMotionFrame[]; scrolls: SendMotionScroll[]; stop: () => void };
+type FirstWheelProbe = {
+  frames: Array<{
+    connected: boolean;
+    top: number;
+    offset: number;
+    extent: number;
+    endGap: number;
+  }>;
+  shifts: number[];
+  wheelAt: number;
+  done: boolean;
+  trusted: boolean;
+};
 
 async function observeSendMotion(page: Page, prompt: string) {
   await page.evaluate((text) => {
@@ -43,10 +67,20 @@ async function observeSendMotion(page: Page, prompt: string) {
         (element) => element.dataset.messageText === text,
       );
       firstBubble ??= bubble;
+      const block = bubble?.closest<HTMLElement>(".chat-virtual-block");
+      const bounds = bubble?.getBoundingClientRect();
+      const style = bubble ? getComputedStyle(bubble) : undefined;
       probe.frames.push({
-        y: bubble?.getBoundingClientRect().top ?? null,
-        opacity: bubble ? getComputedStyle(bubble).opacity : null,
+        y: bounds?.top ?? null,
+        opacity: style?.opacity ?? null,
         same: bubble === firstBubble,
+        height: bounds?.height ?? null,
+        scrollTop: thread.scrollTop,
+        scrollHeight: thread.scrollHeight,
+        clientHeight: thread.clientHeight,
+        blockTop: block?.getBoundingClientRect().top ?? null,
+        blockHeight: block?.getBoundingClientRect().height ?? null,
+        transform: style?.transform ?? null,
       });
       frame = requestAnimationFrame(sample);
     };
@@ -75,17 +109,32 @@ async function finishSendMotion(page: Page, reducedMotion: string) {
     true,
   );
   if (reducedMotion !== "reduce") {
-    expect({
-      noInstantJump: scrolls.every((scroll) => Math.abs(scroll.jump) <= 1),
-      monotonic: visible.every((frame, index) => {
-        const previous = visible[index - 1];
-        return !previous || (frame.y !== null && previous.y !== null && frame.y <= previous.y + 1);
+    expect(
+      {
+        noInstantJump: scrolls.every((scroll) => Math.abs(scroll.jump) <= 1),
+        monotonic: visible.every((frame, index) => {
+          const previous = visible[index - 1];
+          return (
+            !previous || (frame.y !== null && previous.y !== null && frame.y <= previous.y + 1)
+          );
+        }),
+        // Check commands rather than frame counts: a loaded browser may skip intermediate frames.
+        smoothFromDistance: scrolls.some(
+          (scroll) => scroll.behavior === "smooth" && scroll.remaining > 8,
+        ),
+      },
+      JSON.stringify({
+        scrolls,
+        endDistance,
+        frames,
+        reversals: visible.flatMap((frame, index) => {
+          const previous = visible[index - 1];
+          return previous && frame.y !== null && previous.y !== null && frame.y > previous.y + 1
+            ? [{ previous, frame }]
+            : [];
+        }),
       }),
-      // Check commands rather than frame counts: a loaded browser may skip intermediate frames.
-      smoothFromDistance: scrolls.some(
-        (scroll) => scroll.behavior === "smooth" && scroll.remaining > 8,
-      ),
-    }).toEqual({ noInstantJump: true, monotonic: true, smoothFromDistance: true });
+    ).toEqual({ noInstantJump: true, monotonic: true, smoothFromDistance: true });
     expect(endDistance).toBeLessThanOrEqual(8);
   }
 }
@@ -94,10 +143,120 @@ declare global {
   interface Window {
     openclawMotionArrivals?: number;
     openclawSendMotion?: SendMotionProbe;
+    openclawFirstWheel?: FirstWheelProbe;
   }
 }
 
 suite.define(() => {
+  it("keeps visible transcript rows steady when the first wheel admits earlier rows", async () => {
+    const page = await newChatPage(suite, {
+      viewport: { width: 1719, height: 1179 },
+      reducedMotion: "reduce",
+    });
+    const now = Date.now();
+    await installMockGateway(page, {
+      historyMessages: Array.from({ length: 240 }, (_, index) =>
+        chatMessage(
+          index % 2 ? "assistant" : "user",
+          `### Geometry message ${index + 1}\n\n${"Keep the visible conversation steady while earlier rows are measured. ".repeat(5)}`,
+          {
+            timestamp: now - (240 - index) * 60_000,
+            __openclaw: { id: "geometry-" + index, seq: index + 1 },
+          },
+        ),
+      ),
+    });
+    await page.goto(suite.server.baseUrl + "chat");
+    const lastMessage = page
+      .locator(".chat-pane-cache__pane--active .chat-virtual-row")
+      .getByText("Geometry message 240", {
+        exact: true,
+      });
+    await lastMessage.waitFor();
+    await waitForChatScrollIdle(page);
+    await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+    await page.reload();
+    await lastMessage.waitFor();
+    await waitForChatScrollIdle(page);
+    const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+    await thread.hover();
+    await thread.evaluate((element) => {
+      const viewport = element.getBoundingClientRect();
+      const anchor = [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].find((row) => {
+        const bounds = row.getBoundingClientRect();
+        return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+      });
+      if (!anchor) {
+        throw new Error("No visible transcript row to retain");
+      }
+      const probe: FirstWheelProbe = {
+        frames: [],
+        shifts: [],
+        wheelAt: 0,
+        done: false,
+        trusted: false,
+      };
+      window.openclawFirstWheel = probe;
+      const sample = () => {
+        probe.frames.push({
+          connected: element.contains(anchor),
+          top: anchor.getBoundingClientRect().top - viewport.top,
+          offset: element.scrollTop,
+          extent: element.scrollHeight,
+          endGap: element.scrollHeight - element.clientHeight - element.scrollTop,
+        });
+      };
+      const collectShifts = (entries: PerformanceEntryList) => {
+        probe.shifts.push(
+          ...entries
+            .filter((entry) => probe.wheelAt > 0 && entry.startTime >= probe.wheelAt)
+            .map((entry) => entry.startTime),
+        );
+      };
+      const observer = new PerformanceObserver((entries) => collectShifts(entries.getEntries()));
+      observer.observe({ type: "layout-shift" });
+      sample();
+      element.addEventListener(
+        "wheel",
+        (event) => {
+          probe.trusted = event.isTrusted;
+          probe.wheelAt = performance.now();
+          sample();
+          let frames = 0;
+          const nextFrame = () => {
+            sample();
+            if (++frames < 12) {
+              requestAnimationFrame(nextFrame);
+            } else {
+              collectShifts(observer.takeRecords());
+              observer.disconnect();
+              probe.done = true;
+            }
+          };
+          requestAnimationFrame(nextFrame);
+        },
+        { once: true, capture: true },
+      );
+    });
+    await page.mouse.wheel(0, 40);
+    await page.waitForFunction(() => window.openclawFirstWheel?.done === true);
+    const observed = await page.evaluate(() => window.openclawFirstWheel!);
+    const before = observed.frames[0]!;
+    expect(observed.trusted).toBe(true);
+    // A frame can compensate after a painted shift; include recent-input entries too.
+    expect(observed.shifts).toEqual([]);
+    expect(
+      observed.frames.every(
+        (frame) =>
+          frame.connected &&
+          Math.abs(frame.top - before.top) <= 1.5 &&
+          Math.abs(frame.endGap) <= 1.5 &&
+          Math.abs(frame.offset - before.offset - (frame.extent - before.extent)) <= 1.5,
+      ),
+      JSON.stringify(observed.frames),
+    ).toBe(true);
+  });
+
   it.each<{
     name: string;
     lines?: number;

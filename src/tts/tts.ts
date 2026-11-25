@@ -24,6 +24,7 @@ export function maybeApplyTtsToPayload(params: Parameters<typeof maybeApplyTtsTo
 }
 
 export {
+  buildTtsSystemPromptHintAsync,
   getLastTtsAttempt,
   getTtsMaxLength,
   getTtsPersona,
@@ -40,12 +41,9 @@ export {
   resolveTtsPrefsPathAsync,
   resolveTtsProviderOrder,
   setLastTtsAttempt,
-  setSummarizationEnabled,
-  setTtsEnabled,
-  setTtsMaxLength,
-  setTtsPersona,
-  setTtsProvider,
   synthesizeSpeech,
+  textToSpeechStream,
+  textToSpeechTelephony,
   type ResolvedTtsConfig,
   type TtsDirectiveOverrides,
 } from "./runtime-api.js";

@@ -6,12 +6,9 @@ import {
   captureExecRequestSubagentSelection,
   resolveSubagentControllerIdentity,
 } from "../../agents/subagents/registry/subagent-control-scope.js";
-import {
-  killAllControlledSubagentRuns,
-  resolveSubagentController,
-} from "../../agents/subagents/registry/subagent-control.js";
+import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/subagent-control.js";
 import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
-import { prepareSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
+import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureExecRequestCustodySelection } from "../../infra/exec-request-context.js";
@@ -21,6 +18,7 @@ export async function abortControlledSubagents(params: {
   sessionKey: string;
   agentId?: string;
   requesterTurnRunId?: string;
+  yieldedRequesterRunId?: string;
   sessionId?: string;
   lifecycleRevision?: string;
   execCancellation?: ReturnType<typeof captureExecRequestCancellation>;
@@ -42,22 +40,14 @@ export async function abortControlledSubagents(params: {
     agentSessionKey: params.sessionKey,
     agentId: params.agentId,
   };
-  const identity = resolveSubagentControllerIdentity(controllerParams);
-  // Ordinary callers reserve queued descendants before yielding; only subagents need policy reads.
-  const preparedController = identity.callerIsSubagent
-    ? await prepareSessionCapabilityRead(() => resolveSubagentController(controllerParams))
-    : undefined;
-  using controllerRead = preparedController
-    ? { [Symbol.dispose]: preparedController.release }
-    : undefined;
-  void controllerRead;
-  const controller = preparedController?.read() ?? {
-    ...identity,
+  // The Stop caller owns cancellation, not the stopped subagent's tool permissions.
+  // Reading those permissions would reenter ingress already closed by deletion.
+  const controller = {
+    ...resolveSubagentControllerIdentity(controllerParams),
     controlScope: "children" as const,
   };
   const assertCurrent = () => {
     params.assertCurrent?.();
-    preparedController?.read();
   };
   let commands =
     params.execCancellation ??
@@ -109,6 +99,12 @@ export async function abortControlledSubagents(params: {
     prepare,
   };
   let execAborted = false;
+  const registryCancelledRequesters: AgentHarnessDescendantCancellationResult["cancelledRequesters"] =
+    [];
+  let yieldedRequesters: Array<{
+    entry: (typeof selected.runs)[number];
+    requester: AgentHarnessDescendantCancellationResult["cancelledRequesters"][number];
+  }> = [];
   let native: Promise<PromiseSettledResult<AgentHarnessDescendantCancellationResult>> | undefined;
   const commandErrors: unknown[] = [];
   const beforeKill = async (sealRootSelection = () => {}) => {
@@ -131,6 +127,40 @@ export async function abortControlledSubagents(params: {
         return false;
       }
       accepted = true;
+      const sessionId = params.sessionId ?? sessionOrigin?.target.sessionId;
+      yieldedRequesters = sessionId
+        ? requestSelection.runs.flatMap((entry) => {
+            // A settled yielded cohort releases its spawning turn links. Stop
+            // captures the parent's current lifecycle owner instead of reviving them.
+            const requesterTurnRunId =
+              params.yieldedRequesterRunId ??
+              (entry.requesterTurnYielded ? entry.requesterTurnRunId : undefined);
+            return selected.ownsRoot(entry) &&
+              entry.requesterSessionKey === controller.controllerSessionKey &&
+              (entry.requesterAgentId ?? controller.controllerAgentId) ===
+                controller.controllerAgentId &&
+              requesterTurnRunId &&
+              (entry.execution.status !== "terminal" ||
+                entry.pauseReason === "sessions_yield" ||
+                entry.requesterSettleWake)
+              ? [
+                  {
+                    entry,
+                    requester: {
+                      agentId: controller.controllerAgentId,
+                      sessionKey: controller.controllerSessionKey,
+                      sessionId,
+                      lifecycleRevision:
+                        params.lifecycleRevision ??
+                        sessionOrigin?.target.lifecycleRevision ??
+                        undefined,
+                      requesterTurnRunId,
+                    },
+                  },
+                ]
+              : [];
+          })
+        : [];
       native = Promise.allSettled([cancelNative()]).then(([result]) => result);
       try {
         execAborted = commands.cancel();
@@ -188,6 +218,14 @@ export async function abortControlledSubagents(params: {
         runs: requestSelection.runs,
         requestSelection,
         suppressTaskDelivery: true,
+        onCancelled: (entry) => {
+          const captured = yieldedRequesters.find((item) =>
+            isSameSubagentRunOwner(entry, item.entry),
+          );
+          if (captured && !registryCancelledRequesters.includes(captured.requester)) {
+            registryCancelledRequesters.push(captured.requester);
+          }
+        },
         assertCurrent,
         beforeKill,
       });
@@ -211,8 +249,10 @@ export async function abortControlledSubagents(params: {
   const killed =
     (descendants?.killed ?? 0) +
     (settledNative?.status === "fulfilled" ? settledNative.value.killed : 0);
-  const cancelledRequesters =
-    settledNative?.status === "fulfilled" ? settledNative.value.cancelledRequesters : [];
+  const cancelledRequesters = [
+    ...registryCancelledRequesters,
+    ...(settledNative?.status === "fulfilled" ? settledNative.value.cancelledRequesters : []),
+  ];
   if (failure && !settledNative && !descendants && !execAborted && !params.parentStopAccepted?.()) {
     throw commandErrors.length > 0
       ? new AggregateError([failure.error, ...commandErrors], "Request cancellation was incomplete")

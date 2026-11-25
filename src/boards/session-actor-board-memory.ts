@@ -43,13 +43,6 @@ function document(
   switch (stored.content.kind) {
     case "html":
       return { ...htmlMetadata(widget, stored.sha256!), html: stored.content.html };
-    case "registered":
-      return {
-        ...htmlMetadata(widget, stored.sha256!),
-        source: stored.content.source,
-        pluginKind: stored.content.pluginKind,
-        ...(widget.title !== undefined ? { title: widget.title } : {}),
-      };
     case "mcp-app":
       return {
         descriptor: stored.content.descriptor,
@@ -137,12 +130,7 @@ export function executeSessionActorBoardCommand(
         instanceId: command.input.viewGeneration,
       });
       const content = new Map(previous?.content);
-      const body =
-        params.content.kind === "html"
-          ? params.content.html
-          : params.content.kind === "registered"
-            ? params.content.source
-            : undefined;
+      const body = params.content.kind === "html" ? params.content.html : undefined;
       content.set(params.name, {
         content: structuredClone(params.content),
         nameIdentity: params.generatedIdentity

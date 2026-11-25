@@ -17,34 +17,6 @@ import { validateLineSignature } from "./signature.js";
 const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
 const LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS = 5_000;
 
-/**
- * Answer a body-limit failure through the connection owner.
- *
- * The reader defers destruction for these two codes, so the connection is already fenced
- * and only the owner can still write: responding directly would race the teardown and LINE
- * would see a reset instead of the status.
- */
-async function rejectLineWebhookRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  error: unknown,
-): Promise<boolean> {
-  if (
-    !isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE") &&
-    !isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")
-  ) {
-    return false;
-  }
-  await sendHttpRequestRejection(
-    req,
-    res,
-    error.statusCode,
-    JSON.stringify({ error: requestBodyErrorToText(error.code) }),
-    "application/json",
-  );
-  return true;
-}
-
 type LineWebhookTarget = {
   channelSecret: string;
   bot: Pick<ReturnType<typeof createLineBot>, "handleWebhook">;
@@ -131,7 +103,18 @@ export function createLineNodeWebhookHandler(params: {
       }
       sendLineWebhookJson(res, 200, { status: "ok" });
     } catch (err) {
-      if (await rejectLineWebhookRequest(req, res, err)) {
+      if (
+        isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE") ||
+        isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")
+      ) {
+        // The reader defers destruction; answer through the connection owner.
+        await sendHttpRequestRejection(
+          req,
+          res,
+          err.statusCode,
+          JSON.stringify({ error: requestBodyErrorToText(err.code) }),
+          "application/json",
+        );
         return;
       }
       params.runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));

@@ -34,29 +34,61 @@ function catalog(ids: string[], details: Partial<SessionCatalogHost> = {}): Sess
   };
 }
 
-it("retains truncated final-page rows and warning through pagination and expanded refresh", async () => {
-  const first = catalog(["first"], { nextCursor: "last-page" });
-  const error = { code: "DISCOVERY_TRUNCATED", message: "Search by exact session ID." };
-  const last = catalog(["last"], { error });
-  const merged = mergeSessionCatalogPage({
-    current: first,
-    page: last,
-    cursors: { "gateway:local": "last-page" },
-  });
-  expect(merged.advancedHostIds).toEqual(["gateway:local"]);
-  const refreshed = await refetchExpandedSessionCatalogPages({
-    catalogs: [first],
-    previousCatalogs: [catalog(["first", "stale"])],
-    client: createTestGatewayClient(async () => ({ catalogs: [last] })),
+it.each([
+  ["host", "DISCOVERY_TRUNCATED"],
+  ["catalog", "DISCOVERY_TRUNCATED"],
+  ["host", "FILTER_PARTIAL"],
+] as const)(
+  "retains a partial final page with a %s %s warning through pagination and refresh",
+  async (warningScope, code) => {
+    const first = catalog(["first"], { nextCursor: "retry" });
+    const error = { code, message: "Partial results; check the source." };
+    const last = catalog(["last"], warningScope === "host" ? { error } : {});
+    if (warningScope === "catalog") {
+      last.error = error;
+    }
+    const merged = mergeSessionCatalogPage({
+      current: first,
+      page: last,
+      cursors: { "gateway:local": "retry" },
+    });
+    expect.soft(merged.advancedHostIds).toEqual(["gateway:local"]);
+    const refreshed = await refetchExpandedSessionCatalogPages({
+      catalogs: [first],
+      previousCatalogs: [catalog(["first", "stale"])],
+      client: createTestGatewayClient(async () => ({ catalogs: [last] })),
+      agentId: "main",
+      pageDepths: new Map([[sessionCatalogHostKey("anthropic", "gateway:local"), 1]]),
+      isCurrent: () => true,
+      canRequestPage: () => true,
+    });
+    for (const result of [merged.catalog, refreshed[0]]) {
+      const host = result?.hosts[0];
+      expect(host?.sessions.map((row) => row.threadId)).toEqual(["first", "last"]);
+      expect(host?.nextCursor).toBeUndefined();
+      expect(result?.error ?? host?.error).toEqual(error);
+    }
+  },
+);
+
+it("publishes fresh authorized fallback rows instead of wiping a fresh-list catalog", async () => {
+  const fresh = {
+    ...catalog(["authorized"], {
+      error: { code: "FILTER_PARTIAL", message: "Client-side matching" },
+    }),
+    requiresFreshList: true as const,
+  };
+  const result = await refetchExpandedSessionCatalogPages({
+    catalogs: [fresh],
+    previousCatalogs: [catalog(["previous"])],
+    client: createTestGatewayClient(async () => {
+      throw new Error("Unexpected refetch");
+    }),
     agentId: "main",
-    pageDepths: new Map([[sessionCatalogHostKey("anthropic", "gateway:local"), 1]]),
+    pageDepths: new Map(),
     isCurrent: () => true,
     canRequestPage: () => true,
   });
-  for (const result of [merged.catalog, refreshed[0]]) {
-    const host = result?.hosts[0];
-    expect(host?.sessions.map((row) => row.threadId)).toEqual(["first", "last"]);
-    expect(host?.nextCursor).toBeUndefined();
-    expect(host?.error).toEqual(error);
-  }
+  expect(result[0]?.hosts[0]?.sessions.map(({ threadId }) => threadId)).toEqual(["authorized"]);
+  expect(result[0]?.hosts[0]?.error?.code).toBe("FILTER_PARTIAL");
 });

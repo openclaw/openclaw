@@ -2,6 +2,7 @@
 import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
+  AcpRuntimeHandle,
   AcpRuntimeTurn,
 } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeEach, expect, vi } from "vitest";
@@ -165,13 +166,19 @@ export function resolvedIdentity(overrides: Partial<NonNullable<SessionAcpMeta["
   return { state: "resolved" as const, source: "status" as const, lastUpdatedAt: 1, ...overrides };
 }
 
+export function runtimeHandle(
+  sessionKey: string,
+  runtimeSessionName: string,
+  overrides: Partial<AcpRuntimeHandle> = {},
+): AcpRuntimeHandle {
+  return { sessionKey, runtimeSessionName, backend: "acpx", ...overrides };
+}
+
 export function createRuntime() {
   const mocks = {
-    ensureSession: vi.fn<AcpRuntime["ensureSession"]>(async (input) => ({
-      sessionKey: input.sessionKey,
-      backend: "acpx",
-      runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
-    })),
+    ensureSession: vi.fn<AcpRuntime["ensureSession"]>(async (input) =>
+      runtimeHandle(input.sessionKey, `${input.sessionKey}:${input.mode}:runtime`),
+    ),
     runTurn: vi.fn<AcpRuntime["runTurn"]>(async function* () {
       yield { type: "done" as const };
     }),

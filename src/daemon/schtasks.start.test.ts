@@ -14,8 +14,8 @@ import * as ports from "../infra/ports-inspect.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import * as utils from "../utils.js";
+import { startScheduledTask } from "./schtasks-control.js";
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
-import { startScheduledTask } from "./schtasks.js";
 import * as gatewayService from "./service.js";
 import { createMockGatewayService } from "./service.test-helpers.js";
 
@@ -70,12 +70,14 @@ vi.mock("node:child_process", async (original) => ({
 }));
 // mock-isolation: Native enable and Run mutations update only the selected task fixture.
 vi.mock("./schtasks-exec.js", () => ({
+  execScheduledTaskEnabledChange: async (taskName: string, enabled: boolean) => {
+    native.calls.push(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]);
+    native.enabled = enabled;
+    await native.afterEnable?.();
+    return { code: 0, stdout: "", stderr: "" };
+  },
   execSchtasks: vi.fn(async (args: string[]) => {
     native.calls.push(args);
-    if (args[0] === "/Change" && args.includes("/ENABLE")) {
-      native.enabled = true;
-      await native.afterEnable?.();
-    }
     if (args[0] === "/Run") {
       if (!native.enabled) {
         return { code: 1, stdout: "", stderr: "The scheduled task is disabled." };
@@ -216,6 +218,30 @@ it("explicitly starts a disabled registered node without replacing its launcher"
   expect(await fs.readFile(file)).toEqual(before);
   expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "schtasks-start" }]]);
 });
+
+it.each(["beforeMutation", "prepareEffect"] as const)(
+  "does not dispatch Scheduled Task Run when %s refuses the prepared effect",
+  async (hook) => {
+    const { env } = await fixture();
+    native.enabled = true;
+    let authorityChecked = false;
+    const prepare = vi.fn(async () => {
+      expect(authorityChecked).toBe(true);
+      throw new Error("Caller refused prepared effect");
+    });
+    await expect(
+      startTask(env, {
+        assertCurrent: () => {
+          authorityChecked = true;
+        },
+        [hook]: prepare,
+      }),
+    ).rejects.toThrow("Caller refused prepared effect");
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(native.running).toBe(false);
+    expect(native.calls.some((args) => args[0] === "/Run")).toBe(false);
+  },
+);
 
 it("does not enable a captured service whose auto-start policy must be preserved", async () => {
   const { env } = await fixture();

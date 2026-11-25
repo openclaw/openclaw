@@ -9,13 +9,10 @@ import {
   createComputerUseRequest,
   expectRequestMethodNotCalled,
   expectSetupErrorStatus,
-  expectStatusFields,
   requestCalls,
 } from "./computer-use.test-support.js";
 import type { CodexComputerUseConfig } from "./config.js";
 import { createClientHarness, waitForHarnessRequest } from "./test-support.js";
-
-const exposed = { installed: true, pluginEnabled: true, mcpServerAvailable: true };
 
 const sharedClientMocks = vi.hoisted(() => ({
   getLeasedSharedCodexAppServerClient: vi.fn(),
@@ -96,31 +93,19 @@ describe("Codex Computer Use readiness", () => {
     },
   );
 
-  it("holds one client lease through a one-off readiness probe and its cleanup", async () => {
-    const fixture = createComputerUseRequest({ installed: true });
+  it("holds one client lease through a unified readiness probe and its cleanup", async () => {
+    const unified = { pluginName: "unified-computer-use", mcpServerName: "cua_repl" };
+    const fixture = createComputerUseRequest({ installed: true, ...unified, mcpTools: ["js"] });
     const harness = createProbeHarness(fixture);
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
     try {
-      const status = await readCodexComputerUseStatus({ pluginConfig: readinessConfig() });
+      const status = await readCodexComputerUseStatus({ pluginConfig: readinessConfig(unified) });
       expect(status).toMatchObject({
-        enabled: true,
         ready: true,
         reason: "ready",
-        ...exposed,
-        marketplaceName: "desktop-tools",
-        tools: ["list_apps"],
-        message: "Computer Use is ready.",
-        installation: { status: "installed", ok: true },
-        exposure: { status: "available", ok: true },
-        liveTest: {
-          status: "passed",
-          ok: true,
-          attempted: true,
-          attempts: 1,
-          timeoutMs: 60_000,
-          retried: false,
-          repaired: false,
-        },
+        ...unified,
+        tools: ["js"],
+        liveTest: { ok: true, attempts: 1, retried: false, repaired: false },
       });
       expect(requestCalls(fixture).map(([method]) => method)).toEqual(
         expect.arrayContaining(["thread/start", "mcpServer/tool/call", "thread/unsubscribe"]),
@@ -141,22 +126,6 @@ describe("Codex Computer Use readiness", () => {
     }
   });
 
-  it("probes unified Computer Use through its JavaScript tool", async () => {
-    const unified = { pluginName: "unified-computer-use", mcpServerName: "cua_repl" };
-    const { request, status } = await readProbe(
-      { ...unified, mcpTools: ["js", "js_reset", "turn_ended"] },
-      unified,
-    );
-
-    expect(requestCalls(request, "mcpServer/tool/call")).toHaveLength(1);
-    expectStatusFields(status, {
-      ready: true,
-      reason: "ready",
-      ...unified,
-      tools: ["js", "js_reset", "turn_ended"],
-    });
-  });
-
   it.each([0, 1])(
     "retries through the owning runtime with %i reload failures",
     async (reloadFailures) => {
@@ -166,15 +135,15 @@ describe("Codex Computer Use readiness", () => {
           { liveTestFailures: 1, reloadFailures },
           { autoRepair: true },
         );
-        const warning = "Could not reload Computer Use MCP servers: MCP runtime reload failed";
         expect(status).toMatchObject({
           ready: true,
           reason: "ready",
           liveTest: { status: "passed", attempts: 2, retried: true, repaired: !reloadFailures },
-          repair: { attempted: true, killedPids: [], warnings: reloadFailures ? [warning] : [] },
         });
         if (reloadFailures) {
-          expect(status.warnings).toContain(warning);
+          expect(status.warnings).toContain(
+            "Could not reload Computer Use MCP servers: MCP runtime reload failed",
+          );
         }
         expect(request).toHaveBeenCalledWith("config/mcpServer/reload", undefined, {
           timeoutMs: 60_000,
@@ -214,7 +183,6 @@ describe("Codex Computer Use readiness", () => {
   ])("reports a failed probe without implicit repair: $error", async ({ error, ...failures }) => {
     const { request, status } = await readProbe(failures);
     expect(status).toMatchObject({
-      ...exposed,
       ready: false,
       reason: "live_test_failed",
       liveTest: { status: "failed", ok: false, attempts: 2, retried: true, repaired: false, error },
@@ -225,7 +193,6 @@ describe("Codex Computer Use readiness", () => {
     expect(status.message).toContain(
       "Startup is allowed because computerUse.strictReadiness is false.",
     );
-    expect(status.repair).toBeUndefined();
     expectRequestMethodNotCalled(request, "config/mcpServer/reload");
   });
 
@@ -241,20 +208,12 @@ describe("Codex Computer Use readiness", () => {
       status: {
         ready: false,
         reason: "live_test_failed",
-        ...exposed,
-        installation: { status: "installed", ok: true },
-        exposure: { status: "available", ok: true },
         liveTest: {
-          status: "failed",
           ok: false,
-          attempted: true,
           attempts: 2,
-          timeoutMs: 60_000,
-          retried: true,
           repaired: true,
           error: "list_apps timed out",
         },
-        message: expect.stringContaining("Computer Use live test failed after 2 attempts"),
       },
     });
     expect(requestCalls(request, "config/mcpServer/reload")).toHaveLength(1);

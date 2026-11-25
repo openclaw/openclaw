@@ -19,10 +19,10 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
-import type { WebInboundCallbackMessage, WebListenerCloseReason } from "./inbound.js";
 import type { WhatsAppSendResult } from "./inbound/send-result.js";
 import { createAcceptedWhatsAppSendResult as createAcceptedWhatsAppSendResultForHarness } from "./inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
+import type { WebInboundCallbackMessage, WebListenerCloseReason } from "./inbound/types.js";
 import { setWhatsAppRuntime } from "./runtime.js";
 // Whatsapp plugin module implements auto reply harness behavior.
 
@@ -263,7 +263,7 @@ export function createWebListenerFactoryCapture(): AnyExport {
         onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
         shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
         debounceMs?: number;
-        appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
+        appendReplyMaxAgeMs?: number;
         selfChatMode?: boolean;
       }
     | undefined;
@@ -271,7 +271,7 @@ export function createWebListenerFactoryCapture(): AnyExport {
     onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
     shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
     debounceMs?: number;
-    appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
+    appendReplyMaxAgeMs?: number;
     selfChatMode?: boolean;
   }) => {
     capturedOnMessage = opts.onMessage;

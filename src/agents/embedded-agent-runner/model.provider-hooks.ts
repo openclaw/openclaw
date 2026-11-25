@@ -15,6 +15,7 @@ import {
   runProviderDynamicModel,
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
+import { createVendorModelFactsResolver } from "../bundled-model-identity-facts.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { canonicalizeOpenAIModelId } from "../openai-routing.js";
 import { inheritModelProviderRequestRouteFacts } from "../provider-request-config.js";
@@ -83,6 +84,21 @@ export function resolveRuntimeHooks(params?: {
     applyProviderResolvedTransportWithPlugin,
     normalizeProviderTransportWithPlugin,
   });
+}
+
+// Bundled vendor rows are fixed for the process, so one resolver serves every lookup.
+let resolveVendorModelFacts: ReturnType<typeof createVendorModelFactsResolver> | undefined;
+
+/** A route that does not declare a model fact inherits it from the vendor's own row. */
+function withVendorModelFacts<T extends Model & ProviderRuntimeModel>(model: T): T {
+  if (
+    typeof model.id !== "string" ||
+    model.compat?.requiresReasoningContentOnAssistantMessages !== undefined
+  ) {
+    return model;
+  }
+  const facts = (resolveVendorModelFacts ??= createVendorModelFactsResolver())(model);
+  return facts ? { ...model, compat: { ...model.compat, ...facts } } : model;
 }
 
 export function normalizeResolvedModel(params: {
@@ -164,8 +180,9 @@ export function normalizeResolvedModel(params: {
       transportNormalized = { ...pluginModel, api, baseUrl };
     }
   }
-  const normalizedModel = normalizeModelCompat(transportNormalized ?? pluginModel) as Model &
-    ProviderRuntimeModel;
+  const normalizedModel = withVendorModelFacts(
+    normalizeModelCompat(transportNormalized ?? pluginModel) as Model & ProviderRuntimeModel,
+  );
   // Rebuilding provider hooks may drop the host-prepared timeout. Restore it
   // only when the final model does not declare a provider-owned override.
   const modelWithProviderTimeout =

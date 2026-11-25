@@ -6,6 +6,7 @@ import { assertNoSymlinkParentsSync } from "@openclaw/fs-safe/advanced";
 import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { classifyDoctorMigrationBackupPath } from "../commands/doctor-migration-backup-names.js";
 import { resolveStateDir } from "../config/paths.js";
 import { VERSION } from "../version.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
@@ -14,6 +15,7 @@ import {
   isSessionSqliteMigrationWarning,
   type DoctorSessionSqliteIssue,
 } from "./session-sqlite-migration-issues.js";
+import { UPDATE_RUN_ID_PATTERN } from "./update-displaced-database-receipt.js";
 
 export type SessionSqliteMigrationMove = z.infer<typeof MigrationMoveSchema>;
 export type SessionSqliteMigrationMoveKind = SessionSqliteMigrationMove["kind"];
@@ -88,7 +90,16 @@ const MigrationGithubIssueSchema = z.object({
 const MigrationTargetSchema = z
   .object({
     agentId: z.string().min(1),
-    databaseIdentity: z.object({ dev: z.string(), ino: z.string() }).optional(),
+    databaseIdentity: z
+      .object({
+        dev: z.string(),
+        ino: z.string(),
+        sha256: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/u)
+          .optional(),
+      })
+      .optional(),
     completedMoves: z.array(MigrationMoveSchema),
     issues: z.array(MigrationIssueSchema),
     plannedMoves: z.array(MigrationMoveSchema),
@@ -165,6 +176,8 @@ const MigrationManifestSchema = z
     runId: z.string().min(1),
     startedAt: z.string().min(1),
     targets: z.array(MigrationTargetSchema),
+    /** The update run whose Doctor took these backups; its outcome releases them. */
+    updateRunId: z.string().regex(UPDATE_RUN_ID_PATTERN).optional(),
   })
   .superRefine((manifest, context) => {
     if (manifest.failureReports?.githubIssue && manifest.manifestVersion !== 4) {
@@ -225,6 +238,7 @@ export function writeSessionSqliteMigrationManifest(
 ): void {
   fs.mkdirSync(path.dirname(activeRun.manifestPath), { recursive: true, mode: 0o700 });
   replaceFile.replaceFileAtomicSync({
+    allowDrvfsRenameRecovery: true,
     filePath: activeRun.manifestPath,
     content: `${JSON.stringify(activeRun.manifest, null, 2)}\n`,
     dirMode: 0o700,
@@ -481,13 +495,10 @@ function isRestoreMoveWithinTarget(
   }
   const storePath = path.resolve(target.storePath);
   if (move.kind === "database-backup") {
-    return (
-      sourcePath === storePath &&
-      archivePath.startsWith(`${sourcePath}.pre-startup-migration-`) &&
-      /^[a-f0-9-]{36}(?:\.scoped)?\.bak$/.test(
-        archivePath.slice(`${sourcePath}.pre-startup-migration-`.length),
-      )
-    );
+    // Manifests record only SQLite file originals; PostgreSQL directories and
+    // restart-recovery snapshots are never restore moves.
+    const format = classifyDoctorMigrationBackupPath(sourcePath, archivePath);
+    return sourcePath === storePath && (format === "full" || format === "scoped");
   }
   const sessionsDir = path.dirname(storePath);
   const archiveDir = path.join(path.dirname(sessionsDir), "session-sqlite-import-archive");

@@ -1,3 +1,4 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import { getSystemdCgroupHygieneSummary, type GatewayServiceRuntime } from "./service-runtime.js";
 
@@ -28,19 +29,20 @@ export function formatRuntimeStatus(runtime: GatewayServiceRuntime | undefined):
   if (!runtime) {
     return null;
   }
+  const cgroupSummary = getSystemdCgroupHygieneSummary(runtime.systemd);
   const details = [
-    runtime.subState ? `sub ${runtime.subState}` : undefined,
+    runtime.subState ? terminalText`sub ${runtime.subState}` : undefined,
     runtime.lastExitStatus !== undefined ? formatLastExitStatus(runtime.lastExitStatus) : undefined,
-    runtime.lastExitReason ? `reason ${runtime.lastExitReason}` : undefined,
-    runtime.lastRunResult ? `last run ${runtime.lastRunResult}` : undefined,
-    runtime.lastRunTime ? `last run time ${runtime.lastRunTime}` : undefined,
-    getSystemdCgroupHygieneSummary(runtime.systemd),
-    runtime.detail,
+    runtime.lastExitReason ? terminalText`reason ${runtime.lastExitReason}` : undefined,
+    runtime.lastRunResult ? terminalText`last run ${runtime.lastRunResult}` : undefined,
+    runtime.lastRunTime ? terminalText`last run time ${runtime.lastRunTime}` : undefined,
+    cgroupSummary ? terminalText`${cgroupSummary}` : cgroupSummary,
+    runtime.detail ? terminalText`${runtime.detail.replace(/\s+/g, " ").trim()}` : runtime.detail,
   ].filter((detail): detail is string => Boolean(detail));
   return formatRuntimeStatusWithDetails({
-    status: runtime.status,
+    status: runtime.status ? terminalText`${runtime.status}` : runtime.status,
     pid: runtime.pid,
-    state: runtime.state,
+    state: runtime.state ? terminalText`${runtime.state}` : runtime.state,
     details,
   });
 }

@@ -38,6 +38,30 @@ it("screenshots a ref locator", async () => {
   expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "76");
   expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg", timeout: 0 });
 });
+it.each([
+  [undefined, ["bringToFront", "screenshot"]],
+  [false, ["Page.startScreencast", "screenshot", "Page.stopScreencast", "detach"]],
+])(
+  "renders a background tab for capture without taking focus in headed Chrome (headless=%s)",
+  async (headless, calls) => {
+    const order: string[] = [];
+    const session = {
+      on: () => {},
+      send: async (method: string) => void order.push(method),
+      detach: async () => void order.push("detach"),
+    };
+    setPwToolsCoreCurrentPage({
+      context: () => ({ newCDPSession: async () => session }),
+      bringToFront: async () => void order.push("bringToFront"),
+      screenshot: async () => {
+        order.push("screenshot");
+        return Buffer.from("P");
+      },
+    });
+    await capture({ ...target, headless });
+    expect(order).toEqual(calls);
+  },
+);
 it("rejects fullPage for element or ref screenshots", async () => {
   const locator = {};
   setPwToolsCoreCurrentRefLocator(locator);
@@ -48,48 +72,39 @@ it("rejects fullPage for element or ref screenshots", async () => {
     );
   }
 });
-it("does not start a queued screenshot after its timeout", async () => {
-  const previous = createDeferred<void>();
-  const state = sessionMocks.ensurePageState() as unknown as PageState;
-  state.emulation = { transitionTail: previous.promise };
-  const screenshot = vi.fn(async () => Buffer.from("late"));
-  setPwToolsCoreCurrentPage({ screenshot });
-
-  try {
-    await expect(capture({ ...target, timeoutMs: 10 })).rejects.toThrow("timed out");
-    const pending = state.emulation.transitionTail;
-    previous.resolve();
-    await pending;
-    expect(screenshot).not.toHaveBeenCalled();
-    expect(sessionMocks.restoreRoleRefsForTarget).not.toHaveBeenCalled();
-  } finally {
-    previous.resolve();
-  }
-});
-it("skips a cancelled queued labeled screenshot", async () => {
-  const previous = createDeferred<void>();
-  const state = sessionMocks.ensurePageState() as unknown as PageState;
-  state.emulation = { transitionTail: previous.promise };
-  const page = { screenshot: vi.fn(), evaluate: vi.fn() };
-  setPwToolsCoreCurrentPage(page);
-  const controller = new AbortController();
-  const pending = captureLabels({
-    ...target,
-    signal: controller.signal,
-    refs: {},
-  });
-  const rejected = expect(pending).rejects.toThrow("request closed");
-  try {
-    await vi.waitFor(() => expect(state.emulation?.transitionTail).not.toBe(previous.promise));
-    controller.abort(new Error("request closed"));
-    previous.resolve();
-    await rejected;
-    expect(page.screenshot).not.toHaveBeenCalled();
-    expect(page.evaluate).not.toHaveBeenCalled();
-  } finally {
-    previous.resolve();
-  }
-});
+it.each(["timeout", "caller cancellation"])(
+  "does not start a queued screenshot after %s",
+  async (reason) => {
+    const previous = createDeferred<void>();
+    const state = sessionMocks.ensurePageState() as unknown as PageState;
+    state.emulation = { transitionTail: previous.promise };
+    const page = { screenshot: vi.fn(), evaluate: vi.fn() };
+    setPwToolsCoreCurrentPage(page);
+    const controller = new AbortController();
+    const cancelled = reason === "caller cancellation";
+    const pending = cancelled
+      ? captureLabels({ ...target, signal: controller.signal, refs: {} })
+      : capture({ ...target, timeoutMs: 10 });
+    const rejected = expect(pending).rejects.toThrow(cancelled ? "request closed" : "timed out");
+    try {
+      if (cancelled) {
+        await vi.waitFor(() => expect(state.emulation?.transitionTail).not.toBe(previous.promise));
+        controller.abort(new Error("request closed"));
+      } else {
+        await rejected;
+      }
+      const tail = state.emulation.transitionTail;
+      previous.resolve();
+      await rejected;
+      await tail;
+      expect(page.screenshot).not.toHaveBeenCalled();
+      expect(page.evaluate).not.toHaveBeenCalled();
+      expect(sessionMocks.restoreRoleRefsForTarget).not.toHaveBeenCalled();
+    } finally {
+      previous.resolve();
+    }
+  },
+);
 
 it.each(["Emulation.setTouchEmulationEnabled", "Playwright.screenshot"])(
   "rejects mutations behind an interrupted %s until it settles",

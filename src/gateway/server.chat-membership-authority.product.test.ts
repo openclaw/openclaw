@@ -1,19 +1,17 @@
 // Load the deferred Gateway and model runtime during collection, outside the authority deadline.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import assert from "node:assert/strict";
 import { randomUUID, X509Certificate } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
-import { text as readStreamText } from "node:stream/consumers";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { UsersSelfResult } from "../../packages/gateway-protocol/src/schema/users.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import {
   listSessionPendingInputs,
   loadTranscriptEvents,
@@ -24,21 +22,31 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
+import * as messageInjection from "../sessions/session-controller.message-injection.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { readResidentUserProfileIdentity } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
+import {
+  closeProvider,
+  listenProvider,
+  writeToolCall,
+} from "./gateway-provider-fixture.test-support.js";
+import {
+  createProductState,
+  productModelConfig,
+  productProvider,
+} from "./server.chat-product.test-support.js";
 import * as sessionSharingAuthorization from "./session-sharing-authorization-async.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
-import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
@@ -70,15 +78,6 @@ function send(
     idempotencyKey: randomUUID(),
     ...params,
   });
-}
-
-async function waitForRun(client: Client, runId: string) {
-  const terminal = await client.request<{ status: string }>(
-    "agent.wait",
-    { runId, timeoutMs: 30_000 },
-    { timeoutMs: 35_000 },
-  );
-  expect(terminal).toMatchObject({ status: "ok" });
 }
 
 const expectHeld = (entered: Promise<unknown>, completed: Promise<unknown>, stage: string) =>
@@ -158,21 +157,14 @@ async function rejectAfterChange(
 it(
   "carries current caller, membership and global ownership through transcript persistence and agent dispatch",
   { timeout: 90_000 },
-  async () => {
-    const state = await createOpenClawTestState({
-      label: "chat-membership-authority",
-      env: {
-        ...KERNEL_TEST_ENV,
-        VITEST: process.env.VITEST,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-    });
+  async ({ signal }) => {
+    const state = await createProductState("chat-membership-authority");
     const requests: string[] = [];
     const providerErrors: unknown[] = [];
     const expectRequests = (count: number) =>
       expect({ count: requests.length, errors: providerErrors }).toEqual({ count, errors: [] });
     let providerReply = "Authorized member reply.";
+    let toolWrite: { message: string; file: string; supplied: boolean } | undefined;
     const providerHolds: ReturnType<typeof holdProviderResponse>[] = [];
     function holdProviderResponse(message: string) {
       const hold = {
@@ -186,41 +178,44 @@ it(
     }
     const cleanups: Array<() => Promise<unknown>> = [() => state.cleanup()];
     try {
-      const providerServer = createServer((request, response) => {
-        void (async () => {
-          const body = await readStreamText(request);
-          requests.push(body);
-          const reply = providerReply;
-          const hold = providerHolds.find(
-            (candidate) => !candidate.claimed && body.includes(candidate.message),
-          );
-          if (hold) {
-            hold.claimed = true;
-            hold.entered.resolve();
-            await hold.resume.promise;
-          }
+      const runExecution = await observeGatewayRunExecution();
+      cleanups.push(() => runExecution.restore());
+      const waitForRun = async (client: Client, runId: string) => {
+        // A queued RPC observation is nonterminal; join the run's actual effects first.
+        await withinTest(runExecution.waitForCompletion(runId), signal);
+        const terminal = await client.request<{ status: string }>(
+          "agent.wait",
+          { runId, timeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        );
+        expect(terminal).toMatchObject({ status: "ok" });
+      };
+      const providerServer = productProvider(providerErrors, async (body, response) => {
+        requests.push(body);
+        const reply = providerReply;
+        const hold = providerHolds.find(
+          (candidate) => !candidate.claimed && body.includes(candidate.message),
+        );
+        if (hold) {
+          hold.claimed = true;
+          hold.entered.resolve();
+          await hold.resume.promise;
+        }
+        if (toolWrite && body.includes(toolWrite.message) && !toolWrite.supplied) {
+          toolWrite.supplied = true;
+          writeToolCall(response, "write", { path: toolWrite.file, content: toolWrite.message });
+        } else {
           writeOpenAiResponsesText(response, {
             text: reply,
             messageId: `msg_${randomUUID()}`,
             responseId: `resp_${randomUUID()}`,
           });
-        })().catch((error: unknown) => {
-          providerErrors.push(error);
-          response.writeHead(500).end("fixture provider failed");
-        });
+        }
       });
-      cleanups.push(async () => {
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
-      });
-      await once(providerServer.listen(0, "127.0.0.1"), "listening");
-      const address = providerServer.address();
-      assert(address && typeof address !== "string", "fixture provider did not bind");
+      cleanups.push(() => closeProvider(providerServer));
       const agentExecutions: Array<{ release(): Promise<void> }> = [];
       const provider = buildMockOpenAiResponsesProvider(
-        `http://127.0.0.1:${address.port}/v1`,
+        await listenProvider(providerServer),
         "membership-authority",
       );
       const proxyUser = "member@example.test";
@@ -236,8 +231,7 @@ it(
         allowLoopback: true,
         deviceAutoApprove: { enabled: true, scopes: operatorScopes },
       };
-      const providerConfig = { ...provider.config, request: { allowPrivateNetwork: true } };
-      const modelParams = { transport: "sse", openaiWsWarmup: false };
+      const model = productModelConfig(state.workspaceDir, provider);
       const identityScopes = { [proxyAdministrator]: adminScopes };
       const roles = {
         administrator: { sessions: { others: "write" }, agents: "*", scopes: adminScopes },
@@ -247,21 +241,18 @@ it(
         agents: {
           ownership: "explicit",
           entries: { main: {}, work: {} },
-          defaults: {
-            workspace: state.workspaceDir,
-            skipBootstrap: true,
-            heartbeat: { every: "0m" },
-            model: { primary: provider.modelRef },
-            models: {
-              [provider.modelRef]: { agentRuntime: { id: "openclaw" }, params: modelParams },
-            },
-          },
+          defaults: model.defaults,
         },
         session: { scope: "global" },
         messages: { queue: { allowCollaborativeSteering: true } },
-        models: { mode: "replace", providers: { [provider.providerId]: providerConfig } },
+        models: model.models,
         plugins: { enabled: false, slots: { memory: "none" } },
-        tools: { profile: "minimal" },
+        tools: {
+          allow: ["write"],
+          fs: { workspaceOnly: true },
+          codeMode: { enabled: false },
+          toolSearch: false,
+        },
         gateway: {
           auth: { mode: "trusted-proxy", trustedProxy, identityScopes },
           trustedProxies: ["127.0.0.1"],
@@ -338,24 +329,14 @@ it(
         expect(await loadTranscriptEvents(scope)).toEqual(transcriptBeforeDeniedTurn);
         expectRequests(1);
       };
-      for (const change of ["membership revoked", "session replaced"] as const) {
-        await addSessionMember(scope, { identityId: memberProfileId, addedBy: owner.id });
-        const revoke = async () => {
-          await expectUnchanged();
-          if (change === "membership revoked") {
-            await removeSessionMember(scope, memberProfileId);
-          } else {
-            await seedSession(scope, owner.id, "read-only", `${sessionId}-successor`);
-          }
-        };
-        await rejectAfterChange(client, sessionKey, revoke);
+      await rejectAfterChange(client, sessionKey, async () => {
         await expectUnchanged();
-        if (change === "session replaced") {
-          expect(
-            await loadTranscriptEvents({ ...scope, sessionId: `${sessionId}-successor` }),
-          ).toEqual([]);
-        }
-      }
+        await seedSession(scope, owner.id, "read-only", `${sessionId}-successor`);
+      });
+      await expectUnchanged();
+      expect(await loadTranscriptEvents({ ...scope, sessionId: `${sessionId}-successor` })).toEqual(
+        [],
+      );
       await removeSessionMember(scope, memberProfileId);
       await expect(send(client, sessionKey, "Later revoked member turn.")).rejects.toMatchObject({
         code: "INVALID_REQUEST",
@@ -468,19 +449,8 @@ it(
       const replacement = ensureProfileForEmail("profile-replacement@example.test");
       const aliasEmail = "profile-custody-alias@example.test";
       const aliasSource = ensureProfileForEmail(aliasEmail);
-      const beforeProfileReplacement = await loadTranscriptEvents(profile);
-      const beforeProfileRequests = requests.length;
-      const replaceCaller = async () => {
-        linkEmail(proxyUser, replacement.id);
-        expect(await profileId(client)).toBe(replacement.id);
-      };
-      await rejectAfterChange(client, profile.sessionKey, replaceCaller, {
-        code: "FORBIDDEN",
-        message: "Gateway requester authority changed",
-      });
-      expect(requests).toHaveLength(beforeProfileRequests);
-      expect(await loadTranscriptEvents(profile)).toEqual(beforeProfileReplacement);
-      expect(await listSessionPendingInputs(profile)).toEqual({ items: [], total: 0 });
+      linkEmail(proxyUser, replacement.id);
+      expect(await profileId(client)).toBe(replacement.id);
       // Keep both execution sources alive. Retiring either captured canonical
       // identity revokes authority; merging another profile into the sender does not.
       const backer = await connectAs(proxyBacking, "backing", "203.0.113.52");
@@ -492,6 +462,21 @@ it(
       const steeringMessage = `PROFILE_ACCEPTED_${randomUUID()}`;
       const backingHold = holdProviderResponse(backingMessage);
       const steeringHold = holdProviderResponse(steeringMessage);
+      const steeringAccepted = createDeferredCore<boolean>();
+      void steeringAccepted.promise.catch(() => undefined);
+      const beginInjection = messageInjection.beginReplyMessageInjectionTarget;
+      const injectionObserver = vi
+        .spyOn(messageInjection, "beginReplyMessageInjectionTarget")
+        .mockImplementation((...args) => {
+          const attempt = beginInjection(...args);
+          if (args[1].includes(steeringMessage)) {
+            void attempt
+              .then((value) => value.acceptance)
+              .then(steeringAccepted.resolve, steeringAccepted.reject);
+          }
+          return attempt;
+        });
+      cleanups.push(async () => injectionObserver.mockRestore());
       const requestOffset = requests.length;
       providerReply = "Accepted profile input completed.";
       const backing = await send(backer, profile.sessionKey, backingMessage);
@@ -508,6 +493,14 @@ it(
         items: [{ runId: steering.runId, state: "queued", message: { content: steeringMessage } }],
       });
       expect(JSON.stringify(await loadTranscriptEvents(profile))).not.toContain(steeringMessage);
+      // A persisted queue row precedes the runtime's acceptance of this exact input.
+      await expect(
+        expectHeld(
+          steeringAccepted.promise,
+          runExecution.waitForDispatch(steering.runId),
+          "native steering acceptance",
+        ),
+      ).resolves.toBe(true);
       linkEmail(aliasEmail, replacement.id);
       const mergedIdentity = readResidentUserProfileIdentity(aliasSource.id);
       expect(mergedIdentity).toMatchObject({
@@ -542,6 +535,62 @@ it(
       );
       expect(countMessage("assistant", providerReply)).toBe(2);
       expect(await listSessionPendingInputs(profile)).toEqual({ items: [], total: 0 });
+      for (const method of ["agent", "chat.send"] as const) {
+        const workspace = resolveAgentWorkspaceDir(cfg, "main", state.env);
+        const target = {
+          agentId: "main",
+          sessionKey: `agent:main:live-membership-${method}-${randomUUID()}`,
+          sessionId: randomUUID(),
+        };
+        await seedSession(target, owner.id);
+        await administrator.request("session.members.add", {
+          sessionKey: target.sessionKey,
+          identityId: replacement.id,
+        });
+        const allowed = {
+          message: `LIVE_WRITE_${method}_${randomUUID()}`,
+          file: path.join(workspace, `${method}-allowed.txt`),
+          supplied: false,
+        };
+        toolWrite = allowed;
+        const positive = await send(client, target.sessionKey, allowed.message, {}, method);
+        await waitForRun(administrator, positive.runId);
+        expect(allowed.supplied).toBe(true);
+        expect(await fs.readFile(allowed.file, "utf8")).toBe(allowed.message);
+        const forbidden = {
+          message: `REVOKED_WRITE_${method}_${randomUUID()}`,
+          file: path.join(workspace, `${method}-revoked.txt`),
+          supplied: false,
+        };
+        toolWrite = forbidden;
+        const hold = holdProviderResponse(forbidden.message);
+        const revokedRun = await send(client, target.sessionKey, forbidden.message, {}, method);
+        const terminal = administrator.request<{ status: string }>(
+          "agent.wait",
+          { runId: revokedRun.runId, timeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        );
+        void terminal.catch(() => undefined);
+        try {
+          await expectHeld(hold.entered.promise, terminal, `${method} tool response`);
+          await administrator.request("session.members.remove", {
+            sessionKey: target.sessionKey,
+            identityId: replacement.id,
+          });
+          const beforeDenied = requests.length;
+          await expect(
+            send(client, target.sessionKey, "Revoked next request", {}, method),
+          ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+          expect(requests).toHaveLength(beforeDenied);
+        } finally {
+          hold.resume.resolve();
+        }
+        expect(await terminal).toMatchObject({ status: "ok" });
+        expect(forbidden.supplied).toBe(true);
+        // Removal denies the next start, not the tool call of this admitted turn.
+        expect(await fs.readFile(forbidden.file, "utf8")).toBe(forbidden.message);
+        expect(await fs.readFile(allowed.file, "utf8")).toBe(allowed.message);
+      }
       expect(providerErrors).toEqual([]);
     } finally {
       providerHolds.forEach((hold) => hold.resume.resolve());

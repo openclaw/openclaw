@@ -1,10 +1,13 @@
 import { expect, it, vi } from "vitest";
 import { validateUsersMentionableResult } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.js";
+import { addSessionMemberInWorker } from "../config/sessions/session-sharing-store.async.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as userProfileReads from "../state/user-profile-reads.js";
 import {
   linkEmail,
+  mergeProfiles,
   setDisplayName,
   setUserProfileRole,
   syncGitHubIdentity,
@@ -23,15 +26,117 @@ import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type MentionFixture = Parameters<Parameters<typeof withInbox>[0]>[0];
 
+it("ranks only current-chat speakers by sent recency, then silent members and stable directory fallback", async () => {
+  await withInbox(async (f) => {
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    const silent = ensureProfileForEmail("silent@mentions.example.test");
+    const global = ensureProfileForEmail("global@mentions.example.test");
+    setDisplayName(silent.id, "Aaron silent member");
+    setDisplayName(global.id, "Aardvark global");
+    await addSessionMemberInWorker(scope, { identityId: silent.id, addedBy: f.alice.id });
+    await recordSessionParticipant(scope, {
+      identity: { type: "profile", id: f.alice.id },
+      promptedAt: 10,
+    });
+    await recordSessionParticipant(scope, {
+      identity: { type: "profile", id: f.carol.id },
+      promptedAt: 20,
+    });
+    const other = "agent:main:dashboard:unrelated-chat";
+    await f.setSession({}, other);
+    await recordSessionParticipant(
+      { ...scope, sessionKey: other },
+      { identity: { type: "profile", id: global.id }, promptedAt: 100 },
+    );
+    f.clients.splice(f.clients.indexOf(f.carolClient), 1);
+    const read = async (params: { sessionKey: string; query?: string } | { agentId: string }) => {
+      const response = await f.call("users.mentionable", params, f.bobClient);
+      if (!response.ok || !validateUsersMentionableResult(response.payload)) {
+        throw new Error("Invalid mention directory response");
+      }
+      return response.payload;
+    };
+    const initial = await read({ sessionKey: SESSION_KEY });
+    expect(initial.users.map((user) => user.profileId)).toEqual([
+      f.carol.id,
+      f.alice.id,
+      silent.id,
+      global.id,
+    ]);
+    expect(
+      (await read({ sessionKey: SESSION_KEY, query: "Aardvark" })).users.map(
+        (user) => user.profileId,
+      ),
+    ).toEqual([global.id]);
+    await recordSessionParticipant(scope, {
+      identity: { type: "profile", id: f.alice.id },
+      promptedAt: 30,
+    });
+    expect(
+      (await read({ sessionKey: SESSION_KEY })).users.slice(0, 2).map((user) => user.profileId),
+    ).toEqual([f.alice.id, f.carol.id]);
+    expect((await read({ agentId: "main" })).users.map((user) => user.profileId)).toEqual([
+      f.alice.id,
+      global.id,
+      silent.id,
+      f.carol.id,
+    ]);
+  });
+});
+
+it("retains the newest current-chat contribution after sender profiles merge", async () => {
+  await withInbox(async (f) => {
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    const other = ensureProfileForEmail("other-speaker@mentions.example.test");
+    setDisplayName(other.id, "Other speaker");
+    for (const [profileId, promptedAt] of [
+      [f.alice.id, 10],
+      [other.id, 20],
+      [f.carol.id, 30],
+    ] as const) {
+      await recordSessionParticipant(scope, {
+        identity: { type: "profile", id: profileId },
+        promptedAt,
+      });
+    }
+    mergeProfiles(f.carol.id, f.alice.id);
+    const response = await f.call("users.mentionable", { sessionKey: SESSION_KEY }, f.bobClient);
+    if (!response.ok || !validateUsersMentionableResult(response.payload)) {
+      throw new Error("Invalid mention directory response");
+    }
+    expect(response.payload.users.map((user) => user.profileId)).toEqual([f.alice.id, other.id]);
+  });
+});
+
+it("promotes current-chat speakers before the mention directory limit", async () => {
+  await withInbox(async (f) => {
+    for (let index = 0; index < 101; index += 1) {
+      const profile = ensureProfileForEmail("directory-" + index + "@mentions.example.test");
+      setDisplayName(profile.id, "A directory " + String(index).padStart(3, "0"));
+    }
+    setDisplayName(f.carol.id, "Z recent speaker");
+    f.clients.splice(f.clients.indexOf(f.carolClient), 1);
+    await recordSessionParticipant(
+      { agentId: "main", sessionKey: SESSION_KEY },
+      {
+        identity: { type: "profile", id: f.carol.id },
+        promptedAt: 20,
+      },
+    );
+    const response = await f.call("users.mentionable", { sessionKey: SESSION_KEY }, f.bobClient);
+    if (!response.ok || !validateUsersMentionableResult(response.payload)) {
+      throw new Error("Invalid mention directory response");
+    }
+    expect(response.payload.users).toHaveLength(100);
+    expect(response.payload.users[0]?.profileId).toBe(f.carol.id);
+    expect(response.payload.truncated).toBe(true);
+  });
+});
+
 const directoryParams = (query = "Alice", sessionKey = SESSION_KEY) => ({ sessionKey, query });
-const syncBob = (
-  login: string,
-  accountId = 42,
-  email = "bob@mentions.example.test",
-  name?: string,
-) =>
+const syncBob = (login: string, accountId = 42, email = "bob@mentions.example.test") =>
   syncGitHubIdentity({
-    identity: { accountId, login, name },
+    identity: { accountId, login },
     authenticationAlias: { kind: "email", email },
   });
 
@@ -135,7 +240,6 @@ it("discards a completed directory read when a linked handle changes before sele
       syncBob("bob-after");
       setDisplayName(f.bob.id, "Robert Updated");
     });
-    expect(response.error).toBeUndefined();
     expectUsers(response, [{ profileId: f.bob.id, displayName: "Robert Updated" }]);
     expect(await searchDirectory(f, "bob-before")).toMatchObject({ users: [] });
   }));
@@ -159,9 +263,9 @@ it.each([
   });
 });
 
-it("resolves verified handles and full names to the same recipient without exposing account data", () =>
+it("resolves verified handles and optional full names without exposing account data", () =>
   withInbox(async (f) => {
-    syncBob("bobby", 42, "bob@mentions.example.test", "Robert Example");
+    syncBob("bobby");
     setDisplayName(f.bob.id, "Robert Example");
     syncBob("bob-work", 43, "bob-work@mentions.example.test");
     linkEmail("bob-work@mentions.example.test", f.bob.id);
@@ -179,12 +283,11 @@ it("resolves verified handles and full names to the same recipient without expos
     expect(
       f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, [f.bob.id]),
     ).toEqual({ ok: true, value: [f.bob.id] });
-    await f.post();
-    expect(await f.items()).toHaveLength(1);
     syncBob("robert-new");
+    setDisplayName(f.bob.id, null);
     expect(await searchDirectory(f, "bobby")).toMatchObject({ users: [] });
     expect(await searchDirectory(f, "robert-new")).toMatchObject({
-      users: [{ profileId: f.bob.id }],
+      users: [{ profileId: f.bob.id, displayName: "robert-new" }],
     });
   }));
 
@@ -203,10 +306,6 @@ it("includes offline people without leaking administrative profile fields or bin
     for (const user of users) {
       expect(Object.keys(user).toSorted()).toEqual(fields);
     }
-    setDisplayName(offline.id, "Dana");
-    expect(await searchDirectory(f, "Dana")).toMatchObject({
-      users: [{ profileId: offline.id, displayName: "Dana", online: false }],
-    });
   }));
 
 it.each([

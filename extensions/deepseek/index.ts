@@ -6,11 +6,11 @@ import {
   fetchDeepSeekUsage,
   resolveProviderUsageApiKeyAuth,
 } from "openclaw/plugin-sdk/provider-usage";
+import { isDeepSeekV4ModelId } from "./models.js";
 import { applyDeepSeekConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
-import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
 import { createDeepSeekWebSearchProvider } from "./web-search-provider.js";
 
 const PROVIDER_ID = "deepseek";
@@ -21,6 +21,8 @@ export default defineSingleProviderPluginEntry({
   description: "Bundled DeepSeek provider plugin",
   manifest,
   register(api) {
+    // Search reads the prepared credential from each request, not registration config.
+    api.registerReload({ hotPrefixes: ["plugins.entries.deepseek.config.webSearch.apiKey"] });
     api.registerWebSearchProvider(createDeepSeekWebSearchProvider());
   },
   provider: {
@@ -46,8 +48,7 @@ export default defineSingleProviderPluginEntry({
     }),
     ...buildProviderToolCompatFamilyHooks("deepseek"),
     wrapStreamFn: (ctx) => createDeepSeekV4ThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
-    resolveThinkingProfile: ({ modelId }) => resolveDeepSeekV4ThinkingProfile(modelId),
-    isModernModelRef: ({ modelId }) => Boolean(resolveDeepSeekV4ThinkingProfile(modelId)),
+    isModernModelRef: ({ modelId }) => isDeepSeekV4ModelId(modelId),
     resolveUsageAuth: (ctx) => resolveProviderUsageApiKeyAuth(ctx, [ctx.env.DEEPSEEK_API_KEY]),
     fetchUsageSnapshot: async (ctx) =>
       await fetchDeepSeekUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),

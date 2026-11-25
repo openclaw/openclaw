@@ -164,7 +164,7 @@ export function registerSuspensionHandoffLifecycleTests() {
           terminalPolicy: "terminate",
           drain: true,
         });
-        expectDraining(prepared, 200);
+        expectStatus(prepared, { status: "ready", activeCount: 200, writeCustody: [] });
         const { suspensionId } = expectDefined(
           prepared.mock.calls[0],
           "suspension prepare response",
@@ -174,7 +174,7 @@ export function registerSuspensionHandoffLifecycleTests() {
             suspensionId,
             ...(includeLifecycle ? { includeLifecycle } : {}),
           });
-        expectDraining(await status(), 200);
+        expectStatus(await status(), { status: "ready", writeCustody: [] });
         const blocked = Promise.allSettled(
           Array.from({ length: 200 }, () => beginGatewayRootWorkAdmissionWhenOpen()),
         );
@@ -193,7 +193,7 @@ export function registerSuspensionHandoffLifecycleTests() {
         });
         written.resolve();
         await mutation;
-        expectDraining(await status(), 200, { writeCustody: [] });
+        expectStatus(await status(), { status: "ready", writeCustody: [] });
         if (restart === "handoff") {
           expectStatus(
             await request("handoff", {
@@ -277,7 +277,7 @@ export function registerSuspensionHandoffAuthorizationTests() {
       drain: true,
       inspect: { getRootRequests: () => 1, getTerminalPersistence: () => 0 },
     });
-    assert(lease.status === "draining", "expected a held drain");
+    assert(lease.status === "ready", "expected persistence to be ready despite the active root");
     try {
       const result = dispatch({
         method: "gateway.suspend.handoff",

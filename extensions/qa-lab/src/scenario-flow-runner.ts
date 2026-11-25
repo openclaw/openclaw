@@ -1,3 +1,7 @@
+import {
+  annotateRuntimeExecutionError,
+  noteRuntimeDynamicExecution,
+} from "openclaw/plugin-sdk/runtime-env";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaEvidenceRttMeasurement } from "./evidence-summary.js";
 import type { QaTransportState } from "./qa-transport.js";
@@ -155,7 +159,12 @@ function createEvalContext(api: QaFlowApi, vars: QaFlowVars) {
     ...api,
     qaImport: (specifier: string) => {
       const loader = qaFlowImportLoaders[specifier];
-      return loader ? loader() : import(specifier);
+      if (loader) {
+        return loader();
+      }
+      return import(specifier).catch((error: unknown) => {
+        throw annotateRuntimeExecutionError(error, "QA scenario source import");
+      });
     },
     vars,
     ...vars,
@@ -163,11 +172,16 @@ function createEvalContext(api: QaFlowApi, vars: QaFlowVars) {
 }
 
 async function evalExpr(expr: string, api: QaFlowApi, vars: QaFlowVars) {
+  noteRuntimeDynamicExecution("qa");
   const context = createEvalContext(api, vars);
   const names = Object.keys(context);
   const values = Object.values(context);
-  const fn = new AsyncFunction(...names, `return (${expr});`);
-  return await fn(...values);
+  try {
+    const fn = new AsyncFunction(...names, `return (${expr});`);
+    return await fn(...values);
+  } catch (error) {
+    throw annotateRuntimeExecutionError(error, "QA scenario expression evaluation");
+  }
 }
 
 function buildLambda(
@@ -175,15 +189,20 @@ function buildLambda(
   api: QaFlowApi,
   vars: QaFlowVars,
 ) {
+  noteRuntimeDynamicExecution("qa");
   const context = createEvalContext(api, vars);
   const names = Object.keys(context);
   const values = Object.values(context);
   const params = spec.params ?? [];
   const Factory = spec.async ? AsyncFunction : Function;
-  const fn = new Factory(...names, ...params, `return (${spec.expr});`) as (
-    ...fnArgs: unknown[]
-  ) => unknown;
-  return (...lambdaArgs: unknown[]) => fn(...values, ...lambdaArgs);
+  try {
+    const fn = new Factory(...names, ...params, `return (${spec.expr});`) as (
+      ...fnArgs: unknown[]
+    ) => unknown;
+    return (...lambdaArgs: unknown[]) => fn(...values, ...lambdaArgs);
+  } catch (error) {
+    throw annotateRuntimeExecutionError(error, "QA scenario lambda creation");
+  }
 }
 
 async function resolveValue(node: unknown, api: QaFlowApi, vars: QaFlowVars): Promise<unknown> {

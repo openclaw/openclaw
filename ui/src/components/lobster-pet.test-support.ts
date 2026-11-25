@@ -3,7 +3,7 @@ import type { ThemeArtwork } from "../../../packages/gateway-protocol/src/theme.
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { resolveLobsterPetMode, type LobsterComposerElements } from "./lobster-pet-contract.ts";
-import "./lobster-pet.runtime.ts";
+import "./lobster-pet.tsx";
 
 registerNewSessionSetupEnglish();
 

@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { TEST_LINK_READER, testLinkPreview } from "../test-helpers/link-reader.ts";
 import { LazyHovercardBootstrap } from "./lazy-hovercard-registration.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";

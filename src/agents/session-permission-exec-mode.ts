@@ -87,16 +87,54 @@ export function resolveSessionPermissionExecPolicy(
   return { mode: security === base.security && ask === base.ask ? mode : undefined, security, ask };
 }
 
+type ExecPolicyFields = { mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk };
+
+/**
+ * Model ceilings only restrict. Security takes the minimum. Ask takes the maximum,
+ * except that when either side denies allowlist misses (non-full security, ask
+ * off) misses stay denied; a mandatory `always` is never dropped. Unset fields
+ * mean unrestricted host exec downstream. The ceiling's canonical mode is used
+ * only when it describes the result exactly; otherwise raw fields stay so mode
+ * normalization cannot loosen them, and human `ask` outranks reviewer `auto`.
+ */
+function applyExecModeCeiling<T extends ExecPolicyFields>(
+  policy: T,
+  ceiling: ExecMode,
+): T | ExecPolicyFields {
+  const cap = resolveExecPolicyForMode(ceiling);
+  const current = { security: policy.security ?? "full", ask: policy.ask ?? "off" };
+  const security = minSecurity(current.security, cap.security);
+  const deniesMisses = (p: { security: ExecSecurity; ask: ExecAsk }) =>
+    p.security !== "full" && p.ask === "off";
+  const ask =
+    current.ask !== "always" && (deniesMisses(current) || deniesMisses(cap))
+      ? "off"
+      : maxAsk(current.ask, cap.ask);
+  if (security === current.security && ask === current.ask) {
+    return policy.mode === "auto" && ceiling === "ask" ? { ...policy, mode: "ask" } : policy;
+  }
+  return {
+    mode: security === cap.security && ask === cap.ask ? ceiling : undefined,
+    security,
+    ask,
+  };
+}
+
 /** Pure final projection shared by local tool construction and worker dispatch. */
 export function projectEffectiveExecPolicy(params: {
   base: { host?: ExecTarget; mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk };
   overrides?: { host?: ExecTarget; mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk };
   permissionPolicy?: Pick<PreparedSessionPermissionPolicy, "mode">;
   scheduledExecTarget?: ScheduledToolPolicyContext["execTarget"];
+  /** `tools.byProvider[...].exec.mode` entries for the turn's model; applied after every other layer. */
+  modelExecCeilings?: readonly ExecMode[];
 }) {
-  const policy = params.permissionPolicy
-    ? resolveSessionPermissionExecPolicy(params.permissionPolicy, params.overrides)
-    : applyExecPolicyLayer(params.base, params.overrides);
+  const policy = (params.modelExecCeilings ?? []).reduce<ExecPolicyFields>(
+    (current, ceiling) => applyExecModeCeiling(current, ceiling),
+    params.permissionPolicy
+      ? resolveSessionPermissionExecPolicy(params.permissionPolicy, params.overrides)
+      : applyExecPolicyLayer(params.base, params.overrides),
+  );
   const target = params.scheduledExecTarget;
   const host = params.overrides?.host ?? params.base.host;
   return {

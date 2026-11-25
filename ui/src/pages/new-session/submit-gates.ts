@@ -10,8 +10,10 @@ import {
 } from "../../lib/session-method-access.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { sessionPlacementDispatchParams } from "../../lib/sessions/session-placement-startup.ts";
+import { isPastedTextAttachment } from "../chat/pasted-text-card.ts";
 import * as catalog from "./catalog-target.ts";
 import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.ts";
+import type { DraftRepositoryState } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import { resolveDraftSessionPlacement } from "./draft-session-placement.ts";
@@ -30,7 +32,6 @@ registerNewSessionSetupEnglish();
 // silently eat an Enter press again.
 type SilentSubmitGate = "submitting" | "empty-draft";
 type ReasonedSubmitGate =
-  | "initial-turn-rejected"
   | "preference-restore"
   | "model-setup"
   | "route-pending"
@@ -38,6 +39,7 @@ type ReasonedSubmitGate =
   | "attachment-reads"
   | "outcome-unknown"
   | "disconnected"
+  | "draft-unavailable"
   | "access"
   | "folder"
   | "placement-recovery"
@@ -62,6 +64,24 @@ export const PAGE_RENDERED_GATES: ReadonlySet<string> = new Set([
   "outcome-unknown",
   "worktree-name",
 ]);
+
+/** Why the folder's Git state is unknown; undefined once the probe settled on a verdict. */
+export function repositoryIssueText(repository: DraftRepositoryState): string | undefined {
+  switch (repository.kind) {
+    case "forbidden":
+      return repository.missingScope === "operator.admin"
+        ? t("newSession.folderRequiresScope")
+        : repository.missingScope === "operator.write"
+          ? t("newSession.folderRequiresWrite")
+          : repository.missingScope === "operator.read"
+            ? t("newSession.folderRequiresRead")
+            : t("newSession.gitCheckAccessDenied");
+    case "unavailable":
+      return t("newSession.gitCheckUnavailable");
+    default:
+      return undefined;
+  }
+}
 
 export function readNewSessionSubmissionAccess(options: {
   gateway: Parameters<typeof readSessionMethodAccess>[0];
@@ -96,11 +116,11 @@ export function readNewSessionSubmissionAccess(options: {
     }
   }
   if (target.kind === "profile" && target.required) {
-    return readSessionMethodAccess(gateway, { method: "sessions.send", sessionScope: true });
+    return readSessionMethodAccess(gateway, { method: "chat.send", sessionScope: true });
   }
   return readSessionMethodAccess(gateway, {
     method: "sessions.dispatch",
-    requiredScope: target.kind === "profile" ? "operator.admin" : "operator.write",
+    requiredScope: "operator.write",
     params: sessionPlacementDispatchParams({
       key: pendingPlacement.sessionKey,
       agentId: pendingPlacement.agentId || place.agentId,
@@ -134,6 +154,9 @@ export function requiresNewSessionModelSetup(options: {
     agentModel: selectedAgent?.model?.primary,
   });
 }
+
+// Pasted-text cards submit as message text, so placements without file transfer accept them.
+const uploadsFile = (attachment: ChatAttachment) => !isPastedTextAttachment(attachment);
 
 // The flow consumes these gates; keep their read contract independent of its class.
 type SubmitGateDraft = {
@@ -223,6 +246,14 @@ export function resolveNewSessionSubmitBlock(
     // cause; checked here so the gates below can rely on a live client.
     return { gate: "disconnected", reason: t("sessionsView.actionRequiresConnection") };
   }
+  if (
+    kind === "session" &&
+    !pendingPlacementActive &&
+    draft.visibility === "draft" &&
+    connection.snapshot.hello?.policy?.allowedSessionVisibilities?.includes("draft") === false
+  ) {
+    return { gate: "draft-unavailable", reason: t("newSession.draftUnavailable") };
+  }
   const access =
     kind === "terminal"
       ? readNewSessionTerminalStartAccess(connection.snapshot, place.worktree)
@@ -242,7 +273,7 @@ export function resolveNewSessionSubmitBlock(
     ) {
       return { gate: "device", reason: t("newSession.terminalHostUnavailable") };
     }
-    if (draft.attachmentDraft.attachments.length > 0) {
+    if (draft.attachmentDraft.attachments.some(uploadsFile)) {
       return {
         gate: "terminal-capabilities",
         reason: t("newSession.terminalAttachmentsUnsupported"),
@@ -291,7 +322,7 @@ export function resolveNewSessionSubmitBlock(
         ),
     };
   }
-  if (place.deviceFolder && draft.attachmentDraft.attachments.length > 0) {
+  if (place.deviceFolder && draft.attachmentDraft.attachments.some(uploadsFile)) {
     return { gate: "folder", reason: t("newSession.deviceFolderAttachmentsUnsupported") };
   }
   if (!agents?.agentsList) {
@@ -344,9 +375,9 @@ export function resolveNewSessionSubmitBlock(
       reason:
         place.repository.kind === "checking"
           ? t("newSession.checkingGit")
-          : place.remotePlacement
+          : place.remotePlacement && place.repository.kind !== "forbidden"
             ? t("newSession.remoteSourceUnavailable")
-            : t("newSession.gitCheckUnavailable"),
+            : (repositoryIssueText(place.repository) ?? t("newSession.gitCheckUnavailable")),
     };
   }
   if (place.worktree && !place.freshWorkspace && !isWorktreeNameValid(place.worktreeName)) {

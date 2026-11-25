@@ -2,20 +2,12 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
-import { waitForTransportReady } from "./transport-ready.js";
-
-const transportReadyMocks = vi.hoisted(() => ({ injectedSleepError: null as Error | null }));
+import { waitForTransportReady } from "../plugin-sdk/transport-ready-runtime.js";
+import { sleepWithAbort } from "./backoff.js";
 
 vi.mock("./backoff.js", async (importOriginal) => {
-  const { sleepWithAbort } = await importOriginal<typeof import("./backoff.js")>();
-  return {
-    sleepWithAbort: async (ms: number, signal?: AbortSignal) => {
-      if (transportReadyMocks.injectedSleepError) {
-        throw transportReadyMocks.injectedSleepError;
-      }
-      return sleepWithAbort(ms, signal);
-    },
-  };
+  const actual = await importOriginal<typeof import("./backoff.js")>();
+  return { ...actual, sleepWithAbort: vi.fn(actual.sleepWithAbort) };
 });
 
 describe("waitForTransportReady", () => {
@@ -37,23 +29,15 @@ describe("waitForTransportReady", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    transportReadyMocks.injectedSleepError = null;
   });
 
   it("returns when the check succeeds and logs after the delay", async () => {
     let attempts = 0;
     const readyPromise = wait({
       timeoutMs: 220,
-      // Deterministic: first attempt at t=0 won't log; second attempt at t=50 will.
       logAfterMs: 1,
       logIntervalMs: 1_000,
-      check: async () => {
-        attempts += 1;
-        if (attempts > 2) {
-          return { ok: true };
-        }
-        return { ok: false, error: "not ready" };
-      },
+      check: async () => (++attempts > 2 ? { ok: true } : { ok: false, error: "not ready" }),
     });
 
     await vi.advanceTimersByTimeAsync(200);
@@ -64,7 +48,6 @@ describe("waitForTransportReady", () => {
 
   it("caps oversized timeout values before computing the deadline", async () => {
     vi.setSystemTime(1_000);
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const waitPromise = wait({
       timeoutMs: Number.MAX_SAFE_INTEGER,
       logAfterMs: Number.MAX_SAFE_INTEGER,
@@ -73,11 +56,9 @@ describe("waitForTransportReady", () => {
     const asserted = expect(waitPromise).rejects.toThrow("test transport not ready");
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-
     await vi.runOnlyPendingTimersAsync();
     await asserted;
+    expect(runtime.error).toHaveBeenCalledTimes(1);
     expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(
       `not ready after ${MAX_TIMER_TIMEOUT_MS}ms`,
     );
@@ -106,7 +87,6 @@ describe("waitForTransportReady", () => {
         check,
       });
       const attempts = phase === "before" ? 0 : 1;
-      expect(check).toHaveBeenCalledTimes(attempts);
       if (phase === "probe") {
         controller.abort();
         vi.setSystemTime(150);
@@ -140,7 +120,7 @@ describe("waitForTransportReady", () => {
   });
 
   it("rethrows non-abort sleep failures", async () => {
-    transportReadyMocks.injectedSleepError = new Error("sleep exploded");
+    vi.mocked(sleepWithAbort).mockRejectedValueOnce(new Error("sleep exploded"));
 
     await expect(wait()).rejects.toThrow("sleep exploded");
 

@@ -22,18 +22,11 @@ import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
   type ModelSetupWizardResult,
+  type ModelSetupWizardStartMethod,
   type ModelSetupWizardRecovery,
   type ModelSetupWizardState,
   wizardStateFromResult,
 } from "./state.ts";
-
-export type ModelSetupWizardStartMethod =
-  | "mcp.authLogin"
-  | "models.authLogin"
-  | "openclaw.setup.auth.start"
-  | "openclaw.setup.prepare.start"
-  | "openclaw.setup.activate.start"
-  | "openclaw.setup.runtime.start";
 
 export type ModelSetupWizardCompletion = {
   startMethod: ModelSetupWizardStartMethod;
@@ -45,12 +38,14 @@ export type ModelSetupWizardCompletion = {
 
 type WizardTerminalObserver = (result: ModelSetupWizardResult) => (() => boolean) | void;
 
-type WizardRunnerOptions = {
+export type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
   getAgentId: () => string | null;
   onChange: (state: ModelSetupWizardState) => void;
   onBackgroundCompletion?: (completion: ModelSetupWizardCompletion) => Promise<void>;
   onSessionMissing?: () => void;
+  /** Settles a failed `wizard.next`, such as a sign-in the Gateway lost; rejects to keep the failure. */
+  readLostSession?: (error: unknown) => Promise<WizardNextResult>;
   onStart?: (
     method: ModelSetupWizardStartMethod,
     activation?: Parameters<FirstRunSetup["beginActivation"]>[0],
@@ -66,7 +61,6 @@ type WizardSession = {
   sessionId: string;
   authChoice: string;
   authKind?: ProviderLoginOption["kind"];
-  notes: string[];
   reservedWindow?: WindowProxy | null;
   openedUrl?: string;
   externalInputTimer?: ReturnType<typeof setTimeout>;
@@ -90,14 +84,24 @@ export class ModelSetupWizardRunner {
   private session: WizardSession | null = null;
   private retirementGeneration = 0;
   private authLabel: string | undefined;
+  private authBrandId: string | undefined;
   private pendingSignIn:
     | { kind: ProviderLoginOption["kind"]; window: WindowProxy | null }
     | undefined;
 
   constructor(private readonly options: WizardRunnerOptions) {}
 
-  prepareSignIn(kind: ProviderLoginOption["kind"] | "install" | "custom", label: string): void {
+  prepareSignIn(
+    kind: ProviderLoginOption["kind"] | "install" | "custom",
+    label: string,
+    brandId?: string,
+  ): void {
+    // A new attempt replaces a settled one's result or typed failure; a live session stays.
+    if (!this.session) {
+      this.clearSession();
+    }
     this.authLabel = label;
+    this.authBrandId = brandId;
     this.pendingSignIn?.window?.close();
     const browser = kind === "oauth" || kind === "device-code";
     this.pendingSignIn = {
@@ -112,6 +116,10 @@ export class ModelSetupWizardRunner {
 
   get hasAdmittedSession(): boolean {
     return this.session?.admitted === true;
+  }
+
+  get isSuspended(): boolean {
+    return this.session?.suspended === true;
   }
 
   suspend(notice?: string): void {
@@ -132,19 +140,25 @@ export class ModelSetupWizardRunner {
     });
   }
 
-  restore(recovery: ModelSetupWizardRecovery, onTerminalResult: WizardTerminalObserver): void {
+  restore(
+    recovery: ModelSetupWizardRecovery,
+    onTerminalResult: WizardTerminalObserver,
+    startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start",
+    presentation: { label?: string; brandId?: string } = {},
+  ): void {
     const client = this.options.getClient();
     if (!client || this.session) {
       return;
     }
+    this.authLabel = presentation.label;
+    this.authBrandId = presentation.brandId;
     this.session = {
       ...recovery,
       client,
-      notes: [],
       admitted: true,
       retirementGeneration: this.retirementGeneration,
       abortController: new AbortController(),
-      startMethod: "openclaw.setup.auth.start",
+      startMethod,
       onTerminalResult,
     };
     this.setState({ phase: "starting", authChoice: recovery.authChoice });
@@ -190,9 +204,7 @@ export class ModelSetupWizardRunner {
       ModelSetupWizardStartMethod,
       "openclaw.setup.activate.start" | "openclaw.setup.runtime.start" | "mcp.authLogin"
     > = "openclaw.setup.auth.start",
-    preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> & {
-      selectModel?: true;
-    } = {},
+    preferences: { selectModel?: true } = {},
     modelTarget?: "utility",
   ): Promise<ModelSetupWizardCompletion | null> {
     return this.startSession(authChoice, startMethod, {
@@ -223,6 +235,7 @@ export class ModelSetupWizardRunner {
     label: string,
   ): Promise<ModelSetupWizardCompletion | null> {
     this.authLabel = label;
+    this.authBrandId = undefined;
     return this.startSession(params.runtimeId, "openclaw.setup.runtime.start", params);
   }
 
@@ -241,13 +254,13 @@ export class ModelSetupWizardRunner {
       return null;
     }
     const sessionId = generateUUID();
+    const wizard = { sessionId, authChoice, authKind: this.pendingSignIn?.kind };
     const session: WizardSession = {
       client,
       sessionId,
       retirementGeneration: this.retirementGeneration,
       authChoice,
       authKind: this.pendingSignIn?.kind,
-      notes: [],
       reservedWindow: this.pendingSignIn?.window,
       abortController: new AbortController(),
       startMethod,
@@ -257,12 +270,10 @@ export class ModelSetupWizardRunner {
         "kind" in params
           ? params
           : startMethod === "openclaw.setup.auth.start" && "authChoice" in params
-            ? {
-                ...params,
-                kind: "provider-auth",
-                wizard: { sessionId, authChoice, authKind: this.pendingSignIn?.kind },
-              }
-            : undefined,
+            ? { ...params, kind: "provider-auth", wizard }
+            : startMethod === "models.authLogin"
+              ? { kind: "provider-login", wizard }
+              : undefined,
       ),
     };
     this.pendingSignIn = undefined;
@@ -429,13 +440,15 @@ export class ModelSetupWizardRunner {
     this.session?.abortController.abort();
     this.session = null;
     this.authLabel = undefined;
+    this.authBrandId = undefined;
     this.setState({ phase: "idle" });
   }
 
   fail(message: string): void {
-    const label = this.authLabel;
+    const { authLabel, authBrandId } = this;
     this.close();
-    this.authLabel = label;
+    this.authLabel = authLabel;
+    this.authBrandId = authBrandId;
     this.setState({ phase: "error", message });
   }
 
@@ -474,11 +487,18 @@ export class ModelSetupWizardRunner {
     let nextAnswer = answer;
     let acceptsFirstResult = acceptResult;
     while (true) {
-      const result = await client.request<WizardNextResult>(
-        "wizard.next",
-        { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
-        { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
-      );
+      const result = await client
+        .request<WizardNextResult>(
+          "wizard.next",
+          { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
+          { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
+        )
+        .catch(async (error: unknown) => {
+          if (!this.options.readLostSession) {
+            throw error;
+          }
+          return await this.options.readLostSession(error);
+        });
       if (acceptsFirstResult && !acceptsFirstResult() && !result.done) {
         return null;
       }
@@ -491,9 +511,6 @@ export class ModelSetupWizardRunner {
         result.step?.type === "note" &&
         (session.authKind === "oauth" || session.authKind === "device-code")
       ) {
-        if (result.step.message) {
-          session.notes.push(result.step.message);
-        }
         if (result.step.externalUrl || result.step.deviceCode) {
           // The next request can wait for the browser callback without another
           // step. Keep its recovery actions visible while acknowledging this note.
@@ -549,30 +566,25 @@ export class ModelSetupWizardRunner {
         ? this.options.cancelledMessage()
         : this.options.requestFailedMessage(),
     );
+    // A device-code sign-in falls back to this browser step when its provider has no device code.
     if (
       next.phase === "step" &&
-      session.authKind === "oauth" &&
+      (session.authKind === "oauth" || session.authKind === "device-code") &&
       next.step.type === "text" &&
       next.step.externalUrl
     ) {
       next = { ...next, externalAuthInput: true };
     }
-    if (session.notes.length) {
-      if (next.phase === "error") {
-        next = { ...next, message: [next.message, ...session.notes].join("\n\n") };
-      } else if (
-        next.phase === "step" &&
-        next.step.executor !== "gateway" &&
-        !next.step.externalUrl
-      ) {
-        next = {
-          ...next,
-          step: {
-            ...next.step,
-            message: [next.step.message, ...session.notes].filter(Boolean).join("\n\n"),
-          },
-        };
-      }
+    // Only the reply to a rejected answer names its reason; the automatic callback read of the
+    // same step keeps it. A new answer clears it before its request.
+    const previous = this.currentState;
+    if (
+      next.phase === "step" &&
+      !next.validationError &&
+      previous.phase === "step" &&
+      previous.step.id === next.step.id
+    ) {
+      next = { ...next, validationError: previous.validationError };
     }
     if (result.done) {
       clearTimeout(session.externalInputTimer);
@@ -671,7 +683,7 @@ export class ModelSetupWizardRunner {
     const message = sessionExpired
       ? this.options.sessionExpiredMessage()
       : formatUiError(error, this.options.requestFailedMessage());
-    this.setState({ phase: "error", message: [message, ...session.notes].join("\n\n") });
+    this.setState({ phase: "error", message });
   }
 
   private async cancelSession(session: WizardSession): Promise<void> {
@@ -743,6 +755,9 @@ export class ModelSetupWizardRunner {
     clearTimeout(this.session?.externalInputTimer);
     if (this.authLabel) {
       state.authLabel = this.authLabel;
+    }
+    if (this.authBrandId) {
+      state.authBrandId = this.authBrandId;
     }
     this.currentState = state;
     this.options.onChange(state);

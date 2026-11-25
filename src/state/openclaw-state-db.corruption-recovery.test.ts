@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -21,9 +21,9 @@ const PROBE_SCOPE = "corruption-recovery-test";
 const CORRUPT_PAGE_HEADER = Uint8Array.from([0x0a, 0x04, 0xc7, 0x00, 0xcb, 0x01, 0xb9, 0x00]);
 const tempStateDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createTempStateDir(): string {
-  return fs.realpathSync(tempStateDirs.make("openclaw-state-db-corruption-"));
-}
+const fixture = () => ({
+  OPENCLAW_STATE_DIR: fs.realpathSync(tempStateDirs.make("openclaw-state-db-corruption-")),
+});
 
 function sqliteError(message: string, errcode: number): Error {
   return Object.assign(new Error(message), { errcode });
@@ -89,34 +89,18 @@ function prepareCorruptedCachedDatabase(env: NodeJS.ProcessEnv) {
   return { databasePath, healthySnapshot, poisoned };
 }
 
-function expectNotADatabaseError(operation: () => unknown): void {
-  let thrown: unknown;
-  try {
-    operation();
-  } catch (error) {
-    thrown = error;
-  }
-  expect(thrown).toBeInstanceOf(Error);
-  expect(thrown).toMatchObject({
-    message: expect.stringContaining("file is not a database"),
-    code: "ERR_SQLITE_ERROR",
-    errcode: 26,
-  });
-}
-
 afterEach(() => closeOpenClawStateDatabaseForTest());
 const cachedAt = (pathname: string) =>
   openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(pathname);
 
 it("preserves the shared WAL when evicting a poisoned cache owner", () => {
-  const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+  const env = fixture();
   const cached = openOpenClawStateDatabase({ env });
   insertProbeEvent(env, "committed-before-eviction");
   const walPath = `${cached.path}-wal`;
   const walBytesBeforeEviction = fs.statSync(walPath).size;
   const { DatabaseSync } = requireNodeSqlite();
   using peer = new DatabaseSync(cached.path);
-  const close = vi.spyOn(cached.walMaintenance, "close");
 
   try {
     peer.exec("BEGIN;");
@@ -129,8 +113,6 @@ it("preserves the shared WAL when evicting a poisoned cache owner", () => {
     ).toBe(true);
 
     expect(cachedAt(cached.path)).toBeUndefined();
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(close).toHaveBeenCalledWith({ checkpointMode: "PASSIVE" });
     expect(fs.statSync(walPath).size).toBe(walBytesBeforeEviction);
     expect(peer.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
     expect(
@@ -142,7 +124,7 @@ it("preserves the shared WAL when evicting a poisoned cache owner", () => {
 });
 
 it("does not evict a different cached owner when an injected write handle fails", () => {
-  const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+  const env = fixture();
   const cached = openOpenClawStateDatabase({ env });
   const { DatabaseSync } = requireNodeSqlite();
   using injectedDb = new DatabaseSync(":memory:");
@@ -169,9 +151,9 @@ it("does not evict a different cached owner when an injected write handle fails"
   expect([cached.db.isOpen, injectedDb.isOpen]).toEqual([true, true]);
 });
 it.each(["write", "Kysely read", "raw read-only"])("recovers after a corrupt %s", (operation) => {
-  const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+  const env = fixture();
   const { databasePath, healthySnapshot, poisoned } = prepareCorruptedCachedDatabase(env);
-  expectNotADatabaseError(() => {
+  expect(() => {
     if (operation === "write") {
       return insertProbeEvent(env, "during-corruption");
     }
@@ -182,7 +164,13 @@ it.each(["write", "Kysely read", "raw read-only"])("recovers after a corrupt %s"
       ({ db }) => db.prepare("SELECT count(*) AS total FROM diagnostic_events").get(),
       { env },
     );
-  });
+  }).toThrow(
+    expect.objectContaining({
+      message: expect.stringContaining("file is not a database"),
+      code: "ERR_SQLITE_ERROR",
+      errcode: 26,
+    }),
+  );
   expect(cachedAt(databasePath)).toBeUndefined();
   fs.writeFileSync(databasePath, healthySnapshot);
   const reopened = openOpenClawStateDatabase({ env });

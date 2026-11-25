@@ -3,6 +3,10 @@ import {
   listUnreportedPersonalGitHubPublicationsInDatabase,
 } from "../gateway/github-personal-publication-store.worker.js";
 import {
+  readSharedGitHubPublicationRequestInDatabase,
+  readSharedRepositoryGitHubPublicationInDatabase,
+} from "../gateway/github-publication-shared-read.kernel.js";
+import {
   listGitHubPublicationsForClaimInDatabase,
   listSharedGitHubPublicationsInDatabase,
   readGitHubPublicationRequest,
@@ -10,12 +14,14 @@ import {
 import {
   listRepositoryGitHubPublicationsInDatabase,
   readPendingRepositoryGitHubPublicationInDatabase,
+  readRepositoryGitHubPublicationInputInDatabase,
 } from "../gateway/github-repository-publication-read.worker.js";
 import {
   readRepositoryGitHubPublicationBranchInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.worker.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import type { SharedGitHubPublicationReadInput } from "./github-publication-read.types.js";
 import {
   readTaskPublicationReceipts,
   type TaskPublicationRead,
@@ -24,6 +30,21 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 export const publicationReadOperations = {
+  "githubPublications.sharedObservation": (
+    { session, selector, entry, originSources }: SharedGitHubPublicationReadInput,
+    db,
+  ) => ({
+    type: "githubPublications.sharedObservation" as const,
+    row:
+      readSharedRepositoryGitHubPublicationInDatabase(
+        db,
+        session,
+        selector,
+        entry,
+        originSources,
+      ) ??
+      readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry, originSources),
+  }),
   "githubPublications.taskReceipts": (input: TaskPublicationRead, db) => ({
     type: "githubPublications.taskReceipts" as const,
     result: readTaskPublicationReceipts(db, input),
@@ -76,6 +97,13 @@ export const publicationReadOperations = {
   ) => ({
     type: "githubPublications.repositoryList" as const,
     rows: listRepositoryGitHubPublicationsInDatabase(db, input),
+  }),
+  "githubPublications.repositoryInput": (
+    input: Parameters<typeof readRepositoryGitHubPublicationInputInDatabase>[1],
+    db,
+  ) => ({
+    type: "githubPublications.repositoryInput" as const,
+    row: readRepositoryGitHubPublicationInputInDatabase(db, input),
   }),
   "githubPublications.repositoryRead": ({ requestId }: { requestId: string }, db) => ({
     type: "githubPublications.repositoryRead" as const,

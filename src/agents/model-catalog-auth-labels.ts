@@ -8,7 +8,7 @@ import { maskApiKey } from "../security/secret-mask.js";
 import { shortenHomePath } from "../utils.js";
 import { formatRemainingShort } from "./auth-health.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
-import { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
+import { formatAuthProfileOAuthLabel } from "./auth-profiles/display.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   resolveAuthProfileOrder,
@@ -120,14 +120,7 @@ function captureProfileLabel(
   if (profile.type === "token") {
     return `${profileId}=token:${resolveStoredCredentialLabel({ value: profile.token, refValue: profile.tokenRef })}`;
   }
-  const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
-  const suffix =
-    display === profileId
-      ? ""
-      : display.startsWith(profileId)
-        ? display.slice(profileId.length).trim()
-        : `(${display})`;
-  return `${profileId}=OAuth${suffix ? ` ${suffix}` : ""}`;
+  return formatAuthProfileOAuthLabel({ cfg, store, profileId });
 }
 
 function captureFallbackLabel(

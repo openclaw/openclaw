@@ -8,7 +8,7 @@ import {
   prepareExternalMessageActionTargetForResolution,
   shouldDeferExternalMessageActionTargetResolution,
 } from "../src/channels/plugins/message-action-dispatch.js";
-import type { ChannelMessageActionContext } from "../src/channels/plugins/types.js";
+import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { DiscordActionConfig, DiscordConfig, OpenClawConfig } from "../src/config/types.js";
 import { runMessageAction } from "../src/infra/outbound/message-action-runner.js";
@@ -572,43 +572,13 @@ describe("registered Discord metadata reads", () => {
     await expectRejected(dispatch(), /token/i);
   });
 
-  it("returns unknown voice state as a normal absent result", async () => {
-    fixture.route(
-      `${guildPath}/voice-states/${userId}`,
-      { code: 10065, message: "Unknown Voice State" },
-      404,
-    );
-    expect(await dispatchDetails("voice-status", { guildId, userId })).toEqual({
-      ok: true,
-      voice: {
-        guild_id: guildId,
-        user_id: userId,
-        channel_id: null,
-        connected: false,
-        absent: true,
-        reason: "unknown_voice_state",
-      },
-    });
-  });
-
-  it("resolves emoji-list from the current server channel", async () => {
-    expect(await dispatchDetails("emoji-list", { limit: 1 })).toEqual({
-      ok: true,
-      emojis: [{ name: "alpha", identifier: "alpha:1", animated: true }],
-    });
-    expect(fixture.requests).toEqual([
-      { method: "GET", path: `/channels/${current}` },
-      getRequest(`${guildPath}/emojis`),
-    ]);
-  });
-
   it("retains captured authority between permissions lookup requests", async () => {
     fixture.transport.onRequest = () => {
       fixture.record.enabled = false;
     };
     await expectRejected(
       dispatch("permissions", { channelId: sibling }),
-      "no longer active",
+      "Plugin discord was reloaded during the read. Retry the action.",
       `/channels/${sibling}`,
     );
   });
@@ -624,7 +594,11 @@ describe("registered Discord metadata reads", () => {
       fixture.transport.onRequest = () => {
         fixture.record.enabled = false;
       };
-      await expectRejected(dispatch(), "no longer active", `${guildPath}/roles`);
+      await expectRejected(
+        dispatch(),
+        "Plugin discord was reloaded during the read. Retry the action.",
+        `${guildPath}/roles`,
+      );
     },
   );
 });

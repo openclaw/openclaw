@@ -138,19 +138,24 @@ final class AppActivation {
 
     func presentAlert(
         _ alert: NSAlert,
+        over window: NSWindow? = nil,
         completion: @escaping (NSApplication.ModalResponse) -> Void = { _ in })
     {
-        if self.allowsActivation {
+        if self.allowsActivation, window == nil {
+            let source = UUID()
+            alert.window.sharingType = .none
+            ApprovalPromptState.shared.setPending(alert.buttons.count > 1, source: source)
+            defer { ApprovalPromptState.shared.setPending(false, source: source) }
             completion(alert.runModal())
         } else {
-            let parent = NSApp.windows.first { $0.isVisible && $0.canBecomeMain && !$0.isSheet }
+            let parent = window ?? NSApp.windows.first { $0.isVisible && $0.canBecomeMain && !$0.isSheet }
             self.alerts.present(alert, over: parent, completion: completion)
         }
     }
 
-    func response(to alert: NSAlert) async -> NSApplication.ModalResponse {
+    func response(to alert: NSAlert, over window: NSWindow? = nil) async -> NSApplication.ModalResponse {
         await withCheckedContinuation { continuation in
-            self.presentAlert(alert) { continuation.resume(returning: $0) }
+            self.presentAlert(alert, over: window) { continuation.resume(returning: $0) }
         }
     }
 }

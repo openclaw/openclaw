@@ -143,6 +143,21 @@ it("refuses corrupt current-version state on restart without a clean integrity r
   expect(observation.queries.some((sql) => /^PRAGMA foreign_key_check\b/iu.test(sql))).toBe(true);
 });
 
+it("checks fresh-state integrity without repeating its admitted catalog presence probe", () => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-fresh-") };
+  const observation = observeSqliteReadSql(StatementSync.prototype);
+  const opened = openState({ env });
+  expect(readVersion(opened.db)).toBe(SCHEMA_VERSION);
+  expect(observation.queries.filter((sql) => /^PRAGMA integrity_check\b/iu.test(sql))).toHaveLength(
+    1,
+  );
+  expect(
+    observation.queries.filter((sql) =>
+      /^SELECT 1 FROM sqlite_(?:master|schema)\b.*LIMIT 1$/iu.test(sql),
+    ),
+  ).toEqual([]);
+});
+
 it("repairs canonical indexes and shares admission until the final handle closes", () => {
   const { env, pathname } = replacedState("DROP INDEX idx_task_runs_runtime_run");
   const observation = observeSqliteReadSql(StatementSync.prototype);
@@ -225,9 +240,10 @@ it("readmits startup checkpoint storage after a tracked header change", () => {
 });
 
 it("validates a replacement file before reusing a shared-state pathname", () => {
-  const { env } = replacedState(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+  const { env } = replacedState(`PRAGMA user_version = ${SCHEMA_VERSION + 1};
+    UPDATE schema_meta SET app_version = '2026.10.8' WHERE meta_key = 'primary'`);
   const observation = observeSqliteReadSql(StatementSync.prototype);
-  expect(() => openState({ env })).toThrow(/newer schema version/iu);
+  expect(() => openState({ env })).toThrow(/OpenClaw 2026\.10\.8;.*doctor --fix/isu);
   expect(validationStatements(observation.queries).length).toBeGreaterThan(0);
 });
 

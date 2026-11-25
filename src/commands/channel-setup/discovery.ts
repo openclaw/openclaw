@@ -27,7 +27,6 @@ export function isCatalogChannelInstalled(params: {
   cfg: OpenClawConfig;
   entry: ChannelPluginCatalogEntry;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
 }): boolean {
   return listManifestInstalledChannelIds(params).has(params.entry.id as ChannelChoice);
 }

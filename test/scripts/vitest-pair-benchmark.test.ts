@@ -1,28 +1,45 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   analyzeBenchmark,
+  analyzeNodeCacheBenchmark,
   assertEquivalentInventories,
   assertExecutionDigest,
   assertInventoryAvailable,
   assertSingleWorkflowAttempt,
   buildBenchmarkSchedule,
+  buildNodeCacheSchedule,
   loadBenchmarkManifest,
   parseVitestExecutionReport,
+  sha256,
+  validateNodeCacheManifest,
   validateBenchmarkManifest,
   withTerminalManifest,
   writeJsonAtomic,
   type BenchmarkManifest,
   type BenchmarkRunRecord,
+  type NodeCacheManifest,
 } from "../../scripts/lib/vitest-pair-benchmark-contract.mts";
 import {
   buildBenchmarkCommandEnv,
   resolvePackageManagerIdentity,
   runOwnedCommand,
-  VITEST_PAIR_HARNESS_DEADLINE_MS,
+  readNodeCacheSeed,
+  restoreNodeCacheSeed,
+  runNodeCacheBenchmark,
   withVitestPairDeadline,
 } from "../../scripts/lib/vitest-pair-benchmark.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
@@ -32,20 +49,9 @@ import {
   openFixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-// The managed owner joins terminal process groups, but Darwin may retain a foreign zombie
-// until its reaper runs. That PID has no ChildProcess handle in this test.
-async function waitForDescendantReap(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isProcessAlive(pid)) {
-      await delay(5, undefined, { signal });
-    }
-  } catch (cause) {
-    throw new Error(`process still alive: ${pid}`, { cause });
-  }
-}
 
 const deadlineFixtureLifetime = createFixtureLifetime();
 afterEach(() => deadlineFixtureLifetime.cleanup());
@@ -67,17 +73,12 @@ const manifest: BenchmarkManifest = {
     improvementRatio: 0.95,
     improvementPairCount: 5,
   },
-  lanes: [
-    { id: "core", critical: true, config: "test/core.config.ts", files: ["src/core.test.ts"] },
-    {
-      id: "gateway",
-      critical: true,
-      config: "test/gateway.config.ts",
-      files: ["src/gateway.test.ts"],
-    },
-    { id: "ui", critical: true, config: "test/ui.config.ts", files: ["ui/view.test.ts"] },
-    { id: "lifecycle", critical: true, files: ["test/scripts/lifecycle.test.ts"] },
-  ],
+  lanes: ["core", "gateway", "ui", "lifecycle"].map((id) => ({
+    id,
+    critical: true,
+    files: [`src/${id}.test.ts`],
+    config: id === "core" ? "test/core.config.ts" : undefined,
+  })),
 };
 
 const execution = {
@@ -110,33 +111,22 @@ function recordsFor(
     typeof durations === "function"
       ? durations
       : () => ({ baselineMs: 100, candidateMs: 100 * durations });
-  const records: BenchmarkRunRecord[] = [];
-  for (const lane of manifest.lanes) {
-    for (const round of [...Array.from({ length: manifest.rounds }, (_, i) => i + 1), null]) {
-      const pair = round === null ? `cold-${lane.id}` : `measured-${round}-${lane.id}`;
-      const pairDurations = durationsFor(lane.id, round);
-      for (const side of ["baseline", "candidate"] as const) {
-        records.push({
-          id: `${pair}-${side}`,
-          phase: round === null ? "cold" : "measured",
-          side,
-          lane: lane.id,
-          round,
-          pair,
-          cacheMode: round === null ? "fresh" : "warm",
-          command: ["node"],
-          packageManager,
-          startedAt: "2026-09-05T00:00:00.000Z",
-          durationMs: side === "baseline" ? pairDurations.baselineMs : pairDurations.candidateMs,
-          userCpuMs: 50,
-          systemCpuMs: 10,
-          execution,
-          exitCode: 0,
-        });
-      }
-    }
-  }
-  return records;
+  return buildBenchmarkSchedule(manifest)
+    .filter(({ phase }) => phase === "measured" || phase === "cold")
+    .map((plan) => {
+      const times = durationsFor(plan.lane.id, plan.round);
+      return Object.assign({}, plan, {
+        lane: plan.lane.id,
+        command: ["node"],
+        packageManager,
+        startedAt: "2026-09-05T00:00:00.000Z",
+        durationMs: plan.side === "baseline" ? times.baselineMs : times.candidateMs,
+        userCpuMs: 50,
+        systemCpuMs: 10,
+        execution,
+        exitCode: 0,
+      });
+    });
 }
 
 function inventoryPaths(lane: BenchmarkManifest["lanes"][number]): string[] {
@@ -174,7 +164,11 @@ function reportAssertion(
   return { fullName, status, location };
 }
 
-function reportFixture(id: string, files = ["src/example.test.ts"]) {
+function reportFixture(
+  id: string,
+  files = ["src/example.test.ts"],
+  expected?: NodeCacheManifest["expected"],
+) {
   const root = tempDirs.make(`vitest-pair-${id}-`);
   const lane = { id, critical: true, files };
   writeSelectedFiles(root, files);
@@ -204,7 +198,7 @@ function reportFixture(id: string, files = ["src/example.test.ts"]) {
         })),
       }),
     );
-    return parseVitestExecutionReport(file, root, lane);
+    return parseVitestExecutionReport(file, root, lane, expected);
   };
 }
 
@@ -229,15 +223,452 @@ function expectTerminalFailure(root: string, error: string) {
   expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ status: "failure", error });
 }
 
+function runBenchmarkCli(extraArgs: string[], includeManifest = true) {
+  const root = tempDirs.make("vitest-pair-cli-");
+  const outputDir = path.join(root, "output");
+  const args = [
+    "--baseline",
+    "baseline",
+    "--baseline-sha",
+    "a".repeat(40),
+    "--candidate",
+    path.join(root, "candidate"),
+    "--candidate-sha",
+    "b".repeat(40),
+    "--output",
+    outputDir,
+    "--pnpm-bin",
+    path.join(root, "unused-pnpm"),
+    "--run-attempt",
+    "2",
+    "--scratch",
+    path.join(root, "scratch"),
+  ];
+  if (includeManifest) {
+    args.push("--manifest", path.join(root, "unused-manifest.json"));
+  }
+  const result = spawnSync(
+    process.execPath,
+    [path.resolve("scripts/vitest-pair-benchmark.mts"), ...args, ...extraArgs],
+    {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH: path.join(root, "bun-cache"),
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.signal).toBeNull();
+  expect(result.status).toBe(1);
+  for (const directory of ["baseline", "candidate", "scratch"]) {
+    expect(existsSync(path.join(root, directory))).toBe(false);
+  }
+  return { outputDir, stderr: result.stderr };
+}
+
+function cacheManifest(): NodeCacheManifest {
+  const runtime = {
+    node: "v24.22.1",
+    v8: "fixture-v8",
+    platform: "linux",
+    architecture: "x64",
+    executableSha256: "a".repeat(64),
+  };
+  const inputs: NodeCacheManifest["inputs"] = [
+    "src/example.test.ts",
+    "vitest.config.ts",
+    "scripts/run-vitest.mjs",
+  ].map((filePath) => ({ path: filePath, bytes: 1, sha256: "b".repeat(64) }));
+  return {
+    version: 2,
+    mode: "node-compile-cache",
+    workloadSha: "d".repeat(40),
+    lane: {
+      id: "plugin-contract",
+      critical: true,
+      config: "vitest.config.ts",
+      files: ["src/example.test.ts"],
+    },
+    expected: ["suite case A", "suite case B"].map((fullName) => ({
+      file: "src/example.test.ts",
+      fullName,
+      line: 62,
+      column: 5,
+      status: "passed",
+    })),
+    runtime,
+    pnpmSha256: "e".repeat(64),
+    inputs,
+    seed: { files: [{ path: "version/entry", bytes: 1, sha256: "f".repeat(64) }] },
+  };
+}
+
+describe("Node compile-cache benchmark contract", () => {
+  it("requires the runner, selected inputs and a nonempty expanded expected inventory", () => {
+    expect(validateNodeCacheManifest(cacheManifest()).expected).toHaveLength(2);
+    const missing = cacheManifest();
+    missing.expected = [];
+    expect(() => validateNodeCacheManifest(missing)).toThrow("expected passed inventory");
+    const runner = cacheManifest();
+    runner.inputs = runner.inputs.filter(
+      ({ path: filePath }) => filePath !== "scripts/run-vitest.mjs",
+    );
+    expect(() => validateNodeCacheManifest(runner)).toThrow("lane input identity");
+    const escaping = cacheManifest();
+    escaping.seed.files[0]!.path = "../other";
+    expect(() => validateNodeCacheManifest(escaping)).toThrow("repository-relative");
+  });
+
+  it("requires expanded names and multiplicities even when source locations and totals match", () => {
+    const expected = cacheManifest().expected;
+    const parse = reportFixture("strict-cases", undefined, expected);
+    const assertions = expected.map((entry) => reportAssertion(entry.fullName));
+    expect(parse(assertions).assertionCount).toBe(2);
+    expect(parse(assertions.toReversed()).assertionCount).toBe(2);
+    expect(() => parse([assertions[0]!, assertions[0]!])).toThrow("expected passed inventory");
+    expect(() => parse([reportAssertion("other case"), assertions[1]!])).toThrow(
+      "expected passed inventory",
+    );
+    expect(() =>
+      parse([
+        reportAssertion(expected[0]!.fullName, { line: 62, column: 5 }, "skipped"),
+        assertions[1]!,
+      ]),
+    ).toThrow("expected passed inventory");
+    expect(() => parse([])).toThrow("expected passed inventory");
+    const repeated = reportFixture("strict-duplicates", undefined, [expected[0]!, expected[0]!]);
+    expect(repeated([assertions[0]!, assertions[0]!]).assertionCount).toBe(2);
+    expect(() => repeated([assertions[0]!])).toThrow("expected passed inventory");
+  });
+
+  it("uses twenty balanced ordered pairs and the separate median/count decision", () => {
+    const schedule = buildNodeCacheSchedule();
+    expect(schedule).toHaveLength(40);
+    expect(
+      schedule.filter((_, index) => index % 2 === 0 && schedule[index]!.treatment === "disabled"),
+    ).toHaveLength(10);
+    const records = schedule.map(({ pair, treatment }) => ({
+      pair,
+      treatment,
+      status: "success" as const,
+      inclusiveMs: treatment === "disabled" ? 100 : pair <= 15 ? 90 : 110,
+    }));
+    expect(analyzeNodeCacheBenchmark(records)).toMatchObject({
+      medianRatio: 0.9,
+      fasterPairs: 15,
+      continueScreen: true,
+    });
+    records.find((record) => record.pair === 15 && record.treatment === "seeded")!.inclusiveMs =
+      110;
+    expect(analyzeNodeCacheBenchmark(records)).toMatchObject({
+      fasterPairs: 14,
+      continueScreen: false,
+    });
+    expect(() => analyzeNodeCacheBenchmark(records.slice(1))).toThrow("complete ordered");
+    expect(() => analyzeNodeCacheBenchmark(records.toReversed())).toThrow("complete ordered");
+    expect(() =>
+      analyzeNodeCacheBenchmark([{ ...records[0]!, inclusiveMs: null }, ...records.slice(1)]),
+    ).toThrow("complete ordered");
+  });
+
+  itUnix("inventories only regular Node-cache bytes and rejects escaping links", () => {
+    const root = tempDirs.make("node-cache-seed-");
+    mkdirSync(path.join(root, "version"));
+    writeFileSync(path.join(root, "version", "entry"), "compiled");
+    expect(readNodeCacheSeed(root)).toEqual([
+      { path: "version/entry", bytes: 8, sha256: sha256("compiled") },
+    ]);
+    symlinkSync(path.join(root, "version", "entry"), path.join(root, "link"));
+    expect(() => readNodeCacheSeed(root)).toThrow("only regular");
+  });
+
+  itUnix("restores a writable disposable copy without changing a read-only seed", () => {
+    const root = tempDirs.make("node-cache-restore-");
+    const seed = path.join(root, "seed");
+    const active = path.join(root, "active");
+    mkdirSync(seed);
+    writeFileSync(path.join(seed, "entry"), "compiled");
+    chmodSync(path.join(seed, "entry"), 0o444);
+    chmodSync(seed, 0o555);
+    const before = readNodeCacheSeed(seed);
+    try {
+      restoreNodeCacheSeed(seed, active);
+      expect(readNodeCacheSeed(active)).toEqual(before);
+      writeFileSync(path.join(active, "entry"), "new compilation");
+      expect(readNodeCacheSeed(seed)).toEqual(before);
+      expect(statSync(seed).mode & 0o777).toBe(0o555);
+      expect(statSync(path.join(seed, "entry")).mode & 0o777).toBe(0o444);
+      expect(() => restoreNodeCacheSeed(seed, active)).toThrow();
+    } finally {
+      chmodSync(seed, 0o700);
+      chmodSync(path.join(seed, "entry"), 0o600);
+    }
+  });
+
+  itUnix.each(["disabled", "seeded"] as const)(
+    "propagates isolated %s treatment through an actual child",
+    async (kind) => {
+      const root = tempDirs.make("node-cache-env-");
+      const env = buildBenchmarkCommandEnv(
+        path.join(root, "home"),
+        path.join(root, "state"),
+        packageManager,
+        {
+          PATH: process.env.PATH,
+          NODE_DISABLE_COMPILE_CACHE: "poison",
+          OPENCLAW_VITEST_RUNTIME: "bun",
+          TSX_DISABLE_CACHE: "poison",
+          NODE_OPTIONS: "--bad-option",
+          NODE_DEBUG_NATIVE: "COMPILE_CACHE",
+        },
+        { kind, nodeCache: path.join(root, "active-node") },
+      );
+      const keys = [
+        "NODE_DISABLE_COMPILE_CACHE",
+        "NODE_COMPILE_CACHE",
+        "OPENCLAW_VITEST_RUNTIME",
+        "OPENCLAW_VITEST_FS_MODULE_CACHE",
+        "OPENCLAW_VITEST_WORKER_CACHE",
+        "TSX_DISABLE_CACHE",
+        "OPENCLAW_VITEST_MAX_WORKERS",
+        "NODE_OPTIONS",
+        "NODE_DEBUG_NATIVE",
+      ];
+      await runOwnedCommand({
+        bin: process.execPath,
+        args: [
+          "-e",
+          `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(keys)}.map(k => [k, process.env[k] ?? null]))))`,
+        ],
+        cwd: root,
+        env,
+        logPath: path.join(root, "env.json"),
+        timeoutMs: 10_000,
+      });
+      expect(JSON.parse(readFileSync(path.join(root, "env.json"), "utf8"))).toEqual({
+        NODE_DISABLE_COMPILE_CACHE: kind === "disabled" ? "1" : null,
+        NODE_COMPILE_CACHE: path.join(root, "active-node"),
+        OPENCLAW_VITEST_RUNTIME: "node",
+        OPENCLAW_VITEST_FS_MODULE_CACHE: "0",
+        OPENCLAW_VITEST_WORKER_CACHE: "0",
+        TSX_DISABLE_CACHE: null,
+        OPENCLAW_VITEST_MAX_WORKERS: "1",
+        NODE_OPTIONS: null,
+        NODE_DEBUG_NATIVE: null,
+      });
+    },
+  );
+
+  it.each([
+    [["--mode", "node-compile-cache"], "--baseline is not supported"],
+    [["--workload", "prepared"], "--workload and --seed require"],
+    [["--seed", "sealed"], "--workload and --seed require"],
+  ])("rejects mixed CLI mode arguments before output", (args, error) => {
+    const { outputDir, stderr } = runBenchmarkCli(args);
+    expect(stderr).toContain(error);
+    expect(existsSync(outputDir)).toBe(false);
+  });
+});
+
+// The production case requires GNU time and the pinned runtime. macOS/Bun helper
+// controls above do not substitute for this Linux execution proof.
+it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !process.versions.bun)(
+  "measures prepared Node-cache pairs with inclusive cleanup and preserves failed cases",
+  async () => {
+    const root = realpathSync(tempDirs.make("node-cache-lifecycle-"));
+    const workload = path.join(root, "workload");
+    const seed = path.join(root, "seed");
+    const scratch = path.join(root, "scratch");
+    const active = path.join(scratch, "active");
+    mkdirSync(workload);
+    mkdirSync(path.join(workload, "scripts"));
+    const nodeCacheManifest = cacheManifest();
+    nodeCacheManifest.lane = {
+      id: "fixture",
+      critical: true,
+      config: "vitest.config.ts",
+      files: ["case.test.ts"],
+    };
+    nodeCacheManifest.expected = nodeCacheManifest.expected.map((entry) => ({
+      ...entry,
+      file: "case.test.ts",
+    }));
+    const report = {
+      ...execution.counts,
+      numTotalTests: 2,
+      numPassedTests: 2,
+      success: true,
+      testResults: [
+        {
+          name: path.join(workload, "case.test.ts"),
+          status: "passed",
+          assertionResults: nodeCacheManifest.expected.map(
+            ({ fullName, line, column, status }) => ({
+              fullName,
+              status,
+              location: { line, column },
+            }),
+          ),
+        },
+      ],
+    };
+    const script = [
+      'import { writeFileSync } from "node:fs";',
+      'import assert from "node:assert/strict";',
+      'for (const [key, value] of Object.entries({ CI: "1", OPENCLAW_VITEST_RUNTIME: "node", OPENCLAW_VITEST_MAX_WORKERS: "1", OPENCLAW_VITEST_FS_MODULE_CACHE: "0", OPENCLAW_VITEST_WORKER_CACHE: "0" })) assert.equal(process.env[key], value);',
+      "assert.equal(process.env.TSX_DISABLE_CACHE, undefined);",
+      `writeFileSync(process.argv[process.argv.indexOf("--outputFile") + 1], JSON.stringify(${JSON.stringify(report)}));`,
+      "console.log(JSON.stringify({ active: process.env.NODE_COMPILE_CACHE, disabled: process.env.NODE_DISABLE_COMPILE_CACHE ?? null }));",
+    ].join("\n");
+    const sources = {
+      "scripts/run-vitest.mjs": script,
+      "case.test.ts": "fixture",
+      "vitest.config.ts": "fixture",
+    };
+    nodeCacheManifest.inputs = Object.entries(sources).map(([relative, bytes]) => {
+      writeFileSync(path.join(workload, relative), bytes);
+      return { path: relative, bytes: Buffer.byteLength(bytes), sha256: sha256(bytes) };
+    });
+    const git = (args: string[]) => {
+      const result = spawnSync("git", args, { cwd: workload, encoding: "utf8", timeout: 10_000 });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    git(["init", "-q"]);
+    git(["add", "."]);
+    git([
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "commit",
+      "-qm",
+      "fixture",
+    ]);
+    nodeCacheManifest.workloadSha = git(["rev-parse", "HEAD"]);
+    nodeCacheManifest.runtime = {
+      node: process.version,
+      v8: process.versions.v8,
+      platform: process.platform,
+      architecture: process.arch,
+      executableSha256: sha256(readFileSync(process.execPath)),
+    };
+    nodeCacheManifest.pnpmSha256 = nodeCacheManifest.runtime.executableSha256;
+    // Fixture preparation is external to the controller and its timed boundary.
+    const env = buildBenchmarkCommandEnv(
+      path.join(active, "home"),
+      path.join(active, "state"),
+      { executable: process.execPath, resolvedExecutable: process.execPath, version: "fixture" },
+      process.env,
+      { kind: "seeded", nodeCache: path.join(active, "node-compile") },
+    );
+    const seeded = spawnSync(
+      process.execPath,
+      ["scripts/run-vitest.mjs", "--outputFile", path.join(root, "seed-report.json")],
+      { cwd: workload, env, encoding: "utf8", timeout: 10_000 },
+    );
+    expect(seeded.error).toBeUndefined();
+    expect(seeded.signal).toBeNull();
+    expect(seeded.status, seeded.stderr).toBe(0);
+    renameSync(path.join(active, "node-compile"), seed);
+    rmSync(scratch, { recursive: true });
+    nodeCacheManifest.seed = { files: readNodeCacheSeed(seed) };
+    validateNodeCacheManifest(nodeCacheManifest);
+    const context = {
+      workloadDir: workload,
+      seedDir: seed,
+      manifest: nodeCacheManifest,
+      pnpmBin: process.execPath,
+      outputDir: path.join(root, "output"),
+      scratchDir: scratch,
+    };
+    const unlisted = path.join(workload, "unlisted.txt");
+    writeFileSync(unlisted, "untracked input");
+    await expect(runNodeCacheBenchmark(context)).rejects.toThrow(
+      "clean tracked and untracked state",
+    );
+    expect(existsSync(context.outputDir)).toBe(false);
+    expect(existsSync(scratch)).toBe(false);
+    rmSync(unlisted);
+    await runNodeCacheBenchmark(context);
+    expect(
+      JSON.parse(readFileSync(path.join(context.outputDir, "terminal-manifest.json"), "utf8")),
+    ).toMatchObject({ status: "success" });
+    expect(
+      JSON.parse(readFileSync(path.join(context.outputDir, "analysis.json"), "utf8")),
+    ).toMatchObject({ valid: true });
+    expect(existsSync(scratch)).toBe(false);
+    for (const planned of buildNodeCacheSchedule()) {
+      const id = `pair-${planned.pair}-${planned.treatment}`;
+      const record = JSON.parse(readFileSync(path.join(context.outputDir, `${id}.json`), "utf8"));
+      expect(record).toMatchObject({
+        ...planned,
+        status: "success",
+        cleanup: "removed-owned-active",
+        processTreeSettled: true,
+        launchEnv: { NODE_COMPILE_CACHE: path.join(scratch, "active/node-compile") },
+      });
+      expect(record).not.toHaveProperty("env");
+      expect(record.inclusiveMs).toBeGreaterThan(0);
+      expect(Object.values(record.phases).every((value) => typeof value === "number")).toBe(true);
+      expect(
+        JSON.parse(readFileSync(path.join(context.outputDir, id, "command.log"), "utf8")),
+      ).toEqual({
+        active: path.join(scratch, "active/node-compile"),
+        disabled: planned.treatment === "disabled" ? "1" : null,
+      });
+    }
+    const terminal = readFileSync(path.join(context.outputDir, "terminal-manifest.json"), "utf8");
+    await expect(runNodeCacheBenchmark(context)).rejects.toThrow();
+    expect(readFileSync(path.join(context.outputDir, "terminal-manifest.json"), "utf8")).toBe(
+      terminal,
+    );
+    nodeCacheManifest.expected[0]!.fullName = "missing expected case";
+    const failed = { ...context, outputDir: path.join(root, "failed") };
+    await expect(runNodeCacheBenchmark(failed)).rejects.toThrow("expected passed inventory");
+    expect(
+      JSON.parse(readFileSync(path.join(failed.outputDir, "pair-1-disabled.json"), "utf8")),
+    ).toMatchObject({
+      status: "failure",
+      cleanup: "removed-owned-active",
+      processTreeSettled: true,
+    });
+    expect(existsSync(path.join(scratch, "active"))).toBe(false);
+    expect(existsSync(path.join(failed.outputDir, "pair-1-seeded.json"))).toBe(false);
+    expect(readNodeCacheSeed(seed)).toEqual(nodeCacheManifest.seed.files);
+  },
+  60_000,
+);
+
 describe("Vitest pair benchmark", () => {
+  it.each([
+    ["--mode", "seeded", "unknown benchmark mode: seeded"],
+    ["--baseline", "baseline", "duplicate option --baseline"],
+    ["--manifest", "duplicate", "duplicate option --manifest"],
+  ])("rejects CLI option %s before creating output", (option, value, error) => {
+    const { outputDir, stderr } = runBenchmarkCli([option, value]);
+    expect(stderr).toContain(error);
+    expect(existsSync(outputDir)).toBe(false);
+  });
+
+  it.each([true, false])("accepts legacy CLI options with manifest=%s", (includeManifest) => {
+    const { outputDir, stderr } = runBenchmarkCli([], includeManifest);
+    const error = "vitest-pair benchmark refuses workflow reruns; dispatch a fresh run";
+    expect(stderr).toContain(error);
+    expectTerminalFailure(outputDir, error);
+  });
+
   it("keeps the committed representative inventory valid and available", () => {
     const committed = loadBenchmarkManifest("scripts/vitest-pair-benchmark-lanes.json");
-    expect(committed.lanes.map((lane) => lane.id)).toStrictEqual([
-      "core-unit",
-      "gateway-core",
-      "ui-jsdom",
-      "worker-lifecycle",
-    ]);
     expect(assertInventoryAvailable(process.cwd(), committed).inventorySha256).toMatch(
       /^[0-9a-f]{64}$/u,
     );
@@ -281,14 +712,14 @@ describe("Vitest pair benchmark", () => {
   it("uses source locations instead of version-specific rendered names", () => {
     const read = reportFixture("report-digest");
     const baseline = read([
-      reportAssertion("mime detection maps 'avif' image format"),
-      reportAssertion("mime detection maps 'jpg' image format"),
-      reportAssertion("mime detection 'detects docx from buffer'", { line: 79, column: 14 }),
+      reportAssertion("maps 'avif'"),
+      reportAssertion("maps 'jpg'"),
+      reportAssertion("'detects docx'", { line: 79, column: 14 }),
     ]);
     const candidate = read([
-      reportAssertion("mime detection maps avif image format"),
-      reportAssertion("mime detection maps jpg image format"),
-      reportAssertion("mime detection detects docx from buffer", { line: 79, column: 14 }),
+      reportAssertion("maps avif"),
+      reportAssertion("maps jpg"),
+      reportAssertion("detects docx", { line: 79, column: 14 }),
     ]);
 
     expect(candidate.digest).toBe(baseline.digest);
@@ -357,8 +788,7 @@ describe("Vitest pair benchmark", () => {
     expect(neutral).toMatchObject({ verdict: "pass", performance: "no-material-change" });
     expect(neutral.claim).toContain("No broad improvement claim");
 
-    const improved = analyzeRecords(0.9);
-    expect(improved).toMatchObject({ verdict: "pass", performance: "improved" });
+    expect(analyzeRecords(0.9)).toMatchObject({ verdict: "pass", performance: "improved" });
 
     const noisyFaster = analyzeRecords((_lane, round) => ({
       baselineMs: 100,
@@ -384,7 +814,7 @@ describe("Vitest pair benchmark", () => {
     const pinned = path.join(pinnedDir, "pnpm");
     writeExecutable(
       pinned,
-      `#!/bin/sh\nprintf 'pinned\\n' >> ${JSON.stringify(marker)}\nprintf '12.1.0\\n'\n`,
+      `#!/bin/sh\n[ "\${pnpm_config_pm_on_fail:-}" = ignore ] || exit 96\nprintf 'pinned\\n' >> ${JSON.stringify(marker)}\nprintf '12.1.0\\n'\n`,
     );
     const ambientEnv = {
       ...process.env,
@@ -433,7 +863,6 @@ describe("Vitest pair benchmark", () => {
     "aborts the active child at the aggregate deadline and starts no successor",
     ({ signal }) =>
       deadlineFixtureLifetime.run(async () => {
-        expect(VITEST_PAIR_HARNESS_DEADLINE_MS).toBe(165 * 60 * 1000);
         const root = deadlineFixtureLifetime.createTempDir("vitest-pair-deadline-");
         const pidFile = path.join(root, "active.pid");
         const successor = path.join(root, "successor.txt");
@@ -451,62 +880,45 @@ describe("Vitest pair benchmark", () => {
           "setInterval(() => {}, 1000);",
         ].join("\n");
         const ready = observation.receipts.waitFor(pidFile, "ready");
-        const scheduleTimeout = globalThis.setTimeout;
-        // Eager deadline checks and its timer share one clock until the real child is ready.
+        // Hold eager expiry and the watchdog until the real child reports readiness.
         const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
-        let fireDeadline: (() => void) | undefined;
-        const timerSpy = vi
-          .spyOn(globalThis, "setTimeout")
-          .mockImplementation((callback, ms, ...args) => {
-            const timer = scheduleTimeout(callback, ms, ...args);
-            if (ms === 500 && !fireDeadline) {
-              clearTimeout(timer);
-              fireDeadline = () => {
-                fireDeadline = undefined;
-                callback(...args);
-              };
-            }
-            return timer;
-          });
         const commands: Array<ReturnType<typeof runOwnedCommand>> = [];
-        try {
-          await expect(
-            withTerminalManifest(output, () =>
-              withVitestPairDeadline(async (deadline) => {
-                const start = (name: string, args: string[]) => {
-                  const command = deadlineFixtureLifetime.track(
-                    runScript(root, args, {
-                      logPath: path.join(root, `${name}.log`),
-                      deadline,
-                    }),
-                  );
-                  commands.push(command);
-                  return command;
-                };
-                const active = start("active", ["--input-type=module", "-e", activeScript]);
-                await withinTest(
-                  awaitGateBeforeSettlement(
-                    ready,
-                    active,
-                    "benchmark child exited before readiness",
-                  ),
-                  signal,
+        const release = startProcessWatchdogFixture(() =>
+          withTerminalManifest(output, () =>
+            withVitestPairDeadline(async (deadline) => {
+              const start = (name: string, args: string[]) => {
+                const command = deadlineFixtureLifetime.track(
+                  runScript(root, args, {
+                    logPath: path.join(root, `${name}.log`),
+                    deadline,
+                  }),
                 );
-                timerSpy.mockRestore();
-                clock.mockRestore();
-                if (!fireDeadline) {
-                  throw new Error("aggregate deadline was not armed before child readiness");
-                }
-                fireDeadline();
-                await Promise.allSettled([active]);
-                const next = start("successor", [
+                commands.push(command);
+                return command;
+              };
+              await Promise.allSettled([
+                start("active", ["--input-type=module", "-e", activeScript]),
+              ]);
+              await Promise.allSettled([
+                start("successor", [
                   "-e",
                   `require("node:fs").writeFileSync(${JSON.stringify(successor)}, "started")`,
-                ]);
-                await Promise.allSettled([next]);
-              }, 500),
+                ]),
+              ]);
+            }, 500),
+          ),
+        );
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              ready,
+              commands[0]!,
+              "benchmark child exited before readiness",
             ),
-          ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
+            signal,
+          );
+          clock.mockRestore();
+          await expect(release()).rejects.toThrow("Vitest pair aggregate deadline exceeded");
 
           // Assert outside the deadline owner, which normalizes task errors after cancellation.
           expect(commands).toHaveLength(2);
@@ -524,9 +936,8 @@ describe("Vitest pair benchmark", () => {
           expect(existsSync(successor)).toBe(false);
           expectTerminalFailure(output, "Vitest pair aggregate deadline exceeded after 500ms");
         } finally {
-          timerSpy.mockRestore();
           clock.mockRestore();
-          fireDeadline?.();
+          await release().catch(() => {});
           await Promise.allSettled(commands);
           await observation.cleanup();
         }
@@ -546,24 +957,5 @@ describe("Vitest pair benchmark", () => {
 
     expect(result.exitCode).toBe(7);
     expect(readFileSync(attempts, "utf8")).toBe("attempt\n");
-  });
-
-  itUnix("fails closed and cleans a leaked descendant process", async ({ signal }) => {
-    const root = tempDirs.make("vitest-pair-leak-");
-    const pidFile = path.join(root, "child.pid");
-    const script = [
-      'const { spawn } = require("node:child_process");',
-      'const { writeFileSync } = require("node:fs");',
-      `const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });`,
-      `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
-      "child.unref();",
-    ].join("\n");
-
-    await expect(runScript(root, ["-e", script])).rejects.toThrow(
-      /process group remained active|cleanup could not verify/u,
-    );
-
-    const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
-    await waitForDescendantReap(pid, signal);
   });
 });

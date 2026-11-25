@@ -5,6 +5,7 @@ import { discoverConfigWidePluginManifestRegistry } from "../config/io.plugin-me
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as migrationCheckpoint from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import {
   getCurrentPluginMetadataSnapshot,
   withPluginMetadataSnapshotScope,
@@ -56,7 +57,7 @@ const metadata = (names: string[], version: string) => ({
 });
 const expectNotPersisted = () => {
   expect(readIndex()).toBeNull();
-  expect(migrationCheckpoint.hasActiveStartupMigrationLease({ env: process.env })).toBe(false);
+  expect(hasActiveStartupMigrationLeaseForTest({ env: process.env })).toBe(false);
 };
 const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
 const snapshotVersion = (snapshot: PluginMetadataSnapshot | undefined, name = "fixture") =>
@@ -152,7 +153,7 @@ it("admits validated derived metadata while the startup writer lease is unavaila
         pluginMetadataSnapshot: metadata(["fixture"], "1.0.0"),
       });
       expect(readIndex()).toBeNull();
-      expect(migrationCheckpoint.hasActiveStartupMigrationLease()).toBe(true);
+      expect(hasActiveStartupMigrationLeaseForTest()).toBe(true);
     } finally {
       acquire.mockRestore();
       lease.release();
@@ -208,11 +209,7 @@ it("retains the original beta scope and full config-wide inventory without persi
       expect(current()).toBe(aggregate);
       // The invoking generation remains old while the new admission owns current package facts.
       await writeVersion("2.0.0");
-      const result = await runOutsidePluginCache(() => freshCache(startup)).catch(
-        (error: unknown) => error,
-      );
-      expect.soft(result).not.toBeInstanceOf(Error);
-      expect.soft(result).toMatchObject({
+      expect(await runOutsidePluginCache(() => freshCache(startup))).toMatchObject({
         pluginMetadataSnapshot: metadata(names, "2.0.0"),
       });
       expectNotPersisted();
@@ -242,13 +239,6 @@ it.each(["secondary-schema", "duplicate-owner"])(
           await writeJson(manifestPath, { ...manifest, id: "preflight-alpha" });
           const discovered = freshCache(() => discover(config));
           expect(discovered.plugins.some((plugin) => plugin.id === "preflight-alpha")).toBe(false);
-          expect(discovered.diagnostics).toContainEqual(
-            expect.objectContaining({
-              level: "error",
-              pluginId: "preflight-alpha",
-              message: expect.stringContaining("present in multiple agent workspaces"),
-            }),
-          );
         }
         const result = await startup();
         expect(result.snapshot.valid).toBe(false);

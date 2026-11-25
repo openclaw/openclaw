@@ -3,6 +3,7 @@ import path from "node:path";
 import { JSDOM, VirtualConsole } from "jsdom";
 import postcss, { type Declaration, type Root, type Rule } from "postcss";
 import selectorParser from "postcss-selector-parser";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.ts";
 import type { IconFixture } from "./control-ui-icon-fixtures.mts";
 
 type IconGridFinding = {
@@ -549,7 +550,7 @@ export function createIconStyleContext(rootDir: string) {
     const file = path.resolve(target);
     const otherRules: GeometryRule[] = [];
     const seen = new Set<string>();
-    for (const relative of fs.readdirSync(sourceRoot, { recursive: true }).map(String)) {
+    for (const { relativePath: relative } of listDirectoryTreeStrictSync(sourceRoot)) {
       if (!relative.endsWith(".css")) {
         continue;
       }

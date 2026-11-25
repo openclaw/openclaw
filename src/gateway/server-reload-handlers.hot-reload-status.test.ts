@@ -16,7 +16,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { createManagedReloadTestParams } from "./server-reload-handlers.config.test-support.js";
@@ -75,19 +75,19 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
       },
       initialConfig,
       readSnapshot: vi.fn() as never,
-      promoteSnapshot: vi.fn(async () => true) as never,
       subscribeToWrites: vi.fn(() => () => {}) as never,
       broadcast,
       resolveGatewayContext: () => gatewayContext,
-      setState: vi.fn(),
-      reloadPlugins: vi.fn(async () => {
-        throw new Error("Unexpected plugin reload while observing config status");
-      }),
       activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
       channelManager: {} as never,
     }),
   );
   await reloader.ready;
+  const commit = (path: string, config = initialConfig) =>
+    expectDefined(hoisted.onRuntimeConfigCommitted, "runtime config commit")(
+      buildGatewayReloadPlan([path]),
+      config,
+    );
 
   expect(reloader.hotReloadStatus?.()).toBe("active");
 
@@ -102,12 +102,17 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
   expect(hoisted.invalidateConfigGetResponseCache).toHaveBeenCalledOnce();
   expect(broadcast).toHaveBeenCalledWith(
     "config.changed",
-    { path: "/tmp/openclaw.json", hash: "opaque:persisted-1", ts: expect.any(Number) },
+    {
+      path: "/tmp/openclaw.json",
+      hash: "opaque:persisted-1",
+      changedPaths: ["gateway.port"],
+      ts: expect.any(Number),
+    },
     { dropIfSlow: true },
   );
   expect(invalidateMentions).not.toHaveBeenCalled();
 
-  hoisted.onRuntimeConfigCommitted?.(buildGatewayReloadPlan(["gateway.roles"]), initialConfig);
+  commit("gateway.roles");
   expect(invalidateMentions).toHaveBeenCalledOnce();
 
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -120,7 +125,7 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
     gatewayContext.resolveGatewayContext = () => gatewayContext;
     const capture = async () =>
       expectDefined(
-        await captureGatewayOperatorRunAuthority({
+        await prepareGatewayOperatorRunAuthority({
           client: createSyntheticPluginRuntimeClient({
             scopes: ["operator.write"],
             operatorRoleActor: { kind: "operator", profileId: profile.id },
@@ -144,21 +149,20 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
     };
     try {
       setRuntimeConfigSnapshot(candidate);
-      expect(original.authority.signal?.aborted).toBe(false);
-      expect(() => original.authority.assertCurrent()).not.toThrow();
+      expect(original.authority.signal?.aborted).not.toBe(true);
       duringActivation = await capture();
       // An unrelated Gateway publication cannot turn this tentative policy into source loss.
       publishOperatorRoleConfigChange({});
-      expect(duringActivation.authority.signal?.aborted).toBe(false);
+      expect(duringActivation.authority.signal?.aborted).not.toBe(true);
       setRuntimeConfigSnapshot(initialConfig);
-      expect(duringActivation.authority.assertCurrent).not.toThrow();
-      expect(original.authority.signal?.aborted).toBe(false);
+      expect(original.authority.signal?.aborted).not.toBe(true);
 
       setRuntimeConfigSnapshot(candidate);
-      hoisted.onRuntimeConfigCommitted?.(buildGatewayReloadPlan(["gateway.roles"]), candidate);
+      commit("gateway.roles", candidate);
       expect(gatewayContext.getCommittedRuntimeConfig()).toBe(candidate);
-      expect(original.authority.signal?.aborted).toBe(true);
-      expect(duringActivation.authority.signal?.aborted).toBe(true);
+      expect(original.authority.signal?.aborted).not.toBe(true);
+      expect(duringActivation.authority.signal?.aborted).not.toBe(true);
+      await expect(capture()).rejects.toThrow();
     } finally {
       original.release();
       duringActivation?.release();
@@ -170,28 +174,24 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
   const storeOwnerKey = Symbol.for("openclaw.test.managedReloadStoreOwner");
   registerSystemEventStoreOwner(storeOwnerKey, retireStoreOwner);
   try {
-    const commit = expectDefined(hoisted.onRuntimeConfigCommitted, "runtime config commit");
-    const neutralConfig: OpenClawConfig = {
+    const presentation: OpenClawConfig = {
       ...initialConfig,
       ui: { prefs: { sidebarEntries: ["route:usage"] } },
     };
-    commit(buildGatewayReloadPlan(["ui.prefs.sidebarEntries"]), neutralConfig);
-    commit(buildGatewayReloadPlan(["logging.level"]), {
-      ...neutralConfig,
-      logging: { level: "debug" },
-    });
-    expect(retireStoreOwner).not.toHaveBeenCalled();
-
-    const replacementConfig: OpenClawConfig = {
-      ...neutralConfig,
+    const replacement: OpenClawConfig = {
+      ...presentation,
       session: { store: "/tmp/replacement-sessions.json" },
     };
-    commit(buildGatewayReloadPlan(["session.store"]), replacementConfig);
-    expect(retireStoreOwner).toHaveBeenCalledOnce();
-    commit(buildGatewayReloadPlan(["env.OPENCLAW_STATE_DIR"]), replacementConfig);
-    expect(retireStoreOwner).toHaveBeenCalledTimes(2);
-    commit(buildGatewayReloadPlan(["ui.prefs.sidebarEntries"]), replacementConfig);
-    expect(retireStoreOwner).toHaveBeenCalledTimes(2);
+    for (const [path, config, retirements] of [
+      ["ui.prefs.sidebarEntries", presentation, 0],
+      ["logging.level", { ...presentation, logging: { level: "debug" } }, 0],
+      ["session.store", replacement, 1],
+      ["env.OPENCLAW_STATE_DIR", replacement, 2],
+      ["ui.prefs.sidebarEntries", replacement, 2],
+    ] as const) {
+      commit(path, config);
+      expect(retireStoreOwner).toHaveBeenCalledTimes(retirements);
+    }
   } finally {
     registerSystemEventStoreOwner(storeOwnerKey, () => {});
     publishSystemEventStoreResolver(undefined);

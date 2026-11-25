@@ -15,7 +15,6 @@ export function buildDeclaredToolAllowlistContext(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   toolDenylist?: string[];
-  env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): DeclaredToolAllowlistContext | undefined {
   const servers = params.config?.mcp?.servers ?? {};
@@ -35,7 +34,7 @@ export function buildDeclaredToolAllowlistContext(params: {
   const pluginIds = new Set<string>();
   const pluginToolNames = new Set<string>();
   if (params.config?.plugins?.enabled !== false) {
-    const env = params.env ?? process.env;
+    const env = process.env;
     const preparedSnapshot =
       params.metadataSnapshot &&
       params.metadataSnapshot.pluginIds === undefined &&

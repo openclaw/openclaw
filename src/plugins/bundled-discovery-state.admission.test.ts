@@ -6,13 +6,7 @@ import {
   readBundledDiscoveryMode,
   readBundledDiscoveryModeMemoized,
 } from "./bundled-discovery-state.js";
-import {
-  createPluginCache,
-  isPluginCacheFactInvalidatedError,
-  PluginCacheFactInvalidatedError,
-  withPluginCache,
-} from "./plugin-cache.js";
-import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 
 const reads = vi.hoisted(() => ({
   snapshot: vi.fn<() => object | undefined>(),
@@ -32,6 +26,7 @@ vi.mock("../state/openclaw-state-db-readonly.js", async (importOriginal) => ({
 vi.mock("../state/config-machine-state.js", () => ({ readConfigMachineState: reads.mode }));
 
 const env = { OPENCLAW_STATE_DIR: "/synthetic/plugin-admission" };
+const inCache = <T>(run: () => T) => withPluginCache(createPluginCache(), run);
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -46,90 +41,49 @@ beforeEach(() => {
   clearBundledDiscoveryModeMemo();
 });
 
-afterEach(() => {
-  clearBundledDiscoveryModeMemo();
-});
+afterEach(clearBundledDiscoveryModeMemo);
 
+const prepare = () => prepareBundledDiscoveryMode(env);
+const preparedRow = () => {
+  reads.snapshot.mockReturnValue(undefined);
+  return readBundledDiscoveryModeMemoized(env, {}, reads.mode);
+};
 const readers = [
-  {
-    name: "direct preparation snapshot",
-    reject: reads.snapshot,
-    read: () => prepareBundledDiscoveryMode(env),
-  },
-  {
-    name: "memoized discovery snapshot",
-    reject: reads.snapshot,
-    read: () => readBundledDiscoveryModeMemoized(env),
-  },
-  {
-    name: "asynchronous discovery snapshot row",
-    reject: reads.metadata,
-    read: () => prepareBundledDiscoveryMode(env),
-  },
-  {
-    name: "synchronous discovery row",
-    reject: reads.mode,
-    read: () => readBundledDiscoveryMode({ env }),
-  },
-  {
-    name: "artifact-preserving memoized discovery row",
-    reject: reads.mode,
-    read: () => readBundledDiscoveryModeMemoized(env, { artifactPreservingReadOnly: true }),
-  },
-  {
-    name: "memoized prepared row callback",
-    reject: reads.mode,
-    read: () => {
-      reads.snapshot.mockReturnValue(undefined);
-      return readBundledDiscoveryModeMemoized(env, {}, reads.mode);
-    },
-  },
-  {
-    name: "metadata adapter read operation",
-    reject: reads.metadata,
-    read: () => readPluginMetadataStateRow("bundled-discovery", { env }),
-  },
-];
+  ["preparation snapshot", reads.snapshot, prepare],
+  ["memoized snapshot", reads.snapshot, () => readBundledDiscoveryModeMemoized(env)],
+  ["async snapshot row", reads.metadata, prepare],
+  ["sync row", reads.mode, () => readBundledDiscoveryMode({ env })],
+  [
+    "artifact-preserving row",
+    reads.mode,
+    () => readBundledDiscoveryModeMemoized(env, { artifactPreservingReadOnly: true }),
+  ],
+  ["prepared row callback", reads.mode, preparedRow],
+] as const;
 
-function invalidatedRead() {
-  // Error codes preserve the owner's identity across source/require module graphs.
-  return Object.assign(new Error("Selected discovery read scope is closed"), {
+it.each(readers)("preserves invalidation and ordinary errors: %s", async (_name, reject, read) => {
+  // Codes preserve the owner's identity across source/require module graphs.
+  const cause = Object.assign(new Error("Selected discovery read scope is closed"), {
     code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
   });
-}
-
-it.each(readers)(
-  "retains typed invalidation and ordinary errors from $name",
-  async ({ reject, read }) => {
-    const cause = invalidatedRead();
-    reject.mockImplementation(() => {
-      throw cause;
-    });
-    await withPluginCache(createPluginCache(), async () => {
-      const result = Promise.resolve().then(async () => await read());
-      await expect(result).rejects.toBeInstanceOf(PluginCacheFactInvalidatedError);
-      await result.catch((error: unknown) =>
-        expect(error instanceof Error && error.cause).toBe(cause),
-      );
-      await expect(result.catch(isPluginCacheFactInvalidatedError)).resolves.toBe(true);
-    });
-    const failure = new Error("Synthetic metadata read failure");
+  for (const failure of [cause, new Error("Synthetic metadata read failure")]) {
     reject.mockImplementation(() => {
       throw failure;
     });
-    await withPluginCache(createPluginCache(), async () => {
-      await expect(Promise.resolve().then(async () => await read())).rejects.toBe(failure);
+    await inCache(async () => {
+      const result = Promise.resolve().then(async () => read());
+      await expect(result).rejects.toBe(failure);
     });
-  },
-);
+  }
+});
 
-it("waits for pending snapshot bytes without synchronously acquiring them", async () => {
-  const snapshot = createDeferredCore<object>();
-  reads.snapshotAsync.mockReturnValue(snapshot.promise);
-  reads.snapshot.mockImplementation(() => {
-    throw new Error("Pending snapshot bytes must be prepared asynchronously");
-  });
-  await withPluginCache(createPluginCache(), async () => {
+it("waits for pending snapshot bytes without synchronously acquiring them", () =>
+  inCache(async () => {
+    const snapshot = createDeferredCore<object>();
+    reads.snapshotAsync.mockReturnValue(snapshot.promise);
+    reads.snapshot.mockImplementation(() => {
+      throw new Error("Pending snapshot bytes must be prepared asynchronously");
+    });
     const preparing = prepareBundledDiscoveryMode(env);
     try {
       expect(reads.snapshot).not.toHaveBeenCalled();
@@ -139,16 +93,14 @@ it("waits for pending snapshot bytes without synchronously acquiring them", asyn
       await preparing;
     }
     expect(reads.metadata).toHaveBeenCalledOnce();
-  });
-});
+  }));
 
-it("prepares snapshot policy asynchronously and reuses it for synchronous derivation", async () => {
-  await withPluginCache(createPluginCache(), async () => {
+it("prepares snapshot policy asynchronously and reuses it for synchronous derivation", () =>
+  inCache(async () => {
     const activate = await prepareBundledDiscoveryMode(env);
     activate();
     expect(readBundledDiscoveryModeMemoized(env)).toBe("allowlist");
     await prepareBundledDiscoveryMode(env);
     expect(reads.metadata).toHaveBeenCalledTimes(1);
     expect(reads.mode).not.toHaveBeenCalled();
-  });
-});
+  }));

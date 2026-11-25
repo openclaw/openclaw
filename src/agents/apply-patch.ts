@@ -46,7 +46,6 @@ export type ApplyPatchSummary = {
 type ApplyPatchResult = {
   summary: ApplyPatchSummary;
   text: string;
-  noOp?: boolean;
 };
 
 type ApplyPatchToolDetails = {
@@ -94,12 +93,13 @@ export function createApplyPatchTool(
     containmentSource?: ApplyPatchContainmentSource;
     abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+    prepareHostFileMutation?: ApplyPatchFileOptions["prepareHostFileMutation"];
   } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const root = options.root ?? cwd;
   const sandbox = options.sandbox;
-  const workspaceOnly = options.workspaceOnly !== false;
+  const workspaceOnly = options.workspaceOnly ?? Boolean(sandbox);
 
   return {
     name: "apply_patch",
@@ -128,12 +128,14 @@ export function createApplyPatchTool(
           sandbox,
           workspaceOnly,
           memoryWriteProvenance: options.memoryWriteProvenance,
+          prepareHostFileMutation: options.prepareHostFileMutation,
           signal: executionSignal,
         });
       } catch (error) {
         throw withApplyPatchContainmentHint(
           error,
           workspaceOnly ? options.containmentSource : undefined,
+          !sandbox,
         );
       }
 
@@ -171,6 +173,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
       await preflightUpdateHunks(hunks, fileOps, patchOptions.signal);
       return await commitPatchHunks(hunks, fileOps, patchOptions);
     },
+    options.signal,
   );
 }
 
@@ -664,7 +667,6 @@ async function commitPatchHunks(
   return {
     summary,
     text: noOp ? `No changes made to ${Array.from(noOpPaths).join(", ")}.` : formatSummary(summary),
-    ...(noOp ? { noOp: true } : {}),
   };
 }
 
@@ -785,6 +787,7 @@ async function resolvePatchPath(
           filePath,
           cwd: options.cwd,
           root: options.root ?? options.cwd,
+          allowLinkedWorktrees: true,
           allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
           allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })
@@ -794,11 +797,5 @@ async function resolvePatchPath(
     resolved,
     queueKey: await resolveFileMutationQueueKey(resolved),
     display: toDisplayPath(resolved, options.cwd),
-  };
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.applyPatchTestApi")] = {
-    applyPatch,
   };
 }

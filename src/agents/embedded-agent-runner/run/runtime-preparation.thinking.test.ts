@@ -22,12 +22,10 @@ import {
   type AuthProfileStore,
 } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
-import { prepareModelRunCapabilities } from "../../model-catalog-lookup.js";
-import type { ModelCatalogEntry } from "../../model-catalog.types.js";
+import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { createEmptyPreparedModelRuntimeFixture } from "../model.fixture.test-support.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
-import { resolveBundledStaticCatalogModel } from "../model.static-catalog.js";
 import { prepareEmbeddedRunRuntime } from "./runtime.js";
 
 // Keep route planning/auth commit real; isolate credential acquisition and native installation.
@@ -75,13 +73,12 @@ vi.mock("../../harness/selection.js", () => {
 const MODEL_ID = "gpt-5.6-luna";
 const PLATFORM = "https://api.openai.com/v1";
 const SUBSCRIPTION = "https://chatgpt.com/backend-api/codex";
+const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
 describe("selected route thinking metadata at runtime preparation", () => {
   let state: OpenClawTestState;
   let root: string;
   let preparedModelRuntime: PreparedModelRuntimeSnapshot;
-  let platformModel: NonNullable<ReturnType<typeof resolveBundledStaticCatalogModel>>;
-  let provider: ProviderPlugin;
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "effort-route", scenario: "minimal" });
@@ -89,7 +86,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
     const { buildOpenAIProvider } = await loadBundledPluginFacade<{
       buildOpenAIProvider: () => ProviderPlugin;
     }>({ pluginId: "openai", artifactBasename: "api.js" });
-    provider = buildOpenAIProvider();
+    const provider = buildOpenAIProvider();
     const pluginDir = path.resolve("extensions/openai");
     const loaded = loadPluginManifest(pluginDir);
     if (!loaded.ok) {
@@ -103,18 +100,6 @@ describe("selected route thinking metadata at runtime preparation", () => {
     const config = {};
     setCurrentPluginMetadataSnapshot(metadataSnapshot, { config, workspaceDir: root });
     setActivePluginRegistry(pluginRegistry, "effort-route", "default", root);
-    const model = resolveBundledStaticCatalogModel({
-      provider: "openai",
-      modelId: MODEL_ID,
-      cfg: config,
-      env: {},
-      metadataSnapshot,
-      includeRuntimeDiscovery: true,
-    });
-    if (!model) {
-      throw new Error("missing Platform catalog fixture");
-    }
-    platformModel = model;
     preparedModelRuntime = {
       ...createEmptyPreparedModelRuntimeFixture({
         agentDir: state.agentDir(),
@@ -146,11 +131,9 @@ describe("selected route thinking metadata at runtime preparation", () => {
 
   it.each([
     ["platform", "absent"],
-    ["platform", "platform"],
     ["platform", "subscription"],
     ["subscription", "absent"],
     ["subscription", "platform"],
-    ["subscription", "subscription"],
   ] as const)("preserves %s disablement with %s prepared capability", async (route, capability) => {
     vi.stubGlobal(
       "fetch",
@@ -158,32 +141,19 @@ describe("selected route thinking metadata at runtime preparation", () => {
         throw new Error("unexpected network request");
       }),
     );
-    const catalog = await provider.catalog!.run({
-      config: {},
-      env: {},
-      resolveProviderAuth: () => ({ apiKey: "fixture-token", mode: "token", source: "profile" }),
-      resolveProviderApiKey: () => ({ apiKey: undefined }),
-    });
-    if (!catalog || !("providers" in catalog)) {
-      throw new Error("missing subscription catalog fixture");
-    }
-    const subscriptionRow = catalog.providers.openai?.models.find((model) => model.id === MODEL_ID);
-    if (!subscriptionRow) {
-      throw new Error("missing subscription model fixture");
-    }
-    const subscriptionModel = { ...subscriptionRow, provider: "openai" };
-    expect(subscriptionModel.thinkingLevelMap?.off).toBeNull();
-    expect(subscriptionModel.compat?.supportedReasoningEfforts).not.toContain("none");
-    const capabilityModel = capability === "platform" ? platformModel : subscriptionModel;
-    const capabilityApi =
-      capability === "platform" ? "openai-responses" : "openai-chatgpt-responses";
-    expect(capabilityModel.api).toBe(capabilityApi);
-    const capabilityEntry = { ...capabilityModel, api: capabilityApi } satisfies ModelCatalogEntry;
+    // Catalog projection is covered by model-resolution-consistency.test.ts;
+    // this boundary proves that runtime auth selection owns disablement.
     const modelThinkingCapability =
       capability === "absent"
         ? undefined
-        : prepareModelRunCapabilities([[capabilityEntry], []], ["openai", MODEL_ID, "codex"])
-            .modelThinkingCapability;
+        : ({
+            provider: "openai",
+            modelId: MODEL_ID,
+            agentRuntime: "codex",
+            compat: {
+              supportedReasoningEfforts: capability === "platform" ? ["none", ...EFFORTS] : EFFORTS,
+            },
+          } satisfies PreparedModelThinkingCapability);
     const runId = `effort-${route}-${capability}`;
     const runtime = await withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
       prepareEmbeddedRunRuntime({
@@ -228,14 +198,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
       });
       const efforts = effectiveModel.compat?.supportedReasoningEfforts ?? [];
       if (modelThinkingCapability) {
-        expect(modelThinkingCapability.route).toBeUndefined();
-        expect(efforts).toEqual(
-          expect.arrayContaining(
-            modelThinkingCapability.compat.supportedReasoningEfforts?.filter(
-              (effort) => effort !== "none",
-            ) ?? [],
-          ),
-        );
+        expect(efforts).toEqual(expect.arrayContaining(EFFORTS));
       }
       if (platform) {
         expect(efforts).toContain("none");

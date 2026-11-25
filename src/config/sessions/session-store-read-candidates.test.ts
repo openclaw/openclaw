@@ -5,16 +5,54 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as targetPaths from "./session-sqlite-target-paths.js";
 import {
   assertSessionStoreReadCandidate as assertCandidate,
+  captureSessionStoreReadCandidate,
   isSessionStoreReadCandidateCurrent as isCurrent,
 } from "./session-store-read-candidates.js";
-import { captureSessionStoreWriteCandidates as captureWrites } from "./session-store-target-inventory.js";
+import { prepareSessionStoreTargetCandidates as prepare } from "./session-store-target-inventory.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const capturedAlias = "/tmp/RUNNER~1/openclaw-agent.sqlite";
 const canonicalAlias = "/tmp/runneradmin/openclaw-agent.sqlite";
 const redirectedAlias = "/tmp/replacement/openclaw-agent.sqlite";
 
+function captureWrites(storePath: string) {
+  const result = prepare({ write: { storePath } });
+  if (!("write" in result) || !result.write) {
+    throw new Error("Expected captured write candidates");
+  }
+  return structuredClone(result.write);
+}
+
+function resolveWrite(captured: ReturnType<typeof captureWrites>, pathname: string) {
+  const result = prepare({ resolveWrite: { pathname, captured } });
+  if (!("identity" in result) || !result.identity) {
+    throw new Error("Expected a qualified write target");
+  }
+  return result.identity;
+}
+
 afterEach(() => vi.restoreAllMocks());
+
+test.runIf(process.platform !== "win32")(
+  "resolves an exact selected candidate once and rejects retargeting on the next assertion",
+  () => {
+    const root = tempDirs.make("session-store-candidate-work-");
+    const original = path.join(root, "original.sqlite");
+    const replacement = path.join(root, "replacement.sqlite");
+    const alias = path.join(root, "alias.sqlite");
+    fs.writeFileSync(original, "original");
+    fs.writeFileSync(replacement, "replacement");
+    fs.symlinkSync(original, alias);
+    const candidate = captureSessionStoreReadCandidate(alias);
+    const realpath = vi.spyOn(fs.realpathSync, "native");
+    expect(assertCandidate(alias, [candidate])).toBe(fs.realpathSync(original));
+    expect(realpath.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(1);
+    realpath.mockRestore();
+    fs.unlinkSync(alias);
+    fs.symlinkSync(replacement, alias);
+    expect(() => assertCandidate(alias, [candidate])).toThrow(/outside captured discovery custody/);
+  },
+);
 
 function mockRealpath(from: string, to: string) {
   vi.spyOn(fs.realpathSync, "native").mockImplementation((pathname) =>
@@ -39,28 +77,21 @@ function mockWindowsSymlinks(isSymbolicLink: boolean) {
   vi.spyOn(fs, "lstatSync").mockReturnValue({ isSymbolicLink: () => isSymbolicLink } as fs.Stats);
 }
 
-test("keeps custody when a captured alias later resolves to the same file", () => {
-  mockWindowsSymlinks(false);
-  mockRealpath(capturedAlias, canonicalAlias);
-  const candidate = { path: capturedAlias, physicalPath: capturedAlias };
-  expect(isCurrent(candidate)).toBe(true);
-  expect(assertCandidate(capturedAlias, [candidate])).toBe(canonicalAlias);
+test.each([
+  ["converged alias", capturedAlias, canonicalAlias, false, true],
+  ["symlink redirect", capturedAlias, redirectedAlias, true, false],
+  ["lexical redirect", redirectedAlias, canonicalAlias, undefined, false],
+] as const)("checks exact candidate custody: %s", (_name, selected, resolved, symlink, current) => {
+  if (symlink !== undefined) {
+    mockWindowsSymlinks(symlink);
+  }
+  mockRealpath(capturedAlias, resolved);
+  const candidate = { path: selected, physicalPath: capturedAlias };
+  expect(isCurrent(candidate)).toBe(current);
+  if (current) {
+    expect(assertCandidate(selected, [candidate])).toBe(resolved);
+  }
 });
-
-test.runIf(process.platform !== "win32")(
-  "keeps exact custody across POSIX lexical and physical directory spellings",
-  () => {
-    const root = tempDirs.make("session-store-posix-alias-");
-    const physicalDir = directory(root, "physical");
-    const aliasDir = path.join(root, "alias");
-    fs.symlinkSync(physicalDir, aliasDir, "junction");
-    const physicalPath = path.join(physicalDir, "openclaw-agent.sqlite");
-    const aliasPath = path.join(aliasDir, "openclaw-agent.sqlite");
-    fs.writeFileSync(physicalPath, "");
-
-    expectCustody(aliasPath, physicalPath, physicalPath);
-  },
-);
 
 test.each([true, false])("limits Windows alias custody to its parent (same=%s)", (sameParent) => {
   const root = tempDirs.make("session-store-windows-alias-");
@@ -80,13 +111,6 @@ test.each([true, false])("limits Windows alias custody to its parent (same=%s)",
   }
 });
 
-test("rejects a Windows short-path candidate redirected through a symlink", () => {
-  mockWindowsSymlinks(true);
-  vi.spyOn(fs.realpathSync, "native").mockReturnValue(redirectedAlias);
-
-  expect(isCurrent({ path: capturedAlias, physicalPath: capturedAlias })).toBe(false);
-});
-
 test.each([
   ["file", "/tmp/custom/openclaw-agent.sqlite", "/tmp/database-target/openclaw-agent.sqlite", true],
   ["directory", "/tmp/custom", "/tmp/replacement", false],
@@ -96,11 +120,6 @@ test.each([
   expect(isCurrent({ path: family, physicalPath: family, scope: "sibling-family" })).toBe(current);
 });
 
-test("rejects a candidate whose lexical target changed", () => {
-  mockRealpath(capturedAlias, canonicalAlias);
-  expect(isCurrent({ path: redirectedAlias, physicalPath: capturedAlias })).toBe(false);
-});
-
 test.each([false, true])("keeps sibling absence until creation (%s)", async (appeared) => {
   const root = tempDirs.make("session-store-absent-family-");
   const captured = captureWrites(path.join(root, "custom.json"));
@@ -108,12 +127,10 @@ test.each([false, true])("keeps sibling absence until creation (%s)", async (app
   await Promise.resolve();
   if (appeared) {
     fs.writeFileSync(selected, "later database");
-    expect(() => captured.resolveIdentity(selected)).toThrow(
-      "appeared after its initial inventory",
-    );
+    expect(() => resolveWrite(captured, selected)).toThrow("appeared after its initial inventory");
   } else {
     const canonicalPath = path.join(fs.realpathSync(root), "custom.main.4.sqlite");
-    expect(captured.resolveIdentity(selected)).toEqual({
+    expect(resolveWrite(captured, selected)).toEqual({
       key: `path:${canonicalPath}`,
       canonicalPath,
     });
@@ -131,8 +148,8 @@ test("does not certify sibling absence when the initial directory listing failed
   );
   const captured = captureWrites(path.join(root, "custom.json"));
   await Promise.resolve();
-  expect(captured.resolveIdentity(known).key).toMatch(/^file:/);
-  expect(() => captured.resolveIdentity(path.join(root, "custom.main.sqlite"))).toThrow(
+  expect(resolveWrite(captured, known).key).toMatch(/^file:/);
+  expect(() => resolveWrite(captured, path.join(root, "custom.main.sqlite"))).toThrow(
     "absence was not captured",
   );
 });
@@ -149,7 +166,7 @@ test.runIf(process.platform !== "win32")(
     await Promise.resolve();
     fs.unlinkSync(alias);
     fs.symlinkSync(replacement, alias, "junction");
-    expect(() => captured.resolveIdentity(path.join(alias, "custom.main.sqlite"))).toThrow(
+    expect(() => resolveWrite(captured, path.join(alias, "custom.main.sqlite"))).toThrow(
       "selector changed during discovery",
     );
     expect(fs.readdirSync(replacement)).toEqual([]);
@@ -169,7 +186,7 @@ test.each(process.platform === "win32" ? ["file"] : ["file", "symlink"])(
     const captured = captureWrites(path.join(root, "custom.json"));
     await Promise.resolve();
     fs.unlinkSync(selected);
-    expect(() => captured.resolveIdentity(selected)).toThrow();
+    expect(() => resolveWrite(captured, selected)).toThrow();
     expect(fs.existsSync(selected)).toBe(false);
   },
 );

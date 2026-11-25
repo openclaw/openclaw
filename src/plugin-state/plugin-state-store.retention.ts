@@ -1,3 +1,4 @@
+import type { Expression } from "kysely";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -45,7 +46,7 @@ type PluginStateRetention = {
   namespaceCount: number;
   nextExpiry: number;
   now: number;
-  sweepPending: boolean;
+  sweepPending: false | "known" | "unknown";
 };
 
 type PluginStateRetentionParams = { pluginId: string; namespace: string; now: number };
@@ -55,30 +56,36 @@ type PluginStateRetentionRow = {
   first_expiry: number | bigint | null;
 };
 
+function selectPluginStateRetention(db: EngineConnection, now: Expression<number>) {
+  // Expired rows trigger cleanup; only a live deadline invalidates the retained count.
+  return getPluginStateKysely(db)
+    .selectFrom("plugin_state_entries")
+    .select((eb) => [
+      eb.fn
+        .sum<number | bigint | null>(
+          eb
+            .case()
+            .when(eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)]))
+            .then(1)
+            .else(0)
+            .end(),
+        )
+        .as("namespace_count"),
+      eb.fn
+        .min<number | bigint | null>(
+          eb.case().when("expires_at", ">", now).then(eb.ref("expires_at")).else(null).end(),
+        )
+        .as("next_expiry"),
+      eb.fn.min<number | bigint | null>("expires_at").as("first_expiry"),
+    ]);
+}
+
 const pluginStateRetentionQuery = createSqliteQueryCache((db: EngineConnection) =>
-  prepareSqliteQuerySync<PluginStateRetentionParams, PluginStateRetentionRow>(db, (parameter) => {
-    const now = parameter((value) => value.now);
-    // Expired rows trigger cleanup; only a live deadline invalidates the retained count.
-    return getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
-      .select((eb) => [
-        eb.fn
-          .sum<number | bigint | null>(
-            eb
-              .case()
-              .when(eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)]))
-              .then(1)
-              .else(0)
-              .end(),
-          )
-          .as("namespace_count"),
-        eb.fn
-          .min<number | bigint | null>(
-            eb.case().when("expires_at", ">", now).then(eb.ref("expires_at")).else(null).end(),
-          )
-          .as("next_expiry"),
-        eb.fn.min<number | bigint | null>("expires_at").as("first_expiry"),
-      ])
+  prepareSqliteQuerySync<PluginStateRetentionParams, PluginStateRetentionRow>(db, (parameter) =>
+    selectPluginStateRetention(
+      db,
+      parameter((value) => value.now),
+    )
       .where(
         "plugin_id",
         "=",
@@ -88,20 +95,78 @@ const pluginStateRetentionQuery = createSqliteQueryCache((db: EngineConnection) 
         "namespace",
         "=",
         parameter((value) => value.namespace),
-      );
-  }),
+      ),
+  ),
 );
+
+type PluginStateRetentionBatchParams = {
+  pluginId: string;
+  namespaces: readonly string[];
+  now: number;
+};
+// Separate indexed aggregates keep undeclared namespaces out of the query plan.
+const pluginStateRetentionBatchQueries = Array.from({ length: 4 }, (_, lastIndex) =>
+  createSqliteQueryCache((db: EngineConnection) =>
+    prepareSqliteQuerySync<
+      PluginStateRetentionBatchParams,
+      PluginStateRetentionRow & { namespace: string }
+    >(db, (parameter) => {
+      const select = (index: number) =>
+        selectPluginStateRetention(
+          db,
+          parameter((value) => value.now),
+        )
+          .select(parameter((value) => value.namespaces[index]!).as("namespace"))
+          .where(
+            "plugin_id",
+            "=",
+            parameter((value) => value.pluginId),
+          )
+          .where(
+            "namespace",
+            "=",
+            parameter((value) => value.namespaces[index]!),
+          );
+      let query = select(0);
+      for (let index = 1; index <= lastIndex; index++) {
+        query = query.unionAll(select(index));
+      }
+      return query;
+    }),
+  ),
+);
+
+export function readPluginStateRetentionBatch(
+  db: EngineConnection,
+  params: PluginStateRetentionBatchParams,
+): Map<string, PluginStateRetention> {
+  const read = pluginStateRetentionBatchQueries[params.namespaces.length - 1]!;
+  const rows = new Map(read(db)(params).rows.map((row) => [row.namespace, row]));
+  return new Map(
+    params.namespaces.map((namespace) => [
+      namespace,
+      pluginStateRetentionFromRow(rows.get(namespace), params.now),
+    ]),
+  );
+}
 
 export function readPluginStateRetention(
   db: EngineConnection,
   params: PluginStateRetentionParams,
 ): PluginStateRetention {
-  const row = pluginStateRetentionQuery(db)(params).rows[0];
+  return pluginStateRetentionFromRow(pluginStateRetentionQuery(db)(params).rows[0], params.now);
+}
+
+function pluginStateRetentionFromRow(
+  row: PluginStateRetentionRow | undefined,
+  now: number,
+): PluginStateRetention {
   return {
     namespaceCount: coerceRequiredSqliteNumber(row?.namespace_count ?? 0),
     nextExpiry: normalizeSqliteNumber(row?.next_expiry ?? null) ?? Infinity,
-    now: params.now,
-    sweepPending: (normalizeSqliteNumber(row?.first_expiry ?? null) ?? Infinity) <= params.now,
+    now,
+    sweepPending:
+      (normalizeSqliteNumber(row?.first_expiry ?? null) ?? Infinity) <= now ? "known" : false,
   };
 }
 
@@ -237,9 +302,14 @@ export function registerPluginStateEntry(
     Object.assign(retention, readPluginStateRetention(store.db, { ...params, now }));
   }
   if (!retention || retention.sweepPending) {
-    const deleted = deleteExpiredPluginStateEntries(store.db, now, params);
+    const deleted = deleteExpiredPluginStateEntries(
+      store.db,
+      now,
+      params,
+      retention?.sweepPending === "known",
+    );
     if (retention) {
-      retention.sweepPending = deleted === PLUGIN_STATE_EXPIRY_BATCH_ROWS;
+      retention.sweepPending = deleted === PLUGIN_STATE_EXPIRY_BATCH_ROWS ? "unknown" : false;
     }
   }
   // Quotas and batch counts need existence, never the previous JSON payload.

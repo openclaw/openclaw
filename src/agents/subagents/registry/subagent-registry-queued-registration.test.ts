@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import * as agentEvents from "../../../infra/agent-events.js";
 import {
   rotateAgentEventLifecycleGeneration,
   type AgentEventPayload,
@@ -12,17 +13,14 @@ import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
-  getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
-  runWithGatewayIndependentRootWorkAdmission,
-  tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import * as databaseLifecycle from "../../../state/openclaw-state-db-cache.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import { runSpawnPipeline } from "../../spawn-pipeline.js";
-import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -33,12 +31,11 @@ import { registerQueuedRegistrationClaimCases } from "./subagent-registry-queued
 import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
 import { registerQueuedUnknownKillAuthorityTest } from "./subagent-registry-queued-uncertain-kill.test-support.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
-import * as runPause from "./subagent-registry-run-pause.js";
-import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
 
 afterEach(() => {
   resetGatewayWorkAdmission();
+  vi.restoreAllMocks();
 });
 
 const mocks = vi.hoisted(() => ({
@@ -51,11 +48,10 @@ vi.mock("./subagent-registry.js", () => ({
   startQueuedSubagentRun: vi.fn(),
 }));
 
-it("awaits intent and descriptor acknowledgements through the spawn pipeline", async () => {
+it("awaits the queued intent acknowledgement through the spawn pipeline", async () => {
   await withQueuedRegistrationFixture(async (f) => {
     mocks.register.mockImplementation(f.manager.registerSubagentRun);
     const intent = f.holdNextWrite();
-    const descriptor = f.holdNextWrite();
     const cleanup = vi.fn(async () => {});
     const release = vi.fn();
     let completed = false;
@@ -76,51 +72,38 @@ it("awaits intent and descriptor acknowledgements through the spawn pipeline", a
     );
     await intent.entered;
     expect(f.runs.has(f.registration.runId)).toBe(false);
-    expect(f.stored()?.queuedLaunch).toBeUndefined();
+    expect(f.stored()?.execution.status).toBe("queued");
     expect(completed).toBe(false);
-    intent.release();
-    await descriptor.entered;
-    expect(f.current().queuedLaunch).toBeUndefined();
-    expect(f.stored()?.queuedLaunch).toEqual(f.registration.queuedLaunch);
     expect(release).not.toHaveBeenCalled();
-    descriptor.release();
+    intent.release();
     expect(await pipeline).toMatchObject({ ok: true });
-    expect(f.current().queuedLaunch).toEqual(f.registration.queuedLaunch);
+    expect(f.current().execution.status).toBe("queued");
+    expect(f.writes).toBe(1);
     expect(cleanup).not.toHaveBeenCalled();
   });
 });
 
-it.each(["intent", "descriptor"] as const)(
-  "fences an uncertain %s acknowledgement without speculative publication",
-  async (phase) => {
-    await withQueuedRegistrationFixture(async (f) => {
-      const intent = f.holdNextWrite();
-      const descriptor = phase === "descriptor" ? f.holdNextWrite() : undefined;
-      const registration = f.register();
-      await intent.entered;
-      if (descriptor) {
-        intent.release();
-        await descriptor.entered;
-      }
-      (descriptor ?? intent).loseReceipt(
-        new SqliteWorkerError("acknowledgement lost", "outcome-unknown"),
-      );
-      await expect(registration).rejects.toMatchObject({ outcome: "unknown" });
-      expect(f.runs.get(f.registration.runId)?.queuedLaunch).toBeUndefined();
-      expect(f.scope.canLaunch()).toBe(false);
-      expect(f.scope.canCleanupSession()).toBe(false);
-      expect(f.scope.canRetireReservation()).toBe(false);
-      await expect(f.scope.settleFailedLaunch("retained failure")).rejects.toMatchObject({
-        outcome: "unknown",
-      });
-      const writes = f.writes;
-      await expect(
-        mutateSubagentRuns([f.registration.runId], () => ({ value: true }), { runs: f.runs }),
-      ).rejects.toMatchObject({ outcome: "unknown" });
-      expect(f.writes).toBe(writes);
+it("fences an uncertain intent acknowledgement without speculative publication", async () => {
+  await withQueuedRegistrationFixture(async (f) => {
+    const intent = f.holdNextWrite();
+    const registration = f.register();
+    await intent.entered;
+    intent.loseReceipt(new SqliteWorkerError("acknowledgement lost", "outcome-unknown"));
+    await expect(registration).rejects.toMatchObject({ outcome: "unknown" });
+    expect(f.runs.has(f.registration.runId)).toBe(false);
+    expect(f.scope.canLaunch()).toBe(false);
+    expect(f.scope.canCleanupSession()).toBe(false);
+    expect(f.scope.canRetireReservation()).toBe(false);
+    await expect(f.scope.settleFailedLaunch("retained failure")).rejects.toMatchObject({
+      outcome: "unknown",
     });
-  },
-);
+    const writes = f.writes;
+    await expect(
+      mutateSubagentRuns([f.registration.runId], () => ({ value: true }), { runs: f.runs }),
+    ).rejects.toMatchObject({ outcome: "unknown" });
+    expect(f.writes).toBe(writes);
+  });
+});
 
 it("leaves no speculative intent when registration is refused before native admission", async () => {
   await withQueuedRegistrationFixture(async (f) => {
@@ -137,59 +120,6 @@ it("leaves no speculative intent when registration is refused before native admi
     await expect(registration).rejects.toThrow("registration retired");
     expect(f.runs.size).toBe(0);
     expect(f.stored()).toBeUndefined();
-  });
-});
-
-it("rejects and terminalizes an intent superseded while descriptor admission waits", async () => {
-  await withQueuedRegistrationFixture(async (f) => {
-    const intent = f.holdNextWrite();
-    const earlierMutation = f.holdNextWrite("before");
-    const descriptorPrechecked = createDeferred();
-    const registration = f.register(() => {
-      if (f.runs.has(f.registration.runId)) {
-        descriptorPrechecked.resolve();
-      }
-    });
-    await intent.entered;
-    const changing = f.change((draft) => {
-      draft.label = "metadata before descriptor";
-    });
-    intent.release();
-    await earlierMutation.entered;
-    await descriptorPrechecked.promise;
-    const original = f.current();
-    const successor = {
-      ...structuredClone(original),
-      runId: "queued-successor",
-      generation: (original.generation ?? 0) + 1,
-      queuedLaunch: f.registration.queuedLaunch,
-    };
-    await mutateSubagentRuns(
-      [successor.runId],
-      () => ({ value: undefined, postimages: new Map([[successor.runId, successor]]) }),
-      { runs: f.runs },
-    );
-    earlierMutation.release();
-    await changing;
-    await expect(registration).rejects.toThrow("Queued registration lost its original run owner");
-    expect(f.current()).toMatchObject({
-      execution: { status: "terminal", suppressSessionEffects: true },
-      collectorLaunchCleanupPending: true,
-      queuedLaunch: undefined,
-    });
-    const stored = f.stored();
-    expect(stored).toMatchObject({
-      execution: {
-        status: "terminal",
-        outcome: { status: "error", error: "Queued registration lost its original run owner" },
-        suppressSessionEffects: true,
-      },
-      collectorLaunchCleanupPending: true,
-    });
-    expect(stored?.queuedLaunch).toBeUndefined();
-    expect(f.runs.get(successor.runId)).toEqual(successor);
-    expect(f.scope.canLaunch()).toBe(false);
-    expect(f.scope.canCleanupSession()).toBe(false);
   });
 });
 
@@ -212,7 +142,6 @@ it.each(["main", "research"] as const)(
         sessionId: "research-collector-session",
         lifecycleRevision: "research-collector-lifecycle",
       };
-      f.registration.queuedLaunch!.request.sessionKey = "global";
       for (const [agentId, inputTokens, outputTokens] of [
         ["main", 11, 13],
         ["research", 101, 103],
@@ -233,17 +162,10 @@ it.each(["main", "research"] as const)(
           },
         );
       }
-      const intent = f.holdNextWrite();
-      const descriptor = f.holdNextWrite("before");
-      const registration = f.register();
-      await intent.entered;
-      intent.release();
-      await descriptor.entered;
-      descriptor.reject(new Error("descriptor refused"));
-      await expect(registration).rejects.toThrow("descriptor refused");
+      await f.register();
+      await f.scope.settleFailedLaunch("dispatch refused");
       expect(f.current()).toMatchObject({
         execution: { status: "terminal", outcome: { status: "error" } },
-        queuedLaunch: undefined,
         collectorLaunchCleanupPending: true,
       });
       expect(f.stored()?.execution.status).toBe("terminal");
@@ -256,131 +178,18 @@ it.each(["main", "research"] as const)(
   },
 );
 
-it("serializes Stop after a pending descriptor without losing either commit", async () => {
-  await withQueuedRegistrationFixture(async (f) => {
-    const intent = f.holdNextWrite();
-    const descriptor = f.holdNextWrite();
-    const registration = f.register();
-    await intent.entered;
-    intent.release();
-    await descriptor.entered;
-    const captured = f.current();
-    const killing = f.track(f.manager.markSubagentRunTerminated({ runId: captured.runId }));
-    descriptor.release();
-    await registration;
-    expect(await killing).toBe(1);
-    expect(captured.execution.status).toBe("queued");
-    expect(f.current()).toMatchObject({
-      execution: { status: "terminal" },
-      killReconciliation: { taskCancellationAccepted: undefined },
-    });
-    expect(f.stored()?.execution.status).toBe("terminal");
-    expect(f.scope.canLaunch()).toBe(false);
-  });
-});
-
-it.each(["open", "restart", "suspend"] as const)(
-  "owns lifecycle preservation before its first await with admission %s",
-  async (fence) => {
-    await withQueuedRegistrationFixture(async (f) => {
-      await f.register();
-      const release = createDeferred();
-      const preserve = runPause.preserveSubagentRunForRestart;
-      const preservation = vi
-        .spyOn(runPause, "preserveSubagentRunForRestart")
-        .mockImplementation((params) => f.track(release.promise.then(() => preserve(params))));
-      let emit: ((event: AgentEventPayload) => void) | undefined;
-      const complete = vi.fn(async () => {});
-      const warn = vi.fn();
-      const listener = createSubagentRegistryListener({
-        runs: f.runs,
-        pendingLifecycle: createPendingLifecycleScheduler({
-          runs: f.runs,
-          completeInBackground: vi.fn(),
-        }),
-        onAgentEvent: (handler) => {
-          emit = handler;
-          return () => {};
-        },
-        resumeRequesterSettleWake: vi.fn(),
-        adoptPausedSubagentRunIntoSuccessor: async () => false,
-        refreshFrozenResultFromSession: async () => {},
-        completeSubagentRunWithRecovery: complete,
-        warn,
-      });
-      const dispatch = async () => {
-        const settleRootWork = observeRootWork();
-        if (fence === "restart") {
-          markGatewayRestartDraining();
-        } else if (fence === "suspend") {
-          expect(tryBeginGatewaySuspendAdmission(() => {})?.drain()).toBe(true);
-        }
-        try {
-          emit?.({
-            runId: f.registration.runId,
-            seq: 1,
-            stream: "lifecycle",
-            ts: Date.now(),
-            data: {
-              phase: "end",
-              endedAt: Date.now(),
-              ...(fence === "restart" ? { aborted: true, stopReason: "restart" } : {}),
-            },
-          });
-          expect(preservation).toHaveBeenCalledOnce();
-          expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(1);
-        } finally {
-          release.resolve();
-          await settleRootWork();
-        }
-        expect(warn).not.toHaveBeenCalled();
-        expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(0);
-        if (fence === "restart") {
-          expect(f.current().execution.status).toBe("interrupted");
-          expect(complete).not.toHaveBeenCalled();
-        } else {
-          expect(complete).toHaveBeenCalledOnce();
-        }
-      };
-      listener.ensure();
-      try {
-        if (fence === "open") {
-          await dispatch();
-        } else {
-          await runWithGatewayIndependentRootWorkAdmission(dispatch, "test:lifecycle-parent");
-        }
-      } finally {
-        release.resolve();
-        listener.reset();
-        preservation.mockRestore();
-        resetGatewayWorkAdmission();
-      }
-    });
-  },
-);
-
 it.each([false, true])(
   "refuses delayed launch acceptance during a kill claim after start=%s",
   async (started) => {
     await withQueuedRegistrationFixture(async (f) => {
       await f.register();
       let emit: ((event: AgentEventPayload) => void) | undefined;
-      const listener = createSubagentRegistryListener({
-        runs: f.runs,
-        pendingLifecycle: createPendingLifecycleScheduler({
-          runs: f.runs,
-          completeInBackground: vi.fn(),
-        }),
-        onAgentEvent: (handler) => {
-          emit = handler;
-          return () => {};
-        },
-        resumeRequesterSettleWake: vi.fn(),
-        adoptPausedSubagentRunIntoSuccessor: async () => false,
-        refreshFrozenResultFromSession: async () => {},
-        completeSubagentRunWithRecovery: async () => {},
-        warn: vi.fn(),
+      vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+      vi.spyOn(agentEvents, "onAgentEvent").mockImplementation((handler) => {
+        emit = handler;
+        return () => {};
       });
+      const listener = f.createListener();
       listener.ensure();
       try {
         if (started) {
@@ -439,20 +248,12 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
         runs: f.runs,
         completeInBackground,
       });
-      const warn = vi.fn();
-      const listener = createSubagentRegistryListener({
-        runs: f.runs,
-        pendingLifecycle,
-        onAgentEvent: (handler) => {
-          emit = handler;
-          return () => {};
-        },
-        resumeRequesterSettleWake: vi.fn(),
-        adoptPausedSubagentRunIntoSuccessor: async () => false,
-        refreshFrozenResultFromSession: async () => {},
-        completeSubagentRunWithRecovery: async () => {},
-        warn,
+      const warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+      vi.spyOn(agentEvents, "onAgentEvent").mockImplementation((handler) => {
+        emit = handler;
+        return () => {};
       });
+      const listener = f.createListener({ pendingLifecycle });
       const restarted = createDeferred();
       const stop = subscribeSubagentRunChanges("persistence", () => {
         if (f.current().execution.startedAt === 20) {
@@ -550,7 +351,6 @@ it.each(["transaction", "commit"] as const)(
         expect(f.runs.has("accepted-run")).toBe(false);
         expect(f.stored()).toMatchObject({
           execution: { status: "queued" },
-          queuedLaunch: f.registration.queuedLaunch,
         });
       } finally {
         admission.mockRestore();
@@ -582,7 +382,6 @@ it.each(["same-id", "different-id"] as const)(
         expect(f.current()).toMatchObject({
           execution: { status: "terminal", suppressSessionEffects: true },
           collectorLaunchCleanupPending: true,
-          queuedLaunch: undefined,
         });
       }
     });
@@ -594,12 +393,9 @@ it.each(["before", "ack"] as const)(
   async (phase) => {
     await withQueuedRegistrationFixture(async (f) => {
       await f.register();
-      const recovery = f.holdNextWrite();
       const terminal = f.holdNextWrite(phase);
       const captured = f.current();
       const settling = f.track(f.scope.settleFailedLaunch("launch failed"));
-      await recovery.entered;
-      recovery.release();
       await terminal.entered;
       expect(f.current().execution.status).toBe("queued");
       expect(captured.execution.status).toBe("queued");

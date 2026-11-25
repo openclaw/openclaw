@@ -1,7 +1,23 @@
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { asNonNegativeFiniteNumber as numericValue } from "openclaw/plugin-sdk/number-runtime";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { seconds } from "./prometheus-format.js";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
+
+const GC_DURATION_NAME = "openclaw_gc_duration_seconds";
+const GC_DURATION_HELP =
+  "Elapsed garbage collection duration in seconds by collection kind, callback flags, and isolate role.";
+
+export function reserveMainGcHistograms(store: PrometheusMetricStore): void {
+  // The first native batch can arrive after startup traffic fills the shared series cap.
+  for (const kind of ["scavenge", "mark_sweep_compact", "incremental", "weak_processing"]) {
+    store.reserveHistogram(GC_DURATION_NAME, GC_DURATION_HELP, {
+      kind,
+      reason: "other",
+      thread: "main",
+    });
+  }
+}
 
 // Preserve existing le series while narrowing RPC quantile interpolation through 30 seconds.
 const RPC_DURATION_BUCKETS_SECONDS = [
@@ -28,8 +44,39 @@ const CATALOG_LIST_PHASES = new Set([
   "projection_final",
   "delivery",
 ]);
+const CHAT_STARTUP_PHASE =
+  /^chat\.startup\.(session_entry|pending_inputs|history_page|startup_projection|projection_final|session_info)$/;
+const DIFF_CACHE_MISS_REASONS = new Set([
+  "cold",
+  "evicted",
+  "pending",
+  "no-revision",
+  "no-revision-environment",
+  "no-revision-platform",
+  "no-revision-metadata",
+  "no-revision-git-installation",
+  "no-revision-config",
+  "no-revision-reftable",
+  "no-revision-alternates",
+  "no-revision-symlink",
+  "no-revision-nested-repository",
+  "no-revision-status",
+  "no-revision-unmerged",
+  "no-revision-submodule",
+  "no-revision-permission",
+  "no-revision-missing",
+  "no-revision-io",
+  "oversized",
+  "revision-changed-head",
+  "revision-changed-index",
+  "revision-changed-untracked-set",
+  "revision-changed-worktree-mtime",
+  "revision-changed-metadata",
+]);
 const CHAT_SEND_PHASE =
   /^chat\.send\.(authority|admission|preparation|attachments|replyContext|authoring|persist|runAdmission|replyInitialization|snapshot|worktree|effects|response|dispatch)$/;
+const CONTROL_UI_DOCUMENT_STAGE =
+  /^control-ui\.document\.(auth_grants|identity_avatar|plugin_catalog|git_branch|preferences|render|total)$/;
 
 export function recordOperationTimingEvent(
   store: PrometheusMetricStore,
@@ -37,6 +84,8 @@ export function recordOperationTimingEvent(
     DiagnosticEventPayload,
     {
       type:
+        | "queue.lane.enqueue"
+        | "queue.lane.dequeue"
         | "gateway.rpc"
         | "sessions.list.baseline.retired"
         | "diagnostic.phase.completed"
@@ -51,6 +100,30 @@ export function recordOperationTimingEvent(
   metadata: DiagnosticEventMetadata,
 ): void {
   switch (evt.type) {
+    case "queue.lane.enqueue":
+    case "queue.lane.dequeue": {
+      // Custom lane names can carry identities even before the first colon.
+      const lane =
+        /^(main|system-agent|system-agent-inference|cron|cron-nested|hook-dispatch|background|restart-recovery|subagent|active-memory|nested|session|cli|context-engine-turn-maintenance|dreaming-narrative|voice|talk|workboard|facetime)(?=:|$)/.exec(
+          evt.lane.trim(),
+        )?.[1] ?? "unknown";
+      const labels = { lane };
+      store.gauge(
+        "openclaw_queue_lane_size",
+        "Current diagnostic queue lane size.",
+        labels,
+        numericValue(evt.queueSize),
+      );
+      if (evt.type === "queue.lane.dequeue") {
+        store.histogram(
+          "openclaw_queue_lane_wait_seconds",
+          "Queue lane wait time in seconds.",
+          labels,
+          seconds(evt.waitMs),
+        );
+      }
+      return;
+    }
     case "sessions.list.baseline.retired":
       if (metadata.trusted) {
         store.counter(
@@ -86,9 +159,24 @@ export function recordOperationTimingEvent(
       );
       return;
     case "diagnostic.gc":
+      if (evt.kind === "mark_sweep_compact") {
+        const labels = { thread: evt.thread ?? "main" };
+        store.gauge(
+          "openclaw_heap_used_after_major_gc_bytes",
+          "Native used heap after the latest received major collection by isolate role.",
+          labels,
+          evt.heapUsedAfterMajorGcBytes,
+        );
+        store.gauge(
+          "openclaw_heap_used_after_major_gc_timestamp_seconds",
+          "Unix observation time of the latest received native major-GC heap sample.",
+          labels,
+          evt.heapUsedAfterMajorGcTimestampSeconds,
+        );
+      }
       store.histogram(
-        "openclaw_gc_duration_seconds",
-        "Elapsed garbage collection duration in seconds by collection kind, callback flags, and isolate role.",
+        GC_DURATION_NAME,
+        GC_DURATION_HELP,
         {
           kind: evt.kind ?? "unknown",
           reason: evt.reason ?? "other",
@@ -133,10 +221,32 @@ export function recordOperationTimingEvent(
       if (!metadata.trusted) {
         return;
       }
+      const documentStage = CONTROL_UI_DOCUMENT_STAGE.exec(evt.name)?.[1];
+      if (documentStage) {
+        store.histogram(
+          "openclaw_control_ui_document_duration_seconds",
+          "Elapsed Control UI HTML document handler stages in seconds; stages can overlap.",
+          { stage: documentStage },
+          seconds(evt.durationMs),
+        );
+        return;
+      }
       if (evt.name === "sessions.diff" || evt.name === "checkout.diff") {
         const outcome = evt.details?.outcome;
         if (outcome !== "cache-hit" && outcome !== "cache-miss") {
           return;
+        }
+        const reason = evt.details?.missReason;
+        if (
+          outcome === "cache-miss" &&
+          typeof reason === "string" &&
+          DIFF_CACHE_MISS_REASONS.has(reason)
+        ) {
+          store.counter(
+            "openclaw_diff_cache_misses_total",
+            "Local diff cache misses by bounded reason; pending reads join an existing load.",
+            { method: evt.name, reason },
+          );
         }
         for (const stage of [
           "admission",
@@ -158,7 +268,36 @@ export function recordOperationTimingEvent(
         return;
       }
       if (evt.name === "worktree.preparation") {
-        recordWorktreePreparation(store, evt);
+        const { kind, template, outcome } = evt.details ?? {};
+        if (
+          (kind !== "managed" && kind !== "sandbox") ||
+          !["warm", "cold", "unavailable", "reused"].includes(String(template)) ||
+          (outcome !== "returned" && outcome !== "threw")
+        ) {
+          return;
+        }
+        for (const preparationPhase of [
+          "total",
+          "allocate",
+          "checkout",
+          "setup",
+          "templatePrepare",
+          "templateApply",
+          "snapshot",
+          "synchronizeCanonical",
+          "synchronizeProjection",
+          "containerStart",
+          "workspaceLayout",
+        ]) {
+          const elapsed =
+            preparationPhase === "total" ? evt.durationMs : evt.details?.[preparationPhase];
+          store.histogram(
+            "openclaw_worktree_preparation_seconds",
+            "Elapsed managed worktree preparation time; nested phases are inclusive.",
+            { kind, template: String(template), outcome, phase: preparationPhase },
+            typeof elapsed === "number" ? seconds(elapsed) : undefined,
+          );
+        }
         return;
       }
       const sendPhase = CHAT_SEND_PHASE.exec(evt.name)?.[1];
@@ -172,6 +311,16 @@ export function recordOperationTimingEvent(
             seconds(evt.durationMs),
           );
         }
+        return;
+      }
+      const startupPhase = CHAT_STARTUP_PHASE.exec(evt.name)?.[1];
+      if (startupPhase) {
+        store.histogram(
+          "openclaw_gateway_rpc_stage_seconds",
+          "Elapsed time for completed Gateway RPC owner stages.",
+          { method: "chat.startup", phase: startupPhase },
+          seconds(evt.durationMs),
+        );
         return;
       }
       if (!evt.name.startsWith(CATALOG_LIST_PHASE_PREFIX)) {
@@ -218,14 +367,11 @@ export function recordOperationTimingEvent(
           const catalog = evt.modelsList;
           store.counter(
             "openclaw_models_list_requests_total",
-            "Model catalog requests by client kind and bounded request shape.",
+            "Model catalog requests by source, view, and scope.",
             {
-              client_kind: catalog.clientKind,
               source: catalog.source,
               view: catalog.view,
               scope: catalog.scope,
-              refresh: String(catalog.refresh),
-              prepared_only: String(catalog.preparedOnly),
             },
           );
         }
@@ -247,9 +393,8 @@ export function recordOperationTimingEvent(
           const cron = evt.cronList;
           store.counter(
             "openclaw_cron_list_requests_total",
-            "Cron list requests by client kind and bounded request shape.",
+            "Cron list requests by source and bounded request shape.",
             {
-              client_kind: cron.clientKind,
               source: cron.source,
               scope: cron.scope,
               compact: String(cron.compact),
@@ -375,40 +520,5 @@ export function recordOperationTimingEvent(
         );
       }
     }
-  }
-}
-
-function recordWorktreePreparation(
-  store: PrometheusMetricStore,
-  evt: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>,
-) {
-  const { kind, template, outcome } = evt.details ?? {};
-  if (
-    (kind !== "managed" && kind !== "sandbox") ||
-    !["warm", "cold", "unavailable", "reused"].includes(String(template)) ||
-    (outcome !== "returned" && outcome !== "threw")
-  ) {
-    return;
-  }
-  for (const phase of [
-    "total",
-    "allocate",
-    "checkout",
-    "setup",
-    "templatePrepare",
-    "templateApply",
-    "snapshot",
-    "synchronizeCanonical",
-    "synchronizeProjection",
-    "containerStart",
-    "workspaceLayout",
-  ]) {
-    const elapsed = phase === "total" ? evt.durationMs : evt.details?.[phase];
-    store.histogram(
-      "openclaw_worktree_preparation_seconds",
-      "Elapsed managed worktree preparation time; nested phases are inclusive.",
-      { kind, template: String(template), outcome, phase },
-      typeof elapsed === "number" ? seconds(elapsed) : undefined,
-    );
   }
 }

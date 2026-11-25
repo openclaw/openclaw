@@ -7,6 +7,7 @@ import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-ke
 import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import type { DoctorSessionSqliteIssue } from "../../infra/session-sqlite-migration-issues.js";
+import { decodeUtf8Input } from "../../infra/utf8-input.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -84,7 +85,7 @@ export function readLegacySessionStoreEntries(
       }
       // Fail closed if the pinned file grows past the size validated above.
       raw = readFileDescriptorBoundedSync(fd, storeStat.size);
-      parsed = JSON.parse(raw.toString("utf-8"));
+      parsed = JSON.parse(decodeUtf8Input(raw, `Legacy session index ${target.storePath}`));
     } catch (err) {
       issues.push({
         code: "store_unreadable",

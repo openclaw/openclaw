@@ -160,14 +160,6 @@ export function* nativeAttemptAttachments(): IterableIterator<ActiveEmbeddedRunA
   yield* detachedAttempts;
 }
 
-/** @internal Exposed for unit tests only. */
-export function* activeNativeAttempts(): IterableIterator<[string, EmbeddedAgentQueueHandle]> {
-  for (const attachment of nativeAttemptAttachments()) {
-    if (attachment.operation || !hasSessionControllerIdentity(attachment.sessionId)) {
-      yield [attachment.sessionId, attachment.handle];
-    }
-  }
-}
 export function attachNativeAttempt(attachment: ActiveEmbeddedRunAttachment): void {
   if (attachment.operation) {
     attachControllerNativeAttempt(attachment.operation, attachment);
@@ -239,7 +231,7 @@ export function captureActiveEmbeddedRunPersonalToolParticipants(
       handle.isStopped?.() ||
       !ownsRegistration()
     ) {
-      throw new Error("Personal-tool turn authority is no longer active; ask again in a new turn.");
+      throw new Error("This agent run is no longer active. Start a new turn to retry.");
     }
   };
   assertCurrent();
@@ -311,12 +303,8 @@ type EmbeddedRunRecoveryBlocker =
 /** Re-read at the recovery action, including after queued/lazy recovery dispatch. */
 export function resolveActiveEmbeddedRunRecoveryBlocker(
   sessionId: string,
-  expectedHandle?: object,
 ): EmbeddedRunRecoveryBlocker {
   const handle = getActiveNativeAttempt(sessionId);
-  if (expectedHandle && handle !== expectedHandle) {
-    return "stale_session_state";
-  }
   const registration = handle && getEmbeddedRunAttachment(handle);
   return registration
     ? resolveRegisteredEmbeddedRunRecoveryBlocker(

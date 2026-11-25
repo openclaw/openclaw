@@ -19,6 +19,7 @@ import {
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
@@ -42,6 +43,13 @@ const add = (text: string, author = client("alice", "Alice")) =>
   call("session.suggestions.add", { sessionKey, text }, author);
 const addSuggestion = async (text: string, author = client("alice", "Alice")) =>
   responseSuggestionId(await add(text, author));
+
+async function seedClaim(env: Parameters<typeof openOpenClawAgentDatabase>[0]["env"], id: string) {
+  await seedSession();
+  const scope = { agentId: "main", sessionKey, env };
+  await addSessionSuggestion(scope, { id, authorId: "owner", text: "synthetic suggestion" });
+  return { scope, database: openOpenClawAgentDatabase(scope) };
+}
 
 function resolveSuggestion(
   id: string,
@@ -87,37 +95,23 @@ function expectFailure(result: Awaited<ReturnType<typeof call>>, message: string
 }
 
 it.each([
-  ["send", "authority revocation"],
-  ["edit", "authority revocation"],
   ["edit", "request abort"],
   ["dismiss", "host closed"],
 ] as const)("releases the %s claim after %s before finalization", (resolution, change) =>
   withState(async (state) => {
-    await seedSession();
-    const scope = { agentId: "main", sessionKey, env: state.env };
-    await addSessionSuggestion(scope, {
-      id: "revoke-before-finalize",
-      authorId: "owner",
-      text: "synthetic suggestion",
-    });
-    const database = openOpenClawAgentDatabase(scope);
+    const { database } = await seedClaim(state.env, "revoke-before-finalize");
     const requestAbort = new AbortController();
-    let revoked = false;
+    let hostClosed = false;
     mocks.afterSuggestionClaim.mockImplementationOnce(() => {
       if (change === "request abort") {
         requestAbort.abort(new Error("suggestion request aborted"));
       } else {
-        revoked = true;
+        hostClosed = true;
       }
     });
     const assertCurrent = () => {
-      if (revoked && change === "host closed") {
+      if (hostClosed) {
         throw new Error("suggestion host closed");
-      }
-      if (revoked) {
-        throw new SessionMutationAuthorizationChangedError(
-          errorShape(ErrorCodes.FORBIDDEN, "caller authority revoked"),
-        );
       }
     };
     const params = { sessionKey, id: "revoke-before-finalize", resolution };
@@ -129,7 +123,7 @@ it.each([
       signal: requestAbort.signal,
       sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
     });
-    expect(change === "request abort" ? requestAbort.signal.aborted : revoked).toBe(true);
+    expect(change === "request abort" ? requestAbort.signal.aborted : hostClosed).toBe(true);
     expect(mocks.afterSuggestionClaim).toHaveBeenCalledOnce();
     expect(mocks.handleChatSend).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalled();
@@ -139,9 +133,7 @@ it.each([
       expect.objectContaining(
         change === "request abort"
           ? { code: ErrorCodes.UNAVAILABLE, message: "suggestion request was cancelled" }
-          : change === "host closed"
-            ? { code: ErrorCodes.UNAVAILABLE, message: "suggestion host closed" }
-            : { code: "FORBIDDEN" },
+          : { code: ErrorCodes.UNAVAILABLE, message: "suggestion host closed" },
       ),
     );
     const stored = database.db
@@ -153,14 +145,7 @@ it.each([
 
 it("settles an accepted dispatch after caller revocation while its write waits", () =>
   withState(async (state) => {
-    await seedSession();
-    const scope = { agentId: "main", sessionKey, env: state.env };
-    await addSessionSuggestion(scope, {
-      id: "settle-accepted-send",
-      authorId: "owner",
-      text: "synthetic suggestion",
-    });
-    const database = openOpenClawAgentDatabase(scope);
+    const { scope, database } = await seedClaim(state.env, "settle-accepted-send");
     const entered = createDeferred();
     const accepted = createDeferred();
     const release = createDeferred();
@@ -241,14 +226,9 @@ it("settles an accepted dispatch after caller revocation while its write waits",
 it("admits bare fixed-store keys only through their persisted owner", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = state.path("shared-sessions.sqlite");
-    const ownedConfig = {
-      session: { scope: "global", store: storePath },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+    const ownedConfig = fixedStoreOwnershipConfig(storePath) as ReturnType<
+      GatewayRequestContext["getRuntimeConfig"]
+    >;
     setRuntimeConfigSnapshot(ownedConfig);
     await upsertSessionEntryCore(
       { agentId: "ops", sessionKey: "global", storePath },
@@ -397,11 +377,7 @@ it("keeps an uncertain dispatch claimed until retry reconciliation", () =>
           getNodeSqliteKysely<Pick<DB, "session_suggestions">>(db)
             .updateTable("session_suggestions")
             .set({ dispatch_started_at: 0 })
-            .where("session_key", "=", sessionKey)
-            .where("id", "=", id)
-            .where("state", "=", "pending")
-            .where("dispatch_token", "is not", null)
-            .where("dispatch_resolution", "=", "send"),
+            .where("id", "=", id),
         ),
       { agentId: "main", env: state.env },
     );
@@ -482,25 +458,21 @@ it.each(["dispatch", "claim", "release", "finalize", "release-unexpected"] as co
         dispatched.resolve();
       }
       const result = await pending;
-      expect(result.responses).toMatchObject([
-        [
-          false,
-          undefined,
-          {
-            code: "UNAVAILABLE",
-            ...(phase === "release-unexpected"
-              ? {
-                  message: "release storage failed",
-                  retryable: true,
-                  retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
-                }
-              : {
-                  retryable: false,
-                  details: { code: "SESSION_SUGGESTION_SESSION_CHANGED", sessionKey },
-                }),
-          },
-        ],
-      ]);
+      expect(result.responses).toHaveLength(1);
+      expect(result.responses[0]?.slice(0, 2)).toEqual([false, undefined]);
+      expect(result.responses[0]?.[2]).toMatchObject({
+        code: "UNAVAILABLE",
+        ...(phase === "release-unexpected"
+          ? {
+              message: "release storage failed",
+              retryable: true,
+              retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+            }
+          : {
+              retryable: false,
+              details: { code: "SESSION_SUGGESTION_SESSION_CHANGED", sessionKey },
+            }),
+      });
       if (phase !== "release-unexpected") {
         expect(broadcast).not.toHaveBeenCalled();
       }

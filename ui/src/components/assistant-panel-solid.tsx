@@ -34,7 +34,7 @@ defineSolidBridge<AssistantPanelProps, Methods>(
       openSessionKey: { configurable: true, get: () => panel.openSessionKey },
       assistantPanelOpen: { configurable: true, get: () => panel.dockLayout.open },
     });
-    return <AssistantPanelView state={state.read} />;
+    return <AssistantPanelView state={state.read} onContentLoaded={panel.notify} />;
   },
   {
     properties: {
@@ -42,6 +42,7 @@ defineSolidBridge<AssistantPanelProps, Methods>(
       custodianAvailable: { default: false, type: Boolean },
       homeAvailable: { default: false, type: Boolean },
       custodianSuppressed: { default: false, type: Boolean },
+      firstUse: { default: false, type: Boolean },
       pageSessionKey: { default: "" },
       getPrimaryChatPane: { default: undefined, attribute: false },
       pageAgentId: { default: "" },

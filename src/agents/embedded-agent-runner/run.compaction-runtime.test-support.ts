@@ -11,6 +11,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
+import { serializeAgentEventCallback } from "../embedded-agent-subscribe.callback.js";
 import type { EmbeddedRunCompactionRecoveryInput } from "./run/compaction-runtime.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { clearEmbeddedSessionPromptStates } from "./session-prompt-state.js";
@@ -269,8 +270,9 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       { hookName: "before_compaction", handler: beforeHook },
       { hookName: "after_compaction", handler: afterHook },
     ]);
-    const onAgentEvent = vi.fn();
-    runParams.onAgentEvent = onAgentEvent;
+    const onAgentEvent =
+      vi.fn<NonNullable<PreparedEmbeddedRunInput["runParams"]["onAgentEvent"]>>();
+    runParams.onAgentEvent = serializeAgentEventCallback(onAgentEvent);
     const runtime = createEmbeddedRunCompactionRuntime({
       runParams,
       contextEngine,
@@ -285,7 +287,6 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       vi.spyOn(sessionPromptState, "continueFromCurrentTranscript"),
       vi.spyOn(sessionPromptState, "markOwnedTranscriptRetry"),
     ];
-    const armPostCompactionGuard = vi.fn();
     const updates = vi.fn();
     unsubscribe = onInternalSessionTranscriptUpdate((event) => {
       if (event.sessionKey === target.sessionKey) {
@@ -306,7 +307,13 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
           sessionIdUsed: sessionId,
           messagesSnapshot: messages,
           ...(mixedPreflight
-            ? { preflightRecovery: { route: "compact_then_truncate", source: "mid-turn" } }
+            ? {
+                preflightRecovery: {
+                  route: "compact_then_truncate",
+                  pressure: "overflow",
+                  source: "mid-turn",
+                },
+              }
             : {}),
         }),
         runtimeAuthPlan: undefined,
@@ -335,7 +342,6 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
           target: sessionPromptState.sessionTarget,
         }),
         prepareCompactedTranscriptRetry: sessionPromptState.prepareCompactedTranscriptRetry,
-        armPostCompactionGuard,
       };
       if (kind === "timeout") {
         return recoverEmbeddedRunTimeout({
@@ -356,6 +362,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         attemptCompactionCount: 0,
         prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
         markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
+        retryTransientCompactionFailure: async () => false,
       });
     };
     const snapshot = async () => {
@@ -417,17 +424,26 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       }
     };
     const expectNoContinuation = () => {
-      for (const retry of [...retries, armPostCompactionGuard, onAgentEvent]) {
+      for (const retry of retries) {
         expect(retry).not.toHaveBeenCalled();
       }
+      expect(
+        onAgentEvent.mock.calls.filter(
+          ([event]) =>
+            event.stream !== "compaction" ||
+            (event.data.phase !== "start" && event.data.phase !== "end"),
+        ),
+      ).toEqual([]);
     };
     return {
+      runParams,
       compact,
       maintain,
       target,
       replyOperation,
       beforeHook,
       afterHook,
+      onAgentEvent,
       updates,
       controller,
       callerError,

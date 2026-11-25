@@ -11,6 +11,7 @@ describe("buildMemoryFlushPlan", () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 30, 12, 0, 0));
 
     const plan = buildMemoryFlushPlan({
+      cfg: { agents: { defaults: { userTimezone: "UTC" } } },
       nowMs: 8_640_000_000_000_001,
     });
 

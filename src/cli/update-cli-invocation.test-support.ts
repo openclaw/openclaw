@@ -1,13 +1,17 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { expect, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
-import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
+import { gitReleaseSlot, resolveGitReleasePrefix } from "../infra/git-release-paths.js";
+import { readGitRuntimeArtifactIdentity } from "../infra/update-git-runtime.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
-import { updateGitCheckout } from "../infra/update-runner-git.js";
+import { updateGitRelease } from "../infra/update-runner-git-release.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { ExitError } from "../runtime.js";
 import type { UpdateCommandOptions } from "./update-cli/shared.js";
+import { writeOpenClawPackageFixture } from "./update-cli/update-cli-package.test-support.js";
 
 const including = (object: Record<string, unknown>) =>
   expect.arrayContaining([expect.objectContaining(object)]);
@@ -76,41 +80,6 @@ export function expectPluginCapabilityRetryNotice(
   }
 }
 
-export function expectUpdateFailureReport(
-  failure: unknown,
-  cause: Error,
-  output: unknown,
-  runId: string | undefined,
-): void {
-  expect(failure).toBeInstanceOf(Error);
-  expect(failure).toMatchObject({
-    name: "UpdateCommandFailure",
-    message: expect.stringContaining(cause.message),
-    exitCode: 1,
-    result: { status: "error", reason: "update-failed" },
-  });
-  expect(collectNestedErrorCandidates(failure)).toContain(cause);
-  expect(output).toMatchObject({
-    status: "error",
-    reason: "update-failed",
-    runId,
-    reportPath: expect.any(String),
-  });
-  expect(JSON.stringify(output)).toContain(cause.message);
-}
-
-export function expectDelegatedPluginDoctorInput(input: unknown): void {
-  expect(JSON.parse(String(input))).toMatchObject({
-    root: process.cwd(),
-    runId: expect.any(String),
-    executor: expect.any(Object),
-    configInputHash: expect.any(String),
-    repair: true,
-    yes: true,
-    workspaceSuggestions: false,
-  });
-}
-
 export function expectSelectorTriageFailure(
   error: unknown,
   diagnostic: unknown,
@@ -153,14 +122,6 @@ export async function invokeUpdateCli(opts: UpdateCommandOptions) {
   await program.parseAsync(args, { from: "user" });
 }
 
-export const devTargetRefusalCases = [
-  ["malformed tracked", "openclaw-dev-target:v1:not+base64url", false, false],
-  ["unknown version tracked", "openclaw-dev-target:v2:hostile-ref", false, false],
-  ["unknown namespace tracked", "other-dev-target:v1:hostile-ref", false, false],
-  ["malformed inferred", "openclaw-dev-target:v1:not+base64url", true, false],
-  ["malformed inferred JSON", "openclaw-dev-target:v1:not+base64url", true, true],
-] as const;
-
 export const makeOkUpdateResult = (overrides: Partial<UpdateRunResult> = {}): UpdateRunResult => ({
   status: "ok",
   mode: "git",
@@ -170,27 +131,43 @@ export const makeOkUpdateResult = (overrides: Partial<UpdateRunResult> = {}): Up
   ...overrides,
 });
 
+export function createGitUpdateAfterMutationFixture(
+  result = makeOkUpdateResult({ mode: "git" }),
+  targetDeclaration: { databaseEngines?: string[] } = {},
+) {
+  const mutationAdmitted = vi.fn();
+  const run: typeof updateGitRelease = async ({ opts }) => {
+    const prefix = resolveGitReleasePrefix();
+    const releases = path.join(prefix, "releases");
+    await fs.mkdir(releases, { recursive: true });
+    const releasePrefix = await fs.mkdtemp(path.join(releases, "fixture-"));
+    // `<stateDir>/git-install/openclaw -> releases/<id>/openclaw`, as `updateGitRelease` publishes.
+    const releaseRoot = path.join(releasePrefix, "openclaw");
+    await writeOpenClawPackageFixture(releaseRoot, result.after?.version ?? "1.0.0", {
+      builtSha: result.after?.sha ?? "a".repeat(40),
+      entrySource: "export {};\n",
+      ...targetDeclaration,
+    });
+    const gitRuntime = await readGitRuntimeArtifactIdentity(releaseRoot);
+    const target = { version: result.after?.version ?? undefined, ...targetDeclaration };
+    await opts.inspectGitTarget(target);
+    await opts.validateCandidate(releaseRoot);
+    await expectDefined(opts.beforeGitMutation, "Git mutation admission")(targetDeclaration);
+    mutationAdmitted();
+    const root = gitReleaseSlot(prefix);
+    await fs.mkdir(path.dirname(root), { recursive: true });
+    await fs.rm(root, { force: true });
+    await fs.symlink(releaseRoot, root, "junction");
+    return { ...result, mode: "git", root, gitRuntime, sourceRuntimePrepared: true };
+  };
+  return { run, mutationAdmitted };
+}
+
 export const mockGitUpdateAfterMutation = (
   result = makeOkUpdateResult({ mode: "git" }),
-  reinspect = false,
+  targetDeclaration: { databaseEngines?: string[] } = {},
 ) => {
-  const mutationAdmitted = vi.fn();
-  vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts }) => {
-    await opts.inspectGitTarget({});
-    await opts.prepareGitExposure?.(
-      expectDefined(result.root, "candidate checkout"),
-      expectDefined(result.after?.sha ?? undefined, "candidate commit"),
-      undefined,
-    );
-    if (result.root) {
-      await opts.validateCandidate(result.root);
-    }
-    await expectDefined(opts.beforeGitMutation, "Git mutation admission")({});
-    mutationAdmitted();
-    if (reinspect) {
-      await opts.inspectGitTarget({});
-    }
-    return result;
-  });
-  return mutationAdmitted;
+  const fixture = createGitUpdateAfterMutationFixture(result, targetDeclaration);
+  vi.mocked(updateGitRelease).mockImplementationOnce(fixture.run);
+  return fixture.mutationAdmitted;
 };

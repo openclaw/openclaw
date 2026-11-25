@@ -1,8 +1,6 @@
-/**
- * Shared helpers for chat abort gateway method tests.
- */
 import { afterEach, vi } from "vitest";
 import type { Mock } from "vitest";
+import type { ChatAbortParams } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -23,8 +21,7 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import { createChatRunState, type ChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
 
-type TestChatRunRecord =
-  ReturnType<typeof createChatRunState>["runs"] extends Map<string, infer Record> ? Record : never;
+type TestChatRunRecord = ReturnType<ChatRunState["getOrCreate"]>;
 
 export function createAbortTestRunState(entries: Array<[string, Partial<TestChatRunRecord>]>) {
   const state = createChatRunState();
@@ -74,7 +71,7 @@ export function createActiveRun(
     runId?: string;
   } = {},
 ): RpcSourceRef {
-  const sessionId = params.sessionId ?? `${sessionKey}-session`;
+  const { sessionId = `${sessionKey}-session`, agentId, storeScope, storePath } = params;
   const adapter: RpcSourceAdapter = {
     controlUiVisible: params.controlUiVisible,
     requester: params.owner
@@ -86,14 +83,14 @@ export function createActiveRun(
     protocolRunId: params.runId,
     target: captureSessionTarget({
       storeScope:
-        params.storeScope ??
-        params.storePath ??
+        storeScope ??
+        storePath ??
         resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-          agentId: params.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
+          agentId: agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
         }),
       sessionKey,
       incarnation: sessionId,
-      agentId: params.agentId,
+      agentId,
     }),
     policy: { mode: "followup" },
     adapter,
@@ -101,31 +98,25 @@ export function createActiveRun(
   const ref = { input, adapter };
   testSources.add(ref);
   if (!params.queued) {
-    // Drive the actual mailbox admission before attaching the operation. Each
-    // fixture uses its physical store owner, not a fake activity field.
+    // Admit through the mailbox's physical store owner before attaching the operation.
     let started = false;
     const admission = claimSessionControllerTask(input, (claim) => {
       started = true;
       const operation = createReplyOperation({
         sessionKey,
         sessionId,
-        agentId: params.agentId,
+        agentId,
         resetTriggered: false,
         mailboxClaim: claim,
         target: input.target,
       });
-      // This fixture owns a real producer that returns after observing cancellation.
-      // Stop must still join its finally block rather than treating abort as settlement.
-      void (async () => {
-        try {
-          await new Promise<void>((resolve) => {
-            input.abortSignal.addEventListener("abort", () => resolve(), { once: true });
-          });
-        } finally {
-          operation.complete();
-          releaseSessionControllerClaim(claim);
-        }
-      })();
+      // Stop must join producer cleanup rather than treating abort as settlement.
+      void new Promise<void>((resolve) => {
+        input.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      }).finally(() => {
+        operation.complete();
+        releaseSessionControllerClaim(claim);
+      });
     });
     testAdmissions.push(
       admission.then(
@@ -154,20 +145,15 @@ type ChatAbortRespondMock = Mock<RespondFn>;
 export function createChatAbortContext(
   overrides: Record<string, unknown> & {
     sources?: Iterable<readonly [string, RpcSourceRef]>;
+    chatRunState?: ChatRunState;
   } = {},
 ): ChatAbortTestContext {
-  const { sources, ...contextOverrides } = overrides;
+  const { sources, chatRunState = createChatRunState(), ...contextOverrides } = overrides;
   rpcSourceTesting.reset(sources);
-  const chatRunState =
-    contextOverrides.chatRunState && typeof contextOverrides.chatRunState === "object"
-      ? (contextOverrides.chatRunState as ChatRunState)
-      : createChatRunState();
   const context = {
     chatRunState,
     dedupe: new Map(),
-    removeChatRun: vi
-      .fn()
-      .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),
+    removeChatRun: vi.fn((run: string) => ({ sessionKey: "main", clientRunId: run })),
     agentRunSeq: new Map<string, number>(),
     getRuntimeConfig: () => ({}),
     broadcast: vi.fn(),
@@ -187,13 +173,7 @@ export function createChatAbortContext(
 export async function invokeChatAbortHandler(params: {
   handler: GatewayRequestHandler;
   context: ChatAbortTestContext;
-  request: {
-    sessionKey: string;
-    agentId?: string;
-    runId?: string;
-    preserveSideRuns?: boolean;
-    discardPendingInput?: boolean;
-  };
+  request: ChatAbortParams;
   client?: {
     connId?: string;
     connect?: {

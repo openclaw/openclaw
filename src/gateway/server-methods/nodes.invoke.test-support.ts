@@ -1,6 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "../node-invoke.types.js";
+import type { NodeRegistry } from "../node-registry.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
 
 export type RespondCall = Parameters<GatewayRequestHandlerOptions["respond"]>;
@@ -26,6 +35,28 @@ export async function invokeNodeRequest(
 }
 
 type MockCallSource = Pick<Mock, "mock">;
+
+export function expectNodeReply(
+  respond: GatewayRequestHandlerOptions["respond"],
+  payload: unknown,
+) {
+  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+}
+
+export function expectNodeFailure(
+  respond: GatewayRequestHandlerOptions["respond"],
+  error: Record<string, unknown>,
+) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+}
+
+export function bindNodeRegistry(registry: NodeRegistry) {
+  return {
+    get: registry.get.bind(registry),
+    getForPairingGeneration: registry.getForPairingGeneration.bind(registry),
+    invoke: registry.invoke.bind(registry),
+  };
+}
 
 export type TestNodeSession = {
   nodeId: string;
@@ -218,4 +249,33 @@ export function registerNodeInvokeUploadTests({
       }
     },
   );
+}
+
+export function registerNodeInvokeWakeFixture() {
+  let previousConfig: OpenClawConfig | null;
+  let previousSourceConfig: OpenClawConfig | null;
+
+  beforeEach(() => {
+    previousConfig = getRuntimeConfigSnapshot();
+    previousSourceConfig = getRuntimeConfigSourceSnapshot();
+    setRuntimeConfigSnapshot({
+      gateway: {
+        roles: {
+          definitions: {
+            operator: { sessions: { others: "write" }, agents: "*", scopes: ["operator.write"] },
+          },
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    if (previousConfig) {
+      setRuntimeConfigSnapshot(previousConfig, previousSourceConfig ?? undefined);
+    } else {
+      clearRuntimeConfigSnapshot();
+    }
+    vi.useRealTimers();
+    setOpenClawIdTunnelPrincipalLookup(undefined);
+  });
 }

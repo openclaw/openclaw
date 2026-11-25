@@ -1,8 +1,9 @@
 import type fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
-import { root } from "../infra/fs-safe.js";
-import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
+import JSON5 from "json5";
+import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
+import { resolveFutureConfigActionBlock } from "./future-version-guard.js";
 import {
   enqueueConfigAuditRecord,
   captureConfigAuditAppender,
@@ -33,17 +34,22 @@ import {
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
 import { hashConfigRaw, resolveGatewayMode } from "./io.read-helpers.js";
-import type { NormalizedConfigIoDeps } from "./io.read.types.js";
+import type { ConfigSnapshotReadMeasure, NormalizedConfigIoDeps } from "./io.read.types.js";
 import type {
   ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
   PrepareConfigRecoveryCandidate,
 } from "./io.types.js";
-import { chmodConfigBestEffort, chmodConfigBestEffortSync } from "./io.write-safety.js";
+import {
+  captureConfigRootWriteTarget,
+  chmodConfigBestEffort,
+  chmodConfigBestEffortSync,
+  resolveConfigWriteDirectory,
+} from "./io.write-safety.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
-import { resolveIsConfigReadOnly, resolveStateDir } from "./paths.js";
+import { resolveIsConfigReadOnly } from "./paths.js";
 import {
   collectPollutedSecretPlaceholders,
   isPluginLocalInvalidConfigSnapshot,
@@ -51,7 +57,7 @@ import {
 } from "./recovery-policy.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
-type ObserveRecoveryDeps = Pick<NormalizedConfigIoDeps, "fs" | "json5" | "env" | "homedir"> & {
+export type ObserveRecoveryDeps = Pick<NormalizedConfigIoDeps, "fs" | "env" | "homedir"> & {
   logger: Pick<typeof console, "warn">;
 };
 
@@ -66,6 +72,9 @@ type ConfigReadRecoveryParams = {
   ) => Promise<ConfigRecoveryCandidatePreparation>;
   assertCurrent?: () => void;
   allowBackupRecovery?: () => Promise<boolean>;
+  measure?: ConfigSnapshotReadMeasure;
+  /** Explicit Doctor repair may revisit reported loss and use the promoted fallback. */
+  intent?: "doctor-repair";
 };
 
 type ConfigReadRecoveryResult = Pick<ConfigRecoveryCandidate, "raw" | "parsed">;
@@ -76,18 +85,23 @@ function createRecoveryCommitEffect(params: {
   raw: string;
   beforeCommit?: () => void;
 }): ConfigRecoveryEffect<void> {
+  const { path: publicationPath, pathProof } = captureConfigRootWriteTarget(
+    params.configPath,
+    params.deps.fs,
+  );
   const options = {
-    filePath: params.configPath,
+    filePath: publicationPath,
     content: params.raw,
+    allowDrvfsRenameRecovery: true,
     dirMode:
-      readExistingStateRootMode(
-        path.dirname(params.configPath),
-        resolveStateDir(params.deps.env, params.deps.homedir),
-        params.deps.fs,
+      stateRootDirectoryMode(
+        path.dirname(publicationPath),
+        resolveConfigWriteDirectory(params.configPath, publicationPath, params.deps).path,
       ) ?? 0o700,
     mode: 0o600,
     tempPrefix: path.basename(params.configPath),
     fileSystem: params.deps.fs,
+    assertBeforeMutation: pathProof.assertCurrent,
   };
   return {
     sync: () => {
@@ -117,12 +131,9 @@ function createRecoveryCommitEffect(params: {
   };
 }
 
-function parseBackupConfigRaw(
-  deps: ObserveRecoveryDeps,
-  backupRaw: string,
-): { parsed: unknown } | null {
+function parseBackupConfigRaw(backupRaw: string): { parsed: unknown } | null {
   try {
-    return { parsed: deps.json5.parse(backupRaw) };
+    return { parsed: JSON5.parse(backupRaw) };
   } catch {
     return null;
   }
@@ -190,6 +201,7 @@ export function maybeRecoverSuspiciousConfigReadSync(
 type ConfigRecoveryOperation<T> = Generator<ConfigRecoveryEffect<unknown>, T, unknown>;
 type SuspiciousConfigRecoveryPlan = {
   candidate: ConfigReadRecoveryResult;
+  assertBackupUnchanged: () => void;
   apply: (
     beforeCommit?: () => void,
   ) => ConfigRecoveryOperation<{ restored: boolean; error: unknown }>;
@@ -198,6 +210,7 @@ type SuspiciousConfigRecoveryPlan = {
 /** Prepare the existing recovery without observing or writing the selected config. */
 export async function prepareSuspiciousConfigRead(params: ConfigReadRecoveryParams): Promise<{
   candidate: ConfigReadRecoveryResult;
+  assertBackupUnchanged: () => void;
   apply: (beforeCommit?: () => void) => Promise<void>;
 } | null> {
   const health = captureConfigHealthStateStore(
@@ -214,6 +227,7 @@ export async function prepareSuspiciousConfigRead(params: ConfigReadRecoveryPara
   return (
     plan && {
       candidate: plan.candidate,
+      assertBackupUnchanged: plan.assertBackupUnchanged,
       apply: async (beforeCommit) => {
         const result = await runConfigRecoveryAsync(plan.apply(beforeCommit), health, appendAudit);
         if (!result.restored) {
@@ -254,9 +268,11 @@ function* planSuspiciousConfigRead(
   if (resolveIsConfigReadOnly(deps.env)) {
     return null;
   }
-  const backupPath = `${configPath}.bak`;
-  // Missing backups cannot recover config; avoid opening the health worker just to confirm that.
-  if (yield createConfigBackupMissingEffect(deps, backupPath)) {
+  const rotatingBackupPath = `${configPath}.bak`;
+  const doctorRepair = params.intent === "doctor-repair";
+  // Passive recovery without a backup need not open the health worker. Doctor may use a promotion.
+  const backupMissing = yield createConfigBackupMissingEffect(deps, rotatingBackupPath);
+  if (backupMissing && !doctorRepair) {
     return null;
   }
   // Explicit preparation requires identity; ordinary recovery keeps stat best-effort.
@@ -274,51 +290,108 @@ function* planSuspiciousConfigRead(
   });
   const healthSnapshot = (yield {
     sync: () => ({ state: readConfigHealthStateFromStore(deps), basis: null }),
-    async: (health) => health.read(),
+    async: (health) =>
+      params.measure
+        ? params.measure("config.recovery.health-read", () => health.read())
+        : health.read(),
   }) as ConfigHealthSnapshot; // SAFETY: Both effect runners return the typed health-owner snapshot.
   const entry = readConfigHealthEntry(healthSnapshot.state, configPath);
-  let backupRaw: string | null = null;
-  if (!entry.lastKnownGood) {
-    backupRaw = (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
+  let baselineRaw: string | null = null;
+  if (!entry.lastKnownGood && !backupMissing) {
+    baselineRaw = (yield createConfigBackupReadEffect(deps, rotatingBackupPath)) as string | null;
   }
   const backupBaseline =
     entry.lastKnownGood ??
-    (backupRaw
+    (baselineRaw
       ? createConfigHealthFingerprint({
-          raw: backupRaw,
-          parsed: parseBackupConfigRaw(deps, backupRaw)?.parsed ?? {},
+          raw: baselineRaw,
+          parsed: parseBackupConfigRaw(baselineRaw)?.parsed ?? {},
           stat: null,
         })
       : undefined);
   const suspicious = resolveConfigObserveSuspiciousReasons({
     ...current,
     parsed,
+    lastObservedSuspiciousSignature: entry.lastObservedSuspiciousSignature,
     lastKnownGood: backupBaseline,
   });
   const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;
-  if (suspicious.length === 0 || entry.lastObservedSuspiciousSignature === suspiciousSignature) {
+  if (
+    suspicious.length === 0 ||
+    (!doctorRepair && entry.lastObservedSuspiciousSignature === suspiciousSignature)
+  ) {
     return null;
   }
-  backupRaw ??= (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
-  if (!backupRaw) {
+  const lastGoodPath = `${configPath}.last-good`;
+  const candidates = [
+    ...(!backupMissing ? [rotatingBackupPath] : []),
+    ...(doctorRepair && entry.lastPromotedGood?.hash ? [lastGoodPath] : []),
+  ];
+  let selected:
+    | { path: string; original: ConfigRecoveryCandidate; prepared: ConfigRecoveryCandidate }
+    | undefined;
+  // Prefer the rotating backup: it may contain healthy settings newer than the promotion.
+  for (const candidatePath of candidates) {
+    const candidateRaw =
+      (candidatePath === rotatingBackupPath ? baselineRaw : null) ??
+      ((yield createConfigBackupReadEffect(deps, candidatePath)) as string | null);
+    if (!candidateRaw) {
+      continue;
+    }
+    const candidateParse = parseBackupConfigRaw(candidateRaw);
+    if (!candidateParse) {
+      continue;
+    }
+    const candidateHash = hashConfigRaw(candidateRaw);
+    const knownHealthy =
+      candidateHash === entry.lastKnownGood?.hash || candidateHash === entry.lastPromotedGood?.hash;
+    const promotedFallback = candidatePath === lastGoodPath;
+    if (promotedFallback) {
+      if (candidateHash !== entry.lastPromotedGood?.hash) {
+        continue;
+      }
+    } else if (
+      !resolveGatewayMode(candidateParse.parsed) ||
+      (doctorRepair && entry.lastKnownGood && !knownHealthy)
+    ) {
+      // Metadata can hide a predecessor's loss, and observation can replace its marker.
+      // A retained healthy baseline requires known healthy bytes, not size/marker guesses.
+      // Without one, the existing cold .bak-based recovery remains available.
+      // Unverified rotating bytes remain available for manual recovery.
+      continue;
+    }
+    const original = { raw: candidateRaw, parsed: candidateParse.parsed };
+    const prepared = (yield {
+      sync: () => params.prepareBackup(original),
+      async: () => params.prepareBackupAsync?.(original) ?? params.prepareBackup(original),
+    }) as ConfigRecoveryCandidatePreparation;
+    if (
+      !prepared.ok ||
+      (promotedFallback && collectPollutedSecretPlaceholders(prepared.candidate.parsed).length > 0)
+    ) {
+      continue;
+    }
+    // Preserve a configured rollback's restored config. If its gateway mode was
+    // lost, keep the candidate so startup can refuse an incompatible recovery.
+    if (
+      current.gatewayMode &&
+      prepared.candidate.config &&
+      resolveFutureConfigActionBlock({
+        action: "recover config",
+        config: prepared.candidate.config,
+        env: deps.env,
+      })
+    ) {
+      continue;
+    }
+    selected = { path: candidatePath, original, prepared: prepared.candidate };
+    break;
+  }
+  if (!selected) {
     return null;
   }
-  const backupParse = parseBackupConfigRaw(deps, backupRaw);
-  // Reject ineligible backup bytes before migration and validation; a stale healthy
-  // fingerprint cannot make them recoverable.
-  if (!backupParse || !resolveGatewayMode(backupParse.parsed)) {
-    return null;
-  }
-  const backupCandidate = { raw: backupRaw, parsed: backupParse.parsed };
-  const prepared = (yield {
-    sync: () => params.prepareBackup(backupCandidate),
-    async: () =>
-      params.prepareBackupAsync?.(backupCandidate) ?? params.prepareBackup(backupCandidate),
-  }) as ConfigRecoveryCandidatePreparation;
-  if (!prepared.ok) {
-    return null;
-  }
-  const preparedCandidate = prepared.candidate;
+  const { path: backupPath, original, prepared: preparedCandidate } = selected;
+  const backupRaw = original.raw;
   const backupStat = (yield createConfigRecoveryStatEffect(
     deps,
     backupPath,
@@ -326,9 +399,13 @@ function* planSuspiciousConfigRead(
   )) as fs.Stats | null;
   const backup = createConfigHealthFingerprint({
     raw: backupRaw,
-    parsed: backupParse.parsed,
+    parsed: original.parsed,
     stat: backupStat,
   });
+  const restoredHealth =
+    backupPath === lastGoodPath
+      ? { lastKnownGood: entry.lastPromotedGood, lastObservedSuspiciousSignature: null }
+      : { lastObservedSuspiciousSignature: suspiciousSignature };
   const assertUnchanged = createConfigRecoverySourceGuard(
     deps,
     [
@@ -337,8 +414,14 @@ function* planSuspiciousConfigRead(
     ],
     requireIdentity,
   );
+  const assertBackupUnchanged = createConfigRecoverySourceGuard(
+    deps,
+    [[backupPath, backupRaw, backupStat]],
+    requireIdentity,
+  );
   return {
     candidate: preparedCandidate,
+    assertBackupUnchanged,
     *apply(beforeCommit) {
       const snapshotParams = {
         deps,
@@ -404,7 +487,9 @@ function* planSuspiciousConfigRead(
         !restoredFromBackup && restoreErrorDetails.message
           ? `; ${restoreErrorDetails.message}`
           : "";
-      deps.logger.warn(`Config ${result}: ${configPath} (${suspicious.join(", ")}${detail})`);
+      deps.logger.warn(
+        `Config ${result}: ${configPath} (${suspicious.join(", ")}${detail}). Original config kept at ${clobberedPath}; to undo, stop the Gateway and copy it back to ${configPath} after correcting the reported problem.`,
+      );
       const audit = {
         env: deps.env,
         homedir: deps.homedir,
@@ -428,88 +513,13 @@ function* planSuspiciousConfigRead(
       };
       if (restoredFromBackup) {
         yield {
-          sync: () =>
-            patchConfigHealthEntryToStore(deps, configPath, {
-              lastObservedSuspiciousSignature: suspiciousSignature,
-            }),
-          async: (health) =>
-            health.updateAfterFileCommit(
-              {
-                lastObservedSuspiciousSignature: suspiciousSignature,
-              },
-              healthSnapshot,
-            ),
+          sync: () => patchConfigHealthEntryToStore(deps, configPath, restoredHealth),
+          async: (health) => health.updateAfterFileCommit(restoredHealth, healthSnapshot),
         };
       }
       return { restored: restoredFromBackup, error: restoreError };
     },
   };
-}
-
-/** True reports committed file work; health metadata remains best-effort. */
-export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
-  deps: ObserveRecoveryDeps;
-  snapshot: ConfigFileSnapshot;
-  logger?: Pick<typeof console, "warn">;
-}): Promise<boolean> {
-  const { deps, snapshot } = params;
-  if (resolveIsConfigReadOnly(deps.env)) {
-    return false;
-  }
-  if (!snapshot.exists || !snapshot.valid || typeof snapshot.raw !== "string") {
-    return false;
-  }
-  const polluted = collectPollutedSecretPlaceholders(snapshot.parsed);
-  if (polluted.length > 0) {
-    params.logger?.warn(
-      `Config last-known-good promotion skipped: redacted secret placeholder at ${polluted[0]}`,
-    );
-    return false;
-  }
-  const health = captureConfigHealthStateStore(deps, snapshot.path);
-  const healthSnapshot = await health.read();
-  const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
-  const now = new Date().toISOString();
-  const current = createConfigHealthFingerprint({
-    raw: snapshot.raw,
-    parsed: snapshot.parsed,
-    resolved: snapshot.resolved,
-    stat,
-    observedAt: now,
-  });
-  const lastGoodPath = `${snapshot.path}.last-good`;
-  health.assertCurrent();
-  const raw = snapshot.raw;
-  const assertUnchanged = createConfigRecoverySourceGuard(deps, [[snapshot.path, raw, stat]]);
-  await commitConfigRecoveryFile({
-    health,
-    beforeCommit: assertUnchanged,
-    write: async (assertCurrent) => {
-      const directory = await root(path.dirname(lastGoodPath));
-      await directory.write(path.basename(lastGoodPath), raw, {
-        mkdir: false,
-        mode: 0o600,
-        durable: false,
-        encoding: "utf8",
-        overwrite: true,
-        assertBeforeMutation: assertCurrent,
-      });
-    },
-  });
-  await chmodConfigBestEffort({
-    deps,
-    configPath: lastGoodPath,
-    context: "last-known-good promotion",
-  });
-  await health.updateAfterFileCommit(
-    {
-      lastKnownGood: current,
-      lastPromotedGood: current,
-      lastObservedSuspiciousSignature: null,
-    },
-    healthSnapshot,
-  );
-  return true;
 }
 
 /** True lets recovery callers reread the changed file even if newer health facts win. */
@@ -548,7 +558,7 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
     return false;
   }
   const backupStat = await deps.fs.promises.stat(lastGoodPath).catch(() => null);
-  const backupParse = parseBackupConfigRaw(deps, backupRaw);
+  const backupParse = parseBackupConfigRaw(backupRaw);
   if (!backupParse) {
     return false;
   }
@@ -618,7 +628,7 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
   });
   const issueSummary = formatConfigIssueSummary([...snapshot.issues, ...snapshot.legacyIssues]);
   deps.logger.warn(
-    `Config auto-restored from last-known-good: ${snapshot.path} (${params.reason})${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
+    `Config auto-restored from last-known-good: ${snapshot.path} (${params.reason})${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""} Original config kept at ${clobberedPath}; to undo, stop the Gateway and copy it back to ${snapshot.path} after correcting the reported problem.`,
   );
   await appendAudit(
     createConfigObserveAuditRecord({

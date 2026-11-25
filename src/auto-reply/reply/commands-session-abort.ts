@@ -72,8 +72,8 @@ async function executeChannelUserStop(params: Parameters<CommandHandler>[0]) {
   abortTarget.sessionId = capture.sessionId;
   const retirements: Promise<void>[] = [];
   const assertCurrent = () => {
-    if (params.opts?.isCommandTargetCurrent?.sessionSource?.assertScopeCurrent) {
-      params.opts.isCommandTargetCurrent.sessionSource.assertScopeCurrent();
+    if (params.opts?.isCommandTargetCurrent?.sessionSource) {
+      params.opts.isCommandTargetCurrent.sessionSource();
       return;
     }
     if (params.opts?.isCommandTargetCurrent?.() === false) {

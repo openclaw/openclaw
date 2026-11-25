@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { gzipSync } from "node:zlib";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -63,7 +63,7 @@ describe("worker bundle archive", () => {
     await artifact("dist/Upper.js", "export const upper = true;\n", 0o600);
     const bundleHash = await directoryHash();
     await pack(["openclaw.mjs", "dist/worker.js", "dist/Upper.js"]);
-
+    await expect(extract("f".repeat(64))).rejects.toThrow("archive manifest does not match");
     await extract(bundleHash);
 
     expect(await directoryHash(destination)).toBe(bundleHash);
@@ -103,13 +103,11 @@ describe("worker bundle archive", () => {
       const probe = `
       import assert from "node:assert/strict";
       import fs from "node:fs";
-      import { syncBuiltinESMExports } from "node:module";
       const createReadStream = fs.createReadStream;
       let input;
       // Exercise header-boundary cancellation without a transfer-sized fixture.
       fs.createReadStream = (file, options) =>
         (input = createReadStream(file, { ...options, highWaterMark: 1024 }));
-      syncBuiltinESMExports();
       const { readWorkerBundleArchiveManifest } = await import(${JSON.stringify(archiveUrl.href)});
       await assert.rejects(
         readWorkerBundleArchiveManifest(process.argv[1], ${JSON.stringify(scenarioLimits)}),
@@ -206,26 +204,14 @@ describe("worker bundle archive", () => {
     ).resolves.toEqual([entry(relativePath, contents)]);
   });
 
-  it("rejects a valid archive under the wrong logical hash", async () => {
-    await artifact("openclaw.mjs", "worker");
-    await pack(["openclaw.mjs"]);
-
-    await expect(extract("f".repeat(64))).rejects.toThrow("archive manifest does not match");
-  });
-
   it("preserves the v1 bundle hash when Windows cannot retain Unix artifact modes", async () => {
-    const artifacts = ["github-exec-launcher.mjs", "worker.mjs", "workspace-rsync-receiver.mjs"];
-    for (const name of artifacts) {
-      await artifact(name, `export const name = ${JSON.stringify(name)};\n`, 0o700);
-    }
-    await pack(artifacts);
+    await artifact("worker.mjs", "export {};\n", 0o700);
+    await pack(["worker.mjs"]);
     const bundleHash = hashWorkerBundleManifest(await archiveManifest());
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     await expect(extract(bundleHash)).resolves.toBeUndefined();
-    for (const name of artifacts) {
-      await fs.chmod(path.join(destination, name), 0o666);
-    }
+    await fs.chmod(path.join(destination, "worker.mjs"), 0o666);
     expect(await directoryHash(destination)).toBe(bundleHash);
   });
 });

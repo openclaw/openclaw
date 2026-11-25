@@ -1,15 +1,13 @@
+import "./store-publication.test-support.js";
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import {
   WORKER_INFERENCE_PROTOCOL_FEATURE,
   validateWorkerInferenceTerminalFrame,
-  type WorkerInferenceTerminalFrame,
-  type WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { dispatchWorkerRequest } from "../server/ws-connection/worker-connection-dispatch.js";
+import { createSink, DONE } from "./inference.test-support.js";
 import * as support from "./service.test-support.js";
 import {
   bindClaimOwner,
@@ -18,34 +16,7 @@ import {
 } from "./worker-turn-rpc-fixtures.test-support.js";
 import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 
-const delivery = vi.hoisted(() => ({
-  command: undefined as string | undefined,
-  afterCommit: undefined as (() => Promise<void>) | undefined,
-}));
-vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();
-  return {
-    ...actual,
-    runOpenClawStateWorkerOperation: (
-      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
-    ) =>
-      actual.runOpenClawStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === delivery.command) {
-                await delivery.afterCommit?.();
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-  };
-});
+const { delivery } = await import("./store-publication.test-support.js");
 
 const delta = { type: "text_delta", contentIndex: 0, delta: "preserved provider output" } as const;
 const inferenceFrame = (event: string, payload: unknown) => ({
@@ -53,13 +24,6 @@ const inferenceFrame = (event: string, payload: unknown) => ({
   event: `worker.inference.${event}`,
   payload,
 });
-const done: WorkerInferenceTerminalOutcome = {
-  type: "done",
-  message: {
-    ...makeAgentAssistantMessage({ content: [{ type: "text", text: delta.delta }] }),
-    stopReason: "stop",
-  },
-};
 
 support.setupWorkerEnvironmentServiceSuite();
 
@@ -99,16 +63,16 @@ it.each(["diagnostic", "credential revocation"] as const)(
     const continueProvider = createDeferredCore();
     const committed = createDeferredCore();
     const publish = createDeferredCore();
-    const terminalDelivered = createDeferredCore<WorkerInferenceTerminalFrame>();
-    const frames: unknown[] = [];
-    const executeInference = vi.fn<support.WorkerEnvironmentServiceOptions["executeInference"]>(
-      async ({ signal, emit }) => {
-        entered.resolve(signal);
-        await continueProvider.promise;
-        emit(delta);
-        return done;
-      },
-    );
+    const { frames, sink, terminal: terminalDelivered } = createSink("inference-publication");
+    const executeInference: support.WorkerEnvironmentServiceOptions["executeInference"] = async ({
+      signal,
+      emit,
+    }) => {
+      entered.resolve(signal);
+      await continueProvider.promise;
+      emit(delta);
+      return DONE;
+    };
     const workerService = claimService(placements, { executeInference });
     let mutation: Promise<unknown> | undefined;
     let owner: Awaited<ReturnType<typeof bindClaimOwner>> | undefined;
@@ -128,31 +92,13 @@ it.each(["diagnostic", "credential revocation"] as const)(
       assert(admission.ok, "Worker inference admission failed");
       const identity = admission.identity;
       const request = support.inferenceRequest(identity);
-      const respond = vi.fn();
-      await dispatchWorkerRequest({
-        request: {
-          type: "req",
-          id: "inference-publication",
-          method: "worker.inference.start",
-          params: request,
-        },
-        identity,
-        connectionId: "inference-publication-connection",
-        service: workerService,
-        send: (frame) => {
-          frames.push(frame);
-          if (validateWorkerInferenceTerminalFrame(frame)) {
-            terminalDelivered.resolve(frame);
-          }
-        },
-        respond,
-        close: vi.fn(),
-        warn: vi.fn(),
-      });
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, { status: "accepted" });
+      const started = await workerService.startInference(identity, request, sink);
+      assert(started.ok, "Worker inference start failed");
+      expect(started.result).toEqual({ status: "accepted" });
+      started.launch();
       const providerSignal = await awaitGateBeforeSettlement(
         entered.promise,
-        terminalDelivered.promise,
+        terminalDelivered,
         "Inference terminated before provider execution",
       );
       delivery.command =
@@ -177,24 +123,20 @@ it.each(["diagnostic", "credential revocation"] as const)(
         "Inventory mutation finished before its publication gate",
       );
       continueProvider.resolve();
-      const terminal = await terminalDelivered.promise;
+      const terminal = await terminalDelivered;
+      expect(validateWorkerInferenceTerminalFrame(terminal)).toBe(true);
       expect(providerSignal.aborted).toBe(mutationKind !== "diagnostic");
       if (mutationKind === "diagnostic") {
-        const binding = {
-          runEpoch: request.runEpoch,
-          sessionId: request.sessionId,
-          runId: request.runId,
-          turnId: request.turnId,
-        };
+        const { runEpoch, runId, turnId } = request;
+        const binding = { runEpoch, sessionId: request.sessionId, runId, turnId };
         expect(frames).toEqual([
           inferenceFrame("event", { ...binding, seq: 1, event: delta }),
-          inferenceFrame("terminal", { ...binding, seq: 2, outcome: done }),
+          inferenceFrame("terminal", { ...binding, seq: 2, outcome: DONE }),
         ]);
       } else {
         expect(frames).toEqual([terminal]);
         expect(terminal.payload.outcome).toMatchObject({ type: "error" });
       }
-      expect(executeInference).toHaveBeenCalledOnce();
       publish.resolve();
       await mutation;
     } finally {

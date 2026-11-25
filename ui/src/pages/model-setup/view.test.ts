@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { activationTargetId } from "./state.ts";
 import {
   detected,
@@ -60,6 +61,49 @@ describe("renderModelSetup", () => {
     delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
+  it("retains the rescan action through readiness and keeps unavailable actions disabled", () => {
+    const view = props({ page: { phase: "loading" }, detecting: true });
+    const container = mount(view);
+    const button = container.querySelector<HTMLButtonElement>(".model-setup__intro button")!;
+    expect(button).not.toBeNull();
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-hidden")).toBe("true");
+    expect(getComputedStyle(button).visibility).toBe("hidden");
+    expect(button.getAttribute("aria-label")).toBe("Checking…");
+    button.click();
+    expect(view.onDetect).not.toHaveBeenCalled();
+
+    view.page = { phase: "ready", result: detected };
+    view.detecting = false;
+    renderSetup(view, container);
+    expect(container.querySelector(".model-setup__intro button")).toBe(button);
+    expect(button.disabled).toBe(false);
+    expect(button.hasAttribute("aria-hidden")).toBe(false);
+    expect(getComputedStyle(button).visibility).toBe("visible");
+    expect(button.getAttribute("aria-label")).toBe("Check again");
+    button.click();
+    expect(view.onDetect).toHaveBeenCalledOnce();
+
+    view.detecting = true;
+    renderSetup(view, container);
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-label")).toBe("Checking…");
+    view.detecting = false;
+    for (const unavailable of [
+      { canAdmin: false },
+      { gatewayTooOld: true },
+      { activation: { phase: "success" as const, modelRef: "openai/gpt-5" } },
+      { page: { phase: "ready" as const, result: ready } },
+    ]) {
+      renderSetup({ ...view, ...unavailable }, container);
+      expect(container.querySelector(".model-setup__intro button")).toBe(button);
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute("aria-hidden")).toBe("true");
+      button.click();
+    }
+    expect(view.onDetect).toHaveBeenCalledOnce();
+  });
+
   it("shows detected authentication without credential values", () => {
     const detail = "logged in · ChatGPT account · alex@example.com";
     const secret = "synthetic-private-token";
@@ -78,6 +122,42 @@ describe("renderModelSetup", () => {
 
     expect(text(row)).toContain(detail);
     expect(text(row)).not.toContain(secret);
+  });
+
+  it("uses the guided choice label as the sign-in action and preserves native overrides", () => {
+    const authOptions = [
+      {
+        id: "sample-browser",
+        kind: "oauth" as const,
+        label: "Sign in with Sample",
+        groupLabel: "Sample",
+        featured: true,
+      },
+      {
+        id: "sample-device",
+        kind: "device-code" as const,
+        label: "Sign in with a device code",
+        groupLabel: "Sample",
+        actionLabel: "Pair this Mac",
+        featured: true,
+      },
+    ];
+    const onStartAuth = vi.fn();
+    const container = mount(
+      props({
+        onStartAuth,
+        page: { phase: "ready", result: { ...detected, authOptions } },
+      }),
+    );
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-auth-choice="sample-browser"] button',
+    )!;
+    expect(text(button)).toBe("Sign in with Sample");
+    button.click();
+    expect(onStartAuth).toHaveBeenCalledWith(authOptions[0]);
+    expect(text(container.querySelector('[data-auth-choice="sample-device"] button')!)).toBe(
+      "Set up & verify",
+    );
   });
 
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {
@@ -125,6 +205,68 @@ describe("renderModelSetup", () => {
       }),
     );
     expect(withUsableOllama.querySelector('[data-prepare-choice="ollama"]')).toBeNull();
+  });
+
+  it.each([
+    { family: "candidate", selector: '[data-candidate-kind="codex-cli"]' },
+    { family: "featured sign-in", selector: '[data-auth-choice="openai-oauth"]' },
+    { family: "additional sign-in", selector: '[data-auth-choice="other-device"]' },
+    { family: "prepare", selector: '[data-prepare-choice="ollama"]' },
+    { family: "recommendation", selector: '[data-recommended-install="ollama"]' },
+  ])("retains the $family control and reads its new rescan data", ({ family, selector }) => {
+    const result = structuredClone(detected);
+    if (family === "candidate") {
+      result.candidates.push({
+        ...result.candidates[0]!,
+        label: "Utility choice",
+        modelTarget: "utility",
+      });
+    } else if (family === "recommendation") {
+      result.candidates = [];
+      result.authOptions = [];
+    }
+    const onChoose = vi.fn();
+    const viewProps = props({
+      page: { phase: "ready", result },
+      moreSignInOpen: true,
+      onActivateCandidate: onChoose,
+      onStartAuth: onChoose,
+      onStartPrepare: onChoose,
+    });
+    const container = mount(viewProps);
+    const rows = [...container.querySelectorAll(selector)];
+    const control = rows[0]!.querySelector<HTMLButtonElement | HTMLAnchorElement>("button, a")!;
+    control.focus();
+    const rescanned = structuredClone(result);
+    const updated =
+      family === "candidate"
+        ? rescanned.candidates[0]!
+        : family === "prepare"
+          ? rescanned.prepareOptions![0]!
+          : family === "recommendation"
+            ? rescanned.recommendedInstalls![0]!
+            : rescanned.authOptions!.find((option) =>
+                family === "featured sign-in" ? option.featured : !option.featured,
+              )!;
+    updated.label = "Updated choice";
+    if (family === "recommendation") {
+      rescanned.recommendedInstalls![0]!.website = "https://example.com/install";
+    }
+    viewProps.page = { phase: "ready", result: rescanned };
+    renderSetup(viewProps, container);
+
+    const refreshedRows = [...container.querySelectorAll(selector)];
+    expect(refreshedRows).toHaveLength(family === "candidate" ? 2 : 1);
+    rows.forEach((row, index) => expect(refreshedRows[index]).toBe(row));
+    expect(refreshedRows[0]!.querySelector("button, a")).toBe(control);
+    expect(text(refreshedRows[0]!)).toContain("Updated choice");
+    expect(document.activeElement).toBe(control);
+    if (control instanceof HTMLAnchorElement) {
+      expect(control.href).toBe("https://example.com/install");
+    } else {
+      control.click();
+      expect(onChoose).toHaveBeenCalledExactlyOnceWith(updated);
+    }
   });
 
   it("renders recommended install cards only when candidates and sign-ins are empty", () => {
@@ -296,7 +438,7 @@ describe("renderModelSetup", () => {
         actionsDisabled: true,
       }),
     );
-    expect(text(container)).toContain("Checking — asking openai/gpt-5 for a quick reply…");
+    expect(text(container)).toContain("Asking openai/gpt-5 for a quick reply…");
     expect(
       container.querySelector<HTMLButtonElement>(".model-setup__current button")?.disabled,
     ).toBe(true);
@@ -354,6 +496,9 @@ describe("renderModelSetup", () => {
         : {}),
       deviceCode: { code: "ABCD-EFGH", ...(copied ? { expiresInMinutes: 10 } : {}) },
     });
+    await waitForFast(() =>
+      expect(container.querySelector(".wizard-sign-in__code button")).not.toBeNull(),
+    );
 
     if (copied) {
       const link = container.querySelector<HTMLAnchorElement>(
@@ -362,12 +507,12 @@ describe("renderModelSetup", () => {
       expect(link?.target).toBe("_blank");
       expect(link?.rel).toBe("noreferrer");
       expect(text(container)).toContain("ABCD-EFGH");
-      expect(text(container)).toContain("Expires in 10 minutes");
+      expect(text(container)).not.toContain("Expires in");
     }
-    const copy = container.querySelector<HTMLButtonElement>(".wizard-step__sign-in button");
+    const copy = container.querySelector<HTMLButtonElement>(".wizard-sign-in__code button");
     copy?.click();
 
-    const feedback = copied ? "Copied!" : "Copy failed";
+    const feedback = copied ? "Copied" : "Couldn’t copy. Try again.";
     await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe(feedback));
     expect(copy?.getAttribute("aria-label")).toBeNull();
     expect(execCommand).toHaveBeenCalledWith("copy");
@@ -380,7 +525,7 @@ describe("renderModelSetup", () => {
     { sensitive: true, expectedType: "password" },
   ])(
     "labels a $expectedType input and associates validation errors until recovery",
-    ({ sensitive, expectedType }) => {
+    async ({ sensitive, expectedType }) => {
       const container = document.body.appendChild(document.createElement("div"));
       const renderStep = (validationError: string | null) =>
         renderSetup(
@@ -403,6 +548,9 @@ describe("renderModelSetup", () => {
           container,
         );
       renderStep(null);
+      await waitForFast(() =>
+        expect(container.querySelector("#model-setup-wizard-text-input")).not.toBeNull(),
+      );
       const input = container.querySelector<HTMLInputElement>("#model-setup-wizard-text-input");
       const label = container.querySelector<HTMLLabelElement>(
         'label[for="model-setup-wizard-text-input"]',
@@ -455,7 +603,7 @@ describe("renderModelSetup", () => {
       });
       const container = mount(viewProps);
       expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
-      expect(text(container.querySelector('[role="status"]')!)).toContain("Testing");
+      expect(text(container.querySelector('[role="status"]')!)).toContain("Asking");
       expect(text(container)).not.toContain("test-only-secret");
       const button = container.querySelector<HTMLButtonElement>(
         entry === "discovered"
@@ -477,7 +625,7 @@ describe("renderModelSetup", () => {
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
       expect(text(container.querySelector('[role="alert"]')!)).toContain("No reply received");
       expect(text(container.querySelector('[role="alert"]')!)).toContain(
-        "Warm it or choose a faster model, then retry.",
+        "Try again or choose a faster model.",
       );
       expect(button.disabled).toBe(false);
       if (entry === "discovered") {
@@ -548,7 +696,7 @@ describe("renderModelSetup", () => {
       expect(container.querySelector(".content-header")).toBeNull();
       expect(container.querySelector(".model-setup__current")).toBeNull();
       expect(text(container)).toContain("for Writer");
-      expect(text(container)).toContain("not the global defaults");
+      expect(text(container)).toContain("not the defaults for other agents");
       expect(container.querySelector('[data-auth-choice="openai-oauth"]')).toBeNull();
       expect(container.querySelector('[data-prepare-choice="ollama"]')).not.toBeNull();
       for (const option of [install, custom]) {
@@ -627,12 +775,12 @@ describe("renderModelSetup", () => {
         if (mode === "utility") {
           expect(text(success)).toContain("Setup & utility model ready");
           expect(text(success)).not.toContain("Active model");
-          expect(text(success)).not.toContain("Return to Models");
+          expect(text(success)).not.toContain("Back to Models");
           done.click();
           expect(onOpenSetupAssistant).toHaveBeenCalledOnce();
           expect(onOpenChat).not.toHaveBeenCalled();
         } else {
-          expect(done.textContent).toContain("Return to Models");
+          expect(done.textContent).toContain("Back to Models");
           done.click();
           expect(onOpenChat).toHaveBeenCalledOnce();
         }

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
@@ -14,6 +15,36 @@ export const readStyles = (...names: string[]) =>
 
 export function styleDocument(css: string, body: string, attributes = "") {
   return `<!doctype html><html ${attributes}><head><style>${css}</style></head><body>${body}</body></html>`;
+}
+
+export async function traceCss(page: Page) {
+  const cdp = await page.context().newCDPSession(page);
+  const recalculated: number[] = [];
+  cdp.on("Tracing.dataCollected", ({ value }) => {
+    for (const event of value) {
+      const args = event.args;
+      if (
+        event.name === "UpdateLayoutTree" &&
+        isRecord(args) &&
+        typeof args.elementCount === "number"
+      ) {
+        recalculated.push(args.elementCount);
+      }
+    }
+  });
+  await cdp.send("Tracing.start", {
+    categories: "devtools.timeline",
+    transferMode: "ReportEvents",
+  });
+  return async () => {
+    const completed = new Promise<void>((resolve) => {
+      cdp.once("Tracing.tracingComplete", () => resolve());
+    });
+    await cdp.send("Tracing.end");
+    await completed;
+    await cdp.detach();
+    return recalculated;
+  };
 }
 
 // Each calling test file owns one browser and, if needed, one canonical temp directory.

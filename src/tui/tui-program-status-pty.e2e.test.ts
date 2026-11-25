@@ -8,6 +8,14 @@ import {
   waitForSynchronizedFrameRows,
 } from "./tui-pty-harness-fixture-test-support.js";
 
+function waitForFrame(fixture: Awaited<ReturnType<typeof startTuiFixture>>, ...text: string[]) {
+  return waitForSynchronizedFrameRows(
+    fixture.run,
+    (rows) => text.every((value) => rows.some((row) => row.includes(value))),
+    20_000,
+  );
+}
+
 function programStatusSequences(output: string): string[] {
   const sequences: string[] = [];
   for (const segment of iterateAnsiSegments(output)) {
@@ -19,27 +27,21 @@ function programStatusSequences(output: string): string[] {
   return sequences;
 }
 
+function expectStates(fixture: Awaited<ReturnType<typeof startTuiFixture>>, states: string[]) {
+  expect(programStatusSequences(fixture.run.output())).toEqual(
+    states.map((state) =>
+      state === "?" ? state : `state=${state}${state === "clear" ? "" : ":app=openclaw"}`,
+    ),
+  );
+}
+
 it.for([
-  {
-    // The fixture PTY cannot answer the support query, so this forces reporting on.
-    label: "a terminal with OSC 7501 support",
-    programStatus: "1",
-    expected: [
-      "state=idle:app=openclaw",
-      "state=working:app=openclaw",
-      "state=done:app=openclaw",
-      "state=clear",
-    ],
-  },
-  {
-    label: "a terminal that never answers the support query",
-    programStatus: undefined,
-    expected: ["?"],
-  },
+  { programStatus: "1", expected: ["idle", "working", "done", "clear"] },
+  { programStatus: undefined, expected: ["?"] },
 ])(
-  "reports the run lifecycle to $label",
+  "reports the run lifecycle with OSC 7501 override $programStatus",
   { timeout: 30_000 },
-  async ({ label, programStatus, expected }, { signal }) => {
+  async ({ programStatus, expected }, { signal }) => {
     const message = "program status probe";
     const fixture = await startTuiFixture({ env: { PI_PROGRAM_STATUS: programStatus } });
     try {
@@ -50,20 +52,10 @@ it.for([
         signal,
       );
       await fixture.run.waitForOutput("PTY_RESPONSE:", 20_000);
-      await waitForSynchronizedFrameRows(
-        fixture.run,
-        (rows) =>
-          rows.some((row) => row.includes("PTY_RESPONSE:")) &&
-          rows.some((row) => row.includes("| idle")),
-        20_000,
-      );
+      await waitForFrame(fixture, "PTY_RESPONSE:", "| idle");
       await fixture.run.write("/exit\r", { delay: false });
       expect((await fixture.run.waitForExit()).exitCode).toBe(0);
-      const sequences = programStatusSequences(fixture.run.output());
-      console.log(
-        `[behavior-evidence] ${JSON.stringify({ label, sequences, terminal: "real PTY" })}`,
-      );
-      expect(sequences).toEqual(expected);
+      expectStates(fixture, expected);
     } finally {
       await fixture.cleanup();
     }
@@ -79,45 +71,19 @@ it("does not report completion when switching away from a streaming session", as
   try {
     await fixture.run.waitForOutput("local ready", 20_000);
     await fixture.run.write("burst streaming proof\r", { delay: false });
-    await waitForSynchronizedFrameRows(
-      fixture.run,
-      (rows) =>
-        rows.some((row) => row.includes("T063")) && rows.some((row) => row.includes("streaming")),
-      20_000,
-    );
+    await waitForFrame(fixture, "T063", "streaming");
     await selectTuiFixtureSession(fixture, "agent:main:program-status-other", signal);
-    await waitForSynchronizedFrameRows(
-      fixture.run,
-      (rows) => rows.some((row) => row.includes("| idle")),
-      20_000,
-    );
-    expect(programStatusSequences(fixture.run.output())).toEqual([
-      "state=idle:app=openclaw",
-      "state=working:app=openclaw",
-      "state=idle:app=openclaw",
-    ]);
+    await waitForFrame(fixture, "| idle");
+    expectStates(fixture, ["idle", "working", "idle"]);
 
     // Complete the retired run, then prove the new session can report its own success.
     await releaseStream();
     await fixture.waitForLogEntry((entry) => entry.method === "streamingComplete", signal);
     await fixture.run.write("new session reply\r", { delay: false });
-    await waitForSynchronizedFrameRows(
-      fixture.run,
-      (rows) =>
-        rows.some((row) => row.includes("PTY_RESPONSE: new session reply")) &&
-        rows.some((row) => row.includes("| idle")),
-      20_000,
-    );
+    await waitForFrame(fixture, "PTY_RESPONSE: new session reply", "| idle");
     await fixture.run.write("/exit\r", { delay: false });
     expect((await fixture.run.waitForExit()).exitCode).toBe(0);
-    expect(programStatusSequences(fixture.run.output())).toEqual([
-      "state=idle:app=openclaw",
-      "state=working:app=openclaw",
-      "state=idle:app=openclaw",
-      "state=working:app=openclaw",
-      "state=done:app=openclaw",
-      "state=clear",
-    ]);
+    expectStates(fixture, ["idle", "working", "idle", "working", "done", "clear"]);
   } finally {
     await releaseStream();
     await fixture.cleanup();

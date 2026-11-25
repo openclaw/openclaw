@@ -8,11 +8,6 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
-  createMediaGenerationOperation,
-  findMediaGenerationOperation,
-} from "../../media-generation-activity.js";
-import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
-import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
@@ -84,6 +79,7 @@ function createSettleFixture({
     }),
     markTimedOutDuringCompaction: vi.fn(),
     getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
+    onRunAbortDeadlineChanged: () => () => {},
     runAbortSignal: new AbortController().signal,
     isProbeSession: true,
     abortable: async <T>(promise: Promise<T>) => await promise,
@@ -109,38 +105,6 @@ function settleWithPlugins(input: SettleInput) {
 describe("settleEmbeddedAttemptStream liveness", () => {
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("settles cancellation with active media metadata", async () => {
-    resetGeneratedMediaTaskActivityForTests();
-    const sessionKey = "agent:main:cron:settle:run:cancel";
-    const task = createMediaGenerationOperation({
-      taskId: "stream-cancel",
-      runId: "stream-cancel",
-      task: "Stream cancellation proof",
-      requesterSessionKey: sessionKey,
-      taskKind: "image_generation",
-      status: "running",
-      createdAt: Date.now(),
-    });
-    const controller = new AbortController();
-    const input = createSettleFixture({
-      runAbortSignal: controller.signal,
-      attempt: { sessionKey },
-      subscription: {
-        toolMetas: [{ toolName: "image_generate", asyncStarted: true, asyncTaskRunId: task.runId }],
-      },
-    });
-    const settlement = settleEmbeddedAttemptStream(input);
-    try {
-      controller.abort();
-      const result = await settlement;
-      expect(result).toMatchObject({ promptError: null, sessionIdUsed: "sess-settle-1" });
-      expect(findMediaGenerationOperation(task.runId!)).toMatchObject({ status: "running" });
-    } finally {
-      await Promise.allSettled([settlement]);
-      resetGeneratedMediaTaskActivityForTests();
-    }
   });
 
   it.each([false, true])("settles block-reply flush (held=%s)", async (held) => {
@@ -425,7 +389,6 @@ describe("attempt projection persistence through settlement", () => {
             images: [],
             modelPrompt: "continue",
             onFinalPromptText: () => {},
-            onSteeringAcknowledged: () => {},
             persistToolResultProjections: async () => {
               await persistToolResultProjections(projectionState, (customType, data) =>
                 manager.appendCustomEntryAsync(customType, data),

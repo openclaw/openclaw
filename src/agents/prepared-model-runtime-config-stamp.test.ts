@@ -2,19 +2,30 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  createRuntimeConfigReader,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import * as agentTools from "./agent-tools.async.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
+import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
+import { admissionFixture } from "./harness/host-capability.shard.test-support.js";
 import type { AgentHarnessModelCatalogParams } from "./harness/types.js";
+import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import { prepareModelCatalogView } from "./model-catalog-view.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import {
+  getPreparedModelRuntimePolicyConfigReader,
   getPreparedModelRuntimeAuthMaterializations,
   getPreparedModelRuntimeAuthStore,
   loadPreparedModelRuntimeAuth,
   bindPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
 import {
+  acquireReadOnlyPreparedModelRuntime,
+  acquireAgentRunPreparedModelRuntime,
   advancePreparedModelRuntimeConfig,
   cancelPreparedModelRuntimeRefresh,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -49,24 +60,107 @@ function holdPublication(
   config: OpenClawConfig,
   options: Parameters<typeof publish>[1] = {},
 ) {
-  const started = createDeferred();
-  const ready = createDeferred();
+  const gate = createEnteredGate();
   const pending = publish(async () => {
-    started.resolve();
-    await ready.promise;
+    await gate.wait();
     return config;
   }, options);
   resources.defer(async () => {
-    ready.resolve();
+    gate.release();
     await Promise.allSettled([pending]);
   });
-  return { started: started.promise, release: () => ready.resolve(), pending };
+  return { started: gate.entered, release: gate.release, pending };
 }
 
 describe("prepared model runtime config stamps", () => {
   beforeEach(() => {
     mocks.configuredAgentIds = ["default"];
   });
+
+  it("keeps Gateway policy live through startup publication and config stamps", async () => {
+    const initial: OpenClawConfig = { tools: { openclaw: { autoApproveChanges: true } } };
+    clearRuntimeConfigSnapshot();
+    try {
+      await publish(initial, { catalogMode: "static" });
+      const input = fixture.agentInput("default", initial);
+      const snapshot = await prepareModelRuntimeSnapshot(input);
+      const reader = getPreparedModelRuntimePolicyConfigReader(snapshot)!;
+      expect(reader).toBeTypeOf("function");
+      expect(() => reader()).toThrow("Runtime config is not prepared");
+      setRuntimeConfigSnapshot(initial);
+      const replacement = { ...initial, logging: { level: "debug" as const } };
+      advancePreparedModelRuntimeConfig(replacement);
+      setRuntimeConfigSnapshot(replacement);
+      const advanced = await prepareModelRuntimeSnapshot({ ...input, config: replacement });
+      expect(getPreparedModelRuntimePolicyConfigReader(advanced)).toBe(reader);
+      expect(snapshot.config).toBe(initial);
+      expect(advanced.observationConfig).toBe(snapshot.observationConfig);
+      const runtime = (await dispatch())!;
+      expect(runtime.readPolicyConfig).toBe(reader);
+      await using lease = await acquireAgentRunPreparedModelRuntime(
+        {
+          ...input,
+          config: runtime.config,
+          readPolicyConfig: runtime.readPolicyConfig,
+        },
+        { catalogMode: "static", pluginGeneration: runtime.pluginGeneration },
+      );
+      const revoked = { tools: { openclaw: { autoApproveChanges: false } } };
+      setRuntimeConfigSnapshot(revoked);
+      expect(getPreparedModelRuntimePolicyConfigReader(lease.snapshot)!()).toBe(revoked);
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it.each(["live-first", "scoped-first"] as const)(
+    "shares model inventory without sharing admitted policy: %s",
+    async (order) => {
+      const live = { tools: { openclaw: { autoApproveChanges: true } } };
+      const scoped = structuredClone(live);
+      clearRuntimeConfigSnapshot();
+      const readScoped = createRuntimeConfigReader(scoped);
+      setRuntimeConfigSnapshot(live);
+      try {
+        const liveInput = fixture.agentInput("policy", live);
+        const scopedInput = { ...liveInput, config: scoped, readPolicyConfig: readScoped };
+        await using first = await acquireReadOnlyPreparedModelRuntime(
+          order === "live-first" ? liveInput : scopedInput,
+        );
+        const builds = mocks.ensureOpenClawModelsJson.mock.calls.length;
+        await using second = await acquireReadOnlyPreparedModelRuntime(
+          order === "live-first" ? scopedInput : liveInput,
+        );
+        expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(builds);
+        expect(second.snapshot.config).toBe(first.snapshot.config);
+        expect(second.snapshot.observationConfig).toBe(first.snapshot.observationConfig);
+        const liveLease = order === "live-first" ? first : second;
+        const scopedLease = order === "scoped-first" ? first : second;
+        const revoked = { tools: { openclaw: { autoApproveChanges: false } } };
+        setRuntimeConfigSnapshot(revoked);
+        expect(getPreparedModelRuntimePolicyConfigReader(liveLease.snapshot)!()).toBe(revoked);
+        expect(getPreparedModelRuntimePolicyConfigReader(scopedLease.snapshot)!()).toBe(scoped);
+        expect(second.snapshot).not.toHaveProperty("readPolicyConfig");
+        const { attempt, admission } = await admissionFixture().admittedAttempt("listing-policy", {
+          config: live,
+          preparedModelRuntime: liveLease.snapshot,
+        });
+        const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+        using build = vi
+          .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
+          .mockResolvedValue([]);
+        try {
+          await host.capabilities.createToolSurfaceAsync!({ config: structuredClone(live) });
+          expect(build.mock.lastCall?.[0]?.readDelegationConfig?.()).toBe(revoked);
+        } finally {
+          host.close();
+          admission.close();
+        }
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
 
   it("advances without rebuilding or mutating existing readers", async () => {
     const initialConfig = {};
@@ -130,28 +224,17 @@ describe("prepared model runtime config stamps", () => {
       });
       return [row];
     });
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: runtime,
-      source: "fixture",
-      harness: {
-        id: runtime,
-        label: "Native observation fixture",
-        authBootstrap: "harness",
-        supports: () => ({ supported: true }),
-        async runAttempt() {
-          throw new Error("Catalog fixture must not run a model");
-        },
-        loadModelCatalog,
-        readModelCatalogReadiness: (params) => {
-          const observed = observations.get(params.config);
-          return observed !== undefined &&
-            observed.agentDir === params.agentDir &&
-            observed.workspaceDir === params.workspaceDir &&
-            observed.pluginConfig === params.config.plugins?.entries?.[runtime]?.config
-            ? { accountType: "chatgpt", authMode: "oauth" }
-            : undefined;
-        },
+    const registry = harnessRegistry(runtime, {
+      authBootstrap: "harness",
+      loadModelCatalog,
+      readModelCatalogReadiness: (params) => {
+        const observed = observations.get(params.config);
+        return observed !== undefined &&
+          observed.agentDir === params.agentDir &&
+          observed.workspaceDir === params.workspaceDir &&
+          observed.pluginConfig === params.config.plugins?.entries?.[runtime]?.config
+          ? { accountType: "chatgpt", authMode: "oauth" }
+          : undefined;
       },
     });
     mocks.resolveNativeModelPrimary.mockReturnValue("custom/model");
@@ -197,9 +280,8 @@ describe("prepared model runtime config stamps", () => {
   });
 
   it("resolves startup config inside the serialized publication", async () => {
-    const initialConfig = {};
     const nextConfig = hotConfig();
-    let currentConfig = initialConfig;
+    let currentConfig: OpenClawConfig = {};
 
     const publication = publish(() => currentConfig);
     currentConfig = nextConfig;
@@ -259,10 +341,9 @@ describe("prepared model runtime config stamps", () => {
   );
 
   it("drops a publication whose lifecycle claim is lost during async config resolution", async () => {
-    const initialConfig = {};
     const staleConfig = { gateway: { reload: { mode: "off" as const } } };
     const nextConfig = hotConfig();
-    await publish(initialConfig);
+    await publish({});
     await using resources = new AsyncDisposableStack();
     let claimCurrent = true;
     const stale = holdPublication(resources, staleConfig, {
@@ -290,29 +371,26 @@ describe("prepared model runtime config stamps", () => {
   });
 
   it("keeps an in-flight auth publication on the advanced stamp", async () => {
-    const initialConfig = {};
     const nextConfig = hotConfig();
-    await publish(initialConfig);
-    const finishAuthRefreshGate = createDeferred();
-    const authRefreshStarted = createDeferred();
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
-      authRefreshStarted.resolve();
-      await finishAuthRefreshGate.promise;
-      return { agentDir: String(agentDir), wrote: false };
+    await publish({});
+    const authRefresh = createEnteredGate();
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
+      await authRefresh.wait();
+      return {};
     });
 
     try {
       mocks.mutationListener?.({ affectsInheritedStores: true });
-      await authRefreshStarted.promise;
+      await authRefresh.entered;
       mocks.configuredAgentDirs.set("default", "/tmp/later-agent");
       advancePreparedModelRuntimeConfig(nextConfig);
-      finishAuthRefreshGate.resolve();
+      authRefresh.release();
 
       const snapshot = await prepare(nextConfig);
       expectOwner(snapshot, nextConfig);
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
     } finally {
-      finishAuthRefreshGate.resolve();
+      authRefresh.release();
       await Promise.allSettled([dispatch()]);
     }
   });

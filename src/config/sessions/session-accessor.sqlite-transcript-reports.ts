@@ -15,7 +15,6 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
-import { getCliHistoryWriter } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
@@ -44,10 +43,8 @@ import type {
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-transcript-reports.worker.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { withMemoryReportWorker } from "./session-actor-transcript-reports.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";
@@ -101,14 +98,13 @@ async function settleReportOperation<T>(
 
 async function withReportWorker<T>(
   scope: SessionTranscriptWriteScope,
-  kind: "read" | "append",
   run: (
     operation: Pick<SqliteWorkerStore<TranscriptReportWorkerOperations>, "execute">,
     assertCurrent: () => void,
     publish: (
       result: Pick<
         TranscriptReportCommit,
-        "projectionNeedsReconcile" | "cliHistoryChanged" | "sessionEntryChanged" | "entry"
+        "projectionNeedsReconcile" | "sessionEntryChanged" | "entry" | "fullEntry"
       >,
     ) => void,
   ) => Promise<Result<T, TranscriptAppendRefusal>>,
@@ -214,28 +210,14 @@ async function withReportWorker<T>(
         options,
         toAgentExecutionConstraints(identity),
       );
-      const cliWriter =
-        kind === "append"
-          ? getCliHistoryWriter({ ...resolved, storePath: resolveOpenClawAgentSqlitePath(options) })
-          : undefined;
       const assertCurrent = () => {
         execution.assertCurrent();
         assertTargetCurrent();
-        cliWriter?.assertCurrent();
       };
       const { env: _env, ...workerResolved } = resolved;
       const target: TranscriptReportWorkerTarget = {
         resolved: workerResolved,
         sessionEntryCurrentSource: sessionEntryCurrent?.source,
-        ...(cliWriter
-          ? {
-              cliWriter: {
-                runId: cliWriter.runId,
-                authFingerprint: cliWriter.authFingerprint,
-                lifecycleRevision: cliWriter.lifecycleRevision,
-              },
-            }
-          : {}),
         fence: {
           expectedLifecycleRevision: fenced.expectedLifecycleRevision,
           expectedWriterRunId: fenced.expectedWriterRunId,
@@ -259,10 +241,13 @@ async function withReportWorker<T>(
                     runtimeProcessEntrypoints.sessionTranscriptReports,
                   ),
                   input: target,
-                  assertAdmission: (request) =>
-                    request.stage === "transaction" || request.stage === "commit"
-                      ? assertSessionEntryCurrentAdmission(request, sessionEntryCurrent)
-                      : request,
+                  assertAdmission: (request) => {
+                    const admitted =
+                      request.stage === "transaction" || request.stage === "commit"
+                        ? assertSessionEntryCurrentAdmission(request, sessionEntryCurrent)
+                        : request;
+                    return admitted;
+                  },
                 },
               );
             return settleReportOperation(
@@ -270,13 +255,14 @@ async function withReportWorker<T>(
                 worker.run(
                   (operation) =>
                     run(operation, assertCurrent, (publication) => {
-                      if (publication.cliHistoryChanged || publication.sessionEntryChanged) {
+                      if (publication.sessionEntryChanged) {
                         publishSessionEntryWorkerMetadataInvalidation({
                           agentId: resolved.agentId,
                           storePath: execution.path,
                           databaseIdentity,
                           sessionKey: resolved.sessionKey,
                           entry: publication.entry,
+                          fullEntry: publication.fullEntry,
                         });
                       }
                       if (publication.projectionNeedsReconcile) {
@@ -335,7 +321,6 @@ export async function appendAbortedSessionTranscriptPartial(
   }
   const settlement = await withReportWorker(
     publicationScope,
-    "append",
     async (operation, _assertCurrent, publish) => {
       const result = await operation.execute({
         type: "abortedPartial",
@@ -371,7 +356,7 @@ export async function readLatestSessionTranscriptReport(
   customTypes: readonly string[],
 ): Promise<Result<CustomMessageReport | undefined, TranscriptAppendRefusal>> {
   const selectedTypes = [...customTypes];
-  return withReportWorker(scope, "read", async (operation, assertCurrent) => {
+  return withReportWorker(scope, async (operation, assertCurrent) => {
     const prepared = await operation.execute({
       type: "prepare",
       input: { kind: "custom", customTypes: selectedTypes },
@@ -399,7 +384,6 @@ export async function appendSessionTranscriptReport(
     const input = { ...report, message: preparedMessage.persistedMessage, preparedMessage };
     return withReportWorker(
       scope,
-      "append",
       async (operation, _assertCurrent, publish) => {
         const result = await operation.execute({ type: "assistant", input });
         if (!result.ok) {
@@ -418,7 +402,6 @@ export async function appendSessionTranscriptReport(
   const selectReport = report.selectReport;
   return withReportWorker(
     scope,
-    "append",
     async (operation, assertCurrent, publish) => {
       for (let attempt = 0; attempt < 3; attempt++) {
         const prepared = await operation.execute({ type: "prepare", input: selection });

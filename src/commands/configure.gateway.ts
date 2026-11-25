@@ -35,7 +35,6 @@ type GatewayTokenInputMode = "plaintext" | "ref";
 export async function promptGatewayConfig(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   port: number;
-  token?: string;
 }> {
   const portRaw = await prompts.text({
     message: "Gateway port",
@@ -135,7 +134,6 @@ export async function promptGatewayConfig(cfg: OpenClawConfig): Promise<{
   }
 
   let gatewayToken: SecretInput | undefined;
-  let gatewayTokenForCalls: string | undefined;
   let gatewayPassword: string | undefined;
   let trustedProxyConfig: GatewayTrustedProxyConfig | undefined;
   let trustedProxies: string[] | undefined;
@@ -182,8 +180,7 @@ export async function promptGatewayConfig(cfg: OpenClawConfig): Promise<{
       const tokenInput = await prompts.password({
         message: "Gateway token (blank to generate)",
       });
-      gatewayTokenForCalls = normalizeGatewayTokenInput(tokenInput) || randomToken();
-      gatewayToken = gatewayTokenForCalls;
+      gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
     }
   }
 
@@ -309,5 +306,5 @@ export async function promptGatewayConfig(cfg: OpenClawConfig): Promise<{
     tailscaleBin,
   });
 
-  return { config: next, port, token: gatewayTokenForCalls };
+  return { config: next, port };
 }

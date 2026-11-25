@@ -108,7 +108,6 @@ function resolveConfiguredRefForTest(
   return resolveConfiguredModelRef({
     cfg,
     defaultProvider: "openai",
-    defaultModel: "gpt-5.4",
     ...options,
   });
 }
@@ -211,9 +210,7 @@ it.each(["defaults", "agent", "configured catalog", "catalog"] as const)(
         defaultProvider: "fallback",
       });
 
-    expect(resolve(" Model ")).toBe("third");
-    expect(resolve("MODEL")).toBe("second");
-    expect(resolve("mOdEl")).toBe("fallback");
+    expect([" Model ", "MODEL", "mOdEl"].map(resolve)).toEqual(["third", "second", "fallback"]);
   },
 );
 
@@ -342,30 +339,23 @@ it("keeps metadata on custom/model and custom/custom/model", () => {
 });
 
 it("keeps synthetic entries sparse when configured metadata belongs to custom/model", () => {
-  const result = allowed(
-    config(
-      {
-        models: aliases({ "custom/model": "Selected alias" }),
-        modelPolicy: { allow: ["custom/model"] },
-      },
-      undefined,
-      {
-        custom: {
-          baseUrl: "https://configured.example/v1",
-          models: [
-            {
-              id: "custom/model",
-              name: "Unrelated configured name",
-              contextWindow: 128_000,
-              reasoning: true,
-              input: ["text", "image"],
-              params: { temperature: 0.5 },
-            },
-          ],
-        },
-      },
-    ),
+  const unrelated = {
+    id: "custom/model",
+    name: "Unrelated configured name",
+    contextWindow: 128_000,
+    reasoning: true,
+    input: ["text", "image"],
+    params: { temperature: 0.5 },
+  };
+  const cfg = config(
+    {
+      models: aliases({ "custom/model": "Selected alias" }),
+      modelPolicy: { allow: ["custom/model"] },
+    },
+    undefined,
+    { custom: { baseUrl: "https://configured.example/v1", models: [unrelated] } },
   );
+  const result = allowed(cfg);
 
   expect(result.allowedCatalog).toEqual([{ ...row("custom", "model"), alias: "Selected alias" }]);
 });
@@ -516,11 +506,11 @@ it.each([
     'Falling back to "google/claude-3-5-sonnet"',
   ],
   [
-    "warns when an unresolved model falls back to default",
+    "warns when a configured model cannot be resolved",
     "openai/",
     {},
-    ref("openai", "gpt-5.4"),
-    'Model "openai/" could not be resolved. Falling back to default "openai/gpt-5.4".',
+    undefined,
+    'Model "openai/" could not be resolved. Choose a provider/model in Settings → Models.',
   ],
 ] as const)("%s", async (_name, primary, options, expected, warningText) => {
   const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
@@ -555,10 +545,7 @@ it.each([
   [
     "resolves a provider-qualified alias with a profile for a configured primary",
     "nemotron-bolt/Fast@work",
-    {
-      "nemotron-bolt/nemotron-3-super-120b": { alias: "fast" },
-      "openai/gpt-5.5": { alias: "fast" },
-    },
+    aliases({ "nemotron-bolt/nemotron-3-super-120b": "fast", "openai/gpt-5.5": "fast" }),
     ref("nemotron-bolt", "nemotron-3-super-120b"),
     nemotronProvider,
   ],
@@ -604,13 +591,12 @@ it.each([
   [
     "custom provider behind empty default overlay",
     { openai: [], "local-provider": ["local-good"] },
-    "missing-default-model",
     ref("local-provider", "local-good"),
   ],
-  ["hardcoded fallback", { "empty-provider": [] }, "gpt-5.4", ref("openai", "gpt-5.4")],
-] as const)("resolves %s", (_name, providers, defaultModel, expected) => {
+  ["no configured model", { "empty-provider": [] }, undefined],
+] as const)("resolves %s", (_name, providers, expected) => {
   const cfg = config({}, undefined, providerModels(providers));
-  expect(resolveConfiguredRefForTest(cfg, { defaultModel })).toEqual(expected);
+  expect(resolveConfiguredRefForTest(cfg)).toEqual(expected);
 });
 
 it("normalizes retired nested Gemini ids in exact configured provider refs", () => {
@@ -624,7 +610,6 @@ it("normalizes retired nested Gemini ids in exact configured provider refs", () 
   expect(
     resolveConfiguredRefForTest(cfg, {
       defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
       allowPluginNormalization: false,
     }),
   ).toEqual(ref("kilocode", "google/gemini-3.1-pro-preview"));
@@ -744,4 +729,7 @@ it("excludes typed-only rows from conversational selection while retaining dual-
   const result = allowed({}, [chat, typed, dual], { defaultProvider: "fixture" });
   expect(result.allowedCatalog).toEqual([chat, dual]);
   expect(result.allowedKeys.has("fixture/typed")).toBe(false);
+  const authored = allowed(config({ models: { "fixture/typed": {}, "fixture/new": {} } }), [typed]);
+  expect(authored.allowedCatalog).toEqual([row("fixture", "new")]);
+  expect(authored.allows(ref("fixture", "typed"))).toBe(false);
 });

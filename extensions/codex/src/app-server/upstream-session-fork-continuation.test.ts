@@ -228,7 +228,10 @@ it("continues a persistent upstream fork on its secondary home and native model 
     const binding = await startOrResumeThread({
       bindingStore,
       client: selected.client,
-      params: { ...attempt, authProfileId: connection.requestAuthProfileId },
+      params: {
+        ...attempt,
+        authProfileId: connection.usesSupervisionConnection ? undefined : attempt.authProfileId,
+      },
       cwd: root,
       appServer: connection.appServer,
       dynamicTools,
@@ -258,7 +261,7 @@ it("continues a persistent upstream fork on its secondary home and native model 
         model: nativeModel,
         modelProvider: "openai",
         dynamicTools,
-        developerInstructions,
+        developerInstructions: `<thread_policy>\n${developerInstructions}\n</thread_policy>`,
       }),
     );
     expectNativeRequest("thread/inject_items", {

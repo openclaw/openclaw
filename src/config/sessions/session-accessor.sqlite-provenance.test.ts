@@ -12,6 +12,10 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import {
+  projectPublicSessionEntry,
+  projectExecutionSessionEntry,
+} from "./session-entry-projection.js";
 import type { SessionEntry } from "./types.js";
 
 const retainedPrompt = "retained skill prompt ".repeat(400);
@@ -196,5 +200,55 @@ it.each(["transcript_observed_at", "transcript_updated_at"] as const)(
       /too large|safe integer|out of range/i,
     );
     expect(read("session_nodes", "label")).toEqual({ label: null });
+  },
+);
+
+it.each([
+  { type: "human", source: "profile", id: "causal-requester" },
+  { type: "agent", id: "main" },
+] as const)(
+  "keeps legacy actor columns and immutable $type attribution across cold reopen",
+  (delegatedBy) => {
+    const { scope, entry, read } = createFixture();
+    const createdActor = {
+      type: "human",
+      source: "profile",
+      id: "isolation-owner",
+      delegatedBy,
+    } as const;
+    replaceSessionEntrySync(scope, { ...entry, createdActor, sandbox: "required" });
+    expect(read("session_nodes", "created_actor_type, created_actor_id")).toEqual({
+      created_actor_type: "human",
+      created_actor_id: "isolation-owner",
+    });
+    const first = JSON.parse(String(read("session_nodes", "entry_json")?.entry_json));
+    expect(first.createdActor).toEqual(createdActor);
+    const publicEntry = projectPublicSessionEntry({ ...entry, createdActor });
+    expect(publicEntry.createdActor).toEqual(createdActor.delegatedBy);
+    expect(projectExecutionSessionEntry({ ...entry, createdActor }).createdActor).toEqual(
+      createdActor,
+    );
+    replaceSessionEntrySync(scope, { ...publicEntry, updatedAt: 25 });
+    expect(
+      JSON.parse(String(read("session_nodes", "entry_json")?.entry_json)).createdActor,
+    ).toEqual(createdActor);
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const reopened = openOpenClawAgentDatabase(scope);
+    replaceSessionEntrySync(scope, {
+      sessionId: entry.sessionId,
+      updatedAt: 30,
+      label: "post-reopen write",
+      createdActor: { type: "agent", id: "cannot-replace-creator" },
+    });
+    const row = reopened.db
+      .prepare("SELECT entry_json, created_actor_id FROM session_nodes WHERE session_key = ?")
+      .get(scope.sessionKey);
+    expect(row?.created_actor_id).toBe("isolation-owner");
+    expect(JSON.parse(String(row?.entry_json))).toMatchObject({
+      label: "post-reopen write",
+      createdActor,
+      sandbox: "required",
+    });
   },
 );

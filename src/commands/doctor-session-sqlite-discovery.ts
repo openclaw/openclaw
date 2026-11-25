@@ -189,9 +189,11 @@ function readArchivedSessionOwnership(
           "Archived session registry no longer matches its migration receipt (file metadata or contents changed).",
         );
       }
-      records.push(
-        ...readLegacySessionRecords(target, ownershipIssues, { sourcePath: move.archivePath }),
-      );
+      for (const record of readLegacySessionRecords(target, ownershipIssues, {
+        sourcePath: move.archivePath,
+      })) {
+        records.push(record);
+      }
       if (
         ownershipIssues.length ||
         !sameMigrationArtifact(readMigrationArtifactIdentity(move.archivePath), identity)
@@ -308,6 +310,12 @@ async function discoverLegacyHistoricalTranscripts(params: {
       if (!sameMigrationArtifact(identity, readMigrationArtifactIdentity(source.path))) {
         throw new Error("Primary transcript changed during discovery");
       }
+      if (primary.sessionId !== primary.filenameId) {
+        params.issues.push({
+          code: "transcript_filename_mismatch",
+          message: `${source.originalPath}: Header session ID ${primary.sessionId} differs from filename ID ${primary.filenameId}; using the header identity and preserving the original.`,
+        });
+      }
       if (
         params.records.some(
           (record) =>
@@ -370,7 +378,7 @@ async function discoverLegacyHistoricalTranscripts(params: {
     if (records.length > 1 && !identicalArchives) {
       params.issues.push({
         code: "historical_transcript_deferred",
-        message: `${sessionId}: multiple primary files claim this identity; originals retained without importing`,
+        message: `${sessionId}: multiple primary files claim this identity; originals retained without importing: ${records.map((record) => record.historical!.originalPath).join(", ")}`,
       });
     } else {
       discovered.push(first);

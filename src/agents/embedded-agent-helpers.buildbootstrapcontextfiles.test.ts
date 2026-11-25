@@ -68,20 +68,16 @@ describe("buildBootstrapContextFiles", () => {
   });
   it("truncates large bootstrap content with a warning and bounded head/tail", () => {
     const content = `HEAD-${"a".repeat(600)}${"b".repeat(300)}-TAIL`;
-    const warnings: string[] = [];
-    const result = renderFile(
-      { name: "SOUL.md", content },
-      {
-        maxChars: 200,
-        warn: (message) => warnings.push(message),
-      },
-    );
+    const warn = vi.fn();
+    const result = renderFile({ name: "SOUL.md", content }, { maxChars: 200, warn });
     expect(result).toHaveLength(199);
     expect(result).toContain("[...truncated, read SOUL.md for full content...]");
     expect(result).toContain("kept 75+25 chars");
     expect(result?.startsWith(content.slice(0, 75))).toBe(true);
     expect(result?.endsWith(content.slice(-25))).toBe(true);
-    expect(warnings).toEqual([expect.stringMatching(/SOUL\.md.*limit 200/)]);
+    expect(warn.mock.calls.map(([message]) => message)).toEqual([
+      expect.stringMatching(/SOUL\.md.*limit 200/),
+    ]);
   });
   it("warns once per path, content revision, and effective limit across context builds", () => {
     const file = makeFile({ path: "/warning-revisions/AGENTS.md", content: "a".repeat(1000) });

@@ -15,12 +15,16 @@ import {
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
+const sessionConversation = vi.hoisted(() => ({
+  parents: {} as Record<string, { base: string; parents: string[] }>,
+}));
+// mock-isolation: Per-test parent candidates stand in for each channel's session grammar.
 vi.mock("../channels/plugins/session-conversation.js", () => ({
   resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
     id: rawId,
     threadId: undefined,
-    baseConversationId: rawId,
-    parentConversationCandidates: [],
+    baseConversationId: sessionConversation.parents[rawId]?.base ?? rawId,
+    parentConversationCandidates: sessionConversation.parents[rawId]?.parents ?? [],
   }),
 }));
 vi.mock("../channels/plugins/index.js", () => ({
@@ -88,36 +92,50 @@ describe("resolveGroupToolPolicy group context validation", () => {
     return resolveGroupToolPolicy({ config, messageProvider: "whatsapp", ...params });
   }
 
-  it("rejects forged groupId when the session has no group context", () => {
-    expect(
-      groupPolicy({ sessionKey: "agent:main:main", groupId: "trusted-group" }),
-    ).toBeUndefined();
+  it.each([
+    ["forged groupId", "main", "trusted-group", undefined, undefined],
+    ["session overrides caller", "whatsapp:group:safe-room", "trusted-group", undefined, ["read"]],
+    [
+      "spawnedBy group",
+      "main",
+      "trusted-group",
+      "agent:main:whatsapp:group:trusted-group",
+      ["exec", "read", "write", "edit"],
+    ],
+    [
+      "specific session overrides parent",
+      "whatsapp:group:room:sender:alice",
+      "room",
+      undefined,
+      ["read"],
+    ],
+  ] as const)("%s", (_name, session, groupId, spawnedBy, allow) => {
+    expect(groupPolicy({ sessionKey: `agent:main:${session}`, groupId, spawnedBy })).toEqual(
+      allow ? { allow } : undefined,
+    );
   });
 
-  it("uses session-derived group policy when caller groupId disagrees", () => {
+  it("prefers the topic policy over the base group for a topic-sender session", () => {
+    // Feishu reports parents narrowest first; the first matching policy wins.
+    sessionConversation.parents["oc_team:topic:om_42:sender:ou_alice"] = {
+      base: "oc_team",
+      parents: ["oc_team:topic:om_42", "oc_team"],
+    };
+    const feishuCfg = {
+      channels: {
+        feishu: {
+          groups: {
+            oc_team: { tools: { allow: ["exec", "read"] } },
+            "oc_team:topic:om_42": { tools: { allow: ["read"] } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
     expect(
-      groupPolicy({
-        sessionKey: "agent:main:whatsapp:group:safe-room",
-        groupId: "trusted-group",
-      }),
-    ).toEqual({ allow: ["read"] });
-  });
-
-  it("accepts caller groupId when spawnedBy provides the trusted group context", () => {
-    expect(
-      groupPolicy({
-        sessionKey: "agent:main:main",
-        spawnedBy: "agent:main:whatsapp:group:trusted-group",
-        groupId: "trusted-group",
-      }),
-    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
-  });
-
-  it("keeps specific session group policy ahead of trusted parent caller groupId", () => {
-    expect(
-      groupPolicy({
-        sessionKey: "agent:main:whatsapp:group:room:sender:alice",
-        groupId: "room",
+      resolveGroupToolPolicy({
+        config: feishuCfg,
+        sessionKey: "agent:main:feishu:group:oc_team:topic:om_42:sender:ou_alice",
+        messageProvider: "feishu",
       }),
     ).toEqual({ allow: ["read"] });
   });
@@ -148,6 +166,30 @@ describe("resolveGroupToolPolicy group context validation", () => {
       );
     },
   );
+
+  it("names the missing creator channel when a DM-key scheduled account cannot resolve a channel", () => {
+    const params = {
+      config,
+      sessionKey: "agent:ailybot:telegram:direct:alex",
+      accountId: "ailybot",
+      requireConfiguredAccount: true,
+    };
+    expect(() => resolveGroupToolPolicy(params)).toThrow(
+      'Scheduled account "ailybot" is unavailable: the job has no recorded creator channel',
+    );
+  });
+
+  it("keeps the generic message when a named account is removed from configuration", () => {
+    const params = {
+      config,
+      sessionKey: "agent:main:whatsapp:group:safe-room",
+      accountId: "removed",
+      requireConfiguredAccount: true,
+    };
+    expect(() => resolveGroupToolPolicy(params)).toThrow(
+      'Scheduled account "removed" is unavailable. Re-add it to the channel configuration',
+    );
+  });
 
   it("preserves scheduled deny-all", () => {
     expect(

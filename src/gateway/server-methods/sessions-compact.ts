@@ -24,14 +24,14 @@ import {
   SessionMutationPreemptTimeoutError,
 } from "../../sessions/session-controller.lifecycle.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
-import { hasPreparedGatewayDeviceAuthority } from "../device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
+import { respondError } from "./response.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -69,11 +69,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     }
     const requestedAgentId = requestedAgent.agentId;
     const compatibilityDefaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
-    let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
-    const assertRequestCurrent = () => {
-      requestAuthority.assertCurrent();
-      capturedOperator?.authority.assertCurrent();
-    };
+    let capturedOperator: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
+    const assertRequestCurrent = () => requestAuthority.assertCurrent();
     try {
       const target = await resolveGatewaySessionStoreTargetInWorker({
         cfg,
@@ -83,7 +80,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       });
       const storePath = target.storePath;
       if (maxLines === undefined) {
-        capturedOperator = await captureGatewayOperatorRunAuthority({
+        capturedOperator = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority,
@@ -100,18 +97,23 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       const respondNotCompacted = (details: { ok?: boolean; kept?: number; reason?: string }) => {
         respond(
           true,
-          { ok: true, key: target.canonicalKey, compacted: false, ...details },
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            ...details,
+            ...(details.reason === "no transcript"
+              ? { reason: "No chat history to compact." }
+              : {}),
+          },
           undefined,
         );
       };
       if (!sessionId) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `Session ${key} not found. Run openclaw sessions list --json to choose a valid key.`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `Session ${key} not found. Run openclaw sessions list --json to choose a valid key.`,
         );
         return;
       }
@@ -264,9 +266,6 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   requestAuthority.assertCurrent,
                 assertHostCurrent: () => {
                   signal?.throwIfAborted();
-                  if (!hasPreparedGatewayDeviceAuthority(client, hasCurrentClientAuthority)) {
-                    throw new Error("Gateway requester authority changed");
-                  }
                 },
                 expectedLifecycleRevision: lifecycleRevision,
                 expectedSource: target.capturedReadSource,
@@ -406,13 +405,9 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             if (!persisted) {
               const reason = `Session ${key} changed before compaction completed. Retry.`;
               emitCompactionEnd(false, reason);
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.INVALID_REQUEST, reason, {
-                  details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
-                }),
-              );
+              respondError(respond, ErrorCodes.INVALID_REQUEST, reason, {
+                details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
+              });
               return;
             }
             await recordSessionCompacted({
@@ -442,13 +437,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       });
     } catch (err) {
       if (err instanceof SessionMutationPreemptTimeoutError) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `Session ${key} has an active run; retry after it finishes.`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `Session ${key} has an active run; retry after it finishes.`,
         );
         return;
       }

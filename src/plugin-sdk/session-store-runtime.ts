@@ -3,7 +3,7 @@ import { isMainThread } from "node:worker_threads";
 import {
   readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
-  updateAmbientTranscriptWatermark,
+  updateAmbientTranscriptWatermark as updateAccessorAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
 import { buildConversationIdentity } from "../config/sessions/conversation-identity.js";
@@ -24,6 +24,7 @@ import {
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
   patchSessionEntryCore as patchAccessorSessionEntry,
+  recordInboundSessionMeta,
   readSessionUpdatedAtCore as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
@@ -57,6 +58,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
+  copyMutableSessionEntry,
   getSessionEntryAsync,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
@@ -258,6 +260,12 @@ export async function listSessionEntriesAsync(params: {
   }));
 }
 
+export {
+  withSessionEntriesAsync,
+  type SessionStoreSelectedEntries,
+  type SessionStoreSelectedEntry,
+} from "./session-store-selection.js";
+
 type SessionStoreTranscriptReadParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
@@ -357,20 +365,11 @@ export async function patchSessionEntry(
       ...sessionEntryCommitGuardOptions(
         captureExternalSessionCommitGuard(params.assertCommitAllowed),
       ),
-      fallbackEntry: params.fallbackEntry
-        ? projectPluginSessionEntry(params.fallbackEntry)
-        : undefined,
-      maintenanceConfig:
-        params.maintenanceConfig !== undefined
-          ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
-          : undefined,
-      preserveActivity: params.preserveActivity,
-      requireWriteSuccess: params.requireWriteSuccess,
-      replaceEntry: params.replaceEntry,
-      skipMaintenance: params.skipMaintenance,
+      ...sessionEntryPatchFields(params),
     },
   );
-  return entry ? projectPluginSessionEntry(entry) : null;
+  // Public results stay mutable; internal patches share frozen nested facts.
+  return entry ? copyMutableSessionEntry(projectPluginSessionEntry(entry)) : null;
 }
 
 /** Prepare outside SQLite, then compare the exact snapshot and commit once in its worker. */
@@ -397,7 +396,7 @@ export async function prepareSessionEntryPatch(
     },
     sessionEntryPatchOptions(params),
   );
-  return entry ? projectPluginSessionEntry(entry) : null;
+  return entry ? copyMutableSessionEntry(projectPluginSessionEntry(entry)) : null;
 }
 
 /** Reduce a data-only patch against the authoritative entry in one worker command. */
@@ -413,17 +412,11 @@ export async function applySessionEntryPatch(
     },
     sessionEntryPatchOptions(params),
   );
-  return entry ? projectPluginSessionEntry(entry) : null;
+  return entry ? copyMutableSessionEntry(projectPluginSessionEntry(entry)) : null;
 }
 
-function sessionEntryPatchOptions(params: Omit<PrepareSessionEntryPatchParams, "prepare">) {
-  const authority = params.authority;
-  assertSessionEntryPatchAuthority(authority);
+function sessionEntryPatchFields(params: Omit<PatchSessionEntryParams, "update">) {
   return {
-    workerGuard: {
-      assertCurrent: authority?.kind === "host" ? () => authority.assertCurrent() : undefined,
-      source: authority?.kind === "source" ? authority.source : undefined,
-    },
     fallbackEntry: params.fallbackEntry
       ? projectPluginSessionEntry(params.fallbackEntry)
       : undefined,
@@ -435,6 +428,18 @@ function sessionEntryPatchOptions(params: Omit<PrepareSessionEntryPatchParams, "
     requireWriteSuccess: params.requireWriteSuccess,
     replaceEntry: params.replaceEntry,
     skipMaintenance: params.skipMaintenance,
+  };
+}
+
+function sessionEntryPatchOptions(params: Omit<PrepareSessionEntryPatchParams, "prepare">) {
+  const authority = params.authority;
+  assertSessionEntryPatchAuthority(authority);
+  return {
+    workerGuard: {
+      assertCurrent: authority?.kind === "host" ? () => authority.assertCurrent() : undefined,
+      source: authority?.kind === "source" ? authority.source : undefined,
+    },
+    ...sessionEntryPatchFields(params),
   };
 }
 
@@ -455,7 +460,15 @@ export function readSessionUpdatedAtAsync(
   return readSessionUpdatedAtInWorker(toSessionAccessScope(params));
 }
 
-export { resolveAmbientTranscriptWatermarkKey, updateAmbientTranscriptWatermark };
+async function updateSessionStoreAmbientTranscriptWatermark(
+  params: Parameters<typeof updateAccessorAmbientTranscriptWatermark>[0],
+): ReturnType<typeof updateAccessorAmbientTranscriptWatermark> {
+  return copyMutableSessionEntry(await updateAccessorAmbientTranscriptWatermark(params));
+}
+export {
+  resolveAmbientTranscriptWatermarkKey,
+  updateSessionStoreAmbientTranscriptWatermark as updateAmbientTranscriptWatermark,
+};
 export type { AmbientTranscriptWatermarkScope };
 
 /** @deprecated Use readAmbientTranscriptWatermarkAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
@@ -502,7 +515,7 @@ export async function updateSessionStoreEntry(
       requireWriteSuccess: params.requireWriteSuccess,
     },
   );
-  return entry ? projectPluginSessionEntry(entry) : null;
+  return entry ? copyMutableSessionEntry(projectPluginSessionEntry(entry)) : null;
 }
 
 /** Replaces or creates one session entry by agent/session identity. */
@@ -668,7 +681,11 @@ export { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 export { isValidAgentHarnessSessionStoreEntry } from "../sessions/agent-harness-session-key.js";
 // SDK-facing names are a shipped plugin contract; internals route through the
 // session accessor so the storage backend can change beneath them.
-export { recordInboundSessionMeta as recordSessionMetaFromInbound } from "../config/sessions/session-accessor.js";
+export async function recordSessionMetaFromInbound(
+  params: Parameters<typeof recordInboundSessionMeta>[0],
+): ReturnType<typeof recordInboundSessionMeta> {
+  return copyMutableSessionEntry(await recordInboundSessionMeta(params));
+}
 
 export function updateLastRoute(
   params: UpdateSessionLastRouteParams & {
@@ -683,7 +700,7 @@ export function updateLastRoute(
       replacement: "updateLastRouteWithAuthority",
     });
   }
-  return updateSessionLastRoute(params);
+  return updateSessionLastRoute(params).then(copyMutableSessionEntry);
 }
 
 /** Route preparation runs before the worker's conditional commit. */
@@ -695,7 +712,7 @@ export function updateLastRouteWithAuthority(
   return updateSessionLastRouteInScope(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     { ...params, workerGuard: sessionEntryPatchOptions(params).workerGuard },
-  );
+  ).then(copyMutableSessionEntry);
 }
 export {
   evaluateSessionFreshness,

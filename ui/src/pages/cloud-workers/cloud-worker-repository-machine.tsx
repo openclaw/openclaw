@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { normalizeCloudRepo } from "../../../../src/config/cloud-worker-project-profiles.js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readCloudWorkerProfiles } from "./cloud-worker-config.ts";
@@ -93,7 +94,7 @@ function RepositoryMachine(props: RepositoryMachineProps) {
           <button
             type="button"
             class="btn btn--sm"
-            disabled={editor.state().busy}
+            disabled={editor.busy()}
             onClick={() => setEditing(false)}
           >
             {t("common.cancel")}
@@ -101,9 +102,9 @@ function RepositoryMachine(props: RepositoryMachineProps) {
         </Show>
       </div>
       <Show when={editor.state().error}>
-        <div class="callout warning" role="alert">
+        <InlineAlert tone="warning" role="alert">
           {editor.state().error}
-        </div>
+        </InlineAlert>
       </Show>
     </SettingsSection>
   );

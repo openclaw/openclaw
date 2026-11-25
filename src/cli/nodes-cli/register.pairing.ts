@@ -8,7 +8,12 @@ import { defaultRuntime } from "../../runtime.js";
 import { parsePairingList } from "../../shared/node-list-parse.js";
 import type { PendingRequest } from "../../shared/node-list-types.js";
 import { formatCliCommand } from "../command-format.js";
-import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import {
+  formatConnectionFlagReminder,
+  getNodesTheme,
+  runNodesCommand,
+  runNodesReadCommand,
+} from "./cli-utils.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
   callNodesGatewayCli,
@@ -19,16 +24,6 @@ import {
 import type { NodesRpcOpts } from "./types.js";
 
 const DEFAULT_NODE_PAIR_APPROVE_SCOPES: OperatorScope[] = ["operator.pairing"];
-function normalizeNodePairApproveScopes(scopes: unknown): OperatorScope[] {
-  const normalized = new Set<OperatorScope>(DEFAULT_NODE_PAIR_APPROVE_SCOPES);
-  for (const scope of Array.isArray(scopes) ? scopes : []) {
-    if (scope === "operator.pairing" || scope === "operator.write" || scope === "operator.admin") {
-      normalized.add(scope);
-    }
-  }
-  return [...normalized];
-}
-
 async function resolveApproveScopesForRequest(
   opts: NodesRpcOpts,
   requestId: string,
@@ -52,13 +47,8 @@ async function resolveApproveScopesForRequest(
   if (!request) {
     throw new Error(buildUnknownNodePairRequestIdMessage(requestId, opts, pendingRequestIds));
   }
-  const declaredScopes = normalizeNodePairApproveScopes(request.requiredApproveScopes);
-  if (declaredScopes.length > DEFAULT_NODE_PAIR_APPROVE_SCOPES.length) {
-    return { scopes: declaredScopes };
-  }
-  // Older pending requests only list requested commands; derive approval scopes from them.
   return {
-    scopes: resolveNodePairApprovalScopes(request.commands) as OperatorScope[],
+    scopes: resolveNodePairApprovalScopes(request.commands, request.requiredApproveScopes),
   };
 }
 
@@ -101,8 +91,8 @@ export function registerNodesPairingCommands(nodes: Command) {
       .command("pending")
       .description("List pending pairing requests")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("pending", async () => {
-          const result = await callNodesGatewayCli("node.pair.list", opts, {});
+        await runNodesReadCommand("pending", async (signal) => {
+          const result = await callNodesGatewayCli("node.pair.list", opts, {}, { signal });
           const { pending } = parsePairingList(result);
           if (opts.json) {
             defaultRuntime.writeJson(pending);

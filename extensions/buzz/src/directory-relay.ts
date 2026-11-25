@@ -98,7 +98,7 @@ export function startBuzzDirectoryRelay(params: {
   relay: Relay;
   relayPublicKey: string;
   state: BuzzDirectoryState;
-  subscribedRoomIds?: ReadonlySet<string>;
+  subscribedRoomIds: ReadonlySet<string>;
   signal?: AbortSignal;
   onError?: (error: Error) => void;
   onFatalError?: (error: Error) => void;
@@ -203,7 +203,7 @@ export function startBuzzDirectoryRelay(params: {
         });
         const changedRoomId = nextRoomIds.find(
           (channelId) =>
-            params.subscribedRoomIds?.has(channelId) === params.state.isRoomArchived(channelId),
+            params.subscribedRoomIds.has(channelId) === params.state.isRoomArchived(channelId),
         );
         if (changedRoomId) {
           reportFatalError(

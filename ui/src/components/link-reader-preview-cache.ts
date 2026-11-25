@@ -1,6 +1,6 @@
 import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { subscribeToSharedRequest } from "../lib/shared-request-subscription.ts";
 import type { HovercardProperties } from "./link-reader-hovercard.types.ts";
 import {

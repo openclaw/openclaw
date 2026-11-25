@@ -5,15 +5,15 @@ import type { AuthProfileStore, SavedSetupCredential } from "../agents/auth-prof
 import type { InferenceBackendCandidate } from "../commands/onboard-inference-ambient.js";
 import type { detectInferenceBackends } from "../commands/onboard-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import type { ProviderAppGuidedSetupCandidate, ProviderPlugin } from "../plugins/types.js";
-import { detectSetupInference } from "./setup-inference-detect.js";
+import {
+  detectSetupInference,
+  listManualSetupInferenceDetection,
+} from "./setup-inference-detect.js";
 
 const fixture = vi.hoisted(() => ({
   config: {} as OpenClawConfig,
-  metadataSnapshot: undefined as PluginMetadataSnapshot | undefined,
   loadAuthProfileStore: vi.fn<() => AuthProfileStore | Promise<AuthProfileStore>>(),
   withSetupProviderAuthMethod: vi.fn(),
   detectInferenceBackends: vi.fn<typeof detectInferenceBackends>(),
@@ -30,7 +30,6 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   readConfigFileSnapshotWithPluginMetadata: async () => ({
     snapshot: { exists: true, valid: true, config: fixture.config },
-    pluginMetadataSnapshot: fixture.metadataSnapshot,
   }),
 }));
 vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
@@ -57,8 +56,10 @@ vi.mock("../plugins/enable.js", async (importOriginal) => ({
   enablePluginInConfig: fixture.enablePluginInConfig,
   enablePluginWithCapabilityConsent: async (config: OpenClawConfig) => ({ enabled: true, config }),
 }));
-vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
-  withPluginLifecycleLease: async (_options: unknown, run: () => Promise<unknown>) => await run(),
+vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-lifecycle-lease.js")>()),
+  withPluginLifecycleLeaseAsync: async (_options: unknown, run: () => Promise<unknown>) =>
+    await run(),
 }));
 
 vi.mock("../commands/onboard-inference.js", async (importOriginal) => ({
@@ -112,10 +113,12 @@ function detectWithProvider(
   options: {
     enablePluginInConfig?: typeof import("../plugins/enable.js").enablePluginInConfig;
     choices?: ProviderAuthChoiceMetadata[];
+    detectAvailability?: () => Promise<boolean>;
+    providerId?: string;
   } = {},
 ) {
   const provider: ProviderPlugin = {
-    id: "fixture",
+    id: options.providerId ?? "fixture",
     pluginId: "fixture",
     label: "Fixture service",
     auth: [
@@ -124,7 +127,11 @@ function detectWithProvider(
         label: "Local model",
         kind: "custom",
         run: async () => ({ profiles: [] }),
-        appGuidedSetup: { detect, prepare: async () => null },
+        appGuidedSetup: {
+          detect,
+          prepare: async () => null,
+          ...(options.detectAvailability ? { detectAvailability: options.detectAvailability } : {}),
+        },
       },
     ],
   };
@@ -144,7 +151,6 @@ beforeEach(() => {
   fixture.config = {
     agents: { entries: { main: {} }, defaults: { workspace: "/fixture/workspace" } },
   };
-  fixture.metadataSnapshot = undefined;
   fixture.loadAuthProfileStore.mockReturnValue(savedStore(savedSetup(undefined, true)));
   fixture.withSetupProviderAuthMethod.mockReset();
   fixture.resolveManifestProviderAuthChoices.mockReset().mockReturnValue([choice]);
@@ -185,20 +191,30 @@ function pendingProbe<T>() {
 }
 
 describe("setup inference discovery concurrency", () => {
-  it("loads discovered providers from the inventory that selected their choices", async () => {
-    fixture.metadataSnapshot = createPluginMetadataSnapshotFixture({
-      plugins: [{ id: "fixture", providers: ["fixture"] }],
-    });
-
-    await detectWithProvider(async () => null);
-
-    const inventories = {
-      choices: fixture.resolveManifestProviderAuthChoices.mock.calls[0]?.[0]?.metadataSnapshot,
-      providers: fixture.resolvePluginProvidersCore.mock.calls[0]?.[0]?.pluginMetadataSnapshot,
+  it("lists known choices and the configured model without running discovery", async () => {
+    fixture.config = {
+      agents: {
+        entries: { main: {} },
+        defaults: { workspace: "/fixture/workspace", model: "fixture/configured" },
+      },
     };
-    expect(inventories.choices).toBeDefined();
-    expect(inventories.choices).toBe(fixture.metadataSnapshot);
-    expect(inventories.providers).toBe(inventories.choices);
+    // A scan that never answers must not delay choices known from config and manifests.
+    fixture.detectInferenceBackends.mockImplementation(() => new Promise(() => {}));
+    fixture.loadAuthProfileStore.mockImplementation(() => new Promise(() => {}));
+
+    const known = await listManualSetupInferenceDetection("main");
+
+    expect(known).toMatchObject({
+      candidates: [],
+      unavailableCandidates: [],
+      recommendedInstalls: [],
+      configuredModel: "fixture/configured",
+      setupComplete: true,
+      manualProviders: [expect.objectContaining({ id: choice.choiceId })],
+    });
+    expect(fixture.detectInferenceBackends).not.toHaveBeenCalled();
+    expect(fixture.loadAuthProfileStore).not.toHaveBeenCalled();
+    expect(fixture.resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
   it("probes provider services during CLI detection", async () => {
@@ -215,6 +231,35 @@ describe("setup inference discovery concurrency", () => {
       "fixture/local-model",
     ]);
     expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+  });
+
+  it("reports a running provider without an eligible model instead of recommending its install", async () => {
+    const detection = await detectWithProvider(async () => null, [], {
+      choices: [{ ...choice, providerId: "ollama", choiceLabel: "Ollama" }],
+      detectAvailability: async () => true,
+      providerId: "ollama",
+    });
+
+    expect(detection.candidates.map(({ modelRef }) => modelRef)).toEqual(["fixture/saved-model"]);
+    expect(detection.unavailableCandidates).toEqual([
+      expect.objectContaining({
+        label: "Ollama",
+        detail: "server is running",
+        reason: expect.stringContaining("No eligible model is loaded"),
+      }),
+    ]);
+    expect(detection.recommendedInstalls.map(({ id }) => id)).not.toContain("ollama");
+  });
+
+  it("keeps recommending a provider whose service is not running", async () => {
+    const detection = await detectWithProvider(async () => null, [], {
+      choices: [{ ...choice, providerId: "ollama", choiceLabel: "Ollama" }],
+      detectAvailability: async () => false,
+      providerId: "ollama",
+    });
+
+    expect(detection.unavailableCandidates).toEqual([]);
+    expect(detection.recommendedInstalls.map(({ id }) => id)).toContain("ollama");
   });
 
   it("reports a provider discovery failure without waiting for CLI detection", async () => {

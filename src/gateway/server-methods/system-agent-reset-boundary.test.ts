@@ -27,7 +27,7 @@ const greetingMocks = vi.hoisted(() => ({
     recentExternalEdit: false,
     auditSequence: 0,
   })),
-  resolveSystemAgentGreeting: vi.fn(async () => ({ text: "welcome text", source: "template" })),
+  resolveSystemAgentGreeting: vi.fn(async () => "welcome text"),
 }));
 
 vi.mock("../../system-agent/inference-fallback.js", () => ({

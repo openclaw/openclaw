@@ -198,8 +198,6 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
   }
   const assetName = `${config.name}-${config.tagPrefix}${version}-${archStr}-${target}`;
 
-  mkdirSync(toolsDir, { recursive: true });
-
   const downloadUrl = `https://github.com/${config.repo}/releases/download/${config.tagPrefix}${version}/${assetName}`;
   const binaryExt = plat === "win32" ? ".exe" : "";
   const binaryPath = join(toolsDir, config.binaryName + binaryExt);

@@ -13,6 +13,8 @@ import {
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
 const NO_BODY_HTTP_WRAPPER_RE =
   /^(?:no body(?: response)?|no response body|status code \(no body\))$/i;
+const REDACTION_DESTROYED_BODY_RE =
+  /^\[(?:(?:Malformed|Oversized) diagnostic JSON redacted|Unserializable)\]$/;
 const PRESERVED_NOT_FOUND_OR_GONE_REASONS = new Set<FailoverReason | null>([
   "session_expired",
   "billing",
@@ -34,15 +36,12 @@ function isExplicitNoBodyHttpMessage(raw: string | undefined, status: number): b
   if (!trimmed) {
     return false;
   }
-  const candidate = extractLeadingHttpStatus(trimmed) ? trimmed : stripErrorPrefix(trimmed);
+  const candidate = stripErrorPrefix(trimmed);
   const leadingStatus = extractLeadingHttpStatus(candidate);
-  if (leadingStatus) {
-    if (leadingStatus.code !== status) {
-      return false;
-    }
-    return NO_BODY_HTTP_WRAPPER_RE.test(leadingStatus.rest);
-  }
-  return NO_BODY_HTTP_WRAPPER_RE.test(candidate);
+  return (
+    (!leadingStatus || leadingStatus.code === status) &&
+    NO_BODY_HTTP_WRAPPER_RE.test(leadingStatus?.rest ?? candidate)
+  );
 }
 export function isUnclassifiedNoBodyHttpSignal(signal: FailoverSignal): boolean {
   const status = inferSignalStatus(signal);
@@ -271,6 +270,7 @@ export function classifyFailoverClassificationFromHttpStatus(
     if (
       messageReason === "overloaded" ||
       messageReason === "server_error" ||
+      messageReason === "route_unavailable" ||
       (status >= 500 && messageReason === "format")
     ) {
       return messageClassification;
@@ -285,18 +285,22 @@ export function classifyFailoverClassificationFromHttpStatus(
     // 400/422 are ambiguous: inspect the payload first so provider-specific
     // rate limits, auth failures, model-not-found errors, and billing signals
     // are not collapsed into generic "format" failures.
-    if (messageClassification && messageReason !== "server_error") {
+    if (
+      messageClassification &&
+      (messageReason !== "server_error" || opts?.preserveProviderSignalClassification)
+    ) {
       return messageClassification;
     }
-    // When the response has no body at all, or only surfaces as an HTTP wrapper
-    // like "400 status code (no body)", return null instead of defaulting to
-    // "format". These shapes are likely transient proxy issues — classifying
-    // them as "format" triggers a compaction loop that cannot recover.
-    if (isUnclassifiedNoBodyHttpSignal({ status, message })) {
+    // An empty or fully redacted body cannot establish request-format semantics.
+    const diagnostic = stripErrorPrefix(message?.trim() ?? "");
+    const body = extractLeadingHttpStatus(diagnostic)?.rest ?? diagnostic;
+    if (
+      isUnclassifiedNoBodyHttpSignal({ status, message }) ||
+      REDACTION_DESTROYED_BODY_RE.test(body.trim())
+    ) {
       return null;
     }
-    // Body exists but couldn't be classified — still treat as format error
-    // since the provider rejected the request schema.
+    // Other unclassified bodies retain the provider's request-format rejection.
     return toReasonClassification("format");
   }
   return null;

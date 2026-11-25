@@ -1,6 +1,6 @@
-import { detectControlUiBrowserCapabilities } from "./browser-capabilities.ts";
+import { isControlUiBrowserSupported } from "./browser-capabilities.ts";
 
-export const unsupportedControlUiBrowser = !detectControlUiBrowserCapabilities().supported;
+export const unsupportedControlUiBrowser = !isControlUiBrowserSupported();
 
 if (unsupportedControlUiBrowser) {
   // Retire document recovery even while the terminal screen's assets are loading.

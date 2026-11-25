@@ -23,6 +23,7 @@ import {
   systemAgentTerminalFailureGuidance,
 } from "./inference-run-errors.js";
 import type { SystemAgentProposalRef } from "./operator-approval.js";
+import { createSystemAgentUserTurnRecorder } from "./user-turn-transcript.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
   resolveSystemAgentVerifiedInferenceRoute,
@@ -65,6 +66,8 @@ export type SystemAgentSession = {
   verifiedInference: SystemAgentVerifiedInferenceBinding;
   /** Host-owned pending-proposal fingerprint; see system-agent-tool.ts. */
   proposalRef: SystemAgentProposalRef;
+  /** Latest host Template output for embedded/native continuation; never authority. */
+  templateResult?: string;
   /** Native CLI continuity, bound to the exact configured model/auth owner route. */
   cliSession?: {
     routeKey: string;
@@ -90,6 +93,7 @@ export function createSystemAgentSession(
 export async function cleanupSystemAgentSession(session: SystemAgentSession): Promise<void> {
   delete session.cliSession;
   delete session.sessionManager;
+  delete session.templateResult;
 }
 
 type SystemAgentTurnParams = Parameters<SystemAgentTurnRunner>[0];
@@ -231,7 +235,7 @@ export async function runSystemAgentTurn(
   params: SystemAgentTurnParams,
 ): Promise<SystemAgentTurnReply | null> {
   const binding = params.session.verifiedInference;
-  const plan = await requireSystemAgentInferenceRoute(binding, undefined, "agent-turn", () =>
+  const plan = await requireSystemAgentInferenceRoute(binding, "agent-turn", () =>
     clearFailedSystemAgentSessionState(params.session),
   );
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
@@ -288,6 +292,7 @@ export async function runSystemAgentTurn(
     extraSystemPrompt: systemPrompt,
     ...(plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
     prompt: params.input,
+    userTurnTranscriptRecorder: createSystemAgentUserTurnRecorder(params.input),
     timeoutMs: resolveAgentTimeoutMs({ cfg: plan.runConfig }),
     thinkLevel: "off" as const,
     runId,

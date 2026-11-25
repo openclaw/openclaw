@@ -1,17 +1,29 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  getPreparedModelRuntimeTestApi,
-  usePreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
+import { getPreparedModelRuntimeTestApi, usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import * as legacyAuth from "./legacy-inherited-auth-dir.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "./prepared-model-runtime-auth.js";
 import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-runtime-lease.js";
 import * as runtimeBuild from "./prepared-model-runtime.build.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import {
+  markPreparedModelRuntimeSnapshotsStale as markStale,
+  publishPreparedModelRuntimeSnapshot as publish,
+  acquireAgentRunPreparedModelRuntime,
+  getPreparedModelRuntimeSnapshot,
   acquireAgentRunPreparedModelRuntime as acquireRun,
   activateStandalonePreparedModelRuntime as activate,
   getPreparedModelRuntimeSnapshot as readSnapshot,
@@ -24,6 +36,7 @@ import {
 import { createPreparedModelRuntimeReplacement } from "./prepared-model-runtime.lifecycle.js";
 import * as owners from "./prepared-model-runtime.owner.js";
 import { PreparedModelRuntimeOwnerRetention } from "./prepared-model-runtime.retention.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
 
 const fixture = usePreparedModelRuntimeHarness(
   { label: "prepared-runtime-cancelled-admission" },
@@ -58,15 +71,6 @@ function prepareColdBuildGate() {
   return { started, release };
 }
 
-function dynamicInput(label: string): PreparedModelRuntimeInput {
-  return {
-    agentId: "default",
-    agentDir: fixture.state.agentDir("default"),
-    config: {},
-    workspaceDir: `/tmp/${label}`,
-  };
-}
-
 function cancellableRun(input: PreparedModelRuntimeInput) {
   const controller = new AbortController();
   const pending = acquireRun(input, { abortSignal: controller.signal });
@@ -83,10 +87,10 @@ function holdModelBuild() {
   const entered = createDeferred();
   const release = createDeferred();
   pendingBuildReleases.push(release);
-  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
     entered.resolve();
     await release.promise;
-    return { agentDir: String(agentDir), wrote: false };
+    return {};
   });
   return { entered, release };
 }
@@ -116,7 +120,12 @@ describe("prepared model runtime cancelled admission ownership", () => {
     ["does not let an abandoned publication satisfy or delete its same-key replacement", "replace"],
     ["skips workspace preparation for a cancelled queued replacement", "skip"],
   ] as const)("%s", async (_name, outcome) => {
-    const input = dynamicInput("coalesced-admissions");
+    const input = {
+      agentId: "default",
+      agentDir: fixture.state.agentDir("default"),
+      config: {},
+      workspaceDir: "/tmp/coalesced-admissions",
+    };
     const build = prepareColdBuildGate();
     const first = cancellableRun(input);
     await build.started.promise;
@@ -272,10 +281,7 @@ describe("prepared model runtime automatic selections", () => {
         },
       },
     };
-    await refresh(config, {
-      catalogMode: "static",
-      gatewayLifecycle: true,
-    });
+    await refresh(config, { catalogMode: "static", gatewayLifecycle: true });
     const dispatch = await loadPublishedDispatch({ agentId: "worker" });
     expect(dispatch).toBeDefined();
     const input = {
@@ -285,11 +291,10 @@ describe("prepared model runtime automatic selections", () => {
     };
     const options = { pluginGeneration: dispatch!.pluginGeneration };
     await using outer = await acquireRun(input, options);
-    expect(fixture.mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.at(-1)?.[0]).toMatchObject(
-      {
-        selections: [{ provider: "xai", modelId: "grok-4.6", runtime: "openclaw" }],
-      },
-    );
+    const registryInput = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.at(-1)?.[0];
+    expect(registryInput).toMatchObject({
+      selections: [{ provider: "xai", modelId: "grok-4.6", runtime: "openclaw" }],
+    });
     const resolveConfiguredOwner = owners.resolveConfiguredOwner;
     let iterations = 0;
     // Bound the pre-fix microtask livelock; a timer cannot interrupt it.
@@ -306,7 +311,9 @@ describe("prepared model runtime automatic selections", () => {
       },
       options,
     );
-    expect(nested.snapshot).toBe(outer.snapshot);
+    expect(nested.snapshot.catalogOwner).toBe(outer.snapshot.catalogOwner);
+    expect(getPreparedModelRuntimePolicyConfigReader(nested.snapshot)?.()).toBe(config);
+    expect(getPreparedModelRuntimePolicyConfigReader(outer.snapshot)?.()).toBe(config);
     expect(nested.snapshot.isCurrent()).toBe(true);
   });
 
@@ -330,5 +337,318 @@ describe("prepared model runtime automatic selections", () => {
         getPendingReplacement: () => replacement,
       }),
     ).rejects.toThrow("lease admission made no publication progress");
+  });
+
+  it("refuses a refresh continuation whose settled gate never gives way", async () => {
+    const replacement = createPreparedModelRuntimeReplacement();
+    replacement.resolve();
+    let reads = 0;
+    await expect(
+      acquirePreparedModelRuntimeLeaseFromOwners(
+        fixture.agentInput("worker", {}),
+        "run",
+        {
+          captureLifetime: () => () => undefined,
+          owners: new Map(),
+          agentBuildCompletions: new Map(),
+          retainedDirectRunOwners: new PreparedModelRuntimeOwnerRetention(1),
+          retainedGatewayRunOwners: new PreparedModelRuntimeOwnerRetention(8),
+          getBuildTimeoutMs: () => 120_000,
+          getGatewayLifecycleActive: () => false,
+          getPendingReplacement: () => {
+            if (++reads > 16) {
+              throw new Error("test iteration guard reached");
+            }
+            return replacement;
+          },
+        },
+        { waitForReplacementPublication: true },
+      ),
+    ).rejects.toThrow("lease admission made no publication progress");
+    expect(reads).toBe(2);
+  });
+
+  it.each([
+    { waitForReplacementPublication: false, gatesWaited: 3 },
+    { waitForReplacementPublication: true, gatesWaited: 4 },
+  ])(
+    "waits through back-to-back reloads only for a refresh continuation: $waitForReplacementPublication",
+    async ({ waitForReplacementPublication, gatesWaited }) => {
+      const gates = Array.from({ length: 4 }, () => {
+        const replacement = createPreparedModelRuntimeReplacement();
+        replacement.resolve();
+        return replacement;
+      });
+      let reads = 0;
+      const outcome = await acquirePreparedModelRuntimeLeaseFromOwners(
+        fixture.agentInput("worker", {}),
+        "run",
+        {
+          captureLifetime: () => () => undefined,
+          owners: new Map(),
+          agentBuildCompletions: new Map(),
+          retainedDirectRunOwners: new PreparedModelRuntimeOwnerRetention(1),
+          retainedGatewayRunOwners: new PreparedModelRuntimeOwnerRetention(8),
+          getBuildTimeoutMs: () => 120_000,
+          getGatewayLifecycleActive: () => false,
+          getPendingReplacement: () => gates[reads++],
+        },
+        { waitForReplacementPublication },
+      ).then(
+        async (lease) => {
+          await lease[Symbol.asyncDispose]();
+          return undefined;
+        },
+        (error: unknown) => error,
+      );
+
+      expect(reads).toBe(gatesWaited + 1);
+      const gateRefused = String(outcome).includes("made no publication progress");
+      expect(gateRefused).toBe(!waitForReplacementPublication);
+    },
+  );
+});
+
+describe("auth admission publication boundaries", () => {
+  const refreshBatch = (config: OpenClawConfig = {}, startup = false) =>
+    refresh(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      ...(startup ? { startup } : {}),
+    });
+  it("does not start plugin callbacks after cancellation at an event-loop boundary", async () => {
+    let cancelled = false;
+    let lateLoads = 0;
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+      if (cancelled) {
+        lateLoads += 1;
+      }
+      return createEmptyPluginRegistry();
+    });
+    const publication = publish({
+      config: {},
+      agentDir: fixture.state.agentDir("cancelled"),
+      workspaceDir: fixture.state.workspaceDir,
+    });
+    cancelled = true;
+    markStale("cancel before workspace preparation");
+    await expect(publication).rejects.toBeInstanceOf(
+      PreparedModelRuntimePublicationSupersededError,
+    );
+    expect(lateLoads).toBe(0);
+  });
+  it("replays an auth change once the first owner starts capturing credentials", async () => {
+    mocks.configuredAgentIds = ["first"];
+    const config = {};
+    const previous = AuthStorage.inMemory({ custom: { type: "api_key", key: "old-test-key" } });
+    const credentials = { custom: { type: "api_key" as const, key: "updated-test-key" } };
+    mocks.discoverAuthStorage.mockImplementationOnce(() => {
+      mocks.authStorage.getAll.mockReturnValue(credentials);
+      mocks.mutationListener?.({ affectsInheritedStores: true });
+      return previous;
+    });
+
+    await refreshBatch(config);
+    const snapshot = getPreparedModelRuntimeSnapshot({
+      ...fixture.agentInput("first", config),
+      workspaceDir: "/tmp/workspace-first",
+    });
+    expect(snapshot?.createStores().authStorage.getAll()).toEqual(credentials);
+    expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(2);
+  });
+  it("rebinds inherited auth when shared-store ownership moves before first capture", async () => {
+    mocks.configuredAgentIds = ["first"];
+    const config = {};
+    using inherited = vi.spyOn(legacyAuth, "resolveLegacyInheritedAuthDir");
+    inherited.mockReturnValue(fixture.state.agentDir("default"));
+    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+      inherited.mockReturnValue(undefined);
+      mocks.mutationListener?.({ affectsInheritedStores: true });
+      return { entries: [] };
+    });
+
+    await refreshBatch(config);
+    const snapshot = getPreparedModelRuntimeSnapshot({
+      config,
+      agentId: "first",
+      agentDir: fixture.state.agentDir("first"),
+      workspaceDir: "/tmp/workspace-first",
+    });
+    expect(snapshot).toBeDefined();
+    expect(snapshot?.inheritedAuthDir).toBeUndefined();
+    expect(mocks.discoverAuthStorage.mock.calls.at(-1)?.[1]).not.toHaveProperty("inheritedAuthDir");
+  });
+});
+
+describe("borrowed preparation cancellation", () => {
+  function catalogGate(onRelease?: () => void) {
+    const started = createDeferred();
+    const finish = createDeferred();
+    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+      started.resolve();
+      await finish.promise;
+      onRelease?.();
+      return { entries: [] };
+    });
+    return { started: started.promise, finish: () => finish.resolve() };
+  }
+
+  const prepareGroup = (
+    input: Parameters<typeof prepareWorkspaceBuildGroup>[0][number],
+    previous?: Parameters<typeof prepareWorkspaceBuildGroup>[4],
+    preparedMetadata?: Parameters<typeof prepareWorkspaceBuildGroup>[5],
+    resolveRegistry?: Parameters<typeof prepareWorkspaceBuildGroup>[3],
+  ) =>
+    prepareWorkspaceBuildGroup([input], "static", {}, resolveRegistry, previous, preparedMetadata);
+
+  function publication(phase: "published" | "failed") {
+    const ready = createDeferred();
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === phase) {
+        ready.resolve();
+      }
+    });
+    return () => ready.promise.finally(unregister);
+  }
+  const metadata = (config: OpenClawConfig, plugins: Parameters<typeof makeRegistry>[0] = []) =>
+    createPluginMetadataSnapshot({ config, manifestRegistry: makeRegistry(plugins) });
+
+  const publishGateway = (
+    config: OpenClawConfig = {},
+    options: Parameters<typeof refresh>[1] = {},
+  ) =>
+    refresh(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      ...options,
+    });
+  it("holds inspected input through accepted preparation and refuses a retired result", async () => {
+    const database = new DatabaseSync(fixture.state.path("prepared-registration.sqlite"));
+    database.exec(
+      "CREATE TABLE observations (value INTEGER); INSERT INTO observations VALUES (42)",
+    );
+    const registry = createEmptyPluginRegistry();
+    const resources = new PluginRegistryInspectionResources(async () => {});
+    resources.attach(registry);
+    const dispose = vi.fn(() => database.close());
+    resources.runRegistration("prepared-native", () => {
+      resources.register("prepared-native", {
+        id: "sqlite",
+        dispose,
+      });
+    });
+    let observedValue: unknown;
+    const gate = catalogGate(() => {
+      observedValue = database.prepare("SELECT value FROM observations").get()?.value;
+    });
+    const config = {};
+    const preparation = prepareGroup(
+      {
+        config,
+        agentDir: fixture.state.agentDir("default"),
+        workspaceDir: fixture.state.workspaceDir,
+        env: fixture.state.env,
+        skipCredentials: true,
+      },
+      undefined,
+      metadata(config),
+      () => registry,
+    );
+    const outcome = preparation.catch((error: unknown) => error);
+    try {
+      await awaitGateBeforeSettlement(
+        gate.started,
+        preparation,
+        "Preparation completed before its static catalog dependency",
+      );
+      await resources.release();
+      expect(database.isOpen).toBe(true);
+      expect(dispose).not.toHaveBeenCalled();
+      gate.finish();
+      expect(await outcome).toEqual(new Error("Plugin inspection resources have been released"));
+      expect(observedValue).toBe(42);
+      expect(database.isOpen).toBe(false);
+      expect(dispose).toHaveBeenCalledTimes(1);
+    } finally {
+      gate.finish();
+      await Promise.allSettled([outcome, resources.release()]);
+      if (database.isOpen) {
+        database.close();
+      }
+    }
+  });
+  it("recovers a rejected auth refresh projection without affecting siblings", async () => {
+    mocks.configuredAgentIds = ["default", "worker"];
+    await publishGateway();
+    const defaultRuntime = await loadPublishedDispatch({ agentId: "default" });
+    const refreshFailed = publication("failed");
+    mocks.discoverAuthStorage.mockImplementationOnce(() => {
+      throw new Error("auth refresh rejected");
+    });
+
+    mocks.mutationListener?.({
+      agentDir: fixture.state.agentDir("worker"),
+      affectsInheritedStores: false,
+    });
+    await refreshFailed();
+
+    await expect(loadPublishedDispatch({ agentId: "worker" })).resolves.toMatchObject({
+      agentId: "worker",
+    });
+    const retained = await loadPublishedDispatch({ agentId: "default" });
+    expect(retained?.pluginGeneration).toBe(defaultRuntime?.pluginGeneration);
+  });
+  it("aborts run admission without retaining an owner after auth publication", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    const input = {
+      agentId: "default",
+      agentDir: fixture.state.agentDir("default"),
+      config,
+      workspaceDir: "/tmp/dynamic-workspace",
+    };
+    await refresh(config, { gatewayLifecycle: true });
+    const admissionTestApi = getPreparedModelRuntimeTestApi();
+    expect(admissionTestApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+    const finishAuthRefreshGate = createDeferred();
+    let finishAuthRefresh: (() => void) | undefined;
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
+      finishAuthRefresh = () => finishAuthRefreshGate.resolve();
+      await finishAuthRefreshGate.promise;
+      return {};
+    });
+
+    let admission: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;
+    try {
+      mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+      await vi.waitFor(() => expect(finishAuthRefresh).toBeDefined());
+      const abort = new AbortController();
+      admission = acquireAgentRunPreparedModelRuntime(input, { abortSignal: abort.signal });
+      const observed = admission.then(
+        () => "resolved",
+        () => "rejected",
+      );
+      await expect(Promise.race([observed, Promise.resolve("pending")])).resolves.toBe("pending");
+      abort.abort(new Error("request cancelled"));
+      await expect(admission).rejects.toMatchObject({ name: "AbortError" });
+      expect(admissionTestApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+
+      finishAuthRefreshGate.resolve();
+      await loadPublishedDispatch({ agentId: "default" });
+      expect(admissionTestApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+      await using lease = await acquireAgentRunPreparedModelRuntime(input);
+      expect(lease.snapshot).toMatchObject({
+        agentId: "default",
+        agentDir: input.agentDir,
+        workspaceDir: "/tmp/unused-workspace",
+      });
+      expect(admissionTestApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+    } finally {
+      finishAuthRefreshGate.resolve();
+      await Promise.allSettled([
+        admission?.then((lease) => lease[Symbol.asyncDispose]()),
+        loadPublishedDispatch({ agentId: "default" }),
+      ]);
+    }
   });
 });

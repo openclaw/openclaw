@@ -11,7 +11,7 @@ import {
   resolveIMessageDuplicateSourceOwner,
   type ResolvedIMessageAccount,
 } from "./accounts.js";
-import { monitorIMessageProvider } from "./monitor.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { probeIMessage } from "./probe.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";

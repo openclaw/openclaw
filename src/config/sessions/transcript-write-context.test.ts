@@ -18,14 +18,15 @@ import {
   appendTranscriptEventSync as appendEvent,
   replaceTranscriptEventsSync,
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import type { OwnedSessionTranscriptWriteContext as Context } from "./transcript-write-context-store.js";
 import {
   bindOwnedSessionTranscriptWrites as bindWrites,
   captureOwnedTranscriptWriteAssertion as captureGuard,
   captureSessionTranscriptSourcePublication as capturePublisher,
   getOwnedSessionTranscriptInitialWriter as initialWriterFor,
   getOwnedSessionTranscriptWriterFence as writerFence,
+  runWithOwnedSessionTranscriptWrite,
   type InitialSessionTranscriptWriter,
-  type OwnedSessionTranscriptWriteContext as Context,
   SessionTranscriptWriterClaimReboundError as ReboundError,
   withOwnedSessionTranscriptWrites as withWrites,
   withSessionTranscriptSourcePublication as withPublication,
@@ -71,6 +72,51 @@ const mutations: Array<[string, (target: Target) => unknown]> = [
   ["message append", (target) => appendTranscriptMessageSync(target, { message: userMessage })],
 ];
 type MutationCase = { write: (target: Target) => unknown; rebound: boolean };
+
+it.each(["file", "store", "agent", "bound"] as const)(
+  "keeps owned write tracking scoped to the matching %s target",
+  async (kind) => {
+    const sessionKey = "agent:main:test-session";
+    const ownerTarget = {
+      agentId: "main",
+      sessionKey: "global",
+      ...(kind === "store" ? { storePath: "/tmp/main.sqlite" } : {}),
+    };
+    const otherTarget = {
+      agentId: "worker",
+      sessionKey: "global",
+      ...(kind === "store" ? { storePath: "/tmp/worker.sqlite" } : {}),
+    };
+    const scoped = kind === "store" || kind === "agent";
+    const writeOwner = scoped
+      ? { sessionFile: "global", sessionKey: "global", sessionTarget: ownerTarget }
+      : { sessionFile: path.resolve("old-session.jsonl"), sessionKey };
+    const request = scoped
+      ? { sessionFile: "global", sessionKey: "global", sessionTarget: otherTarget }
+      : {
+          sessionFile:
+            kind === "bound" ? writeOwner.sessionFile : path.resolve("next-session.jsonl"),
+          sessionKey,
+        };
+    const events: string[] = [];
+    const context = {
+      ...writeOwner,
+      withTranscriptWrite: async <T>(run: () => T | Promise<T>) => {
+        events.push("owned-write");
+        return await run();
+      },
+    };
+    const write = () =>
+      runWithOwnedSessionTranscriptWrite(request, () => {
+        events.push("write");
+        return "ok";
+      });
+    const result =
+      kind === "bound" ? await bindWrites(context, write)() : await withWrites(context, write);
+    expect(result).toBe("ok");
+    expect(events).toEqual(kind === "bound" ? ["owned-write", "write"] : ["write"]);
+  },
+);
 
 it.each([false, true])(
   "settles committed transcript publication when source binding throws (native=%s)",

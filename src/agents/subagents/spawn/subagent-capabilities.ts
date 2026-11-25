@@ -78,7 +78,7 @@ function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string
   return Boolean(leftAgentId) && leftAgentId === rightAgentId;
 }
 
-function resolveSessionCapabilityEntry(params: {
+export function resolveSessionCapabilityEntry(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
   store?: SessionCapabilityStore;
@@ -157,8 +157,6 @@ export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDep
     depth,
     role,
     controlScope,
-    canSpawn: role === "main" || role === "orchestrator",
-    canControlChildren: controlScope === "children",
   };
 }
 
@@ -261,14 +259,21 @@ export function isSubagentEnvelopeSession(
 /** Visible spawns are interactive sessions; a dashboard key alone grants nothing. */
 export function isVisibleSpawnedSession(
   sessionKey: string,
-  opts?: { cfg?: OpenClawConfig; store?: SessionCapabilityStore },
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+    entry?: SessionCapabilityEntry;
+  },
 ): boolean {
   if (!isDashboardSessionKey(sessionKey)) {
     return false;
   }
-  const entry = resolveSessionCapabilityEntry({ sessionKey, ...opts });
+  const entry =
+    opts?.entry ??
+    resolveSessionCapabilityEntry({ sessionKey, cfg: opts?.cfg, store: opts?.store });
   return (
-    entry?.createdVia === "spawn" && isStoredSubagentEnvelopeSession({ sessionKey, ...opts, entry })
+    entry?.createdVia === "spawn" &&
+    isStoredSubagentEnvelopeSession({ sessionKey, cfg: opts?.cfg, store: opts?.store, entry })
   );
 }
 
@@ -325,7 +330,7 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
       (!direct &&
         (parent?.delegatedToolPolicy?.requesterSessionKey !==
           delegatedToolPolicy.requesterSessionKey ||
-          parent?.delegatedToolPolicy?.targetAgentId !== targetAgentId))
+          parent.delegatedToolPolicy?.targetAgentId !== targetAgentId))
     ) {
       delegatedToolPolicy = undefined;
     }

@@ -23,19 +23,57 @@ export function pluginFixtureConfig(
   };
 }
 
-export function writeFixtureJson(dir: string, name: string, value: unknown) {
+export const writeFixtureJson = (dir: string, name: string, value: unknown) =>
   fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
-}
 
-/** A valid channel registration; these loader tests do not exercise channel I/O. */
-export function channelFixtureSource(id: string) {
+export function channelFixtureSource(
+  id: string,
+  options: {
+    label?: string;
+    docsPath?: string;
+    blurb?: string;
+    configured?: boolean;
+    resolveAccount?: false;
+  } = {},
+) {
+  const label = options.label ?? "Fixture";
+  const account = { accountId: "default", ...(options.configured ? { token: "configured" } : {}) };
+  const resolveAccount =
+    options.resolveAccount === false ? "undefined" : `(${JSON.stringify(account)})`;
   return `{
     id: ${JSON.stringify(id)},
-    meta: { id: ${JSON.stringify(id)}, label: "Fixture", selectionLabel: "Fixture",
-      docsPath: "/channels/fixture", blurb: "fixture channel" },
+    meta: { id: ${JSON.stringify(id)}, label: ${JSON.stringify(label)}, selectionLabel: ${JSON.stringify(label)},
+      docsPath: ${JSON.stringify(options.docsPath ?? "/channels/fixture")}, blurb: ${JSON.stringify(options.blurb ?? "fixture channel")} },
     capabilities: { chatTypes: ["direct"] },
-    config: { listAccountIds: () => [], resolveAccount: () => ({ accountId: "default" }) },
+    config: { listAccountIds: () => ${options.configured ? '["default"]' : "[]"}, resolveAccount: () => ${resolveAccount} },
     outbound: { deliveryMode: "direct" },
+  }`;
+}
+
+export function memoryCapabilityFixtureSource(prompt: string, label: string) {
+  return `{
+    promptBuilder: () => [${JSON.stringify(prompt)}],
+    flushPlanResolver: () => ({
+      softThresholdTokens: 10, forceFlushTranscriptBytes: 20, reserveTokensFloor: 30,
+      prompt: ${JSON.stringify(label)}, systemPrompt: ${JSON.stringify(label)},
+      relativePath: ${JSON.stringify(`memory/${label}.md`)},
+    }),
+    runtime: {
+      async getMemorySearchManager() { return { manager: null, error: ${JSON.stringify(label)} }; },
+      resolveMemoryBackendConfig() { return { backend: "builtin" }; },
+    },
+  }`;
+}
+
+export function memoryPublicArtifactsFixtureSource(workspaceDir: string, absolutePath: string) {
+  return `{
+    publicArtifacts: {
+      async listArtifacts() {
+        return [{ kind: "memory-root", workspaceDir: ${JSON.stringify(workspaceDir)},
+          relativePath: "MEMORY.md", absolutePath: ${JSON.stringify(absolutePath)},
+          agentIds: ["main"], contentType: "markdown" }];
+      },
+    },
   }`;
 }
 

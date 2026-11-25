@@ -67,34 +67,32 @@ export async function servePublicSessionCardRepresentation(params: {
         host: params.host,
       });
     },
+    consume: (representation) =>
+      withReadySessionRows(
+        projection,
+        () => [{ key: locator.sessionKey, agentId: locator.agentId }],
+        () => {
+          if (
+            !representation ||
+            !Buffer.isBuffer(representation.body) ||
+            !isPublicSessionShareActive(config, locator, projection)
+          ) {
+            return "fallback" as const;
+          }
+          if (!representation.isCurrent()) {
+            return false as const;
+          }
+          const body = representation.body;
+          res.statusCode = 200;
+          res.setHeader("Cache-Control", "public, max-age=300");
+          res.setHeader("Content-Type", "image/png");
+          res.setHeader("Content-Length", body.byteLength);
+          res.end(body);
+          return "served" as const;
+        },
+      ),
   });
-  if (result.kind !== "ok") {
-    await card.fallback();
-    return true;
-  }
-  const served = await withReadySessionRows(
-    projection,
-    () => [{ key: locator.sessionKey, agentId: locator.agentId }],
-    () => {
-      const representation = result.value;
-      if (
-        !representation ||
-        !Buffer.isBuffer(representation.body) ||
-        !representation.isCurrent() ||
-        !isPublicSessionShareActive(config, locator, projection)
-      ) {
-        return false;
-      }
-      const body = representation.body;
-      res.statusCode = 200;
-      res.setHeader("Cache-Control", "public, max-age=300");
-      res.setHeader("Content-Type", "image/png");
-      res.setHeader("Content-Length", body.byteLength);
-      res.end(body);
-      return true as const;
-    },
-  );
-  if (!served) {
+  if (result.kind !== "ok" || result.value === "fallback") {
     await card.fallback();
   }
   return true;

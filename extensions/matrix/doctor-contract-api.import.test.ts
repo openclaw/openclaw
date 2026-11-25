@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   accountStorageRoot,
@@ -10,6 +11,7 @@ import {
   createMigrationParams,
   migrationById,
   syncCachePayload,
+  writeSource,
 } from "./doctor-contract-api.test-support.js";
 import {
   type MatrixSyncCacheRecord,
@@ -22,7 +24,6 @@ import {
   writeMatrixIdbSnapshotJson,
 } from "./src/matrix/crypto-state-store.js";
 import { getMatrixRuntime } from "./src/runtime.js";
-import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const failImport = vi.hoisted(() => (name: string): never => {
   throw new Error(`${name} loaded by a Doctor migration`);
@@ -73,8 +74,7 @@ it("refuses retired JSON state without changing it or inspecting token-root arch
     path.join(accountRoot("sync-cache-backup"), filename),
   );
   for (const file of [...sources, ...archives]) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, '{"retained":true}\n');
+    writeSource(file, '{"retained":true}\n');
   }
   const migration = await migrationById("matrix-account-sqlite-schema");
   for (const run of [migration.detectLegacyState, migration.migrateLegacyState]) {

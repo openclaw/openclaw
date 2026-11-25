@@ -27,12 +27,21 @@ describe("Reef inbox cursor persistence", () => {
   });
   afterEach(() => cleanupStateTestDirectory(stateDir));
   it("preserves monotonic progress", async () => {
-    const first = cursor();
+    const requested = { ...binding };
+    const first = new ReefInboxCursorStore(runtime, requested);
+    requested.handle = "changed";
     const second = cursor();
+    await expect(first.load()).resolves.toBe(0);
     await Promise.all([first.advance(12), second.advance(7), second.advance(20)]);
-    await expect(cursor().load()).resolves.toBe(20);
+    await expect(
+      new ReefInboxCursorStore(createStateRuntime(stateDir), binding).load(),
+    ).resolves.toBe(20);
     await expect(first.advance(-1)).rejects.toThrow("invalid Reef inbox cursor");
     await expect(first.load()).resolves.toBe(20);
+    await expectReefStateOperationError(
+      new ReefInboxCursorStore(runtime, { ...binding, handle: "clawd" }).load(),
+      "Reef inbox cursor belongs to a different identity",
+    );
   });
 
   it("uses one operation per cursor call without application-thread SQL", async () => {

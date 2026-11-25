@@ -7,7 +7,10 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import {
   createAlwaysConfiguredPluginConfig,
@@ -144,16 +147,11 @@ describe("runMessageAction plugin dispatch", () => {
         return jsonResult({ ok: true, action: ctx.action });
       });
       const discordPlugin: ChannelPlugin = {
-        id: "discord",
-        meta: {
+        ...createChannelTestPluginBase({
           id: "discord",
-          label: "Discord",
-          selectionLabel: "Discord",
-          docsPath: "/channels/discord",
-          blurb: "Discord action dispatch test plugin.",
-        },
-        capabilities: { chatTypes: ["direct", "channel"] },
-        config: createAlwaysConfiguredPluginConfig(),
+          capabilities: { chatTypes: ["direct", "channel"] },
+          config: createAlwaysConfiguredPluginConfig(),
+        }),
         messaging: { targetResolver: { looksLikeId: () => true } },
         actions: {
           describeMessageTool: () => ({ actions: ["channel-delete", "channel-info"] }),
@@ -266,19 +264,14 @@ describe("runMessageAction plugin dispatch", () => {
       handleAction,
     };
     const accountPlugin: ChannelPlugin = {
-      id: "accountchat",
-      meta: {
+      ...createChannelTestPluginBase({
         id: "accountchat",
-        label: "Account Chat",
-        selectionLabel: "Account Chat",
-        docsPath: "/channels/accountchat",
-        blurb: "Account chat test plugin.",
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: {
-        listAccountIds: () => ["default", "ops", "disabled"],
-        resolveAccount: (_cfg, accountId) => ({ enabled: accountId !== "disabled" }),
-      },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => ["default", "ops", "disabled"],
+          resolveAccount: (_cfg, accountId) => ({ enabled: accountId !== "disabled" }),
+        },
+      }),
       directory: {
         listGroupsLive: async () => [{ id: "channel:resolved", name: "resolved", kind: "group" }],
       },

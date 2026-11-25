@@ -29,6 +29,12 @@ export type PortDescriptor = PortSchema & {
   fragments?: readonly (PortSchema & { id: string; dependencies: readonly string[] })[];
   /** Populated from the admitted source, never from the configured feature set. */
   activeFragments?: readonly string[];
+  /** Select the exact historical layout before admitting a backup source. */
+  selectSourceLayout?: (hasColumn: (table: string, column: string) => boolean) => PortDescriptor;
+  /** Retired source tables may be omitted only when empty. */
+  retainedSqliteTables?: readonly string[];
+  /** Inspection notes bound to this admitted source. */
+  notes?: readonly string[];
   /** Engine-owned derived DDL is rendered for the namespace under verification. */
   postgresPostData?: (namespace: string) => string;
   /** Source-only projections are validated against their owner before omission. */
@@ -44,6 +50,7 @@ export type PortDescriptor = PortSchema & {
     version: number;
     migrationRequired: boolean;
     pendingColumns: Readonly<Record<string, readonly string[]>>;
+    pendingTables?: readonly string[];
   };
   /** Caller supplies an exclusively owned private copy, never the live source. */
   migrateSqliteSource?: (

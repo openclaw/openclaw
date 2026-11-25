@@ -89,51 +89,94 @@ async function expectDiagnostic(finalize: () => void | Promise<void>, failure: E
 }
 
 it.each([
-  { phase: "selection", outcome: "success" },
-  { phase: "continuation", outcome: "failure" },
+  ["selection", "success"],
+  ["continuation", "failure"],
+  ["ready", "success"],
+  ["reservation", "failure"],
 ] as const)(
-  "preserves transport $outcome across $phase admission failure",
-  async ({ phase, outcome }) => {
-    const admissionFailure = new Error("synthetic admission refusal");
+  "preserves transport %s/%s across capture admission failure",
+  async (phase, outcome) => {
+    stubGuardedCaptureEnv(`admission-${phase}`);
+    const settings = resolveDebugProxySettings();
+    const failure = new Error("synthetic capture admission rejected");
     const transportFailure = new Error("synthetic transport rejection");
+    const response = new Response("transport succeeded", {
+      headers: { "x-fixture": "transport-response" },
+    });
     let refuse = phase === "selection";
-    const transport = vi.fn(async () => {
+    const transport = vi.fn<typeof fetch>(async () => {
       refuse = true;
       if (outcome === "failure") {
         throw transportFailure;
       }
-      return new Response("transport succeeded");
+      return response;
     });
     const target: typeof globalThis = { ...globalThis, fetch: transport };
     const store = { upsertSession: vi.fn(), endSession: vi.fn(), recordEvent: vi.fn() };
     const deps = { getStore: () => store, fetchTarget: target };
-    stubGuardedCaptureEnv("transport-admission");
-    const settings = resolveDebugProxySettings();
-    initializeDebugProxyCapture("fixture", settings, deps);
-    control.scope = createOpenClawDatabaseMaintenanceScope();
-    vi.spyOn(control.scope, "assertAdmission").mockImplementation(() => {
-      if (refuse) {
-        throw admissionFailure;
-      }
-    });
-    const own = vi.spyOn(control.scope, "own");
+    const guarded = phase === "ready" || phase === "reservation";
+    if (guarded) {
+      createWorkerLease.mockImplementation(() => {
+        if (phase === "reservation") {
+          throw failure;
+        }
+        const fail = async () => {
+          throw failure;
+        };
+        return {
+          ready: Promise.reject(failure),
+          execute: fail,
+          runOperation: fail,
+          release: async () => {},
+          retire: async () => {},
+        };
+      });
+    } else {
+      initializeDebugProxyCapture("fixture", settings, deps);
+      control.scope = createOpenClawDatabaseMaintenanceScope();
+      vi.spyOn(control.scope, "assertAdmission").mockImplementation(() => {
+        if (refuse) {
+          throw failure;
+        }
+      });
+    }
+    const finalize = () =>
+      guarded
+        ? finalizeDebugProxyCaptureAsync(settings)
+        : finalizeDebugProxyCapture(settings, deps);
+    let result: GuardedFetchResult | undefined;
     try {
-      const result = target.fetch(captureUrl);
-      if (outcome === "success") {
-        expect(await (await result).text()).toBe("transport succeeded");
-      } else {
-        await expect(result).rejects.toBe(transportFailure);
+      const pending = guarded
+        ? fetchWithSsrFGuard({ url: captureUrl, fetchImpl: transport }).then((value) => {
+            result = value;
+            return value.response;
+          })
+        : target.fetch(captureUrl);
+      try {
+        if (outcome === "success") {
+          const received = await pending;
+          expect(received).toBe(response);
+          expect(await received.text()).toBe("transport succeeded");
+        } else {
+          await expect(pending).rejects.toBe(transportFailure);
+        }
+      } finally {
+        await result?.release();
       }
-      expect(transport).toHaveBeenCalledTimes(1);
-      expect(own).toHaveBeenCalledTimes(phase === "selection" ? 0 : 1);
-      expect(store.recordEvent).not.toHaveBeenCalled();
-      await expectDiagnostic(() => finalizeDebugProxyCapture(settings, deps), admissionFailure);
-      expect(store.endSession).toHaveBeenCalledOnce();
+      if (!guarded) {
+        expect(store.recordEvent).not.toHaveBeenCalled();
+      }
+      await expectDiagnostic(finalize, failure);
+      if (!guarded) {
+        expect(store.endSession).toHaveBeenCalledOnce();
+      }
     } finally {
       const scope = control.scope;
       control.scope = undefined;
-      finalizeDebugProxyCapture(settings, deps);
-      await scope.close();
+      await Promise.resolve()
+        .then(finalize)
+        .catch(() => undefined);
+      await scope?.close();
     }
   },
 );
@@ -271,63 +314,6 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
       await late;
       await finalizeDebugProxyCaptureAsync(settings, { fetchTarget: target });
       finalizeDebugProxyCapture(settings, deps);
-    }
-  },
-);
-
-it.each([
-  { failureKind: "ready", outcome: "success" },
-  { failureKind: "reservation", outcome: "failure" },
-] as const)(
-  "preserves guarded transport $outcome across $failureKind preparation failure",
-  async ({ failureKind, outcome }) => {
-    const preparationFailure = new Error("synthetic capture preparation rejected");
-    const transportFailure = new Error("synthetic guarded transport rejected");
-    stubGuardedCaptureEnv(`guarded-preparation-${failureKind}-${outcome}`);
-    createWorkerLease.mockImplementation(() => {
-      if (failureKind === "reservation") {
-        throw preparationFailure;
-      }
-      const fail = async () => {
-        throw preparationFailure;
-      };
-      return {
-        ready: Promise.reject(preparationFailure),
-        execute: fail,
-        runOperation: fail,
-        release: async () => {},
-        retire: async () => {},
-      };
-    });
-    const settings = resolveDebugProxySettings();
-    const response = new Response("guarded transport succeeded", {
-      status: 200,
-      headers: { "x-fixture": "transport-response" },
-    });
-    const transport = vi.fn<typeof fetch>().mockResolvedValue(response);
-    if (outcome === "failure") {
-      transport.mockRejectedValue(transportFailure);
-    }
-    try {
-      const pending = fetchWithSsrFGuard({ url: captureUrl, fetchImpl: transport });
-      if (outcome === "success") {
-        const result = await pending;
-        try {
-          expect(result.response.status).toBe(200);
-          expect(result.response.headers.get("x-fixture")).toBe("transport-response");
-          expect(await result.response.text()).toBe("guarded transport succeeded");
-        } finally {
-          await result.release();
-        }
-      } else {
-        await expect(pending).rejects.toBe(transportFailure);
-      }
-      expect(transport).toHaveBeenCalledTimes(1);
-      expect(createWorkerLease).toHaveBeenCalledTimes(1);
-      await expectDiagnostic(() => finalizeDebugProxyCaptureAsync(settings), preparationFailure);
-    } finally {
-      // The controlled capture diagnostic must not mask a failed transport assertion.
-      await finalizeDebugProxyCaptureAsync(settings).catch(() => undefined);
     }
   },
 );

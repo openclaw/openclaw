@@ -1,23 +1,13 @@
-import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { sessionRequest as sessionRpc } from "./hydration-family.test-support.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
 } from "./session-capability.test-support.ts";
 
-export function sessionRpc(handlers: Record<string, (params?: unknown) => unknown>) {
-  return vi.fn(async (method: string, params?: unknown) => {
-    const handler = handlers[method];
-    if (!Object.hasOwn(handlers, method) || !handler) {
-      throw new Error(`Unexpected request: ${method}`);
-    }
-    return handler(params);
-  });
-}
-
 export function sessionRpcHarness(
-  handlers: Parameters<typeof sessionRpc>[0],
+  handlers: Record<string, (params?: unknown) => unknown>,
   makeClient = (request: ReturnType<typeof sessionRpc>) =>
     ({ request }) as unknown as GatewayBrowserClient,
 ) {

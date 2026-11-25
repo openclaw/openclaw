@@ -254,6 +254,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_conversation_deliveries_reply
 CREATE INDEX IF NOT EXISTS idx_agent_conversation_deliveries_updated
   ON conversation_deliveries(updated_at DESC, operation_id);
 
+CREATE INDEX IF NOT EXISTS idx_agent_conversation_deliveries_source_session
+  ON conversation_deliveries(source_session_key, operation_id);
+
 CREATE TABLE IF NOT EXISTS session_conversations (
   session_id TEXT NOT NULL,
   conversation_id TEXT NOT NULL,
@@ -290,6 +293,7 @@ CREATE TABLE IF NOT EXISTS session_members (
   identity_id TEXT NOT NULL,
   added_by TEXT NOT NULL,
   added_at INTEGER NOT NULL,
+  access TEXT CHECK (access IS NULL OR access IN ('read', 'suggest', 'send')),
   PRIMARY KEY (session_key, identity_id),
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;
@@ -422,6 +426,20 @@ CREATE INDEX IF NOT EXISTS idx_agent_message_tool_run_outcomes_occurred
 
 -- Receipts outlive Goal clear and session reset so a delayed retry cannot recreate a Goal.
 -- They intentionally have no session FK; bounded retention belongs to the operation owner.
+CREATE TABLE IF NOT EXISTS session_creation_operations (
+  operation_digest TEXT PRIMARY KEY,
+  request_fingerprint TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  lifecycle_revision TEXT,
+  role TEXT,
+  scopes_json TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_agent_session_creation_operations_expiry
+  ON session_creation_operations(expires_at);
+-- END SESSION CREATION OPERATIONS
+
 CREATE TABLE IF NOT EXISTS session_goal_operations (
   session_key TEXT NOT NULL,
   operation_id TEXT NOT NULL,
@@ -458,6 +476,12 @@ CREATE TABLE IF NOT EXISTS transcript_events (
       AND event_utf8_bytes IS NOT NULL
       AND event_utf8_bytes BETWEEN 1 AND 4194304
       AND length(event_zstd) BETWEEN 1 AND 4194304
+      AND navigation_json IS NOT NULL
+    )
+    OR (
+      event_json IS NULL AND event_zstd IS NULL
+      AND event_utf8_bytes IS NOT NULL
+      AND event_utf8_bytes BETWEEN 1 AND 4194304
       AND navigation_json IS NOT NULL
     )
   ),
@@ -524,6 +548,22 @@ CREATE TABLE IF NOT EXISTS session_transcript_cold_archives (
   CHECK (length(archive_name) > 0 AND archive_name NOT IN ('.', '..') AND archive_name NOT LIKE '%/%' AND archive_name NOT LIKE '%\%'),
   CHECK ((storage = 'file' AND archive_blob IS NULL) OR (storage = 'sqlite' AND archive_blob IS NOT NULL))
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS session_transcript_cold_archive_chunks (
+  session_id TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+  archive_name TEXT NOT NULL UNIQUE,
+  archive_sha256 TEXT NOT NULL CHECK (length(archive_sha256) = 64),
+  first_seq INTEGER NOT NULL,
+  last_seq INTEGER NOT NULL CHECK (last_seq >= first_seq),
+  event_count INTEGER NOT NULL CHECK (event_count >= 1),
+  raw_bytes INTEGER NOT NULL CHECK (raw_bytes >= 0),
+  archive_bytes INTEGER NOT NULL CHECK (archive_bytes >= 0),
+  archive_blob BLOB,
+  PRIMARY KEY (session_id, chunk_index),
+  FOREIGN KEY (session_id) REFERENCES session_transcript_cold_archives(session_id) ON DELETE CASCADE,
+  CHECK (length(archive_name) > 0 AND archive_name NOT IN ('.', '..') AND archive_name NOT LIKE '%/%' AND archive_name NOT LIKE '%\%')
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (
   session_id TEXT NOT NULL PRIMARY KEY,
@@ -599,6 +639,13 @@ CREATE TABLE IF NOT EXISTS context_engine_turn_outbox (
 
 CREATE INDEX IF NOT EXISTS idx_agent_context_engine_turn_outbox_engine
   ON context_engine_turn_outbox(engine_id, created_at);
+
+CREATE TABLE IF NOT EXISTS agent_tool_usage (
+  tool_id TEXT PRIMARY KEY NOT NULL,
+  score REAL NOT NULL CHECK (score >= 0),
+  updated_at INTEGER NOT NULL
+) STRICT;
+-- END AGENT TOOL USAGE
 
 CREATE TABLE IF NOT EXISTS cache_entries (
   scope TEXT NOT NULL,
@@ -806,6 +853,17 @@ CREATE INDEX IF NOT EXISTS idx_agent_transcript_context_pending
   ON session_transcript_active_events(session_id)
   WHERE context_eligible IS NULL;
 
+CREATE TABLE IF NOT EXISTS session_transcript_active_event_facts (
+  session_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  serialized_bytes INTEGER NOT NULL CHECK (serialized_bytes >= 1),
+  dependency_navigation_json TEXT NOT NULL,
+  PRIMARY KEY (session_id, seq),
+  FOREIGN KEY (session_id, seq)
+    REFERENCES session_transcript_active_events(session_id, event_seq) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+-- END ACTIVE EVENT FACTS
+
 CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
   text,
   session_id UNINDEXED,
@@ -858,6 +916,8 @@ CREATE TABLE IF NOT EXISTS session_pending_inputs (
   state TEXT NOT NULL CHECK (state IN ('queued', 'interrupted', 'cancelled')),
   accepted_at INTEGER NOT NULL,
   consumed_event_id TEXT,
+  end_cause TEXT,
+  origin_source_json TEXT,
   UNIQUE (session_id, idempotency_key),
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
   FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
@@ -880,3 +940,6 @@ CREATE TABLE IF NOT EXISTS session_input_completions (
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
   FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
 ) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_input_completions_session_key
+  ON session_input_completions(session_key);

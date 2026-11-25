@@ -4,6 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { inspectDoctorDatabaseEngines } from "../commands/doctor-database-engine-inspection.js";
 import { preparePostgresBackupDiscovery } from "./backup-database-discovery.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
+import { createSqliteFamilyEngines } from "./database-engine/selection-fixture.test-support.js";
 import { prepareUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import { captureSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import { readUpdatePostgresState } from "./update-candidate-state.postgres.js";
@@ -44,16 +45,7 @@ it("snapshots Proxy environments before backup, update, and Doctor worker dispat
   await inspectDoctorDatabaseEngines({ stateDir, config: {}, env });
   await withDatabaseEngineSelection(
     {
-      effectiveEngines: {
-        state: "sqlite",
-        agent: "sqlite",
-        workboard: "sqlite",
-        logbook: "sqlite",
-        "team-reports": "sqlite",
-        quarantine: "sqlite",
-        "managed-update": "sqlite",
-        "package-activation": "sqlite",
-      },
+      effectiveEngines: createSqliteFamilyEngines(),
     },
     () => readUpdatePostgresState({ stateDir, config: {}, env }, new Map()),
   );

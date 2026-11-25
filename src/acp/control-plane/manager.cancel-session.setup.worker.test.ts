@@ -1,10 +1,8 @@
 import { createIdentityFromStatus } from "@openclaw/acp-core/runtime/session-identity";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { readAcpSessionEntryAsync } from "../runtime/session-meta.js";
 import {
@@ -14,6 +12,8 @@ import {
 import {
   cancelSession,
   createGate,
+  holdEnsure,
+  holdMetadataWrite,
   expectSuccessor,
   locatorSessionKey,
   expectNoRuntimeEffects,
@@ -24,7 +24,6 @@ import {
   startTurn,
 } from "./manager.cancellation-locator.test-support.js";
 import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
-import { DEFAULT_DEPS } from "./manager.types.js";
 
 it("preserves replacement metadata when a cancelled late handle fails its applied-model policy", async () => {
   await withAcpCancellationFixture(async (f) => {
@@ -32,10 +31,9 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
       runtimeSessionName: "retained-runtime",
       runtimeOptions: { model: "fixture/allowed" },
     });
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "fixture-operator",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
       modelPolicy: prepareOperatorModelPolicy({
         cfg: f.target.cfg,
         policy: { allow: ["fixture/allowed"] },
@@ -126,10 +124,7 @@ it("preserves a durable replacement while cold cancellation ensure normalizes it
   await withAcpCancellationFixture(
     async (f) => {
       const ensureGate = createGate("ensureGate settled before its controlled boundary");
-      f.ensureSession.mockImplementationOnce(async () => {
-        await ensureGate.wait();
-        return runtimeHandle(f, "normalized-runtime");
-      });
+      holdEnsure(f, ensureGate, "normalized-runtime");
       const close = vi.spyOn(f.runtime, "close");
       const cancellation = cancelSession(f, "cold-ensure-replacement");
       const result = Promise.allSettled([cancellation]);
@@ -175,14 +170,7 @@ it.each([
           }
           return runtimeHandle(f, "normalized-runtime");
         });
-        const upsert = DEFAULT_DEPS.upsertSessionMeta;
-        const writer =
-          boundary === "ensure"
-            ? undefined
-            : vi.spyOn(DEFAULT_DEPS, "upsertSessionMeta").mockImplementationOnce(async (params) => {
-                await normalizationGate.wait();
-                return upsert(params);
-              });
+        const writer = boundary === "ensure" ? undefined : holdMetadataWrite(normalizationGate);
         let controlPrepared = false;
         const reader = observeControlRead(() => {
           controlPrepared = true;

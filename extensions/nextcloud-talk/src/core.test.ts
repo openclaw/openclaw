@@ -6,7 +6,6 @@ import {
   stripNextcloudTalkTargetPrefix as stripPrefix,
 } from "./normalize.js";
 import { resolveNextcloudTalkAllowlistMatch as resolveAllowlistMatch } from "./policy.js";
-import { resolveNextcloudTalkOutboundSessionRoute as resolveSessionRoute } from "./session-route.js";
 import {
   extractNextcloudTalkHeaders as extractHeaders,
   generateNextcloudTalkSignature as generateSignature,
@@ -17,28 +16,8 @@ function signedPayload(generate = generateSignature) {
   const payload = { body: JSON.stringify({ hello: "world" }), secret: "secret-123" };
   return { ...payload, ...generate(payload) };
 }
-const sessionRoute = (target: string) =>
-  resolveSessionRoute({ cfg: {}, agentId: "main", accountId: "acct-1", target });
 
 describe("nextcloud talk core", () => {
-  it("marks ambiguous room-token session routes as best-effort", () => {
-    const route = sessionRoute("nextcloud-talk:room-123");
-
-    expect(route).toEqual({
-      sessionKey: "agent:main:nextcloud-talk:group:room-123",
-      baseSessionKey: "agent:main:nextcloud-talk:group:room-123",
-      recipientSessionExact: false,
-      peer: { kind: "group", id: "room-123" },
-      chatType: "group",
-      from: "nextcloud-talk:room:room-123",
-      to: "nextcloud-talk:room-123",
-    });
-  });
-
-  it("returns null when the target cannot be normalized to a room id", () => {
-    expect(sessionRoute("")).toBeNull();
-  });
-
   it("normalizes and recognizes supported room target formats", () => {
     expect(stripPrefix(" room:abc123 ")).toBe("abc123");
     expect(stripPrefix("nextcloud-talk:room:AbC123")).toBe("AbC123");
@@ -132,7 +111,7 @@ describe("nextcloud talk core", () => {
     expect(match(["*"]).allowed).toBe(true);
     expect(match(["nc:User-Id"])).toEqual({
       allowed: true,
-      matchKey: "user-id",
+      matchKey: "users/user-id",
       matchSource: "id",
     });
     expect(match(["allowed"], "other").allowed).toBe(false);

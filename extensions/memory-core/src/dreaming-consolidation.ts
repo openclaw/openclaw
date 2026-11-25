@@ -390,6 +390,7 @@ export async function consolidateMemory(params: {
   existingMemory: string;
   candidates: PromotionCandidate[];
   model?: string;
+  timeoutMs?: number;
   maxPriorEntryLossFraction: number;
   memoryFileMaxChars?: number;
   maxPromotedSnippetTokens?: number;
@@ -421,7 +422,7 @@ export async function consolidateMemory(params: {
         ),
         extraSystemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
         ...(params.model ? { model: params.model } : {}),
-        timeoutMs: CONSOLIDATION_TIMEOUT_MS,
+        timeoutMs: params.timeoutMs ?? CONSOLIDATION_TIMEOUT_MS,
       });
       const plan = parseConsolidationPlan(result.text, group.candidates, maxPromotedSnippetTokens);
       if (!plan) {

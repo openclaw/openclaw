@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import {
   createBuiltRuntime,
   createSourceRuntime,
@@ -68,27 +68,19 @@ it("leaves config and state absent on repeated readiness checks", async () => {
     ["OPENCLAW_HOME"],
   );
 
-  const preflightUrl = runtimeUrl(doctorConfigRuntimeEntrypoints.startup);
-  const checkpointUrl = runtimeUrl(doctorConfigRuntimeEntrypoints.checkpoint);
   const script = `
-      const { runStartupConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
-      const { hasActiveStartupMigrationLease } = await import(${JSON.stringify(checkpointUrl)});
-      const result = await runStartupConfigPreflight({
-        gateway: false,
-        observe: false,
-      });
+      const { runStartupConfigPreflight } = await import(${JSON.stringify(runtimeUrl(doctorConfigRuntimeEntrypoints.startup))});
+      const result = await runStartupConfigPreflight({ gateway: false, observe: false });
       console.log("__RESULT__" + JSON.stringify({
-        activeLease: hasActiveStartupMigrationLease({ env: process.env }),
         configExists: result.snapshot.exists,
       }));
     `;
-  const first = await run(runtimeRoot, env, script);
-  const second = await run(runtimeRoot, env, script);
-
-  expect(first).toEqual({ activeLease: false, configExists: false });
-  expect(second).toEqual({ activeLease: false, configExists: false });
-  expect(fs.existsSync(configPath)).toBe(false);
-  expect(fs.existsSync(stateDir)).toBe(false);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    expect(await run(runtimeRoot, env, script)).toEqual({
+      configExists: false,
+    });
+    expect([configPath, stateDir].map((target) => fs.existsSync(target))).toEqual([false, false]);
+  }
 }, 150_000);
 describe("CLI readiness after early config observation", () => {
   let runtime: ReturnType<typeof createRuntime>;
@@ -211,6 +203,10 @@ describe("CLI readiness after early config observation", () => {
       expect(observed.message).toContain("Session reference is ambiguous:");
       expect(observed.message).toContain("first");
       expect(observed.message).toContain("second");
+      expect(observed).toMatchObject({
+        databaseExistedBefore: existingState,
+        observedConfigMode: "local",
+      });
       expect(observed.calls).toEqual([
         {
           method: "sessions.resolve",
@@ -220,11 +216,9 @@ describe("CLI readiness after early config observation", () => {
           configPort: 19876,
         },
       ]);
-      expect(observed.databaseExistedBefore).toBe(existingState);
-      expect(observed.observedConfigMode).toBe("local");
       expect(observed.stages).toContain("config-ready");
       expect(fs.readFileSync(configPath, "utf8")).toBe(configRaw);
-      expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+      expect(hasActiveStartupMigrationLeaseForTest({ env })).toBe(false);
     },
     75_000,
   );

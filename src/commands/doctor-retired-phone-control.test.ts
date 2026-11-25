@@ -70,6 +70,14 @@ async function writeLegacy(value: unknown) {
   return legacyPath;
 }
 
+const prepare = (cfg: OpenClawConfig) => prepareRetiredPhoneControlCleanup({ cfg, env });
+const commandsOf = (result: Awaited<ReturnType<typeof prepare>>) =>
+  result.config.gateway?.nodes?.commands;
+function expectUnchanged(result: Awaited<ReturnType<typeof prepare>>, cfg: OpenClawConfig) {
+  expect(result.config).toBe(cfg);
+  expect(result.configChanges).toEqual([]);
+}
+
 beforeEach(async () => {
   resetPluginStateStoreForTests();
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-phone-control-retire-"));
@@ -82,106 +90,97 @@ afterEach(async () => {
   await fs.rm(stateDir, { recursive: true, force: true });
 });
 
-it("does not expose an allow that was effective only because a lease removed the seed deny", async () => {
-  await registerLease({ removedFromDeny: ["sms.send"] });
-  const cfg = config({
-    allow: ["sms.send"],
-    deny: seedDeny.filter((command) => command !== "sms.send"),
-  });
-
-  const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
-
-  expect(result.config.gateway?.nodes?.commands).toBeUndefined();
-  expect(result.configChanges).toEqual([
-    "Removed stale Phone Control lease-only command allow entries.",
-    "Removed the retired Phone Control setup deny seed.",
-  ]);
-});
-
-it("prefers the authoritative SQLite journal over a stale legacy source", async () => {
-  await registerLease({ addedToAllow: ["sms.send"], persistentAllows: ["health.summary"] });
-  await writeLegacy({ version: 2, addedToAllow: ["health.summary"] });
-  const cfg = config({ allow: ["sms.send", "health.summary"] });
-
-  const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
-
-  expect(result.config.gateway?.nodes?.commands?.allow).toEqual(["health.summary"]);
-  expect(result.cleanupSafe).toBe(true);
-});
-
-it("keeps exact-seed entries that currently shadow explicit allows", async () => {
-  const cfg = config({ allow: ["sms.send"], deny: [...seedDeny] });
-
-  const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
-
-  expect(result.config.gateway?.nodes?.commands).toEqual({
-    allow: ["sms.send"],
-    deny: ["sms.send"],
-  });
-  expect(result.configChanges).toEqual(["Removed the retired Phone Control setup deny seed."]);
-});
-
-it.each(["legacy", "canonical", "unreadable"] as const)(
-  "preserves policy for malformed %s journals",
-  async (source) => {
-    if (source === "legacy") {
-      await writeLegacy({ version: 3 });
-    } else if (source === "canonical") {
-      await createLeaseJournal().register("generation-1", { version: 3 });
-    } else {
-      vi.spyOn(fs, "stat").mockRejectedValueOnce(
-        Object.assign(new Error("denied"), { code: "EACCES" }),
-      );
-    }
-    const cfg = config({
-      deny: [...seedDeny],
-      ...(source === "legacy" ? { allow: ["sms.send"] } : {}),
-    });
-    const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
-    expect(result.config).toBe(cfg);
-    expect(result.cleanupSafe).toBe(false);
-    if (source === "legacy") {
-      expect(result.configChanges).toEqual([]);
-      expect(result.warnings).toHaveLength(1);
-    } else {
-      expect(result.cleanupPending).toBe(true);
-      if (source === "canonical") {
-        expect(result.warnings).toEqual([
-          "Retired Phone Control lease journal contains a malformed record.",
-        ]);
-      } else {
-        expect(result.warnings[0]).toContain("Could not inspect retired Phone Control lease state");
-      }
-    }
+it.each([
+  {
+    name: "lease-shadowed seed allow",
+    lease: { removedFromDeny: ["sms.send"] },
+    input: { allow: ["sms.send"], deny: seedDeny.filter((command) => command !== "sms.send") },
+    expected: undefined,
   },
-);
-
-it("does not touch operator-authored command entries that differ from the old seed", async () => {
-  const deny = [...seedDeny, "custom.command"];
-  const cfg = config({ allow: ["sms.send"], deny });
-
-  const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
-
-  expect(result.config).toBe(cfg);
-  expect(result.config.gateway?.nodes?.commands).toEqual({ allow: ["sms.send"], deny });
-  expect(result.configChanges).toEqual([]);
+  {
+    name: "canonical journal over stale legacy state",
+    lease: { addedToAllow: ["sms.send"], persistentAllows: ["health.summary"] },
+    legacy: { version: 2, addedToAllow: ["health.summary"] },
+    input: { allow: ["sms.send", "health.summary"] },
+    expected: { allow: ["health.summary"] },
+  },
+  {
+    name: "deny-wins explicit allow",
+    input: { allow: ["sms.send"], deny: [...seedDeny] },
+    expected: { allow: ["sms.send"], deny: ["sms.send"] },
+  },
+  {
+    name: "operator policy",
+    input: { allow: ["sms.send"], deny: [...seedDeny, "custom.command"] },
+    expected: { allow: ["sms.send"], deny: [...seedDeny, "custom.command"] },
+    unchanged: true,
+  },
+  {
+    name: "restored lease deny",
+    lease: { removedFromDeny: ["computer.act"] },
+    input: { deny: ["camera.snap", "custom.command"] },
+    expected: { deny: ["camera.snap", "custom.command", "computer.act"] },
+  },
+])("preserves policy for $name", async (scenario) => {
+  if (scenario.lease) {
+    await registerLease(scenario.lease);
+  }
+  if (scenario.legacy) {
+    await writeLegacy(scenario.legacy);
+  }
+  const cfg = config(scenario.input);
+  const result = await prepare(cfg);
+  expect(commandsOf(result)).toEqual(scenario.expected);
+  expect(result.cleanupSafe).toBe(true);
+  if (scenario.unchanged) {
+    expectUnchanged(result, cfg);
+  }
 });
 
-it("restores journal-owned deny entries without removing customized operator policy", async () => {
-  await registerLease({ removedFromDeny: ["computer.act"] });
-  const deny = ["camera.snap", "custom.command"];
-  const cfg = config({ deny });
+it.each([
+  ["legacy", "malformed"],
+  ["canonical", "malformed record"],
+  ["unreadable", "Could not inspect retired Phone Control lease state"],
+] as const)("preserves policy for malformed %s journals", async (source, message) => {
+  if (source === "legacy") {
+    await writeLegacy({ version: 3 });
+  } else if (source === "canonical") {
+    await createLeaseJournal().register("generation-1", { version: 3 });
+  } else {
+    vi.spyOn(fs, "stat").mockRejectedValueOnce(
+      Object.assign(new Error("denied"), { code: "EACCES" }),
+    );
+  }
+  const cfg = config({
+    deny: [...seedDeny],
+    ...(source === "legacy" ? { allow: ["sms.send"] } : {}),
+  });
+  const result = await prepare(cfg);
+  expectUnchanged(result, cfg);
+  expect(result.cleanupSafe).toBe(false);
+  expect(result.cleanupPending).toBe(true);
+  expect(result.warnings).toEqual([expect.stringContaining(message)]);
+});
 
-  const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
+it("preserves policy and original bytes for malformed UTF-8 legacy journals", async () => {
+  const legacyPath = await writeLegacy({
+    version: 1,
+    armedAtMs: 1,
+    expiresAtMs: null,
+    removedFromDeny: ["CORRUPT"],
+  });
+  const bytes = Buffer.from(
+    (await fs.readFile(legacyPath, "utf8")).replace("CORRUPT", "\x80"),
+    "latin1",
+  );
+  await fs.writeFile(legacyPath, bytes);
+  const cfg = config({ deny: ["operator.command"] });
 
-  expect(result.config.gateway?.nodes?.commands?.deny).toEqual([
-    "camera.snap",
-    "custom.command",
-    "computer.act",
-  ]);
-  expect(result.configChanges).toEqual([
-    "Restored command deny entries removed by Phone Control leases.",
-  ]);
+  const result = await prepare(cfg);
+  expectUnchanged(result, cfg);
+  expect(result.cleanupSafe).toBe(false);
+  expect(result.warnings).toEqual([expect.stringContaining("must be valid UTF-8")]);
+  expect(await fs.readFile(legacyPath)).toEqual(bytes);
 });
 
 it.each([false, true])(

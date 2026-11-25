@@ -35,6 +35,9 @@ async function createFixture() {
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/package-lifecycle-marker.mjs",
     "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+    "scripts/lib/fs-safe-npm-cli-protocol.mjs",
+    "runtime-process-bootstrap.generated.mjs",
   ]) {
     await write(local(file), await read(fileURLToPath(new URL(`../../${file}`, import.meta.url))));
   }

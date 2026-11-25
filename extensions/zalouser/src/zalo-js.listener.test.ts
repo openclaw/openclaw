@@ -23,7 +23,7 @@ vi.mock("./zca-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./zca-client.js")>()),
   createZalo: createZaloMock,
 }));
-import { logoutZaloProfile, startZaloListener } from "./zalo-js.js";
+import { logoutZaloProfile, resolveZaloOwnUserId, startZaloListener } from "./zalo-js.js";
 
 class TestListener extends EventEmitter {
   start = vi.fn(() => {});
@@ -60,6 +60,22 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   resetPluginStateStoreForTests();
+});
+
+it("uses authenticated session identity without a profile request", async () => {
+  await withZalouserIngressTestQueue(async () => {
+    await seedSession();
+    const fetchAccountInfo = vi.fn(async () => ({ userId: "fixture-owner" }));
+    createZaloMock.mockResolvedValue({
+      login: async () => ({ ...sessionApi(new TestListener()), fetchAccountInfo }),
+    });
+    try {
+      expect(await resolveZaloOwnUserId()).toBe("fixture-owner");
+      expect(fetchAccountInfo).not.toHaveBeenCalled();
+    } finally {
+      await logoutZaloProfile();
+    }
+  });
 });
 
 it.each(["connected", "throw", "abort", "error", "message rejection"] as const)(

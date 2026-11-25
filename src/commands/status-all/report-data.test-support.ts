@@ -1,4 +1,3 @@
-// Shared public-command fixture for status-all collection and rendered diagnostics.
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import type { ProgressReporter } from "../../cli/progress.js";
@@ -16,45 +15,51 @@ import {
 } from "../status.test-support.ts";
 import { createTestConfigSnapshot } from "../test-runtime-config-helpers.js";
 
-const mocks = vi.hoisted(() => ({
-  renderTable: vi.fn<typeof import("../../../packages/terminal-core/src/table.js").renderTable>(
-    ({ rows }) => rows.map((row) => Object.values(row).join(": ")).join("\n"),
-  ),
-  collectStatusScanOverview: vi.fn(),
-  resolveStatusServiceSummaries: vi.fn(),
-  resolveNodeOnlyGatewayInfo: vi.fn(),
-  progress: { setLabel: vi.fn(), tick: vi.fn(), setPercent: vi.fn(), done: vi.fn() },
-  history: vi.fn<typeof import("../../infra/update-run-reader.js").getUpdateRunHistoryStatusAsync>(
-    async () => ({}),
-  ),
-  getUpdateRun: vi.fn<(runId: string) => UpdateRunRecord | undefined>(),
-  readRestartSentinelReadOnly: vi.fn<() => Promise<{ payload: RestartSentinelPayload } | null>>(
-    async () => null,
-  ),
-  buildStatusAllOverviewRows: vi.fn<
-    typeof import("../status-overview-rows.ts").buildStatusAllOverviewRows
-  >(() => []),
-  readConfigFileSnapshot: vi.fn<typeof import("../../config/config.js").readConfigFileSnapshot>(),
-  inspectPortUsage: vi.fn<() => Promise<PortUsage | null>>(async () => null),
-  resolveGatewayBindHost: vi.fn(async () => "127.0.0.1"),
-  resolveStatusGatewayDiagnosticsSafe:
-    vi.fn<typeof import("../status-runtime-shared.ts").resolveStatusGatewayDiagnosticsSafe>(),
-  resolveStatusGatewayHealthSafe:
-    vi.fn<typeof import("../status-runtime-shared.ts").resolveStatusGatewayHealthSafe>(),
-  resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
-  loadExecApprovalsReadOnly: vi.fn(() => ({ version: 1, agents: {} })),
-  buildWorkspaceSkillReadiness: vi.fn<
-    typeof import("../../skills/discovery/status.js").buildWorkspaceSkillReadiness
-  >(() => ({ workspaceDir: "/tmp/mock-skills", eligible: 0, missing: 0 })),
-  resolveStatusSummaryFromOverview: vi.fn(async (_params: unknown) => ({})),
-  resolveStatusAllConnectionDetails: vi.fn(() => ""),
-  resolveGatewayLogPaths:
-    vi.fn<typeof import("../../daemon/restart-logs.js").resolveGatewayLogPaths>(),
-  resolveGatewaySupervisorLogPaths:
-    vi.fn<typeof import("../../daemon/restart-logs.js").resolveGatewaySupervisorLogPaths>(),
-  resolveGatewayRestartLogPath: vi.fn(() => "/tmp/fixture-restart.log"),
-  readFileTailLines: vi.fn<typeof import("./gateway.js").readFileTailLines>(async () => []),
-}));
+const mocks = vi.hoisted(() => {
+  const noLogs = () => {
+    throw new Error("No fixture logs");
+  };
+  return {
+    renderTable: vi.fn<typeof import("../../../packages/terminal-core/src/table.js").renderTable>(
+      ({ rows }) => rows.map((row) => Object.values(row).join(": ")).join("\n"),
+    ),
+    collectStatusScanOverview: vi.fn(),
+    resolveStatusServiceSummaries: vi.fn(),
+    resolveNodeOnlyGatewayInfo: vi.fn(),
+    progress: { setLabel: vi.fn(), tick: vi.fn(), setPercent: vi.fn(), done: vi.fn() },
+    history: vi.fn<
+      typeof import("../../infra/update-run-reader.js").getUpdateRunHistoryStatusAsync
+    >(async () => ({})),
+    getUpdateRun: vi.fn<(runId: string) => UpdateRunRecord | undefined>(),
+    readRestartSentinelReadOnly: vi.fn<() => Promise<{ payload: RestartSentinelPayload } | null>>(
+      async () => null,
+    ),
+    buildStatusAllOverviewRows: vi.fn<
+      typeof import("../status-overview-rows.ts").buildStatusAllOverviewRows
+    >(() => []),
+    readConfigFileSnapshot: vi.fn<typeof import("../../config/config.js").readConfigFileSnapshot>(
+      async () => createTestConfigSnapshot({}),
+    ),
+    inspectPortUsage: vi.fn<() => Promise<PortUsage | null>>(async () => null),
+    resolveStatusGatewayDiagnosticsSafe: vi.fn<
+      typeof import("../status-runtime-shared.ts").resolveStatusGatewayDiagnosticsSafe
+    >(async () => ({ ok: true, value: {} })),
+    resolveStatusGatewayHealthSafe: vi.fn<
+      typeof import("../status-runtime-shared.ts").resolveStatusGatewayHealthSafe
+    >(async () => createStatusHealth()),
+    resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
+    buildWorkspaceSkillReadiness: vi.fn<
+      typeof import("../../skills/discovery/status.js").buildWorkspaceSkillReadiness
+    >(() => ({ workspaceDir: "/tmp/mock-skills", eligible: 0, missing: 0 })),
+    resolveStatusAllConnectionDetails: vi.fn(() => ""),
+    resolveGatewayLogPaths:
+      vi.fn<typeof import("../../daemon/restart-logs.js").resolveGatewayLogPaths>(noLogs),
+    resolveGatewaySupervisorLogPaths:
+      vi.fn<typeof import("../../daemon/restart-logs.js").resolveGatewaySupervisorLogPaths>(noLogs),
+    resolveGatewayRestartLogPath: vi.fn(() => "/tmp/fixture-restart.log"),
+    readFileTailLines: vi.fn<typeof import("./gateway.js").readFileTailLines>(async () => []),
+  };
+});
 
 export { mocks };
 
@@ -93,9 +98,7 @@ vi.mock("../../daemon/diagnostics.js", async (importOriginal) => ({
 }));
 vi.mock("../../gateway/net.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../gateway/net.js")>()),
-  resolveGatewayBindHost: mocks.resolveGatewayBindHost,
-  resolveGatewayRequiredListenHosts: (bindHost: string) =>
-    bindHost === "100.64.0.40" ? [bindHost, "127.0.0.1"] : [bindHost],
+  resolveGatewayBindHost: async () => "127.0.0.1",
 }));
 vi.mock("../../infra/ports-inspect.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/ports-inspect.js")>()),
@@ -103,7 +106,7 @@ vi.mock("../../infra/ports-inspect.js", async (importOriginal) => ({
 }));
 vi.mock("../../infra/exec-approvals.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/exec-approvals.js")>()),
-  loadExecApprovalsReadOnly: mocks.loadExecApprovalsReadOnly,
+  loadExecApprovalsReadOnly: () => ({ version: 1, agents: {} }),
 }));
 vi.mock("../../infra/update-run-ledger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-run-ledger.js")>()),
@@ -152,10 +155,9 @@ vi.mock("../status.gateway-connection.ts", async (importOriginal) => ({
 // mock-isolation: Reuse fixed scan facts while retaining the real downstream report rendering.
 vi.mock("../status.scan-overview.ts", () => ({
   collectStatusScanOverview: mocks.collectStatusScanOverview,
-  prepareStatusSummaryFromOverview: async (params: unknown) => {
-    const summary = await mocks.resolveStatusSummaryFromOverview(params);
-    return { publish: () => ({ summary, sessionStores: undefined }) };
-  },
+  prepareStatusSummaryFromOverview: async () => ({
+    publish: () => ({ summary: {}, sessionStores: undefined }),
+  }),
 }));
 
 vi.mock("../../daemon/restart-logs.js", async (importOriginal) => ({
@@ -175,11 +177,7 @@ import { statusAllCommand } from "../status-all.js";
 export async function runStatusAllReport(
   params: Partial<{
     overview: Partial<Awaited<ReturnType<typeof collectStatusScanOverview>>>;
-    daemon: Awaited<ReturnType<typeof resolveStatusServiceSummaries>>[0];
-    nodeService: Awaited<ReturnType<typeof resolveStatusServiceSummaries>>[1];
     nodeOnlyGateway: Awaited<ReturnType<typeof resolveNodeOnlyGatewayInfo>>;
-    timeoutMs?: number;
-    gatewayProbeDeadlineMs: number;
   }> = {},
 ) {
   const service = {
@@ -195,66 +193,45 @@ export async function runStatusAllReport(
   } satisfies Awaited<ReturnType<typeof resolveStatusServiceSummaries>>[0];
   mocks.collectStatusScanOverview.mockResolvedValueOnce({
     ...createStatusScanResultFixture(),
-    coldStart: false,
-    hasConfiguredChannels: true,
     skipColdStartNetworkChecks: false,
     gatewaySnapshot: baseStatusGatewaySnapshot,
     runtimeDegradation: null,
     channelsStatus: null,
     ...params.overview,
   });
-  mocks.resolveStatusServiceSummaries.mockResolvedValueOnce([
-    params.daemon ?? service,
-    params.nodeService ?? service,
-  ]);
+  mocks.resolveStatusServiceSummaries.mockResolvedValueOnce([service, service]);
   mocks.resolveNodeOnlyGatewayInfo.mockResolvedValueOnce(params.nodeOnlyGateway ?? null);
   const log = vi.fn();
-  await statusAllCommand(
-    { log, error: vi.fn(), exit: vi.fn() },
-    {
-      timeoutMs: params.timeoutMs,
-      gatewayProbeDeadlineMs:
-        params.gatewayProbeDeadlineMs ??
-        createStatusGatewayProbeBudget(params.timeoutMs).gatewayProbeDeadlineMs,
-    },
-  );
+  await statusAllCommand({ log, error: vi.fn(), exit: vi.fn() }, createStatusGatewayProbeBudget());
   expect(log).toHaveBeenCalledOnce();
   return stripAnsi(String(log.mock.calls[0]?.[0])).split("\n");
 }
 
+export async function reportText(params: Parameters<typeof runStatusAllReport>[0] = {}) {
+  return (await runStatusAllReport(params)).join("\n");
+}
+
+export function expectReport(
+  output: string,
+  contains: readonly string[],
+  excludes: readonly string[] = [],
+) {
+  for (const text of contains) {
+    expect(output).toContain(text);
+  }
+  for (const text of excludes) {
+    expect(output).not.toContain(text);
+  }
+}
+
 export function setupStatusAllReportTest() {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.renderTable.mockImplementation(({ rows }) =>
-      rows.map((row) => Object.values(row).join(": ")).join("\n"),
-    );
-    mocks.buildWorkspaceSkillReadiness.mockReset().mockReturnValue({
-      workspaceDir: "/tmp/mock-skills",
-      eligible: 0,
-      missing: 0,
-    });
+    const { progress, ...functions } = mocks;
+    for (const mock of [...Object.values(functions), ...Object.values(progress)]) {
+      mock.mockReset();
+    }
     vi.spyOn(performance, "now").mockReturnValue(0);
-    mocks.readConfigFileSnapshot.mockReset().mockResolvedValue(createTestConfigSnapshot({}));
-    mocks.inspectPortUsage.mockReset().mockResolvedValue(null);
-    mocks.resolveStatusAllConnectionDetails.mockReturnValue("");
-    mocks.resolveGatewayLogPaths.mockImplementation(() => {
-      throw new Error("No fixture logs");
-    });
-    mocks.resolveGatewaySupervisorLogPaths.mockImplementation(() => {
-      throw new Error("No fixture logs");
-    });
-    mocks.resolveGatewayRestartLogPath.mockReturnValue("/tmp/fixture-restart.log");
-    mocks.readFileTailLines.mockReset().mockResolvedValue([]);
-    mocks.history.mockReset().mockResolvedValue({});
-    mocks.getUpdateRun.mockReset().mockReturnValue(undefined);
-    mocks.readRestartSentinelReadOnly.mockReset().mockResolvedValue(null);
-    mocks.resolveStatusGatewayDiagnosticsSafe
-      .mockReset()
-      .mockResolvedValue({ ok: true, value: {} });
-    mocks.resolveStatusGatewayHealthSafe.mockReset().mockResolvedValue(createStatusHealth());
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.restoreAllMocks());
 }

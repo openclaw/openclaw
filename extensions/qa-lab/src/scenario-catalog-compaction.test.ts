@@ -91,7 +91,7 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain("env.runtimeId === 'openclaw'");
     expect(flow).toContain("initialRequests[0].errorCode === 'context_length_exceeded'");
     expect(flow).toContain("initialRequests.length === 2");
-    expect(flow).toContain("compactionSummaryRequests.length === 2");
+    expect(flow).toContain("compactionSummaryRequests.length === 3");
     expectContains(
       flow,
       `compactionSummaryRequests[0].compactionSummaryFaultMode === config.faultMode`,
@@ -125,7 +125,6 @@ describe("qa compaction scenario catalog", () => {
       actions.map(readFlowAssertExpression).find((expression) => expression.includes(needle)) ?? "";
     const continuations = setExpr("postWriteContinuations");
     const callId = setExpr("writeTranscriptToolCallId");
-    const chain = setExpr("continuationChain");
     const summaries = setExpr("compactionSummaryRequests");
     const sessionId = "seeded-transcript";
     const allInputText = "Compaction retry mutating tool check QA-COMPACTION-DURABLE-MARKER";
@@ -143,7 +142,12 @@ describe("qa compaction scenario catalog", () => {
     const write = makeRequest(2, { plannedToolName: "write" });
     const failedWrite = { ...write, cursor: 3, outcome: "error", toolOutput: "failed" };
     const continuation = makeRequest(4, { requestKind: "tool-continuation" });
-    const failedContinuation = { ...continuation, cursor: 5, outcome: "error" };
+    const failedContinuation = {
+      ...continuation,
+      cursor: 5,
+      outcome: "error",
+      toolOutputStructuredError: true,
+    };
     const foreign = <T extends object>(request: T) => ({
       ...request,
       sessionId: `${sessionId}-other`,
@@ -228,54 +232,45 @@ describe("qa compaction scenario catalog", () => {
       "continuationChain.requests.length === continuationChain.waits.length + 1",
       "writeRequest.rawByteLength < config.overflowThresholdBytes && writeRequest.rawByteLength < overflowRequest.rawByteLength",
     );
-    expect(flow).toContain("new qaErrors.QaSuiteScenarioSkipError");
     expect(flow).toContain("outbound.text === config.finalMarker");
     expect(flow).toContain("overflowRequests.length === 1");
     expect(flow).toContain("overflowRequest.rawByteLength > config.overflowThresholdBytes");
     expect(flow).toContain("writeRequests.length === 1");
-    expect(flow).toContain("writeRequest.requestKind === 'agent-initial'");
-    expect(flow).toContain("writeRequest.outcome === 'success'");
-    expect(flow).toContain("!writeRequest.toolOutput");
-
-    expect(flow).toContain("writeRequest.plannedToolArgs?.path === config.outputFile");
-    expect(flow).toContain("writeRequest.plannedToolArgs?.content === config.expectedFileContent");
-    expect(flow).toContain("typeof writeRequest.plannedToolCallId === 'string'");
+    expectContains(
+      assertExpr("writeRequest.requestKind"),
+      "writeRequest.outcome === 'success' && !writeRequest.toolOutput",
+      "writeRequest.plannedToolArgs?.path === config.outputFile && writeRequest.plannedToolArgs?.content === config.expectedFileContent",
+      "typeof writeRequest.plannedToolCallId === 'string' && writeRequest.plannedToolCallId.length > 0",
+    );
 
     expect(flow).toContain("successfulWriteTranscriptEvents.length === 1");
     expect(flow).toContain("transcript.successfulToolCallCounts[writeWireToolName] === 1");
-    expect(flow).toContain("currentCallId = request.plannedToolCallId");
-    expect(flow).toContain("continuationChain.requests.length === postWriteContinuations.length");
-
-    expect(flow).toContain("terminalContinuations[0] === continuationChain.terminal");
-    expect(flow).toContain("String(terminalContinuations[0].toolOutput ?? '').trim().length > 0");
+    expectContains(
+      assertExpr("continuationChain.valid"),
+      "continuationChain.requests.length === postWriteContinuations.length",
+      "request.outcome === 'success' && request.toolOutputStructuredError !== true",
+    );
+    expect(assertExpr("terminalContinuations.length === 1")).toContain(
+      "terminalContinuations[0] === continuationChain.terminal && String(terminalContinuations[0].toolOutput ?? '').trim().length > 0 && terminalContinuations[0].toolOutputStructuredError !== true",
+    );
     expect(flow).toContain("{ role: 'assistant', text: config.historyMarker");
 
     expect(scenario.execution.retryCount).toBe(0);
     expect(flow).not.toContain('"transcriptToolName":"write"');
     expect(flow).not.toContain('"requireSuccessfulTranscriptToolResult":true');
-    expect(flow).not.toContain(
-      "writeRequest.plannedToolCallId.length > 0 && typeof writeRequest.plannedToolItemId",
-    );
-    expect(flow).not.toContain("transcript.successfulToolCallCounts.write === 1");
-    expect(flow).not.toContain("sessionEntry?.compactionCount === 1");
     expect(flow).not.toContain("compactionSummaryRequests.length === 1");
     expect(flow).not.toContain("{ role: 'assistant', text: config.bulkyMarker");
     expect(flow).not.toContain("JSON.stringify(overflowRequest)");
 
-    expect(callId).toContain("typeof writeRequest.plannedToolItemId === 'string'");
-    expect(callId).toContain("writeRequest.plannedToolItemId.length > 0");
-    expect(callId).toContain(
-      "`${writeRequest.plannedToolCallId}|${writeRequest.plannedToolItemId}`",
-    );
-    expect(callId).toContain(": writeRequest.plannedToolCallId");
-
-    expect(continuations).not.toContain("request.outcome");
-    expect(continuations).not.toContain("request.plannedToolName");
-    expect(continuations).not.toContain("request.toolOutputCallId");
-    expect(continuations).not.toContain("request.toolOutputStructuredError");
-
-    expect(chain).toContain("request.toolOutputCallId === currentCallId");
-    expect(chain).toContain("request.plannedToolName === 'wait'");
+    for (const [plannedToolItemId, expected] of [
+      ["item", "call|item"],
+      ["", "call"],
+      [undefined, "call"],
+    ]) {
+      expect(
+        runInNewContext(callId, { writeRequest: { plannedToolCallId: "call", plannedToolItemId } }),
+      ).toBe(expected);
+    }
 
     expect(stableCell).toContain("continuationChain.waits.length === 0 ||");
     expect(stableCell).toContain("typeof request.plannedToolArgs?.cell_id === 'string'");
@@ -302,7 +297,6 @@ describe("qa compaction scenario catalog", () => {
       "compactionSummaryRequests.some((request) => request.cursor > overflowRequest.cursor && request.cursor < writeRequest.cursor)",
       "compactionSummaryRequests.every((request) => request.outcome === 'success' && request.plannedToolName === undefined && request.toolOutputStructuredError !== true)",
     );
-    expect(retryCheck).toContain("compactionSummaryRequests.every");
     expect(retryCheck).toContain(
       "!String(request.allInputText ?? '').includes('Previous summary failed quality checks')",
     );

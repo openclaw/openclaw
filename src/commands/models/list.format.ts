@@ -1,6 +1,6 @@
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
-import { isRich as isRichTerminal, theme } from "../../../packages/terminal-core/src/theme.js";
+import { isRich as isRichTerminal } from "../../../packages/terminal-core/src/theme.js";
 import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 
 const TRUNCATED_SUFFIX = "...";
@@ -22,26 +22,6 @@ export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
 export const padTerminalCell = (value: string, size: number) => {
   const remaining = size - visibleWidth(value);
   return remaining > 0 ? `${value}${" ".repeat(remaining)}` : value;
-};
-
-export const formatTag = (tag: string) => {
-  switch (tag) {
-    case "default":
-      return theme.success(tag);
-    case "image":
-      return theme.accentBright(tag);
-    case "configured":
-      return theme.accent(tag);
-    case "missing":
-      return theme.error(tag);
-  }
-  if (tag.startsWith("fallback#") || tag.startsWith("img-fallback#")) {
-    return theme.warn(tag);
-  }
-  if (tag.startsWith("alias:")) {
-    return theme.accentDim(tag);
-  }
-  return theme.muted(tag);
 };
 
 export const truncate = (value: string, max: number) => {

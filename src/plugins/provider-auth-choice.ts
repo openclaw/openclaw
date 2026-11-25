@@ -6,7 +6,10 @@ import {
 } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
-import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
+import {
+  normalizeAgentModelRefForConfig,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -19,7 +22,7 @@ import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capabili
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import {
   applyProviderAuthConfigPatchWithNormalization,
   restoreAgentsDefaultsModel,
@@ -28,15 +31,12 @@ import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
 import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
+import type { ProviderAuthOptionBag } from "./provider-auth-types.js";
+import type { ProviderAuthContext } from "./provider-authentication.types.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
 import { applyPrimaryModel } from "./provider-model-primary.js";
 import { buildProviderPluginMethodChoice } from "./provider-plugin-choice.js";
-import type {
-  ProviderAuthMethod,
-  ProviderAuthOptionBag,
-  ProviderAuthResult,
-  ProviderPlugin,
-} from "./types.js";
+import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "./types.js";
 
 type ApplyProviderAuthChoiceParams = {
   authChoice: string;
@@ -52,6 +52,7 @@ type ApplyProviderAuthChoiceParams = {
   signal?: AbortSignal;
   assertCurrent?: () => void;
   isRemote?: boolean;
+  nodes?: ProviderAuthContext["nodes"];
   beforePersistentEffect?: () => void | Promise<void>;
   opts?: Partial<ProviderAuthOptionBag>;
 };
@@ -91,17 +92,6 @@ function restoreConfiguredPrimaryModel(
   return nextConfig.agents?.defaults
     ? restoreAgentsDefaultsModel(nextConfig, originalConfig.agents?.defaults?.model)
     : nextConfig;
-}
-
-function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | undefined {
-  const model = cfg.agents?.defaults?.model;
-  if (typeof model === "string") {
-    return model;
-  }
-  if (model && typeof model === "object" && typeof model.primary === "string") {
-    return model.primary;
-  }
-  return undefined;
 }
 
 function withProviderPluginId(provider: ProviderPlugin, pluginId: string): ProviderPlugin {
@@ -161,6 +151,7 @@ export async function runProviderPluginAuthMethod(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
   isRemote?: boolean;
+  nodes?: ProviderAuthContext["nodes"];
   beforePersistentEffect?: () => void | Promise<void>;
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
@@ -202,6 +193,7 @@ async function prepareProviderPluginAuthMethod(
     ...(params.signal ? { signal: params.signal } : {}),
     assertCurrent: params.assertCurrent,
     ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
+    nodes: params.nodes,
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
     opts: params.opts,
@@ -269,7 +261,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
     signal: params.signal,
     assertCurrent: params.assertCurrent,
   };
-  const prepared = await withPluginLifecycleLease(leaseOptions, async () =>
+  const prepared = await withPluginLifecycleLeaseAsync(leaseOptions, async () =>
     withPluginCache(initialCache, async () => {
       let nextConfig = params.config;
       let pendingPluginInstalls: Record<string, PluginInstallRecord> | undefined;
@@ -444,6 +436,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
       ...(params.signal ? { signal: params.signal } : {}),
       assertCurrent: params.assertCurrent,
       ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
+      nodes: params.nodes,
       beforePersistentEffect: async () => {
         assertUtilityModelSeparation(params.config, resolved.wizard?.modelTarget);
         await params.beforePersistentEffect?.();
@@ -483,7 +476,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
         ? formatLiteralProviderPrefixedModelRef(resolved.provider.id, selectedModel)
         : selectedModel;
       if (params.setDefaultModel) {
-        const previousPrimary = resolveConfiguredDefaultModelPrimary(entryConfig);
+        const previousPrimary = resolveAgentModelPrimaryValue(entryConfig.agents?.defaults?.model);
         const preservesDifferentPrimary =
           params.preserveExistingDefaultModel === true &&
           previousPrimary !== undefined &&

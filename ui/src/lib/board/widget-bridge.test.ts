@@ -1,231 +1,364 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { dispatchWidgetPrompt } from "../../components/mcp-app-security.ts";
 import { BoardWidgetBridgeOwner } from "./widget-bridge.ts";
-
 vi.mock("../../components/mcp-app-security.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../components/mcp-app-security.ts")>()),
   dispatchWidgetPrompt: vi.fn(),
 }));
-
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000 });
-  vi.mocked(dispatchWidgetPrompt).mockReset().mockResolvedValue(true);
+  dispatchPrompt.mockReset().mockResolvedValue(true);
+  client.request.mockReset().mockResolvedValue({ ok: true });
+  widgetActivated.mockReset().mockResolvedValue(true);
+  controller = owner();
 });
-
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-
-const coalesced = { ok: true, appended: false, coalesced: true };
-
-function setup(omitPromptDecision = false) {
-  const client = {
-    request: vi.fn<(method: string, params: Record<string, unknown>) => Promise<unknown>>(
-      async (method) =>
-        method === "board.prompt.authorize"
-          ? omitPromptDecision
-            ? {}
-            : { confirmationRequired: false }
-          : { ok: true },
-    ),
-  };
-  const confirmPrompt = vi.fn(() => true);
-  const dispatchPrompt = vi.mocked(dispatchWidgetPrompt);
-  const controller = new BoardWidgetBridgeOwner({
+const envelope = { type: "openclaw:widget-bridge-request" as const, ticket: "ticket" };
+const client = {
+  request: vi.fn<(method: string, params: Record<string, unknown>) => Promise<unknown>>(),
+};
+const confirmPrompt = () => true;
+const widgetActivated = vi.fn<() => Promise<boolean>>();
+const owner = () =>
+  new BoardWidgetBridgeOwner({
     frame: document.createElement("iframe"),
     ticket: "ticket",
     client,
     rateKey: "widget",
     confirmPrompt,
+    widgetActivated,
   });
-  const handle = (
-    method: string,
-    params: Record<string, unknown>,
-    context?: Parameters<BoardWidgetBridgeOwner["handle"]>[1],
-  ) =>
-    controller.handle(
-      {
-        type: "openclaw:widget-bridge-request",
-        id: crypto.randomUUID(),
-        ticket: "ticket",
-        method,
-        params,
-      },
-      context,
-    );
-  const emit = (payload: unknown) => handle("state.emit", { payload });
-  return { client, confirmPrompt, dispatchPrompt, handle, emit };
-}
-
-describe("board widget bridge", () => {
-  it("opens HTTPS widget links in a new tab without opener or referrer access", async () => {
-    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
-    const { handle, client } = setup();
-
-    await expect(handle("host.open", { url: "https://example.com/path" })).resolves.toEqual({
-      ok: true,
-    });
-
-    expect(open).toHaveBeenCalledWith("https://example.com/path", "_blank", "noopener,noreferrer");
-    expect(client.request).not.toHaveBeenCalled();
+const dispatchPrompt = vi.mocked(dispatchWidgetPrompt);
+let controller: BoardWidgetBridgeOwner;
+const handle = (
+  method: string,
+  params: Record<string, unknown>,
+  context?: Parameters<BoardWidgetBridgeOwner["handle"]>[1],
+) => controller.handle({ ...envelope, id: crypto.randomUUID(), method, params }, context);
+const emit = (payload: unknown) => handle("state.emit", { payload });
+// Stands in for WebKit: showPicker() consumes the page's transient activation
+// and throws NotAllowedError without it. Setting isActive models a new gesture.
+const stubUserActivation = (isActive: boolean) => {
+  const activation = { isActive };
+  Object.defineProperty(navigator, "userActivation", { configurable: true, value: activation });
+  const showPicker = vi.fn(() => {
+    if (!activation.isActive) {
+      throw new DOMException("showPicker() requires a user gesture", "NotAllowedError");
+    }
+    activation.isActive = false;
   });
-
-  it.each(["javascript:alert(1)"])(
-    "rejects unsafe widget link destinations without opening %s",
-    async (url) => {
-      const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
-      const { handle } = setup();
-
-      await expect(handle("host.open", { url })).rejects.toThrow("widget link url is invalid");
-      expect(open).not.toHaveBeenCalled();
-    },
+  Object.defineProperty(HTMLInputElement.prototype, "showPicker", {
+    configurable: true,
+    value: showPicker,
+  });
+  onTestFinished(() => {
+    Reflect.deleteProperty(navigator, "userActivation");
+    Reflect.deleteProperty(HTMLInputElement.prototype, "showPicker");
+  });
+  return Object.assign(activation, { showPicker });
+};
+it.each([
+  ["https://example.com/path", false, null],
+  ["javascript:alert(1)", false, "widget link url is invalid"],
+  ["https://example.com/path", true, null],
+] as const)("opens safe links or reports failure: %s (%s)", async (url, nullHandle, error) => {
+  const open = vi.spyOn(window, "open").mockReturnValue(nullHandle ? null : ({} as Window));
+  const result = handle("host.open", { url });
+  if (error) {
+    await expect(result).rejects.toThrow(error);
+  } else {
+    await expect(result).resolves.toEqual({ ok: true });
+  }
+  expect(open.mock.calls).toEqual(
+    url.startsWith("https:") ? [[url, "_blank", "noopener,noreferrer"]] : [],
   );
-
-  it("reports when the browser blocks a widget link", async () => {
-    const open = vi.spyOn(window, "open").mockReturnValue(null);
-    const { handle } = setup();
-
-    await expect(handle("host.open", { url: "https://example.com/path" })).rejects.toThrow(
+  expect(client.request).not.toHaveBeenCalled();
+});
+it("hands widget links to the native link owner instead of a WebKit popup", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  stubUserActivation(true);
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  await expect(handle("host.open", { url: "https://example.com/path" })).resolves.toEqual({
+    ok: true,
+  });
+  await expect(handle("host.open", { url: "javascript:alert(1)" })).rejects.toThrow(
+    "widget link url is invalid",
+  );
+  expect(postMessage.mock.calls).toEqual([
+    [{ type: "open-link", url: "https://example.com/path", target: "external" }],
+  ]);
+  expect(open).not.toHaveBeenCalled();
+});
+it("keeps widget links without user activation away from the native link owner", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  stubUserActivation(false);
+  // Refusal is terminal even if the browser would allow a popup.
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  await expect(handle("host.open", { url: "https://example.com/path" })).rejects.toThrow(
+    "widget link could not be opened",
+  );
+  expect(postMessage).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+});
+it("spends the gesture on every native widget link open", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  const activation = stubUserActivation(true);
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  const link = (path: string) => handle("host.open", { url: `https://example.com/${path}` });
+  await expect(link("first")).resolves.toEqual({ ok: true });
+  expect(activation.isActive).toBe(false);
+  // A repeat on the same gesture finds it spent, however soon it comes.
+  await expect(link("reuse")).rejects.toThrow("widget link could not be opened");
+  // A second real click needs no wait: no time passes before it opens.
+  activation.isActive = true;
+  await expect(link("second-click")).resolves.toEqual({ ok: true });
+  expect(postMessage.mock.calls).toEqual([
+    [{ type: "open-link", url: "https://example.com/first", target: "external" }],
+    [{ type: "open-link", url: "https://example.com/second-click", target: "external" }],
+  ]);
+  expect(activation.showPicker).toHaveBeenCalledTimes(2);
+  expect(open).not.toHaveBeenCalled();
+});
+it("keeps widget links away from the native link owner when the gesture cannot be spent", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  const activation = stubUserActivation(true);
+  const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+  // An engine whose showPicker() leaves activation live, or throws, fails closed.
+  activation.showPicker.mockImplementationOnce(() => {});
+  activation.showPicker.mockImplementationOnce(() => {
+    throw new TypeError("showPicker is not supported");
+  });
+  for (const path of ["not-spent", "unsupported"]) {
+    await expect(handle("host.open", { url: `https://example.com/${path}` })).rejects.toThrow(
       "widget link could not be opened",
     );
-    expect(open).toHaveBeenCalledOnce();
+  }
+  expect(postMessage).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+});
+it("does not retry a failed native post through the browser", async () => {
+  const postMessage = vi.fn(() => {
+    throw new Error("bridge unavailable");
   });
-
-  it("keeps confirmation when the authorization response omits its decision", async () => {
-    const { handle, confirmPrompt, dispatchPrompt } = setup(true);
-
-    await handle("prompt.send", { text: "Show details" }, { promptUserActivated: true });
-
-    expect(dispatchPrompt).toHaveBeenCalledWith(
-      expect.any(HTMLIFrameElement),
-      "Show details",
-      "widget",
-      confirmPrompt,
-      undefined,
-    );
-  });
-
-  it("rejects a forged prompt bridge request without trusted user activation", async () => {
-    const { handle, client, dispatchPrompt } = setup();
-
-    await expect(handle("prompt.send", { text: "Forged" })).rejects.toThrow(
-      "active user interaction",
-    );
-
-    expect(client.request).not.toHaveBeenCalled();
-    expect(dispatchPrompt).not.toHaveBeenCalled();
-  });
-
-  it("cancels prompt dispatch when the widget identity changes during authorization", async () => {
-    const { handle, client, dispatchPrompt } = setup();
-    const authorization = createDeferred<unknown>();
-    client.request.mockReturnValueOnce(authorization.promise);
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  stubUserActivation(true);
+  const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+  await expect(handle("host.open", { url: "https://example.com/path" })).rejects.toThrow(
+    "widget link could not be opened",
+  );
+  expect(postMessage).toHaveBeenCalledOnce();
+  expect(open).not.toHaveBeenCalled();
+});
+it("drops a widget link retired while its activation query is pending", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  const activation = stubUserActivation(true);
+  const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+  for (const answer of [true, false]) {
+    const query = createDeferred<boolean>();
+    widgetActivated.mockReturnValueOnce(query.promise);
     let current = true;
-    const handling = handle(
-      "prompt.send",
-      { text: "Stale prompt" },
-      {
-        promptUserActivated: true,
-        isCurrent: () => current,
-      },
+    const link = handle(
+      "host.open",
+      { url: "https://example.com/retired" },
+      { isCurrent: () => current },
     );
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce());
-
+    // Retirement or a reconnect lands while the proxy has not answered yet.
     current = false;
-    authorization.resolve({ confirmationRequired: false });
-
-    await expect(handling).rejects.toThrow("no longer current");
-    expect(dispatchPrompt).not.toHaveBeenCalled();
+    query.resolve(answer);
+    await expect(link).rejects.toThrow("widget link request is no longer current");
+  }
+  expect(postMessage).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+  expect(activation.showPicker).not.toHaveBeenCalled();
+  expect(activation.isActive).toBe(true);
+});
+it("opens native widget links only while that widget's own frame holds user activation", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  // Dashboard activation from a click or keystroke outside this widget.
+  stubUserActivation(true);
+  widgetActivated.mockResolvedValue(false);
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  await expect(handle("host.open", { url: "https://example.com/elsewhere" })).rejects.toThrow(
+    "widget link could not be opened",
+  );
+  expect(widgetActivated).toHaveBeenCalledOnce();
+  expect(postMessage).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+  widgetActivated.mockResolvedValue(true);
+  await expect(handle("host.open", { url: "https://example.com/inside" })).resolves.toEqual({
+    ok: true,
   });
-
-  it("coalesces identical state payloads for five seconds", async () => {
-    const { emit, client } = setup();
-
-    await emit({ count: 1 });
-    expect(await emit({ count: 1 })).toEqual(coalesced);
+  expect(postMessage.mock.calls).toEqual([
+    [{ type: "open-link", url: "https://example.com/inside", target: "external" }],
+  ]);
+});
+it("spends one gesture across the widgets of a dashboard", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  stubUserActivation(true);
+  vi.spyOn(window, "open").mockReturnValue(null);
+  const link = (target: BoardWidgetBridgeOwner, path: string) =>
+    target.handle({
+      ...envelope,
+      id: crypto.randomUUID(),
+      method: "host.open",
+      params: { url: `https://example.com/${path}` },
+    });
+  await expect(link(owner(), "first")).resolves.toEqual({ ok: true });
+  await expect(link(owner(), "second")).rejects.toThrow("widget link could not be opened");
+  expect(postMessage.mock.calls.map(([message]) => message.url)).toEqual([
+    "https://example.com/first",
+  ]);
+});
+it("opens one native widget link when requests race the activation check", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  stubUserActivation(true);
+  vi.spyOn(window, "open").mockReturnValue(null);
+  const activation = createDeferred<boolean>();
+  widgetActivated.mockReturnValue(activation.promise);
+  const links = ["a", "b"].map((path) =>
+    handle("host.open", { url: `https://example.com/${path}` }).then(
+      () => "opened",
+      () => "refused",
+    ),
+  );
+  activation.resolve(true);
+  expect(await Promise.all(links)).toEqual(["opened", "refused"]);
+  expect(postMessage).toHaveBeenCalledOnce();
+});
+it.each([
+  ["javascript:alert(1)", "widget link url is invalid"],
+  ["JavaScript:alert(1)", "widget link url is invalid"],
+  ["data:text/html,<script>alert(1)</script>", "widget link url is invalid"],
+  ["blob:https://example.com/0", "widget link url is invalid"],
+  ["file:///etc/hosts", "widget link url is invalid"],
+  ["mailto:someone@example.com", "widget link url is invalid"],
+  ["tel:+15555550100", "widget link url is invalid"],
+  ["//example.com/path", "widget link url is invalid"],
+  [" https://example.com/path", "widget link url is invalid"],
+  ["https:example.com", "widget link url is invalid"],
+  ["https://", "widget link url is invalid"],
+] as const)(
+  "never opens a non-HTTP(S) widget link natively or by popup: %s",
+  async (url, error) => {
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    await expect(handle("host.open", { url })).rejects.toThrow(error);
+    expect(postMessage).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  },
+);
+it("never opens widget links for a forged or retired view ticket", async () => {
+  const postMessage = vi.fn();
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  stubUserActivation(true);
+  const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+  const link = (ticket: string) =>
+    controller.handle({
+      ...envelope,
+      ticket,
+      id: crypto.randomUUID(),
+      method: "host.open",
+      params: { url: "https://example.com/path" },
+    });
+  await expect(link("forged")).rejects.toThrow("widget view ticket does not match");
+  controller.updateIdentity(document.createElement("iframe"), "renewed");
+  await expect(link("ticket")).rejects.toThrow("widget view ticket does not match");
+  expect(postMessage).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+  await expect(link("renewed")).resolves.toEqual({ ok: true });
+  expect(postMessage).toHaveBeenCalledOnce();
+});
+it("keeps confirmation when the authorization response omits its decision", async () => {
+  client.request.mockResolvedValueOnce({});
+  await handle("prompt.send", { text: "Show details" }, { promptUserActivated: true });
+  expect(dispatchPrompt.mock.calls[0]?.[3]).toBe(confirmPrompt);
+});
+it.each([
+  ["data.query", { queryName: "" }, "widget host request queryName is required"],
+  ["prompt.send", { text: "Forged" }, "active user interaction"],
+  ["state.emit", { payload: "x".repeat(8_193) }, "exceeds 8192"],
+  ["action.run", { action: "example.resolve", params: "bad" }, "widget action params are invalid"],
+] as const)("rejects invalid %s before dispatch", async (method, params, error) => {
+  await expect(handle(method, params)).rejects.toThrow(error);
+  expect(client.request).not.toHaveBeenCalled();
+  expect(dispatchPrompt).not.toHaveBeenCalled();
+});
+it("cancels prompt dispatch when the widget identity changes during authorization", async () => {
+  const authorization = createDeferred<unknown>();
+  client.request.mockReturnValueOnce(authorization.promise);
+  let current = true;
+  const handling = handle(
+    "prompt.send",
+    { text: "Stale prompt" },
+    { promptUserActivated: true, isCurrent: () => current },
+  );
+  await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce());
+  current = false;
+  authorization.resolve({ confirmationRequired: false });
+  await expect(handling).rejects.toThrow("no longer current");
+  expect(dispatchPrompt).not.toHaveBeenCalled();
+});
+it.each(["expiry", "interleaved"])("coalesces repeated state across %s", async (mode) => {
+  await emit({ count: 1 });
+  if (mode === "interleaved") {
+    await emit({ count: 2 });
+  }
+  expect(await emit({ count: 1 })).toEqual({ ok: true, appended: false, coalesced: true });
+  if (mode === "expiry") {
     vi.advanceTimersByTime(5_000);
     await emit({ count: 1 });
-
-    expect(client.request).toHaveBeenCalledTimes(2);
-    expect(client.request).toHaveBeenNthCalledWith(1, "board.event", {
-      ticket: "ticket",
-      payload: { count: 1 },
-    });
+  }
+  expect(client.request).toHaveBeenCalledTimes(2);
+});
+it("allows a state payload to retry after delivery fails", async () => {
+  client.request.mockRejectedValueOnce(new Error("offline"));
+  await expect(emit({ count: 1 })).rejects.toThrow("offline");
+  await expect(emit({ count: 1 })).resolves.toEqual({ ok: true });
+});
+it("rate-limits varying state payloads at the trusted host", async () => {
+  for (let count = 0; count < 12; count += 1) {
+    await emit({ count });
+  }
+  await expect(emit({ count: 12 })).rejects.toThrow("rate limit exceeded");
+  vi.advanceTimersByTime(60_000);
+  await expect(emit({ count: 13 })).resolves.toEqual({ ok: true });
+});
+it("keeps a named query request limited to its ticket and name", async () => {
+  await handle("data.query", {
+    queryName: "main-ci",
+    ticket: "widget-supplied-ticket",
+    bindingId: "github.actions.runs",
+    params: { repository: "other/repo", perPage: 30 },
   });
-
-  it("coalesces an identical state payload across interleaved emissions", async () => {
-    const { emit, client } = setup();
-
-    await emit({ status: "first" });
-    await emit({ status: "second" });
-    expect(await emit({ status: "first" })).toEqual(coalesced);
-
-    expect(client.request).toHaveBeenCalledTimes(2);
+  expect(client.request).toHaveBeenCalledExactlyOnceWith("board.data.read", {
+    ticket: "ticket",
+    queryName: "main-ci",
   });
-
-  it("rejects state payloads above 8KB before the gateway call", async () => {
-    const { emit, client } = setup();
-
-    await expect(emit("x".repeat(8_193))).rejects.toThrow("exceeds 8192");
-    expect(client.request).not.toHaveBeenCalled();
-  });
-
-  it("allows a state payload to retry after delivery fails", async () => {
-    const { emit, client } = setup();
-    client.request.mockRejectedValueOnce(new Error("offline"));
-
-    await expect(emit({ count: 1 })).rejects.toThrow("offline");
-    await expect(emit({ count: 1 })).resolves.toEqual({ ok: true });
-
-    expect(client.request).toHaveBeenCalledTimes(2);
-  });
-
-  it("rate-limits varying state payloads at the trusted host", async () => {
-    const { emit, client } = setup();
-
-    for (let count = 0; count < 12; count += 1) {
-      await emit({ count });
-    }
-    await expect(emit({ count: 12 })).rejects.toThrow("rate limit exceeded");
-
-    vi.advanceTimersByTime(60_000);
-    await expect(emit({ count: 13 })).resolves.toEqual({ ok: true });
-
-    expect(client.request).toHaveBeenCalledTimes(13);
-  });
-
-  it("maps read, action, and cron requests to ticket-bound board RPCs", async () => {
-    const { handle, client } = setup();
-
-    await handle("data.read", { bindingId: "health", params: { probe: false } });
-    await handle("action.run", { action: "example.resolve", params: { eventId: "event-1" } });
-    await handle("cron.trigger", { jobId: "job-1" });
-
-    expect(client.request).toHaveBeenNthCalledWith(1, "board.data.read", {
-      ticket: "ticket",
-      bindingId: "health",
-      params: { probe: false },
-    });
-    expect(client.request).toHaveBeenNthCalledWith(2, "board.action", {
-      ticket: "ticket",
-      action: "example.resolve",
-      params: { eventId: "event-1" },
-    });
-    expect(client.request).toHaveBeenNthCalledWith(3, "board.action", {
-      ticket: "ticket",
-      action: "cron.trigger",
-      jobId: "job-1",
-    });
-  });
-
-  it("rejects non-object action params", async () => {
-    const { handle, client } = setup();
-
-    await expect(
-      handle("action.run", { action: "example.resolve", params: "bad" }),
-    ).rejects.toThrow("widget action params are invalid");
-    expect(client.request).not.toHaveBeenCalled();
+});
+it.each([
+  ["data.query", { queryName: "main-ci" }, "board.data.read"],
+  ["data.read", { bindingId: "health", params: { probe: false } }, "board.data.read"],
+  ["action.run", { action: "example.resolve", params: { eventId: "event-1" } }, "board.action"],
+  ["cron.trigger", { jobId: "job-1" }, "board.action"],
+] as const)("maps %s to a ticket-bound board RPC", async (method, params, rpc) => {
+  await handle(method, params);
+  expect(client.request).toHaveBeenCalledExactlyOnceWith(rpc, {
+    ticket: "ticket",
+    ...params,
+    ...(method === "cron.trigger" ? { action: "cron.trigger" } : {}),
   });
 });

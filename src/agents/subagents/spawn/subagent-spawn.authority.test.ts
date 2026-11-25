@@ -47,7 +47,8 @@ import {
   isSameSubagentRunOwner,
 } from "../registry/subagent-run-generation.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
@@ -56,6 +57,7 @@ vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 const fixture = installSpawnAuthorityFixture();
 const { parentSessionKey, parentRunId, groupId, createBoundParent } = fixture;
 type Bound = Awaited<ReturnType<typeof createBoundParent>>;
+const queuedTask = { collect: true, context: "isolated", groupId } as const;
 const observe = (pending: Promise<unknown>) => pending.catch((error: unknown) => error);
 const abortParent = (context: Bound["context"], scopes = ["operator.write"]) =>
   invokeChatAbortHandler({
@@ -146,7 +148,7 @@ describe("pending spawn invocation authority", () => {
     "stops a fresh spawn below a completed persistent sibling while a %s drain remains pending",
     async (slowBranch) => {
       const originalConfig = getRuntimeConfig();
-      const config = {
+      await fixture.configure({
         ...originalConfig,
         agents: {
           ...originalConfig.agents,
@@ -155,8 +157,7 @@ describe("pending spawn invocation authority", () => {
             subagents: { maxSpawnDepth: 2 },
           },
         },
-      };
-      await fixture.configure(config);
+      });
       const { cfg, storePath, context, admission, parent } = await createBoundParent();
       const key = (id: string) => `agent:main:subagent:${id}`;
       const ids = slowBranch === "sibling" ? ["a", "b"] : ["a", "b", "d"];
@@ -261,7 +262,6 @@ describe("pending spawn invocation authority", () => {
       const dispatch = vi.fn();
       const expectCompletedSibling = () => {
         expect(isSameSubagentRunOwner(subagentRuns.get("b"), completedB)).toBe(true);
-        expect(subagentRuns.get("b")?.generation).toBe(completedGeneration);
         expect(resolveSubagentSessionStatus(subagentRuns.get("b"))).toBe("done");
         expect(loadSessionEntry({ storePath, sessionKey: key("b") })).toMatchObject({
           sessionId: "b-session",
@@ -288,12 +288,7 @@ describe("pending spawn invocation authority", () => {
         const tool = spawnTool(cfg, key("b"), "fresh-b", new AbortController().signal);
         const spawned = await fresh.run(() =>
           asCaller(context, admitted, key("b"), () =>
-            tool.execute!("late-spawn", {
-              task: "late child",
-              collect: true,
-              context: "isolated",
-              groupId,
-            }),
+            tool.execute!("late-spawn", { ...queuedTask, task: "late child" }),
           ),
         );
         expect(spawned).toMatchObject({ details: { status: "accepted" } });
@@ -339,17 +334,16 @@ describe("pending spawn invocation authority", () => {
     const { cfg, context, admission, parent, admitted } = await createBoundParent();
     await blockSpawn(parentSessionKey, "handoff-blocker");
     let cancellation: ReturnType<typeof invokeChatAbortHandler> | undefined;
-    const cancel = () => abortParent(context, ["operator.read", "operator.write"]);
     let registrationAbortRequested = false;
     const stopObservingRegistration = subscribeSubagentRunChanges("persistence", () => {
       if (
         !registrationAbortRequested &&
         [...subagentRuns.values()].some(
-          (run) => run.requesterTurnRunId === parentRunId && run.queuedLaunch !== undefined,
+          (run) => run.requesterTurnRunId === parentRunId && run.execution.status === "queued",
         )
       ) {
         registrationAbortRequested = true;
-        cancellation = cancel();
+        cancellation = abortParent(context, ["operator.read", "operator.write"]);
       }
     });
     const rollback = vi.fn(async () => {});
@@ -368,12 +362,7 @@ describe("pending spawn invocation authority", () => {
     );
     const pending = observe(
       asCaller(context, admitted, parentSessionKey, () =>
-        tool.execute!("spawn-handoff", {
-          task: "independent after handoff",
-          collect: true,
-          context: "isolated",
-          groupId,
-        }),
+        tool.execute!("spawn-handoff", { ...queuedTask, task: "independent after handoff" }),
       ),
     );
     try {
@@ -385,9 +374,8 @@ describe("pending spawn invocation authority", () => {
       const { runId } = (accepted as { details: { runId: string } }).details;
       expect(subagentRuns.get(runId)?.requesterTurnRunId).toBe(parentRunId);
       expect(dispatch).not.toHaveBeenCalled();
-      cancellation ??= cancel();
-      const respond = await cancellation;
-      expect(respond).toHaveBeenCalledWith(true, {
+      cancellation ??= abortParent(context, ["operator.read", "operator.write"]);
+      expect(await cancellation).toHaveBeenCalledWith(true, {
         ok: true,
         aborted: true,
         runIds: [parentRunId],
@@ -428,13 +416,7 @@ describe("pending spawn invocation authority", () => {
     try {
       const spawned = await inGateway(context, () =>
         spawnSubagentDirect(
-          {
-            task: "acceptance rekey",
-            collect: true,
-            context: "isolated",
-            lightContext: true,
-            groupId,
-          },
+          { ...queuedTask, task: "acceptance rekey", lightContext: true },
           { agentSessionKey: parentSessionKey, requesterRunId: parentRunId },
         ),
       );
@@ -501,8 +483,7 @@ describe("pending spawn invocation authority", () => {
         accepted.stop();
       }
       lease?.release();
-      const result = await cancellation;
-      expect(result).toMatchObject({ found: true, killed: true });
+      expect(await cancellation).toMatchObject({ found: true, killed: true });
       expect(subagentRuns.get("accepted-task-run")?.endedReason).toBe("subagent-killed");
     } finally {
       response.resolve();

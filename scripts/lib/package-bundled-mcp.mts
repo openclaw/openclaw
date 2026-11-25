@@ -9,20 +9,19 @@ export const PATCHED_MCP_CLI = "build/src/bin/chrome-devtools-mcp.js";
 // Never derive expected hashes from the artifact being checked.
 function mcpFileHashes(hashes: {
   main: string;
+  cli: string;
+  snapshot: string;
   notices: string;
   page: string;
   thirdParty: string;
   patchNotice: string;
 }): ReadonlyMap<string, string> {
   return new Map([
-    [PATCHED_MCP_CLI, "9f380d06e1ac05b257e27e708c0cc4b4ba190e285ed6eb6c8aa50978d98a12c5"],
+    [PATCHED_MCP_CLI, hashes.cli],
     ["build/src/bin/chrome-devtools-mcp-main.js", hashes.main],
     ["LICENSE", "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"],
     ["build/src/third_party/THIRD_PARTY_NOTICES", hashes.notices],
-    [
-      "build/src/TextSnapshot.js",
-      "299833ad0e4cfc171a417afaec41df594e4862fe53a7ada6ba160409f979788b",
-    ],
+    ["build/src/TextSnapshot.js", hashes.snapshot],
     ["build/src/McpPage.js", hashes.page],
     ["build/src/third_party/index.js", hashes.thirdParty],
     ["build/src/OPENCLAW_PATCH_NOTICE.md", hashes.patchNotice],
@@ -33,6 +32,8 @@ const MCP_FILE_HASHES = new Map<string, ReadonlyMap<string, string>>([
   [
     "1.8.0",
     mcpFileHashes({
+      cli: "9f380d06e1ac05b257e27e708c0cc4b4ba190e285ed6eb6c8aa50978d98a12c5",
+      snapshot: "299833ad0e4cfc171a417afaec41df594e4862fe53a7ada6ba160409f979788b",
       main: "fc383cb3e5db5f18cf1e8c49221212c669825248874ba91c90ba9035e175f5b4",
       notices: "8f10277934fe6888173f41f7cbbd9112d208c8c931bf163db59110f69f119e53",
       page: "b9e791d758e4d28589525e2d427600e24b271d365a5879893a392043a11cf426",
@@ -43,6 +44,8 @@ const MCP_FILE_HASHES = new Map<string, ReadonlyMap<string, string>>([
   [
     "1.9.0",
     mcpFileHashes({
+      cli: "9f380d06e1ac05b257e27e708c0cc4b4ba190e285ed6eb6c8aa50978d98a12c5",
+      snapshot: "299833ad0e4cfc171a417afaec41df594e4862fe53a7ada6ba160409f979788b",
       main: "5ca0e81196ab6b6e1481629a2dcae7f416b3b38f74555e3138ad5cdbb055e809",
       notices: "975febf536bb1c83c031a7888b90bdf1ffe8dc46000e0698eac364491dca8ac4",
       page: "6d83dbd4d79c913664fbfa428d138b22fe4246612ab4dfcd93e9d8e62d5d6b51",
@@ -53,11 +56,37 @@ const MCP_FILE_HASHES = new Map<string, ReadonlyMap<string, string>>([
   [
     "1.10.1",
     mcpFileHashes({
+      cli: "9f380d06e1ac05b257e27e708c0cc4b4ba190e285ed6eb6c8aa50978d98a12c5",
+      snapshot: "299833ad0e4cfc171a417afaec41df594e4862fe53a7ada6ba160409f979788b",
       main: "10603ea8c2ac9f69a42791100701795018ebfaa522a7c93d783ed583cce5cce4",
       notices: "6ae0ce181dbc9ba4217b6aad679d7503ed3ab56c45e6f3647e9ab753aa97b67b",
       page: "47aa13c6b28cc11e1b0883532edea97cfde7563d78d143035850852d09809975",
       thirdParty: "c988e0684584b75e87ae04b768c4f8ae7064401afe5187ec0d4878b2c6833f12",
       patchNotice: "4bf44b52a80b5860b2160bc83407a5f0dd09f1801c85d0a2b6e4fec26bd7045d",
+    }),
+  ],
+  [
+    "1.11.0",
+    mcpFileHashes({
+      cli: "e8b0290a8fe9a1edc31d595ccc870df926bfaaafe19fb14cd4d8d47bf6194979",
+      main: "68bffbf26cf0e8840409079456a7681c03e737cd977935c2e0c424c1b8a0700a",
+      snapshot: "5c647c3d0b416bdfc1bcaf1b1136f6a7682db05cf59982e3ab6f17d00d2d17ac",
+      notices: "6476ce17667202e92ea191d166050a3ab74f465f2f7a2b6b01dcb4e9477b6a0a",
+      page: "4044a30df6292a5d4517f718c32818e9c85f8051c318ec88bef7aa127d883a36",
+      thirdParty: "b047499006b0027bd37165fa8197fa6fa5caa9b8c07d938992857659270ec493",
+      patchNotice: "41aada055258ec8754581f6cee1e3ed505499be8373969e6267031ebabc00594",
+    }),
+  ],
+  [
+    "1.12.0",
+    mcpFileHashes({
+      cli: "e8b0290a8fe9a1edc31d595ccc870df926bfaaafe19fb14cd4d8d47bf6194979",
+      main: "fc7e2ca9f850a71a015d42f771a4c96f7ee81e21fbcdbd5e1559ccdbac800a96",
+      snapshot: "21be06826da0dafaadf712b1dc689f6f07c63042a0b6ee30c4afca9a0d616963",
+      notices: "79e0eeaebdc9a605a3a2a51ecfe8da1e0f68df37416e405ba96dd4376a488e64",
+      page: "313ce4bfaaea85ab3c57a0bb8f4ad23c093ad33f25407170b2bef6f1654b30b8",
+      thirdParty: "e1752f75684b672362dc3ae77a399407c509b76471fca08f967fc44fe2cb267b",
+      patchNotice: "c490fb032360cf26141c4a8d72c6ab4587613051619aa88c346662eaaa6daee5",
     }),
   ],
 ]);
@@ -76,7 +105,7 @@ export function isSupportedPatchedMcpVersion(version: unknown): version is strin
 export function collectPatchedMcpArtifactErrors({
   // The node-bootstrap producer checks the current runtime; frozen package
   // consumers pass their independently checked exact dependency pin.
-  declaredVersion = "1.10.1",
+  declaredVersion = "1.12.0",
   manifest,
   files,
   sha256,

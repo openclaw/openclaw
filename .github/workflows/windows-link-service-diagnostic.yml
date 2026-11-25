@@ -1,0 +1,64 @@
+name: Windows synthetic link service diagnostic
+
+# Manual, independent diagnostic only. Never a release-qualification dependency.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-synthetic-link-service
+  cancel-in-progress: false
+
+jobs:
+  synthetic-link-service:
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.22.1"
+      - name: Bind source and check syntax without imports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force .artifacts/windows-link-service | Out-Null
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:GITHUB_SHA) { throw 'Source identity mismatch' }
+          $head | Set-Content .artifacts/windows-link-service/head.txt
+          node --version | Set-Content .artifacts/windows-link-service/node.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Node identity unavailable' }
+          if ((Get-Content .artifacts/windows-link-service/node.txt).Trim() -cne 'v24.22.1') { throw 'Wrong Node version' }
+          Get-FileHash scripts/diagnostics/windows-link-service.mjs -Algorithm SHA256 | Select-Object -ExpandProperty Hash | Set-Content .artifacts/windows-link-service/harness.sha256
+          node --check scripts/diagnostics/windows-link-service.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Harness syntax invalid' }
+          'Synthetic only. No product modules, release proof, package installs, or environment tuning.' | Set-Content .artifacts/windows-link-service/scope.txt
+      - name: Run one externally supervised synthetic comparison
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/diagnostics/windows-link-service.mjs | Tee-Object .artifacts/windows-link-service/records.jsonl
+          $status = $LASTEXITCODE
+          $records = @(Get-Content .artifacts/windows-link-service/records.jsonl | ForEach-Object { $_ | ConvertFrom-Json })
+          if ($records.Count -gt 12) { throw 'Diagnostic exceeded record budget' }
+          if ($status -ne 0) { throw 'Synthetic diagnostic incomplete; inspect bounded records' }
+          $headers = @($records | Where-Object { $_.type -ceq 'header' })
+          $samples = @($records | Where-Object { $_.type -ceq 'sample' })
+          $results = @($records | Where-Object { $_.type -ceq 'result' })
+          if ($headers.Count -ne 1 -or $samples.Count -ne 10 -or $results.Count -ne 1) { throw 'Incomplete record inventory' }
+          $expectedHash = (Get-Content .artifacts/windows-link-service/harness.sha256).Trim().ToLowerInvariant()
+          if ($headers[0].harnessSha256 -cne $expectedHash) { throw 'Measured harness identity mismatch' }
+          $result = $results[0]
+          if ($result.success -ne $true -or $result.validated -ne 640 -or $result.workersJoined -ne $true -or $result.processSettled -ne $true -or $result.cleanupVerified -ne $true) { throw 'Unsettled or unvalidated diagnostic' }
+      - name: Preserve exact-source diagnostic records even on failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-link-service-node-24.22.1-${{ github.run_attempt }}
+          path: .artifacts/windows-link-service/
+          if-no-files-found: warn
+          retention-days: 7

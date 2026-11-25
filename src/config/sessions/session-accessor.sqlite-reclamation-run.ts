@@ -3,6 +3,7 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { hasAgentDatabaseMaintenanceAuthority } from "../../state/openclaw-agent-db-lease.js";
@@ -13,6 +14,11 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
+import type {
+  AgentDatabaseExecutionFileIdentity,
+  OpenClawAgentDatabaseExecution,
+} from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -22,6 +28,7 @@ import type {
   DeleteSessionEntryLifecycleParams,
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
+import { retainConversationWorkerPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import { prepareSessionDeletionInDatabase } from "./session-accessor.sqlite-deletion-plan.js";
 import { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
 import { publishSessionEntryWorkerInvalidations } from "./session-accessor.sqlite-entry-worker-publication.js";
@@ -121,14 +128,20 @@ export async function runSessionDeletionPlanning(
 }
 
 type SqliteSessionReclamationParams = {
+  retainedExecution?: OpenClawAgentDatabaseExecution;
+  readCustody?: AgentDatabaseRequestExecutionSource["readCustody"];
   diagnostics?: SqliteSessionReclamationDiagnostics;
-  assertCommitAllowed?: () => void;
+  assertCommitAllowed?: (operation?: RetainedWorkerTransactionAdmission) => void;
   refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
-  assertMaintenanceCommitAllowed?: (plans?: readonly SessionMaintenancePreservationPlan[]) => void;
+  assertMaintenanceCommitAllowed?: (
+    plans?: readonly SessionMaintenancePreservationPlan[],
+    operation?: RetainedWorkerTransactionAdmission,
+  ) => void;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   onWorkerResult?: (
     result: SqliteSessionReclamationResult,
     databaseIdentity: string | symbol,
+    fileIdentity?: AgentDatabaseExecutionFileIdentity,
   ) => void;
   plan: SqliteSessionReclamationPlan;
 };
@@ -169,7 +182,7 @@ export async function runSqliteSessionReclamation(
       return deleteSessionWithNativeBindingsInWorker(
         params.plan,
         participants,
-        () => params.assertCommitAllowed?.(),
+        (operation) => params.assertCommitAllowed?.(operation),
         params.onWorkerResult,
       );
     }
@@ -215,15 +228,15 @@ export async function runSqliteSessionReclamation(
     );
   }
   const maintenanceIdentity =
-    params.plan.kind === "maintenance-plan"
+    params.plan.kind === "maintenance-plan" && !params.retainedExecution
       ? readDatabasePathIdentitySync(params.plan.databaseOptions.path)
       : undefined;
   return await withSqliteMutationWorkerLifetime(
     params.plan.databaseOptions,
     async ({ assertCurrent, signal }) => {
-      const assertRequestCurrent = () => {
+      const assertRequestCurrent = (operation?: RetainedWorkerTransactionAdmission) => {
         assertCurrent();
-        params.assertCommitAllowed?.();
+        params.assertCommitAllowed?.(operation);
         if (maintenanceIdentity) {
           assertExistingDatabaseIdentity(
             params.plan.databaseOptions.path,
@@ -234,9 +247,11 @@ export async function runSqliteSessionReclamation(
       };
       const runWorker = async (
         claim: SqliteReclamationClaim,
-        nativeLocation: string,
+        fileIdentity: AgentDatabaseExecutionFileIdentity,
         validationOwner?: SqliteMutationWorkerValidationOwner,
+        retainedExecution?: OpenClawAgentDatabaseExecution,
       ) => {
+        const nativeLocation = fileIdentity.nativeLocation;
         const plan = {
           ...params.plan,
           databaseOptions: { ...params.plan.databaseOptions, path: nativeLocation },
@@ -251,6 +266,8 @@ export async function runSqliteSessionReclamation(
           return await runSessionMaintenanceMetadataInWorker({
             plan,
             claim,
+            retainedExecution,
+            readCustody: params.readCustody,
             refreshMaintenanceProtection: params.refreshMaintenanceProtection,
             assertMaintenanceCommitAllowed: params.assertMaintenanceCommitAllowed,
             assertCurrent: () => {
@@ -259,7 +276,8 @@ export async function runSqliteSessionReclamation(
             },
             signal,
             diagnostics: params.diagnostics,
-            onWorkerResult: params.onWorkerResult,
+            onWorkerResult: (result, identity) =>
+              params.onWorkerResult?.(result, identity, fileIdentity),
           });
         }
         return withSqliteReclamationWorker(
@@ -270,6 +288,7 @@ export async function runSqliteSessionReclamation(
               { ...params, plan },
               {
                 nativeLocation,
+                fileIdentity,
                 validationOwner,
                 claim,
                 worker,
@@ -306,28 +325,40 @@ export async function runSqliteSessionReclamation(
       if (retained?.found) {
         const { database, claim } = retained;
         try {
-          return await runWorker(claim, readOpenClawAgentDatabaseIdentity(database).filename, {
-            database,
-            isCurrent: claim.isCurrent,
-          });
+          const identity = readOpenClawAgentDatabaseIdentity(database);
+          return await runWorker(
+            claim,
+            {
+              kind: "file",
+              physicalIdentity: identity.identity,
+              birthtime: identity.birthtime,
+              nativeLocation: identity.canonicalPath,
+            },
+            {
+              database,
+              isCurrent: claim.isCurrent,
+            },
+          );
         } finally {
           claim.release();
         }
       }
       const plan = params.plan;
-      const execution = captureOpenClawAgentDatabaseExecution(
-        plan.databaseOptions,
-        maintenanceIdentity?.key.startsWith("file:")
-          ? {
-              expectedIdentity: {
-                kind: "file",
-                physicalIdentity: maintenanceIdentity.key.slice(5),
-                birthtime: maintenanceIdentity.birthtime,
-                nativeLocation: maintenanceIdentity.canonicalPath,
-              },
-            }
-          : undefined,
-      );
+      const execution =
+        params.retainedExecution ??
+        captureOpenClawAgentDatabaseExecution(
+          plan.databaseOptions,
+          maintenanceIdentity?.key.startsWith("file:")
+            ? {
+                expectedIdentity: {
+                  kind: "file",
+                  physicalIdentity: maintenanceIdentity.key.slice(5),
+                  birthtime: maintenanceIdentity.birthtime,
+                  nativeLocation: maintenanceIdentity.canonicalPath,
+                },
+              }
+            : undefined,
+        );
       try {
         if (
           plan.kind === "maintenance-plan" ||
@@ -349,10 +380,19 @@ export async function runSqliteSessionReclamation(
             throw new Error("SQLite session reclamation lost its prepared database");
           }
           const claim = execution.captureGenerationClaim();
-          return await runWorker(claim, identity.nativeLocation, {
-            source: { agentId: execution.agentId, path: identity.nativeLocation },
+          return await runWorker(
             claim,
-          });
+            identity,
+            {
+              source: {
+                agentId: execution.agentId,
+                path: identity.nativeLocation,
+                canonicalPath: identity.nativeLocation,
+              },
+              claim,
+            },
+            execution,
+          );
         }
         // Capture an opening expectation, never a substitute native claim. The existing
         // reclamation actor performs its own validation without occupying the foreground opener.
@@ -371,15 +411,19 @@ export async function runSqliteSessionReclamation(
           ...plan.databaseOptions,
           path: expectedSource.canonicalPath,
         };
-        const assertOpeningCurrent = () => {
-          assertRequestCurrent();
+        const assertOpeningCurrent = (operation?: RetainedWorkerTransactionAdmission) => {
+          assertRequestCurrent(operation);
           execution.assertCurrent();
         };
         return await withSqliteReclamationWorker(
           databaseOptions,
           expectedSource,
           async (worker) => {
-            const validationSource = { agentId: execution.agentId, path: databaseOptions.path };
+            const validationSource = {
+              agentId: execution.agentId,
+              path: databaseOptions.path,
+              canonicalPath: expectedSource.canonicalPath,
+            };
             const receiveValidation =
               captureOpenClawAgentDatabaseValidationTransfer(validationSource);
             const prepared = await worker.prepare({
@@ -412,6 +456,12 @@ export async function runSqliteSessionReclamation(
               { ...params, plan: { ...plan, databaseOptions } },
               {
                 nativeLocation: prepared.source.filename,
+                fileIdentity: {
+                  kind: "file",
+                  physicalIdentity: prepared.source.identity,
+                  birthtime: prepared.source.birthtime,
+                  nativeLocation: prepared.source.canonicalPath,
+                },
                 claim: prepared.claim,
                 validationOwner: { source: validationSource, claim: prepared.claim },
                 worker,
@@ -425,7 +475,9 @@ export async function runSqliteSessionReclamation(
           params.plan.databaseOptions.path,
         );
       } finally {
-        await execution.release();
+        if (!params.retainedExecution) {
+          await execution.release();
+        }
       }
     },
   );
@@ -451,24 +503,26 @@ async function runPreparedSqliteSessionReclamation(
     onWorkerResult?: (
       result: SqliteSessionReclamationResult,
       databaseIdentity: string | symbol,
+      fileIdentity?: AgentDatabaseExecutionFileIdentity,
     ) => void;
     plan: SqliteArchiveReclamationPlan;
   },
   owner: {
     nativeLocation: string;
+    fileIdentity: AgentDatabaseExecutionFileIdentity;
     validationOwner?: SqliteMutationWorkerValidationOwner;
     claim: SqliteReclamationClaim;
     worker: SqliteReclamationWorker;
-    assertRequestCurrent: () => void;
+    assertRequestCurrent: (operation?: RetainedWorkerTransactionAdmission) => void;
     signal: AbortSignal;
   },
 ): Promise<SqliteSessionReclamationResult> {
   const { claim, worker, assertRequestCurrent } = owner;
   const identity = claim.identity;
   const { plan } = params;
-  const assertCommitAllowed = () => {
+  const assertCommitAllowed = (operation?: RetainedWorkerTransactionAdmission) => {
     worker.assertCurrent(plan.databaseOptions, claim);
-    assertRequestCurrent();
+    assertRequestCurrent(operation);
   };
   assertCommitAllowed();
   return await worker.run({
@@ -476,19 +530,42 @@ async function runPreparedSqliteSessionReclamation(
     validationOwner: owner.validationOwner,
     plan,
     diagnostics: params.diagnostics,
-    withWriteAdmission: async (run, reclamationAdmission) =>
+    withWriteAdmission: async (run, reclamationAdmission, operation) =>
       await runExclusiveSqliteSessionWrite(
         plan.databaseOptions,
         async () => {
+          const conversations = retainConversationWorkerPublication(
+            identity,
+            plan.databaseOptions.path,
+          );
           let refusal: { error: unknown } | undefined;
           let publishCommitted: (() => void) | undefined;
           try {
-            assertCommitAllowed();
+            assertCommitAllowed(operation);
             publishCommitted = prepareReclamationPublication(plan, identity);
+            if (
+              ![
+                "lifecycle-projection-plan",
+                "archive-publish-prepare",
+                "maintenance-pages",
+              ].includes(plan.kind)
+            ) {
+              conversations.begin();
+            }
           } catch (error) {
             refusal = { error };
           }
-          const completed = await run(refusal);
+          let completed: SqliteSessionReclamationResult | undefined;
+          try {
+            completed = await run(refusal);
+          } finally {
+            conversations.settle(
+              completed?.conversationPublication,
+              completed === undefined &&
+                refusal === undefined &&
+                reclamationAdmission.releaseCause !== "preliminary-release",
+            );
+          }
           if (completed) {
             // Publish captured identities after transaction settlement, before releasing the writer.
             const publishRemoval =
@@ -512,7 +589,7 @@ async function runPreparedSqliteSessionReclamation(
               },
               collectReclamationChangedSessionKeys(plan, completed),
               () => {
-                params.onWorkerResult?.(completed, identity);
+                params.onWorkerResult?.(completed, identity, owner.fileIdentity);
                 publishSessionLifecycleWorkerEffects(plan, completed);
                 publishRemoval?.();
               },

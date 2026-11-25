@@ -12,6 +12,15 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 
+export type TelegramGroupConfigResolver = (
+  chatId: string | number,
+  messageThreadId: number | undefined,
+  cfg: OpenClawConfig,
+) => {
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+};
+
 export function resolveTelegramScopedGroupConfig(
   telegramCfg: TelegramAccountConfig,
   chatId: string | number,

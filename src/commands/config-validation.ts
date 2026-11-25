@@ -48,8 +48,6 @@ export async function requireValidConfigForWrite(runtime: RuntimeEnv) {
   return read;
 }
 
-export type ConfigWriteSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
-
 /** Each command phase owns prepared facts; installation ends the preceding metadata scope. */
 export async function withCommandPluginMetadata<T>(
   params: { config: OpenClawConfig; workspaceDir?: string; snapshot?: PluginMetadataSnapshot },

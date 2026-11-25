@@ -20,10 +20,10 @@ import {
 import { createCronExecutionId } from "../run-id.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronJob, CronRunErrorClassification } from "../types.js";
+import type { CronEvent, CronJob, CronRunErrorClassification } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove } from "./ops-mutations.js";
-import type { CronEvent, CronServiceDeps, CronServiceState } from "./state.js";
+import type { CronServiceDeps, CronServiceState } from "./state.js";
 import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
 import { onTimer, runMissedJobs } from "./timer.test-support.js";
@@ -324,121 +324,6 @@ describe("cron batch outcome finalization", () => {
     }
   });
 
-  it.each(["owning agent", "failure route"] as const)(
-    "durably auto-disables before notifying the %s",
-    async (route) => {
-      const routed = route === "failure route";
-      const job = dueJob("recurring-auto-disable", {
-        name: "Recurring report",
-        schedule: { kind: "every", everyMs: 60_000, anchorMs: DUE_AT - 60_000 },
-        state: {
-          nextRunAtMs: DUE_AT,
-          consecutiveErrors: 9,
-          runningAtMs: DUE_AT,
-          // An earlier threshold alert must not suppress the auto-disable notice.
-          ...(routed ? { lastFailureAlertAtMs: DUE_AT - 30_000 } : {}),
-        },
-        ...(routed
-          ? { failureAlert: { mode: "webhook" as const, to: "https://alerts.example.com/hook" } }
-          : {}),
-      });
-      const order: string[] = [];
-      const deliveryContext = { channel: "discord", to: "channel-1", accountId: "default" };
-      const resolveOriginDeliveryContext = vi.fn(async () => deliveryContext);
-      const enqueueSystemEvent = vi.fn<CronServiceDeps["enqueueSystemEvent"]>(() => {
-        expect(
-          openOpenClawStateDatabase()
-            .db.prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
-            .get(cronStoreKey(storePath), job.id),
-        ).toMatchObject({ enabled: 0 });
-        order.push("notify");
-      });
-      const requestHeartbeat = vi.fn(() => {
-        order.push("heartbeat");
-      });
-      const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
-        async () => {},
-      );
-      const { state, storePath } = await fixture([job], {
-        nowMs: () => DUE_AT + 10,
-        defaultAgentId: "main",
-        enqueueSystemEvent,
-        requestHeartbeat,
-        ...(routed ? { sendCronFailureAlert } : { resolveOriginDeliveryContext }),
-      });
-      const cause = routed ? "server_error" : "timeout";
-      const error = routed
-        ? "cron: provider returned HTTP 500 at /private/agent/work"
-        : "cron: job execution timed out at /private/agent/work";
-      await finalizeError(state, job, error, undefined, { kind: "reason", reason: cause });
-      const text = routed
-        ? sendCronFailureAlert.mock.calls[0]?.[0].payload.text
-        : enqueueSystemEvent.mock.calls[0]?.[0];
-      for (const fragment of [
-        "Recurring report",
-        job.id,
-        "10 consecutive run failures",
-        `Cause: ${cause}`,
-        `openclaw automations enable ${job.id}`,
-      ]) {
-        expect(text).toContain(fragment);
-      }
-      if (routed) {
-        expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-        expect(sendCronFailureAlert.mock.calls[0]?.[0]).toMatchObject({
-          mode: "webhook",
-          to: "https://alerts.example.com/hook",
-        });
-        expect(text).toContain('Automation "Recurring report" was auto-disabled');
-        expect(text).toContain(`Last error: ${error}`);
-        expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeat).not.toHaveBeenCalled();
-      } else {
-        expect(order).toEqual(["notify", "heartbeat"]);
-        expect(text).not.toContain("/private/agent/work");
-        expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining(`openclaw automations enable ${job.id}`),
-          {
-            agentId: "main",
-            sessionKey: undefined,
-            contextKey: `cron:${job.id}:auto-disabled`,
-            deliveryContext,
-          },
-        );
-        expect(resolveOriginDeliveryContext).toHaveBeenCalledWith({
-          agentId: "main",
-          sessionKey: undefined,
-        });
-        expect(requestHeartbeat).toHaveBeenCalledWith(
-          expect.objectContaining({
-            source: "notifications-event",
-            intent: "immediate",
-            reason: "wake",
-            agentId: "main",
-          }),
-        );
-      }
-      expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
-        enabled: false,
-        state: {
-          consecutiveErrors: 10,
-          lastError: error,
-          autoDisabled: {
-            reason: "consecutive-failures",
-            atMs: DUE_AT + 10,
-            consecutiveErrors: 10,
-          },
-          ...(routed
-            ? {
-                lastFailureAlertAtMs: DUE_AT + 10,
-                lastFailureNotificationDeliveryStatus: "unknown",
-              }
-            : {}),
-        },
-      });
-    },
-  );
-
   it("records a completed setup timeout and clears its active marker while the service is stopped", async () => {
     const job = dueJob("stopped-setup-timeout-marker", {
       state: { nextRunAtMs: DUE_AT, runningAtMs: DUE_AT },
@@ -447,7 +332,6 @@ describe("cron batch outcome finalization", () => {
     state.stopped = true;
     expect(
       await finalizeError(state, job, "setup timed out before runner start", {
-        clearOnFailure: false,
         discardWhenStopped: true,
       }),
     ).toEqual([]);

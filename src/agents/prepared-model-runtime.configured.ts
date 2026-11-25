@@ -13,11 +13,12 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { readAgentDatabaseReadAdmissionRefusal } from "../state/agent-database-admission.js";
 import { getOrLoadAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveAgentEntry, toAgentEntriesRecord } from "./agent-scope-config.js";
@@ -27,7 +28,6 @@ import {
   resolveSubagentSpawnModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   buildInlineProviderModels,
   completeInlineProviderModel,
@@ -104,6 +104,11 @@ export function collectPreparedModelRuntimeProviderIds(
   if (includeCredentialProviders) {
     for (const providerId of Object.keys(credentials)) {
       addProviderId(providerId);
+    }
+    for (const [providerId, providerConfig] of Object.entries(config.models?.providers ?? {})) {
+      if (hasConfiguredSecretInput(providerConfig.apiKey)) {
+        addProviderId(providerId);
+      }
     }
   }
   for (const ref of configuredModelRefs) {
@@ -312,7 +317,7 @@ export function listConfiguredOwnerInputs(
       return (
         deletion !== "pending" &&
         deletion !== "complete" &&
-        !readAgentDatabaseAdmissionRefusal(agentId)
+        !readAgentDatabaseReadAdmissionRefusal(agentId)
       );
     })
     .map((agentId) => {
@@ -347,8 +352,8 @@ export function listConfiguredOwnerInputs(
           cfg: config,
           agentId,
           manifestPlugins: [],
-          provider: configured.provider || DEFAULT_PROVIDER,
-          model: configured.model || DEFAULT_MODEL,
+          provider: configured?.provider,
+          model: configured?.model,
           requestedRouteResolution: "resolved",
           // Session policy can narrow either configured chain after admission waits. Prepare
           // their owners once so nested execution never expands an already frozen generation.

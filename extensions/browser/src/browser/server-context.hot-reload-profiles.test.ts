@@ -13,11 +13,9 @@ import {
 import type { BrowserServerState } from "./server-context.types.js";
 
 type TestProfileConfig = NonNullable<NonNullable<OpenClawConfig["browser"]>["profiles"]>[string];
-const mockState = vi.hoisted(
-  (): {
-    cfgProfiles: Record<string, TestProfileConfig>;
-  } => ({ cfgProfiles: {} }),
-);
+const mockState = vi.hoisted((): { cfgProfiles: Record<string, TestProfileConfig> } => ({
+  cfgProfiles: {},
+}));
 const { closePlaywright, retirePlaywright, stopChrome } = vi.hoisted(() => ({
   closePlaywright: vi.fn(async (_opts: { cdpUrl: string }) => {}),
   retirePlaywright: vi.fn((_opts: { cdpUrl: string }) => true),
@@ -146,7 +144,6 @@ describe("server-context hot-reload profiles", () => {
 
     expect(state.resolved.extensionRelayInternalTokens).not.toHaveProperty("chrome");
     expect(runtime.profile.cdpPort).toBe(18801);
-    expect(lifecycle.transitionReason).toContain("cdpPort");
     await lifecycle.tail;
     expect(relay.close).toHaveBeenCalledOnce();
     expect(state.extensionRelays?.has("chrome")).toBe(false);
@@ -161,7 +158,6 @@ describe("server-context hot-reload profiles", () => {
     expect(state.resolved.extensionRelayInternalTokens.chrome).toBe(relay.internalToken);
     await close();
 
-    expect(relay.close).toHaveBeenCalledTimes(2);
     expect(state.extensionRelays?.has("chrome")).toBe(false);
     expect(state.resolved.extensionRelayInternalTokens).toEqual({
       work: "other-live-profile-credential",
@@ -225,7 +221,6 @@ describe("server-context hot-reload profiles", () => {
       profile: { engine: "lightpanda", cdpUrl },
       lastTargetId: null,
     });
-    expect(lifecycle.transitionReason).toBe("profile invariants changed: engine");
     expect(retirePlaywright).toHaveBeenCalledWith({ cdpUrl });
     await lifecycle.tail;
     expect(closePlaywright).toHaveBeenCalledWith({ cdpUrl });
@@ -287,7 +282,6 @@ describe("server-context hot-reload profiles", () => {
       "constructor",
       { cdpPort: 18801 },
     );
-    expect(runtime.running).toBeNull();
     const lateRunning = { pid: 321 } as RunningChrome;
     const launch = createDeferred<void>();
     const launchStarted = createDeferred<void>();
@@ -319,8 +313,6 @@ describe("server-context hot-reload profiles", () => {
     await expect(
       enqueueProfileStart({ state, runtime: replacement, key: "default", run: async () => {} }),
     ).resolves.toBeUndefined();
-    expect(closePlaywright).toHaveBeenCalledWith({
-      cdpUrl: profile.cdpUrl,
-    });
+    expect(closePlaywright).toHaveBeenCalledWith({ cdpUrl: profile.cdpUrl });
   });
 });

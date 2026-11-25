@@ -63,7 +63,6 @@ export default definePluginEntry({
     const store = createGeolocationDatabaseStore({
       stateDir: resolveStateDir(),
       settings,
-      now: () => new Date(),
       fetchImpl: fetch,
       logger: api.logger,
     });
@@ -131,9 +130,6 @@ export default definePluginEntry({
         }
         const assertCurrent = () => {
           options.signal?.throwIfAborted();
-          if (options.client?.invalidated || options.hasCurrentClientAuthority?.() === false) {
-            throw new Error("Gateway requester authority changed");
-          }
           options.sessionMutationCommitGuard?.();
           options.sessionMutationAuthorization?.assertCurrent();
         };

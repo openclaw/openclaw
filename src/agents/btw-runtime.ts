@@ -2,12 +2,14 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
-import type { ChatType } from "../channels/chat-type.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ImageContent, Message, Model, TextContent } from "../llm/types.js";
+import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { omitRecordedModelPrompt } from "../sessions/user-turn-transcript.message.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -18,19 +20,23 @@ import { createEmptyAuthProfileStore } from "./auth-profiles/runtime-snapshot-ow
 import { resolveSessionAuthSelection } from "./auth-profiles/session-override.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
-import { buildBtwCliPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
+import { buildBtwCliPrompt, buildBtwQuestionPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
 import { normalizeBtwContentBlocks } from "./btw-transcript.js";
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
+import { createCliModelRequestGate } from "./cli-runner/model-request-hook.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
 import { createNativeModelOwnedRuntimeModel } from "./defaults.js";
-import type { BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import {
   preparePluginHarnessToolPolicies,
   resolvePluginHarnessPolicyToolsAllow,
 } from "./harness/execution-environment.js";
 import { readSessionRuntimeOwnershipAsync } from "./harness/session-runtime-ownership.js";
-import type { AgentHarness, AgentHarnessSessionRuntimeOwnership } from "./harness/types.js";
+import type {
+  AgentHarness,
+  AgentHarnessSessionRuntimeOwnership,
+  AgentHarnessSideQuestionParamsV2,
+} from "./harness/types.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import {
   ensureAuthProfileStoreAsync,
@@ -148,10 +154,11 @@ async function sanitizeBtwUserMessage(params: {
   message: Extract<Message, { role: "user" }>;
   imageLimits: ImageSanitizationLimits;
 }): Promise<Extract<Message, { role: "user" }> | undefined> {
-  if (typeof params.message.content === "string") {
-    return params.message;
+  const message = omitRecordedModelPrompt(params.message);
+  if (typeof message.content === "string") {
+    return message;
   }
-  const blocks = normalizeBtwContentBlocks(params.message.content);
+  const blocks = normalizeBtwContentBlocks(message.content);
   if (!blocks) {
     return undefined;
   }
@@ -176,7 +183,7 @@ async function sanitizeBtwUserMessage(params: {
     return undefined;
   }
   return {
-    ...params.message,
+    ...message,
     content,
   };
 }
@@ -425,55 +432,40 @@ export async function resolveRuntimeModel(params: {
   };
 }
 
-export type RunBtwSideQuestionParams = {
-  cfg: OpenClawConfig;
+export type RunBtwSideQuestionParams = Omit<
+  AgentHarnessSideQuestionParamsV2,
+  | "hostCapabilities"
+  | "sandbox"
+  | "preparedModelRuntime"
+  | "runtimeModel"
+  | "preparedRuntimeAuth"
+  | "expectedSessionRuntimeOwnership"
+  | "preparedWebSearchPolicy"
+  | "sessionId"
+  | "sessionFile"
+  | "agentId"
+  | "workspaceDir"
+  | "toolsAllow"
+  | "toolCalls"
+  | "authProfileId"
+  | "authProfileIdSource"
+> & {
   agentId: string;
-  agentDir: string;
-  provider: string;
-  model: string;
-  question: string;
-  toolCalls?: "deny";
+  /**
+   * A tool-free session fork. Built-in runtime sessions run it here (`runSessionFork`); a
+   * harness with its own side-question fork (Codex) runs it with every tool call denied.
+   */
+  sessionFork?: () => Promise<{ text: string }>;
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Background consumers collect usage without recording a user-facing reply. */
   onUsage?: (usage: NormalizedUsage | undefined) => void;
-  images?: ImageContent[];
-  sessionEntry: StoredSessionEntry;
-  sessionStore?: Record<string, StoredSessionEntry>;
-  sessionKey?: string;
-  sandboxSessionKey?: string;
   /**
    * Set by gateway-hosted callers so the prepared runtime resolves the owner the
    * gateway published. Left unset by local callers such as the embedded TUI,
    * which must not borrow the active registry's subagent and node capabilities.
    */
   allowGatewaySubagentBinding?: boolean;
-  storePath?: string;
-  resolvedThinkLevel?: ThinkLevel;
-  resolvedReasoningLevel: ReasoningLevel;
-  blockReplyChunking?: BlockReplyChunking;
-  resolvedBlockStreamingBreak?: "text_end" | "message_end";
-  opts?: GetReplyOptions;
-  isNewSession: boolean;
-  messageChannel?: string;
-  messageProvider?: string;
-  chatType?: ChatType;
-  agentAccountId?: string;
-  messageTo?: string;
-  messageThreadId?: string | number;
-  chatId?: string;
-  messageActionTurnCapability?: string;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  memberRoleIds?: string[];
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-  senderIsOwner?: boolean;
-  currentChannelId?: string;
   /** Internal execution identity; never reuse a parent/correlation run id. */
   authorityRunId?: string;
 };
@@ -552,12 +544,7 @@ export async function runCliBtwSideQuestion(params: {
       sessionFile: params.sessionFile,
       workspaceDir: params.workspaceDir,
       config: params.cfg,
-      prompt: buildBtwCliPrompt({
-        messages: params.messages,
-        question: params.question,
-        imageCount: params.imageCount,
-        inFlightPrompt: params.inFlightPrompt,
-      }),
+      prompt: buildBtwCliPrompt(params),
       extraSystemPrompt: buildBtwSystemPrompt(),
       executionMode: "side-question",
       provider: params.cliProvider,
@@ -573,6 +560,34 @@ export async function runCliBtwSideQuestion(params: {
       messageProvider: params.messageProvider,
       currentChannelId: params.currentChannelId,
     });
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner) {
+      // The prompt carries the conversation as text, so it passes the CLI turn gate.
+      prepared.beforeModelRequest = createCliModelRequestGate({
+        hookRunner,
+        hookContext: {
+          runId,
+          agentId: params.sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          modelProviderId: params.cliProvider,
+          modelId: params.model,
+          ...buildAgentHookContextChannelFields(params),
+        },
+        provider: params.cliProvider,
+        model: params.model,
+        requestKind: "side_question",
+        messages: async () => [
+          ...params.messages,
+          {
+            role: "user",
+            content: buildBtwQuestionPrompt(params.question, params.inFlightPrompt),
+            timestamp: Date.now(),
+          },
+        ],
+      });
+    }
     const output = await executePreparedCliRun(prepared);
     const text = output.text.trim();
     if (!text) {
@@ -597,9 +612,11 @@ export async function withBtwPreparedRuntime(
   return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
     const lease = await acquirePublishedPreparedModelRuntime(input);
     onAcquired({ release: () => lease[Symbol.asyncDispose]() });
-    return withPluginRuntimeGenerationScope(lease.snapshot, () => {
-      captureWorkContext();
-      return run(lease.snapshot);
-    });
+    return lease.run(() =>
+      withPluginRuntimeGenerationScope(lease.snapshot, () => {
+        captureWorkContext();
+        return run(lease.snapshot);
+      }),
+    );
   });
 }

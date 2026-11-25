@@ -6,6 +6,8 @@ import {
   makeGatewayService,
   monotonicClock,
   requestStartupProbe,
+  readActiveGatewayLockIdentity,
+  readGatewayOwnerLease,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
 } from "./restart-health.test-helpers.js";
@@ -17,40 +19,178 @@ describe("restart startup progress", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
-  it("observes explicit startup phases before readiness at 90000 ms", async () => {
-    const readyAtMs = 90_000;
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000 }],
-      hints: [],
+  it("keeps a portless file owner starting through a long migration without opening its store", async () => {
+    const readyAtMs = 120_000;
+    readActiveGatewayLockIdentity.mockResolvedValue({
+      pid: 8000,
+      ownerId: "migrating-gateway",
+      createdAt: "2026-11-25T00:00:00.000Z",
     });
-    requestStartupProbe.mockImplementation(async () => ({
-      statusCode: monotonicClock.nowMs < readyAtMs ? 503 : 200,
-      body: JSON.stringify(
-        monotonicClock.nowMs < readyAtMs
-          ? { status: "starting", pendingReason: "plugin-convergence" }
-          : { status: "started" },
-      ),
+    readGatewayOwnerLease.mockImplementation(() => {
+      throw new Error("restart observer opened a migrating store");
+    });
+    const service = makeGatewayService({ status: "stopped" });
+    vi.mocked(service.readRuntime).mockImplementation(async () =>
+      monotonicClock.nowMs < readyAtMs ? { status: "stopped" } : { status: "running", pid: 8000 },
+    );
+    inspectPortUsage.mockImplementation(async (port) => ({
+      port,
+      status: monotonicClock.nowMs < readyAtMs ? "free" : "busy",
+      listeners: monotonicClock.nowMs < readyAtMs ? [] : [{ pid: 8000 }],
+      hints: [],
     }));
     callGateway.mockImplementation(gatewayHealthResponse());
     const onProgress = vi.fn();
-    const result = await waitForGatewayHealthyRestart({
-      service: makeGatewayService({ status: "running", pid: 8000 }),
+    const health = await waitForGatewayHealthyRestart({
+      service,
       port: 18789,
-      requirePluginHealth: false,
-      timeoutMs: 60_000,
+      config: {},
+      probeHosts: ["127.0.0.1"],
+      timeoutMs: 180_000,
+      requireOwnedListener: true,
       onProgress,
     });
-    expect(result).toMatchObject({
-      healthy: false,
-      waitOutcome: "still-starting",
-      elapsedMs: 60_000,
-      startupPhase: "plugin-convergence",
+    expect(health).toMatchObject({
+      healthy: true,
+      waitOutcome: "healthy",
+      elapsedMs: readyAtMs,
     });
-    expect(onProgress).toHaveBeenCalledWith("plugin-convergence");
-    expect(callGateway).toHaveBeenCalledTimes(0);
+    expect(onProgress).toHaveBeenCalledWith("startup migration");
+    expect(readGatewayOwnerLease).not.toHaveBeenCalled();
   });
+
+  it("exposes a verified stale file owner to stopped-listener recovery without opening state", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    readActiveGatewayLockIdentity.mockResolvedValue({ pid: 8000, port: 18789, startTime: 123 });
+    callGateway.mockRejectedValue(
+      new Error("gateway install changed; run: openclaw gateway restart"),
+    );
+    const health = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "stopped" }),
+      port: 18789,
+      config: {},
+      probeHosts: ["127.0.0.1"],
+      expectedVersion: "2026.11.8",
+      timeoutMs: 1_000,
+    });
+    expect(health).toMatchObject({
+      healthy: false,
+      staleConnection: "installation-replaced",
+      staleGatewayPids: [8000],
+      waitOutcome: "stale-pids",
+    });
+    expect(readGatewayOwnerLease).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "advancing startup", advances: true, expected: "healthy", elapsedMs: 90_000 },
+    { name: "stalled startup", expected: "still-starting", elapsedMs: 60_000 },
+    {
+      name: "replayed phases",
+      advances: true,
+      repeats: true,
+      readyAtMs: 180_000,
+      expected: "still-starting",
+      elapsedMs: 105_000,
+    },
+    {
+      name: "another process's phases",
+      advances: true,
+      replaced: true,
+      expected: "still-starting",
+      elapsedMs: 60_000,
+    },
+    {
+      name: "explicit deadline",
+      advances: true,
+      timeoutMs: 60_000,
+      expected: "still-starting",
+      elapsedMs: 60_000,
+    },
+    {
+      name: "foreign listener phases",
+      advances: true,
+      listenerPid: 9000,
+      expected: "timeout",
+      elapsedMs: 60_000,
+    },
+    {
+      name: "dead replacement",
+      advances: true,
+      dies: true,
+      expected: "stopped-free",
+      elapsedMs: 47_500,
+    },
+  ])(
+    "observes $name without confusing progress with readiness",
+    async ({
+      advances,
+      repeats,
+      replaced,
+      readyAtMs = 90_000,
+      timeoutMs,
+      listenerPid,
+      dies,
+      expected,
+      elapsedMs,
+    }) => {
+      const runtimePid = () => (replaced && monotonicClock.nowMs >= 45_000 ? 8001 : 8000);
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.mocked(service.readRuntime).mockImplementation(async () =>
+        dies && monotonicClock.nowMs >= 45_000
+          ? { status: "stopped" }
+          : { status: "running", pid: runtimePid() },
+      );
+      inspectPortUsage.mockImplementation(async () => ({
+        port: 18789,
+        status: dies && monotonicClock.nowMs >= 45_000 ? "free" : "busy",
+        listeners:
+          dies && monotonicClock.nowMs >= 45_000 ? [] : [{ pid: listenerPid ?? runtimePid() }],
+        hints: [],
+      }));
+      requestStartupProbe.mockImplementation(async () => ({
+        statusCode: monotonicClock.nowMs < readyAtMs ? 503 : 200,
+        body: JSON.stringify(
+          monotonicClock.nowMs < readyAtMs
+            ? {
+                status: "starting",
+                pendingReason:
+                  advances &&
+                  monotonicClock.nowMs >= 45_000 &&
+                  !(repeats && monotonicClock.nowMs >= 75_000 && monotonicClock.nowMs < 105_000)
+                    ? "agent-database-inspection"
+                    : "startup-sidecars",
+              }
+            : { status: "started" },
+        ),
+      }));
+      callGateway.mockImplementation(gatewayHealthResponse());
+      const onProgress = vi.fn();
+      const result = await waitForGatewayHealthyRestart({
+        service,
+        port: 18789,
+        requireOwnedListener: true,
+        timeoutMs,
+        onProgress,
+      });
+      expect(result).toMatchObject({
+        healthy: expected === "healthy",
+        waitOutcome: expected,
+        elapsedMs,
+      });
+      expect(onProgress).toHaveBeenCalledWith("startup-sidecars");
+      if (expected === "healthy") {
+        expect(callGateway).toHaveBeenCalledOnce();
+      } else {
+        expect(callGateway).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([{ statusCode: 503, body: '{"status":"draining","pendingReason":"shutdown"}' }])(
     "does not mistake another HTTP readiness outcome for startup: %j",
@@ -66,7 +206,7 @@ describe("restart startup progress", () => {
       const result = await waitForGatewayHealthyRestart({
         service: makeGatewayService({ status: "running", pid: 8000 }),
         port: 18789,
-        requirePluginHealth: false,
+        requireOwnedListener: true,
       });
       expect(result).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 0 });
     },
@@ -103,7 +243,7 @@ describe("restart startup progress", () => {
         port: 18789,
         timeoutMs: 2_000,
         requireRunningService: true,
-        requirePluginHealth: false,
+        requireOwnedListener: true,
         expectedBuildId,
       });
       expect(result).toMatchObject({ healthy: false, waitOutcome: outcome });
@@ -136,7 +276,7 @@ describe("restart startup progress", () => {
       child,
       port: 18789,
       requireRunningService: true,
-      requirePluginHealth: false,
+      requireOwnedListener: true,
       expectedVersion: "2026.9.4",
     });
     if (exitCode === null) {
@@ -170,61 +310,30 @@ describe("restart startup progress", () => {
     const health = await waitForGatewayHealthyRestart({
       service,
       port: 18789,
-      requirePluginHealth: false,
+      requireOwnedListener: true,
     });
     expect(health).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 180_000 });
   });
 
   it.each([
     {
-      name: "heartbeat observed after polling delay",
-      readyAtMs: 90_000,
-      pollJitterMs: 250,
+      name: "silent startup before its listener",
+      migration: false,
+      readyAtMs: 120_000,
       expected: "healthy",
-      elapsedMs: 90_250,
+      elapsedMs: 120_000,
     },
     {
-      name: "migration released at 120s before readiness at 145s",
-      releaseAtMs: 120_000,
-      readyAtMs: 145_000,
-      expected: "healthy",
-      elapsedMs: 145_000,
-    },
-    {
-      name: "migration stalled after its 61s renewal without completing",
-      renewUntilMs: 61_000,
-      readyAtMs: 145_000,
+      name: "supervisor's next process before its listener",
+      migration: false,
+      replacedAtMs: 30_000,
       expected: "still-starting",
-      elapsedMs: 130_000,
-    },
-    {
-      name: "foreign migration completion after the observed lease is replaced",
-      foreignAfterMs: 90_000,
-      releaseAtMs: 120_000,
-      readyAtMs: 145_000,
-      expected: "still-starting",
-      elapsedMs: 130_000,
+      elapsedMs: 89_500,
       phase: "waiting for Gateway listener",
     },
+    { name: "startup migration", expected: "still-starting", elapsedMs: 300_000 },
     {
-      name: "migration completion credited only once",
-      releaseAtMs: 120_000,
-      expected: "still-starting",
-      elapsedMs: 180_000,
-      phase: "waiting for Gateway listener",
-    },
-    {
-      name: "migration poll failure without observed completion",
-      renewUntilMs: 61_000,
-      pollErrorAtMs: 120_000,
-      readyAtMs: 145_000,
-      expected: "still-starting",
-      elapsedMs: 130_000,
-      phase: "waiting for Gateway listener",
-    },
-    { name: "renewing migration", expected: "still-starting", elapsedMs: 300_000 },
-    {
-      name: "renewing migration under a published updater",
+      name: "startup migration under a published updater",
       updateInProgress: true,
       expected: "still-starting",
       elapsedMs: 300_000,
@@ -232,18 +341,26 @@ describe("restart startup progress", () => {
   ])(
     "bounds a $name",
     async ({
-      foreignAfterMs,
-      releaseAtMs,
-      renewUntilMs,
-      pollErrorAtMs,
+      migration = true,
+      replacedAtMs,
       phase,
       readyAtMs,
-      pollJitterMs,
       expected,
       elapsedMs,
       updateInProgress,
     }) => {
       const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.mocked(service.readRuntime).mockImplementation(async () => ({
+        status: "running",
+        pid: monotonicClock.nowMs >= (replacedAtMs ?? Infinity) ? 8001 : 8000,
+      }));
+      if (migration) {
+        readActiveGatewayLockIdentity.mockResolvedValue({
+          pid: 8000,
+          ownerId: "migrating-gateway",
+          createdAt: "2026-11-25T00:00:00.000Z",
+        });
+      }
       if (readyAtMs !== undefined) {
         inspectPortUsage.mockImplementation(async (port) => ({
           port,
@@ -255,48 +372,10 @@ describe("restart startup progress", () => {
           gatewayHealthResponse({ server: { bootId: "stable-boot" } }),
         );
       }
-      if (pollJitterMs) {
-        vi.mocked(service.readRuntime).mockImplementation(async () => {
-          if (monotonicClock.nowMs === 60_000) {
-            monotonicClock.nowMs += pollJitterMs;
-          }
-          return { status: "running", pid: 8000 };
-        });
-      }
-      const isStartupMigrationActive = ({
-        onActivity,
-      }: {
-        env?: NodeJS.ProcessEnv;
-        onActivity?: (activity: {
-          owner: string;
-          pid?: number;
-          heartbeatAt: number | null;
-        }) => void;
-      } = {}) => {
-        if (monotonicClock.nowMs >= (pollErrorAtMs ?? Infinity)) {
-          throw new Error("Migration activity unavailable");
-        }
-        if (monotonicClock.nowMs < 1_000 || monotonicClock.nowMs >= (releaseAtMs ?? Infinity)) {
-          return false;
-        }
-        const foreignLease = monotonicClock.nowMs >= (foreignAfterMs ?? Infinity);
-        onActivity?.({
-          owner: foreignLease ? "foreign-migration-owner" : "migration-owner",
-          pid: foreignLease ? 9000 : 8000,
-          heartbeatAt:
-            1_000 +
-            Math.floor(
-              (Math.min(monotonicClock.nowMs, renewUntilMs ?? Infinity) - 1_000) / 60_000,
-            ) *
-              60_000,
-        });
-        return true;
-      };
       const health = await waitForGatewayHealthyRestart({
         service,
         port: 18789,
-        isStartupMigrationActive,
-        requirePluginHealth: false,
+        requireOwnedListener: true,
         env: updateInProgress ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {},
       });
       expect(health).toMatchObject({
@@ -310,7 +389,9 @@ describe("restart startup progress", () => {
         defaultTimeoutSeconds: 60,
       });
       if (expected === "still-starting") {
-        expect(message.failMessage).toContain(`still starting after ${elapsedMs / 1000}s`);
+        expect(message.failMessage).toContain(
+          `still starting after ${Math.round(elapsedMs / 1000)}s`,
+        );
         expect(message.failMessage).toContain(phase ?? "startup migration");
         expect(message.failMessage).toContain("openclaw gateway status --deep");
       }
@@ -319,7 +400,7 @@ describe("restart startup progress", () => {
 
   it.each([
     { listenerPid: 8000, elapsedMs: 90_000 },
-    { listenerPid: 9000, elapsedMs: 60_000 },
+    { listenerPid: 9000, elapsedMs: 300_000 },
   ])(
     "only credits new listener progress owned by the service (pid=$listenerPid)",
     async ({ listenerPid, elapsedMs }) => {
@@ -333,7 +414,7 @@ describe("restart startup progress", () => {
       const health = await waitForGatewayHealthyRestart({
         service: makeGatewayService({ status: "running", pid: 8000 }),
         port: 18789,
-        requirePluginHealth: false,
+        requireOwnedListener: true,
       });
       expect(health).toMatchObject({
         healthy: false,

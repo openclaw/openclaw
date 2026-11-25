@@ -9,7 +9,7 @@ import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 export async function resolveCheckoutRootFromRealPath(
   requested: string,
   requestedLabel: string,
-): Promise<{ root: string; commit: string }> {
+): Promise<{ root: string }> {
   const rootResult = await runGit(requested, [
     "rev-parse",
     "--show-toplevel",
@@ -35,7 +35,7 @@ export async function resolveCheckoutRootFromRealPath(
         }
       }
     }
-    if (insideGitCheckout(requested)) {
+    if (await insideGitCheckout(requested)) {
       throw new Error(
         `Git metadata is unavailable for ${requested}; checkout preserved. Restore the original repository metadata, then use git worktree repair from that repository. Do not recreate its index or delete the checkout to bypass recovery.`,
       );
@@ -50,7 +50,6 @@ export async function resolveCheckoutRootFromRealPath(
   }
   return {
     root: await fs.realpath(normalizeGitPathForFilesystem(root)),
-    commit: output.slice(separator + 1),
   };
 }
 

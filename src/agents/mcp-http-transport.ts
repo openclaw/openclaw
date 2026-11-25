@@ -11,6 +11,7 @@ import {
   type Transport,
   type JSONRPCMessage,
 } from "@modelcontextprotocol/client";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 
 const STREAM_RETRY_EXHAUSTED_RE = /^Maximum reconnection attempts \(\d+\) exceeded\.$/;
 const SESSION_TERMINATION_TIMEOUT_MS = 5_000;
@@ -364,11 +365,12 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
     this.sessionReplacedError = new McpSseSessionExpiredError(
       `MCP SSE server reconnected onto a replacement session endpoint: ${endpoint}`,
     );
+    materializeErrorStack(this.sessionReplacedError);
     this.emitError(this.sessionReplacedError);
     void this.close();
     // EventSource can arm its reconnect timer after this callback returns.
     // Close again on the next turn so that new timer cannot survive.
-    setTimeout(() => void this.transport.close(), 0).unref?.();
+    setTimeout(() => void this.transport.close(), 0).unref();
   }
 
   protected onTransportError(error: Error): void {
@@ -380,7 +382,7 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
       void this.close();
       // EventSource schedules reconnect after its error callback returns.
       // Close again on the next turn so that new timer cannot survive.
-      setTimeout(() => void this.transport.close(), 0).unref?.();
+      setTimeout(() => void this.transport.close(), 0).unref();
     }
   }
 
@@ -447,7 +449,7 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
     if (this.closed) {
       // SDK reconnect callbacks can finish after close() cleared their old timer.
       // Defer a second close so any timer armed later in that callback is cancelled.
-      setTimeout(() => void this.transport.close(), 0).unref?.();
+      setTimeout(() => void this.transport.close(), 0).unref();
       return;
     }
     this.emitError(error);

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { ignoreMissingPath } from "../infra/errno.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES } from "./constants.js";
 import { formatLine } from "./output.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
@@ -30,6 +31,19 @@ import {
   resolveSystemdUnitPathForName,
 } from "./systemd-service-files.js";
 import { activateSystemdServiceIdentity } from "./systemd-service-identity.js";
+import { readSystemdGatewayStopTimeout } from "./systemd-stop-policy.js";
+
+/** Check the native permission before maintenance drains work it cannot stop. */
+export function assertSystemdServiceActionAllowed(
+  target: SystemdServiceReadTarget | null | undefined,
+  action: "start" | "stop" | "restart",
+): void {
+  if (target?.scope === "system" && !isRunningAsRoot()) {
+    throw new Error(
+      `${target.unitName} is a system-scope unit; run \`sudo systemctl ${action} ${target.unitName}\` to ${action} it (${target.unitPath})`,
+    );
+  }
+}
 
 async function runSystemdServiceAction(
   params: GatewayServiceControlArgs,
@@ -47,13 +61,8 @@ async function runSystemdServiceAction(
     ((message: string) => params.stdout.write(`${formatLine("Warning", message)}\n`));
   const installed = params.systemdIdentity ?? (await findInstalledSystemdGatewayScope(env));
   const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
-  if (installed?.scope === "system") {
-    if (!isRunningAsRoot()) {
-      throw new Error(
-        `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${action} ${unitName}\` to ${action} it`,
-      );
-    }
-  } else if (action !== "stop") {
+  assertSystemdServiceActionAllowed(installed, action);
+  if (installed?.scope !== "system" && action !== "stop") {
     if (!params.systemdIdentity) {
       await assertSystemdAvailable(env);
     }
@@ -72,20 +81,38 @@ async function runSystemdServiceAction(
     report(params.systemdIdentity.unitName);
     return;
   }
+  let commandTimeoutMs: number | undefined;
+  if (action === "stop") {
+    params.assertCurrent?.();
+    const effective = await readSystemdGatewayStopTimeout({ env }, installed ?? undefined);
+    params.assertCurrent?.();
+    const timeout =
+      effective !== undefined && Number.isFinite(effective)
+        ? effective
+        : GATEWAY_SERVICE_STOP_TIMEOUT_MS;
+    if (effective === undefined || !Number.isFinite(effective)) {
+      warn(
+        `Gateway service stop timeout is ${effective === undefined ? "unverified" : "unbounded"}; limiting the systemctl stop command to ${timeout + 5_000}ms. Operator policy is unchanged.`,
+      );
+    }
+    // Give the manager its configured shutdown budget, then bound a wedged client.
+    commandTimeoutMs = timeout + 5_000;
+  }
   let runSystemctl: (args: string[]) => ReturnType<typeof execSystemctl>;
   if (installed?.scope === "system") {
     runSystemctl = (args) => {
       params.assertCurrent?.();
-      return execSystemctl(args, env);
+      return execSystemctl(args, env, commandTimeoutMs, params.beforeEffect);
     };
   } else {
     runSystemctl = (args) =>
       execSystemctlUser(
         env,
         args,
-        undefined,
+        commandTimeoutMs,
         params.assertCurrent,
         action === "stop" ? { warn } : undefined,
+        params.beforeEffect,
       );
   }
   if (action !== "stop") {
@@ -126,8 +153,6 @@ export async function restartSystemdService(
 type LegacySystemdUnit = {
   name: string;
   unitPath: string;
-  enabled: boolean;
-  exists: boolean;
 };
 
 async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
@@ -145,7 +170,7 @@ async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySys
       enabled = res.code === 0;
     }
     if (exists || backupExists || enabled) {
-      results.push({ name, unitPath, enabled, exists });
+      results.push({ name, unitPath });
     }
   }
   return results;

@@ -1,4 +1,7 @@
-import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
+import {
+  resolveOpenAIReasoningEffortForModel,
+  type OpenAIResponsesOptions,
+} from "@openclaw/ai/internal/openai";
 import {
   createEmptyTransportUsage,
   resolveOpenAIReasoningEffortMap,
@@ -13,6 +16,7 @@ import {
   type PlainTextToolCallMessageProjection,
   type PlainTextToolCallNameMatcher,
   type PlainTextToolCallMessageNormalization,
+  type PlainTextToolCallProtectedRangeResolver,
 } from "../../packages/tool-call-repair/src/index.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
@@ -26,8 +30,9 @@ import { streamSimple } from "../llm/stream.js";
 import type { AssistantMessage, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { mapAssistantMessageStream } from "../llm/utils/stream-wrapper.js";
-import { findCodeRegions } from "../shared/text/code-regions.js";
+import { createCodeRegionResolver } from "../shared/text/code-regions.js";
 import { assertProviderStreamEvent } from "./provider-stream-event-normalization.js";
+export { recordSuppressedReasoning } from "@openclaw/llm-core/diagnostics";
 export { applyOpenAICompletionsToolReasoning } from "@openclaw/ai/internal/openai";
 export {
   isGoogleGemini3FlashModel,
@@ -55,7 +60,9 @@ export {
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 export {
+  applyProviderPayloadHook,
   createEmptyTransportUsage,
+  mergeTransportHeaders,
   createProviderWaitObserver,
   failTransportStream,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
@@ -86,6 +93,7 @@ export function composeProviderStreamWrappers(
 function promotePlainTextToolCalls(
   message: unknown,
   toolNames: Set<string>,
+  resolveProtectedRanges: PlainTextToolCallProtectedRangeResolver,
 ): PlainTextToolCallMessageProjection | undefined {
   const messageRecord = asOptionalObjectRecord(message);
   if (
@@ -99,7 +107,7 @@ function promotePlainTextToolCalls(
     createToolCallBlock: createPromotedPlainTextToolCallBlock,
     isRetainableNonTextBlock: () => true,
     message,
-    resolveProtectedRanges: findCodeRegions,
+    resolveProtectedRanges,
   });
 }
 
@@ -122,6 +130,7 @@ function normalizeProviderDoneMessage(
   allowPromotion: boolean,
   toolNames: Set<string>,
   matcher: PlainTextToolCallNameMatcher,
+  resolveProtectedRanges: PlainTextToolCallProtectedRangeResolver,
   preserveEmptyTextBlocks = false,
 ): PlainTextToolCallMessageNormalization {
   const scrubbedMessage = projectScrubbedPlainTextToolCallMessage({
@@ -129,7 +138,7 @@ function normalizeProviderDoneMessage(
     matcher,
     message,
     preserveEmptyTextBlocks,
-    resolveProtectedRanges: findCodeRegions,
+    resolveProtectedRanges,
   });
   if (scrubbedMessage) {
     return { kind: "scrubbed", ...scrubbedMessage };
@@ -139,7 +148,7 @@ function normalizeProviderDoneMessage(
   if (!allowPromotion) {
     return undefined;
   }
-  const promotedMessage = promotePlainTextToolCalls(message, toolNames);
+  const promotedMessage = promotePlainTextToolCalls(message, toolNames, resolveProtectedRanges);
   return promotedMessage ? { kind: "promoted", ...promotedMessage } : undefined;
 }
 
@@ -155,6 +164,7 @@ function wrapPlainTextToolCallStream(
     return source;
   }
   const matcher = createProviderToolNameMatcher(toolNames);
+  const resolveProtectedRanges = createCodeRegionResolver();
   const output = createAssistantMessageEventStream();
 
   void (async () => {
@@ -168,13 +178,14 @@ function wrapPlainTextToolCallStream(
             allowPromotion,
             toolNames,
             matcher,
+            resolveProtectedRanges,
             preserveEmptyTextBlocks,
           ),
-        // findCodeRegions resolves exactly the CommonMark fenced/indented/inline code shapes
+        // The resolver preserves exactly the CommonMark fenced/indented/inline code shapes
         // the carried fence scan models (and yields to the full parse for the rest), so its
         // protection is safe to trust from the fast path.
         protectedRangesFenceCompatible: true,
-        resolveProtectedRanges: findCodeRegions,
+        resolveProtectedRanges,
         stopAfterDone: true,
       });
       for await (const normalizedEvent of normalizedEvents) {
@@ -268,6 +279,45 @@ export function createPayloadPatchStreamWrapper(
     return streamWithPayloadPatch(underlying, model, context, options, (payload) =>
       patchPayload({ payload, model, context, options }),
     );
+  };
+}
+
+/** OpenAI Responses hosted-search wire policy shared by native and admitted proxy routes. */
+export function createOpenAIHostedWebSearchWrapper(
+  baseStreamFn: StreamFn | undefined,
+  shouldPatch: NonNullable<
+    NonNullable<Parameters<typeof createPayloadPatchStreamWrapper>[2]>["shouldPatch"]
+  >,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (
+    model,
+    context,
+    options?: Parameters<StreamFn>[2] &
+      Pick<OpenAIResponsesOptions, "openclawCodeModeAllowedHostedToolTypes">,
+  ) => {
+    if (!shouldPatch({ model, context, options })) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      options?.openclawCodeModeAllowedHostedToolTypes?.add("web_search");
+      const existingTools = Array.isArray(payload.tools) ? payload.tools : [];
+      const filteredTools = existingTools.filter((tool) => {
+        const record = asOptionalObjectRecord(tool);
+        return record?.type !== "function" || record.name !== "web_search";
+      });
+      if (filteredTools.some((tool) => asOptionalObjectRecord(tool)?.type === "web_search")) {
+        if (filteredTools.length !== existingTools.length) {
+          payload.tools = filteredTools;
+        }
+      } else {
+        payload.tools = [...filteredTools, { type: "web_search" }];
+      }
+      const reasoning = asOptionalObjectRecord(payload.reasoning);
+      if (reasoning?.effort === "minimal") {
+        reasoning.effort = "low";
+      }
+    });
   };
 }
 

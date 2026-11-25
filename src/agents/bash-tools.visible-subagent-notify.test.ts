@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import { enqueueSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-handoff.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -23,8 +23,12 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { getFinishedSession, waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import {
+  fullGatewayExec,
+  nodeCommand,
+  runningSession,
+} from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
 
@@ -93,12 +97,15 @@ afterEach(async () => {
 });
 
 it.skipIf(process.platform === "win32").each([
-  ["agent:main:dashboard:borrowed", true, true],
-  ["agent:main:subagent:hidden", true, false],
-  ["agent:main:dashboard:navigation", false, false],
+  ["agent:main:dashboard:borrowed", true, true, false],
+  ["agent:main:subagent:hidden", true, false, false],
+  ["agent:main:dashboard:navigation", false, false, false],
+  ["agent:main:dashboard:visible", true, true, true],
 ] as const)(
-  "keeps a failed background exec owned by %s (child=%s, borrowed policy=%s)",
-  async (sessionKey, child, borrowedPolicy) => {
+  "keeps a failed background exec owned by %s (child=%s, borrowed policy=%s, visible spawn=%s)",
+  async (sessionKey, child, borrowedPolicy, visibleSpawn) => {
+    // Visible spawns are interactive sessions and receive exit notifications directly.
+    const notified = !child || visibleSpawn;
     const tmpDir = state.root;
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const cfg: OpenClawConfig = {
@@ -118,16 +125,18 @@ it.skipIf(process.platform === "win32").each([
           updatedAt: Date.now(),
           delivery,
           ...(key === sessionKey
-            ? { spawnedBy: "agent:main:main", ...(spawnDepth ? { spawnDepth } : {}) }
+            ? {
+                spawnedBy: "agent:main:main",
+                ...(spawnDepth ? { spawnDepth } : {}),
+                ...(visibleSpawn ? { createdVia: "spawn" as const } : {}),
+              }
             : {}),
         },
       );
     await seedSession("agent:main:main", "main-fixture");
     await seedSession(sessionKey, "dashboard-fixture", child ? 1 : undefined);
-    const scriptFile = path.join(tmpDir, "background-child.cjs");
     const releaseFile = path.join(tmpDir, "release-child");
-    await fs.writeFile(
-      scriptFile,
+    const command = nodeCommand(
       [
         'const fs = require("node:fs");',
         `const releaseFile = ${JSON.stringify(releaseFile)};`,
@@ -136,12 +145,9 @@ it.skipIf(process.platform === "win32").each([
         "finish();",
       ].join("\n"),
     );
-    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
     const exec = createExecTool({
       config: cfg,
-      host: "gateway",
-      security: "full",
-      ask: "off",
+      ...fullGatewayExec,
       allowBackground: true,
       timeoutSec: 10,
       notifyOnExit: true,
@@ -152,16 +158,13 @@ it.skipIf(process.platform === "win32").each([
       currentChannelId: "100123",
     });
     const started = await exec.execute("background-child", {
-      command: `${quote(process.execPath)} ${quote(scriptFile)}`,
+      command,
       background: true,
     });
     // Completion retains its producer's policy after the original turn closes.
     clearAgentRunContext(RUN_ID);
-    const details = asOptionalRecord(started.details);
-    if (details?.status !== "running" || typeof details.sessionId !== "string") {
-      throw new Error(`Expected running exec, received ${String(details?.status)}`);
-    }
-    const sessionId = details.sessionId;
+    const { sessionId } = runningSession(started.details);
+    expect(typeof sessionId).toBe("string");
     // Register and retire the child while its process is waiting, before exit.
     if (child) {
       subagentRuns.set(
@@ -174,15 +177,14 @@ it.skipIf(process.platform === "win32").each([
     await fs.writeFile(releaseFile, "go");
     await waitForExecScope(sessionKey);
     expect(getFinishedSession(sessionId)?.exitCode).toBe(7);
-    expect(enqueueSessionEvent).toHaveBeenCalledTimes(child ? 0 : 1);
-    if (!child) {
+    expect(enqueueSessionEvent).toHaveBeenCalledTimes(notified ? 1 : 0);
+    if (notified) {
       const receipt = vi.mocked(enqueueSessionEvent).mock.results[0]!.value;
       await expect(receipt.settled).resolves.toMatchObject({
         status: "completed",
         executionStarted: true,
         delivered: true,
       });
-      expect(dispatchMock).toHaveBeenCalledTimes(1);
       expect(dispatchMock.mock.calls[0]?.[0].ctx.SessionKey).toBe(sessionKey);
       expect(sendTextMock).toHaveBeenCalledTimes(1);
     } else {

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createUniqueId, onCleanup, onSettled } from "solid-js";
+import { createEffect, createSignal, createUniqueId, onSettled, Show } from "solid-js";
 import { createOverlayAnchor } from "../../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -13,30 +13,38 @@ export function ChatPullRequestChecks(props: {
   checksState: string;
   presented: boolean;
   dismissed?: boolean;
-  children: JSX.Element;
+  children: () => JSX.Element;
 }) {
+  const [opened, setOpened] = createSignal(false);
   let details!: HTMLDetailsElement;
   let trigger!: HTMLElement;
   let surface!: HTMLElement;
   let mounted = false;
+  let presented = false;
   const overlay = createOverlay(`chat-pr-checks-${createUniqueId()}`, undefined, {
     interactionElements: () => [details],
     // Keyboard session switching preserves the retained disclosure's open intent.
     dismissOutsideFocus: false,
     acquireOcclusion: acquireNativeOverlaySurface,
   });
-  onCleanup(() => overlay.dispose());
-  const sync = () => {
+  const sync = (nextPresented: boolean, dismissed?: boolean) => {
+    presented = nextPresented;
     if (mounted) {
       // Explicit Details dismissal clears intent; parking only hides the surface.
-      if (props.dismissed) {
+      if (dismissed) {
         details.open = false;
       }
-      overlay.request(props.presented && details.open);
+      if (presented && details.open) {
+        setOpened(true);
+      }
+      overlay.request(presented && details.open);
     }
   };
   // Synchronize the native disclosure with the pane presentation and overlay owner.
-  createEffect(() => [props.presented, props.dismissed], sync);
+  createEffect(
+    () => ({ presented: props.presented, dismissed: props.dismissed }),
+    (next) => sync(next.presented, next.dismissed),
+  );
   onSettled(() => {
     overlay.bindSurface(surface);
     overlay.bindTrigger(trigger);
@@ -45,16 +53,17 @@ export function ChatPullRequestChecks(props: {
     anchor.update(trigger, "top-end");
     // Apply each native close edge synchronously; parking preserves disclosure intent.
     const stop = overlay.subscribe((open) => {
-      if (props.presented) {
+      if (presented) {
         details.open = open;
       }
     });
     mounted = true;
-    sync();
+    sync(props.presented, props.dismissed);
     return () => {
       mounted = false;
       stop();
       anchor.dispose();
+      overlay.dispose();
     };
   });
   return (
@@ -62,7 +71,7 @@ export function ChatPullRequestChecks(props: {
       ref={(node) => (details = node)}
       class="chat-pr__checks"
       data-checks={props.checksState}
-      onToggle={sync}
+      onToggle={() => sync(props.presented, props.dismissed)}
     >
       <summary
         ref={(node) => (trigger = node)}
@@ -82,7 +91,13 @@ export function ChatPullRequestChecks(props: {
         data-anchored-overlay
         popover="manual"
       >
-        {props.children}
+        <div
+          class="chat-pr__checks-menu"
+          role="group"
+          aria-label={t("chat.pullRequests.ciMonitoring")}
+        >
+          <Show when={opened()}>{props.children()}</Show>
+        </div>
       </div>
     </details>
   );

@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 
 /** Bun's native plugin resolver remains the owner even when Node hooks are available. */
@@ -55,6 +56,7 @@ type BunPluginImportKind =
   | "entry-point-run"
   | "entry-point-build";
 export type BunPluginRuntime = {
+  main: string;
   resolveSync?: (specifier: string, parent: string) => string;
   Transpiler: new (options: {
     loader: "jsx" | "tsx";
@@ -75,7 +77,7 @@ export type BunPluginRuntime = {
           path: string;
           importer: string;
           kind?: BunPluginImportKind;
-        }) => { path: string; namespace: "file" } | undefined,
+        }) => { path: string; namespace: string } | undefined,
       ): void;
       onLoad(
         options: { filter: RegExp; namespace: "file" },
@@ -159,16 +161,15 @@ function installCapturedPluginModuleResolver(bun: BunPluginRuntime | undefined):
     bun.plugin({
       name: "openclaw-plugin-source-capture",
       setup(builder) {
-        builder.onResolve(
-          { filter: /.*/, namespace: "file" },
-          ({ path: request, importer, kind }) => {
-            const target = resolveCapturedPluginModule((owner) =>
-              owner.prepare(request, importer, kind),
-            );
-            // Package selection stays native; owners redirect only captured physical source paths.
-            return target ? { path: target, namespace: "file" } : undefined;
-          },
-        );
+        // Compiled Bun refuses hooks whose filter includes its immutable entrypoint.
+        const filter = new RegExp(`^(?!${escapeRegExp(bun.main)}(?![\\s\\S]))`);
+        builder.onResolve({ filter, namespace: "file" }, ({ path: request, importer, kind }) => {
+          const target = resolveCapturedPluginModule((owner) =>
+            owner.prepare(request, importer, kind),
+          );
+          // Package selection stays native; owners redirect only captured physical source paths.
+          return target ? { path: target, namespace: "file" } : undefined;
+        });
       },
     });
     return;
@@ -297,6 +298,7 @@ export function tryNativeRequireModule(
       | Record<string, string>
       | ((specifier: string, parent?: string) => string | undefined);
     fallbackOnMissingDependency?: boolean;
+    hostRoot?: string;
   } = {},
 ): { ok: true; moduleExport: unknown } | { ok: false } {
   const modulePath = toNativeRequirePath(moduleSpecifier);
@@ -312,9 +314,13 @@ export function tryNativeRequireModule(
   }
   let resolvedPath: string | undefined;
   try {
-    resolvedPath = withNativeRequireAliases(options.aliasMap, () => require.resolve(modulePath));
+    resolvedPath = withNativeRequireAliases(options.aliasMap, options.hostRoot, () =>
+      require.resolve(modulePath),
+    );
     // Requiring the resolved target could apply a second alias to the same request.
-    const moduleExport = withNativeRequireAliases(options.aliasMap, () => require(modulePath));
+    const moduleExport = withNativeRequireAliases(options.aliasMap, options.hostRoot, () =>
+      require(modulePath),
+    );
     nativeModuleLoadFailures.delete(resolvedPath);
     return { ok: true, moduleExport };
   } catch (error) {
@@ -338,6 +344,24 @@ export function tryNativeRequireModule(
       nativeModuleLoadFailures.set(resolvedPath, error);
     }
     throw error;
+  }
+}
+
+/** Terminal capture disposal revokes its modules and ends original-error retry ownership. */
+export function clearPluginSourceCaptureModuleCache(directory: string): void {
+  // Jiti's Windows keys use forward slashes; containment follows filesystem identity.
+  const urls = pathToFileURL(directory + path.sep).href;
+  const cache = createRequire(import.meta.url).cache;
+  for (const id of Object.keys(cache)) {
+    if (id.startsWith(urls) || (path.isAbsolute(id) && isPathInside(directory, id))) {
+      delete cache[id];
+    }
+  }
+  // Failed modules need not remain in require.cache, but their errors still retain plugin objects.
+  for (const filename of nativeModuleLoadFailures.keys()) {
+    if (isPathInside(directory, filename)) {
+      nativeModuleLoadFailures.delete(filename);
+    }
   }
 }
 
@@ -373,13 +397,26 @@ function withNativeRequireAliases<T>(
     | Record<string, string>
     | ((specifier: string, parent?: string) => string | undefined)
     | undefined,
+  hostRoot: string | undefined,
   run: () => T,
 ): T {
-  if (!aliasMap || !moduleWithResolver["_resolveFilename"]) {
+  if ((!aliasMap && !hostRoot) || !moduleWithResolver["_resolveFilename"]) {
     return run();
   }
   const resolveAlias =
-    typeof aliasMap === "function" ? aliasMap : (specifier: string) => aliasMap[specifier];
+    typeof aliasMap === "function" ? aliasMap : (specifier: string) => aliasMap?.[specifier];
+  const nativeHostRoot = hostRoot ? fs.realpathSync.native(hostRoot) : undefined;
+  const resolveHostPath = (filename: string): string => {
+    if (!hostRoot || !nativeHostRoot || hostRoot === nativeHostRoot || !path.isAbsolute(filename)) {
+      return filename;
+    }
+    const physicalPath = fs.realpathSync.native(filename);
+    if (!isPathInside(nativeHostRoot, physicalPath)) {
+      return filename;
+    }
+    // Admission uses native spelling; packed chunks must share the running host's graph.
+    return path.join(hostRoot, path.relative(nativeHostRoot, physicalPath));
+  };
   const originalResolveFilename = moduleWithResolver["_resolveFilename"];
   const esmHooks = useNodeModuleHooks()
     ? Module.registerHooks({
@@ -391,8 +428,9 @@ function withNativeRequireAliases<T>(
           if (aliasTarget) {
             return { shortCircuit: true, url: pathToFileURL(aliasTarget).href };
           }
+          let resolved: ReturnType<typeof nextResolve>;
           try {
-            return nextResolve(specifier, context);
+            resolved = nextResolve(specifier, context);
           } catch (error) {
             // Compiled workers can load source SDKs without a TypeScript resolver.
             // Keep the native graph while resolving its emitted JavaScript suffixes.
@@ -408,11 +446,22 @@ function withNativeRequireAliases<T>(
                 context.parentURL,
               );
               if (fs.existsSync(fileURLToPath(sourceUrl))) {
-                return nextResolve(sourceUrl.href, context);
+                resolved = nextResolve(sourceUrl.href, context);
+              } else {
+                throw error;
               }
+            } else {
+              throw error;
             }
-            throw error;
           }
+          if (!hostRoot || hostRoot === nativeHostRoot || !resolved.url.startsWith("file:")) {
+            return resolved;
+          }
+          const url = new URL(resolved.url);
+          if (url.search || url.hash) {
+            return resolved;
+          }
+          return { ...resolved, url: pathToFileURL(resolveHostPath(fileURLToPath(url))).href };
         },
       })
     : undefined;
@@ -423,7 +472,7 @@ function withNativeRequireAliases<T>(
       // modules by this filename, so another spelling loads a second SDK instance.
       return path.normalize(aliasTarget);
     }
-    return originalResolveFilename(request, parent, isMain, options);
+    return resolveHostPath(originalResolveFilename(request, parent, isMain, options));
   }) satisfies ResolveFilename;
   try {
     return run();

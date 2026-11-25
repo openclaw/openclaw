@@ -19,11 +19,8 @@ export async function withHostDataSql<T>(
   observe?: Parameters<typeof observeHostDataSql>[0],
 ): Promise<T> {
   const sql = observeHostDataSql(observe);
-  try {
-    return await run(sql);
-  } finally {
-    sql.restore();
-  }
+  using _ = { [Symbol.dispose]: sql.restore };
+  return await run(sql);
 }
 
 export function publication(request: admission.SqliteWorkerAdmissionRequest) {
@@ -92,28 +89,22 @@ export function expectNoSql(queries: readonly string[], pattern: RegExp) {
   expect(queries.filter((query) => pattern.test(query))).toEqual([]);
 }
 
-function wrapAgentExecution(
-  owner: OpenClawAgentDatabaseExecution,
-  decorate: Decorate,
-): OpenClawAgentDatabaseExecution {
-  return {
+// Capture the originals before spying; keep both paths and their lazy identity getters intact.
+export function spyAgentExecutions(module: ExecutionModule, decorate: Decorate) {
+  const wrap = <Execution extends OpenClawAgentDatabaseExecution>(owner: Execution): Execution => ({
     ...owner,
     get fileIdentity() {
       return owner.fileIdentity;
     },
     runExisting: (source, operation, options) =>
       owner.runExisting(source, (worker) => operation(decorate(worker)), options),
-  };
-}
-
-// Capture the originals before spying; keep both paths and their lazy identity getters intact.
-export function spyAgentExecutions(module: ExecutionModule, decorate: Decorate) {
+  });
   const capture = module.captureOpenClawAgentDatabaseExecution;
-  const prepare = module.captureOpenClawAgentDatabasePreparationExecution;
+  const captureAsync = module.captureOpenClawAgentDatabaseExecutionAsync;
   vi.spyOn(module, "captureOpenClawAgentDatabaseExecution").mockImplementation((...args) =>
-    wrapAgentExecution(capture(...args), decorate),
+    wrap(capture(...args)),
   );
-  vi.spyOn(module, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
-    (...args) => wrapAgentExecution(prepare(...args), decorate),
+  vi.spyOn(module, "captureOpenClawAgentDatabaseExecutionAsync").mockImplementation(
+    async (...args) => wrap(await captureAsync(...args)),
   );
 }

@@ -1,12 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, readFileSync, realpathSync, rmSync } from "node:fs";
 import { posix, win32 } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   isNodeVersionAtLeast,
   MINIMUM_BUN_VERSION,
   parseNodeReleaseVersion,
 } from "../node-version.mjs";
+import { createRuntimeProcessScriptFile } from "../runtime-process-scripts.generated.mjs";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "./lib/package-lifecycle-marker.mjs";
 
 const allowedLifecyclePackageManagers = new Set(["pnpm", "npm", "yarn", "bun"]);
@@ -15,8 +16,6 @@ const lifecyclePackageManagerLauncherAliases = new Map([
   ["yarn-berry", "yarn"],
 ]);
 const NODE_ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/iu;
-const NODE_RUNTIME_PROBE_SOURCE =
-  "process.stdout.write(JSON.stringify({version:process.versions.node??null,bunVersion:process.versions.bun??null,execPath:process.execPath??null}))";
 const PACKAGE_CLI_NODE_PROBE_TIMEOUT_MS = 10_000;
 /**
  * @typedef {{
@@ -187,6 +186,7 @@ function stripBunLifecyclePaths(pathEntries, cwd, pathApi, platform, dependencyL
  *   access?: (path: string, mode: number) => void;
  *   realpath?: (path: string) => string;
  *   run?: PackageCliNodeProbeRun;
+ *   allowUnavailableNodeFallback?: boolean;
  * }} [options]
  * @returns {PackageCliNodeRuntime | null}
  */
@@ -201,6 +201,7 @@ export function probePackageCliNodeRuntime(options = {}) {
     access = accessSync,
     realpath = realpathSync,
     run = spawnSync,
+    allowUnavailableNodeFallback = false,
   } = options;
   const pathApi = platform === "win32" ? win32 : posix;
   const delimiter = platform === "win32" ? ";" : ":";
@@ -239,13 +240,18 @@ export function probePackageCliNodeRuntime(options = {}) {
         delete childEnv[key];
       }
     }
-    return run(candidate, ["-e", NODE_RUNTIME_PROBE_SOURCE], {
-      cwd,
-      encoding: "utf8",
-      env: childEnv,
-      timeout: PACKAGE_CLI_NODE_PROBE_TIMEOUT_MS,
-      windowsHide: true,
-    });
+    const script = createRuntimeProcessScriptFile("packageCliNodeProbe");
+    try {
+      return run(candidate, [fileURLToPath(script.url)], {
+        cwd,
+        encoding: "utf8",
+        env: childEnv,
+        timeout: PACKAGE_CLI_NODE_PROBE_TIMEOUT_MS,
+        windowsHide: true,
+      });
+    } finally {
+      script.dispose();
+    }
   };
 
   for (const entry of pathEntries) {
@@ -291,6 +297,9 @@ export function probePackageCliNodeRuntime(options = {}) {
       continue;
     }
     if (result?.status !== 0) {
+      if (allowUnavailableNodeFallback) {
+        continue;
+      }
       return null;
     }
 
@@ -344,7 +353,7 @@ export function enforceSupportedNodeRuntime(
       return true;
     }
     reportError(
-      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4.3+ (detected ${detectedRuntime.bunVersion}).`,
+      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4.4+ (detected ${detectedRuntime.bunVersion}).`,
     );
     return false;
   }
@@ -460,7 +469,12 @@ export function warnIfNonPnpmLifecycle(env = process.env, warn = console.warn) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  if (enforceSupportedNodeRuntime() && removeLegacyPackageInstallGuard()) {
+  // `npm exec` hides lifecycle output and failures, and replaces no installed release.
+  // Let its throwaway install finish so the launcher can report the runtime problem.
+  if (
+    (enforceSupportedNodeRuntime() || process.env.npm_command === "exec") &&
+    removeLegacyPackageInstallGuard()
+  ) {
     warnIfNonPnpmLifecycle();
   } else {
     process.exitCode = 1;

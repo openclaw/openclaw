@@ -3,7 +3,7 @@
 import type { SystemAgentChatResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import * as uuid from "../../lib/uuid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -330,11 +330,9 @@ describe("custodian page nudges", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
     pendingQuestion.resolve(chatReply("Moving on."));
 
-    await Promise.resolve();
-    await page.updateComplete;
     // The authoritative rejoin wins over the interrupted reply.
+    await waitForFast(() => expect(page.textContent).toContain("Welcome back."));
     expect(page.textContent).not.toContain("Moving on.");
-    expect(page.textContent).toContain("Welcome back.");
     const action = nudgeAction(page);
     expect(action.disabled).toBe(false);
   });

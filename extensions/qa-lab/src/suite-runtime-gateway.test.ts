@@ -45,6 +45,8 @@ afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
   writeGatewayRestartIntentSyncMock.mockReset();
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
 });
 
 function mockGateway(config: Record<string, unknown> = {}) {
@@ -57,19 +59,21 @@ function mockGateway(config: Record<string, unknown> = {}) {
 }
 
 function mockHealthyResponse() {
-  const release = vi.fn(async () => {});
-  fetchWithSsrFGuardMock.mockResolvedValue({ response: { ok: true }, release });
-  return release;
+  fetchWithSsrFGuardMock.mockResolvedValue({ response: { ok: true }, release: async () => {} });
 }
 
-function guardedStream(events: string[], name: string, release: () => Promise<void>) {
+function guardedStream(events: string[], name: string, release: () => Promise<void>, status = 200) {
   return {
     response: new Response(
       new ReadableStream<Uint8Array>({
         cancel() {
           events.push(`${name}:cancel`);
+          if (status !== 200) {
+            throw new Error("cancel failed");
+          }
         },
       }),
+      { status },
     ),
     release: async () => {
       events.push(`${name}:release`);
@@ -86,7 +90,6 @@ describe("qa suite gateway helpers", () => {
 
     expect(failure).toBeInstanceOf(QaSuiteInfraError);
     expect(failure).toMatchObject({
-      name: "QaSuiteInfraError",
       code: "transport_ready_timeout",
       cause: readinessError,
       message: expect.stringContaining(readinessError.message),
@@ -99,7 +102,7 @@ describe("qa suite gateway helpers", () => {
 
   it("forces an authenticated restart even when the config patch was already applied", async () => {
     vi.useFakeTimers();
-    const release = mockHealthyResponse();
+    mockHealthyResponse();
     writeGatewayRestartIntentSyncMock.mockReturnValue(true);
     const patch = { tools: { codeMode: { enabled: false } } };
     gatewayCall.mockImplementation(
@@ -114,22 +117,20 @@ describe("qa suite gateway helpers", () => {
     await vi.advanceTimersByTimeAsync(1_750);
 
     await expect(restarting).resolves.toEqual({ ok: true });
-    const mutationTimeout = { timeoutMs: 180_000 };
-    expect(gatewayCall.mock.calls).toEqual([
-      ["config.get", {}, { timeoutMs: 60_000 }],
-      ["system.info", {}, mutationTimeout],
-      [
-        "config.patch",
-        {
-          raw: JSON.stringify(patch, null, 2),
-          baseHash: "hash-1",
-          restartDelayMs: 1_000,
-          replacePaths: ["gateway.controlUi.allowedOrigins"],
-        },
-        mutationTimeout,
-      ],
-      ["gateway.restart.request", { reason: "config.patch", skipDeferral: true }, mutationTimeout],
+    expect(gatewayCall.mock.calls[2]?.slice(0, 2)).toEqual([
+      "config.patch",
+      {
+        raw: JSON.stringify(patch, null, 2),
+        baseHash: "hash-1",
+        restartDelayMs: 1_000,
+        replacePaths: ["gateway.controlUi.allowedOrigins"],
+      },
     ]);
+    expect(gatewayCall).toHaveBeenLastCalledWith(
+      "gateway.restart.request",
+      { reason: "config.patch", skipDeferral: true },
+      { timeoutMs: 180_000 },
+    );
     expect(writeGatewayRestartIntentSyncMock).toHaveBeenCalledWith({
       env: runtimeEnv,
       targetPid: 43_123,
@@ -137,23 +138,16 @@ describe("qa suite gateway helpers", () => {
       intent: { force: true, waitMs: 0 },
     });
     expect(writeGatewayRestartIntentSyncMock).toHaveBeenCalledOnce();
-    expect(writeGatewayRestartIntentSyncMock.mock.invocationCallOrder[0]).toBeGreaterThan(
-      gatewayCall.mock.invocationCallOrder[2] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(writeGatewayRestartIntentSyncMock.mock.invocationCallOrder[0]).toBeLessThan(
-      gatewayCall.mock.invocationCallOrder[3] ?? Number.NEGATIVE_INFINITY,
-    );
+    const intentOrder = writeGatewayRestartIntentSyncMock.mock.invocationCallOrder[0]!;
+    expect(intentOrder).toBeGreaterThan(gatewayCall.mock.invocationCallOrder[2]!);
+    expect(intentOrder).toBeLessThan(gatewayCall.mock.invocationCallOrder[3]!);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "http://127.0.0.1:43123/readyz",
         auditContext: "qa-lab-suite-wait-for-gateway-healthy",
       }),
     );
-    expect(waitReady).toHaveBeenCalledWith({
-      gateway: env.gateway,
-      timeoutMs: expect.any(Number),
-    });
-    expect(release).toHaveBeenCalled();
+    expect(waitReady).toHaveBeenCalledOnce();
     expect(restartAfterStateMutation).not.toHaveBeenCalled();
   });
 
@@ -211,25 +205,12 @@ describe("qa suite gateway helpers", () => {
 
   it("cancels failed suite gateway JSON response bodies before releasing their guard", async () => {
     const events: string[] = [];
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        new ReadableStream<Uint8Array>({
-          cancel() {
-            events.push("cancel");
-            throw new Error("cancel failed");
-          },
-        }),
-        { status: 503 },
-      ),
-      release: async () => {
-        events.push("release");
-      },
-    });
+    fetchWithSsrFGuardMock.mockResolvedValue(guardedStream(events, "failed", async () => {}, 503));
 
     await expect(fetchJson("http://127.0.0.1:43123/config")).rejects.toThrow(
       "request failed 503: http://127.0.0.1:43123/config",
     );
-    expect(events).toEqual(["cancel", "release"]);
+    expect(events).toEqual(["failed:cancel", "failed:release"]);
   });
 
   it("retries healthy gateway responses until their guard releases successfully", async () => {
@@ -266,15 +247,9 @@ describe("qa suite gateway helpers", () => {
       await expect(readiness).resolves.toBeUndefined();
       expect(onReady).toHaveBeenCalledOnce();
     } finally {
-      try {
-        released.resolve();
-        await vi.advanceTimersByTimeAsync(1_000);
-        await settled;
-      } finally {
-        sleep.mockRestore();
-        vi.useRealTimers();
-        syncBuiltinESMExports();
-      }
+      released.resolve();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await settled;
     }
   });
 

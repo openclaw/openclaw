@@ -1,5 +1,3 @@
-// Gateway server chat tests cover WebSocket chat flow, history construction,
-// NO_REPLY handling, agent events, and connected control-UI delivery.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -18,29 +16,18 @@ import {
 } from "./session-history-fixtures.test-support.js";
 import { dispatchInboundMessageMock, onceMessage, rpcReq, testState } from "./test-helpers.js";
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
-const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
+const YAML_PARTS = ["```yaml\nroot:\n", "  nested:\n    value: true\n```"];
 
 function mockDispatchedReplies(kind: "final" | "block", payloads: ReplyPayload[]) {
   dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
     const [params] = args as [{ dispatcher: ReplyDispatcher }];
     for (const payload of payloads) {
-      if (kind === "final") {
-        params.dispatcher.sendFinalReply(payload);
-      } else {
-        params.dispatcher.sendBlockReply(payload);
-      }
+      params.dispatcher[kind === "final" ? "sendFinalReply" : "sendBlockReply"](payload);
     }
     params.dispatcher.markComplete();
     await params.dispatcher.waitForIdle();
     return { queuedFinal: kind === "final", counts: params.dispatcher.getQueuedCounts() };
   });
-}
-
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
 }
 
 let ws: WebSocket;
@@ -51,46 +38,40 @@ const gatewaySuite = installGatewayServerChatTestSuite((started) => {
 const { expectRecordFields, withMainSessionStore } = gatewaySuite;
 
 describe("gateway server chat", () => {
-  const waitForChatEvent = (runId: string, state = "final") =>
+  const waitForChatEvent = (runId: string, sideResult = false) =>
     onceMessage(
       ws,
       (event) =>
         event.type === "event" &&
-        event.event === "chat" &&
-        event.payload?.state === state &&
+        event.event === (sideResult ? "chat.side_result" : "chat") &&
+        (sideResult ? event.payload?.kind === "btw" : event.payload?.state === "final") &&
         event.payload?.runId === runId,
       8_000,
     );
-
-  const loadChatHistoryWithMessages = async (
-    messages: Array<Record<string, unknown>>,
-  ): Promise<unknown[]> => {
-    return withMainSessionStore(async () => {
-      await replaceMainTranscriptMessages(messages);
-
-      const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-      });
-      expect(res.ok).toBe(true);
-      return res.payload?.messages ?? [];
-    });
+  const sendChat = async (idempotencyKey: string, message: string) => {
+    const res = await rpcReq(ws, "chat.send", { sessionKey: "main", message, idempotencyKey });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    return res;
+  };
+  const readHistory = async () => {
+    const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", { sessionKey: "main" });
+    expect(res.ok).toBe(true);
+    return res.payload?.messages ?? [];
   };
 
-  const replaceMainTranscriptMessages = async (
-    messages: Record<string, unknown>[],
-  ): Promise<void> => {
+  const loadChatHistoryWithMessages = (messages: Record<string, unknown>[]) =>
+    withMainSessionStore(async () => {
+      await replaceMainTranscriptMessages(messages);
+      return readHistory();
+    });
+  const replaceMainTranscriptMessages = async (messages: Record<string, unknown>[]) => {
     const storePath = testState.sessionStorePath;
     if (!storePath) {
       throw new Error("session store path was not initialized");
     }
-    const events = messages.map((message, index) => ({
-      message,
-      id: `message-${index}`,
-      type: "message",
-    }));
     await replaceTranscriptEvents(
       { agentId: "main", sessionId: "sess-main", sessionKey: "main", storePath },
-      events,
+      messages.map((message, index) => ({ message, id: `message-${index}`, type: "message" })),
     );
   };
 
@@ -158,24 +139,17 @@ describe("gateway server chat", () => {
       ...publications,
       createGatewayHistoryText("assistant", "NO_REPLY", 6),
     ]);
-    expect(collectHistoryTextValues(historyMessages)).toEqual([
-      "Sanitized publication.",
-      "Sanitized publication.",
-    ]);
-    for (const publication of publications) {
-      expect(historyMessages).toContainEqual(expect.objectContaining(publication));
-    }
+    const expectPublications = (messages: unknown[]) => {
+      expect(collectHistoryTextValues(messages)).toEqual(Array(2).fill("Sanitized publication."));
+      for (const publication of publications) {
+        expect(messages).toContainEqual(expect.objectContaining(publication));
+      }
+    };
+    expectPublications(historyMessages);
     expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
     const publicRows = historyMessages.filter(isRecord);
     expect(publicRows).toHaveLength(historyMessages.length);
-    const reprojected = await loadChatHistoryWithMessages(publicRows);
-    expect(collectHistoryTextValues(reprojected)).toEqual([
-      "Sanitized publication.",
-      "Sanitized publication.",
-    ]);
-    for (const publication of publications) {
-      expect(reprojected).toContainEqual(expect.objectContaining(publication));
-    }
+    expectPublications(await loadChatHistoryWithMessages(publicRows));
   });
 
   test("chat.history drops retired synthetic replies without dropping canonical or forwarded messages", async () => {
@@ -208,74 +182,56 @@ describe("gateway server chat", () => {
     expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
   });
 
-  test("preserves split fenced-code indentation in chat.send events and history", async () => {
-    await withMainSessionStore(async () => {
-      const expected = "```yaml\nroot:\n  nested:\n    value: true\n```";
-      mockDispatchedReplies("final", [
-        { text: "```yaml\nroot:\n" },
-        { text: "  nested:\n    value: true\n```" },
-      ]);
-      const finalPromise = waitForChatEvent("idem-fenced-code-indentation");
-
-      const result = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "show the YAML",
-        idempotencyKey: "idem-fenced-code-indentation",
+  test.each([false, true])(
+    "preserves split fenced-code indentation (side result: %s)",
+    async (side) => {
+      await withMainSessionStore(async () => {
+        const expected = YAML_PARTS.join("");
+        const runId = `idem-fenced-code-${side}`;
+        mockDispatchedReplies(
+          side ? "block" : "final",
+          YAML_PARTS.map((text) => (side ? { text, btw: { question: "show YAML" } } : { text })),
+        );
+        const eventPromise = waitForChatEvent(runId, side);
+        await sendChat(runId, side ? "/btw show YAML" : "show the YAML");
+        const event = await eventPromise;
+        if (side) {
+          expectRecordFields(event.payload, {
+            kind: "btw",
+            runId,
+            question: "show YAML",
+            text: expected,
+          });
+        } else {
+          expect(extractFirstTextBlock(event.payload?.message)).toBe(expected);
+          expect(collectHistoryTextValues(await readHistory())).toContain(expected);
+        }
       });
-      expect(result.ok).toBe(true);
-      const finalEvent = await finalPromise;
-      expect(extractFirstTextBlock(finalEvent.payload?.message)).toBe(expected);
+    },
+  );
 
-      const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-      });
-      expect(history.ok).toBe(true);
-      expect(collectHistoryTextValues(history.payload?.messages ?? [])).toContain(expected);
-    });
-  });
-
-  test("routes chat.send slash commands without agent runs", async () => {
-    await withMainSessionStore(async () => {
+  test("routes slash commands without agent runs", () =>
+    withMainSessionStore(async () => {
       const spy = vi.mocked(agentCommandMock);
       const callsBefore = spy.mock.calls.length;
       const eventPromise = waitForChatEvent("idem-command-1");
-      const res = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "/context list",
-        idempotencyKey: "idem-command-1",
-      });
-      expect(res.ok).toBe(true);
+      await sendChat("idem-command-1", "/context list");
       await eventPromise;
       expect(spy.mock.calls.length).toBe(callsBefore);
-    });
-  });
+    }));
 
-  test("routes /btw replies through side-result events without transcript injection", async () => {
-    await withMainSessionStore(async () => {
+  test("routes /btw without transcript injection", () =>
+    withMainSessionStore(async () => {
       await replaceMainTranscriptMessages([
         createGatewayHistoryText("user", "main thread context", Date.now()),
       ]);
       mockDispatchedReplies("final", [{ text: "323", btw: { question: "what is 17 * 19?" } }]);
-      const sideResultPromise = onceMessage(
-        ws,
-        (o) =>
-          o.type === "event" &&
-          o.event === "chat.side_result" &&
-          o.payload?.kind === "btw" &&
-          o.payload?.runId === "idem-btw-1",
-        8000,
-      );
+      const sideResultPromise = waitForChatEvent("idem-btw-1", true);
       const finalPromise = waitForChatEvent("idem-btw-1");
 
-      const res = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "/btw what is 17 * 19?",
-        idempotencyKey: "idem-btw-1",
-      });
-
-      expect(res.ok).toBe(true);
-      await waitForFast(() => {
-        expect(dispatchInboundMessageMock).toHaveBeenCalled();
+      await sendChat("idem-btw-1", "/btw what is 17 * 19?");
+      await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalled(), {
+        interval: 1,
       });
       const sideResult = await sideResultPromise;
       const finalEvent = await finalPromise;
@@ -292,50 +248,12 @@ describe("gateway server chat", () => {
         state: "final",
       });
 
-      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-      });
-      expect(historyRes.ok).toBe(true);
-      const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
-      expect(historyTexts).toEqual(["main thread context"]);
-    });
-  });
-
-  test("preserves split fenced-code indentation in /btw side-result events", async () => {
-    await withMainSessionStore(async () => {
-      mockDispatchedReplies("block", [
-        { text: "```yaml\nroot:\n", btw: { question: "show YAML" } },
-        { text: "  nested:\n    value: true\n```", btw: { question: "show YAML" } },
-      ]);
-      const sideResultPromise = onceMessage(
-        ws,
-        (event) =>
-          event.type === "event" &&
-          event.event === "chat.side_result" &&
-          event.payload?.kind === "btw" &&
-          event.payload?.runId === "idem-btw-fenced-code-indentation",
-        8_000,
-      );
-
-      const result = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "/btw show YAML",
-        idempotencyKey: "idem-btw-fenced-code-indentation",
-      });
-      expect(result.ok).toBe(true);
-      expectRecordFields((await sideResultPromise).payload, {
-        kind: "btw",
-        runId: "idem-btw-fenced-code-indentation",
-        question: "show YAML",
-        text: "```yaml\nroot:\n  nested:\n    value: true\n```",
-      });
-    });
-  });
+      expect(collectHistoryTextValues(await readHistory())).toEqual(["main thread context"]);
+    }));
 
   test("chat.history persists assistant image data URLs as managed image blocks", async () => {
     await withMainSessionStore(
       async () => {
-        // Keep the connected owner's profile and media in the suite-owned state directory.
         const pngB64 =
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
         mockDispatchedReplies("final", [
@@ -343,50 +261,32 @@ describe("gateway server chat", () => {
         ]);
 
         const finalPromise = waitForChatEvent("idem-managed-image-history");
-        await Promise.all([
-          rpcReq(ws, "chat.send", {
-            sessionKey: "main",
-            message: "show me an image",
-            idempotencyKey: "idem-managed-image-history",
-          }).then((res) => {
-            expect(res.ok, JSON.stringify(res)).toBe(true);
-            expect(res.payload?.runId).toBe("idem-managed-image-history");
-          }),
-          finalPromise,
-        ]);
+        const response = await sendChat("idem-managed-image-history", "show me an image");
+        expect(response.payload?.runId).toBe("idem-managed-image-history");
+        await finalPromise;
 
-        let assistantMessage: Record<string, unknown> | undefined;
-        await waitForFast(
-          async () => {
-            const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-              sessionKey: "main",
-            });
-            expect(historyRes.ok).toBe(true);
-            const messages = historyRes.payload?.messages ?? [];
-            assistantMessage = messages.find(
-              (message): message is Record<string, unknown> =>
-                typeof message === "object" &&
-                message !== null &&
-                (message as { role?: unknown }).role === "assistant",
-            );
-            if (!assistantMessage) {
-              throw new Error("Expected assistant history message");
-            }
-          },
-          { timeout: CHAT_RESPONSE_TIMEOUT_MS },
+        const assistantMessage = await vi.waitFor(
+          async () =>
+            expectRecordFields(
+              (await readHistory()).find(
+                (message) => isRecord(message) && message.role === "assistant",
+              ),
+              { role: "assistant" },
+            ),
+          { interval: 1, timeout: 10_000 },
         );
         const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
         expect(assistantContent).toHaveLength(2);
         expect(assistantContent[0]).toEqual({ type: "text", text: "Image reply" });
-        const imageBlock = expectRecordFields(assistantContent[1], {
+        expectRecordFields(assistantContent[1], {
           type: "image",
           alt: "Generated image 1",
           mimeType: "image/png",
           width: 1,
           height: 1,
+          url: expect.stringContaining("/api/chat/media/outgoing/"),
+          openUrl: expect.stringContaining("/full"),
         });
-        expect(String(imageBlock.url)).toContain("/api/chat/media/outgoing/");
-        expect(String(imageBlock.openUrl)).toContain("/full");
         const serializedAssistant = JSON.stringify(assistantMessage);
         expect(serializedAssistant).not.toContain("data:image/png;base64");
         expect(serializedAssistant).not.toContain(pngB64);

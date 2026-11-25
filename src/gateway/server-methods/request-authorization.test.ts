@@ -4,8 +4,14 @@ import {
   createAgentDatabaseInspectionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
-import { sendAuthorizationRequest } from "../server-methods.authorization.test-support.js";
-import type { GatewayRequestHandler } from "./types.js";
+import {
+  authorizationClient,
+  sendAuthorizationRequest,
+} from "../server-methods.authorization.test-support.js";
+import { createRequestGatewayMethodRegistry } from "../server-methods.js";
+import { authorizeGatewayRequestPreDispatch } from "./request-authorization.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
+import type { GatewayRequestContext, GatewayRequestHandler } from "./types.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -19,74 +25,36 @@ afterEach(() => {
   tempDirs.cleanup();
 });
 
-it("dispatches an admitted agent-only send while another agent is preparing", async () => {
-  recordAgentDatabaseAdmissions(
-    [
-      createAgentDatabaseInspectionRefusal({
-        agentId: "main",
-        paths: [],
-        reason: "Synthetic inspection is pending.",
-        pending: true,
-      }),
-    ],
-    { source: "startup" },
-  );
+function createSend(agentId: string, pending: boolean, idempotencyKey = "agent-only-startup") {
+  const refusal = createAgentDatabaseInspectionRefusal({
+    agentId,
+    paths: [],
+    pending,
+    reason: pending ? "Synthetic inspection is pending." : "Synthetic inspection failed.",
+  });
+  recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+  const startup = {
+    hasPendingAgents: pending,
+    isAgentInputRecoveryPending: () => false,
+    registerInputRecovery: () => {},
+    waitForAgentPreparation: () => {
+      throw new Error("Send must not wait for startup preparation");
+    },
+  };
   const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { sent: true }));
-  const respond = await sendAuthorizationRequest(
-    "send",
-    {
-      agentId: "work",
-      to: "channel:C1",
-      channel: "slack",
-      message: "hello",
-      idempotencyKey: "healthy-agent-send",
-    },
-    {
-      scopes: ["operator.admin"],
-      context: {
-        getRuntimeConfig: () => ({
-          agents: { ownership: "explicit", entries: { main: {}, work: {} } },
-        }),
-        agentDatabaseStartup: {
-          hasPendingAgents: true,
-          waitForAgentPreparation: () => {
-            throw new Error("An admitted send must not wait for startup preparation");
-          },
-        },
-      },
-      extraHandlers: { send: handler },
-    },
-  );
-  expect(respond).toHaveBeenCalledWith(true, { sent: true });
-  expect(handler).toHaveBeenCalledTimes(1);
-});
-
-it.each([true, false])(
-  "refuses an agent-only send before dispatch while inspection is pending=%s",
-  async (pending) => {
-    const refusal = createAgentDatabaseInspectionRefusal({
-      agentId: "work",
-      paths: [],
-      reason: pending ? "Synthetic inspection is pending." : "Synthetic inspection failed.",
-      pending,
-    });
-    recordAgentDatabaseAdmissions([refusal], { source: "startup" });
-    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { sent: true }));
-    const startup = {
-      hasPendingAgents: pending,
-      waitForAgentPreparation: () => {
-        throw new Error("Writes must refuse without waiting for startup preparation");
-      },
-    };
-    const send = () =>
+  return {
+    handler,
+    startup,
+    refusal,
+    send: () =>
       sendAuthorizationRequest(
         "send",
         {
           agentId: "work",
-          channel: "slack",
           to: "channel:C1",
+          channel: "slack",
           message: "hello",
-          idempotencyKey: "agent-only-startup",
+          idempotencyKey,
         },
         {
           scopes: ["operator.admin"],
@@ -98,21 +66,31 @@ it.each([true, false])(
           },
           extraHandlers: { send: handler },
         },
-      );
+      ),
+  };
+}
+
+it("dispatches an admitted agent-only send while another agent is preparing", async () => {
+  const { handler, send } = createSend("main", true, "healthy-agent-send");
+  const respond = await send();
+  expect(respond).toHaveBeenCalledWith(true, { sent: true });
+  expect(handler).toHaveBeenCalledTimes(1);
+});
+
+it.each([true, false])(
+  "refuses an agent-only send before dispatch while inspection is pending=%s",
+  async (pending) => {
+    const { handler, send, startup, refusal } = createSend("work", pending);
 
     const respond = await send();
     expect(handler).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        retryable: pending,
-        ...(pending
-          ? { details: { reason: "startup-sidecars", method: "send" } }
-          : { details: refusal }),
-      }),
-    );
+    expectRpcError(respond, {
+      code: "UNAVAILABLE",
+      retryable: pending,
+      ...(pending
+        ? { details: { reason: "startup-sidecars", method: "send" } }
+        : { details: refusal }),
+    });
 
     recordAgentDatabaseAdmissions([], { source: "startup" });
     startup.hasPendingAgents = false;
@@ -120,3 +98,41 @@ it.each([true, false])(
     expect(handler).toHaveBeenCalledTimes(1);
   },
 );
+
+it("keeps admitted method authority after preparation; refuses the next request", async () => {
+  const client = authorizationClient("method-check-once", ["operator.admin"]);
+  const methodRegistry = createRequestGatewayMethodRegistry({ "demo.checkOnce": () => {} });
+  const context = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
+  const request = {
+    method: "demo.checkOnce",
+    requestParams: {},
+    client,
+    context,
+    methodRegistry,
+    assertPreparationCurrent: () => {
+      client.invalidated = true;
+    },
+  };
+  expect(await authorizeGatewayRequestPreDispatch(request)).toMatchObject({ error: null });
+  expect(await authorizeGatewayRequestPreDispatch(request)).toMatchObject({
+    error: { code: "FORBIDDEN", message: "This connection lost access. Reconnect and try again." },
+  });
+});
+
+it("refuses a new request from an ended run, not session authorization inside an admitted one", async () => {
+  const client = authorizationClient("ended-run", ["operator.admin"]);
+  const identity = { agentId: "main", sessionKey: "agent:main:main" };
+  client.internal = { ...client.internal, agentRuntimeIdentity: identity as never };
+  const methodRegistry = createRequestGatewayMethodRegistry({ "demo.endedRun": () => {} });
+  const context = {
+    getRuntimeConfig: () => ({}),
+    validateAgentRuntimeApprovalAuthority: () => false,
+  } as unknown as GatewayRequestContext;
+  const request = { method: "demo.endedRun", requestParams: {}, client, context, methodRegistry };
+  expect(await authorizeGatewayRequestPreDispatch(request)).toMatchObject({
+    error: { code: "INVALID_REQUEST", message: expect.stringContaining("agent run has ended") },
+  });
+  expect(await authorizeGatewayRequestPreDispatch({ ...request, admitted: true })).toMatchObject({
+    error: null,
+  });
+});

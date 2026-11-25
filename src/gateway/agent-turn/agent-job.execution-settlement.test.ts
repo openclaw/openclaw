@@ -129,9 +129,8 @@ describe("waitForAgentJob settled execution", () => {
     "keeps %s timing and reply evidence (lifecycle first=%s, status=%s, reply=%j)",
     async (source, lifecycleFirst, status, terminalReply) => {
       const job = createJob("execution-timing");
-      const { runId, dedupe } = job;
+      const { runId } = job;
       const publishedAt = Date.now();
-      const entry = { ts: publishedAt, ok: status === "ok", payload: { runId, status } };
       const terminalReceipt = {
         runId,
         sessionId: "session-a",
@@ -148,7 +147,7 @@ describe("waitForAgentJob settled execution", () => {
         recordLifecycle();
         await expect(job.wait(source)).resolves.toBeNull();
       }
-      setGatewayDedupeEntry({ dedupe, key: `${source}:${runId}`, entry });
+      job.publish(source, { status }, { ts: publishedAt, ok: status === "ok" });
       if (!lifecycleFirst) {
         recordLifecycle();
       }
@@ -165,7 +164,6 @@ describe("waitForAgentJob settled execution", () => {
       for (const selectedSource of [undefined, source]) {
         await job.expect(expected, selectedSource);
       }
-      expect(dedupe.get(`${source}:${runId}`)).toBe(entry);
       await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
       await job.expect({ endedAt: expected.endedAt }, source);
       await vi.advanceTimersByTimeAsync(2);
@@ -241,15 +239,11 @@ describe("waitForAgentJob settled execution", () => {
       job.emit({ ...settledTiming, yielded: true, livenessState: "paused" });
       await expect(job.wait("chat")).resolves.toBeNull();
       job.publish("chat", { status, startedAt: 100, endedAt: 300 }, { ok: status === "ok" });
-      await job.expect(
-        {
-          status,
-          endedAt: 300,
-          yielded: status === "ok" ? true : undefined,
-          livenessState: status === "ok" ? "paused" : undefined,
-        },
-        "chat",
-      );
+      const execution =
+        status === "ok"
+          ? { yielded: true, livenessState: "paused" }
+          : { yielded: undefined, livenessState: undefined };
+      await job.expect({ status, endedAt: 300, ...execution }, "chat");
     },
   );
 

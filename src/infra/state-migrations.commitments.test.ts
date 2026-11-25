@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -11,9 +11,11 @@ import {
   detectLegacyCommitments,
   migrateLegacyCommitments,
 } from "./state-migrations.commitments.js";
+import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
+    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   });
@@ -105,33 +107,38 @@ it.each([
   expect(receipt()).toBeUndefined();
 });
 
-it.each(["beforeVerify", "beforeClaim"] as const)(
-  "leaves a source changed %s unchanged",
-  async (hook) => {
-    await writeLegacy();
-    const result = await migrate({ [hook]: () => fs.appendFileSync(source, "\n") });
-    expect(result.changes).toEqual([]);
-    expect(result.warnings[0]).toContain("changed");
-    expectPaths(true, false);
-    expect(receipt()).toBeUndefined();
-  },
-);
+it("leaves a source changed before cleanup unchanged with a pending receipt", async () => {
+  await writeLegacy();
+  const verify = vi.spyOn(LegacyMigrationSourceClaim.prototype, "verify");
+  verify.mockImplementationOnce(function (this: LegacyMigrationSourceClaim, ...args) {
+    verify.mockRestore();
+    fs.appendFileSync(source, "\n");
+    return this.verify(...args);
+  });
+  const result = await migrate();
+  expect(result.changes).toEqual([]);
+  expect(result.warnings[0]).toContain("changed");
+  expectPaths(true, false);
+  expect(receipt()?.removed_source).toBe(0);
+});
 
 it.each([false, true])(
-  "recovers interrupted cleanup (claim already deleted: %s)",
+  "recovers interrupted cleanup (source already deleted: %s)",
   async (deleted) => {
     await writeLegacy(rows("retired"));
-    const first = await migrate({
-      removeSource: async (claimPath) => {
-        if (deleted) {
-          await fsp.unlink(claimPath);
-        }
-        throw new Error("simulated cleanup failure");
-      },
+    const verify = vi.spyOn(LegacyMigrationSourceClaim.prototype, "verify");
+    verify.mockImplementationOnce(async function (this: LegacyMigrationSourceClaim, ...args) {
+      verify.mockRestore();
+      await this.verify(...args);
+      if (deleted) {
+        await fsp.unlink(source);
+      }
+      throw new Error("simulated cleanup failure");
     });
+    const first = await migrate();
     expect(first.changes).toEqual([]);
     expect(first.warnings[0]).toContain("discard was recorded, but cleanup failed");
-    expectPaths(false, !deleted);
+    expectPaths(!deleted, false);
     expect(receipt()?.removed_source).toBe(0);
     const detected = await detect();
     expect(detected.hasLegacy).toBe(true);

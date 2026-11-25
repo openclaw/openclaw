@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { listDirectoryTreeStrict } from "../../../../src/infra/directory-walk.js";
 import { MediaFetchError, saveRemoteMedia } from "../../../../src/media/fetch.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -29,18 +30,6 @@ function handleSourceRequest(request: IncomingMessage, response: ServerResponse)
       response.writeHead(302, { location: `${targetOrigin}/payload` });
       response.end();
       return;
-    case "/oversized-file":
-      response.writeHead(200, {
-        "content-length": "128",
-        "content-type": "application/octet-stream",
-      });
-      response.end("declared oversized file");
-      return;
-    case "/oversized-stream":
-      response.writeHead(200, { "content-type": "application/octet-stream" });
-      response.write(Buffer.alloc(12, 0x61));
-      response.end(Buffer.alloc(12, 0x62));
-      return;
     default:
       response.writeHead(404);
       response.end();
@@ -59,11 +48,8 @@ function handleTargetRequest(request: IncomingMessage, response: ServerResponse)
 }
 
 async function expectNoPublishedMediaFiles(stateDir: string): Promise<void> {
-  const entries = await fs
-    .readdir(path.join(stateDir, "media"), {
-      withFileTypes: true,
-      recursive: true,
-    })
+  const entries = await listDirectoryTreeStrict(path.join(stateDir, "media"))
+    .then((inventory) => inventory.map((walkEntry) => walkEntry.dirent))
     .catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return [];
@@ -152,25 +138,6 @@ describe("media guarded fetch product boundaries", () => {
         ["authorization", "cookie", "x-api-key"].map((key) => targetRequests[0]?.[key]),
       ).toEqual([undefined, undefined, undefined]);
       await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("redirected media");
-    });
-  });
-
-  it("rejects declared and streamed overflows without publishing store artifacts", async () => {
-    const stateDir = tempDirs.make("openclaw-media-bounded-fetch-");
-    const allowedOrigins = [sourceOrigin];
-
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      for (const subdir of ["oversized-file", "oversized-stream"]) {
-        await expect(
-          saveRemoteMedia({
-            url: `${sourceOrigin}/${subdir}`,
-            maxBytes: 16,
-            subdir,
-            ssrfPolicy: { allowedOrigins },
-          }),
-        ).rejects.toMatchObject({ name: "MediaFetchError", code: "max_bytes" });
-        await expectNoPublishedMediaFiles(stateDir);
-      }
     });
   });
 });

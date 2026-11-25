@@ -1,49 +1,39 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "@solidjs/testing-library";
 import { flush } from "solid-js";
-import { expect } from "vitest";
+import { assert, expect } from "vitest";
 import { userEvent } from "vitest/browser";
 import { Menu, type MenuHandle, type MenuItem, type MenuProps } from "../components/solid/menu.tsx";
 
 export const navigationItems: readonly MenuItem[] = [
-  {
-    id: "assign",
-    label: "Assign to",
-    children: [
-      { id: "ada", label: "Ada Rivera" },
-      { id: "grace", label: "Grace Kim" },
-    ],
-  },
-  {
-    id: "move",
-    label: "Move to group",
-    children: [
-      { id: "engineering", label: "Engineering" },
-      { id: "design", label: "Design" },
-    ],
-  },
+  ...Object.entries({
+    assign: ["Assign to", { ada: "Ada Rivera", grace: "Grace Kim" }],
+    move: ["Move to group", { engineering: "Engineering", design: "Design" }],
+  } as const).map(([branchId, [branchLabel, children]]) => ({
+    id: branchId,
+    label: branchLabel,
+    children: Object.entries(children).map(([id, label]) => ({ id, label })),
+  })),
   { id: "disabled", label: "Unavailable", disabled: true },
   { id: "archive", label: "Archive" },
 ];
 
 export function mountMenu(props: Partial<MenuProps> | (() => Partial<MenuProps>) = {}) {
   let handle!: MenuHandle;
-  const view = render(() => {
-    const resolved = typeof props === "function" ? props() : props;
-    return (
-      <>
-        <Menu
-          id="people"
-          label="People"
-          items={navigationItems}
-          {...resolved}
-          ref={(value) => (handle = value)}
-        />
-        <button type="button" tabindex={0}>
-          After menu
-        </button>
-      </>
-    );
-  });
+  const view = render(() => (
+    <>
+      <Menu
+        id="people"
+        label="People"
+        items={navigationItems}
+        {...(typeof props === "function" ? props() : props)}
+        ref={(value) => (handle = value)}
+      />
+      <button type="button" tabindex={0}>
+        After menu
+      </button>
+    </>
+  ));
   flush();
   return {
     ...view,
@@ -54,53 +44,39 @@ export function mountMenu(props: Partial<MenuProps> | (() => Partial<MenuProps>)
 }
 
 export function surface(id = "people"): HTMLElement {
-  const element = document.getElementById(`${id}:content`);
-  if (!element) {
-    throw new Error(`Missing menu ${id}`);
-  }
-  return element;
+  return expectDefined(document.getElementById(`${id}:content`), `menu ${id}`);
 }
 
 export function trigger(id = "people"): HTMLButtonElement {
   const element = document.getElementById(`${id}:trigger`);
-  if (!(element instanceof HTMLButtonElement)) {
-    throw new Error(`Missing trigger ${id}`);
-  }
+  assert(element instanceof HTMLButtonElement, `Missing trigger ${id}`);
   return element;
 }
 
 export function item(label: string, id = "people"): HTMLButtonElement {
-  const element = [...surface(id).querySelectorAll<HTMLButtonElement>("button")].find(
-    (candidate) =>
-      candidate.getAttribute("aria-label") === label &&
-      candidate.closest('[role="menu"]') === surface(id),
+  return expectDefined(
+    [...surface(id).querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) =>
+        candidate.getAttribute("aria-label") === label &&
+        candidate.closest('[role="menu"]') === surface(id),
+    ),
+    `${label} in ${id}`,
   );
-  if (!element) {
-    throw new Error(`Missing ${label} in ${id}`);
-  }
-  return element;
 }
 
 export async function phase(element: HTMLElement, value: "open" | "hidden"): Promise<void> {
   await expect
-    .poll(() => element.matches(":popover-open"), { message: `${element.id} native visibility` })
-    .toBe(value === "open");
-  if (element.dataset.phase === value) {
-    return;
-  }
-  return new Promise((resolve) => {
-    element.addEventListener(
-      value === "open" ? "overlay-after-show" : "overlay-after-hide",
-      () => resolve(),
-      { once: true },
-    );
-  });
+    .poll(() => [element.matches(":popover-open"), element.dataset.phase], {
+      message: `${element.id} native visibility and completed phase`,
+      // Native frame and animation settlement can exceed the default poll window on WebKit CI.
+      timeout: 5_000,
+    })
+    .toEqual([value === "open", value]);
 }
 
 export async function openMenu(id = "people") {
   await userEvent.click(trigger(id));
   await phase(surface(id), "open");
-  expect(surface(id).matches(":popover-open")).toBe(true);
 }
 
 export function openSurfaces() {

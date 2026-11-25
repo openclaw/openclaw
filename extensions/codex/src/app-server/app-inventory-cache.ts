@@ -68,13 +68,8 @@ type InFlightRefresh = {
 };
 
 export class CodexAppInventoryCache {
-  private readonly ttlMs: number;
   private readonly entries = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, InFlightRefresh>();
-
-  constructor(options: { ttlMs?: number } = {}) {
-    this.ttlMs = options.ttlMs ?? CODEX_APP_INVENTORY_CACHE_TTL_MS;
-  }
 
   read(params: RefreshParams): CodexAppInventoryCacheRead {
     const nowMs = resolveDateTimestampMs(params.nowMs);
@@ -91,14 +86,9 @@ export class CodexAppInventoryCache {
     ) {
       void this.refreshNow(params).catch(() => undefined);
     }
-    let snapshot: CodexAppInventorySnapshot | undefined;
-    if (entry) {
-      const { invalidated: _invalidated, ...rest } = entry;
-      snapshot = rest;
-    }
     return {
       state,
-      ...(snapshot ? { snapshot } : {}),
+      ...(entry ? { snapshot: entry } : {}),
     };
   }
 
@@ -164,7 +154,8 @@ export class CodexAppInventoryCache {
             !previousRefreshSucceeded),
         targetAppIds: params.targetAppIds,
       });
-      const expiresAtMs = resolveExpiresAtMsFromDurationMs(this.ttlMs, { nowMs }) ?? 0;
+      const expiresAtMs =
+        resolveExpiresAtMsFromDurationMs(CODEX_APP_INVENTORY_CACHE_TTL_MS, { nowMs }) ?? 0;
       const snapshot: CodexAppInventorySnapshot = {
         apps: inventory.apps,
         installedApps: inventory.installedApps,

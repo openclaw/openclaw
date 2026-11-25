@@ -6,7 +6,11 @@ import { createCatalogAttemptReporter } from "../../agents/prepared-model-runtim
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
-import { createModelsListTestContext } from "./models-list-result.openai-routes.test-support.js";
+import {
+  createModelsListTestContext,
+  modelAuthStore,
+  requestModelsList,
+} from "./models-list-result.openai-routes.test-support.js";
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture();
 const modelConfig: OpenClawConfig = {
@@ -34,10 +38,6 @@ function oauth(label: string): AuthProfileStore["profiles"][string] {
   };
 }
 const emptyAuthStore = { version: 1, profiles: {} } as const;
-const authStore = (
-  profiles: AuthProfileStore["profiles"],
-  usageStats?: AuthProfileStore["usageStats"],
-): AuthProfileStore => ({ version: 1, profiles, ...(usageStats ? { usageStats } : {}) });
 const rejectedKey = { type: "api_key" as const, provider: "openai", key: "rejected-api-key" };
 const rejected = (profileId: string) => ({
   provider: "openai",
@@ -84,6 +84,94 @@ function preloaded(
   };
 }
 
+it("discloses failed acquisition scopes on retained configured models", async () => {
+  const reporter = createCatalogAttemptReporter(
+    {},
+    { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
+    () => true,
+    () => {},
+  );
+  const snapshot = reporter.withRefreshStatus({
+    entries: [openaiModel],
+    routeVariants: [openaiModel],
+    providerOutcomes: [{ provider: "openai", status: "ready" }],
+  });
+  const projector = decisions(snapshot);
+  const prepared = await prepareModelsListResult(preloaded(modelConfig, snapshot, projector));
+  const models = prepared.read().models;
+  expect(models.length).toBeGreaterThan(0);
+  // Neither a retained ready outcome nor an unknown native scope explains this failure.
+  reporter.failed(new Error("private endpoint and credential must not escape"), [
+    "openai",
+    "private-provider",
+  ]);
+  reporter.failed(new Error("private native failure"), [], "native");
+  expect(prepared.read()).toMatchObject({
+    models,
+    refreshFailed: true,
+    refreshFailures: [
+      { acquisition: "provider", provider: "openai" },
+      { acquisition: "provider" },
+      { acquisition: "native" },
+    ],
+    providerOutcomes: [{ provider: "openai", status: "ready" }],
+  });
+  expect(projector.snapshot.refreshFailures).toEqual(snapshot.refreshFailures);
+  expect(JSON.stringify(prepared.read())).not.toContain("private");
+  const respond = await requestModelsList(
+    createModelsListTestContext({
+      cfg: modelConfig,
+      catalog: [openaiModel],
+      catalogComplete: true,
+      preparedAuthStore: emptyAuthStore,
+      metadataSnapshot,
+      catalogDiagnostics: snapshot,
+    }),
+    { agentId: "main", view: "configured", includeDetails: true },
+  );
+  expect(respond.mock.calls[0]?.[0]).toBe(true);
+  expect(respond.mock.calls[0]?.[1]).toMatchObject({
+    refreshFailed: true,
+    refreshFailures: prepared.read().refreshFailures,
+  });
+  expect(JSON.stringify(respond.mock.calls[0]?.[1])).not.toContain("private");
+  reporter.published(["openai", "private-provider"], "provider");
+  expect(prepared.read()).toMatchObject({
+    models,
+    refreshFailed: true,
+    refreshFailures: [{ acquisition: "native" }],
+  });
+  reporter.published(undefined, "native");
+  expect(prepared.read()).not.toHaveProperty("refreshFailed");
+  expect(prepared.read()).not.toHaveProperty("refreshFailures");
+  expect(projector.snapshot.refreshFailures).toBeUndefined();
+});
+
+it("omits endpoint-shaped acquisition identifiers even from the all view", async () => {
+  const reporter = createCatalogAttemptReporter(
+    {},
+    { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
+    () => true,
+    () => {},
+  );
+  reporter.failed(new Error("private error"), ["https://private.invalid/account"], "native");
+  const context = createModelsListTestContext({
+    cfg: {},
+    catalog: [],
+    catalogComplete: true,
+    preparedAuthStore: emptyAuthStore,
+    metadataSnapshot,
+    catalogDiagnostics: reporter.withRefreshStatus({ entries: [], routeVariants: [] }),
+  });
+  const respond = await requestModelsList(context, { view: "all", includeDetails: true });
+  expect(respond.mock.calls[0]?.[0]).toBe(true);
+  expect(respond.mock.calls[0]?.[1]).toMatchObject({
+    refreshFailed: true,
+    refreshFailures: [{ acquisition: "native" }],
+  });
+  expect(JSON.stringify(respond.mock.calls[0]?.[1])).not.toContain("private");
+});
+
 it.each([false, true])("preserves rejection on refresh failure=%s", async (unavailable) => {
   const reporter = createCatalogAttemptReporter(
     {},
@@ -113,7 +201,12 @@ it.each([false, true])("preserves rejection on refresh failure=%s", async (unava
   ).resolves.toEqual({
     models: [],
     providerOutcomes,
-    ...(unavailable ? { refreshFailed: true } : {}),
+    ...(unavailable
+      ? {
+          refreshFailed: true,
+          refreshFailures: [{ acquisition: "provider", provider: "unreachable" }],
+        }
+      : {}),
   });
 });
 
@@ -133,7 +226,7 @@ it.each([false, true])(
     });
     const projector = decisions(
       snapshot,
-      authStore(
+      modelAuthStore(
         {
           "openai:chatgpt": rejectedKey,
           "openai:other": oauth("accepted"),
@@ -178,7 +271,7 @@ it("does not apply one profile rejection to a different selected profile", () =>
   };
   const projector = decisions(
     snapshot,
-    authStore({ "openai:rejected": oauth("rejected"), "openai:accepted": oauth("accepted") }),
+    modelAuthStore({ "openai:rejected": oauth("rejected"), "openai:accepted": oauth("accepted") }),
     modelConfig,
     "openai:accepted",
   );
@@ -187,6 +280,55 @@ it("does not apply one profile rejection to a different selected profile", () =>
     availability: true,
     selectedProfileId: "openai:accepted",
   });
+});
+
+it("keeps a routed model's reset time off sibling ClawRouter models", async () => {
+  const limited = "anthropic/limited";
+  const sibling = "openai/healthy";
+  const catalog = [limited, sibling].map((id) => ({ id, name: id, provider: "clawrouter" }));
+  const now = Date.now();
+  const until = now + 15 * 60 * 60_000;
+  const keyUntil = now + 60_000;
+  for (const disabledUntil of [keyUntil, now - 1]) {
+    const context = createModelsListTestContext({
+      catalog,
+      metadataSnapshot,
+      preparedAuthStore: {
+        version: 1,
+        profiles: { shared: { provider: "clawrouter", type: "api_key", key: "fixture" } },
+        usageStats: {
+          shared: {
+            cooldownReason: "rate_limit",
+            cooldownModel: limited,
+            cooldownUntil: until,
+            disabledReason: "billing",
+            disabledUntil,
+          },
+        },
+      },
+    });
+    const respond = await requestModelsList(context, { view: "all" });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        models: expect.arrayContaining([
+          expect.objectContaining({
+            id: limited,
+            available: false,
+            unavailableReason: "cooldown",
+            unavailableUntil: until,
+          }),
+          expect.objectContaining({
+            id: sibling,
+            ...(disabledUntil === keyUntil
+              ? { available: false, unavailableReason: "cooldown", unavailableUntil: keyUntil }
+              : { available: true }),
+          }),
+        ]),
+      }),
+      undefined,
+    );
+  }
 });
 
 it.each([false, true])("projects cooldown only when unavailable (%s)", async (available) => {
@@ -208,13 +350,18 @@ it.each([false, true])("projects cooldown only when unavailable (%s)", async (av
   const evaluateNative = vi.spyOn(projector, "evaluateNative");
   const prepared = await prepareModelsListResult(preloaded(config, snapshot, projector));
 
+  const agentRuntime = expect.objectContaining({ id: "openclaw", source: "implicit" });
   expect(prepared.read().models).toEqual([
-    { ...model, tags: ["configured"], available, ...(available ? {} : cooldown) },
+    { ...model, agentRuntime, tags: ["configured"], available, ...(available ? {} : cooldown) },
   ]);
   const hostEvaluations = evaluateEntry.mock.calls.length;
   evaluateNative.mockReturnValue({ availability: true, routeResolution: null });
-  expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: true }]);
+  expect(prepared.read().models).toEqual([
+    { ...model, agentRuntime, tags: ["configured"], available: true },
+  ]);
   evaluateNative.mockReturnValue({ availability: false, routeResolution: null });
-  expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: false }]);
+  expect(prepared.read().models).toEqual([
+    { ...model, agentRuntime, tags: ["configured"], available: false },
+  ]);
   expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
 });

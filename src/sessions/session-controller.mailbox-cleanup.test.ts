@@ -1,31 +1,90 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import { createQueueSettings, createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
 import { completeFollowupRunLifecycle } from "../auto-reply/reply/queue/lifecycle.js";
 import { clearFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { expectCollected } from "../test-utils/retention.js";
 import {
-  captureSessionControllerMailboxSummarySources,
-  clearSessionControllerMailbox,
+  captureSessionControllerMailboxSummarySources as summarySources,
+  clearSessionControllerMailbox as clearMailbox,
 } from "./session-controller.mailbox-cleanup.js";
-import { trackSessionControllerSourceWork } from "./session-controller.mailbox-source.js";
+import { trackSessionControllerSourceWork as trackSourceWork } from "./session-controller.mailbox-source.js";
 import {
   claimSessionControllerInput,
-  getExistingSessionControllerMailbox,
+  getExistingSessionControllerMailbox as existingMailbox,
   releaseSessionControllerClaim,
   reserveSessionControllerSource,
   submitSessionControllerTask,
 } from "./session-controller.mailbox.js";
+
+function makeRun(key: string, prompt: string) {
+  const run = createQueueTestRun({ prompt });
+  run.run.sessionKey = key;
+  return run;
+}
+
+function inputFor(run: ReturnType<typeof createQueueTestRun>) {
+  return expectDefined(run.controllerInput, "Expected an enqueued controller input");
+}
+
+it("keeps receipt expiry and deduplication without retaining completed run contexts", async () => {
+  const context = new AsyncLocalStorage<SessionManager>();
+  const managers: WeakRef<SessionManager>[] = [];
+  const mailboxes: ReturnType<typeof inputFor>["mailbox"][] = [];
+  const settings = createQueueSettings({ mode: "followup" });
+  const receiptRun = (key: string) =>
+    createQueueTestRun({ prompt: key, messageId: key }, { sessionId: key, sessionKey: key });
+  const complete = async (key: string) => {
+    const run = receiptRun(key);
+    expect(enqueueFollowupRun(key, run, settings)).toBe(true);
+    const claim = await claimSessionControllerInput(run);
+    mailboxes.push(claim.mailbox);
+    releaseSessionControllerClaim(claim);
+    await claim.settlement.promise;
+  };
+  const runWithManager = (key: string) => {
+    const manager = SessionManager.inMemory();
+    managers.push(new WeakRef(manager));
+    return context.run(manager, complete, key);
+  };
+  try {
+    for (let index = 0; index < 6; index++) {
+      await runWithManager(`agent:main:receipt-retention-${randomUUID()}`);
+    }
+    for (const mailbox of mailboxes) {
+      expect(mailbox.entries).toHaveLength(0);
+      expect(mailbox.timer).toBeDefined();
+      expect(mailbox.recentSources.size).toBe(1);
+      expect(enqueueFollowupRun(mailbox.key, receiptRun(mailbox.key), settings)).toBe(false);
+    }
+    await expectCollected(...managers);
+    for (const mailbox of mailboxes) {
+      for (const receipt of mailbox.recentSources.values()) {
+        receipt.expires = Date.now() + 20;
+      }
+      mailbox.wake();
+    }
+    await expect.poll(() => mailboxes.every((mailbox) => !existingMailbox(mailbox.key))).toBe(true);
+  } finally {
+    for (const mailbox of mailboxes) {
+      mailbox.recentSources.clear();
+      clearFollowupQueue(mailbox.key, mailbox);
+    }
+    context.disable();
+  }
+});
 
 it("notifies a native producer once when a full clear retains its pending cleanup", async () => {
   const key = `agent:main:mailbox-clear-native-${randomUUID()}`;
   const preceding = reserveSessionControllerSource(key, { policy: { mode: "followup" } });
   const cleanup = createDeferredCore();
   const events: string[] = [];
-  const onCancelled = vi.fn(() => {
-    events.push("cancelled");
-  });
+  const onCancelled = vi.fn(() => events.push("cancelled"));
   const onSettled = vi.fn(() => {
     events.push("settling");
     return cleanup.promise;
@@ -34,12 +93,12 @@ it("notifies a native producer once when a full clear retains its pending cleanu
   const admission = submitSessionControllerTask(key, { onCancelled, onSettled, start });
   const admissionResult = admission.catch((error: unknown) => error);
   const mailbox = preceding.mailbox;
-  const input = mailbox.entries.find((entry) => entry !== preceding);
-  if (!input) {
-    throw new Error("Expected the queued native producer");
-  }
+  const input = expectDefined(
+    mailbox.entries.find((entry) => entry !== preceding),
+    "Expected the queued native producer",
+  );
   try {
-    clearSessionControllerMailbox(mailbox, completeFollowupRunLifecycle);
+    clearMailbox(mailbox, completeFollowupRunLifecycle);
     expect(onCancelled).toHaveBeenCalledOnce();
     expect(events).toEqual(["cancelled", "settling"]);
     expect(start).not.toHaveBeenCalled();
@@ -47,7 +106,7 @@ it("notifies a native producer once when a full clear retains its pending cleanu
     expect(input.abortSignal.aborted).toBe(true);
     expect(mailbox.entries).toContain(input);
 
-    clearSessionControllerMailbox(mailbox, completeFollowupRunLifecycle);
+    clearMailbox(mailbox, completeFollowupRunLifecycle);
     expect(onCancelled).toHaveBeenCalledOnce();
     expect(onSettled).toHaveBeenCalledOnce();
     expect(mailbox.entries).toContain(input);
@@ -56,7 +115,7 @@ it("notifies a native producer once when a full clear retains its pending cleanu
     expect(mailbox.entries).not.toContain(input);
   } finally {
     cleanup.resolve();
-    clearSessionControllerMailbox(mailbox, completeFollowupRunLifecycle);
+    clearMailbox(mailbox, completeFollowupRunLifecycle);
     await input.settlement.promise;
   }
 });
@@ -67,42 +126,28 @@ it.each([true, false])(
     const key = `agent:main:mailbox-clear-${randomUUID()}`;
     const settings = createQueueSettings({ mode: "followup", cap: 2 });
     let current = true;
-    const runs = ["first", "second", "third", "fourth"].map((prompt) => {
-      const run = createQueueTestRun({ prompt });
-      run.run.sessionKey = key;
-      return run;
-    });
+    const runs = ["first", "second", "third", "fourth"].map((prompt) => makeRun(key, prompt));
     for (const run of runs) {
       enqueueFollowupRun(key, run, settings);
     }
-    const inputs = runs.map((run) => {
-      if (!run.controllerInput) {
-        throw new Error("Expected an enqueued controller input");
-      }
-      return run.controllerInput;
-    });
+    const inputs = runs.map(inputFor);
     const first = inputs[0]!;
     first.abortSignal.addEventListener("abort", () => {
       current = false;
     });
     const mailbox = first.mailbox;
-    const remainingSummaries = captureSessionControllerMailboxSummarySources(mailbox).filter(
+    const remainingSummaries = summarySources(mailbox).filter(
       (source) => source.controllerInput !== first,
     );
     const rawWork = createDeferredCore();
-    trackSessionControllerSourceWork(first, rawWork.promise);
+    trackSourceWork(first, rawWork.promise);
     try {
       expect(() =>
-        clearSessionControllerMailbox(
-          mailbox,
-          completeFollowupRunLifecycle,
-          captured ? inputs : undefined,
-          () => {
-            if (!current) {
-              throw new Error("cancellation authority revoked");
-            }
-          },
-        ),
+        clearMailbox(mailbox, completeFollowupRunLifecycle, captured ? inputs : undefined, () => {
+          if (!current) {
+            throw new Error("cancellation authority revoked");
+          }
+        }),
       ).toThrow("cancellation authority revoked");
       expect(first.abortSignal.aborted).toBe(true);
       expect(first.retirementRequested).toBe(true);
@@ -115,7 +160,7 @@ it.each([true, false])(
       for (const run of runs.slice(1)) {
         expect(run.queueAbortSignal?.aborted).toBe(false);
       }
-      expect(captureSessionControllerMailboxSummarySources(mailbox)).toEqual(remainingSummaries);
+      expect(summarySources(mailbox)).toEqual(remainingSummaries);
       rawWork.resolve();
       await first.settlement.promise;
       expect(mailbox.entries).not.toContain(first);
@@ -129,36 +174,26 @@ it.each([true, false])(
 
 it("keeps a reentrant successor outside the cleared mailbox generation", async () => {
   const key = `agent:main:mailbox-clear-reentrant-${randomUUID()}`;
-  const first = createQueueTestRun({ prompt: "first" });
-  const successor = createQueueTestRun({ prompt: "successor" });
-  first.run.sessionKey = key;
-  successor.run.sessionKey = key;
+  const first = makeRun(key, "first");
+  const successor = makeRun(key, "successor");
   const settings = createQueueSettings({ mode: "followup" });
   enqueueFollowupRun(key, first, settings);
-  const input = first.controllerInput;
-  if (!input) {
-    throw new Error("Expected an enqueued controller input");
-  }
+  const input = inputFor(first);
   const mailbox = input.mailbox;
   input.abortSignal.addEventListener("abort", () => {
     enqueueFollowupRun(key, successor, settings);
   });
   try {
-    clearSessionControllerMailbox(mailbox, completeFollowupRunLifecycle);
-    const successorInput = successor.controllerInput;
-    if (!successorInput) {
-      throw new Error("Expected the reentrant successor to be enqueued");
-    }
+    clearMailbox(mailbox, completeFollowupRunLifecycle);
+    const successorInput = inputFor(successor);
     expect(first.queueAbortSignal?.aborted).toBe(true);
     expect(successor.queueAbortSignal?.aborted).toBe(false);
     expect(successorInput.abortSignal.aborted).toBe(false);
     expect(successor.queueAbortSignal).not.toBe(first.queueAbortSignal);
     expect(mailbox.entries).not.toContain(input);
     expect(successorInput.mailbox.items).toEqual([successor]);
-    expect(getExistingSessionControllerMailbox(key, successorInput.target)).toBe(
-      successorInput.mailbox,
-    );
-    clearSessionControllerMailbox(mailbox, completeFollowupRunLifecycle, [input]);
+    expect(existingMailbox(key, successorInput.target)).toBe(successorInput.mailbox);
+    clearMailbox(mailbox, completeFollowupRunLifecycle, [input]);
     expect(successor.queueAbortSignal?.aborted).toBe(false);
     expect(successorInput.abortSignal.aborted).toBe(false);
     const claim = await claimSessionControllerInput(successor);

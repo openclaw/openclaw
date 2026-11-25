@@ -1,6 +1,8 @@
+import { createChangeListeners } from "../../../../../src/shared/listeners.js";
+
 export class TranscriptSearchState {
   private value = { open: false, query: "" };
-  private listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   private focusPending = false;
   private returnFocusTarget: HTMLElement | null = null;
   private restoreFocus: (() => void) | undefined;
@@ -9,10 +11,7 @@ export class TranscriptSearchState {
     return this.value;
   }
 
-  subscribe(notify: () => void): () => void {
-    this.listeners.add(notify);
-    return () => this.listeners.delete(notify);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
   reset(): void {
     this.focusPending = false;
@@ -68,8 +67,6 @@ export class TranscriptSearchState {
       return;
     }
     this.value = { open, query };
-    for (const notify of this.listeners) {
-      notify();
-    }
+    this.listeners.publish();
   }
 }

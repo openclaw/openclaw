@@ -1,10 +1,13 @@
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "./update-doctor-result.js";
 import { findActiveUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 
 const RETIREMENT_STEP = "finalize:doctor:model-retirement";
+export const DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING =
+  "Model retirement deferred until configured plugin installation converges.";
 
-function resolveDoctorUpdateRun(
+export function resolveDoctorUpdateRun(
   env: NodeJS.ProcessEnv,
   runId = env[UPDATE_RUN_ID_ENV]?.trim() || undefined,
 ) {
@@ -17,6 +20,15 @@ function resolveDoctorUpdateRun(
         ? findActiveUpdateRun({ env })
         : undefined;
   return run?.status === "running" ? run : undefined;
+}
+
+export function hasCompletedUpdateModelRetirement(
+  run: Pick<UpdateRunRecord, "steps"> | undefined,
+): boolean {
+  // Only the selected run's durable completion retires its warning; absence is not success.
+  return (
+    run?.steps.some((step) => step.step === RETIREMENT_STEP && step.status === "completed") ?? false
+  );
 }
 
 export function hasDeferredUpdateModelRetirement(
@@ -45,7 +57,7 @@ export function recordUpdateModelRetirement(
   }
   const detail =
     status === "deferred"
-      ? "Model retirement repair deferred until plugin convergence."
+      ? "Model retirement repair deferred until plugin package convergence: the updating parent still owns plugin installation. Run openclaw update repair after the package update finishes."
       : "Deferred model retirement repair completed after plugin convergence.";
   recordUpdateRunStep(
     run.runId,
@@ -57,6 +69,17 @@ export function recordUpdateModelRetirement(
     },
     { env },
   );
+  if (status === "completed") {
+    recordUpdateRunStep(
+      run.runId,
+      {
+        step: `warning:${RETIREMENT_STEP}:deferred`,
+        status: "skipped",
+        detail,
+      },
+      { env },
+    );
+  }
   // Completion must follow the package warnings in the bounded status history.
   recordUpdateRunStep(
     run.runId,

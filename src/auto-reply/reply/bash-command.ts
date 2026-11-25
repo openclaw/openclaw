@@ -17,9 +17,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { isBangCommandInput } from "./bash-command-input.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { stripMentions } from "./mentions.js";
 import type { resolveElevatedPermissions } from "./reply-elevated.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
@@ -62,7 +63,7 @@ function parseBashRequest(trimmed: string): BashRequest | null {
   let restSource;
   if (match) {
     restSource = match[1] ?? "";
-  } else if (trimmed.startsWith("!")) {
+  } else if (isBangCommandInput(trimmed)) {
     restSource = trimmed.slice(1);
     if (restSource.trimStart().startsWith(":")) {
       restSource = restSource.trimStart().slice(1);
@@ -145,9 +146,9 @@ export async function handleBashChatCommand(params: {
     };
   }
 
-  const stripped = stripStructuralPrefixes(params.ctx.commandText ?? "");
+  const raw = params.ctx.commandText ?? "";
   const rawBody = (
-    params.isGroup ? stripMentions(stripped, params.ctx, params.cfg, agentId) : stripped
+    params.isGroup ? stripMentions(raw, params.ctx, params.cfg, agentId) : raw
   ).trim();
   const request = parseBashRequest(rawBody);
   if (!request) {
@@ -295,9 +296,10 @@ export async function handleBashChatCommand(params: {
         ? result.details
         : {};
     const exitLabel = renderExecExitLabel(exitDetails);
+    // Warnings carry what OpenClaw has to say about the run, such as a process left running.
     const output =
       result.details?.status === "completed"
-        ? result.details.aggregated
+        ? [result.details.warningText, result.details.aggregated].filter(Boolean).join("\n\n")
         : result.content.map((chunk) => (chunk.type === "text" ? chunk.text : "")).join("\n");
     return {
       text: [

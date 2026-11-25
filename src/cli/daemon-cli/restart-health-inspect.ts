@@ -4,12 +4,14 @@ import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-pr
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { ConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
-import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { classifyPortListener } from "../../infra/ports-format.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import type { PortUsage } from "../../infra/ports-types.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import type { OpenClawStateSchemaReadAdmission } from "../../state/openclaw-state-db-contract.js";
+import {
+  hasCommandProcessCleanupError,
+  ignoreNonCleanupCommandError,
+} from "../../process/exec-result.js";
 import type { GatewayRestartDeadline } from "./restart-health-deadline.js";
 import {
   confirmGatewayReachable,
@@ -17,7 +19,6 @@ import {
   type GatewayReachability,
   type GatewayRestartProbeContext,
 } from "./restart-health-probe.js";
-import { finalizeGatewayRestartSnapshot } from "./restart-health-snapshot.js";
 import type { GatewayRestartSnapshot } from "./restart-health.types.js";
 import { hasListenerAttributionGap, listenerOwnedByRuntimePid } from "./restart-port-ownership.js";
 
@@ -27,13 +28,16 @@ export async function inspectGatewayRestart(params: {
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
-  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
-  requirePluginHealth?: boolean;
   requireChannelHealth?: boolean;
+  /** Probe only a listener the service runtime owns, even without an expected version. */
+  requireOwnedListener?: boolean;
+  /** Diagnostic-only; protocol reachability never establishes process ownership. */
+  allowUnattributedDiagnosticProbe?: boolean;
   probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   timeoutMs?: number;
   /** Bound Gateway requests separately from native service/listener inspection. */
   probeTimeoutMs?: number;
@@ -67,12 +71,7 @@ export async function inspectGatewayRestart(params: {
       const command = await read(
         "service-command",
         async () =>
-          (await params.service.readCommand?.(env).catch((error: unknown) => {
-            if (hasCommandProcessCleanupError(error)) {
-              throw error;
-            }
-            return null;
-          })) ?? null,
+          (await params.service.readCommand?.(env).catch(ignoreNonCleanupCommandError)) ?? null,
       );
       return resolveGatewayServiceProbeHosts({ env, command });
     }));
@@ -80,20 +79,18 @@ export async function inspectGatewayRestart(params: {
   const expectedBuildId = normalizeOptionalString(params.expectedBuildId);
   const requiresGatewayProbe =
     Boolean(expectedVersion || expectedBuildId) ||
-    params.requirePluginHealth === false ||
+    params.requireOwnedListener === true ||
     params.requireChannelHealth === false;
   let reachability: GatewayReachability | null = null;
   const loadReachability = () =>
     read("gateway-health", () =>
       confirmGatewayReachable({
+        assertCurrent: params.assertCurrent,
         port: params.port,
         ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
         env,
-        allowHttpVerification:
-          Boolean(expectedVersion) &&
-          params.requirePluginHealth === false &&
-          params.requireChannelHealth === false,
+        allowHttpVerification: Boolean(expectedVersion) && params.requireChannelHealth === false,
         timeoutMs: remainingTimeoutMs(params.probeTimeoutMs),
         ...(signal ? { signal } : {}),
       }),
@@ -119,6 +116,7 @@ export async function inspectGatewayRestart(params: {
     portUsage = await read("port-inspection", () =>
       inspectPortUsage(params.port, {
         probeHosts,
+        knownRuntimePid: runtime.status === "running" ? runtime.pid : undefined,
         ...(signal ? { signal } : {}),
       }),
     );
@@ -138,7 +136,7 @@ export async function inspectGatewayRestart(params: {
 
   signal?.throwIfAborted();
   const configuredProbe = params.configuredProbe;
-  const startupPhase =
+  let startupPhase =
     portUsage.status === "busy" && configuredProbe
       ? await read("startup-health", () =>
           readGatewayStartupPhase({
@@ -150,7 +148,7 @@ export async function inspectGatewayRestart(params: {
         )
       : undefined;
   if (startupPhase && (expectedVersion || expectedBuildId)) {
-    // Startup cannot conceal a previous install or a definitive plugin/channel failure.
+    // Startup cannot conceal a previous install or a definitive channel failure.
     reachability = await loadReachability();
   }
   const gatewayListeners =
@@ -166,31 +164,69 @@ export async function inspectGatewayRestart(params: {
           listenerOwnedByRuntimePid({ listener, runtimePid }),
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
+  // Scheduled Tasks can report Running while elevated listener command lines are hidden.
+  const canProbeUnattributedListener =
+    params.allowUnattributedDiagnosticProbe === true &&
+    process.platform === "win32" &&
+    running &&
+    runtimePid == null &&
+    portUsage.listeners.length > 0 &&
+    portUsage.listeners.every(
+      (listener) => !listener.commandLine && classifyPortListener(listener) === "unknown",
+    );
   let healthy = false;
   if (
     !startupPhase &&
     portUsage.status === "busy" &&
-    (!running || !requiresGatewayProbe || ownsPort)
+    (!running || !requiresGatewayProbe || ownsPort || canProbeUnattributedListener)
   ) {
     const reachable = (reachability ??= await loadReachability());
-    healthy = reachable.reachable;
+    // Auth rejection proves liveness, but only a successful hello supplies a version.
+    healthy =
+      reachable.reachable &&
+      (!canProbeUnattributedListener || Boolean(normalizeOptionalString(reachable.gatewayVersion)));
   }
-  // Read after probes: an owner can acquire the coordinator while health is unavailable.
+  // Custody is a file contract. Observers must not open a migrating store to
+  // find its owner, including before that owner can bind an HTTP listener.
   const unmanagedHealthy = healthy && !running;
-  const owner =
-    !unmanagedHealthy && portUsage.status === "busy"
-      ? readGatewayOwnerLease({
-          env,
-          port: params.port,
-          ...(params.openStateSchemaReadAdmission
-            ? { openStateSchemaReadAdmission: params.openStateSchemaReadAdmission }
-            : {}),
-        })
-      : undefined;
-  // A recorded owner is never stale by PID inference; other listeners are foreign.
-  // 2026.9.3 Gateways have no row and retain the installed-runtime ownership path.
+  let hasOwner = false;
+  let fileOwnerPid: number | undefined;
+  try {
+    const identity = await read("state-owner", () =>
+      readActiveGatewayLockIdentity({
+        env,
+        includeEmbedded: true,
+        requireInspection: true,
+        timeoutMs: remainingTimeoutMs(),
+        signal,
+      }),
+    );
+    if (identity && (identity.port === undefined || identity.port === params.port)) {
+      hasOwner = true;
+      fileOwnerPid = identity.pid;
+      if (portUsage.status === "free") {
+        startupPhase ??= "startup migration";
+      }
+    }
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    signal?.throwIfAborted();
+    startupPhase ??= "waiting for Gateway state ownership";
+  }
+  // A stale-install refusal can outlive its native service. The profile-bound
+  // listener remains available to its recovery owner; other live owners stay protected.
+  const stoppedStaleOwner =
+    runtime.status === "stopped" &&
+    !runtime.inspectionFailure &&
+    !runtime.inspectionReason &&
+    Boolean(reachability?.staleConnection) &&
+    fileOwnerPid !== undefined &&
+    gatewayListeners.length > 0 &&
+    portUsage.listeners.every((listener) => listener.pid === fileOwnerPid);
   const staleGatewayPids =
-    unmanagedHealthy || owner
+    unmanagedHealthy || (hasOwner && !stoppedStaleOwner)
       ? []
       : Array.from(
           new Set(
@@ -211,6 +247,8 @@ export async function inspectGatewayRestart(params: {
     gatewayBuildId,
     probeError,
     authenticationError,
+    operatorScopeWarning,
+    protocolMismatch,
     staleConnection,
     activatedPluginErrors,
     unavailablePlugins,
@@ -218,28 +256,53 @@ export async function inspectGatewayRestart(params: {
     channelProbeTimeouts,
     channelRuntimeWarnings,
   } = reachability ?? {};
-  return finalizeGatewayRestartSnapshot(
-    {
-      runtime,
-      portUsage,
-      healthy,
-      staleGatewayPids,
-      ...(gatewayBootId ? { gatewayBootId } : {}),
-      ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
-      ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
-      ...(startupPhase ? { startupPhase } : {}),
-      ...(probeError ? { probeError } : {}),
-      ...(authenticationError ? { authenticationError } : {}),
-      ...(staleConnection ? { staleConnection } : {}),
-      ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
-      ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),
-      ...(channelProbeErrors?.length ? { channelProbeErrors } : {}),
-      ...(channelProbeTimeouts?.length ? { channelProbeTimeouts } : {}),
-      ...(channelRuntimeWarnings?.length ? { channelRuntimeWarnings } : {}),
-    },
-    expectedVersion,
-    expectedBuildId,
-    params.requirePluginHealth !== false,
-    params.requireChannelHealth !== false,
-  );
+  const snapshot: GatewayRestartSnapshot = {
+    runtime,
+    portUsage,
+    healthy,
+    staleGatewayPids,
+    ...(gatewayBootId ? { gatewayBootId } : {}),
+    ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
+    ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
+    ...(startupPhase ? { startupPhase } : {}),
+    ...(probeError ? { probeError } : {}),
+    ...(authenticationError ? { authenticationError } : {}),
+    ...(operatorScopeWarning ? { operatorScopeWarning } : {}),
+    ...(protocolMismatch ? { protocolMismatch } : {}),
+    ...(staleConnection ? { staleConnection } : {}),
+    ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
+    ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),
+    ...(channelProbeErrors?.length ? { channelProbeErrors } : {}),
+    ...(channelProbeTimeouts?.length ? { channelProbeTimeouts } : {}),
+    ...(channelRuntimeWarnings?.length ? { channelRuntimeWarnings } : {}),
+  };
+  if (expectedVersion) {
+    snapshot.expectedVersion = expectedVersion;
+    if (snapshot.gatewayVersion !== expectedVersion) {
+      snapshot.healthy = false;
+      if (snapshot.gatewayVersion != null) {
+        snapshot.versionMismatch = {
+          expected: expectedVersion,
+          actual: snapshot.gatewayVersion,
+        };
+      }
+    }
+  }
+  // Runtime identity remains required even with a separately configured UI root.
+  if (expectedBuildId) {
+    if (snapshot.gatewayBuildId !== expectedBuildId) {
+      snapshot.healthy = false;
+      if (snapshot.gatewayBuildId !== undefined) {
+        snapshot.buildIdMismatch = {
+          expected: expectedBuildId,
+          actual: snapshot.gatewayBuildId ?? null,
+        };
+      }
+    }
+  }
+  // Plugin load errors are notices: the plugin stays unloaded and the Gateway serves.
+  if (params.requireChannelHealth !== false && snapshot.channelProbeErrors?.length) {
+    snapshot.healthy = false;
+  }
+  return snapshot;
 }

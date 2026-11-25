@@ -1,16 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import {
-  hasActiveRestartRecoveryDeliveryClaim,
-  hasExactRestartRecoveryDeliveryClaim,
-  projectRestartRecoveryDeliverySettlement,
-  resolveRestartRecoveryTerminalDeliveryDisposition,
-} from "./restart-recovery-receipt-state.js";
-import {
-  getRestartRecoveryPendingFinalSourceRunId,
-  mergeRestartRecoveryTerminalRunIds,
-} from "./restart-recovery-state.js";
-import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type {
   SessionActorAppend,
   SessionActorAppendCommitted,
@@ -22,7 +11,7 @@ import type {
   SessionActorReducerOutcome,
 } from "./session-actor-contract.js";
 import { reduceSessionActorEntry } from "./session-actor-reducers.js";
-import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-row.js";
 import { reduceSessionEntryPatch } from "./session-entry-patch-operation.js";
 import { projectPendingFinalDeliverySettlement } from "./session-pending-final-settlement.js";
 import type {
@@ -37,7 +26,10 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
-import { sessionMatchesExpectedTranscriptTurn } from "./session-transcript-turn-state.js";
+import {
+  buildSessionTranscriptTurnExpectedState,
+  sessionMatchesExpectedTranscriptTurn,
+} from "./session-transcript-turn-state.js";
 import type { SessionTurnCommitted, SessionTurnPlan } from "./session-turn.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -56,7 +48,6 @@ export type SessionActorPhaseBackend = {
     input: Extract<SessionActorPhaseInputs["appendTranscriptEvent"], { eventJson: string }>,
   ): { projectionNeedsReconcile?: boolean };
   validateSources(sources: SessionSourcePredicate[] | undefined): SessionSourceValidation;
-  validateRecoveryInput(claim: HarnessCompletionRecovery): boolean;
   mutatePendingInput(input: PendingInputMutation): PendingInputMutationReceipt;
   admit(stage: "transaction" | "commit", publication?: unknown): void;
 };
@@ -78,6 +69,15 @@ export function applySessionActorPhaseWithBackend(
     }
     return entry;
   };
+  // Prior-run settlement can advance lifecycle during input preparation.
+  // Only explicit guards survive that gap; ordinary input adopts this owner's preimage.
+  const inputExpectedState = (
+    input: SessionTurnPlan,
+    expected: SessionTranscriptTurnExpectedState | undefined,
+  ) =>
+    expected ??
+    input.options.expectedSessionState ??
+    buildSessionTranscriptTurnExpectedState(requireEntry());
   const lifecycle = (
     sessionId: string,
     expectedState: SessionTranscriptTurnExpectedState,
@@ -104,14 +104,6 @@ export function applySessionActorPhaseWithBackend(
     const next = {
       ...entry,
       ...patch,
-      ...(patch.restartRecoveryTerminalRunIds
-        ? {
-            restartRecoveryTerminalRunIds: mergeRestartRecoveryTerminalRunIds(
-              entry.restartRecoveryTerminalRunIds,
-              patch.restartRecoveryTerminalRunIds,
-            ),
-          }
-        : {}),
     };
     if (!isDeepStrictEqual(entry, next)) {
       if (defer) {
@@ -150,41 +142,18 @@ export function applySessionActorPhaseWithBackend(
       if (command.input.turn && command.input.append) {
         throw new Error("Session actor input must use one append contract");
       }
-      const recovery = command.input.recovery;
-      if (recovery) {
-        const entry = requireEntry();
-        if (
-          (entry.restartRecoveryDeliveryRunId ?? entry.activeWriterRunId) !==
-            recovery.expectedRunId ||
-          backend.validateSources(recovery.sources).refusedSource
-        ) {
-          throw new Error("Session actor recovery lost its source or run");
-        }
-        const claim = recovery.harnessCompletion;
-        if (
-          claim &&
-          (claim.requesterSessionKey !== sessionKey ||
-            claim.requesterAgentId !== backend.agentId ||
-            claim.sessionId !== entry.sessionId ||
-            claim.lifecycleRevision !== entry.lifecycleRevision ||
-            !backend.validateRecoveryInput(claim))
-        ) {
-          throw new Error("Session actor recovery input no longer matches its source");
-        }
-        backend.admit("transaction", { kind: "session-actor-recovery", recovery });
-      }
       if (pending) {
         pendingInputMutationReceipt = backend.mutatePendingInput(pending);
       }
       const input = command.input.turn;
       if (
         input?.options.initialSessionEntry &&
-        Object.values(expectedState).some((value) => value !== undefined)
+        Object.values(expectedState ?? {}).some((value) => value !== undefined)
       ) {
         throw new Error("Session actor initialization cannot expect an existing lifecycle");
       }
-      if (!input && pending) {
-        lifecycle(pending.sessionId, expectedState, patch);
+      if (!command.input.turn && pending) {
+        lifecycle(pending.sessionId, command.input.expectedState, patch);
       }
       result = {
         inputId: pending && (pending.expected.existing?.input_id ?? pending.inputId),
@@ -195,7 +164,7 @@ export function applySessionActorPhaseWithBackend(
                 options: {
                   ...input.options,
                   ...(!input.options.initialSessionEntry
-                    ? { expectedSessionState: expectedState }
+                    ? { expectedSessionState: inputExpectedState(input, expectedState) }
                     : {}),
                   sessionLifecyclePatch: { ...input.options.sessionLifecyclePatch, ...patch },
                 },
@@ -217,8 +186,8 @@ export function applySessionActorPhaseWithBackend(
         ...command.input.lifecycle,
         ...(command.input.runId !== undefined ? { activeWriterRunId: command.input.runId } : {}),
       };
-      const input = command.input.turn;
-      if (input) {
+      if (command.input.turn) {
+        const input = command.input.turn;
         if (input.options.expectedSessionId !== command.input.sessionId) {
           throw new Error("Session actor adoption changed its captured session");
         }
@@ -226,37 +195,12 @@ export function applySessionActorPhaseWithBackend(
           ...input,
           options: {
             ...input.options,
-            expectedSessionState: command.input.expectedState,
+            expectedSessionState: inputExpectedState(input, command.input.expectedState),
             sessionLifecyclePatch: { ...input.options.sessionLifecyclePatch, ...patch },
           },
         });
       } else {
         lifecycle(command.input.sessionId, command.input.expectedState, patch, undefined, true);
-      }
-      break;
-    }
-    case "session.actor.deliveryPending": {
-      const input = command.input;
-      if (input.claim) {
-        const entry = hot.entry;
-        if (!entry) {
-          result = { disposition: "stale" };
-          break;
-        }
-        const disposition = resolveRestartRecoveryTerminalDeliveryDisposition(entry, input.claim);
-        if (disposition === "startable") {
-          entryUpdate = {
-            ...entry,
-            restartRecoveryDeliveryReceiptState: "terminal-pending",
-            restartRecoveryDeliveryToolCallId: input.claim.toolCallId,
-            updatedAt: input.updatedAt,
-          };
-          result = { disposition: "started" };
-        } else {
-          result = { disposition };
-        }
-      } else {
-        lifecycle(input.sessionId, input.expectedState, input.lifecycle, undefined, true);
       }
       break;
     }
@@ -284,17 +228,7 @@ export function applySessionActorPhaseWithBackend(
     }
     case "session.actor.completeTurn": {
       const { turn: input, bookkeeping } = command.input;
-      const pendingFinalDelivery = command.input.pendingFinalDelivery
-        ? {
-            ...command.input.pendingFinalDelivery,
-            sourceRunId: hot.entry
-              ? getRestartRecoveryPendingFinalSourceRunId(
-                  hot.entry,
-                  command.input.pendingFinalDelivery.context,
-                )
-              : undefined,
-          }
-        : undefined;
+      const pendingFinalDelivery = command.input.pendingFinalDelivery;
       if (bookkeeping) {
         if (requireEntry().activeWriterRunId !== bookkeeping.writerRunId) {
           throw new SessionActorStaleStateError(
@@ -332,14 +266,6 @@ export function applySessionActorPhaseWithBackend(
           const next = {
             ...entry,
             ...terminal,
-            ...(terminal?.restartRecoveryTerminalRunIds
-              ? {
-                  restartRecoveryTerminalRunIds: mergeRestartRecoveryTerminalRunIds(
-                    entry.restartRecoveryTerminalRunIds,
-                    terminal.restartRecoveryTerminalRunIds,
-                  ),
-                }
-              : {}),
             ...(pendingFinalDelivery ? { pendingFinalDelivery } : {}),
           };
           if (!isDeepStrictEqual(entry, next)) {
@@ -363,35 +289,7 @@ export function applySessionActorPhaseWithBackend(
       const input = command.input;
       const entry = hot.entry;
       if (!entry) {
-        result = input.restart ? { disposition: "stale" } : { state: "stale", wakeRecovery: false };
-        break;
-      }
-      if (input.restart) {
-        const { claim, outcome, updatedAt } = input.restart;
-        const patch = projectRestartRecoveryDeliverySettlement(entry, claim, outcome, updatedAt);
-        if (patch) {
-          entryUpdate = { ...entry, ...patch };
-          result = { disposition: outcome === "confirmed" ? "recorded" : "cleared" };
-        } else if (!hasActiveRestartRecoveryDeliveryClaim(entry, claim)) {
-          result = { disposition: "stale" };
-        } else if (
-          hasExactRestartRecoveryDeliveryClaim(entry, claim) &&
-          entry.restartRecoveryDeliveryReceiptState === "delivered-terminal"
-        ) {
-          result = { disposition: outcome === "confirmed" ? "recorded" : "stale" };
-        } else if (
-          outcome === "not-sent" &&
-          !entry.restartRecoveryDeliveryReceiptState &&
-          !entry.restartRecoveryDeliveryToolCallId
-        ) {
-          result = { disposition: "cleared" };
-        } else {
-          throw new Error(
-            outcome === "confirmed"
-              ? "failed to persist terminal delivery completion"
-              : "failed to clear terminal delivery intent",
-          );
-        }
+        result = { state: "stale" };
         break;
       }
       const settlement = projectPendingFinalDeliverySettlement(
@@ -402,7 +300,7 @@ export function applySessionActorPhaseWithBackend(
       if (settlement.patch) {
         entryUpdate = { ...entry, ...settlement.patch };
       }
-      result = { state: settlement.state, wakeRecovery: settlement.wakeRecovery };
+      result = { state: settlement.state };
       break;
     }
     case "session.actor.patch":
@@ -438,13 +336,6 @@ export function applySessionActorPhaseWithBackend(
     }
   }
   if (command.type === "session.actor.completeTurn") {
-    if (command.input.restartClaimCleanup) {
-      const entry = entryUpdate ?? requireEntry();
-      const patch = reduceSessionEntryPatch(command.input.restartClaimCleanup, entry, entry);
-      if (patch) {
-        entryUpdate = { ...entry, ...patch };
-      }
-    }
     if (command.input.activitySummary) {
       const entry = entryUpdate ?? requireEntry();
       const patch = reduceSessionEntryPatch(

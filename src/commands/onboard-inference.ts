@@ -40,11 +40,6 @@ export {
  * presence are detection evidence; explicit setup verifies the selected login.
  */
 
-type DetectInferenceBackendsOptions = {
-  config?: OpenClawConfig;
-  agentId?: string;
-};
-
 // ChatGPT.app is the current desktop owner; keep Codex stable/beta as fallbacks.
 const CODEX_MACOS_APP_NAMES = ["ChatGPT.app", "Codex.app", "Codex Beta.app"] as const;
 const CODEX_MACOS_APP_PROBE_TIMEOUT_MS = 3_000;
@@ -74,15 +69,13 @@ async function probeCodexCommand(): Promise<LocalCommandProbe> {
   }
   return pathProbe;
 }
-/**
- * Detect usable inference backends in ladder order. Returns candidates only
- * for backends that exist on this machine; explicit setup owns selection.
- * Native CLI discovery stays passive; environment credentials precede unverified CLIs.
- */
-export async function detectInferenceBackends(
-  options: DetectInferenceBackendsOptions = {},
-): Promise<InferenceBackendCandidate[]> {
-  const candidates: InferenceBackendCandidate[] = [];
+/** The configured agent model, read from config alone without any machine probe. */
+export function resolveConfiguredModelCandidate(
+  options: {
+    config?: OpenClawConfig;
+    agentId?: string;
+  } = {},
+): InferenceBackendCandidate | undefined {
   const defaultAgentId = options.config
     ? options.agentId?.trim() || tryResolveLegacyCompatibilityAgentId(options.config)
     : undefined;
@@ -93,27 +86,45 @@ export async function detectInferenceBackends(
   const existingModel =
     resolveAgentModelPrimaryValue(defaultAgentModel) ??
     resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);
-  if (existingModel) {
-    const resolved = resolveDefaultModelForAgent({
-      cfg: options.config ?? {},
-      ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
-    });
-    const profileId = splitTrailingAuthProfile(existingModel).profile;
-    const modelRef = resolveConfiguredRouteModelLabel({
-      configuredRef: existingModel,
-      resolved,
-      ...(profileId ? { profileId } : {}),
-    });
-    candidates.push({
-      kind: "existing-model",
-      // Approval and activation bind to the executable target, not a mutable
-      // alias spelling. The authored config itself remains untouched.
-      modelRef,
-      label: "Current model",
-      detail: `${modelRef} — already configured`,
-      credentials: true,
-    });
+  if (!existingModel) {
+    return undefined;
   }
+  const resolved = resolveDefaultModelForAgent({
+    cfg: options.config ?? {},
+    ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
+  });
+  const profileId = splitTrailingAuthProfile(existingModel).profile;
+  const modelRef = resolved
+    ? resolveConfiguredRouteModelLabel({
+        configuredRef: existingModel,
+        resolved,
+        ...(profileId ? { profileId } : {}),
+      })
+    : existingModel;
+  return {
+    kind: "existing-model",
+    // Approval and activation bind to the executable target, not a mutable
+    // alias spelling. The authored config itself remains untouched.
+    modelRef,
+    label: "Current model",
+    detail: `${modelRef} — already configured`,
+    credentials: true,
+  };
+}
+
+/**
+ * Detect usable inference backends in ladder order. Returns candidates only
+ * for backends that exist on this machine; explicit setup owns selection.
+ * Native CLI discovery stays passive; environment credentials precede unverified CLIs.
+ */
+export async function detectInferenceBackends(
+  options: {
+    config?: OpenClawConfig;
+    agentId?: string;
+  } = {},
+): Promise<InferenceBackendCandidate[]> {
+  const configured = resolveConfiguredModelCandidate(options);
+  const candidates: InferenceBackendCandidate[] = configured ? [configured] : [];
   const envCandidates = detectAmbientInferenceBackends();
 
   const [claudeProbe, codexProbe, geminiProbe] = await Promise.all([

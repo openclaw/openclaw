@@ -7,21 +7,6 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { resolveChannelTtsVoiceDelivery } from "./tts-capabilities.js";
-import type { ChannelPlugin } from "./types.plugin.js";
-
-function createChannelPlugin(
-  id: string,
-  capabilities: ChannelPlugin["capabilities"],
-): ChannelPlugin {
-  return createChannelTestPluginBase({
-    id,
-    label: id,
-    capabilities,
-    config: {
-      listAccountIds: () => ["default"],
-    },
-  });
-}
 
 describe("resolveChannelTtsVoiceDelivery", () => {
   afterEach(() => {
@@ -33,13 +18,16 @@ describe("resolveChannelTtsVoiceDelivery", () => {
       createTestRegistry([
         {
           pluginId: "imessage",
-          plugin: createChannelPlugin("imessage", {
-            chatTypes: ["direct"],
-            tts: {
-              voice: {
-                synthesisTarget: "audio-file",
-                audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
-                preferAudioFileFormat: "caf",
+          plugin: createChannelTestPluginBase({
+            id: "imessage",
+            capabilities: {
+              chatTypes: ["direct"],
+              tts: {
+                voice: {
+                  synthesisTarget: "audio-file",
+                  audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+                  preferAudioFileFormat: "caf",
+                },
               },
             },
           }),
@@ -53,5 +41,12 @@ describe("resolveChannelTtsVoiceDelivery", () => {
       preferAudioFileFormat: "caf",
     });
     expect(resolveChannelTtsVoiceDelivery("slack")).toBeUndefined();
+  });
+
+  it("resolves bundled channel voice delivery before the channel registry loads", () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    expect(resolveChannelTtsVoiceDelivery("Telegram")).toMatchObject({
+      synthesisTarget: "voice-note",
+    });
   });
 });

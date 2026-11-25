@@ -1,6 +1,6 @@
+import { isNativeAppUiClient } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
-  errorShape,
   validateSessionsProviderReviewContinueParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -17,6 +17,7 @@ import {
   resolveSessionSharingTargetAsync,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -28,14 +29,15 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
       const { params, client, context, respond } = options;
       if (
         !client ||
-        !isOperatorUiClient(client.connect.client) ||
+        (!isOperatorUiClient(client.connect.client) &&
+          !isNativeAppUiClient(client.connect.client)) ||
         client.internal?.syntheticClient ||
         client.internal?.senderAttribution
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "Review and acknowledge the findings in chat."),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Review and acknowledge the findings in chat.",
         );
         return;
       }
@@ -73,19 +75,16 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
           agentId: requested.agentId,
         });
         if (!target || target.entry.sessionId !== params.sessionId) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "The session changed; refresh its findings."),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "The session changed; refresh its findings.",
           );
           return;
         }
         // Accepted input retains its original operator authority independently of UI selection.
         const assertCurrent = () => {
           options.signal?.throwIfAborted();
-          if (options.hasCurrentClientAuthority?.() === false) {
-            throw new Error("Provider review caller authority is no longer current");
-          }
           const assertAuthority =
             authorization.authorization?.assertAdmittedInputCurrent ??
             authorization.authorization?.assertCurrent;
@@ -131,13 +130,10 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
           respond(false, undefined, error.error);
         } else {
           // Provider findings and continuation text must not become request diagnostics.
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "Could not continue this chat. Refresh its current findings before trying again.",
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "Could not continue this chat. Refresh its current findings before trying again.",
           );
         }
       } finally {

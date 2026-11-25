@@ -27,9 +27,8 @@ vi.mock("openclaw/plugin-sdk/webhook-targets", () => ({
   withResolvedWebhookRequestPipeline,
 }));
 
-vi.mock("./auth.js", () => ({
-  verifyGoogleChatRequest,
-}));
+// mock-isolation: Drive webhook authentication outcomes without fetching Google's signing keys.
+vi.mock("./auth.js", () => ({ verifyGoogleChatRequest }));
 
 let createGoogleChatWebhookRequestHandler: typeof import("./monitor-webhook.js").createGoogleChatWebhookRequestHandler;
 let warnAppPrincipalMisconfiguration: typeof import("./monitor-webhook.js").warnAppPrincipalMisconfiguration;
@@ -79,6 +78,7 @@ function prepare(body: unknown, accountId?: string) {
   const target = createTarget(accountId);
   installSimplePipeline([target]);
   mockBody(body);
+  verifyGoogleChatRequest.mockResolvedValue({ ok: true });
   return target;
 }
 
@@ -176,28 +176,20 @@ describe("googlechat monitor webhook", () => {
       size: vi.fn(() => 0),
       clear: vi.fn(),
     };
-    const webhookTargets = new Map<string, WebhookTarget[]>([
-      [
-        "/googlechat",
-        [
-          {
-            account: createTarget().account,
-            config: { gateway: { trustedProxies: ["10.0.0.0/24"] } },
-            runtime: {},
-            core: {} as never,
-            path: "/googlechat",
-            mediaMaxMb: 20,
-          } as unknown as WebhookTarget,
-        ],
-      ],
-    ]);
+    const target = {
+      account: createTarget().account,
+      config: { gateway: { trustedProxies: ["10.0.0.0/24"] } },
+      runtime: {},
+      core: {} as never,
+      path: "/googlechat",
+      mediaMaxMb: 20,
+    } as unknown as WebhookTarget;
+    const webhookTargets = new Map([["/googlechat", [target]]]);
     const webhookInFlightLimiter = {} as never;
-    const processEvent = vi.fn(async () => {});
     const handler = createHandler({
       webhookTargets,
       webhookRateLimiter: rateLimiter,
       webhookInFlightLimiter,
-      processEvent,
     });
     const req = createRequest({ remoteAddress: "10.0.0.1" });
     const res = createResponse();
@@ -230,7 +222,6 @@ describe("googlechat monitor webhook", () => {
       authorizationEventObject: { systemIdToken: "addon-token" },
       chat: { eventTime, user, buttonClickedPayload: { space, message: clickedMessage } },
     });
-    verifyGoogleChatRequest.mockResolvedValue({ ok: true });
     const { processEvent, res } = await runWebhookHandler();
 
     expect(verifyGoogleChatRequest).toHaveBeenCalledWith({
@@ -263,9 +254,7 @@ describe("googlechat monitor webhook", () => {
 
   it("waits for durable admission before acknowledging a message", async () => {
     const raw = message("durable");
-    const target = prepare(raw);
-    resolveWebhookTargetWithAuthOrReject.mockResolvedValue(target);
-    verifyGoogleChatRequest.mockResolvedValue({ ok: true });
+    prepare(raw);
     let releaseAdmission: (result: { kind: "durable" }) => void = () => {};
     ingressReceive.mockImplementation(
       () =>
@@ -295,11 +284,7 @@ describe("googlechat monitor webhook", () => {
     },
     { name: "invalid message identity", invalid: true, statusCode: 400, body: "invalid payload" },
   ])("rejects $name without dispatch", async ({ invalid, statusCode, body }) => {
-    const target = prepare(
-      message(invalid ? null : "failed", invalid ? "missing resource name" : "hello"),
-    );
-    resolveWebhookTargetWithAuthOrReject.mockResolvedValue(target);
-    verifyGoogleChatRequest.mockResolvedValue({ ok: true });
+    prepare(message(invalid ? null : "failed", invalid ? "missing resource name" : "hello"));
     if (invalid) {
       ingressReceive.mockResolvedValue({
         kind: "invalid",

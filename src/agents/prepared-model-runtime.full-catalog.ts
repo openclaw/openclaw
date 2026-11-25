@@ -13,7 +13,6 @@ import {
 } from "./embedded-agent-runner/model.inline-provider.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
-import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import {
   enrichHarnessRows,
   modelCatalogRouteVariantKey,
@@ -25,6 +24,11 @@ import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-pr
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { resolveFallbackRateLimitModel } from "./model-fallback-rate-limit-model.js";
+import { modelKey } from "./model-ref-shared.js";
+import { resolveDefaultModelForAgent } from "./model-selection-config.js";
+import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import { applyModelServingContextLimit } from "./model-serving-context.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import {
@@ -48,7 +52,7 @@ import type {
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
+import { AuthStorage } from "./sessions/auth-storage.core.js";
 
 const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 
@@ -56,10 +60,20 @@ const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 export async function prepareFullCatalogFacts(
   agentFacts: Parameters<typeof completeConfiguredRuntimeModels>[0] &
     Pick<PreparedModelRuntimeAgentFacts, "templateAuthStorage" | "credentials">,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  pluginGeneration: Pick<
+    PreparedModelRuntimePluginGeneration,
+    | "pluginMetadataSnapshot"
+    | "pluginRegistry"
+    | "preparedStaticProviderCatalog"
+    | "providerStaticModels"
+  >,
   catalogMode: PreparedModelRuntimeCatalogMode,
   catalogSource: PreparedModelRuntimeCatalogSource,
-  options: { includeNative?: boolean; providerIds?: readonly string[] } = {},
+  options: {
+    includeNative?: boolean;
+    providerIds?: readonly string[];
+    assertCurrent?: () => void;
+  } = {},
 ): Promise<PreparedModelRuntimeCatalogFacts & { catalogModels: readonly Model[] }> {
   const prepare = async () => {
     const { env, input, templateAuthStorage } = agentFacts;
@@ -108,10 +122,16 @@ export async function prepareFullCatalogFacts(
       ...(input.readOnly ? { readOnly: true } : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     });
-    const modelCatalog =
-      catalogMode === "live" && options.includeNative !== false
-        ? await augmentPreparedModelCatalogWithAgentHarness({ input, snapshot, pluginRegistry })
-        : snapshot;
+    let modelCatalog = snapshot;
+    if (catalogMode === "live" && options.includeNative !== false) {
+      const { augmentPreparedModelCatalogWithAgentHarness } =
+        await import("./harness/model-catalog.js");
+      modelCatalog = await augmentPreparedModelCatalogWithAgentHarness({
+        input,
+        snapshot,
+        pluginRegistry,
+      });
+    }
     const providerStaticModels =
       input.config.models?.mode === "replace"
         ? []
@@ -125,7 +145,7 @@ export async function prepareFullCatalogFacts(
             ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           })));
-    // Signed-in providers keep their known manifest rows when the account listing fails.
+    // Signed-in providers whose manifest is their list keep it when an account listing fails.
     const credentialProviders = Object.keys(agentFacts.credentials).map(normalizeProviderId);
     const scopedProviders =
       options.providerIds && new Set(options.providerIds.map(normalizeProviderId));
@@ -143,10 +163,11 @@ export async function prepareFullCatalogFacts(
         { providerMetadataOwners: pluginMetadataSnapshot.owners },
       ).map((model) => completeInlineProviderModel(model, providerConfig)),
     );
-    const configuredRuntimeModels = completeConfiguredRuntimeModels(
+    const configuredRuntimeModels = await completeConfiguredRuntimeModels(
       agentFacts,
       pluginGeneration,
       templateModelRegistry,
+      options.assertCurrent,
     );
     const providerOutcomes = catalogSource.providerOutcomes ?? [];
     const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
@@ -178,7 +199,6 @@ export async function prepareFullCatalogFacts(
       catalogModels,
       modelCatalog: completeModelCatalog,
       configuredRuntimeModels,
-      inlineProviderModels: pluginGeneration.inlineProviderModels,
     };
   };
   return withPluginRuntimeGenerationScope(
@@ -331,13 +351,46 @@ export function createPreparedModelRuntimeSnapshot(
 ): PreparedModelRuntimeSnapshot {
   const { credentials, input } = agentFacts;
   const {
+    inlineProviderModels,
     mediaCapabilityProviders,
     mediaCapabilityProviderSource,
     messageToolCatalog,
     pluginMetadataSnapshot,
     pluginRegistry,
   } = pluginGeneration;
-  const { configuredRuntimeModels, inlineProviderModels, templateModelRegistry } = catalogFacts;
+  const { configuredRuntimeModels, templateModelRegistry } = catalogFacts;
+  const fallbackRateLimitModels = withPluginRuntimeGenerationScope(
+    { metadataSnapshot: pluginMetadataSnapshot, pluginRegistry },
+    () => {
+      const models = new Map<string, Model | undefined>();
+      const selection = {
+        cfg: publishedConfig,
+        agentId: input.agentId,
+        manifestPlugins: pluginMetadataSnapshot,
+      };
+      if (resolveConfiguredModelFallbacks(selection).length === 0) {
+        return models;
+      }
+      const candidates = resolveModelCandidateChain({
+        ...selection,
+        ...resolveDefaultModelForAgent({ ...selection, allowPluginNormalization: false }),
+      });
+      for (const { provider, model: modelId } of candidates.length > 1 ? candidates : []) {
+        const key = modelKey(provider, modelId);
+        if (!models.has(key)) {
+          try {
+            models.set(
+              key,
+              resolveFallbackRateLimitModel({ provider, modelId, cfg: publishedConfig }),
+            );
+          } catch {
+            // Unavailable owners remain with normal candidate admission, including its error policy.
+          }
+        }
+      }
+      return models;
+    },
+  );
   const modelCatalog = materializePreparedModelCatalog(
     catalogFacts.modelCatalog,
     agentFacts.runtimeCapabilityModels,
@@ -385,6 +438,7 @@ export function createPreparedModelRuntimeSnapshot(
     loadFullModelCatalog: catalogAccess.loadFullModelCatalog,
     loadNativeModelCatalog: catalogAccess.loadNativeModelCatalog,
     configuredRuntimeModels,
+    fallbackRateLimitModels,
     configuredModelAliases: prepareConfiguredModelAliases(
       agentFacts,
       pluginGeneration,
@@ -396,12 +450,12 @@ export function createPreparedModelRuntimeSnapshot(
       pluginMetadataSnapshot,
     ),
     inlineProviderModels,
-    createStores: (publishedModels?: ReadonlyMap<string, readonly Model[]>) => {
+    createStores: (publishedModels, selectedModel) => {
       // Runtime keys and session extensions mutate per-run stores; parsed inputs stay shared.
       const authStorage = AuthStorage.inMemory(credentials);
       return {
         authStorage,
-        modelRegistry: templateModelRegistry.fork(authStorage, publishedModels),
+        modelRegistry: templateModelRegistry.fork(authStorage, publishedModels, selectedModel),
       };
     },
     routeModelResolutionMemo: new Map<string, Promise<Model>>(),
@@ -409,6 +463,7 @@ export function createPreparedModelRuntimeSnapshot(
   bindPreparedModelRuntimeAuth(snapshot, {
     labels: catalogAccess.initialAuth.providerAuthLabels,
     store: catalogAccess.initialAuth.authStore,
+    readUsage: catalogAccess.readUsage,
     load: catalogAccess.loadAuth,
     materializations: Object.freeze([...getPreparedRuntimeAuthMaterializations(input.agentDir)]),
   });

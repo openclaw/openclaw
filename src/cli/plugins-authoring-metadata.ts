@@ -13,7 +13,22 @@ export function buildToolPluginManifest(params: {
   packageManifest: JsonObject;
   existingManifest?: JsonObject;
 }): JsonObject {
-  const toolMetadata = buildToolPluginToolMetadata(params.metadata, params.existingManifest);
+  const existingToolMetadata = isRecord(params.existingManifest?.toolMetadata)
+    ? params.existingManifest.toolMetadata
+    : {};
+  const nextEntries = params.metadata.tools
+    .map((tool) => {
+      const existingValue = existingToolMetadata[tool.name];
+      const existing = isRecord(existingValue) ? { ...existingValue } : {};
+      if (tool.optional) {
+        existing.optional = true;
+      } else {
+        delete existing.optional;
+      }
+      return [tool.name, existing] as const;
+    })
+    .filter(([, value]) => Object.keys(value).length > 0);
+  const toolMetadata = nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
   const existingContracts = isRecord(params.existingManifest?.contracts)
     ? params.existingManifest.contracts
     : {};
@@ -41,28 +56,6 @@ export function buildToolPluginManifest(params: {
   const serialized = JSON.stringify(manifest);
   // SAFETY: Serializing this assembled manifest preserves its outer JSON object shape.
   return JSON.parse(serialized) as JsonObject;
-}
-
-function buildToolPluginToolMetadata(
-  metadata: ToolPluginMetadata,
-  existingManifest: JsonObject | undefined,
-): Record<string, unknown> | undefined {
-  const existingToolMetadata = isRecord(existingManifest?.toolMetadata)
-    ? existingManifest.toolMetadata
-    : {};
-  const nextEntries = metadata.tools
-    .map((tool) => {
-      const existingValue = existingToolMetadata[tool.name];
-      const existing = isRecord(existingValue) ? { ...existingValue } : {};
-      if (tool.optional) {
-        existing.optional = true;
-      } else {
-        delete existing.optional;
-      }
-      return [tool.name, existing] as const;
-    })
-    .filter(([, value]) => Object.keys(value).length > 0);
-  return nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
 }
 
 export function buildToolPluginPackageManifest(params: {

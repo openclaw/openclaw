@@ -1,37 +1,22 @@
 import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   getSlackApprovalApprovers,
   getSlackApprovalApproversForTeam,
   isSlackPluginApprovalAuthorizedSender,
 } from "./approval-auth.js";
-import { registerSlackInstallationState } from "./installation-identity-state.js";
+import { buildPluginRequest, useSlackInstallations } from "./approval-native.test-support.js";
 
-const installations: Array<ReturnType<typeof registerSlackInstallationState>> = [];
+const install = useSlackInstallations();
 type SlackConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>;
 const slackConfig = (slack: SlackConfig): OpenClawConfig => ({ channels: { slack } });
 const authorized = isSlackPluginApprovalAuthorizedSender;
 
-function install(...args: Parameters<typeof registerSlackInstallationState>) {
-  installations.push(registerSlackInstallationState(...args));
-}
-
-afterEach(() => {
-  for (const installation of installations.splice(0)) {
-    installation.release();
-  }
-});
-
 function pluginRequest(
   policySubject?: PluginApprovalRequest["request"]["policySubject"],
 ): PluginApprovalRequest {
-  return {
-    id: "plugin:req-1",
-    request: { title: "Plugin approval", description: "Allow access", policySubject },
-    createdAtMs: 0,
-    expiresAtMs: 1000,
-  };
+  return buildPluginRequest({ policySubject });
 }
 
 describe("legacy Slack plugin approval sender authorization", () => {
@@ -130,7 +115,7 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
   });
 
   it("applies tool, plugin, then Agent reviewer lists with qualified IDs", () => {
-    installations.push(registerSlackInstallationState("default", "workspace", "T11111111"));
+    install("default", "workspace", "T11111111");
     const cfg: OpenClawConfig = {
       approvals: {
         plugin: {
@@ -166,7 +151,7 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
   });
 
   it("distinguishes an omitted default from an explicit empty default", () => {
-    installations.push(registerSlackInstallationState("default", "workspace", "T11111111"));
+    install("default", "workspace", "T11111111");
     const cfg: OpenClawConfig = {
       approvals: { plugin: { slack: { plugins: { calendar: { approvers: [pluginReviewer] } } } } },
       channels: { slack: { allowFrom: [legacyReviewer] } },

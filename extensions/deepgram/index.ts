@@ -1,5 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { transcribeDeepgramAudio } from "./audio.js";
+import { DEFAULT_DEEPGRAM_AUDIO_MODEL, transcribeDeepgramAudio } from "./audio.js";
 import { buildDeepgramRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
 export default definePluginEntry({
@@ -10,7 +10,7 @@ export default definePluginEntry({
     api.registerMediaUnderstandingProvider({
       id: "deepgram",
       capabilities: ["audio"],
-      defaultModels: { audio: "nova-3" },
+      defaultModels: { audio: DEFAULT_DEEPGRAM_AUDIO_MODEL },
       autoPriority: { audio: 30 },
       transcribeAudio: transcribeDeepgramAudio,
     });

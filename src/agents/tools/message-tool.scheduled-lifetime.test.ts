@@ -1,5 +1,9 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
 import type { ChannelPollContext } from "../../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -9,9 +13,8 @@ import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as activeJobs from "../../cron/active-jobs.js";
 import { prepareCronRunAdmission } from "../../cron/run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../../cron/scheduled-occurrence.test-support.js";
 import { registerActiveCronTaskRun } from "../../cron/service/active-run-cancellation.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
-import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import type * as Gateway from "../../gateway/server-methods/types.js";
 import { recoverPendingDeliveries } from "../../infra/outbound/delivery-queue-recovery.js";
 import { loadUnfinishedDeliveries } from "../../infra/outbound/delivery-queue-storage.js";
@@ -23,7 +26,11 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { createEmbeddedMessageInvocationPolicy } from "../scheduled-message-invocation.js";
 import * as gatewayCallerContext from "./gateway-caller-context.js";
-import { createMessageTool } from "./message-tool-execution.js";
+import { createMessageTool, createMessageToolAsync } from "./message-tool-execution.js";
+import {
+  messageGatewayContext,
+  resolvedMessageSecrets,
+} from "./message-tool-execution.test-support.js";
 
 const settled = { status: "settled", partialDelivery: false };
 function delivered(messageId: string, withSettlement = true) {
@@ -45,7 +52,7 @@ const connection = (gatewayUrl: string, gatewayToken: string) => ({ gatewayUrl, 
 const partialError = (error: unknown, messageId: string) =>
   createChannelPartialDeliveryError(error, { messageIds: [messageId], visibleReplySent: true });
 
-it.each([
+it.for([
   ["provider", "send", "direct", "accepted", sent],
   ["target", "send", "direct", "rejected", {}],
   ["action", "set-presence", "direct", "accepted", actionDone],
@@ -65,13 +72,13 @@ it.each([
   ["poll-partial", "poll", "direct", "partial", partiallyDelivered("poll-partial")],
   ["poll-partial", "poll", "gateway", "partial", partiallyDelivered("poll-partial")],
 ] as const)(
-  "settles %s revocation during %s via %s as %s",
-  async (revokeAt, action, deliveryMode, outcome, expected) => {
+  "settles %s scope closure during %s via %s as %s",
+  async ([revokeAt, action, deliveryMode, outcome, expected], { signal }) => {
     const accepted = outcome !== "rejected";
     const at = (...stages: string[]) => stages.includes(revokeAt);
     const viaGateway = deliveryMode === "gateway";
     const existingGatewayJob = revokeAt === "provider" && deliveryMode === "gateway";
-    const revokedError = "cron message action authority is no longer active";
+    const revokedError = "message action turn capability is no longer active";
     const laterError =
       revokeAt === "poll-provider"
         ? undefined
@@ -95,9 +102,7 @@ it.each([
     const scheduledToolPolicy = { version: 1, mode: "trusted" } as const;
     const identity = { agentId: "main", runId, sessionId: runId };
     const runOptions = { ...identity, sessionKey, scheduledToolPolicy };
-    const marker = activeJobs.markCronJobActive(jobId, {
-      isMessageActionAuthorityCurrent: () => true,
-    });
+    const marker = activeJobs.markCronJobActive(jobId);
     const releaseCancellation = registerActiveCronTaskRun({
       runId,
       controller: source,
@@ -240,25 +245,17 @@ it.each([
         const { sendHandlers } = await import("../../gateway/server-methods/send.js");
         const method = "message.action";
         gatewayDispatch = vi.fn(sendHandlers[method] as Gateway.GatewayRequestHandler);
-        const methods = createGatewayMethodRegistry([
-          {
-            name: method,
-            owner: { kind: "core", area: "message" },
-            scope: "operator.write",
-            handler: gatewayDispatch,
-          },
-        ]);
-        gatewayContext = {
-          getRuntimeConfig: () => currentConfig,
-          getGatewayMethodRegistry: () => methods,
-          validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-          trackExecution: <T>(run: () => Promise<T>) => run(),
+        gatewayContext = messageGatewayContext(() => currentConfig, gatewayDispatch, {
           dedupe: new Map(),
-        } as Gateway.GatewayRequestContext;
+        });
       }
       const prepareAdmission = () =>
         prepareCronRunAdmission({
-          deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+          scheduledExecution: TEST_SCHEDULED_EXECUTION,
+          deliveryAttemptFence: {
+            beforeAttempt: async () => {},
+            assertCurrent: () => source.signal.throwIfAborted(),
+          },
           cfg: config,
           ...runOptions,
           jobId,
@@ -290,15 +287,10 @@ it.each([
       vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
         async ({ config: resolvedConfig }) => {
           await pauseAtBoundary(revokeAt === "config");
-          return {
-            resolvedConfig,
-            diagnostics: [],
-            targetStatesByPath: {},
-            hadUnresolvedTargets: false,
-          };
+          return resolvedMessageSecrets(resolvedConfig);
         },
       );
-      const tool = createMessageTool({
+      const tool = await createMessageToolAsync({
         config,
         ...identity,
         agentSessionKey: sessionKey,
@@ -350,15 +342,13 @@ it.each([
 
       pending = execute(existingGatewayJob ? "existing-job-message" : "accepted-before-revocation");
       void pending.catch(() => undefined);
-      await withTestTimeout(
-        Promise.race([
+      await withinTest(
+        awaitGateBeforeSettlement(
           boundaryEntered.promise,
-          pending.then(() => {
-            throw new Error("Scheduled message action completed before its provider boundary");
-          }),
-        ]),
-        5000,
-        "Scheduled provider boundary not reached",
+          pending,
+          "Scheduled message action completed before its provider boundary",
+        ),
+        signal,
       );
       if (revokeAt === "config") {
         currentConfig = {
@@ -376,7 +366,7 @@ it.each([
       if (revokeAt === "action") {
         activeJobs.requestActiveCronJobCancellation(jobId, "Cron job removed by operator.");
       } else {
-        activeJobs.noteActiveCronJobMessageActionAuthorityMutation(jobId);
+        admission.close();
       }
       releaseBoundary.resolve();
 
@@ -385,7 +375,7 @@ it.each([
       } else {
         await expect(pending).rejects.toThrow(
           viaGateway && revokeAt !== "unconfirmed-action"
-            ? "agent runtime authority is no longer active"
+            ? "The message turn has ended. Start a new turn to retry."
             : revokedError,
         );
       }

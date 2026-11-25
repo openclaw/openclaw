@@ -1,8 +1,5 @@
-/**
- * Tests restart trace formatting and persisted restart metadata.
- */
 import { performance } from "node:perf_hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   collectGatewayProcessMemoryUsageMb,
@@ -23,12 +20,34 @@ vi.mock("../logging/subsystem.js", () => ({
 
 describe("gateway shutdown diagnostics", () => {
   let clock = 0;
+  const waits: Array<{ resolve: () => void; settled: Promise<void> }> = [];
+  function wait(
+    name: string,
+    metrics?: Parameters<typeof measureGatewayCloseStep>[2],
+    runtime = false,
+  ) {
+    const deferred = createDeferredCore();
+    const settled = runtime
+      ? measureGatewayRestartTrace(name, () => deferred.promise, metrics, true)
+      : measureGatewayCloseStep(name, () => deferred.promise, metrics);
+    const pending = { ...deferred, settled };
+    waits.push(pending);
+    return pending;
+  }
+  async function advance() {
+    clock += 5_000;
+    await vi.advanceTimersByTimeAsync(5_000);
+  }
   beforeEach(() => {
     clock = 0;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     vi.stubEnv("OPENCLAW_GATEWAY_RESTART_TRACE", "0");
   });
-  afterEach(() => {
+  afterEach(async () => {
+    for (const pending of waits) {
+      pending.resolve();
+    }
+    await Promise.allSettled(waits.splice(0).map(({ settled }) => settled));
     finishGatewayRestartTrace("test.finish");
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -61,81 +80,70 @@ describe("gateway shutdown diagnostics", () => {
   });
 
   it("retains concurrent same-name joins until each fulfills or rejects", async () => {
-    const first = createDeferredCore();
-    const second = createDeferredCore();
-    const closingFirst = measureGatewayCloseStep("restart.close.channels", () => first.promise);
+    const first = wait("restart.close.channels");
     clock = 100;
-    const closingSecond = measureGatewayCloseStep("restart.close.channels", () => second.promise);
-    try {
-      clock = 250;
-      expect(formatGatewayPendingCloseSteps()).toBe(
-        "restart.close.channels=250ms, restart.close.channels=150ms",
-      );
-      first.resolve();
-      await closingFirst;
-      expect(formatGatewayPendingCloseSteps()).toBe("restart.close.channels=150ms");
-      const failure = new Error("channel teardown failed");
-      const rejected = expect(closingSecond).rejects.toBe(failure);
-      second.reject(failure);
-      await rejected;
-      expect(formatGatewayPendingCloseSteps()).toBe("none");
-    } finally {
-      first.resolve();
-      second.resolve();
-      await Promise.allSettled([closingFirst, closingSecond]);
-    }
+    const second = wait("restart.close.channels");
+    clock = 250;
+    expect(formatGatewayPendingCloseSteps()).toBe(
+      "restart.close.channels=250ms, restart.close.channels=150ms",
+    );
+    first.resolve();
+    await first.settled;
+    expect(formatGatewayPendingCloseSteps()).toBe("restart.close.channels=150ms");
+    const failure = new Error("channel teardown failed");
+    const rejected = expect(second.settled).rejects.toBe(failure);
+    second.reject(failure);
+    await rejected;
+    expect(formatGatewayPendingCloseSteps()).toBe("none");
   });
 
   it("reports live sub-waits every five seconds only while shutdown joins are pending", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const subWait = createDeferredCore();
-    const first = createDeferredCore();
-    const second = createDeferredCore();
-    const runtime = measureGatewayRestartTrace(
-      "worker-placement.reconcile.read",
-      () => subWait.promise,
-      undefined,
-      true,
+    const subWait = wait("worker-placement.reconcile.read", undefined, true);
+    await advance();
+    expect(logInfo).not.toHaveBeenCalled();
+    expect(formatGatewayPendingCloseSteps()).toBe("none");
+
+    const first = wait("shutdown.worker-placement");
+    await advance();
+    expect(logInfo).toHaveBeenLastCalledWith(
+      "shutdown pending: count=2 worker-placement.reconcile.read=10000ms, shutdown.worker-placement=5000ms",
     );
-    let closingFirst: Promise<void> | undefined;
-    let closingSecond: Promise<void> | undefined;
-    try {
-      clock = 5_000;
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(logInfo).not.toHaveBeenCalled();
-      expect(formatGatewayPendingCloseSteps()).toBe("none");
+    const second = wait("shutdown.worker-environments");
+    first.resolve();
+    await first.settled;
+    await advance();
+    expect(logInfo).toHaveBeenLastCalledWith(
+      "shutdown pending: count=2 worker-placement.reconcile.read=15000ms, shutdown.worker-environments=5000ms",
+    );
 
-      closingFirst = measureGatewayCloseStep("shutdown.worker-placement", () => first.promise);
-      clock = 10_000;
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(logInfo).toHaveBeenLastCalledWith(
-        "shutdown pending: count=2 worker-placement.reconcile.read=10000ms, shutdown.worker-placement=5000ms",
-      );
-      closingSecond = measureGatewayCloseStep("shutdown.worker-environments", () => second.promise);
-      first.resolve();
-      await closingFirst;
-      clock = 15_000;
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(logInfo).toHaveBeenLastCalledWith(
-        "shutdown pending: count=2 worker-placement.reconcile.read=15000ms, shutdown.worker-environments=5000ms",
-      );
+    second.resolve();
+    await second.settled;
+    logInfo.mockClear();
+    await advance();
+    expect(logInfo).not.toHaveBeenCalled();
+    expect(formatGatewayPendingCloseSteps()).toBe("none");
+    subWait.resolve();
+    await subWait.settled;
+    expect(logInfo).not.toHaveBeenCalled();
+  });
 
-      second.resolve();
-      await closingSecond;
-      logInfo.mockClear();
-      clock = 20_000;
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(logInfo).not.toHaveBeenCalled();
-      expect(formatGatewayPendingCloseSteps()).toBe("none");
-      subWait.resolve();
-      await runtime;
-      expect(logInfo).not.toHaveBeenCalled();
-    } finally {
-      subWait.resolve();
-      first.resolve();
-      second.resolve();
-      await Promise.allSettled([runtime, closingFirst, closingSecond]);
-    }
+  it("reports current retained custody while shutdown is pending", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const custody = { sources: 6, operations: 5, sourceWork: 5 };
+    const closing = wait("restart.close.session-sources", () => custody);
+    await advance();
+    expect(logInfo).toHaveBeenLastCalledWith(
+      "shutdown pending: count=1 restart.close.session-sources=5000ms sources=6.0 operations=5.0 sourceWork=5.0",
+    );
+    Object.assign(custody, { sources: 1, operations: 0, sourceWork: 1 });
+    await advance();
+    expect(logInfo).toHaveBeenLastCalledWith(
+      "shutdown pending: count=1 restart.close.session-sources=10000ms sources=1.0 operations=0.0 sourceWork=1.0",
+    );
+    closing.resolve();
+    await closing.settled;
+    expect(formatGatewayPendingCloseSteps()).toBe("none");
   });
 
   it("keeps the parent ready duration when recording child spans", () => {
@@ -155,25 +163,18 @@ describe("gateway shutdown diagnostics", () => {
     );
   });
 
-  it("bounds pending diagnostics and keeps step names on one line", async () => {
-    const released = createDeferredCore();
-    const closing = Array.from({ length: 10 }, (_, index) =>
-      measureGatewayCloseStep(`restart.close.${index}\n${"x".repeat(200)}`, () => released.promise),
-    );
-    try {
-      clock = 1_234;
-      const summary = formatGatewayPendingCloseSteps();
-      expect(summary).toContain("restart.close.0_");
-      expect(summary).not.toContain("\n");
-      expect(summary).not.toContain("x".repeat(121));
-      expect(summary).toContain("=1234ms");
-      expect(summary).toMatch(/, \+2 more$/u);
-      expect(summary.length).toBeLessThan(1_200);
-    } finally {
-      released.resolve();
-      await Promise.all(closing);
+  it("bounds pending diagnostics and keeps step names on one line", () => {
+    for (let index = 0; index < 10; index++) {
+      wait(`restart.close.${index}\n${"x".repeat(200)}`);
     }
-    expect(formatGatewayPendingCloseSteps()).toBe("none");
+    clock = 1_234;
+    const summary = formatGatewayPendingCloseSteps();
+    expect(summary).toContain("restart.close.0_");
+    expect(summary).not.toContain("\n");
+    expect(summary).not.toContain("x".repeat(121));
+    expect(summary).toContain("=1234ms");
+    expect(summary).toMatch(/, \+2 more$/u);
+    expect(summary.length).toBeLessThan(1_200);
   });
 });
 
@@ -182,12 +183,7 @@ describe("gateway restart trace handoff", () => {
     const startedAt = Date.now() - 305_000;
     const lastAt = startedAt + 300_000;
 
-    expect(
-      createGatewayRestartTraceHandoffEnv({
-        startedAt,
-        lastAt,
-      }),
-    ).toStrictEqual({
+    expect(createGatewayRestartTraceHandoffEnv({ startedAt, lastAt })).toStrictEqual({
       OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS: String(startedAt),
       OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS: String(lastAt),
     });
@@ -195,12 +191,8 @@ describe("gateway restart trace handoff", () => {
 
   it("counts active timer resources", () => {
     const timer = setTimeout(() => {}, 10_000);
-    try {
-      const metrics = Object.fromEntries(collectGatewayProcessMemoryUsageMb());
-
-      expect(metrics.activeTimersCount).toBeGreaterThanOrEqual(1);
-    } finally {
-      clearTimeout(timer);
-    }
+    onTestFinished(() => clearTimeout(timer));
+    const metrics = Object.fromEntries(collectGatewayProcessMemoryUsageMb());
+    expect(metrics.activeTimersCount).toBeGreaterThanOrEqual(1);
   });
 });

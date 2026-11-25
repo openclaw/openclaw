@@ -24,14 +24,13 @@ export const restartSentinelReadOperations = {
     type: "restartSentinel.current" as const,
     state: readRestartSentinelRowSync(db),
   }),
-  "restartSentinel.snapshot": (_input: undefined, db) =>
-    runSqliteReadSnapshotSync(db, () => {
-      const { state, revision } = readRestartSentinelSnapshotSync(db);
-      return {
-        type: "restartSentinel.snapshot" as const,
-        snapshot: { sentinel: state.kind === "valid" ? state.sentinel : null, revision },
-      };
-    }),
+  "restartSentinel.snapshot": (_input: undefined, db) => {
+    const { state, revision } = readRestartSentinelSnapshotSync(db);
+    return {
+      type: "restartSentinel.snapshot" as const,
+      snapshot: { sentinel: state.kind === "valid" ? state.sentinel : null, revision },
+    };
+  },
   "restartSentinel.installReceipt": (_input: undefined, db) => ({
     type: "restartSentinel.installReceipt" as const,
     sentinel: readUpdateInstallReceiptRowSync(db),

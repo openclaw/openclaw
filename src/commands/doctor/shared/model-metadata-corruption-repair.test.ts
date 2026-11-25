@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { ConfigAuditRecord } from "../../../config/io.audit.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { repairGeneratedModelMetadataCorruption } from "./model-metadata-corruption-repair.js";
@@ -13,23 +13,22 @@ const preservedModel = {
   contextTokens: 272_000,
   api: "openai-chatgpt-responses" as const,
 };
-
+type RepairParams = Parameters<typeof repairGeneratedModelMetadataCorruption>[0];
 function corruptedConfig(): OpenClawConfig {
+  const model = {
+    ...preservedModel,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    maxTokens: 8192,
+  };
   return {
     models: {
       providers: {
         openai: {
           api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
-          models: [
-            {
-              ...preservedModel,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 8192,
-            },
-          ],
+          models: [model],
         },
       },
     },
@@ -87,22 +86,24 @@ function writeRecord(
   };
 }
 
-function repair(
-  config = corruptedConfig(),
-  overrides: Partial<Parameters<typeof repairGeneratedModelMetadataCorruption>[0]> = {},
-) {
+function repair(config = corruptedConfig(), overrides: Partial<RepairParams> = {}) {
   return repairGeneratedModelMetadataCorruption({
     config,
     authoredRoot: structuredClone(config),
     configPath,
     currentHash: "current",
-    auditRecords: [writeRecord()],
+    loadAuditRecords: () => [writeRecord()],
     ...overrides,
   });
 }
 
 it("removes only the audit-proven generic fallback quartet", () => {
-  const result = repair();
+  const config = corruptedConfig();
+  const before = structuredClone(config);
+  const loadAuditRecords = vi.fn(() => [writeRecord()]);
+  const result = repair(config, { loadAuditRecords });
+  expect(config).toEqual(before);
+  expect(loadAuditRecords).toHaveBeenCalledOnce();
   const model = result.config.models?.providers?.openai?.models[0];
   expect(model).toStrictEqual(preservedModel);
   expect(result.changes).toHaveLength(1);
@@ -113,19 +114,15 @@ it.each(["failed write", "unrelated paths", "custom route", "included models"])(
   "leaves an exact fingerprint unchanged with %s",
   (scenario) => {
     const config = corruptedConfig();
-    const overrides: Partial<Parameters<typeof repairGeneratedModelMetadataCorruption>[0]> = {};
+    const overrides: Partial<RepairParams> = {};
     if (scenario === "failed write") {
-      overrides.auditRecords = [writeRecord({ result: "failed", nextHash: null })];
+      overrides.loadAuditRecords = () => [writeRecord({ result: "failed", nextHash: null })];
     } else if (scenario === "unrelated paths") {
-      overrides.auditRecords = [
+      overrides.loadAuditRecords = () => [
         writeRecord({
-          changedPaths: [
-            "models.providers.anthropic.models[0].reasoning",
-            "models.providers.anthropic.models[0].input",
-            "models.providers.ollama.models[0].cost",
-            "models.providers.ollama.models[0].maxTokens",
-            "…+92 more",
-          ],
+          changedPaths: ["reasoning", "input", "cost", "maxTokens"].map(
+            (field) => `models.providers.anthropic.models[0].${field}`,
+          ),
         }),
       ];
     } else if (scenario === "custom route") {
@@ -156,5 +153,14 @@ it.each(["partial fallback tuple", "custom model"])("does not diagnose a %s", (s
   } else {
     model.id = "custom-sol";
   }
-  expect(repair(config)).toEqual({ config, changes: [], warnings: [] });
+  const loadAuditRecords = vi.fn(() => [writeRecord()]);
+  expect(repair(config, { loadAuditRecords })).toEqual({ config, changes: [], warnings: [] });
+  expect(loadAuditRecords).not.toHaveBeenCalled();
+});
+
+it("does not load provenance for a config without model providers", () => {
+  const loadAuditRecords = vi.fn(() => [writeRecord()]);
+  const config = {};
+  expect(repair(config, { loadAuditRecords }).config).toBe(config);
+  expect(loadAuditRecords).not.toHaveBeenCalled();
 });

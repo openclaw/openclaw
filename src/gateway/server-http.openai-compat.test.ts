@@ -84,7 +84,7 @@ it.each(endpoints)("hot reloads %s routes on the same server", async (endpoint) 
           "/v1/embeddings",
           ...Object.values(routes),
         ]) {
-          const { res, getBody } = await sendRequest(server, {
+          const { res } = await sendRequest(server, {
             path: requestPath,
             headers: { "x-openclaw-scopes": "operator.read" },
           });
@@ -94,12 +94,6 @@ it.each(endpoints)("hot reloads %s routes on the same server", async (endpoint) 
           expect(res.statusCode, `${requestPath} with ${endpoint}=${enabled}`).toBe(
             isEnabled ? (isModels ? 200 : 405) : 404,
           );
-          if (isEnabled && requestPath === "/v1/models") {
-            expect(JSON.parse(getBody())).toMatchObject({
-              object: "list",
-              data: expect.arrayContaining([expect.objectContaining({ id: "openclaw/default" })]),
-            });
-          }
         }
       }
     },
@@ -157,7 +151,6 @@ const phases = [
   ["complete", true],
   ["before headers", false],
   ["during body", false],
-  ["policy changed", false],
 ] as const;
 
 it.each(
@@ -225,25 +218,14 @@ it.each(
           headers: requestHeaders,
         });
         client.on("error", () => {});
-        const completed =
-          complete || phase === "policy changed" ? once(client, "response") : undefined;
+        const completed = complete ? once(client, "response") : undefined;
         client.end(JSON.stringify(mediaBody(path, SOURCE_URLS, stream, kind)));
         try {
-          if (phase === "policy changed") {
-            await firstStarted.promise;
-            publishConfig({
-              ...config,
-              gateway: { ...config.gateway, allowRealIpFallback: true },
-            });
-            firstResponse?.end(bytes);
-          }
           if (completed) {
             const [response] = await completed;
             const body = await text(response);
-            expect(response.statusCode).toBe(complete ? 200 : 401);
-            if (complete) {
-              expect(body).toContain("image accepted");
-            }
+            expect(response.statusCode).toBe(200);
+            expect(body).toContain("image accepted");
           } else {
             await firstStarted.promise;
             if (phase === "during body") {

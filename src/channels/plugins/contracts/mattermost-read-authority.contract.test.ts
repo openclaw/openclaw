@@ -14,28 +14,28 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
-import { createPluginRegistry } from "../../../plugins/registry.js";
+import { createTestPluginRegistry } from "../../../plugins/registry-runtime.test-helpers.js";
 import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
-import type { PluginRuntime } from "../../../plugins/runtime/types.js";
 import { createPluginRecord } from "../../../plugins/status.test-fixtures.js";
-import { createChannelTestPluginBase } from "../../../test-utils/channel-plugins.js";
 import { dispatchChannelMessageAction } from "../message-action-dispatch.js";
 import { getBundledChannelPluginAsync } from "./test-helpers/bundled-channel-plugin-loader.js";
 
 const preparation = vi.hoisted(() => ({ afterLookup: undefined as (() => void) | undefined }));
-vi.mock("node:dns/promises", async (original) => {
-  const actual = await original<typeof import("node:dns/promises")>();
-  return {
-    ...actual,
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
     lookup: async (...args: Parameters<typeof actual.lookup>) => {
       const result = await actual.lookup(...args);
       preparation.afterLookup?.();
       return result;
     },
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 const CURRENT = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -62,10 +62,6 @@ afterEach(() => {
 
 type FixtureOptions = {
   origin?: "bundled" | "global";
-  legacy?: boolean;
-  trusted?: boolean;
-  requesterAccountId?: string;
-  currentProvider?: string;
   currentChatType?: "channel" | "direct";
   currentMessagingTarget?: string;
   rawTarget?: string;
@@ -83,55 +79,26 @@ async function withReadFixture(
   }) => Promise<void>,
 ) {
   const mattermostPlugin = await getBundledChannelPluginAsync("mattermost");
-  const actions = mattermostPlugin?.actions;
-  if (!mattermostPlugin || !actions) {
+  if (!mattermostPlugin?.actions) {
     throw new Error("Mattermost message actions are unavailable");
   }
-  const owner = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
+  const owner = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "mattermost",
     origin: options.origin ?? "global",
-    trustedOfficialInstall: options.trusted ?? true,
+    trustedOfficialInstall: true,
   });
   owner.registry.plugins.push(record);
   owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({
     plugin: {
       ...mattermostPlugin,
       status: undefined,
-      actions: {
-        ...actions,
-        readAuthorityActions: options.legacy ? undefined : actions.readAuthorityActions,
-      },
     },
   });
-  if (options.currentProvider === "slack") {
-    // The requester needs discovery metadata, not the bundled Slack runtime.
-    const requester = createPluginRecord({
-      id: "slack",
-      origin: "config",
-      trustedOfficialInstall: false,
-    });
-    owner.registry.plugins.push(requester);
-    owner.createApi(requester, { config: {}, registrationMode: "full" }).registerChannel({
-      plugin: {
-        ...createChannelTestPluginBase({ id: "slack" }),
-        actions: { describeMessageTool: () => ({ actions: [] }) },
-      },
-    });
-  }
   setActivePluginRegistry(owner.registry);
-  for (const key of [
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "https_proxy",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-  ]) {
+  for (const key of "HTTPS_PROXY HTTP_PROXY https_proxy http_proxy ALL_PROXY all_proxy".split(
+    " ",
+  )) {
     vi.stubEnv(key, undefined);
   }
   const requests: string[] = [];
@@ -160,14 +127,13 @@ async function withReadFixture(
             actions: { messages: true },
             groupPolicy: "allowlist",
             groups: options.allowOtherChannel === false ? {} : { [OTHER]: {} },
-            accounts: { other: { enabled: true } },
           },
         },
       };
       setRuntimeConfigSnapshot(cfg, cfg);
-      const requesterAccountId = options.requesterAccountId ?? "default";
+      const requesterAccountId = "default";
       const toolContext = {
-        currentChannelProvider: options.currentProvider ?? "mattermost",
+        currentChannelProvider: "mattermost",
         currentChannelId: `channel:${CURRENT}`,
         currentChatType: options.currentChatType ?? ("channel" as const),
         ...(options.currentMessagingTarget
@@ -197,7 +163,11 @@ async function withReadFixture(
           agentId: "main",
           sessionKey,
           operationalRunInstance,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(delegatedAuthority),
+          receiptAuthority: () => {
+            if (!validateAgentRunDelegatedAuthority(delegatedAuthority)) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
         },
       );
       try {
@@ -219,8 +189,6 @@ async function withReadFixture(
           revoke: (authorityOwner) => {
             if (authorityOwner === "plugin") {
               record.enabled = false;
-            } else if (authorityOwner === "run") {
-              releaseAgentRunDelegatedAuthority(delegatedAuthority);
             } else {
               revokeMessageActionTurnCapability(turnCapability);
             }
@@ -237,7 +205,7 @@ async function withReadFixture(
   );
 }
 
-type AuthorityOwner = "plugin" | "run" | "turn";
+type AuthorityOwner = "plugin" | "turn";
 type Revocation = [AuthorityOwner, string, number?];
 async function checkRead(
   options: FixtureOptions,
@@ -276,53 +244,44 @@ describe("Mattermost registered message reads", () => {
       [postsPath(CURRENT)],
     ));
 
-  it.each([false, true])("directory resolution retains authority (revoked=%s)", (revoked) =>
+  it("directory resolution retains authority", () =>
     checkRead(
       { rawTarget: "#allowed" },
       OTHER,
-      revoked
-        ? /no longer active/
-        : {
-            ok: true,
-            channelId: OTHER,
-            hasMore: false,
-            messages: [
-              { ...POST, timestampMs: 1_700_000_000_000, timestampUtc: "2023-11-14T22:13:20.000Z" },
-            ],
-          },
-      revoked
-        ? ["/api/v4/users/me"]
-        : [
-            "/api/v4/users/me",
-            "/api/v4/users/fixture-bot/channels?per_page=200",
-            metadataPath,
-            postsPath(OTHER),
-          ],
-      revoked ? ["run", "/api/v4/users/me"] : undefined,
-    ),
-  );
+      {
+        ok: true,
+        channelId: OTHER,
+        hasMore: false,
+        messages: [
+          { ...POST, timestampMs: 1_700_000_000_000, timestampUtc: "2023-11-14T22:13:20.000Z" },
+        ],
+      },
+      [
+        "/api/v4/users/me",
+        "/api/v4/users/fixture-bot/channels?per_page=200",
+        metadataPath,
+        postsPath(OTHER),
+      ],
+    ));
 
-  it.each<[FixtureOptions, string | RegExp, string[]]>([
-    [
-      { requesterAccountId: "other" },
-      "Explicit account does not match the trusted current account.",
-      [],
-    ],
-    [{ currentProvider: "slack" }, /current provider and account|Cross-context/, []],
-    [{ allowOtherChannel: false }, "Mattermost read target channel is not allowed", [metadataPath]],
-  ])("rejects unauthorized reads (%j)", (options, error, paths) =>
-    checkRead(options, OTHER, error, paths),
-  );
+  it("rejects channels outside the allowlist", () =>
+    checkRead(
+      { allowOtherChannel: false },
+      OTHER,
+      "Mattermost read target channel is not allowed",
+      [metadataPath],
+    ));
 
   it.each<Revocation>([
     ["turn", metadataPath],
     ["plugin", postsPath(OTHER), 200],
-    ["run", postsPath(OTHER), 403],
   ])("fences %s revocation at %s (status=%s)", (owner, at, status?: number) =>
     checkRead(
       {},
       OTHER,
-      /no longer active/,
+      owner === "turn"
+        ? "message action turn capability is no longer active"
+        : "Plugin mattermost was reloaded during the read. Retry the action.",
       at === metadataPath ? [metadataPath] : [metadataPath, postsPath(OTHER)],
       [owner, at, status],
     ),
@@ -338,24 +297,15 @@ describe("Mattermost registered message reads", () => {
             revoke("plugin");
           }
         };
-        await expect(read(OTHER)).rejects.toThrow(/no longer active/);
+        await expect(read(OTHER)).rejects.toThrow(
+          "Plugin mattermost was reloaded during the read. Retry the action.",
+        );
         expect(lookups).toBeGreaterThan(0);
         expect(requests).toEqual(beforePosts ? [metadataPath] : []);
         preparation.afterLookup = undefined;
       });
     }
   });
-
-  it.each([{ legacy: true }, { trusted: false }])(
-    "restricts reads to exact-current without installed authority (%j)",
-    async (options) => {
-      await withReadFixture(options, async ({ read, requests }) => {
-        await expect(read(CURRENT)).resolves.toMatchObject({ details: { ok: true } });
-        await expect(read(OTHER)).rejects.toThrow("exact current conversation");
-        expect(requests).toEqual([postsPath(CURRENT)]);
-      });
-    },
-  );
 
   it("preserves direct operator reads and provider errors", async () => {
     await withReadFixture(

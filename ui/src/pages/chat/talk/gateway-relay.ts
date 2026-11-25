@@ -5,6 +5,7 @@ import {
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { RealtimeVoiceCloseOptions } from "../../../../../src/talk/provider-types.js";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { RealtimeTalkAudioInputBudget } from "./audio-input-budget.ts";
@@ -26,6 +27,8 @@ import {
   type RealtimeTalkTransportContext,
   type RealtimeTalkTransportStartResult,
 } from "./shared.ts";
+
+registerChatComposerEnglish();
 
 const BARGE_IN_RMS_THRESHOLD = 0.02;
 const BARGE_IN_PEAK_THRESHOLD = 0.08;
@@ -340,8 +343,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
     const closesRelay = event.type === "close";
     try {
-      if (event.talkEvent) {
-        this.ctx.callbacks.onTalkEvent?.(event.talkEvent);
+      const lifecycleType = event.talkEvent?.type;
+      if (lifecycleType === "session.ready" || lifecycleType === "session.closed") {
+        this.ctx.callbacks.onTalkEvent?.({ type: lifecycleType });
       }
       switch (event.type) {
         case "ready":

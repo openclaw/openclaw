@@ -31,11 +31,8 @@ class MemoryBeforeRequesterSequencer extends BaseSequencer {
   }
 }
 const config = createUnitFastVitestConfig();
-export default {
-  ...config,
-  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
-  test: {
-    ...config.test,
+config.cacheDir = ${JSON.stringify(path.join(root, ".vite"))};
+Object.assign(config.test, {
     include: [memoryTest, "src/agents/cli-runner/bundle-mcp.requester-lifecycle.test.ts"],
     pool: "forks",
     maxWorkers: 1,
@@ -43,26 +40,21 @@ export default {
     isolate: false,
     passWithNoTests: false,
     sequence: { sequencer: MemoryBeforeRequesterSequencer },
-  },
-};
+});
+export default config;
 `,
       );
-      const env = { ...process.env };
-      for (const key of Object.keys(env)) {
-        if (
-          key.startsWith("VITEST") ||
-          key.startsWith("OPENCLAW_VITEST") ||
-          key === "GITHUB_ACTIONS"
-        ) {
-          delete env[key];
-        }
-      }
-      env.OPENCLAW_VITEST_RUNTIME = process.versions.bun ? "bun" : "node";
-      if (process.versions.bun) {
-        env.OPENCLAW_BUN_PATH = process.execPath;
-      }
-      env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH = path.join(root, "modules");
-      env.NO_COLOR = "1";
+      const env = {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([key]) => !/^(VITEST|OPENCLAW_VITEST)|^GITHUB_ACTIONS$/.test(key),
+          ),
+        ),
+        OPENCLAW_VITEST_RUNTIME: process.versions.bun ? "bun" : "node",
+        ...(process.versions.bun ? { OPENCLAW_BUN_PATH: process.execPath } : {}),
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "modules"),
+        NO_COLOR: "1",
+      };
       const result = await runVitestShutdownCommand({
         cwd: repoRoot,
         env,
@@ -85,19 +77,14 @@ export default {
         expect(file.assertionResults.length).toBeGreaterThan(0);
         expect(file.assertionResults.every((test) => test.status === "passed")).toBe(true);
       }
-      const memory = expectDefined(
-        report.testResults.find((file) =>
-          file.name.endsWith("agent-runner-memory.private-transcript.test.ts"),
-        ),
-        "memory producer result",
-      );
-      const requester = expectDefined(
-        report.testResults.find((file) =>
-          file.name.endsWith("bundle-mcp.requester-lifecycle.test.ts"),
-        ),
-        "requester lifecycle result",
-      );
-      expect(memory.endTime).toBeLessThanOrEqual(requester.startTime);
+      const resultFor = (suffix: string) =>
+        expectDefined(
+          report.testResults.find((file) => file.name.endsWith(suffix)),
+          suffix,
+        );
+      expect(
+        resultFor("agent-runner-memory.private-transcript.test.ts").endTime,
+      ).toBeLessThanOrEqual(resultFor("bundle-mcp.requester-lifecycle.test.ts").startTime);
     }),
   // A cold nested Vitest run of both files takes over 180s on loaded 4-CPU hosts.
   600_000,

@@ -9,21 +9,20 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readDarwinProcessCensus, readDarwinProcessTree } from "./darwin-process-inspection.js";
 
-const exec = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.runIf(process.platform === "darwin").each([false, true])(
   "inspects real process topology, identities, and arguments on main and Worker (Seatbelt=%s)",
   async (seatbelt) => {
     const fixture = fileURLToPath(
-      new URL("./darwin-process-inspection.test-support.mjs", import.meta.url),
+      import.meta.resolve("./darwin-process-inspection.test-support.mjs"),
     );
     const command = seatbelt ? "/usr/bin/sandbox-exec" : process.execPath;
     // Seatbelt refuses Apple's setuid ps even with default access allowed.
     const args = seatbelt
       ? ["-p", "(version 1)(allow default)", process.execPath, fixture, "--seatbelt"]
       : [fixture];
-    const { stdout } = await exec(command, args);
+    const { stdout } = await promisify(execFile)(command, args);
     expect(JSON.parse(stdout)).toEqual({
       threads: 2,
       child: "observed",
@@ -42,7 +41,6 @@ const EXITING_CHILD_FIXTURE = String.raw`
 #include <libproc.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/proc.h>
 #include <sys/proc_info.h>
 #include <sys/sysctl.h>
@@ -63,8 +61,7 @@ static int exiting(void) {
   if (sysctl(mib, 4, &kernel, &length, NULL, 0) != 0 || length != sizeof(kernel)) return -1;
   int window = result <= 0 && error == ESRCH && (kernel.kp_proc.p_flag & P_WEXIT) != 0;
   if (kernel.kp_proc.p_stat == SZOMB || (!window && result <= 0)) {
-    fprintf(stderr, "outside exit window: libproc=%d errno=%d p_stat=%d p_flag=0x%x\n",
-        result, error, kernel.kp_proc.p_stat, kernel.kp_proc.p_flag);
+    fprintf(stderr, "outside exit window\n");
     return -1;
   }
   return window;
@@ -88,8 +85,7 @@ int main(void) {
     close(master); close(gate[1]); close(ready[0]);
     int slave = setsid() == getpid() ? open(slave_path, O_RDWR | O_NOCTTY | O_NONBLOCK) : -1;
     if (slave < 0) _exit(1);
-    char buffer[1024];
-    memset(buffer, 'x', sizeof(buffer));
+    char buffer[1024] = {0};
     while (write(slave, buffer, sizeof(buffer)) > 0) {}
     if (errno != EAGAIN || fcntl(slave, F_SETFL, 0) != 0) _exit(1);
     char released;

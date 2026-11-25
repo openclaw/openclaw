@@ -7,7 +7,6 @@
 export {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
-  preemptAndDrainEmbeddedHeartbeatRun,
   resolveActiveEmbeddedRunSessionIdBySessionFile,
   runEmbeddedAgent,
 } from "./embedded-agent.js";

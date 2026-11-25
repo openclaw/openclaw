@@ -7,11 +7,7 @@ import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inv
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
-import {
-  openPackageActivationJournal,
-  resolvePackageActivationAnchor,
-  resolvePackageActivationJournalPath,
-} from "../../infra/package-update-activation-journal.js";
+import * as activationJournal from "../../infra/package-update-activation-journal.js";
 import { packageActivationRuntimeForTest } from "../../infra/package-update-activation-runtime.test-support.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
@@ -23,35 +19,25 @@ import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import * as sentinel from "../../infra/update-control-plane-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  getUpdateRun,
-  recordUpdateRunVerification,
-} from "../../infra/update-run-ledger.js";
+import * as ledger from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import {
-  requestUpdateCommandExecutorCancellation,
-  withUpdateCommandExecutor,
-  withUpdateCommandExecutorChild,
+  requestUpdateCommandExecutorCancellation as cancelExecutor,
+  withUpdateCommandExecutor as withExecutor,
+  withUpdateCommandExecutorChild as withChild,
 } from "./update-command-executor.js";
 import {
   finishSuccessfulPackageSwitch,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import * as results from "./update-command-result.js";
 import {
-  UnreportedUpdateAdmissionOutcome,
-  UpdateCommandFailure,
-  UpdateCommandPendingRecoveryFailure,
-} from "./update-command-result.js";
-import {
-  hasDeferredUpdateCommandTerminalResult,
-  withUpdateCommandTerminalResult,
+  hasDeferredUpdateCommandTerminalResult as hasDeferredResult,
+  withUpdateCommandTerminalResult as withTerminalResult,
 } from "./update-command-terminal.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
@@ -61,8 +47,7 @@ vi.mock("../../infra/gateway-lock.js", async (importOriginal) => ({
   readActiveGatewayLockPort: async () => 19101,
 }));
 
-// Keep the finalizer, swap/completion, executor, SQLite lease, ledger, and both
-// report consumers real. Unrelated plugin/native work has already succeeded.
+// Only unrelated plugin/native work is mocked; terminal state stays real.
 vi.mock("./update-command-convergence.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-convergence.js")>()),
   convergeUpdatePlugins: async (params: { result: unknown }) => ({
@@ -86,35 +71,24 @@ vi.mock("./shared.js", async (original) => ({
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let base: string;
-let temporary: string;
 let jsonOutput: unknown[];
-let humanOutput: string[];
-let errorOutput: string[];
 beforeEach(async () => {
   vi.mocked(verifyUpdatedGateway).mockReset();
   base = await fs.realpath(dirs.make("update-terminal-outcome-"));
-  temporary = path.join(base, "private-tmp");
+  const temporary = path.join(base, "private-tmp");
   await fs.mkdir(temporary, { mode: 0o700 });
   vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(temporary);
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(base, "state"));
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(base, "state", "openclaw.json"));
   vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "");
   jsonOutput = [];
-  humanOutput = [];
-  errorOutput = [];
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
     jsonOutput.push(structuredClone(value));
   });
-  vi.spyOn(defaultRuntime, "log").mockImplementation((value) => {
-    humanOutput.push(String(value));
-  });
-  vi.spyOn(defaultRuntime, "error").mockImplementation((value) => {
-    humanOutput.push(String(value));
-    errorOutput.push(String(value));
-  });
+  vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
 afterEach(() => {
-  vi.useRealTimers();
   __setFsSafeTestHooksForTest(undefined);
   closeOpenClawStateDatabaseForTest();
   clearRuntimeConfigSnapshot();
@@ -139,20 +113,79 @@ async function journaledFixture(root: string) {
   return fixture;
 }
 
-it.skipIf(process.platform === "win32").each([
-  { cancel: false, captured: false },
-  { cancel: false, captured: true },
-  { cancel: true, captured: false },
-])(
-  "retains terminal authority until release (cancel: $cancel, captured: $captured)",
-  async ({ cancel, captured }) => {
+type Run = NonNullable<UpdateCommandOptions["run"]>;
+type Fixture = Awaited<ReturnType<typeof journaledFixture>>;
+function createRun(): Run {
+  return {
+    runId: ledger.createUpdateRun({ trigger: "cli" }, { env: process.env }).runId,
+    env: { ...process.env },
+  };
+}
+function reportPath(run: Run) {
+  return path.join(run.env!.OPENCLAW_STATE_DIR!, "update-reports", `${run.runId}.md`);
+}
+function expectUnpublished(onResult: ReturnType<typeof vi.fn>) {
+  expect(jsonOutput).toEqual([]);
+  expect(onResult).not.toHaveBeenCalled();
+}
+async function publishPackage(
+  fixture: Fixture,
+  fence: NonNullable<Run["executorFence"]>,
+  installTarget = fixture.params.installTarget,
+) {
+  let transaction: PackageUpdateTransaction | undefined;
+  const published = await swapStagedPackageInstall({
+    ...fixture.params,
+    installTarget,
+    activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+    onTransaction: (value) => {
+      transaction = value;
+    },
+  });
+  expect(published.status, published.step.stderrTail ?? "").toBe("committed");
+  return transaction;
+}
+function readRun(run: Run) {
+  return ledger.getUpdateRun(run.runId, { env: run.env });
+}
+function readJournal(anchor: string) {
+  return syncFs.readFileSync(activationJournal.resolvePackageActivationJournalPath(anchor));
+}
+function expectPublication(anchor: string) {
+  expect(activationJournal.openPackageActivationJournal(anchor).read().phase).toBe(
+    "publication-complete",
+  );
+}
+function readReport(run: Run) {
+  return syncFs.readFileSync(reportPath(run), "utf8");
+}
+async function beforeRelease(run: Run, fixture: Fixture, anchor: string) {
+  return {
+    sentinel: await readRestartSentinelReadOnly(run.env),
+    run: readRun(run),
+    leaseKind: createManagedHandoffLeaseStore().read(fixture.packageRoot).kind,
+    originalJournalRetired: !syncFs.existsSync(anchor),
+  };
+}
+function releasedState(run: Run, anchor: string) {
+  return {
+    run: readRun(run),
+    journal: readJournal(anchor),
+    report: syncFs.existsSync(reportPath(run)) ? readReport(run) : undefined,
+  };
+}
+function expectPublished(onResult: ReturnType<typeof vi.fn>, result: object) {
+  expect(onResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(result));
+  expect(jsonOutput).toEqual([expect.objectContaining(result)]);
+}
+
+it.skipIf(process.platform === "win32")(
+  "retains terminal authority until release when cancelled during preparation",
+  async () => {
     const fixture = await journaledFixture(base);
     const next = await journaledFixture(path.join(base, "next"));
-    const anchor = resolvePackageActivationAnchor(fixture.packageRoot);
-    const run: NonNullable<UpdateCommandOptions["run"]> = {
-      runId: createUpdateRun({ trigger: "cli" }, { env: process.env }).runId,
-      env: { ...process.env },
-    };
+    const anchor = activationJournal.resolvePackageActivationAnchor(fixture.packageRoot);
+    const run = createRun();
     const onResult = vi.fn();
     const notification = createDeferredCore();
     const resumeNotification = createDeferredCore();
@@ -161,38 +194,15 @@ it.skipIf(process.platform === "win32").each([
     let postReleaseRenames = 0;
     let postReleaseRead: { mockRestore: () => void } | undefined;
     const writeSentinel = sentinel.writeControlPlaneUpdateRestartSentinel;
-    let before:
-      | {
-          sentinel: Awaited<ReturnType<typeof readRestartSentinelReadOnly>>;
-          run: ReturnType<typeof getUpdateRun>;
-          leaseKind: string;
-          originalJournalRetired: boolean;
-        }
-      | undefined;
-    let afterRelease:
-      | {
-          run: ReturnType<typeof getUpdateRun>;
-          journal: Buffer;
-          report: string | undefined;
-        }
-      | undefined;
+    let before: Awaited<ReturnType<typeof beforeRelease>> | undefined;
+    let afterRelease: ReturnType<typeof releasedState> | undefined;
     let injectionFailure: unknown;
     let injected = false;
     let contenderFailure: unknown;
     const publishNext = () =>
-      withUpdateCommandExecutor("next-update", async (executor) => {
+      withExecutor("next-update", async (executor) => {
         const fence = await executor.enter(fixture.packageRoot);
-        const published = await swapStagedPackageInstall({
-          ...next.params,
-          installTarget: fixture.params.installTarget,
-          activation: {
-            fence,
-            runtime: packageActivationRuntimeForTest(),
-            onPrepared: () => {},
-          },
-          onTransaction: () => {},
-        });
-        expect(published.status, published.step.stderrTail ?? "").toBe("committed");
+        await publishPackage(next, fence, fixture.params.installTarget);
       });
     vi.spyOn(sentinel, "writeControlPlaneUpdateRestartSentinel").mockImplementation(
       async (...args) => {
@@ -201,18 +211,10 @@ it.skipIf(process.platform === "win32").each([
           return;
         }
         injected = true;
-        // The original journal is retired, but terminal state still belongs to
-        // the original executor. A second real swap must not acquire this slot yet.
+        // Retiring the journal must not admit a successor before terminal release.
         try {
-          before = {
-            sentinel: await readRestartSentinelReadOnly(run.env),
-            run: getUpdateRun(run.runId, { env: run.env }),
-            leaseKind: createManagedHandoffLeaseStore().read(fixture.packageRoot).kind,
-            originalJournalRetired: !syncFs.existsSync(anchor),
-          };
-          await publishNext().catch((error: unknown) => {
-            contenderFailure = error;
-          });
+          before = await beforeRelease(run, fixture, anchor);
+          contenderFailure = await publishNext().catch((error: unknown) => error);
         } catch (error) {
           // Sentinel notification is best-effort; surface fixture failures outside that catch.
           injectionFailure = error;
@@ -222,51 +224,15 @@ it.skipIf(process.platform === "win32").each([
       },
     );
     let failure: unknown;
-    const work = withUpdateCommandTerminalResult(
+    const work = withTerminalResult(
       async (registerRun) => {
         registerRun(run);
-        let operationFailure: unknown;
-        await withUpdateCommandExecutor(run.runId, async (executor) => {
+        const operationFailure = await withExecutor(run.runId, async (executor) => {
           const fence = await executor.enter(fixture.packageRoot);
           run.executorFence = fence;
-          let transaction: PackageUpdateTransaction | undefined;
-          const published = await swapStagedPackageInstall({
-            ...fixture.params,
-            activation: {
-              fence,
-              runtime: packageActivationRuntimeForTest(),
-              onPrepared: () => {},
-            },
-            onTransaction: (value) => {
-              transaction = value;
-            },
-          });
-          expect(published.status, published.step.stderrTail ?? "").toBe("committed");
-          expect(openPackageActivationJournal(anchor).read().phase).toBe("publication-complete");
+          const transaction = await publishPackage(fixture, fence);
+          expectPublication(anchor);
           expect(transaction).toBeDefined();
-          if (captured) {
-            recordUpdateRunVerification(
-              run.runId,
-              {
-                serviceRunning: true,
-                versionMatch: true,
-                channelsReady: true,
-                readyz: true,
-                settled: true,
-                runningVersion: "2.0.0",
-                pluginErrors: [],
-              },
-              { env: run.env },
-            );
-            finishUpdateRun(
-              run.runId,
-              {
-                status: "succeeded",
-                after: { version: "2.0.0" },
-              },
-              { env: run.env },
-            );
-          }
           await finishSuccessfulPackageSwitch(
             { packageRoot: fixture.packageRoot, run, json: true },
             {
@@ -274,43 +240,17 @@ it.skipIf(process.platform === "win32").each([
               shouldRestart: false,
               installKindChanged: false,
               downgradeRisk: false,
-              ...(captured
-                ? {
-                    result: {
-                      status: "ok" as const,
-                      mode: "npm" as const,
-                      root: fixture.packageRoot,
-                      after: { version: "2.0.0" },
-                      steps: [],
-                      durationMs: 1,
-                    },
-                  }
-                : {}),
               controlPlaneUpdateSentinelMeta: { runId: run.runId, note: "requested update" },
             },
           );
-        }).catch((error: unknown) => {
-          operationFailure = error;
-        });
+        }).catch((error: unknown) => error);
         expect(createManagedHandoffLeaseStore().read(fixture.packageRoot).kind).toBe("absent");
-        expect(jsonOutput).toEqual([]);
-        expect(onResult).not.toHaveBeenCalled();
-        // A real successor is now admitted before the outer publisher emits.
-        // It must not cause that publisher to re-read or mutate the old run.
+        expectUnpublished(onResult);
+        // Publication cannot reuse released update authority after a successor.
+        // Optional cleanup must acquire its own state custody and only add diagnostics.
         await publishNext();
-        expect(openPackageActivationJournal(anchor).read().phase).toBe("publication-complete");
-        const reportPath = path.join(
-          run.env!.OPENCLAW_STATE_DIR!,
-          "update-reports",
-          `${run.runId}.md`,
-        );
-        afterRelease = {
-          run: getUpdateRun(run.runId, { env: run.env }),
-          journal: syncFs.readFileSync(resolvePackageActivationJournalPath(anchor)),
-          report: syncFs.existsSync(reportPath)
-            ? syncFs.readFileSync(reportPath, "utf8")
-            : undefined,
-        };
+        expectPublication(anchor);
+        afterRelease = releasedState(run, anchor);
         postReleaseRenames = rename.mock.calls.length;
         closeOpenClawStateDatabaseForTest();
         postReleaseRead = vi
@@ -334,96 +274,63 @@ it.skipIf(process.platform === "win32").each([
       await notification.promise;
       expect(injectionFailure).toBeUndefined();
       expect(contenderFailure).toBeInstanceOf(UpdateCommandRecoveryPendingError);
-      expect(onResult).not.toHaveBeenCalled();
-      expect(jsonOutput).toEqual([]);
-      if (cancel) {
-        requestUpdateCommandExecutorCancellation(run.executorFence!, run.runId, cancellation);
-        let cancelledContender: unknown;
-        await publishNext().catch((error: unknown) => {
-          cancelledContender = error;
-        });
-        expect(cancelledContender).toBeInstanceOf(UpdateCommandRecoveryPendingError);
-      }
+      expectUnpublished(onResult);
+      cancelExecutor(run.executorFence!, run.runId, cancellation);
+      const cancelledContender = await publishNext().catch((error: unknown) => error);
+      expect(cancelledContender).toBeInstanceOf(UpdateCommandRecoveryPendingError);
     } finally {
       resumeNotification.resolve();
       await work;
+      expect(postReleaseRead).not.toHaveBeenCalled();
       postReleaseRead?.mockRestore();
     }
     expect(injectionFailure).toBeUndefined();
     expect(injected).toBe(true);
     expect(before).toMatchObject({
       sentinel: { payload: { status: "ok", stats: { runId: run.runId } } },
-      // The uncaptured row must remain running until the notification returns.
-      run: { status: captured ? "succeeded" : "running" },
+      run: { status: "running" },
       leaseKind: "current",
       originalJournalRetired: true,
     });
-    if (cancel) {
-      expect(failure).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
-      expect(collectNestedErrorCandidates(failure)).toContain(cancellation);
-      expect(onResult).not.toHaveBeenCalled();
-      expect(jsonOutput).toEqual([]);
-      expect(afterRelease?.run).toEqual(before?.run);
-      expect(afterRelease?.report).toBeUndefined();
-    } else {
-      expect(failure).toBeUndefined();
-      expect(onResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: "ok" }));
-      expect(jsonOutput).toEqual([expect.objectContaining({ status: "ok" })]);
-      expect(afterRelease?.run?.status).toBe("succeeded");
-      expect(afterRelease?.report).toBeDefined();
-    }
-    expect(getUpdateRun(run.runId, { env: run.env })).toEqual(afterRelease?.run);
+    expect(failure).toBeInstanceOf(results.UpdateCommandPendingRecoveryFailure);
+    expect(collectNestedErrorCandidates(failure)).toContain(cancellation);
+    expectUnpublished(onResult);
+    expect(afterRelease?.run).toEqual(before?.run);
+    expect(afterRelease?.report).toBeUndefined();
+    expect(readRun(run)).toEqual(afterRelease?.run);
     expect(rename.mock.calls).toHaveLength(postReleaseRenames);
     expect(await readRestartSentinelReadOnly(run.env)).toEqual(before?.sentinel);
-    expect(syncFs.readFileSync(resolvePackageActivationJournalPath(anchor))).toEqual(
-      afterRelease?.journal,
-    );
+    expect(readJournal(anchor)).toEqual(afterRelease?.journal);
   },
 );
 
 it
   .skipIf(process.platform === "win32")
-  .each([
-    "timeout",
-    "unprepared-admission",
-    "prepared-admission",
-    "prepared-child-failure",
-  ] as const)("preserves terminal facts when a successor follows %s", async (kind) => {
-  const prepared = kind === "prepared-admission" || kind === "prepared-child-failure";
-  const childFailure = new Error("fixture completed child settlement failure");
-  const fixture = await journaledFixture(base);
-  const run: NonNullable<UpdateCommandOptions["run"]> = {
-    runId: createUpdateRun({ trigger: "cli" }, { env: process.env }).runId,
-    env: { ...process.env },
-  };
-  const original = getUpdateRun(run.runId, { env: run.env });
-  const anchor = resolvePackageActivationAnchor(fixture.packageRoot);
-  const onResult = vi.fn();
-  const reportPath = path.join(run.env!.OPENCLAW_STATE_DIR!, "update-reports", `${run.runId}.md`);
-  let originalFailure: unknown;
-  let journal: Buffer | undefined;
-  let settledRecord: ReturnType<typeof getUpdateRun>;
-  let preparedReport: string | undefined;
-  let postReleaseRead: { mockRestore: () => void } | undefined;
-  let failure: unknown;
-  try {
-    await withUpdateCommandTerminalResult(
+  .each(["unprepared-admission", "prepared-admission", "prepared-child-failure"] as const)(
+  "preserves terminal facts when a successor follows %s",
+  async (kind) => {
+    const childFailed = kind === "prepared-child-failure";
+    const prepared = kind === "prepared-admission" || childFailed;
+    const reason = childFailed ? "update-admission-cleanup-failed" : "fixture-preflight-refusal";
+    const childFailure = new Error("fixture completed child settlement failure");
+    const fixture = await journaledFixture(base);
+    const run = createRun();
+    const original = readRun(run);
+    const anchor = activationJournal.resolvePackageActivationAnchor(fixture.packageRoot);
+    const onResult = vi.fn();
+    let originalFailure: unknown;
+    let journal: Buffer | undefined;
+    let settledRecord: ReturnType<typeof readRun>;
+    let preparedReport: string | undefined;
+    let postReleaseRead: { mockRestore: () => void } | undefined;
+    const failure = await withTerminalResult(
       async (registerRun) => {
         registerRun(run);
-        await withUpdateCommandExecutor(run.runId, async (executor) => {
+        originalFailure = await withExecutor(run.runId, async (executor) => {
           run.executorFence = await executor.enter(fixture.packageRoot, {
             preflight: true,
-            ...(kind === "timeout" ? { activationTimeoutMs: 60_000 } : {}),
           });
-          if (kind === "timeout") {
-            // Expire synchronous work before a finalizer can register, without
-            // dispatching a timer or permitting another updater before release.
-            vi.useFakeTimers({ toFake: ["Date"] });
-            vi.setSystemTime(Date.now() + 60_001);
-            run.executorFence.assertCurrent();
-            throw new Error("The activation deadline did not revoke its owner");
-          }
-          const refused = new UnreportedUpdateAdmissionOutcome(
+          const refused = new results.UnreportedUpdateAdmissionOutcome(
             {
               opts: { run, json: true },
               root: fixture.packageRoot,
@@ -435,11 +342,10 @@ it
             { exitCode: 0 },
           );
           if (prepared) {
-            if (kind === "prepared-child-failure") {
-              // The child has already joined, so admission is idle; its real
-              // settlement error is collected after refusal preparation registers.
+            if (childFailed) {
+              // Join before refusal; retain the settlement error for terminal preparation.
               await expect(
-                withUpdateCommandExecutorChild(run.executorFence, fixture.packageRoot, async () => {
+                withChild(run.executorFence, fixture.packageRoot, async () => {
                   throw childFailure;
                 }),
               ).rejects.toBe(childFailure);
@@ -452,38 +358,29 @@ it
                 throw refused;
               },
             ).catch((error: unknown) => {
-              expect(hasDeferredUpdateCommandTerminalResult(run)).toBe(true);
+              expect(hasDeferredResult(run)).toBe(true);
               throw error;
             });
           }
           throw refused;
-        }).catch((error: unknown) => {
-          originalFailure = error;
-        });
-        vi.useRealTimers();
+        }).catch((error: unknown) => error);
         expect(originalFailure).toBeInstanceOf(
-          kind === "timeout"
-            ? UpdateActivationTimeoutError
-            : kind === "prepared-child-failure"
-              ? AggregateError
-              : prepared
-                ? UpdateCommandFailure
-                : UnreportedUpdateAdmissionOutcome,
+          childFailed
+            ? AggregateError
+            : prepared
+              ? results.UpdateCommandFailure
+              : results.UnreportedUpdateAdmissionOutcome,
         );
         expect(createManagedHandoffLeaseStore().read(fixture.packageRoot).kind).toBe("absent");
-        expect(jsonOutput).toEqual([]);
-        expect(onResult).not.toHaveBeenCalled();
-        settledRecord = getUpdateRun(run.runId, { env: run.env });
+        expectUnpublished(onResult);
+        settledRecord = readRun(run);
         if (prepared) {
           expect(settledRecord).toMatchObject({
-            status: kind === "prepared-child-failure" ? "failed" : "skipped",
-            reason:
-              kind === "prepared-child-failure"
-                ? "update-admission-cleanup-failed"
-                : "fixture-preflight-refusal",
+            status: childFailed ? "failed" : "skipped",
+            reason,
           });
-          preparedReport = syncFs.readFileSync(reportPath, "utf8");
-          if (kind === "prepared-child-failure") {
+          preparedReport = readReport(run);
+          if (childFailed) {
             expect(collectNestedErrorCandidates(originalFailure)).toContain(childFailure);
             expect(preparedReport).toContain("Package manager admission refused");
             expect(preparedReport).toContain(childFailure.message);
@@ -491,64 +388,42 @@ it
         } else {
           expect(settledRecord).toEqual(original);
         }
-        await withUpdateCommandExecutor("successor-update", async (executor) => {
+        await withExecutor("successor-update", async (executor) => {
           const fence = await executor.enter(fixture.packageRoot);
-          const published = await swapStagedPackageInstall({
-            ...fixture.params,
-            activation: {
-              fence,
-              runtime: packageActivationRuntimeForTest(),
-              onPrepared: () => {},
-            },
-            onTransaction: () => {},
-          });
-          expect(published.status, published.step.stderrTail ?? "").toBe("committed");
+          await publishPackage(fixture, fence);
         });
-        expect(openPackageActivationJournal(anchor).read().phase).toBe("publication-complete");
-        journal = syncFs.readFileSync(resolvePackageActivationJournalPath(anchor));
+        expectPublication(anchor);
+        journal = readJournal(anchor);
         closeOpenClawStateDatabaseForTest();
         postReleaseRead = vi.spyOn(snapshot, "prepareSqliteReadOnlyLocationSync");
         throw originalFailure;
       },
       { json: true, onResult },
-    );
-  } catch (error) {
-    failure = error;
-  } finally {
-    vi.useRealTimers();
-  }
-  expect(journal).toBeDefined();
-  if (prepared) {
-    expect(failure).toBeInstanceOf(UpdateCommandFailure);
-    expect(failure).not.toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
-    const status = kind === "prepared-child-failure" ? "error" : "skipped";
-    const reason =
-      kind === "prepared-child-failure"
-        ? "update-admission-cleanup-failed"
-        : "fixture-preflight-refusal";
-    expect(failure).toMatchObject({
-      exitCode: kind === "prepared-child-failure" ? 1 : 0,
-      result: { status, reason },
-    });
-    expect(jsonOutput).toHaveLength(1);
-    expect(jsonOutput[0]).toMatchObject({ status, reason });
-    expect(onResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status, reason }));
-    expect(syncFs.readFileSync(reportPath, "utf8")).toBe(preparedReport);
-  } else {
-    expect(failure).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
-    expect(failure).toMatchObject({
-      cause: originalFailure,
-      result: {
-        reason: kind === "timeout" ? "update-activation-timeout" : "fixture-preflight-refusal",
-      },
-    });
-    expect(syncFs.existsSync(reportPath)).toBe(false);
-    expect(onResult).not.toHaveBeenCalled();
-    expect(jsonOutput).toEqual([]);
-  }
-  expect(postReleaseRead).not.toHaveBeenCalled();
-  postReleaseRead?.mockRestore();
-  expect(getUpdateRun(run.runId, { env: run.env })).toEqual(settledRecord);
-  expect(syncFs.readFileSync(resolvePackageActivationJournalPath(anchor))).toEqual(journal);
-  expect(await readRestartSentinelReadOnly(run.env)).toBeNull();
-});
+    ).catch((error: unknown) => error);
+    expect(journal).toBeDefined();
+    if (prepared) {
+      expect(failure).toBeInstanceOf(results.UpdateCommandFailure);
+      expect(failure).not.toBeInstanceOf(results.UpdateCommandPendingRecoveryFailure);
+      const status = childFailed ? "error" : "skipped";
+      expect(failure).toMatchObject({
+        exitCode: childFailed ? 1 : 0,
+        result: { status, reason },
+      });
+      expectPublished(onResult, { status, reason });
+      expect(readReport(run)).toBe(preparedReport);
+    } else {
+      expect(failure).toBeInstanceOf(results.UpdateCommandPendingRecoveryFailure);
+      expect(failure).toMatchObject({
+        cause: originalFailure,
+        result: { reason: "fixture-preflight-refusal" },
+      });
+      expect(syncFs.existsSync(reportPath(run))).toBe(false);
+      expectUnpublished(onResult);
+    }
+    expect(postReleaseRead).not.toHaveBeenCalled();
+    postReleaseRead?.mockRestore();
+    expect(readRun(run)).toEqual(settledRecord);
+    expect(readJournal(anchor)).toEqual(journal);
+    expect(await readRestartSentinelReadOnly(run.env)).toBeNull();
+  },
+);

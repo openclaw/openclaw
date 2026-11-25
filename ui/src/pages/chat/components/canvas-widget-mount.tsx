@@ -1,6 +1,9 @@
 import { spread } from "@solidjs/web";
 import { createSignal, omit, onSettled, Show, useContext } from "solid-js";
-import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
+import {
+  CanvasWidgetView,
+  type OpenClawCanvasWidgetView,
+} from "../../../components/canvas-widget-view.tsx";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
 type WidgetProperties = Pick<
@@ -50,11 +53,8 @@ function CanvasWidgetHost(props: {
       container.isConnected && typeof container.moveBefore === "function"
         ? parkedWidgets.get(props.widgetKey)
         : undefined;
-    const view = retained?.element ?? document.createElement("openclaw-canvas-widget-view");
+    const view = retained?.element ?? new CanvasWidgetView.Element();
     Object.assign(view, props.properties);
-    if (!customElements.get("openclaw-canvas-widget-view")) {
-      view.style.cssText = `display:block;min-height:${props.properties.preferredHeight ?? 420}px`;
-    }
     view.presentationActive = presented();
     if (retained) {
       container.moveBefore(view, null);

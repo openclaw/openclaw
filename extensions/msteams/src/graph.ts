@@ -51,21 +51,11 @@ export type GraphUser = {
   mail?: string;
 };
 
-export type GraphGroup = {
-  id?: string;
-  displayName?: string;
-};
+export type GraphGroup = Pick<GraphUser, "id" | "displayName">;
 
-export type GraphChannel = {
-  id?: string;
-  displayName?: string;
-};
+export type GraphChannel = Pick<GraphUser, "id" | "displayName">;
 
 export type GraphResponse<T> = { value?: T[]; "@odata.nextLink"?: string };
-
-export function normalizeQuery(value?: string | null): string {
-  return value?.trim() ?? "";
-}
 
 export function escapeOData(value: string): string {
   return value.replace(/'/g, "''");
@@ -295,10 +285,6 @@ export async function resolveGraphToken(
   return accessToken;
 }
 
-export async function listTeamsByName(token: string, query: string): Promise<GraphGroup[]> {
-  return (await listTeamsByNameWithPageInfo(token, query)).items;
-}
-
 export async function listTeamsByNameWithPageInfo(
   token: string,
   query: string,
@@ -317,10 +303,6 @@ export async function deleteGraphRequest(params: { token: string; path: string }
     errorPrefix: "Graph DELETE",
   });
   await response.body?.cancel().catch(() => undefined);
-}
-
-export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
-  return (await listChannelsForTeamWithPageInfo(token, teamId)).items;
 }
 
 export async function listChannelsForTeamWithPageInfo(

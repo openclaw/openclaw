@@ -59,6 +59,8 @@ export function availableLinkReaders(
       priorMetadata.detailMethod === metadata.detailMethod &&
       priorMetadata.previewMethod === metadata.previewMethod &&
       priorMetadata.imageMethod === metadata.imageMethod &&
+      priorMetadata.sessionScoped === metadata.sessionScoped &&
+      priorMetadata.progressive === metadata.progressive &&
       priorMetadata.hosts.length === metadata.hosts.length &&
       priorMetadata.hosts.every((host, index) => host === metadata.hosts[index])
       ? prior

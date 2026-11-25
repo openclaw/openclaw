@@ -9,6 +9,7 @@ import {
   validateWorkerInferenceStartParams,
   type WorkerInferenceStartParams,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { WorkerTurnAdmissionParams } from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { prepareSkillBundle } from "../skills/library/bundle.js";
@@ -19,6 +20,7 @@ type WorkerPromptFixture = {
   setup: (options?: { inferencePlans: Array<"safe-tool" | "empty-terminal" | "text"> }) => Promise<{
     gateway: {
       inferenceRequests: WorkerInferenceStartParams[];
+      turnAdmissionRequests: WorkerTurnAdmissionParams[];
       liveEventRequests: WorkerLiveEventParams[];
       transcriptRequests: WorkerTranscriptCommitParams[];
       acceptedTranscriptRequests: WorkerTranscriptCommitParams[];
@@ -95,6 +97,13 @@ export function registerWorkerPromptTests({ setup, modelRef: MODEL_REF }: Worker
 
       expect(result.status).toBe("completed");
       expect(gateway.inferenceRequests).toHaveLength(1);
+      expect(gateway.turnAdmissionRequests).toHaveLength(1);
+      expect(gateway.turnAdmissionRequests[0]?.systemPrompt).toBe(
+        gateway.inferenceRequests[0]?.context.systemPrompt,
+      );
+      expect(gateway.applicationOrder.indexOf("admission")).toBeLessThan(
+        gateway.applicationOrder.indexOf("inference"),
+      );
       expect(gateway.inferenceRequests[0]?.modelRef).toEqual(MODEL_REF);
       expect(gateway.inferenceRequests[0]?.context.systemPrompt).toContain(
         "worker-bootstrap-marker",
@@ -106,7 +115,13 @@ export function registerWorkerPromptTests({ setup, modelRef: MODEL_REF }: Worker
           : { role: "user", runtimeContext: {} },
       );
       expect(firstCarrier).not.toHaveProperty("runtimeContextCarrier");
-      expect(firstCarrier?.content).toContain("Active exec sessions:\\nnone");
+      expect(firstCarrier?.content).toContain("Active exec sessions at turn start (snapshot):");
+      expect(firstCarrier?.content).toContain(
+        "Scope: exec-tool process sessions only; persistent automations and other background work are not included.",
+      );
+      expect(firstCarrier?.content).toContain(
+        "No active exec-tool sessions in this scope at turn start.",
+      );
       if (!inHistorySystemUpdates) {
         expect(firstCarrier).not.toHaveProperty("operatorMessage");
         const inferenceRequest = gateway.inferenceRequests[0]!;

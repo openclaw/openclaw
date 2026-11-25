@@ -11,6 +11,8 @@ import {
 import { assertSqliteIntegrity } from "../../../../src/infra/sqlite-integrity.js";
 import { admitSqliteSchema } from "../../../../src/infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../../../src/state/openclaw-agent-schema.js";
+import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
@@ -62,34 +64,126 @@ function observe(before?: Parameters<typeof observeHostDataSql>[0]) {
   };
 }
 
-it.each(["clean", "missing seal"])("reopens after %s without losing schema repair", (close) => {
-  const filename = path.join(tempDirs.make("memory-admission-seal-"), "memory.sqlite");
-  {
-    using db = openNodeSqliteDatabase(filename);
-    admitSqliteSchema(db);
-    ensure(db);
-    assertSqliteIntegrity(db, "memory index");
-    using seal = prepareSqliteDatabaseCleanClose(db);
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    db.close();
-    expect(seal.publish()).toBe(true);
-  }
-  expect(captureSqliteDatabaseAdmissions().filter((entry) => entry.location === filename)).toEqual(
-    [],
-  );
-  if (close === "missing seal") {
-    fs.unlinkSync(`${filename}.seal`);
-  }
-  using db = openNodeSqliteDatabase(filename);
+it("reuses agent-created memory objects on first admission and repairs later DDL", () => {
+  using db = openNodeSqliteDatabase(":memory:");
+  db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
   admitSqliteSchema(db);
-  using observed = observe();
-  observed.expectAdmission(db, close === "clean");
+  const observed = observeHostDataSql();
+  using _ = { [Symbol.dispose]: observed.restore };
+  runSqliteImmediateTransactionSync(db, () => expectSchema(db));
+  expect(
+    observed.queries.filter((sql) =>
+      /CREATE TABLE IF NOT EXISTS memory_(?:index_|embedding_cache)|CREATE INDEX IF NOT EXISTS idx_memory_|DROP INDEX IF EXISTS idx_memory_index_chunks_path;|PRAGMA main\.table_xinfo\(meta\)|SELECT 1 AS found FROM sqlite_master/iu.test(
+        sql,
+      ),
+    ),
+  ).toEqual([]);
+  insertChunk(db, "retained", "searchable body");
+  expect(ftsMatches(db, "searchable")).toEqual([{ id: "retained" }]);
   db.exec("DROP INDEX idx_memory_index_chunks_source");
-  ensure(db);
+  runSqliteImmediateTransactionSync(db, () => expectSchema(db));
   expect(schemaEntry(db, "idx_memory_index_chunks_source")).toEqual({
     name: "idx_memory_index_chunks_source",
   });
+  expect(ftsMatches(db, "searchable")).toEqual([{ id: "retained" }]);
 });
+
+it.for(["clean", "missing seal"])(
+  "reopens after %s without losing schema repair",
+  async (close, { signal }) => {
+    const filename = path.join(tempDirs.make("memory-admission-seal-"), "memory.sqlite");
+    {
+      using db = openNodeSqliteDatabase(filename);
+      admitSqliteSchema(db);
+      ensure(db);
+      assertSqliteIntegrity(db, "memory index");
+      using seal = prepareSqliteDatabaseCleanClose(db);
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      db.close();
+      expect(seal.publish()).toBe(true);
+    }
+    expect(
+      captureSqliteDatabaseAdmissions().filter((entry) => entry.location === filename),
+    ).toEqual([]);
+    if (close === "missing seal") {
+      fs.unlinkSync(`${filename}.seal`);
+    }
+    {
+      using db = openNodeSqliteDatabase(filename);
+      admitSqliteSchema(db);
+      using observed = observe();
+      // Current process facts survive close even when no restart seal remains.
+      observed.expectAdmission(db);
+      db.exec("DROP INDEX idx_memory_index_chunks_source");
+      ensure(db);
+      expect(schemaEntry(db, "idx_memory_index_chunks_source")).toEqual({
+        name: "idx_memory_index_chunks_source",
+      });
+      assertSqliteIntegrity(db, "memory index");
+      using seal = prepareSqliteDatabaseCleanClose(db);
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      db.close();
+      expect(seal.publish()).toBe(true);
+    }
+    if (close === "missing seal") {
+      fs.unlinkSync(`${filename}.seal`);
+    }
+    const schemaUrl = new URL("./memory-schema.ts", import.meta.url);
+    const result = await runNodeScript(
+      (workerArgv) => [
+        ...workerArgv(schemaUrl).slice(0, -1),
+        "--input-type=module",
+        "--eval",
+        `
+          import { openNodeSqliteDatabase, requireNodeSqlite } from ${JSON.stringify(new URL("../../../../src/infra/node-sqlite.ts", import.meta.url).href)};
+          import { admitSqliteSchema } from ${JSON.stringify(new URL("../../../../src/infra/sqlite-schema-facts.ts", import.meta.url).href)};
+          import { ensureMemoryIndexSchema } from ${JSON.stringify(schemaUrl.href)};
+          const db = openNodeSqliteDatabase(${JSON.stringify(filename)});
+          try {
+            admitSqliteSchema(db);
+            const native = requireNodeSqlite();
+            const queries = [];
+            for (const method of ["prepare", "exec"]) {
+              const original = native.DatabaseSync.prototype[method];
+              native.DatabaseSync.prototype[method] = new Proxy(original, {
+                apply(target, receiver, args) {
+                  queries.push(args[0]);
+                  return Reflect.apply(target, receiver, args);
+                },
+              });
+            }
+            for (const method of ["get", "all", "run", "iterate"]) {
+              const original = native.StatementSync.prototype[method];
+              native.StatementSync.prototype[method] = new Proxy(original, {
+                apply(target, receiver, args) {
+                  queries.push(receiver.sourceSQL);
+                  return Reflect.apply(target, receiver, args);
+                },
+              });
+            }
+            const value = ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+            const schema = new RegExp(${JSON.stringify(schemaSql.source)}, ${JSON.stringify(schemaSql.flags)});
+            console.log(JSON.stringify({ value, schemaQueries: queries.filter((sql) => schema.test(sql)) }));
+          } finally {
+            db.close();
+          }
+        `,
+      ],
+      { ...process.env, NODE_OPTIONS: "" },
+      undefined,
+      { signal, executable: process.execPath },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const restarted = JSON.parse(result.stdout);
+    expect(restarted.value).toEqual({ ftsAvailable: true });
+    if (close === "clean") {
+      expect(restarted.schemaQueries).toEqual([]);
+    } else {
+      expect(restarted.schemaQueries.length).toBeGreaterThan(0);
+    }
+  },
+);
 
 it.each(["commit", "rollback", "later DDL", "revocation"])(
   "publishes only final committed initialization after %s",
@@ -132,6 +226,8 @@ it("skips fresh-shadow legacy inspection and data repair but backfills later imp
     recallColumns: /PRAGMA table_info\(memory_index_chunks\)/iu,
     sourceIdentity: /PRAGMA main\.table_xinfo\(memory_index_sources\)/iu,
     retiredIndex: /DROP INDEX IF EXISTS idx_memory_index_chunks_path;/iu,
+    strictMigration: /PRAGMA (?:main\.)?table_list\b/iu,
+    ftsObjects: /SELECT type, name, sql FROM sqlite_schema/iu,
   };
   const legacySql: string[] = [];
   const dataRepairSql: string[] = [];

@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -13,8 +14,10 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
-import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
-import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import {
+  assertSessionTranscriptHot,
+  readHotSessionTranscriptSnapshot,
+} from "./session-cold-storage-state.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { projectAssistantTranscriptText } from "./transcript-assistant-delivery-read.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
@@ -73,6 +76,7 @@ export function hasSessionTranscriptMessageInDatabase(
 export function findTranscriptEventInRows(
   rows: Iterable<{ event_json: string }>,
   match: (event: TranscriptEvent) => boolean,
+  malformed: "skip" | "throw" = "skip",
 ): { event: TranscriptEvent } | undefined {
   for (const row of rows) {
     try {
@@ -80,8 +84,12 @@ export function findTranscriptEventInRows(
       if (match(event)) {
         return { event };
       }
-    } catch {
-      // Malformed rows are skipped, matching transcript index tolerance.
+    } catch (error) {
+      // Malformed rows are skipped, matching transcript index tolerance, unless the
+      // caller must prove absence.
+      if (malformed === "throw") {
+        throw error;
+      }
     }
   }
   return undefined;
@@ -155,16 +163,19 @@ export function readLatestAssistantTextFromDatabase(
 function parseLatestAssistantMessageEvent(
   raw: string,
 ): LatestTranscriptAssistantMessage | undefined {
-  let parsed: {
-    id?: unknown;
-    message?: { model?: unknown; provider?: unknown; role?: unknown; timestamp?: unknown };
-  };
   try {
-    parsed = JSON.parse(raw);
+    return readLatestAssistantMessageEvent(JSON.parse(raw));
   } catch {
     return undefined;
   }
-  const message = parsed.message;
+}
+
+/** The same event projection serves hot SQL and verified cold archive records. */
+export function readLatestAssistantMessageEvent(
+  event: unknown,
+): LatestTranscriptAssistantMessage | undefined {
+  const parsed = asOptionalRecord(event);
+  const message = asOptionalRecord(parsed?.message);
   if (!message || message.role !== "assistant") {
     return undefined;
   }
@@ -172,7 +183,7 @@ function parseLatestAssistantMessageEvent(
     return undefined;
   }
   return {
-    ...(typeof parsed.id === "string" && parsed.id.trim() ? { id: parsed.id } : {}),
+    ...(typeof parsed?.id === "string" && parsed.id.trim() ? { id: parsed.id } : {}),
     message,
   };
 }

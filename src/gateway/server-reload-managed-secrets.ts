@@ -133,6 +133,13 @@ export function createManagedReloadSecretHandlers(options: {
         sourceConfig,
         transactionOwnership,
       );
+      // Deferred writes (setup recovery) carry authored SecretRefs, not resolved values,
+      // so an unchanged candidate may match the running snapshot only in source form.
+      const runsCandidate = (resolved: OpenClawConfig) =>
+        isDeepStrictEqual(resolved, nextConfig) ||
+        (previousSecretsSnapshot !== null &&
+          isDeepStrictEqual(previousSecretsSnapshot.sourceConfig, nextSecretsSourceConfig) &&
+          isDeepStrictEqual(resolved, previousSecretsSnapshot.config));
       if (
         previousRuntimeMetadata &&
         previousRuntimeSourceConfig &&
@@ -143,7 +150,7 @@ export function createManagedReloadSecretHandlers(options: {
           ...previousSecretsSnapshot,
           sourceConfig: nextSecretsSourceConfig,
         };
-        if (!isDeepStrictEqual(sourceOnlySnapshot.config, nextConfig)) {
+        if (!runsCandidate(previousSecretsSnapshot.config)) {
           throw new GatewayConfigReloadSupersededError();
         }
         await transactionOwnership.checkpoint();
@@ -213,7 +220,7 @@ export function createManagedReloadSecretHandlers(options: {
       const preparedSecrets = preparation.snapshot;
       await transactionOwnership.checkpoint();
       assertReloadPublicationCurrent(transactionOwnership.isCurrent(), false);
-      if (!isDeepStrictEqual(preparedSecrets.config, nextConfig)) {
+      if (!runsCandidate(preparedSecrets.config)) {
         throw new GatewayConfigReloadSupersededError();
       }
       if (!previousRuntimeSourceConfig || !previousSecretsSnapshot) {
@@ -405,15 +412,15 @@ export function createManagedReloadSecretHandlers(options: {
             const publishRuntime = async (
               restore: typeof params.activateRuntimeSecrets.restoreSnapshotIfCurrent,
             ) => {
+              const publishedConfig = getRuntimeConfig();
               runtimeSecretsPublished = true;
               publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
               // Claim the generation at the snapshot activation edge, but keep
               // `required` until the runtime commit succeeds.
               claimGenerationOwnership();
               try {
-                // Hot-reloaded services inherit process.env. Publish the
-                // prepared layer at the same edge as secrets/runtime state,
-                // before any replacement service or channel starts.
+                // Publish the prepared env alongside secrets/runtime state before
+                // replacement services or channels inherit process.env.
                 transactionOwnership.publishRuntimeEnv();
                 try {
                   await commit();
@@ -422,12 +429,12 @@ export function createManagedReloadSecretHandlers(options: {
                   // Commit admission policy before irreversible PTY and socket eviction.
                   if (isCommitted()) {
                     runtimeCommitted = true;
-                    transactionOwnership.markRuntimeCommitted(prepared.config, plan);
+                    transactionOwnership.markRuntimeCommitted(publishedConfig, plan);
                     if (!runtimePolicyReconciled) {
                       // Committed policy owners read the published plugin generation.
                       await runAfterPluginLifecycleCommit(async () => {
-                        params.commitRuntimePolicy(prepared.config);
-                        await params.reconcileRuntimePolicy(prepared.config, "committed");
+                        params.commitRuntimePolicy(publishedConfig);
+                        await params.reconcileRuntimePolicy(publishedConfig, "committed");
                       });
                       runtimePolicyReconciled = true;
                     }
@@ -482,7 +489,7 @@ export function createManagedReloadSecretHandlers(options: {
           let committed = false;
           await publication.publish(
             async () => {
-              advancePreparedModelRuntimeConfig(prepared.config);
+              advancePreparedModelRuntimeConfig(getRuntimeConfig());
               committed = true;
             },
             () => committed,

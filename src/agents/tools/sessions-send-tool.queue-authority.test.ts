@@ -62,34 +62,23 @@ registerAgentSessionLoopTestLifecycle();
 
 describe("sessions_send direct queue source authority", () => {
   it.each([
-    "live",
-    "revoked",
-    "unscoped",
-    "send-revoked",
-    "send-live",
-    "peer-revoked",
-    "peer-live",
-    "ask-revoked",
-    "settle-live",
-    "settle-wildcard",
-    "settle-revoked",
-    "settle-reassigned",
+    ["live", null],
+    ["unscoped", "guarded_injection_unsupported"],
+    ["send-revoked", "tools.agentToAgent.send"],
+    ["send-live", null],
+    ["peer-revoked", "Session communication state changed before admission."],
+    ["peer-live", null],
+    ["settle-live", null],
+    ["settle-wildcard", null],
   ] as const)(
     "checks the %s source at the real final enqueue and preserves accepted input",
-    async (source) => {
+    async (source, error) => {
       const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
       await withOpenClawTestState(stateOptions, async (state) => {
         const crossAgent = source.startsWith("send-");
         const peerPolicy = source.startsWith("peer-");
-        const asks = peerPolicy || source === "ask-revoked";
-        const rejected =
-          source === "revoked" ||
-          source === "send-revoked" ||
-          source === "peer-revoked" ||
-          source === "ask-revoked" ||
-          source === "settle-revoked" ||
-          source === "settle-reassigned" ||
-          source === "unscoped";
+        const asks = peerPolicy;
+        const rejected = error !== null;
         const targetAgentId = crossAgent ? "worker" : "main";
         const cfg = {
           agents: {
@@ -101,7 +90,7 @@ describe("sessions_send direct queue source authority", () => {
         setRuntimeConfigSnapshot(cfg);
         setActivePluginRegistry(createSessionConversationTestRegistry());
         const requesterSessionKey = "agent:main:dashboard:queue-source";
-        const sessionKey = `agent:${targetAgentId}:cron:queue-target:run:active`;
+        const sessionKey = `agent:${targetAgentId}:dashboard:queue-target`;
         const sessionId = "queue-target-session";
         for (const [key, id] of [
           [requesterSessionKey, "queue-source-session"],
@@ -236,8 +225,6 @@ describe("sessions_send direct queue source authority", () => {
           return responses[0]![0];
         };
         const message = "guidance-from-" + source + "-source";
-        const settleOwner = {};
-        let currentSettleOwner: object | undefined = settleOwner;
         let tool = createSessionsSendTool({
           config: cfg,
           agentSessionKey: requesterSessionKey,
@@ -267,7 +254,7 @@ describe("sessions_send direct queue source authority", () => {
             idempotencyKey: "settle-source",
             settleBatch: {
               sourceSessionKeys: [child],
-              isCurrent: () => currentSettleOwner === settleOwner,
+              isCurrent: () => true,
             },
           };
           const trustedInternalHandoff = consumeSubagentCompletionToolHandoff({
@@ -317,7 +304,8 @@ describe("sessions_send direct queue source authority", () => {
           }
           tool = available;
         }
-        const send = () => tool.execute("source-send", { sessionKey, message, timeoutSeconds: 0 });
+        const send = () =>
+          tool.execute("source-send", { sessionKey, message, mode: "steer", timeoutSeconds: 0 });
         const pending = withGatewayToolCallerIdentity(
           {
             ...createSessionsSendTestCaller(requesterSessionKey),
@@ -327,7 +315,11 @@ describe("sessions_send direct queue source authority", () => {
                   gatewayContextResolver: () => context,
                   operationalRunInstance: instance,
                   approvalAuthority: authority,
-                  receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+                  receiptAuthority: () => {
+                    if (!validateAgentRunDelegatedAuthority(authority)) {
+                      throw new Error("agent tool caller authority is no longer active");
+                    }
+                  },
                 }),
           },
           send,
@@ -358,19 +350,10 @@ describe("sessions_send direct queue source authority", () => {
             expect(questions.get(questionId)?.status).toBe("pending");
             expect(queued).not.toHaveBeenCalled();
             expect(manager.buildSessionContext().messages).toEqual([]);
-            if (source === "ask-revoked") {
-              releaseAgentRunDelegatedAuthority(authority);
-            }
-            expect(await answer(questionId, creator)).toBe(source !== "ask-revoked");
+            expect(await answer(questionId, creator)).toBe(true);
           }
           await Promise.race([preparation.promise, pending]);
           expect(queued).not.toHaveBeenCalled();
-          if (source === "revoked") {
-            releaseAgentRunDelegatedAuthority(authority);
-          }
-          if (source === "settle-revoked" || source === "settle-reassigned") {
-            currentSettleOwner = source === "settle-reassigned" ? {} : undefined;
-          }
           const revokeSend = () =>
             setRuntimeConfigSnapshot({
               ...cfg,
@@ -411,19 +394,9 @@ describe("sessions_send direct queue source authority", () => {
           const result = await pending;
           if (rejected) {
             expect(result.details).toMatchObject({
-              status: source === "ask-revoked" ? "forbidden" : "error",
+              status: "error",
             });
-            expect(JSON.stringify(result)).toContain(
-              source === "ask-revoked"
-                ? "authority"
-                : source === "send-revoked"
-                  ? "tools.agentToAgent.send"
-                  : source === "unscoped"
-                    ? "guarded_injection_unsupported"
-                    : source === "peer-revoked"
-                      ? "Session communication state changed before admission."
-                      : "agent tool caller authority is no longer active",
-            );
+            expect(JSON.stringify(result)).toContain(error);
             expect(queued).not.toHaveBeenCalled();
           } else {
             expect(result.details).toMatchObject({

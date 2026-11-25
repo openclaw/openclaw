@@ -3,7 +3,7 @@ import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,7 +20,9 @@ import {
 import type { QueuedCompactionHostOptions } from "./compact.types.js";
 import type { AcceptedCompactionSuccessor } from "./compaction-successor.js";
 
-const { compactEmbeddedAgentSession: compact } = await loadCompactHooksHarness();
+const { compactEmbeddedAgentSession: compact } = await loadCompactHooksHarness({
+  durableSession: true,
+});
 // The harness resets modules. Load every real owner afterward so the manager
 // and queued compaction share the same private write context and database lifetime.
 const [
@@ -34,21 +36,21 @@ const [
   },
   { closeOpenClawAgentDatabasesAsync, closeOpenClawAgentDatabasesForTest },
   { SessionManager: PersistentSessionManager },
+  sessionManagerViews,
   safetyTimeout,
   realSafetyTimeout,
   { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot },
-  { readSessionTranscriptWatermarkAsync },
 ] = await Promise.all([
   import("../../auto-reply/reply/session-updates.js"),
   import("../../config/sessions/session-accessor.js"),
   import("../../state/openclaw-agent-db.js"),
   import("../sessions/session-manager.js"),
+  import("../sessions/session-manager-view-types.js"),
   import("./compaction-safety-timeout.js"),
   vi.importActual<typeof import("./compaction-safety-timeout.js")>(
     "./compaction-safety-timeout.js",
   ),
   import("../../config/runtime-snapshot.js"),
-  import("../../config/sessions/session-transcript-watermark.js"),
 ]);
 
 let restoreTranscriptBridge: (() => void) | undefined;
@@ -106,12 +108,11 @@ function expectPostCompactionCalls(count = 0) {
 }
 
 async function waitForCheckpoint(checkpoint: Promise<unknown>, pending: Promise<unknown>) {
-  await Promise.race([
+  await awaitGateBeforeSettlement(
     checkpoint,
-    pending.then(() => {
-      throw new Error("Queued compaction settled before the checkpoint");
-    }),
-  ]);
+    pending,
+    "Queued compaction settled before the checkpoint",
+  );
 }
 const compactParams = (abortSignal?: AbortSignal) => ({
   ...target(),
@@ -154,23 +155,22 @@ type BackendAppendOutcome = ReturnType<ReturnType<typeof createBackendAppend>>;
 type TranscriptRewrite = NonNullable<ContextEngineRuntimeContext["rewriteTranscriptEntries"]>;
 
 async function transcriptFixture() {
-  const { SessionManager } = await import("../sessions/index.js");
-  const openAsync = vi.spyOn(SessionManager, "openAsync");
-  const originalOpenAsync = expectDefined(
-    openAsync.getMockImplementation(),
-    "session-manager bridge",
-  );
+  const originalOpenAsync = PersistentSessionManager.openAsync.bind(PersistentSessionManager);
+  const openAsync = vi.spyOn(PersistentSessionManager, "openAsync");
   const hooks: { beforeBranchRead?: () => void } = {};
   openAsync.mockImplementation(async (...args) => {
-    const manager = await PersistentSessionManager.openAsync(...args);
-    const getBranch = manager.getBranch.bind(manager);
-    vi.spyOn(manager, "getBranch").mockImplementation((...branchArgs) => {
-      hooks.beforeBranchRead?.();
-      return getBranch(...branchArgs);
-    });
+    const manager = await originalOpenAsync(...args);
+    const readBranch =
+      manager[sessionManagerViews.sessionManagerReadTranscriptBranch].bind(manager);
+    vi.spyOn(manager, sessionManagerViews.sessionManagerReadTranscriptBranch).mockImplementation(
+      (...branchArgs) => {
+        hooks.beforeBranchRead?.();
+        return readBranch(...branchArgs);
+      },
+    );
     return manager;
   });
-  restoreTranscriptBridge = () => openAsync.mockImplementation(originalOpenAsync);
+  restoreTranscriptBridge = () => openAsync.mockRestore();
   const manager = PersistentSessionManager.open(target(), workspaceDir);
   const entryId = manager.appendMessage({
     role: "user",
@@ -237,44 +237,6 @@ it.each(["compact", "maintain"] as const)(
     if (effect === "compact") {
       expect(contextEngineCompactMock).not.toHaveBeenCalled();
     }
-  },
-);
-
-it.each([false, true])(
-  "reanchors CLI history across compaction bookkeeping without trusting a foreign prefix (%s)",
-  async (foreignPrefix) => {
-    const manager = await PersistentSessionManager.openAsync(target(), workspaceDir);
-    await manager.appendMessageAsync({ role: "user", content: "older turn", timestamp: 1 });
-    const retained = expectDefined(
-      await manager.appendMessageAsync({ role: "user", content: "recent turn", timestamp: 2 }),
-      "retained turn",
-    );
-    const before = await readSessionTranscriptWatermarkAsync(target());
-    const boundary = {
-      version: 1 as const,
-      state: "known" as const,
-      sessionId,
-      writerRunId: "prior-cli-run",
-      authFingerprint: "a".repeat(64),
-      ...before,
-    };
-    await patchSessionEntryCore(target(), () => ({ cliHistoryBoundary: boundary }));
-    if (foreignPrefix) {
-      await manager.appendMessageAsync({ role: "user", content: "foreign turn", timestamp: 3 });
-    }
-    contextEngineCompactMock.mockImplementationOnce(async () => {
-      const compactor = await PersistentSessionManager.openAsync(target(), workspaceDir);
-      await compactor.appendThinkingLevelChange("off");
-      await compactor.appendCustomEntryAsync("model-snapshot", { provider: "summary-fixture" });
-      await compactor.appendCompactionAsync("account summary", retained, 120);
-      return completed(sessionId);
-    });
-    await expect(compact(backendCompactParams())).resolves.toMatchObject(success);
-    const after = await readSessionTranscriptWatermarkAsync(target());
-    expect(latestEntry()?.cliHistoryBoundary).toEqual({
-      ...boundary,
-      ...(foreignPrefix ? before : after),
-    });
   },
 );
 

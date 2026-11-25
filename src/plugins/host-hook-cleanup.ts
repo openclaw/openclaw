@@ -147,7 +147,6 @@ export async function runPluginHostLifecycleCleanup(params: {
   pluginId?: string;
   reason: PluginHostCleanupReason;
   sessionKey?: string;
-  runId?: string;
   shouldCleanup?: () => boolean;
 }): Promise<PluginHostCleanupResult> {
   const failures: PluginHostCleanupFailure[] = [];
@@ -165,7 +164,7 @@ export async function runPluginHostLifecycleCleanup(params: {
       pluginId,
       hookId: `runtime:${lifecycle.id}`,
       cleanup: lifecycle.cleanup,
-      context: { ...context, runId: params.runId },
+      context: { ...context, runId: undefined },
     })),
   ];
   for (const { pluginId, hookId, cleanup, context: cleanupContext } of cleanups) {
@@ -194,7 +193,6 @@ export async function runPluginHostCleanup(params: {
   pluginId?: string;
   reason: PluginHostCleanupReason;
   sessionKey?: string;
-  runId?: string;
   preserveSchedulerJobIds?: ReadonlySet<string>;
   shouldCleanup?: () => boolean;
   restartPromotedSessionEntrySlotKeys?: ReadonlySet<string>;
@@ -280,11 +278,7 @@ export async function runPluginHostCleanup(params: {
       });
       failures.push(...runtimeSchedulerFailures);
     }
-    if (
-      shouldCleanup() &&
-      (params.pluginId || params.runId) &&
-      (params.reason !== "restart" || params.runId)
-    ) {
+    if (shouldCleanup() && params.pluginId && params.reason !== "restart") {
       clearPluginRunContext(params);
     }
     return { cleanupCount, failures };

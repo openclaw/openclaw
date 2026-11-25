@@ -1,6 +1,8 @@
 import fs from "node:fs";
-import { afterEach, expect, it, vi, type TestContext } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type TestContext } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
@@ -22,12 +24,16 @@ import {
   waitForApprovalAccepted,
 } from "./server-methods/approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
-import { withRequestedExecApproval } from "./server-methods/exec-approval.test-support.js";
+import {
+  requestExecApproval,
+  withRequestedExecApproval,
+} from "./server-methods/exec-approval.test-support.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
@@ -75,11 +81,8 @@ async function expectHeldRegistration<T>(
     return register(...args);
   });
   const ready = start();
-  const settled = vi.fn();
-  void ready.then(settled, settled);
   try {
-    await Promise.race([gate.reached, ready]);
-    expect(settled).not.toHaveBeenCalled();
+    await awaitGateBeforeSettlement(gate.reached, ready, "Request ended before registration");
     beforeRelease();
     gate.release();
     const { record, pending } = await ready;
@@ -94,7 +97,6 @@ async function expectHeldRegistration<T>(
 
 it("prepares the real approval worker before starting a requested request", async (testContext) => {
   const preparation = holdPoint<unknown>();
-  const attemptedCreate = deferred();
   const prepare = approvalFixtures.createPreparedTestApprovalManager;
   vi.spyOn(approvalFixtures, "createPreparedTestApprovalManager").mockImplementationOnce(
     async (...args) => {
@@ -104,7 +106,6 @@ it("prepares the real approval worker before starting a requested request", asyn
     },
   );
   const earlyCreate = vi.spyOn(ExecApprovalManager.prototype, "create").mockImplementation(() => {
-    attemptedCreate.resolve();
     throw new Error("Approval record created before worker preparation completed");
   });
   const request = withRequestedExecApproval(
@@ -118,13 +119,11 @@ it("prepares the real approval worker before starting a requested request", asyn
   );
   const settled = Promise.allSettled([request]);
   try {
-    expect(
-      await Promise.race([
-        preparation.reached.then(() => "prepared"),
-        attemptedCreate.promise.then(() => "record-created"),
-        request.then(() => "request-completed"),
-      ]),
-    ).toBe("prepared");
+    await awaitGateBeforeSettlement(
+      preparation.reached,
+      request,
+      "Request ended before preparation",
+    );
     expect(earlyCreate).not.toHaveBeenCalled();
     earlyCreate.mockRestore();
     preparation.release();
@@ -173,12 +172,11 @@ it("does not expose a registered approval before publication", async (testContex
     vi.useFakeTimers();
     const pending = start();
     try {
-      const id = await Promise.race([
+      const id = await awaitGateBeforeSettlement(
         registration.reached,
-        pending.then(() => {
-          throw new Error("Approval request completed before registration");
-        }),
-      ]);
+        pending,
+        "Approval request completed before registration",
+      );
       const readiness = track(
         pendingApproval(manager, context, () => pending).then((result) => {
           expect(publication).toHaveBeenCalled();
@@ -208,7 +206,7 @@ it("waits for the real RPC accepted tuple after held registration", async (testC
   const fixture = createTestApprovalFixture(testContext);
   const { manager } = fixture;
   await fixture.run(async () => {
-    const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
+    const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const reviewer = makeGatewayClient({
       connId: "fixture-reviewer",
@@ -230,16 +228,7 @@ it("waits for the real RPC accepted tuple after held registration", async (testC
       async () => {
         const { pending, response } = await waitForApprovalAccepted(respond, (observedRespond) =>
           fixture.track(
-            Promise.resolve(
-              handler({
-                req: { type: "req", method: "exec.approval.request", id: "fixture", params },
-                params,
-                client: null,
-                isWebchatConnect: () => false,
-                respond: observedRespond,
-                context,
-              }),
-            ),
+            requestExecApproval({ handlers, params, respond: observedRespond, context }),
           ),
         );
         const [record] = await manager.listPendingRecords();
@@ -271,7 +260,6 @@ it("joins a late outer handler before releasing its database after an assertion 
   const database = openOpenClawStateDatabase(fixture.databaseOptions);
   const unwinding = holdPoint();
   const failure = new Error("inspection failed");
-  const settled = vi.fn();
   let pending: Promise<void> | undefined;
   const body = fixture.run(async () => {
     const record = fixture.manager.create({ command: "echo fixture" }, 60_000);
@@ -291,10 +279,12 @@ it("joins a late outer handler before releasing its database after an assertion 
     );
     throw failure;
   });
-  void body.then(settled, settled);
   try {
-    await Promise.race([unwinding.reached, body]);
-    expect(settled).not.toHaveBeenCalled();
+    await awaitGateBeforeSettlement(
+      unwinding.reached,
+      body,
+      "Fixture ended before handler unwound",
+    );
     expect(database.db.isOpen).toBe(true);
     unwinding.release();
     await expect(body).rejects.toBe(failure);

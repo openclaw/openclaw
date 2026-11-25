@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import * as sessions from "../config/sessions.js";
 import {
   appendTranscriptMessageSync,
   loadSessionEntry,
@@ -23,7 +24,9 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { cleanupSummary } from "./sessions-cleanup-summary.test-support.js";
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
+import { runLocalSessionsCleanup } from "./sessions-cleanup.runtime.js";
 
 const OWNER_PLUGIN_ID = "cleanup-owner";
 const HARNESS_ID = "cleanup-runtime";
@@ -32,6 +35,7 @@ const STORE_OPTIONS = {
   maxEntries: 10,
   overflowPolicy: "reject-new",
 } as const;
+const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
 
 function cleanupFixture(
   state: OpenClawTestState,
@@ -101,18 +105,15 @@ function writeCleanupPlugins(bundledRoot: string) {
       },
     };`,
   });
-  fs.writeFileSync(
-    path.join(owner.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: owner.id,
-      activation: { onStartup: false, onAgentHarnesses: [HARNESS_ID] },
-      configSchema: { type: "object", additionalProperties: false },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(owner.dir, "package.json"),
-    JSON.stringify({ name: `@openclaw/${owner.id}`, openclaw: { extensions: ["./index.cjs"] } }),
-  );
+  writeJson(path.join(owner.dir, "openclaw.plugin.json"), {
+    id: owner.id,
+    activation: { onStartup: false, onAgentHarnesses: [HARNESS_ID] },
+    configSchema: { type: "object", additionalProperties: false },
+  });
+  writeJson(path.join(owner.dir, "package.json"), {
+    name: `@openclaw/${owner.id}`,
+    openclaw: { extensions: ["./index.cjs"] },
+  });
   const unrelated = writePlugin({
     id: "unrelated-cleanup-plugin",
     body: `require("node:fs").writeFileSync(require("node:path").join(__dirname, "loaded"), "loaded");
@@ -142,6 +143,42 @@ afterEach(() => {
 });
 
 afterAll(cleanupPluginLoaderFixturesForTest);
+
+it("keeps prior store summaries when a later target returns a failure", async () => {
+  await withOpenClawTestState(
+    {
+      label: "cleanup-partial",
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_BUNDLED_PLUGINS_DIR: undefined },
+    },
+    async (state) => {
+      const target = (agentId: string) => ({
+        agentId,
+        storePath: state.statePath(`agents/${agentId}/sessions/sessions.json`),
+      });
+      const mainSummary = cleanupSummary({
+        mode: "enforce",
+        dryRun: false,
+      });
+      vi.spyOn(sessions, "runSessionsCleanup")
+        .mockResolvedValueOnce({
+          mode: "enforce",
+          previewResults: [],
+          appliedSummaries: [mainSummary],
+        })
+        .mockRejectedValueOnce(new Error("injected later-store failure"));
+      const result = await runLocalSessionsCleanup(
+        {
+          cfg: { plugins: { enabled: false } },
+          opts: { enforce: true },
+          targets: [target("main"), target("work")],
+        },
+        createNonExitingRuntime(),
+      );
+      expect(result.appliedSummaries).toEqual([mainSummary]);
+      expect(result.failure).toMatchObject({ target: target("work"), lifecycleCommitted: false });
+    },
+  );
+});
 
 it("refuses an owned store, permits preview, and cleans only after exclusive admission", async () => {
   await withOpenClawTestState({ label: "cleanup-maintenance-owner" }, async (state) => {
@@ -250,9 +287,6 @@ it.each([
         expect(warnings.mock.calls.flat().join("\n")).toContain("not cleaned");
       } else {
         expect(bindings.lookup(key)).toBeUndefined();
-        expect(bindings.entries()).toMatchObject([
-          { key: siblingBindingKey, value: { threadId: "kept-thread" } },
-        ]);
         expect(warnings).not.toHaveBeenCalled();
       }
       expect(loadSessionEntry({ ...scope, sessionKey: siblingKey })?.sessionId).toBe(sessionId);

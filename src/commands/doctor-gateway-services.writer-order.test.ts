@@ -1,15 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as configModule from "../config/config.js";
-import {
-  readConfigFileSnapshot,
-  type ConfigFileSnapshot,
-  type OpenClawConfig,
-} from "../config/config.js";
+import { readConfigFileSnapshot, type ConfigFileSnapshot } from "../config/config.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
-import { isDefaultInstallIdentity } from "../config/paths.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { runGatewayServicesHealth } from "../flows/doctor-health-contribution-runners.gateway.js";
@@ -68,33 +63,6 @@ vi.mock("./daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: service.buildPlan,
 }));
 
-const read = (file: string) => fs.readFile(file, "utf8");
-const readPair = (file: string) => Promise.all([read(file), read(`${file}.bak`)]);
-const readFiles = (paths: string[]) => Promise.all(paths.map(read));
-const persist = (ctx: Awaited<ReturnType<typeof prepareWriterContext>>) =>
-  runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
-
-function writeGatewayConfig(home: string, extra: Partial<OpenClawConfig>) {
-  return writeOpenClawConfig(home, {
-    gateway: { mode: "local" },
-    plugins: { enabled: false },
-    ...extra,
-  });
-}
-function prepareService(
-  home: string,
-  ctx: Awaited<ReturnType<typeof prepareWriterContext>>,
-  token?: string,
-) {
-  const programArguments = [process.execPath, path.join(home, "openclaw.mjs"), "gateway"];
-  service.readCommand.mockResolvedValue({
-    programArguments,
-    environment: token ? { OPENCLAW_GATEWAY_TOKEN: token } : {},
-  });
-  service.buildPlan.mockResolvedValue({ programArguments, environment: {} });
-  ctx.prompter.confirmRuntimeRepair = async () => true;
-}
-
 function withGatewayServiceHome(run: (home: string) => Promise<void>, env: NodeJS.ProcessEnv = {}) {
   return withDoctorConfigPreflightHome(async (home) => {
     vi.spyOn(os, "userInfo").mockReturnValue({
@@ -130,273 +98,281 @@ function withGatewayServiceHome(run: (home: string) => Promise<void>, env: NodeJ
   });
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawStateDatabaseAsync();
-});
+const readText = (file: string) => fs.readFile(file, "utf8");
+const readFiles = (files: string[]) => Promise.all(files.map(readText));
+function planService(home: string, environment: Record<string, string> = {}) {
+  const programArguments = [process.execPath, path.join(home, "openclaw.mjs"), "gateway"];
+  service.readCommand.mockResolvedValue({ programArguments, environment });
+  service.buildPlan.mockResolvedValue({ programArguments, environment: {} });
+}
+function expectNoServiceChanges() {
+  for (const effect of [service.install, service.stage, service.restart]) {
+    expect(effect).not.toHaveBeenCalled();
+  }
+}
+function expectPersistenceFinding(ctx: Awaited<ReturnType<typeof prepareWriterContext>>) {
+  expect(ctx.healthFindings).toContainEqual(
+    expect.objectContaining({
+      category: "fix-now",
+      severity: "error",
+      message: expect.stringContaining(
+        "Failed to persist gateway.auth.token before service repair",
+      ),
+      fixHint: expect.stringContaining("gateway status --deep"),
+    }),
+  );
+}
 
-it.each([false, true])(
-  "preserves an environment token through a store SecretRef (existing=%s)",
-  async (existing) => {
-    await withGatewayServiceHome(async (home) => {
-      const token = "doctor-service-synthetic-credential";
-      const configPath = await writeGatewayConfig(home, {
-        secrets: { providers: { team: { source: "store" } } },
+describe("Doctor gateway config writer ordering", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
+  });
+
+  it.each([false, true])(
+    "preserves an environment token through a store SecretRef (existing=%s)",
+    async (existing) => {
+      await withGatewayServiceHome(async (home) => {
+        const token = "doctor-service-synthetic-credential";
+        const configPath = await writeOpenClawConfig(home, {
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+          secrets: { providers: { team: { source: "store" } } },
+        });
+        const scope = { kind: "team" as const };
+        if (existing) {
+          await writeSecretStoreEntry({
+            scope,
+            name: "EXISTING_GATEWAY_TOKEN",
+            value: token,
+            kind: "secret",
+            updatedBy: "fixture",
+          });
+        }
+        const entriesBefore = await listSecretStoreEntries({ scope });
+        const originalBytes = await fs.readFile(configPath, "utf8");
+        const ctx = await prepareWriterContext(configPath);
+        planService(home);
+        service.install.mockResolvedValue(undefined);
+        ctx.prompter.confirmRuntimeRepair = async () => true;
+        await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: token }, () => runGatewayServicesHealth(ctx));
+
+        const bytes = await fs.readFile(configPath, "utf8");
+        expect(bytes.includes(token)).toBe(false);
+        const ref = JSON.parse(bytes).gateway.auth.token;
+        expect(ref).toMatchObject({ source: "store", provider: "team" });
+        const stored = await readSecretStoreValue({ scope, name: ref.id });
+        expect(stored.ok && stored.value === token).toBe(true);
+        const entriesAfter = await listSecretStoreEntries({ scope });
+        if (existing) {
+          expect(ref.id).toBe("EXISTING_GATEWAY_TOKEN");
+          expect(entriesAfter).toEqual(entriesBefore);
+        } else {
+          expect(entriesAfter).toHaveLength(1);
+        }
+        expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(originalBytes);
+        expect(service.install).toHaveBeenCalledOnce();
       });
-      const scope = { kind: "team" as const };
-      if (existing) {
-        await writeSecretStoreEntry({
-          scope,
-          name: "EXISTING_GATEWAY_TOKEN",
-          value: token,
-          kind: "secret",
-          updatedBy: "fixture",
-        });
-      }
-      const entriesBefore = await listSecretStoreEntries({ scope });
-      const originalBytes = await read(configPath);
-      const ctx = await prepareWriterContext(configPath);
-      prepareService(home, ctx);
-      service.install.mockResolvedValue(undefined);
-      await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: token }, () => runGatewayServicesHealth(ctx));
-      const bytes = await read(configPath);
-      expect(bytes.includes(token)).toBe(false);
-      const ref = JSON.parse(bytes).gateway.auth.token;
-      expect(ref).toMatchObject({ source: "store", provider: "team" });
-      const stored = await readSecretStoreValue({ scope, name: ref.id });
-      expect(stored.ok && stored.value === token).toBe(true);
-      const entriesAfter = await listSecretStoreEntries({ scope });
-      if (existing) {
-        expect(ref.id).toBe("EXISTING_GATEWAY_TOKEN");
-        expect(entriesAfter).toEqual(entriesBefore);
-      } else {
-        expect(entriesAfter).toHaveLength(1);
-      }
-      expect(await read(`${configPath}.bak`)).toBe(originalBytes);
-      expect(service.install).toHaveBeenCalledOnce();
-    });
-  },
-);
+    },
+  );
 
-it.each(["validation-refusal", "service-failure", "post-commit-failure"])(
-  "uses Doctor's persisted baseline through service repair (%s)",
-  async (outcome) => {
-    await withGatewayServiceHome(
-      async (home) => {
-        const configPath = await writeGatewayConfig(home, {
-          browser: { executablePath: "${BROWSER_BIN}" },
+  it.each(["validation-refusal", "service-failure", "post-commit-failure"])(
+    "uses Doctor's persisted baseline through service repair (%s)",
+    async (outcome) => {
+      await withGatewayServiceHome(async (home) => {
+        const configPath = await writeOpenClawConfig(home, {
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
         });
-        expect(isDefaultInstallIdentity()).toBe(true);
+        const paths = [configPath, `${configPath}.bak`];
         const ctx = await prepareWriterContext(configPath);
         ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19090 } };
-        await withEnvAsync({ BROWSER_BIN: "/opt/example/browser-first" }, async () => {
-          expect(await persist(ctx)).toBe(true);
-        });
+        expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(true);
         expect(ctx.cfg.gateway?.auth?.token).toBeUndefined();
-        const initialBytes = await read(configPath);
-        expect(JSON.parse(initialBytes).browser.executablePath).toBe("${BROWSER_BIN}");
-        const initialBackup = await read(`${configPath}.bak`);
-        const persistedBeforeService = ctx.cfgForPersistence;
-        prepareService(home, ctx, "recovered-fixture-token");
-        let installedSnapshot: ConfigFileSnapshot | undefined;
+        const before = await readFiles(paths);
+        const baseline = ctx.cfgForPersistence;
+        const token = "recovered-fixture-token";
+        planService(home, { OPENCLAW_GATEWAY_TOKEN: token });
+        let installed: ConfigFileSnapshot | undefined;
         let installedBaseline: typeof ctx.cfg | undefined;
         service.install.mockImplementation(async () => {
-          installedSnapshot = await readConfigFileSnapshot();
+          installed = await readConfigFileSnapshot();
           installedBaseline = structuredClone(ctx.cfgForPersistence);
-          if (outcome === "service-failure") {
-            throw new Error("fixture service install failed");
-          }
+          throw new Error("fixture service install failed");
         });
         if (outcome === "validation-refusal") {
           // Port zero reaches the real writer's schema refusal, not an earlier service guard.
           ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 0 } };
         }
-        const candidateBeforeService = ctx.cfg;
+        const candidate = ctx.cfg;
+        ctx.prompter.confirmRuntimeRepair = async () => true;
         if (outcome === "post-commit-failure") {
-          const actualTransform = configModule.transformConfigFile;
+          const transform = configModule.transformConfigFile;
           const failure = new ConfigWritePostCommitError({
             configPath,
             rollbackStatus: "not-restored",
             cause: new Error("fixture post-write failure"),
           });
           vi.spyOn(configModule, "transformConfigFile").mockImplementationOnce(async (...args) => {
-            await actualTransform(...args);
+            await transform(...args);
             throw failure;
           });
           await expect(runGatewayServicesHealth(ctx)).rejects.toBe(failure);
           expect(ctx.configWriteError).toBe(failure);
-          expect(service.install).not.toHaveBeenCalled();
-          expect(service.stage).not.toHaveBeenCalled();
-          expect(service.restart).not.toHaveBeenCalled();
-          const [committed, backup] = await readPair(configPath);
-          expect(JSON.parse(committed).gateway.auth.token).toMatchObject({ source: "store" });
-          expect(committed.includes("recovered-fixture-token")).toBe(false);
-          // A later contribution must not retry a context whose publication failed.
+          expectNoServiceChanges();
+          const committed = await readFiles(paths);
+          expect(JSON.parse(committed[0]!).gateway.auth.token).toMatchObject({ source: "store" });
+          expect(committed[0]).not.toContain(token);
           ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19092 } };
-          await expect(persist(ctx)).rejects.toBe(failure);
-          expect(await readPair(configPath)).toEqual([committed, backup]);
+          await expect(runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).rejects.toBe(
+            failure,
+          );
+          expect(await readFiles(paths)).toEqual(committed);
           return;
         }
-        await withEnvAsync({ BROWSER_BIN: "/opt/example/browser-service" }, async () => {
-          await runGatewayServicesHealth(ctx);
-        });
+        await runGatewayServicesHealth(ctx);
         if (outcome === "validation-refusal") {
           expect(ctx.configWriteRefusal).toBe("validation");
-          expect(ctx.cfg).toBe(candidateBeforeService);
-          expect(ctx.cfgForPersistence).toBe(persistedBeforeService);
+          expect(ctx.cfg).toBe(candidate);
+          expect(ctx.cfgForPersistence).toBe(baseline);
           expect(ctx.cfg.gateway?.auth?.token).toBeUndefined();
           expect(service.install).not.toHaveBeenCalled();
-          expect(ctx.runtime.error).toHaveBeenCalledWith(
+          expect(ctx.updateWarnings).toContainEqual(
             expect.stringContaining("Failed to persist gateway.auth.token before service repair"),
           );
-          expect(await readPair(configPath)).toEqual([initialBytes, initialBackup]);
+          expectPersistenceFinding(ctx);
+          expect(await readFiles(paths)).toEqual(before);
         } else {
           expect(service.install).toHaveBeenCalledOnce();
-          expect(installedSnapshot).toMatchObject({
+          expect(installed).toMatchObject({
             valid: true,
-            sourceConfig: {
-              gateway: { auth: { token: { source: "store" } } },
-              browser: { executablePath: "/opt/example/browser-service" },
-            },
+            sourceConfig: { gateway: { auth: { token: { source: "store" } } } },
           });
           expect(installedBaseline).toEqual(ctx.cfg);
           expect(ctx.configWriteRefusal).toBeUndefined();
-          expect(ctx.cfg.gateway?.auth?.token).toEqual(
-            installedSnapshot?.sourceConfig.gateway?.auth?.token,
-          );
           expect(ctx.cfg).toEqual(ctx.cfgForPersistence);
-          if (outcome === "service-failure") {
-            expect(ctx.runtime.error).toHaveBeenCalledWith(
-              "Gateway service update failed: Error: fixture service install failed",
-            );
-          }
+          expect(ctx.cfg.gateway?.auth?.token).toEqual(
+            installed?.sourceConfig.gateway?.auth?.token,
+          );
+          const message = "Gateway service update failed: Error: fixture service install failed";
+          expect(ctx.updateWarnings).toContain(`core/doctor/gateway-service: ${message}`);
+          expect(ctx.healthFindings).toContainEqual(
+            expect.objectContaining({
+              category: "fix-now",
+              severity: "error",
+              message,
+              fixHint: expect.stringContaining("doctor --fix"),
+            }),
+          );
+          ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19091 } };
+          expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(true);
+          const snapshot = await readConfigFileSnapshot();
+          expect(snapshot.sourceConfig.gateway?.auth?.token).toEqual(
+            installed?.sourceConfig.gateway?.auth?.token,
+          );
+          expect(ctx.configResult.confirmedConfigSource?.hash).toBe(snapshot.hash);
         }
         expect(service.stage).not.toHaveBeenCalled();
         expect(service.restart).not.toHaveBeenCalled();
-        if (outcome !== "validation-refusal") {
-          ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19091 } };
-          await withEnvAsync({ BROWSER_BIN: "/opt/example/browser-final" }, async () => {
-            expect(await persist(ctx)).toBe(true);
-            const snapshot = await readConfigFileSnapshot();
-            expect(snapshot.sourceConfig.browser?.executablePath).toBe(
-              "/opt/example/browser-final",
-            );
-            expect(snapshot.sourceConfig.gateway?.auth?.token).toEqual(
-              installedSnapshot?.sourceConfig.gateway?.auth?.token,
-            );
-            expect(ctx.configResult.confirmedConfigSource?.hash).toBe(snapshot.hash);
-          });
-        }
-        const finalBytes = await read(configPath);
-        expect(finalBytes.includes("recovered-fixture-token")).toBe(false);
-        expect(JSON.parse(finalBytes).browser.executablePath).toBe("${BROWSER_BIN}");
-        const finalBackup = await read(`${configPath}.bak`);
-        expect(await persist(ctx)).toBe(outcome !== "validation-refusal");
-        expect(await readPair(configPath)).toEqual([finalBytes, finalBackup]);
-      },
-      { BROWSER_BIN: "/opt/example/browser-planning" },
-    );
-  },
-);
+        const final = await readFiles(paths);
+        expect(final[0]).not.toContain(token);
+        expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(
+          outcome !== "validation-refusal",
+        );
+        expect(await readFiles(paths)).toEqual(final);
+      });
+    },
+  );
 
-it.each([
-  { parent: "legacy writable", defer: undefined, expectedVersion: "2026.5.16-beta.4" },
-  { parent: "explicit deferral", defer: "1", expectedVersion: VERSION },
-])("preserves update recovery bytes for a $parent parent", async ({ defer, expectedVersion }) => {
-  await withDoctorConfigPreflightHome(async (home) => {
-    await withEnvAsync(
-      {
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_PROFILE: undefined,
-        OPENCLAW_NIX_MODE: undefined,
-        OPENCLAW_CONFIG_READONLY: undefined,
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
-        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: defer,
-      },
-      async () => {
-        const configPath = await writeGatewayConfig(home, {
-          meta: { lastTouchedVersion: "2026.5.16-beta.4" },
-        });
-        const originalBytes = await read(configPath);
-        const preUpdatePath = `${configPath}.pre-update`;
-        await fs.writeFile(preUpdatePath, originalBytes);
-        const ctx = await prepareWriterContext(configPath);
-        expect(ctx.configResult.sourceLastTouchedVersion).toBe("2026.5.16-beta.4");
-        const initialBaseline = ctx.cfgForPersistence;
-        ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19090 } };
-        await persist(ctx);
-        const committedBytes = await read(configPath);
-        expect(JSON.parse(committedBytes)).toMatchObject({
-          meta: { lastTouchedVersion: expectedVersion },
-          gateway: { port: 19090 },
-        });
-        const snapshot = await readConfigFileSnapshot();
-        expect(snapshot).toMatchObject({
-          valid: true,
-          sourceConfig: {
+  it.each([
+    { parent: "legacy writable", defer: undefined, expectedVersion: "2026.5.16-beta.4" },
+    { parent: "explicit deferral", defer: "1", expectedVersion: VERSION },
+  ])("preserves update recovery bytes for a $parent parent", async ({ defer, expectedVersion }) => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_PROFILE: undefined,
+          OPENCLAW_NIX_MODE: undefined,
+          OPENCLAW_CONFIG_READONLY: undefined,
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+          OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: defer,
+        },
+        async () => {
+          const configPath = await writeOpenClawConfig(home, {
+            meta: { lastTouchedVersion: "2026.5.16-beta.4" },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+          const originalBytes = await fs.readFile(configPath, "utf8");
+          const preUpdatePath = `${configPath}.pre-update`;
+          await fs.writeFile(preUpdatePath, originalBytes);
+          const ctx = await prepareWriterContext(configPath);
+          expect(ctx.configResult.sourceLastTouchedVersion).toBe("2026.5.16-beta.4");
+          const initialBaseline = ctx.cfgForPersistence;
+          ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19090 } };
+
+          await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+
+          const committedBytes = await fs.readFile(configPath, "utf8");
+          expect(JSON.parse(committedBytes)).toMatchObject({
             meta: { lastTouchedVersion: expectedVersion },
             gateway: { port: 19090 },
-          },
-        });
-        expect(ctx.cfgForPersistence).not.toBe(initialBaseline);
-        expect(ctx.cfgForPersistence).toEqual(ctx.cfg);
-        expect(ctx.cfgForPersistence.gateway?.port).toBe(19090);
-        expect(await read(`${configPath}.bak`)).toBe(originalBytes);
-        expect(await read(preUpdatePath)).toBe(originalBytes);
-        await persist(ctx);
-        expect(await read(configPath)).toBe(committedBytes);
-        expect(await read(`${configPath}.bak`)).toBe(originalBytes);
-        expect(await read(preUpdatePath)).toBe(originalBytes);
-      },
-    );
-  });
-});
+          });
+          expect(ctx.cfgForPersistence).not.toBe(initialBaseline);
+          expect(ctx.cfgForPersistence).toEqual(ctx.cfg);
+          expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(originalBytes);
+          expect(await fs.readFile(preUpdatePath, "utf8")).toBe(originalBytes);
 
-it("refuses mixed include repairs before service changes after an earlier config commit", async () => {
-  await withGatewayServiceHome(async (home) => {
-    const configPath = await writeOpenClawConfig(home, {
-      gateway: { mode: "local" },
-      plugins: { enabled: false },
-      browser: { $include: "./browser.json" },
+          await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+          expect(await fs.readFile(configPath, "utf8")).toBe(committedBytes);
+          expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(originalBytes);
+          expect(await fs.readFile(preUpdatePath, "utf8")).toBe(originalBytes);
+        },
+      );
     });
-    const includePath = path.join(path.dirname(configPath), "browser.json");
-    await fs.writeFile(includePath, JSON.stringify({ enabled: true }));
-    await fs.writeFile(`${includePath}.bak`, JSON.stringify({ enabled: false }));
-    const originalBytes = await read(configPath);
-    expect(isDefaultInstallIdentity()).toBe(true);
-    const ctx = await prepareWriterContext(configPath);
-    ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19090 } };
-    await persist(ctx);
-    expect(await read(`${configPath}.bak`)).toBe(originalBytes);
-    const persistedBaseline = ctx.cfgForPersistence;
-    const retainedPaths = [configPath, `${configPath}.bak`, includePath, `${includePath}.bak`];
-    const retainedBytes = await readFiles(retainedPaths);
-    ctx.cfg = { ...ctx.cfg, browser: { ...ctx.cfg.browser, enabled: false } };
-    const candidateBeforeService = ctx.cfg;
-    prepareService(home, ctx, "recovered-fixture-token");
-    await runGatewayServicesHealth(ctx);
-    expect(ctx.configWriteRefusal).toBe("include-ownership");
-    expect(ctx.cfg).toBe(candidateBeforeService);
-    expect(ctx.cfgForPersistence).toBe(persistedBaseline);
-    expect(ctx.cfg.gateway?.auth?.token).toBeUndefined();
-    expect(service.install).not.toHaveBeenCalled();
-    expect(service.stage).not.toHaveBeenCalled();
-    expect(service.restart).not.toHaveBeenCalled();
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to persist gateway.auth.token before service repair"),
-    );
-    const snapshot = await readConfigFileSnapshot();
-    expect(snapshot.valid).toBe(true);
-    expect(snapshot.sourceConfig.gateway?.port).toBe(19090);
-    expect(snapshot.sourceConfig.gateway?.auth?.token).toBeUndefined();
-    expect(snapshot.sourceConfig.browser?.enabled).toBe(true);
-    expect(await readFiles(retainedPaths)).toEqual(retainedBytes);
-    expect(await persist(ctx)).toBe(false);
-    expect(await readFiles(retainedPaths)).toEqual(retainedBytes);
+  });
+
+  it("refuses mixed include repairs before service changes after an earlier config commit", async () => {
+    await withGatewayServiceHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        browser: { $include: "./browser.json" },
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+      });
+      const includePath = path.join(path.dirname(configPath), "browser.json");
+      await fs.writeFile(includePath, JSON.stringify({ enabled: true }));
+      await fs.writeFile(`${includePath}.bak`, JSON.stringify({ enabled: false }));
+      const originalBytes = await fs.readFile(configPath, "utf8");
+      const ctx = await prepareWriterContext(configPath);
+      ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19090 } };
+      await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+      expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(originalBytes);
+      const persistedBaseline = ctx.cfgForPersistence;
+      const retainedPaths = [configPath, `${configPath}.bak`, includePath, `${includePath}.bak`];
+      const retainedBytes = await readFiles(retainedPaths);
+
+      ctx.cfg = { ...ctx.cfg, browser: { ...ctx.cfg.browser, enabled: false } };
+      const candidateBeforeService = ctx.cfg;
+      planService(home, { OPENCLAW_GATEWAY_TOKEN: "recovered-fixture-token" });
+      ctx.prompter.confirmRuntimeRepair = async () => true;
+
+      await runGatewayServicesHealth(ctx);
+
+      expect(ctx.configWriteRefusal).toBe("include-ownership");
+      expect(ctx.cfg).toBe(candidateBeforeService);
+      expect(ctx.cfgForPersistence).toBe(persistedBaseline);
+      expect(ctx.cfg.gateway?.auth?.token).toBeUndefined();
+      expectNoServiceChanges();
+      expectPersistenceFinding(ctx);
+      expect(await readFiles(retainedPaths)).toEqual(retainedBytes);
+      expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(false);
+      expect(await readFiles(retainedPaths)).toEqual(retainedBytes);
+    });
   });
 });

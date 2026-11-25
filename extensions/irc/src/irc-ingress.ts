@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
-  type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -29,7 +28,7 @@ type IrcIngressBody = Omit<IrcIngressPayload, "version">;
 
 export type IrcIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
-export type IrcIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
+type IrcIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type IrcIngressDispatch = (
   message: IrcInboundMessage,
@@ -140,19 +139,14 @@ export type IrcIngressMonitor = ReturnType<typeof createIrcIngressMonitor>;
 
 export function createIrcIngressMonitor(options: {
   accountId: string;
-  queue?: ChannelIngressQueue<IrcIngressPayload>;
   dispatch: IrcIngressDispatch;
   runtime: Pick<RuntimeEnv, "error" | "log">;
-  pollIntervalMs?: number;
-  adoptionStallTimeoutMs?: number;
 }) {
   const monitor = createChannelIngressMonitor<IrcIngressRaw, IrcIngressBody, IrcIngressPayload>({
-    queue:
-      options.queue ??
-      (() =>
-        getIrcRuntime().state.openChannelIngressQueue<IrcIngressPayload>({
-          accountId: options.accountId,
-        })),
+    queue: () =>
+      getIrcRuntime().state.openChannelIngressQueue<IrcIngressPayload>({
+        accountId: options.accountId,
+      }),
     inspect: (raw, context) => inspectIrcIngress(raw, context.phase),
     payload: {
       version: IRC_INGRESS_PAYLOAD_VERSION,
@@ -177,14 +171,13 @@ export function createIrcIngressMonitor(options: {
         connectionEpoch: raw.body.connectionEpoch.trim(),
       });
     },
-    pollIntervalMs: options.pollIntervalMs ?? IRC_INGRESS_POLL_INTERVAL_MS,
+    pollIntervalMs: IRC_INGRESS_POLL_INTERVAL_MS,
     retention: {
       completedMaxEntries: 1_000,
       failedMaxEntries: 1_000,
     },
     drain: {
       resolveNonRetryableFailure: resolveIrcIngressNonRetryableFailure,
-      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
       onLog: (message) => options.runtime.log?.(`irc ${message}`),
     },
     createStoppedError: () => new Error("IRC ingress is stopped."),

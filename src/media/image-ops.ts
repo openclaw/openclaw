@@ -7,8 +7,16 @@ import {
   type ImageProbe,
   type ImageMetadata,
 } from "rastermill";
+import {
+  readImageMetadataFromHeader,
+  resolveDisplayImageMetadata,
+} from "./image-header-metadata.js";
 import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
-import { convertBmpToPngWithWorker, createImageProcessor } from "./image-processor.js";
+import {
+  convertBmpToPngWithWorker,
+  createImageProcessor,
+  createImageProcessorWithPixelLimits,
+} from "./image-processor.js";
 
 export { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
 export { createImageProcessor } from "./image-processor.js";
@@ -16,19 +24,15 @@ export { readImageProbeFromHeader };
 
 export type { ImageMetadata, ImageProbe };
 
-/** OpenClaw-facing image backend availability error, preserving the failed operation and causes. */
+/** OpenClaw-facing image backend availability error, retaining its standard cause. */
 class ImageProcessorUnavailableError extends Error {
   readonly code = "IMAGE_PROCESSOR_UNAVAILABLE";
-  readonly operation: string;
-  readonly causes: unknown[];
 
-  constructor(operation: string, message: string, causes: unknown[]) {
+  constructor(message: string, causes: unknown[]) {
     super(message, {
       cause: causes.find((cause): cause is Error => cause instanceof Error),
     });
     this.name = "ImageProcessorUnavailableError";
-    this.operation = operation;
-    this.causes = causes;
   }
 }
 
@@ -37,6 +41,8 @@ type ResizeToJpegParams = {
   maxSide: number;
   quality: number;
   withoutEnlargement?: boolean;
+  /** Widens source admission for an owner whose output is a bounded downscale. */
+  maxInputPixels?: number;
 };
 
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
@@ -51,22 +57,6 @@ export function buildImageResizeSideGrid(maxSide: number, sideStart: number): nu
     .map((value) => Math.min(maxSide, value))
     .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
     .toSorted((a, b) => b - a);
-}
-
-function resolveDisplayImageMetadata(probe: ImageProbe | null): ImageMetadata | null {
-  if (!probe) {
-    return null;
-  }
-  // Rastermill reports encoded axes; orientations 5-8 swap the displayed axes.
-  if (probe.orientation && probe.orientation >= 5 && probe.orientation <= 8) {
-    return { width: probe.height, height: probe.width };
-  }
-  return { width: probe.width, height: probe.height };
-}
-
-/** Reads display dimensions from image header bytes without invoking a full image decode. */
-export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
-  return resolveDisplayImageMetadata(readImageProbeFromHeader(buffer));
 }
 
 /** Detects animated WebP before a single-frame image transform can discard its frames. */
@@ -124,7 +114,10 @@ export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> 
         },
         quality: params.quality,
       },
-      "resizeToJpeg",
+      createImageProcessorWithPixelLimits({
+        inputPixels: params.maxInputPixels ?? MAX_IMAGE_INPUT_PIXELS,
+        outputPixels: MAX_IMAGE_INPUT_PIXELS,
+      }),
     )
   ).data;
 }
@@ -132,13 +125,13 @@ export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> 
 async function encodeImage(
   buffer: Buffer,
   options: EncodeOptions,
-  operation: string,
+  processor = createImageProcessor(),
 ): Promise<EncodedImage> {
   try {
-    return await createImageProcessor().encode(buffer, options);
+    return await processor.encode(buffer, options);
   } catch (error) {
     if (error instanceof RastermillUnavailableError) {
-      throw new ImageProcessorUnavailableError(operation, error.message, error.causes);
+      throw new ImageProcessorUnavailableError(error.message, error.causes);
     }
     throw error;
   }
@@ -161,26 +154,22 @@ export async function encodeImageWithinBytes(
   const sides = [
     ...new Set(WITHIN_BYTES_SIDE_SCALES.map((scale) => Math.round(longSide * scale))),
   ].filter((side) => side > 0);
-  return await encodeImage(
-    buffer,
-    {
-      format: "auto",
-      maxBytes,
-      opaque: { format: "jpeg" },
-      transparent: { format: "png" },
-      transparency: "preserve",
-      search: { ...(sides.length ? { maxSide: sides } : {}), quality: WITHIN_BYTES_QUALITY_STEPS },
-    },
-    "encodeImageWithinBytes",
-  );
+  return await encodeImage(buffer, {
+    format: "auto",
+    maxBytes,
+    opaque: { format: "jpeg" },
+    transparent: { format: "png" },
+    transparency: "preserve",
+    search: { ...(sides.length ? { maxSide: sides } : {}), quality: WITHIN_BYTES_QUALITY_STEPS },
+  });
 }
 
 export async function convertImageToJpeg(buffer: Buffer): Promise<Buffer> {
-  return (await encodeImage(buffer, { format: "jpeg" }, "convertImageToJpeg")).data;
+  return (await encodeImage(buffer, { format: "jpeg" })).data;
 }
 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
-  return (await encodeImage(buffer, { format: "jpeg" }, "convertHeicToJpeg")).data;
+  return (await encodeImage(buffer, { format: "jpeg" })).data;
 }
 
 /** Converts image bytes to PNG, including BMP fallback unsupported by Rastermill's Photon gate. */
@@ -218,15 +207,11 @@ export async function optimizeImageToPng(
   resizeSide: number;
   compressionLevel: number;
 }> {
-  const out = await encodeImage(
-    buffer,
-    {
-      format: "png",
-      maxBytes,
-      search: options?.sides === undefined ? {} : { maxSide: options.sides },
-    },
-    "optimizeImageToPng",
-  );
+  const out = await encodeImage(buffer, {
+    format: "png",
+    maxBytes,
+    search: options?.sides === undefined ? {} : { maxSide: options.sides },
+  });
   return {
     buffer: out.data,
     optimizedSize: out.bytes,

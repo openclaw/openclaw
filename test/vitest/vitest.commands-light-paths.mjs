@@ -5,10 +5,6 @@ const commandsLightEntries = [
   { source: "src/commands/cleanup-utils.ts", test: "src/commands/cleanup-utils.test.ts" },
   { test: "src/commands/auth-choice.test.ts" },
   {
-    source: "src/commands/dashboard.links.ts",
-    test: "src/commands/dashboard.links.test.ts",
-  },
-  {
     source: "src/commands/dashboard.ts",
     test: "src/commands/dashboard.test.ts",
   },

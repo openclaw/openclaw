@@ -11,7 +11,9 @@ import * as kyselyCache from "../infra/kysely-sync-cache-state.js";
 import * as kyselySync from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as busyTimeout from "../infra/sqlite-busy-timeout.js";
+import { sqliteSchedulerClock } from "../infra/sqlite-maintenance-fixture.test-support.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
+import * as schemaMaintenance from "../infra/state-database-maintenance.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -25,7 +27,10 @@ import { OPENCLAW_STATE_SCHEMA_VERSION as SCHEMA_VERSION } from "./openclaw-stat
 import { expectRow, expectRows } from "./openclaw-state-db-fixtures.test-support.js";
 import { closeTrackedStateDatabase as closeTracked } from "./openclaw-state-db-handle.js";
 import * as initialization from "./openclaw-state-db-initialization.js";
-import { openUnpublishedStateDatabase as openDatabase } from "./openclaw-state-db-open.js";
+import {
+  openUnpublishedStateDatabase as openDatabase,
+  openUnpublishedStateDatabaseAsync,
+} from "./openclaw-state-db-open.js";
 import * as permissions from "./openclaw-state-db-permissions.js";
 
 type Acquisition = ReturnType<typeof openDatabase>;
@@ -184,6 +189,52 @@ async function expectSuccessfulReopen(params: Parameters<typeof acquire>[0]) {
   expect(exec).not.toHaveBeenCalled();
 }
 
+it.each(["SDK sync", "Doctor async"] as const)(
+  "closes fresh %s acquisition when its schema lease wrapper fails after setup",
+  async (mode) => {
+    const { params, opened, maintenanceOwnerCount, targetLocations } = acquisitionFixture();
+    const pathname = path.join(path.dirname(params.pathname), "fresh.sqlite");
+    targetLocations.add(pathname);
+    targetLocations.add(nodeSqlite.resolveExistingSqliteFileUri(pathname));
+    const fresh = {
+      ...params,
+      pathname,
+      ensureSchema(db: DatabaseSync) {
+        params.ensureSchema(db);
+        db.exec("INSERT INTO payload VALUES ('committed');");
+      },
+    };
+    const failure = new Error("schema lease release failed after native acquisition");
+    const syncMaintenance = schemaMaintenance.withStateDatabaseSchemaMaintenance;
+    const asyncMaintenance = schemaMaintenance.withStateDatabaseSchemaMaintenanceAsync;
+    const release =
+      mode === "SDK sync"
+        ? vi
+            .spyOn(schemaMaintenance, "withStateDatabaseSchemaMaintenance")
+            .mockImplementation((...args) => {
+              syncMaintenance(...args);
+              throw failure;
+            })
+        : vi
+            .spyOn(schemaMaintenance, "withStateDatabaseSchemaMaintenanceAsync")
+            .mockImplementation(async (...args) => {
+              await asyncMaintenance(...args);
+              throw failure;
+            });
+    if (mode === "SDK sync") {
+      expect(() => acquire(fresh)).toThrow(failure);
+    } else {
+      await expect(openUnpublishedStateDatabaseAsync(fresh)).rejects.toBe(failure);
+    }
+    const db = expectDefined(opened.at(-1), "fresh native acquisition");
+    expectReleased(db, maintenanceOwnerCount);
+    expect(cache.getOpenClawStateDatabaseIfOpenAtPath(pathname)).toBeUndefined();
+    expectPayload(pathname);
+    release.mockRestore();
+    await expectSuccessfulReopen({ ...fresh, ensureSchema: () => {} });
+  },
+);
+
 it.each(["initialization", "native open"] as const)(
   "refuses to recreate an existing database removed before %s",
   (boundary) => {
@@ -307,6 +358,7 @@ it("does not recreate a removed parent during existing database hardening", () =
 
 it("records and reports SQLite errors from scheduled shared-state checkpoints", async () => {
   await withCheckpointLogging(async (warn) => {
+    const clock = sqliteSchedulerClock();
     const { params, open } = acquisitionFixture();
     const database = acquire(params);
     open.mockClear();
@@ -320,7 +372,7 @@ it("records and reports SQLite errors from scheduled shared-state checkpoints", 
       return prepare(sql);
     });
     warn.mockClear();
-    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    await clock.advanceBy(30 * 60 * 1000);
     expect(database.walMaintenance.health).toMatchObject({
       state: "error",
       error: "checkpoint storage unavailable",
@@ -337,7 +389,7 @@ it("records and reports SQLite errors from scheduled shared-state checkpoints", 
       }),
     );
     intercepted.mockRestore();
-    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    await clock.advanceBy(30 * 60 * 1000);
     expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
     expect(open).not.toHaveBeenCalled();
   });

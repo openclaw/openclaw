@@ -118,6 +118,13 @@ const SystemAgentApprovalAllowedDecisionsSchema = Type.Tuple([
   Type.Literal("deny"),
 ]);
 
+/** Native automation proposal identity for display; never approval authority. */
+const StreamApprovalProposalSchema = closedObject({
+  jobId: NonEmptyString,
+  name: NonEmptyString,
+  operation: Type.Union([Type.Literal("add"), Type.Literal("update")]),
+});
+
 /** Redacted exec details safe to persist and render outside the requesting runtime. */
 export const ExecApprovalPresentationSchema = Type.Object(
   {
@@ -125,6 +132,7 @@ export const ExecApprovalPresentationSchema = Type.Object(
     commandText: NonEmptyString,
     commandPreview: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     warningText: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    streamProposal: Type.Optional(StreamApprovalProposalSchema),
     host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     nodeId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -169,7 +177,11 @@ export const ApprovalPresentationSchema = Type.Union([
   SystemAgentApprovalPresentationSchema,
 ]);
 
+/** Server-bound initiating person; display attribution never grants approval authority. */
+const ApprovalTurnActorSchema = closedObject({ id: NonEmptyString, label: NonEmptyString });
+
 const ApprovalRecordCommonFields = {
+  turnActor: Type.Optional(ApprovalTurnActorSchema),
   id: ApprovalIdSchema,
   urlPath: NonEmptyString,
   createdAtMs: Type.Integer({ minimum: 0 }),
@@ -198,6 +210,8 @@ const ApprovalResolutionFields = {
 export const PendingApprovalSnapshotSchema = closedObject({
   ...ApprovalRecordCommonFields,
   status: Type.Literal("pending"),
+  /** Recipient-local decision eligibility; the Gateway rechecks the exact live binding on resolve. */
+  canDecide: Type.Optional(Type.Boolean()),
   /** Canonical raising session when projected into a session-scoped reviewer surface. */
   sourceSessionKey: Type.Optional(NonEmptyString),
 });
@@ -319,10 +333,26 @@ export const TerminalSessionApprovalEventSchema = withSince(
   }),
 );
 
+/** Own-turn waiting status, without command, review URL, or decision capability. */
+const ParticipantSessionApprovalEventSchema = closedObject({
+  sessionKey: NonEmptyString,
+  updatedAtMs: Type.Integer({ minimum: 0 }),
+  phase: Type.Literal("participant"),
+  approvalId: ApprovalIdSchema,
+  runId: NonEmptyString,
+  participantId: NonEmptyString,
+  status: stringLiteralUnion(["pending", "terminal"]),
+  expiresAtMs: Type.Integer({ minimum: 0 }),
+});
+
 /** Sanitized approval transition delivered only to an opted-in session audience. */
 export const SessionApprovalEventSchema = withSince(
   "2026.7",
-  Type.Union([PendingSessionApprovalEventSchema, TerminalSessionApprovalEventSchema]),
+  Type.Union([
+    PendingSessionApprovalEventSchema,
+    TerminalSessionApprovalEventSchema,
+    ParticipantSessionApprovalEventSchema,
+  ]),
 );
 
 /** Authoritative pending approval set returned when a session stream subscribes. */
@@ -332,6 +362,7 @@ export const SessionApprovalReplaySchema = withSince(
     sessionKey: NonEmptyString,
     updatedAtMs: Type.Integer({ minimum: 0 }),
     approvals: Type.Array(PendingApprovalSnapshotSchema),
+    participantApprovals: Type.Optional(Type.Array(ParticipantSessionApprovalEventSchema)),
     truncated: Type.Boolean(),
   }),
 );
@@ -348,6 +379,7 @@ export type PluginApprovalExternalResolution = Static<
   typeof PluginApprovalExternalResolutionSchema
 >;
 export type ExecApprovalPresentation = Static<typeof ExecApprovalPresentationSchema>;
+export type StreamApprovalProposal = Static<typeof StreamApprovalProposalSchema>;
 export type PluginApprovalPresentation = Static<typeof PluginApprovalPresentationSchema>;
 export type SystemAgentApprovalPresentation = Static<typeof SystemAgentApprovalPresentationSchema>;
 export type ApprovalPresentation = Static<typeof ApprovalPresentationSchema>;

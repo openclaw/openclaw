@@ -8,22 +8,24 @@ openclaw-tooltip-provider {
 }
 
 .tooltip-surface {
+  --chat-bubble-background: initial;
+  --chat-text-link: var(--link);
+  --chat-text-link-hover: var(--link-hover);
   position: fixed;
   inset: auto;
   --oc-overlay-distance: 8px;
+  --oc-overlay-enter-scale: 0.9;
   max-width: var(--openclaw-tooltip-max-width, min(260px, calc(100vw - 16px)));
   max-height: min(420px, calc(100dvh - 16px));
   overflow: auto;
-  border: 1px solid
-    var(--openclaw-tooltip-border-color, var(--overlay-border, var(--border-strong)));
-  border-radius: var(--openclaw-tooltip-border-radius, var(--radius-md));
+  border: 1px solid transparent;
+  border-radius: var(--openclaw-tooltip-border-radius, var(--radius-tooltip));
+  corner-shape: superellipse(1.5);
   padding: var(--openclaw-tooltip-padding, 5px 7px);
-  background: var(
-    --openclaw-tooltip-background-color,
-    color-mix(in srgb, var(--bg-elevated) 97%, var(--text) 3%)
-  );
+  background: var(--openclaw-tooltip-background-color, var(--menu-surface));
   color: var(--text);
-  box-shadow: var(--openclaw-tooltip-shadow, var(--overlay-shadow, var(--shadow-md)));
+  box-shadow: var(--openclaw-tooltip-shadow, var(--menu-shadow));
+  backdrop-filter: var(--menu-backdrop);
   font-family: var(--font-body);
   font-size: 11px;
   font-weight: 500;
@@ -32,31 +34,17 @@ openclaw-tooltip-provider {
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
-  opacity: 0;
-  scale: 0.9;
-  transition:
-    opacity var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast)) ease,
-    scale var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast)) ease,
-    display var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast))
-      allow-discrete,
-    overlay var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast))
-      allow-discrete;
 }
 
-.tooltip-surface:popover-open:where(:not([data-phase="closing"])) {
-  opacity: 1;
-  scale: 1;
-  transition-duration: var(
-    --openclaw-tooltip-popup-show-duration,
-    var(--control-ui-transition-fast)
-  );
+/* The shared overlay keyframes; transitions never settle on anchored surfaces in WebKitGTK 2.50. */
+.tooltip-surface[data-phase="opening"] {
+  animation: oc-overlay-enter
+    var(--openclaw-tooltip-popup-show-duration, var(--control-ui-transition-fast)) ease;
 }
 
-@starting-style {
-  .tooltip-surface:popover-open {
-    opacity: 0;
-    scale: 0.9;
-  }
+.tooltip-surface[data-phase="closing"] {
+  animation: oc-overlay-exit
+    var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast)) ease forwards;
 }
 
 :host(.sidebar-hover-tooltip) .tooltip-surface[data-phase="opening"] {
@@ -79,7 +67,6 @@ openclaw-tooltip-provider {
   .tooltip-surface {
     --openclaw-tooltip-popup-show-duration: 0ms;
     --openclaw-tooltip-popup-hide-duration: 0ms;
-    transition: none;
   }
 
   .tooltip-surface[data-phase="opening"],

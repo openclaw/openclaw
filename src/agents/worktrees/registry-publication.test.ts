@@ -1,8 +1,6 @@
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { expect, it, onTestFinished } from "vitest";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import {
-  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -10,28 +8,20 @@ import { worktreeRegistryPublication } from "./registry-publication.js";
 import {
   insertRegistryWorktreeInDatabase,
   updateRegistryWorktreeInDatabase,
+  type WorktreeRegistryPatch,
 } from "./registry-run-end.worker.js";
-import type { ManagedWorktreeRecord } from "./types.js";
+import { makeWorktreeRecord } from "./service.test-support.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseAsync());
+const dirs = useWorktreeStateRoots();
 
 it("installs the whole committed registry batch before observers and discards savepoint/outer rollback", () => {
   const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("worktree-publication-") };
   const database = openOpenClawStateDatabase({ env });
-  const record: ManagedWorktreeRecord = {
-    id: "first",
-    name: "first",
-    repoFingerprint: "0123456789abcdef",
-    repoRoot: env.OPENCLAW_STATE_DIR,
+  const record = makeWorktreeRecord(env.OPENCLAW_STATE_DIR, "first", {
     path: `${env.OPENCLAW_STATE_DIR}/first`,
-    branch: "first",
-    baseRef: "HEAD",
-    ownerKind: "session",
     ownerId: "agent:main:first",
-    createdAt: 1,
-    lastActiveAt: 1,
-  };
+  });
   const installed = new Map<string, unknown>();
   const observed: string[][] = [];
   const unsubscribeFacts = worktreeRegistryPublication.subscribeFacts((change) => {
@@ -41,84 +31,51 @@ it("installs the whole committed registry batch before observers and discards sa
       }
     }
   });
+  onTestFinished(unsubscribeFacts);
   const observe = () =>
     deferSqlitePostCommitPublication(database.db, () => observed.push([...installed.keys()]));
   const write = (run: () => void) => runOpenClawStateWriteTransaction(run, { env, database });
-  try {
-    write(() => {
-      insertRegistryWorktreeInDatabase(database.db, { record });
-      observe();
-      expect(() =>
-        write(() => {
-          updateRegistryWorktreeInDatabase(database.db, {
-            id: "first",
-            patch: { lastActiveAt: 2 },
-          });
-          observe();
-          throw new Error("rollback savepoint");
-        }),
-      ).toThrow("rollback savepoint");
-      insertRegistryWorktreeInDatabase(database.db, {
-        record: {
-          ...record,
-          id: "second",
-          path: `${env.OPENCLAW_STATE_DIR}/second`,
-          branch: "second",
-        },
-      });
-      observe();
-      expect(installed.size).toBe(0);
-      expect(observed).toEqual([]);
-    });
-    const keys = [JSON.stringify(["worktrees", "first"]), JSON.stringify(["worktrees", "second"])];
-    expect(observed).toEqual([keys, keys]);
-    expect(installed.get(keys[0]!)).toMatchObject({
-      kind: "postimage",
-      value: { last_active_at: 1 },
-    });
+  const update = (patch: WorktreeRegistryPatch) =>
+    updateRegistryWorktreeInDatabase(database.db, { id: "first", patch });
+  const expectFact = (value: object) =>
+    expect(installed.get(keys[0]!)).toMatchObject({ kind: "postimage", value });
+  const keys = ["first", "second"].map((id) => JSON.stringify(["worktrees", id]));
+  const rollback = (message: string, patch: WorktreeRegistryPatch) =>
     expect(() =>
       write(() => {
-        updateRegistryWorktreeInDatabase(database.db, { id: "first", patch: { removedAt: 3 } });
+        update(patch);
         observe();
-        throw new Error("rollback outer");
+        throw new Error(message);
       }),
-    ).toThrow("rollback outer");
-    expect(observed).toHaveLength(2);
-    expect(installed.get(keys[0]!)).toMatchObject({
-      kind: "postimage",
-      value: { removed_at: null },
+    ).toThrow(message);
+  write(() => {
+    insertRegistryWorktreeInDatabase(database.db, { record });
+    observe();
+    rollback("rollback savepoint", { lastActiveAt: 2 });
+    insertRegistryWorktreeInDatabase(database.db, {
+      record: {
+        ...record,
+        id: "second",
+        path: `${env.OPENCLAW_STATE_DIR}/second`,
+        branch: "second",
+      },
     });
-    installed.clear();
-    const before = database.db.prepare("SELECT total_changes() AS count").get();
-    write(() =>
-      updateRegistryWorktreeInDatabase(database.db, {
-        id: "first",
-        patch: { lastActiveAt: 1, removedAt: undefined, snapshotRef: undefined },
-      }),
-    );
-    expect(database.db.prepare("SELECT total_changes() AS count").get()).toEqual(before);
+    observe();
     expect(installed.size).toBe(0);
-    write(() =>
-      updateRegistryWorktreeInDatabase(database.db, {
-        id: "first",
-        patch: { snapshotRef: "refs/openclaw/snapshots/first" },
-      }),
-    );
-    expect(installed.get(keys[0]!)).toMatchObject({
-      kind: "postimage",
-      value: { snapshot_ref: "refs/openclaw/snapshots/first" },
-    });
-    write(() =>
-      updateRegistryWorktreeInDatabase(database.db, {
-        id: "first",
-        patch: { snapshotRef: undefined },
-      }),
-    );
-    expect(installed.get(keys[0]!)).toMatchObject({
-      kind: "postimage",
-      value: { snapshot_ref: null },
-    });
-  } finally {
-    unsubscribeFacts();
-  }
+    expect(observed).toEqual([]);
+  });
+  expect(observed).toEqual([keys, keys]);
+  expectFact({ last_active_at: 1 });
+  rollback("rollback outer", { removedAt: 3 });
+  expect(observed).toHaveLength(2);
+  expectFact({ removed_at: null });
+  installed.clear();
+  const before = database.db.prepare("SELECT total_changes() AS count").get();
+  write(() => update({ lastActiveAt: 1, removedAt: undefined, snapshotRef: undefined }));
+  expect(database.db.prepare("SELECT total_changes() AS count").get()).toEqual(before);
+  expect(installed.size).toBe(0);
+  write(() => update({ snapshotRef: "refs/openclaw/snapshots/first" }));
+  expectFact({ snapshot_ref: "refs/openclaw/snapshots/first" });
+  write(() => update({ snapshotRef: undefined }));
+  expectFact({ snapshot_ref: null });
 });

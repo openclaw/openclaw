@@ -31,6 +31,8 @@ export type { QaGatewayChildListeningContext } from "./gateway-child-setup.js";
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 export type QaGatewayChild = Awaited<ReturnType<typeof startOwnedGatewayChild>>;
 
+const QA_GATEWAY_CHILD_LOG_MAX_PENDING_BYTES = 4 * 1024 * 1024;
+
 export function createQaGatewayChild() {
   const lifetime = new QaGatewayChildLifecycle();
   let started = false;
@@ -120,9 +122,18 @@ async function startOwnedGatewayChild(
       [child.stdout, "stdout", stdoutLog],
       [child.stderr, "stderr", stderrLog],
     ] as const) {
-      stream.on("data", (chunk) => {
-        const buffer = Buffer.from(chunk);
+      stream.on("data", (buffer: Buffer) => {
         output.push(label, buffer);
+        // A stalled file sink must not turn diagnostic output into an unbounded queue.
+        // Fail through the existing pipe-error owner; it stops the child and settles logs.
+        if (log.writableLength + buffer.byteLength > QA_GATEWAY_CHILD_LOG_MAX_PENDING_BYTES) {
+          stream.destroy(
+            new Error(
+              `${label} log backlog exceeded ${QA_GATEWAY_CHILD_LOG_MAX_PENDING_BYTES} bytes`,
+            ),
+          );
+          return;
+        }
         log.write(buffer);
       });
     }
@@ -165,6 +176,7 @@ async function startOwnedGatewayChild(
     lifetime.rpcClient = await startQaGatewayRpcClient({
       wsUrl: launch.wsUrl,
       token: gatewayToken,
+      password: params.rpcPassword,
       logs,
     });
     await lifetime.rpcClient.request("config.get", {}, { timeoutMs: 30_000 });
@@ -220,8 +232,17 @@ async function startOwnedGatewayChild(
       return active.identity?.pid ?? active.child.pid ?? null;
     },
     getProcessCpuMs: () => readProcessTreeCpuMs(active.identity?.pid ?? active.child.pid ?? null),
-    getProcessRssBytes: () =>
-      readProcessTreeRssBytes(active.identity?.pid ?? active.child.pid ?? null),
+    getProcessRssBytes: () => {
+      const rootPid = active.identity?.pid ?? active.child.pid ?? null;
+      return readProcessTreeRssBytes(rootPid, (reason) => {
+        try {
+          // Suite success can discard Gateway logs; keep unavailable sampling in the runner log.
+          writeSync(2, `[qa-rss] at=${new Date().toISOString()} rootPid=${rootPid} ${reason}\n`);
+        } catch {
+          // Diagnostic sink failure must not change the strict unavailable metric.
+        }
+      });
+    },
     token: gatewayToken,
     workspaceDir,
     tempRoot,

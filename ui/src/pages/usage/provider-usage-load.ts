@@ -8,7 +8,7 @@ export function createProviderUsageLoader(options: {
   client: () => GatewayBrowserClient | null;
   isCurrent: (epoch: unknown) => boolean;
   epoch: () => unknown;
-  onResult: (epoch: unknown) => void;
+  onResult: () => void;
   onSettled: () => void;
 }) {
   let active: AbortController | null = null;
@@ -63,7 +63,7 @@ export function createProviderUsageLoader(options: {
           if (result.ok && !incomplete) {
             summary = result.value;
           }
-          options.onResult(epoch);
+          options.onResult();
         }
       } catch {
         // An aborted or failed read leaves the previous plans visible.

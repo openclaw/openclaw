@@ -29,7 +29,7 @@ async function releaseFixture(configs: string[], estimate = 1, files?: string[])
   vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(prices);
   const { createNodeTestShardBundles: plan } =
     await import("../../scripts/lib/ci-node-test-plan.mts");
-  const price = (rows: NodeTestShard[], seconds: number) => {
+  const price = (rows: ReadonlyArray<{ timing_key?: string }>, seconds: number) => {
     for (const row of rows) {
       prices[expectDefined(row.timing_key, "split timing identity")] = seconds;
     }
@@ -49,17 +49,112 @@ async function releaseFixture(configs: string[], estimate = 1, files?: string[])
 
 const rowFiles = (row: NodeTestShard) =>
   (row.groups ?? [row]).flatMap((group) => group.includePatterns ?? []);
+// Release packing may pair measured stripes into one job; each stripe keeps its
+// own process and timing identity as a packed group.
+const splitUnits = (rows: NodeTestShard[]): Array<{ shardName: string; timing_key?: string }> =>
+  rows.flatMap((row) =>
+    row.groups
+      ? row.groups.map((group) => ({ shardName: group.shard_name, timing_key: group.timing_key }))
+      : [{ shardName: row.shardName, timing_key: row.timing_key }],
+  );
 const totalSeconds = (rows: NodeTestShard[]) =>
   rows.reduce((sum, row) => sum + row.predictedSeconds!, 0);
 function expectInventory(rows: NodeTestShard[], files: string[]) {
   expect(rows.flatMap(rowFiles).toSorted()).toEqual(files.toSorted());
 }
 
+it("balances cold release bundles without predicting time or enlarging their allocation", async () => {
+  const { plan, full, weights, price } = await releaseFixture([
+    "test/vitest/vitest.infra.config.ts",
+  ]);
+  const before = full();
+  const files = before.flatMap(rowFiles);
+  const native = plan({ runnerBackend: "blacksmith" });
+  const bundles = before.filter((row) => row.shardName.startsWith("bundle-"));
+  expect(bundles.length).toBeGreaterThan(1);
+  const largest = bundles.toSorted((a, b) => rowFiles(b).length - rowFiles(a).length)[0]!;
+  expect(rowFiles(largest).length).toBeGreaterThan(0);
+  expect(rowFiles(largest).length).toBeLessThanOrEqual(64);
+  const heavy = new Set(rowFiles(largest));
+  weights.mockImplementation((file) => (heavy.has(file) ? 10 : 1));
+  const after = full();
+  expect(after).toHaveLength(before.length);
+  expectInventory(after, files);
+  const cost = (row: NodeTestShard) =>
+    rowFiles(row).reduce((sum, file) => sum + (heavy.has(file) ? 10 : 1), 0);
+  const balanced = after.filter((row) => row.shardName.startsWith("bundle-"));
+  expect(Math.max(...balanced.map(cost))).toBeLessThan(Math.max(...bundles.map(cost)));
+  expect(
+    after
+      .filter((row) => row.shardName.startsWith("bundle-"))
+      .every((row) => rowFiles(row).length <= 64),
+  ).toBe(true);
+  expect(after.every((row) => row.predictedSeconds === undefined)).toBe(true);
+  const changed = after.filter((row) => {
+    const previous = before.find((entry) => entry.shardName === row.shardName)!;
+    expect(row).toEqual({
+      ...previous,
+      includePatterns: row.includePatterns,
+      timing_key: row.timing_key,
+    });
+    return JSON.stringify(row.includePatterns) !== JSON.stringify(previous.includePatterns);
+  });
+  expect(changed.length).toBeGreaterThan(0);
+  for (const row of changed) {
+    const expected = shardMetadata.createCompactSplitTimingGeneration({
+      configs: row.configs,
+      env: row.env,
+      parentShardName: `release-full-${row.shardName}`,
+      stripes: [row.includePatterns!],
+    });
+    expect(row.timing_key).toBe(expected.timingKeys[0]);
+  }
+  expect(full()).toEqual(after);
+  expect(plan({ runnerBackend: "blacksmith" })).toEqual(native);
+
+  // A final selection can already have a historical wall even though its
+  // count-packed predecessor was cold. Its exact observation still owns splitting.
+  price([changed[0]!], 1000);
+  const measured = full();
+  expectInventory(measured, files);
+  expect(
+    totalSeconds(measured.filter((row) => row.predictedSeconds !== undefined)),
+  ).toBeGreaterThanOrEqual(1000);
+  expect(
+    measured.every((row) => row.predictedSeconds === undefined || row.predictedSeconds <= 720),
+  ).toBe(true);
+});
+
+it("retains measured release selections and avoids equal-weight cold reshuffles", async () => {
+  const { full, prices, weights } = await releaseFixture(["test/vitest/vitest.infra.config.ts"]);
+  const cold = full();
+  const files = cold.flatMap(rowFiles);
+  const bundles = cold.filter((row) => row.shardName.startsWith("bundle-"));
+  expect(bundles.length).toBeGreaterThan(2);
+  prices[`release-full-${bundles[0]!.shardName}`] = 100;
+  const before = full();
+  expect(before.filter((row) => row.predictedSeconds !== undefined)).toHaveLength(1);
+  const measured = before.find((row) => row.predictedSeconds !== undefined)!;
+  const largest = bundles.slice(1).toSorted((a, b) => rowFiles(b).length - rowFiles(a).length)[0]!;
+  expect(rowFiles(largest).length).toBeGreaterThan(0);
+  expect(rowFiles(largest).length).toBeLessThanOrEqual(64);
+  const heavy = new Set(rowFiles(largest));
+  weights.mockImplementation((file) => (heavy.has(file) ? 10 : 1));
+  const after = full();
+  expectInventory(after, files);
+  expect(after).toHaveLength(before.length);
+  expect(after.find((row) => row.shardName === measured.shardName)).toEqual(measured);
+  expect(after.filter((row) => row.predictedSeconds === undefined)).not.toEqual(
+    before.filter((row) => row.predictedSeconds === undefined),
+  );
+  weights.mockReturnValue(1);
+  expect(full()).toEqual(before);
+});
+
 it.each([
-  ["agentic-agents-support", ["agents-support"], undefined],
   ["agentic-gateway-methods", ["gateway-methods", "gateway-methods-isolated"], undefined],
+  ["agentic-agents-support", ["agents-support"], 90],
   ["agentic-cli-process", ["cli-process"], 90],
-  ["core-runtime-config", ["runtime-config"], 90],
 ] as const)("keeps %s timing walls until refitted", async (owner, names, timeout) => {
   const configs = names.map((name) => `test/vitest/vitest.${name}.config.ts`);
   const files = expectDefined(listWholeConfigSplitFiles(owner), "release owner inventory");
@@ -81,17 +176,20 @@ it.each([
   expect(rows.length).toBeGreaterThan(1);
   expectInventory(rows, files);
   expect(totalSeconds(rows)).toBeGreaterThanOrEqual(3355);
+  const units = splitUnits(rows);
+  for (const unit of units) {
+    expect(unit.shardName).toMatch(new RegExp(`^${owner}-hosted-\\d+$`, "u"));
+  }
   for (const row of rows) {
-    expect(row.shardName).toMatch(new RegExp(`^${owner}-hosted-\\d+$`, "u"));
     expect(row.predictedSeconds).toBeLessThanOrEqual(720);
     expect(row.env).toBeUndefined();
     expect(row.timeoutMinutes).toBe(beforeBlacksmith[0]!.timeoutMinutes);
   }
-  price(rows, 50);
+  price(units, 50);
   expect(plan(pullRequest)).toEqual(beforePr);
   expect(plan({ runnerBackend: "blacksmith" })).toEqual(beforeBlacksmith);
-  expect(full().map((row) => row.predictedSeconds)).toEqual([rows.length * 50]);
-  price(rows, 0);
+  expect(full().map((row) => row.predictedSeconds)).toEqual([units.length * 50]);
+  price(units, 0);
   expect(full()).toHaveLength(1);
 });
 
@@ -192,22 +290,15 @@ it("fits measured release work without changing coverage or worker contracts", a
       })
       .toSorted();
   expect(contracts(rows)).toEqual(contracts(before));
-  for (const owner of [
-    "agentic-cli-process",
-    "agentic-control-plane-agent-chat",
-    "core-runtime-config",
-  ]) {
-    const owns = (name: string) => name.startsWith(`${owner}-hosted-`);
-    const owned = groupsOf(rows).filter((group) => owns(group.shard_name));
-    expect(owned.length, owner).toBeGreaterThan(1);
-    for (const group of owned) {
+  const split = rows.filter((row) =>
+    groupsOf([row]).some((group) => /-hosted-\d+$/u.test(group.shard_name)),
+  );
+  expect(split.length).toBeGreaterThan(0);
+  for (const row of split) {
+    expect(row.predictedSeconds).toBeLessThanOrEqual(720);
+    expect(row.timeoutMinutes).not.toBe(90);
+    for (const group of groupsOf([row]).filter((entry) => /-hosted-\d+$/u.test(entry.shard_name))) {
       expect(group.includePatterns!.length).toBeLessThanOrEqual(64);
-    }
-    for (const row of rows.filter((job) =>
-      groupsOf([job]).some((group) => owns(group.shard_name)),
-    )) {
-      expect(row.predictedSeconds, owner).toBeLessThanOrEqual(720);
-      expect(row.timeoutMinutes, owner).not.toBe(90);
     }
   }
   const packed = rows.filter((row) => row.groups);

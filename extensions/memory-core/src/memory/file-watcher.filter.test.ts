@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { MemoryFileWatcher } from "./file-watcher.js";
 
 const observer = await vi.hoisted(async () => {
@@ -15,36 +15,24 @@ vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
   watch: observer.watch,
 }));
 
-let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-let watcher: MemoryFileWatcher | undefined;
-beforeEach(async () => {
-  observer.reset();
-  state = await createOpenClawTestState({ label: "memory-watch-filter" });
-});
-afterEach(async () => {
-  await watcher?.close();
-  watcher = undefined;
-  vi.useRealTimers();
-  await state.cleanup();
-});
-
-it("filters irrelevant removals but preserves indexable files and possible directories", async () => {
+it("filters irrelevant removals but preserves indexable files and possible directories", async ({
+  onTestFinished,
+}) => {
+  const state = await createOpenClawTestState({ label: "memory-watch-filter" });
+  const owned: { watcher?: MemoryFileWatcher } = {};
+  onTestFinished(async () => {
+    await owned.watcher?.close();
+    vi.useRealTimers();
+    await state.cleanup();
+  });
   const workspaceDir = state.workspaceDir;
   const extraDir = path.join(workspaceDir, "extra");
-  for (const dir of [
-    "memory",
-    "extra/notes",
-    "extra/data",
-    "extra/archive/report.json",
-    "extra/media",
-  ]) {
-    await fs.mkdir(path.join(workspaceDir, dir), { recursive: true });
-  }
+  await fs.mkdir(extraDir);
   const changed = createDeferred<void>();
   const onDirty = vi.fn();
   const onChange = vi.fn(() => changed.resolve());
   const onUnavailable = vi.fn();
-  watcher = new MemoryFileWatcher({
+  owned.watcher = new MemoryFileWatcher({
     runInBackgroundContext: AsyncLocalStorage.snapshot(),
     workspaceDir,
     agentId: "main",
@@ -62,38 +50,25 @@ it("filters irrelevant removals but preserves indexable files and possible direc
     onChange,
     onUnavailable,
   });
-  await watcher.start();
+  await owned.watcher.start();
   vi.useFakeTimers();
 
-  const entry = observer.observations.find((observation) =>
-    observation.options.scopes.some(
-      (scope) => path.resolve(observation.root.rootDir, scope.path) === workspaceDir,
-    ),
-  );
-  if (!entry) {
-    throw new Error("Missing workspace observation");
-  }
+  const entry = observer.observations.find(
+    ({ root }) => root.rootDir === path.dirname(workspaceDir),
+  )!;
   const relative = (file: string) =>
     path.relative(entry.root.rootDir, path.join(workspaceDir, file));
   const removed = (file: string) => entry.dirty([{ path: relative(file), type: "structural" }]);
 
-  // fs-safe retains exclusions for known removed entries. Structural hints
-  // without a known kind must still allow a directory with this same name.
   const json = relative("extra/archive/state.json");
   expect(entry.options.exclude?.({ path: json, kind: "file" })).toBe(true);
   expect(entry.options.exclude?.({ path: json, kind: "directory" })).toBe(false);
 
-  for (const file of ["extra/data/state.json", "extra/notes/write.tmp", "extra/data/skip.md"]) {
-    const absolute = path.join(workspaceDir, file);
-    await fs.writeFile(absolute, "temporary");
-    await fs.unlink(absolute);
-    removed(file);
+  for (const file of ["data/state.json", "notes/write.tmp", "data/skip.md", "data"]) {
+    removed(`extra/${file}`);
   }
-  await fs.rmdir(path.join(extraDir, "data"));
-  removed("extra/data");
   await vi.advanceTimersByTimeAsync(1500);
-  expect(onDirty).not.toHaveBeenCalled();
-  expect(onChange).not.toHaveBeenCalled();
+  expect([onDirty.mock.calls, onChange.mock.calls]).toEqual([[], []]);
 
   for (const file of [
     "extra/notes/keep.md",
@@ -102,13 +77,8 @@ it("filters irrelevant removals but preserves indexable files and possible direc
     "USER.md",
     "memory/keep.md",
   ]) {
-    const absolute = path.join(workspaceDir, file);
-    await fs.writeFile(absolute, "indexed");
-    await fs.unlink(absolute);
     removed(file);
   }
-  await fs.writeFile(path.join(extraDir, "archive/report.json/nested.md"), "indexed");
-  await fs.rm(path.join(extraDir, "archive/report.json"), { recursive: true });
   removed("extra/archive/report.json");
   expect(onDirty).toHaveBeenCalledTimes(6);
   await vi.advanceTimersByTimeAsync(1500);

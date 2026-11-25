@@ -104,9 +104,13 @@ function signalLeaf(pidPath: string) {
     "process.send('ready'); setInterval(() => {}, 1000);",
   ].join("\n");
 }
-function ownedFixture() {
-  return setupFixture("split", false, true, (prefix, root) =>
-    mkdtempSync(path.join(root!, prefix)),
+function ownedFixture(registryPackages?: readonly string[]) {
+  return setupFixture(
+    "split",
+    false,
+    true,
+    (prefix, root) => mkdtempSync(path.join(root!, prefix)),
+    registryPackages,
   );
 }
 let receipts: FixtureReceiptChannel;
@@ -201,6 +205,7 @@ function startOwnedScheduler(
   probe = "",
   pidFiles: readonly string[] = [],
   driver?: string,
+  entryArgs?: readonly string[],
 ) {
   const childrenPath = path.join(fixture.root, "scheduler-children.jsonl");
   const events = path.join(fixture.root, "scheduler-events");
@@ -229,7 +234,7 @@ function startOwnedScheduler(
       "const renameFixtureFile = fs.renameSync.bind(fs);",
       "fs.renameSync = (from, to) => { const result = renameFixtureFile(from, to); receipt(to); return result; };",
       "syncBuiltinESMExports();",
-      `if (${JSON.stringify(entries)}.includes(process.argv[1])) {`,
+      `if (${JSON.stringify([...entries, path.join(fixture.harness, "scripts/run-with-env.mts")])}.includes(process.argv[1])) {`,
       "  const spawn = cp.spawn;",
       "  cp.spawn = (...args) => {",
       "    const child = spawn(...args);",
@@ -246,7 +251,7 @@ function startOwnedScheduler(
       "  syncBuiltinESMExports();",
       "}",
       `if (process.argv[1] === ${JSON.stringify(entries[1])}) {`,
-      "  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {",
+      "  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => {",
       `    fs.writeFileSync(${JSON.stringify(events)} + '/' + signal, String(process.pid));`,
       "  });",
       probe,
@@ -255,7 +260,7 @@ function startOwnedScheduler(
   );
   const shim = spawn(
     process.execPath,
-    [
+    entryArgs ?? [
       ...(driver
         ? ["--import", pathToFileURL(path.join(fixture.harness, "scripts/tsx.mjs")).href]
         : []),
@@ -690,6 +695,92 @@ describe("Docker scheduler trusted harness execution", () => {
     },
   );
 
+  posixIt.for(
+    ["published-upgrade-survivor"].flatMap((family) =>
+      (["SIGTERM", "SIGHUP"] as const).map((signal) => ({ family, signal })),
+    ),
+  )(
+    "retains $family package command ownership through $signal cleanup",
+    { timeout: 30_000 },
+    async ({ family, signal }, { signal: abortSignal }) => {
+      const fixture = ownedFixture([
+        "@openclaw/codex",
+        "@openclaw/discord",
+        "@openclaw/matrix",
+        "@openclaw/whatsapp",
+      ]);
+      const lane = family;
+      configureSignalFixtureLanes(fixture, [lane]);
+      // Published baselines generate their wrapper command after catalog selection.
+      writeFileSync(
+        path.join(fixture.harness, "scripts/e2e/upgrade-survivor-docker.sh"),
+        `exec ${quote(process.execPath)} ${quote(path.join(fixture.selectedHarness, "marker.cjs"))}\n`,
+      );
+      const pidFile = path.join(fixture.root, "package-lane.pid");
+      const cleanupReady = path.join(fixture.root, "package-cleanup-ready");
+      const published = path.join(fixture.root, "package-published");
+      writeLaneMarker(fixture, [
+        "let stopping = false;",
+        "for (const signal of ['SIGTERM', 'SIGHUP']) process.on(signal, () => {",
+        "  if (stopping) return; stopping = true;",
+        // Keep the real 10s scheduler grace. The prior env wrapper exits at 5s.
+        `  setTimeout(() => fs.writeFileSync(${JSON.stringify(cleanupReady)}, String(process.pid)), 5500);`,
+        "});",
+        "process.on('SIGUSR1', () => process.exit(0));",
+        `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        "setInterval(() => {}, 1000);",
+      ]);
+      writeFileSync(
+        path.join(fixture.harness, "scripts/upgrade-survivor-diagnostics.mjs"),
+        [
+          "import assert from 'node:assert/strict';",
+          "import fs from 'node:fs';",
+          `const pid = Number(fs.readFileSync(${JSON.stringify(pidFile)}, 'utf8'));`,
+          "assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });",
+          `fs.writeFileSync(${JSON.stringify(published)}, 'joined');`,
+        ].join("\n"),
+      );
+      const scripts = readJson("package.json").scripts;
+      const [executable, ...args] = scripts[`test:docker:${family}`].split(" ");
+      expect(executable).toBe("node");
+      const owner = startOwnedScheduler(
+        fixture,
+        abortSignal,
+        {
+          OPENCLAW_DOCKER_ALL_PARALLELISM: "1",
+          OPENCLAW_DOCKER_ALL_LANES: "gateway-network",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "base",
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "openclaw@2026.7.1-2",
+        },
+        "",
+        [pidFile],
+        undefined,
+        args.map((arg: string) =>
+          /^(?:\.\/)?scripts\//u.test(arg) ? path.join(fixture.harness, arg) : arg,
+        ),
+      );
+      await withScheduler(owner, async () => {
+        const pid = await owner.ready(pidFile);
+        owner.captureGroup(pid);
+        try {
+          owner.shim.kill(signal);
+          await owner.ready(cleanupReady);
+          expect(owner.shim).toMatchObject({ exitCode: null, signalCode: null });
+          expect(isProcessAlive(pid)).toBe(true);
+          expect(existsSync(published)).toBe(false);
+        } finally {
+          signalIfAlive(pid, "SIGUSR1");
+        }
+        await expectExit(owner, signal === "SIGHUP" ? 129 : 143);
+        expect(isProcessAlive(pid)).toBe(false);
+        const summary = readJson(path.join(fixture.root, "logs/summary.json"));
+        expect(summary.cleanup).toEqual({ joined: true });
+        expect(summary.lanes).toHaveLength(1);
+        expect(summary.lanes[0].cancelled).toBe(true);
+      });
+    },
+  );
+
   posixIt.for([
     ...(["SIGINT", "SIGTERM"] as const).flatMap((signal) =>
       (["failure-first", "signal-first", "success-first"] as const).map((order) => ({
@@ -987,7 +1078,7 @@ describe("Docker scheduler trusted harness execution", () => {
         driver,
         [
           "import fs from 'node:fs';",
-          "import { runCleanupSmokePhase, runShellCommand } from './scripts/test-docker-all.mts';",
+          "import { runCleanupSmokePhase, runShellCommand, writeRunSummary } from './scripts/test-docker-all.mts';",
           callbackGateSource,
           "const phases = [];",
           ...(order === "signal-first"
@@ -1037,6 +1128,11 @@ describe("Docker scheduler trusted harness execution", () => {
           "try {",
           "const failure = await runCleanupSmokePhase(process.env, process.env.OPENCLAW_DOCKER_ALL_LOG_DIR, phases);",
           "state.returned = true; snapshot();",
+          ...(order === "ordinary"
+            ? [
+                "await writeRunSummary(process.env.OPENCLAW_DOCKER_ALL_LOG_DIR, { failures: [failure], lanes: [], phases, status: 'failed' });",
+              ]
+            : []),
           `const next = ${order === "signal-first" ? `await runShellCommand({ command: ${JSON.stringify(nextCommand)}, env: process.env, label: 'post-signal-admission' })` : "undefined"};`,
           `fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ failure, phases, next }));`,
           `} catch (error) {
@@ -1126,6 +1222,27 @@ describe("Docker scheduler trusted harness execution", () => {
           expect(phases).toEqual([
             expect.objectContaining({ name: "cleanup-smoke", status: "failed" }),
           ]);
+          if (order === "ordinary") {
+            const expected = {
+              rerunCommand: `(cd ${quote(fixture.selectedHarness)} && ${quote(fixture.pinnedPnpm)} test:docker:cleanup)`,
+              status: 3,
+              targetable: false,
+            };
+            const summary = readJson(path.join(fixture.root, "logs/summary.json"));
+            expect(summary).toMatchObject({
+              status: "failed",
+              failures: [{ name: "cleanup-smoke", ...expected }],
+              phases: [expect.objectContaining({ name: "cleanup-smoke", status: "failed" })],
+              lanes: [],
+            });
+            const index = readJson(path.join(fixture.root, "logs/failures.json"));
+            expect(index).not.toHaveProperty("status");
+            expect(index.combinedGhWorkflowCommand).toBeUndefined();
+            expect(index.lanes[0]?.ghWorkflowCommand).toBeUndefined();
+            expect(index.lanes).toEqual([
+              expect.objectContaining({ lane: "cleanup-smoke", ...expected }),
+            ]);
+          }
           expect(readFileSync(path.join(fixture.root, "logs/cleanup-smoke.log"), "utf8")).toContain(
             "cleanup smoke failed intentionally",
           );
@@ -1421,6 +1538,7 @@ if (${JSON.stringify(failure)} === "timeout") {
       );
       for (const call of calls) {
         expect(call).toMatchObject({
+          cwd: call.lane === "gateway-network" ? fixture.selectedHarness : fixture.target,
           target: fixture.target,
           harness: fixture.selectedHarness,
           liveTarget: fixture.target,
@@ -1433,11 +1551,6 @@ if (${JSON.stringify(failure)} === "timeout") {
           cache: path.join(fixture.target, "relative cache"),
           tools: path.join(fixture.target, "relative tools"),
         });
-      }
-      for (const lane of laneNames) {
-        expect(calls.find((call) => call.lane === lane).cwd).toBe(
-          lane === "gateway-network" ? fixture.selectedHarness : fixture.target,
-        );
       }
       const summary = readJson(path.join(logDir, "summary.json"));
       expect(summary.status).toBe("passed");

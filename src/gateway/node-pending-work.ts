@@ -26,8 +26,6 @@ type NodePendingWorkState = {
 
 type DrainOptions = {
   maxItems?: number;
-  includeDefaultStatus?: boolean;
-  nowMs?: number;
   pairingGeneration?: string;
 };
 
@@ -162,13 +160,13 @@ export function removeNodePendingWorkItem(params: {
   return true;
 }
 
-/** Drains pending work for a node, including a baseline status request unless disabled. */
+/** Drains pending work for a node, including a baseline status request. */
 export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): DrainResult {
   const normalizedNodeId = nodeId.trim();
   if (!normalizedNodeId) {
     return { revision: 0, items: [], hasMore: false };
   }
-  const nowMs = resolveDateTimestampMs(opts.nowMs ?? Date.now());
+  const nowMs = resolveDateTimestampMs(Date.now());
   const retained = stateByNodeId.get(normalizedNodeId);
   if (retained) {
     pruneExpired(retained, nowMs);
@@ -181,7 +179,7 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   const items = explicitItems.slice(0, maxItems);
   const explicitReturnedCount = items.length;
   const hasExplicitStatus = explicitItems.some((item) => item.type === "status.request");
-  const includeBaseline = opts.includeDefaultStatus !== false && !hasExplicitStatus;
+  const includeBaseline = !hasExplicitStatus;
   if (state && explicitReturnedCount > 0) {
     for (const item of items) {
       state.itemsById.delete(item.id);

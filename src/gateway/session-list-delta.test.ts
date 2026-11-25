@@ -221,6 +221,10 @@ it("encodes insertions, replacements, reorders and removals against an exact imm
   );
   expect(allChanged.rowsDelta).toBeUndefined();
   expect(getSessionListBaseMiss(allChanged)).toBe("all-rows-changed");
+  const singleWire = JSON.parse(
+    serializeGatewayFrame({ type: "res", id: "single", ok: true, payload: allChanged }).toString(),
+  ).payload;
+  expect(expandSessionRowFacts(singleWire.sessions, singleWire.sharedFacts)).toEqual([changed]);
   expect(getSessionListBaseMiss(shareSidebarSessionRows([changed]))).toBeUndefined();
 });
 

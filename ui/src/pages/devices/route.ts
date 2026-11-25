@@ -1,7 +1,7 @@
-import { defineSolidPage } from "../../app-route-types.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
-import type { DevicesRouteData } from "./devices-page.tsx";
+import type { DevicesRouteData } from "./view.types.ts";
 
 export const page = defineSolidPage<"devices", ApplicationContext, DevicesRouteData>(
   "devices",
@@ -26,7 +26,6 @@ export const page = defineSolidPage<"devices", ApplicationContext, DevicesRouteD
         loadNodes(devices),
         Promise.allSettled([
           canPair && loadDevices(devices),
-          context.runtimeConfig.refresh(),
           canAdmin && loadExecApprovals(devices),
         ]),
       ]);

@@ -106,7 +106,7 @@ describe("resolveCodexNativeSearchActivation", () => {
 
   it("leaves credential admission to the model request for direct openai without auth", () => {
     const result = activate({ config: baseConfig, modelProvider: "openai" });
-    expect(result).toMatchObject({ state: "native_active", codexMode: "cached" });
+    expect(result).toMatchObject({ state: "native_active" });
     expect(result).not.toHaveProperty("inactiveReason");
   });
 

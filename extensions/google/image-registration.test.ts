@@ -11,13 +11,13 @@ const runtime = vi.hoisted(() => {
   return {
     moduleLoads: 0,
     generateImage,
-    buildProvider: vi.fn(() => ({ generateImage })),
   };
 });
 
+// mock-isolation: Keep the provider unloaded to prove registration's lazy import boundary.
 vi.mock("./image-generation-provider.js", () => {
   runtime.moduleLoads += 1;
-  return { buildGoogleImageGenerationProvider: runtime.buildProvider };
+  return { googleImageGenerationProvider: { generateImage: runtime.generateImage } };
 });
 
 function registerImageProvider() {
@@ -36,8 +36,8 @@ it("registers independent image metadata without loading the runtime and delegat
   const expectedMetadata = {
     id: "google",
     label: "Google",
-    defaultModel: "gemini-3.1-flash-image",
-    models: ["gemini-3.1-flash-image", "gemini-3-pro-image"],
+    defaultModel: "gemini-nano-banana-2.1",
+    models: ["gemini-nano-banana-2.1", "gemini-3.1-flash-image", "gemini-3-pro-image"],
     capabilities: {
       generate: {
         maxCount: 4,
@@ -49,6 +49,9 @@ it("registers independent image metadata without loading the runtime and delegat
         enabled: true,
         maxCount: 4,
         maxInputImages: 5,
+        maxInputImagesByModel: {
+          "gemini-nano-banana-2.1": 14,
+        },
         supportsSize: true,
         supportsAspectRatio: true,
         supportsResolution: true,
@@ -56,6 +59,24 @@ it("registers independent image metadata without loading the runtime and delegat
       geometry: {
         sizes: ["1024x1024", "1024x1536", "1536x1024", "1024x1792", "1792x1024"],
         aspectRatios: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+        aspectRatiosByModel: {
+          "gemini-nano-banana-2.1": [
+            "1:1",
+            "1:4",
+            "1:8",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:1",
+            "4:3",
+            "4:5",
+            "5:4",
+            "8:1",
+            "9:16",
+            "16:9",
+            "21:9",
+          ],
+        },
         resolutions: ["1K", "2K", "4K"],
       },
     },
@@ -72,7 +93,6 @@ it("registers independent image metadata without loading the runtime and delegat
   second.capabilities.geometry?.resolutions?.push("4K");
   expect(JSON.stringify(metadata)).toBe(JSON.stringify(expectedMetadata));
   expect(runtime.moduleLoads).toBe(0);
-  expect(runtime.buildProvider).not.toHaveBeenCalled();
 
   const request: ImageGenerationRequest = {
     provider: "google",
@@ -92,7 +112,6 @@ it("registers independent image metadata without loading the runtime and delegat
     await Promise.all([provider.generateImage(request), second.generateImage(secondRequest)]),
   ).toEqual([result, result]);
   expect(runtime.moduleLoads).toBe(1);
-  expect(runtime.buildProvider).toHaveBeenCalledOnce();
   expect(runtime.generateImage).toHaveBeenNthCalledWith(1, request);
   expect(runtime.generateImage).toHaveBeenNthCalledWith(2, secondRequest);
 });

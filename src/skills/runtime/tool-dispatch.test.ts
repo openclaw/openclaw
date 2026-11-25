@@ -83,13 +83,19 @@ it.each([
   },
 );
 
+const maintenanceActions = ["update.run", "restart", "update.cleanup"];
+const fullGatewayActions = [
+  "config.get",
+  "config.schema.lookup",
+  "users.getRole",
+  "users.setRole",
+  ...maintenanceActions,
+];
+
 it.each([
-  [{ profile: "coding" }, ["update.run"]],
-  [{ profile: "full" }, ["config.get", "config.schema.lookup", "update.run"]],
-  [
-    { profile: "messaging", alsoAllow: ["gateway"] },
-    ["config.get", "config.schema.lookup", "update.run"],
-  ],
+  [{ profile: "coding" }, maintenanceActions],
+  [{ profile: "full" }, fullGatewayActions],
+  [{ profile: "messaging", alsoAllow: ["gateway"] }, fullGatewayActions],
 ] satisfies Array<[OpenClawConfig["tools"], string[]]>)(
   "limits gateway actions to the skill dispatch policy: %j",
   async (toolPolicy, actions) => {

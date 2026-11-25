@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { mkdir, rename, rm, symlink } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, vi } from "vitest";
+import { nativeObjectFixture } from "../helpers/mac-native.js";
 import {
   addon,
   artifactFixture,
@@ -23,6 +24,16 @@ import {
 import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
 const it = createMacScriptTest();
+
+function snapshot(root: string): Array<{ target: string; bytes: Buffer; mode: number }> {
+  return readdirSync(root).flatMap((name) => {
+    const target = path.join(root, name);
+    const stat = statSync(target);
+    return stat.isDirectory()
+      ? snapshot(target)
+      : [{ target, bytes: readFileSync(target), mode: stat.mode & 0o777 }];
+  });
+}
 
 const machResourceKinds = [
   "object",
@@ -48,20 +59,15 @@ function withMachResourceKind(
     "synthetic-dsym": 10,
   };
   const magic = bytes.readUInt32BE(0);
-  const offsets = [0];
-  if (magic === 0xcafebabe || magic === 0xcafebabf) {
-    const fat64 = magic === 0xcafebabf;
-    expect(bytes.readUInt32BE(4)).toBe(2);
-    offsets.length = 0;
-    for (let index = 0; index < 2; index++) {
-      const entry = 8 + index * (fat64 ? 32 : 20);
-      offsets.push(
-        fat64 ? Number(bytes.readBigUInt64BE(entry + 8)) : bytes.readUInt32BE(entry + 8),
-      );
-    }
-  }
+  const fat64 = magic === 0xcafebabf;
+  const offsets =
+    magic === 0xcafebabe || fat64
+      ? Array.from({ length: bytes.readUInt32BE(4) }, (_, index) => {
+          const entry = 8 + index * (fat64 ? 32 : 20);
+          return fat64 ? Number(bytes.readBigUInt64BE(entry + 8)) : bytes.readUInt32BE(entry + 8);
+        })
+      : [0];
   for (const offset of offsets) {
-    expect(bytes.readUInt32BE(offset)).toBe(0xcffaedfe);
     if (bytes.readUInt32LE(offset + 12) === 1) {
       bytes.writeUInt32LE(filetypes[kind], offset + 12);
     }
@@ -72,7 +78,7 @@ function withMachResourceKind(
 describe.skipIf(process.platform !== "darwin")(
   "portable elevation native artifact verification",
   () => {
-    // The following archive case owns a new lifetime and must prepare successfully
+    // The following object case owns a new lifetime and must prepare successfully
     // after this failed flight; keep the failure probe ahead of the concurrent cases.
     it("rejects all borrowers of a failed native preparation", ({ mac }) =>
       mac.lifetime.run(async () => {
@@ -102,32 +108,37 @@ describe.skipIf(process.platform !== "darwin")(
         }
       }));
 
-    it.concurrent("accepts a real archive with a complete shared runtime outside the checkout", async ({
-      mac,
-    }) =>
+    it("compiles shared object slices without preparing full images", ({ mac }) =>
       mac.lifetime.run(async () => {
-        const harness = await artifactFixture(mac);
-        const result = await harness.verify();
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain(
-          `Elevation artifact verified: source=${sourceCommit} peekaboo=${peekabooCommit}`,
-        );
-        const calls = readFileSync(harness.calls, "utf8");
-        expect(
-          calls.match(/^codesign --verify --deep --strict --all-architectures /gm),
-        ).toHaveLength(1);
-        expect(calls.match(/^helper-authority=.*$/gm)).toEqual(["helper-authority=:"]);
-        expect(calls.indexOf("candidate-helper-hash")).toBeGreaterThanOrEqual(0);
-        expect(calls.indexOf("candidate-helper-hash")).toBeLessThan(
-          calls.indexOf("codesign --verify --deep"),
-        );
-        expect(calls).toContain("codesign -dv --verbose=4 --arch arm64 ");
-        expect(calls).toContain("codesign -dv --verbose=4 --arch x86_64 ");
-        expect(calls).toContain("codesign --verify --strict --test-requirement==notarized ");
-        expect(calls).toContain("xcrun stapler validate ");
-        expect(calls).toContain("spctl --assess --type execute ");
-        expect(calls).toContain(`/${addon}`);
-        expect(calls).toContain(`/${library}`);
+        const root = mac.createTempDir("mac-object-preparation-");
+        const tool = vi.spyOn(mac, "run");
+        try {
+          const requests = ["fat32", "fat64"] as const;
+          const outputs = await Promise.all(
+            requests.map((format) => nativeObjectFixture(path.join(root, format), format, mac)),
+          );
+          expect(outputs.map((bytes) => bytes.readUInt32BE(0))).toEqual([0xcafebabe, 0xcafebabf]);
+          const compilers = tool.mock.calls.filter(([command]) => command === "/usr/bin/xcrun");
+          expect(compilers).toHaveLength(2);
+          expect(compilers.map(([, args]) => args.slice(0, 4))).toEqual([
+            ["clang", "-arch", "arm64", "-c"],
+            ["clang", "-arch", "x86_64", "-c"],
+          ]);
+          expect(tool.mock.calls.filter(([command]) => command === "/usr/bin/lipo")).toHaveLength(
+            2,
+          );
+          for (const format of requests) {
+            const arches = await runMacFixtureTool(
+              "/usr/bin/lipo",
+              ["-archs", path.join(root, format, "object")],
+              root,
+              mac,
+            );
+            expect(arches.split(/\s+/u).toSorted()).toEqual(["arm64", "x86_64"]);
+          }
+        } finally {
+          tool.mockRestore();
+        }
       }));
 
     it.concurrent.for(["extra-entry", "regular-file", "symlink"])(
@@ -353,61 +364,6 @@ describe.skipIf(process.platform !== "darwin")(
         }),
     );
 
-    it.concurrent.for([
-      ...machResourceKinds.map((resource) => ({ resource, format: "thin" })),
-      { resource: "object", format: "fat32" },
-      { resource: "synthetic-core", format: "fat64" },
-    ] as const)(
-      "accepts $format $resource resources without changing bytes or modes",
-      async ({ resource, format }, { mac }) =>
-        mac.lifetime.run(async () => {
-          const harness = await artifactFixture(mac);
-          const objects = {
-            arm64: await macObjectFixture(harness.home, "arm64", mac),
-            x86_64: await macObjectFixture(harness.home, "x86_64", mac),
-          };
-          const universal =
-            format === "thin"
-              ? undefined
-              : await macFatContainerFixture(
-                  harness.home,
-                  [objects.arm64, objects.x86_64],
-                  format === "fat64",
-                  mac,
-                );
-          const preserved = [];
-          for (const arch of ["arm64", "x86_64"] as const) {
-            for (const mode of [0o644, 0o755]) {
-              const target = harness.at(
-                `${runtimeRoot}/lib/object-resource ${arch} [*]\n${mode}.dylib`,
-              );
-              const bytes = withMachResourceKind(universal ?? objects[arch], resource);
-              await write(target, bytes, mode);
-              preserved.push({ target, bytes, mode });
-            }
-          }
-          const result = await harness.verify();
-          expect(result.status, result.stderr).toBe(0);
-          expect(result.stdout).toContain("Elevation artifact verified");
-          const inspected = await harness.verifyCode();
-          expect(inspected.status, inspected.stderr).toBe(0);
-          for (const { target, bytes, mode } of preserved) {
-            expect(readFileSync(target), target).toEqual(bytes);
-            expect(statSync(target).mode & 0o777, target).toBe(mode);
-          }
-          const calls = readFileSync(harness.calls, "utf8");
-          expect(calls).toContain("codesign --verify --deep --strict --all-architectures");
-          expect(
-            calls
-              .split("\n")
-              .filter(
-                (line) =>
-                  line.startsWith("codesign -dv --verbose=4") && line.includes("object-resource"),
-              ),
-          ).toEqual([]);
-        }),
-    );
-
     it.concurrent("rejects unsupported native architecture despite architecture text in its filename", async ({
       mac,
     }) =>
@@ -502,34 +458,73 @@ describe.skipIf(process.platform !== "darwin")(
           harness.at(`${runtimeRoot}/Example.class`),
           Buffer.from("cafebabe0000003400010001000000000000000000000000", "hex"),
         );
-        const preserved = [
-          ...targets,
-          "Contents/MacOS/OpenClaw",
-          "Contents/MacOS/openclaw-mlx-tts",
-          ...[0o644, 0o700, 0o750].map((mode) => `Contents/Frameworks/thin-${mode}.dylib`),
-          ...[
-            library,
-            "lib/native.a",
-            "lib/universal.a",
-            "lib/archive64 [*]",
-            "Example.class",
-            "ordinary.resource",
-          ].map((relative) => `${runtimeRoot}/${relative}`),
-        ].map((relative) => ({
-          relative,
-          bytes: readFileSync(harness.at(relative)),
-          mode: statSync(harness.at(relative)).mode & 0o777,
-        }));
+        const objects = {
+          arm64: await macObjectFixture(harness.home, "arm64", mac),
+          x86_64: await macObjectFixture(harness.home, "x86_64", mac),
+        };
+        const formats = [
+          { format: "thin", bytes: Object.values(objects) },
+          {
+            format: "fat32",
+            bytes: [await macFatContainerFixture(harness.home, Object.values(objects), false, mac)],
+          },
+          {
+            format: "fat64",
+            bytes: [await macFatContainerFixture(harness.home, Object.values(objects), true, mac)],
+          },
+        ];
+        for (const { format, bytes } of formats) {
+          const kinds =
+            format === "thin"
+              ? machResourceKinds
+              : ([format === "fat32" ? "object" : "synthetic-core"] as const);
+          for (const kind of kinds) {
+            for (const [index, contents] of bytes.entries()) {
+              for (const mode of [0o644, 0o755]) {
+                const relative = `${runtimeRoot}/lib/object-resource ${kind} ${format} ${index} [*]\n${mode}.dylib`;
+                await write(harness.at(relative), withMachResourceKind(contents, kind), mode);
+              }
+            }
+          }
+        }
+        const preserved = snapshot(harness.app);
         const result = await harness.verify();
         expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("Elevation artifact verified");
+        expect(result.stdout).toContain(
+          `Elevation artifact verified: source=${sourceCommit} peekaboo=${peekabooCommit}`,
+        );
+        const calls = readFileSync(harness.calls, "utf8");
+        expect(
+          calls.match(/^codesign --verify --deep --strict --all-architectures /gm),
+        ).toHaveLength(1);
+        expect(calls.match(/^helper-authority=.*$/gm)).toEqual(["helper-authority=:"]);
+        expect(calls.indexOf("candidate-helper-hash")).toBeGreaterThanOrEqual(0);
+        expect(calls.indexOf("candidate-helper-hash")).toBeLessThan(
+          calls.indexOf("codesign --verify --deep"),
+        );
+        expect(calls).toContain("codesign -dv --verbose=4 --arch arm64 ");
+        expect(calls).toContain("codesign -dv --verbose=4 --arch x86_64 ");
+        expect(calls).toContain("codesign --verify --strict --test-requirement==notarized ");
+        expect(calls).toContain("xcrun stapler validate ");
+        expect(calls).toContain("spctl --assess --type execute ");
+        expect(calls).toContain(`/${addon}`);
+        expect(calls).toContain(`/${library}`);
+
         // verifyCode receives this tree; verify above inspects a separate ZIP extraction.
         const code = await harness.verifyCode();
         expect(code.status, code.stderr).toBe(0);
         expect(code.stdout).toBe("Elevation code verified\n");
-        for (const { relative, bytes, mode } of preserved) {
-          expect(readFileSync(harness.at(relative)), relative).toEqual(bytes);
-          expect(statSync(harness.at(relative)).mode & 0o777, relative).toBe(mode);
+        expect(
+          readFileSync(harness.calls, "utf8")
+            .split("\n")
+            .filter(
+              (line) =>
+                line.startsWith("codesign -dv --verbose=4") && line.includes("object-resource"),
+            ),
+        ).toEqual([]);
+        for (const { target, bytes, mode } of preserved) {
+          expect(readFileSync(target), target).toEqual(bytes);
+          expect(statSync(target).mode & 0o777, target).toBe(mode);
         }
       }));
 

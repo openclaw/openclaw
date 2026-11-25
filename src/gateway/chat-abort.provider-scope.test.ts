@@ -44,7 +44,6 @@ it.each([true, false])(
       {
         cfg: { agents: { entries: { main: {} } } },
         providerId: "openai",
-        stopReason: "auth-revoked",
       },
     );
     expect(result.runIds).toEqual(bound ? ["local-run"] : []);

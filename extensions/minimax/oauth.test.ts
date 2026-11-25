@@ -10,7 +10,7 @@ const fetchTimeoutMs = 30_000;
 function captureMiniMaxOAuthFetchTimeout() {
   const originalSetTimeout = globalThis.setTimeout;
   let fireTimeout: (() => void) | undefined;
-  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+  vi.spyOn(globalThis, "setTimeout").mockImplementation(((
     callback: (...args: unknown[]) => void,
     timeout?: number,
     ...args: unknown[]
@@ -26,14 +26,11 @@ function captureMiniMaxOAuthFetchTimeout() {
     return timer;
   }) as typeof setTimeout);
   return {
-    setTimeoutSpy,
     fire() {
       if (!fireTimeout) {
         throw new Error("expected MiniMax OAuth fetch timeout to be scheduled");
       }
-      const callback = fireTimeout;
-      fireTimeout = undefined;
-      callback();
+      fireTimeout();
     },
   };
 }
@@ -177,9 +174,6 @@ describe("loginMiniMaxPortalOAuth", () => {
         ).rejects.toHaveProperty("name", expect.stringMatching(/^(AbortError|TimeoutError)$/));
         expect(server.requests).toContain(path);
         expect(fetchMock.mock.calls[fetchIndex]?.[1]?.signal).toBeInstanceOf(AbortSignal);
-        expect(
-          oauthTimeout.setTimeoutSpy.mock.calls.some(([, timeout]) => timeout === fetchTimeoutMs),
-        ).toBe(true);
       } finally {
         await server.close();
         await loginPromise?.catch(() => undefined);
@@ -194,13 +188,10 @@ describe("loginMiniMaxPortalOAuth", () => {
   ] as const)("bounds %s bodies without using response.text()", async (name, token, status) => {
     const malformed = status === 200;
     const chunk = malformed ? '{"status":"error","detail":"' : `minimax ${name} unavailable `;
+    // HTTP failures are typed and never echo the provider body.
     const message = malformed
       ? "MiniMax OAuth failed to parse response."
-      : expect.stringContaining(
-          token
-            ? "minimax token unavailable"
-            : "MiniMax OAuth authorization failed: minimax authorization unavailable",
-        );
+      : "The provider is temporarily unavailable.";
     const tracked = cancelTrackedTextResponse(`${chunk.repeat(malformed ? 512 : 1024)}tail`, {
       status,
       headers: { "Content-Type": status === 200 ? "application/json" : "text/plain" },
@@ -217,6 +208,14 @@ describe("loginMiniMaxPortalOAuth", () => {
     expect((error as Error).message).not.toContain("tail");
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["refused", () => Response.json({ status: "error" }), "device_code_denied"],
+    ["rate-limited", () => new Response("slow down", { status: 429 }), "rate_limited"],
+  ] as const)("rejects a %s token poll with a typed failure", async (_name, response, reason) => {
+    stubOAuthFetch((_input, init) => authResponse(init), response());
+    await expect(loginMiniMax()).rejects.toMatchObject({ name: "ProviderAuthFailure", reason });
   });
 
   it("records the issuing account endpoint for Global and CN credentials", async () => {
@@ -272,7 +271,7 @@ describe("loginMiniMaxPortalOAuth", () => {
 
     const outcome = succeeds
       ? expect(result).resolves.toMatchObject({ access: "access", refresh: "refresh" })
-      : expect(result).rejects.toThrow("timed out");
+      : expect(result).rejects.toMatchObject({ reason: "device_code_expired" });
     await vi.advanceTimersByTimeAsync(delay);
     await outcome;
   });

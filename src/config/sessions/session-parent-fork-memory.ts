@@ -4,10 +4,10 @@ import type {
   ForkSessionEntryFromParentTargetResult,
   ForkSessionFromParentTranscriptParams,
 } from "./session-accessor.types.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
-  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageAuthority } from "./session-actor-storage-contract.js";

@@ -3,23 +3,12 @@ import {
   getActiveNativeAttempt,
   getEmbeddedRunAttachment,
   type ActiveEmbeddedRunAttachment,
-  type EmbeddedAgentQueueHandle,
 } from "../agents/embedded-agent-runner/run-state.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import {
   waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,
 } from "./session-controller.settlement.js";
-
-/** Joins one captured native attempt without observing a same-ID successor. */
-export async function waitForSessionNativeAttemptEnd(
-  sessionId: string,
-  timeoutMs: number | null,
-  handle: EmbeddedAgentQueueHandle | undefined,
-): Promise<boolean> {
-  const registration = handle ? getEmbeddedRunAttachment(handle) : undefined;
-  return await waitForCapturedSessionNativeAttemptEnd(sessionId, timeoutMs, registration);
-}
 
 /** Starts bounded observation after an effect, retaining the producer captured before it. */
 export async function waitForCapturedSessionNativeAttemptEnd(
@@ -64,8 +53,9 @@ export async function waitForSessionRunEnd(
   timeoutMs: number | null = 15_000,
 ): Promise<boolean> {
   const handle = getActiveNativeAttempt(sessionId);
-  const operation = handle ? getEmbeddedRunAttachment(handle)?.operation : undefined;
-  const nativeSettlement = waitForSessionNativeAttemptEnd(sessionId, timeoutMs, handle);
+  const attachment = handle ? getEmbeddedRunAttachment(handle) : undefined;
+  const operation = attachment?.operation;
+  const nativeSettlement = waitForCapturedSessionNativeAttemptEnd(sessionId, timeoutMs, attachment);
   const ownerSettlement = operation
     ? timeoutMs === null
       ? operation.ownerSettlement.then(() => true)

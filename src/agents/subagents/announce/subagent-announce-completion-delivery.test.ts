@@ -1,70 +1,152 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
 } from "../../../gateway/operator-tool-gateway-authority.js";
+import { createOwnedTestInstance } from "../../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../../plugins/runtime.js";
+import {
+  getGatewayContextLifetime,
+  getPluginRegistryForContext,
+  withPluginRuntimeRegistryScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
   reserveSessionControllerSource,
   retireSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
-// Completion predicates read recorded facts, not rendered placeholder wording.
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../admitted-run-context.test-support.js";
 import { hasFailedSubagentNoOutputCompletion } from "../../internal-event-contract.js";
 import { runAnnounceAgentCall } from "./subagent-announce-completion-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
+import type { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
-const failedChild = { type: "task_completion", source: "subagent", status: "error" } as const;
-
-it("does not dispatch a private handoff after its caller has already cancelled", async () => {
-  const caller = new AbortController();
-  caller.abort(new Error("requester stopped"));
-  const dispatch = vi.fn(async () => {
-    throw new Error("cancelled dispatch must not start");
-  });
+afterEach(() => setSubagentAnnounceDeliveryDepsForTest());
+const dispatch = vi.fn<typeof dispatchGatewayMethodInProcess>();
+beforeEach(() => {
+  dispatch.mockReset().mockResolvedValue({ status: "ok" });
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
+});
+const announce = (overrides: Partial<Parameters<typeof runAnnounceAgentCall>[0]> = {}) =>
+  runAnnounceAgentCall({ agentParams: {}, isExecutionAllowed: () => true, ...overrides });
+
+it("admits a requester continuation on the current generation after its producer releases", async () => {
+  const predecessor = createOwnedTestInstance("announce-predecessor");
+  const successor = createOwnedTestInstance("announce-successor");
+  const shared = createOwnedTestInstance("announce-shared");
+  const previousRegistry = predecessor.owner!.registry!;
+  const currentRegistry = successor.owner!.registry!;
+  const invocations = new PluginInvocationScope(previousRegistry, [predecessor, shared], {
+    retained: true,
+  });
+  const oldCallback = invocations.wrap(predecessor.wrap((): string => "previous"));
+  const currentCallback = successor.wrap((): string => "current");
+  const sharedCallback = shared.wrap(() => "shared");
+  const callbacks = new Map([
+    [previousRegistry, oldCallback],
+    [currentRegistry, currentCallback],
+  ]);
+  const original = captureActivePluginRegistrySnapshot();
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  const input = reserveSessionControllerSource("agent:main:generation-continuation", {
+    target: captureSessionTarget({
+      storeScope: "/synthetic/generation-continuation",
+      sessionKey: "agent:main:generation-continuation",
+      incarnation: "generation-continuation-session",
+    }),
+    reservationId: "subagent-settle:generation-continuation",
+    policy: { mode: "followup" },
+    continuationCaller: {
+      run: (run) => withPluginRuntimeRegistryScope(previousRegistry, run),
+    },
+  });
+  dispatch.mockImplementation(async () => {
+    expect(sharedCallback()).toBe("shared");
+    const registry = getPluginRegistryForContext();
+    const callback = registry && callbacks.get(registry);
+    expect(callback?.()).toBe("current");
+    return { status: "ok" };
+  });
+  let delivery: Promise<unknown> | undefined;
   try {
-    await expect(
-      runAnnounceAgentCall({
-        agentParams: {},
-        privateCompletion: true,
-        signal: caller.signal,
-        isExecutionAllowed: () => true,
+    setActivePluginRegistry(currentRegistry);
+    delivery = invocations.run(() =>
+      announce({
+        controllerInput: input,
+        onBeforeDispatch: async () => {
+          entered.resolve();
+          await resume.promise;
+          expect(sharedCallback()).toBe("shared");
+        },
       }),
-    ).rejects.toThrow("requester stopped");
-    expect(dispatch).not.toHaveBeenCalled();
+    );
+    await entered.promise;
+    invocations.release();
+    expect(() => oldCallback()).toThrow("Plugin announce-predecessor consumer is closed");
+    resume.resolve();
+    await expect(delivery).resolves.toEqual({ status: "ok" });
+    expect(dispatch).toHaveBeenCalledOnce();
   } finally {
-    setSubagentAnnounceDeliveryDepsForTest();
+    invocations.release();
+    resume.resolve();
+    await Promise.allSettled([delivery]);
+    retireSessionControllerInput(input);
+    await input.settlement.promise;
+    restoreActivePluginRegistrySnapshot(original);
   }
 });
 
-it("keeps genuine cancellation attached after requester execution starts", async () => {
-  const caller = new AbortController();
-  const started = vi.fn();
-  const dispatch = vi.fn(async (_method, _params, options) => {
-    options?.onExecutionStarted?.();
-    return await new Promise((_resolve, reject) => {
-      options?.signal?.addEventListener("abort", () => reject(options.signal?.reason as Error), {
-        once: true,
+it.each(["caller", "Gateway"] as const)(
+  "does not dispatch a private handoff after its %s has already cancelled",
+  async (source) => {
+    const resolveGatewayContext = () => undefined;
+    const caller =
+      source === "caller"
+        ? new AbortController()
+        : getGatewayContextLifetime(resolveGatewayContext);
+    const cancellation =
+      source === "caller" ? { signal: caller.signal } : { resolveGatewayContext };
+    caller.abort(new Error("requester stopped"));
+    await expect(announce({ privateCompletion: true, ...cancellation })).rejects.toThrow(
+      "requester stopped",
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["caller", "Gateway"] as const)(
+  "keeps %s cancellation attached after requester execution starts",
+  async (source) => {
+    const resolveGatewayContext = () => undefined;
+    const caller =
+      source === "caller"
+        ? new AbortController()
+        : getGatewayContextLifetime(resolveGatewayContext);
+    const cancellation =
+      source === "caller" ? { signal: caller.signal } : { resolveGatewayContext };
+    const started = vi.fn();
+    dispatch.mockImplementation(async (_method, _params, options) => {
+      options?.onAccepted?.({});
+      options?.onExecutionStarted?.();
+      return await new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(options.signal?.reason as Error), {
+          once: true,
+        });
       });
     });
-  });
-  setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
-  try {
-    const delivery = runAnnounceAgentCall({
-      agentParams: {},
-      signal: caller.signal,
-      onExecutionStarted: started,
-      isExecutionAllowed: () => true,
-    });
+    const delivery = announce({ ...cancellation, onExecutionStarted: started });
     expect(started).toHaveBeenCalledOnce();
     caller.abort(new Error("requester stopped"));
     await expect(delivery).rejects.toThrow("requester stopped");
-  } finally {
-    setSubagentAnnounceDeliveryDepsForTest();
-  }
-});
+  },
+);
 
 it.each([
   ["current", true],
@@ -73,10 +155,9 @@ it.each([
   "revalidates a %s continuation caller immediately before dispatch",
   async (_name, current) => {
     const route = Object.freeze({ channel: "discord", to: "channel:continuation" });
-    const ambientAuthority = createAdmittedRunOperatorAuthority({
+    const ambientAuthority = createTestOperatorAuthority({
       profileId: "previous-requester",
       scopes: ["operator.read"],
-      assertCurrent() {},
     });
     const input = reserveSessionControllerSource("agent:main:continuation", {
       target: captureSessionTarget({
@@ -96,12 +177,10 @@ it.each([
         },
       }),
     });
-    const observedAuthority = vi.fn();
-    const dispatch = vi.fn(async () => {
-      observedAuthority(readOperatorToolGatewayAuthority()?.operatorRunAuthority);
+    dispatch.mockImplementation(async () => {
+      expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority).toBeUndefined();
       return { status: "ok" };
     });
-    setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
     try {
       const delivery = runWithOperatorToolGatewayAuthority(
         {
@@ -109,23 +188,16 @@ it.each([
           scopes: ambientAuthority.scopes,
           signal: new AbortController().signal,
         },
-        () =>
-          runAnnounceAgentCall({
-            agentParams: {},
-            controllerInput: input,
-            isExecutionAllowed: () => true,
-          }),
+        () => announce({ controllerInput: input }),
       );
       if (current) {
         await expect(delivery).resolves.toEqual({ status: "ok" });
-        expect(observedAuthority).toHaveBeenCalledWith(undefined);
       } else {
         await expect(delivery).rejects.toThrow("continuation owner retired");
         expect(dispatch).not.toHaveBeenCalled();
       }
       expect(input.continuationCaller?.deliveryRoute).toBe(route);
     } finally {
-      setSubagentAnnounceDeliveryDepsForTest();
       retireSessionControllerInput(input);
       await input.settlement.promise;
     }
@@ -139,11 +211,8 @@ it.each(["commit", "failure", "revocation"] as const)(
     const release = createDeferredCore();
     const failed = new Error("dispatch receipt unavailable");
     let current = true;
-    const dispatch = vi.fn(async () => ({ status: "ok" }));
-    setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
     try {
-      const delivery = runAnnounceAgentCall({
-        agentParams: {},
+      const delivery = announce({
         isExecutionAllowed: () => current,
         onBeforeDispatch: async () => {
           entered.resolve();
@@ -159,50 +228,97 @@ it.each(["commit", "failure", "revocation"] as const)(
       release.resolve();
       if (outcome === "commit") {
         await expect(delivery).resolves.toEqual({ status: "ok" });
-        expect(dispatch).toHaveBeenCalledOnce();
       } else if (outcome === "failure") {
         await expect(delivery).rejects.toBe(failed);
-        expect(dispatch).not.toHaveBeenCalled();
       } else {
         await expect(delivery).rejects.toThrow("subagent source lifecycle changed");
-        expect(dispatch).not.toHaveBeenCalled();
       }
+      expect(dispatch).toHaveBeenCalledTimes(outcome === "commit" ? 1 : 0);
     } finally {
       release.resolve();
-      setSubagentAnnounceDeliveryDepsForTest();
     }
   },
 );
 
-describe("hasFailedSubagentNoOutputCompletion", () => {
-  it.each([
-    [
-      "recorded no visible result",
-      { ...failedChild, result: "(no output)", noVisibleResult: true },
-      true,
-    ],
-    [
-      "reworded placeholder",
-      { ...failedChild, result: "(nothing to report)", noVisibleResult: true },
-      true,
-    ],
-    ["real result resembling placeholder", { ...failedChild, result: "(no output)" }, false],
-    [
-      "successful child",
-      { ...failedChild, status: "ok", result: "(no output)", noVisibleResult: true },
-      false,
-    ],
-    [
-      "non-subagent source",
-      { ...failedChild, source: "image_generation", result: "(no output)", noVisibleResult: true },
-      false,
-    ],
-  ] as const)("classifies %s from the recorded result fact", (_label, event, expected) => {
-    expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
-  });
-
-  it("reports nothing for an absent or empty event list", () => {
-    expect(hasFailedSubagentNoOutputCompletion(undefined)).toBe(false);
-    expect(hasFailedSubagentNoOutputCompletion([])).toBe(false);
-  });
+it.each([
+  ["absent", { noVisibleResult: true }, true],
+  ["reworded", { noVisibleResult: true, result: "(nothing to report)" }, true],
+  ["visible placeholder", {}, false],
+  ["success", { noVisibleResult: true, status: "ok" }, false],
+  ["other source", { noVisibleResult: true, source: "image_generation" }, false],
+] as const)("classifies %s completion from the recorded fact", (_label, overrides, expected) => {
+  const event = {
+    type: "task_completion",
+    source: "subagent",
+    status: "error",
+    result: "(no output)",
+    ...overrides,
+  } as const;
+  expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
 });
+
+it("reports nothing for an absent or empty event list", () => {
+  expect(hasFailedSubagentNoOutputCompletion(undefined)).toBe(false);
+  expect(hasFailedSubagentNoOutputCompletion([])).toBe(false);
+});
+
+it.each(["deadline", "admission", "execution"] as const)(
+  "publishes a materialized %s abort reason with unchanged failure identity",
+  async (trigger) => {
+    vi.useFakeTimers();
+    const prepareStackTrace = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+    const formatted = new Set<Error>();
+    Error.prepareStackTrace = (error) => {
+      formatted.add(error);
+      return `${error.name}: ${error.message}`;
+    };
+    let current = true;
+    let signal: AbortSignal | undefined;
+    let formattedAtAbort = false;
+    dispatch.mockImplementation(async (_method, _params, options) => {
+      signal = options?.signal;
+      signal?.addEventListener("abort", () => {
+        formattedAtAbort = formatted.has(signal?.reason);
+      });
+      if (trigger === "deadline") {
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal?.reason as Error), { once: true });
+        });
+      }
+      current = false;
+      if (trigger === "admission") {
+        options?.sessionMutationCommitGuard?.();
+      } else {
+        options?.onExecutionStarted?.();
+      }
+      return undefined;
+    });
+    try {
+      const result = announce({
+        timeoutMs: 10,
+        isExecutionAllowed: () => current,
+        isSourceSessionAdmissionAllowed: () => current,
+      }).catch((error: unknown) => error);
+      if (trigger === "deadline") {
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      const failure = await result;
+      expect(formattedAtAbort).toBe(true);
+      expect(signal?.aborted).toBe(true);
+      expect(failure).toBe(signal?.reason);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe(
+        trigger === "deadline"
+          ? "gateway request timeout for agent"
+          : "subagent source lifecycle changed before completion delivery",
+      );
+    } finally {
+      if (prepareStackTrace) {
+        Object.defineProperty(Error, "prepareStackTrace", prepareStackTrace);
+      } else {
+        Reflect.deleteProperty(Error, "prepareStackTrace");
+      }
+      vi.useRealTimers();
+    }
+  },
+);

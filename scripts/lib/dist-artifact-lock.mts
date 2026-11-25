@@ -41,11 +41,17 @@ function retainUnjoinedDistArtifactWork(owner: ArtifactOwner, error: unknown) {
   return error;
 }
 
-export async function runOwnedDistArtifactEntry(script: string, args: string[]) {
+export async function runOwnedDistArtifactEntry(
+  script: string,
+  args: string[],
+  parentClaim?: string,
+) {
   const directory = resolveDistArtifactLockPath(process.cwd());
-  const claim = path.join(directory, `child-${process.pid}`);
+  const claim = path.join(directory, parentClaim ?? `child-${process.pid}`);
   // A surviving wrapper claim retains ownership for possibly detached compilers.
-  fs.writeFileSync(claim, "Awaiting child completion.\n", { flag: "wx" });
+  if (!parentClaim) {
+    fs.writeFileSync(claim, "Awaiting child completion.\n", { flag: "wx" });
+  }
   const owner: ArtifactOwner = { directory };
   // This entry process inherits ownership until exit. Native bundler callbacks
   // can lose async context and run after the CLI module's import has settled.
@@ -57,7 +63,10 @@ export async function runOwnedDistArtifactEntry(script: string, args: string[]) 
     throw retainUnjoinedDistArtifactWork(owner, error);
   } finally {
     // The pre-existing claim is the durable fence if recording uncertainty failed.
-    if (owner.unjoinedError === undefined || fs.existsSync(path.join(directory, "unjoined"))) {
+    if (
+      !parentClaim &&
+      (owner.unjoinedError === undefined || fs.existsSync(path.join(directory, "unjoined")))
+    ) {
       fs.unlinkSync(claim);
     }
   }
@@ -89,8 +98,19 @@ export async function acquireDistArtifactOwnership(
           timeoutMs: wait ? (signal ? LOCK_POLL_MS : Number.POSITIVE_INFINITY) : 0,
           retry: { minTimeout: LOCK_POLL_MS, maxTimeout: LOCK_POLL_MS, factor: 1 },
           staleRecovery: "fail-closed",
-          shouldReclaim: ({ payload }) => {
+          shouldReclaim: ({ payload, nowMs, staleMs }) => {
             owner = payload;
+            if (fs.existsSync(path.join(directory, "unjoined"))) {
+              return true;
+            }
+            // Exclusive creation exposes an empty file before the owner is written.
+            // Keep fs-safe's publication grace; abandoned records still fail closed.
+            if (payload === null) {
+              const pending = fs.statSync(ownerPath, { throwIfNoEntry: false });
+              if (pending?.size === 0 && nowMs - pending.mtimeMs < staleMs) {
+                return false;
+              }
+            }
             // fs-safe rechecks the observed owner before failing closed, never reclaiming it.
             const pid =
               payload && typeof payload === "object" && "pid" in payload ? payload.pid : null;
@@ -105,9 +125,6 @@ export async function acquireDistArtifactOwnership(
             try {
               process.kill(pid, 0);
             } catch {
-              return true;
-            }
-            if (fs.existsSync(path.join(directory, "unjoined"))) {
               return true;
             }
             if (!reportedWait) {

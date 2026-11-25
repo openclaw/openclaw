@@ -1,10 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, vi } from "vitest";
-import {
-  installSessionTitleRegistrar,
-  registerSessionTitleTarget,
-} from "./session-title-target-registration.ts";
+import { registerSessionTitleTarget } from "./markdown-link-display.ts";
+import { installSessionTitleRegistrar } from "./session-progress-hovercard-target.ts";
 
 it("keeps mounted targets until bootstrap and releases cancelled targets", async () => {
   const removed = document.createElement("a");

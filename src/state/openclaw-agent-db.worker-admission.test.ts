@@ -1,10 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
@@ -33,12 +36,14 @@ import {
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import { revokeAgentDatabaseResources } from "./openclaw-agent-db-resources.js";
 import * as validationCache from "./openclaw-agent-db-validation-cache.js";
 import {
   getOpenClawAgentDatabaseValidation as getValidation,
   getOpenClawAgentDatabaseValidationForTransfer as transferValidation,
   invalidateOpenClawAgentDatabaseValidation as invalidateValidation,
 } from "./openclaw-agent-db-validation-cache.js";
+import { withWorkerAdmission } from "./openclaw-agent-db-worker-admission.js";
 import { withOpenClawAgentDatabaseWrite as writeAgent } from "./openclaw-agent-db-write.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync as closeAgent,
@@ -54,6 +59,7 @@ import {
 } from "./openclaw-agent-execution-authority.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution as captureExecution } from "./openclaw-agent-execution.js";
+import { expectRow, readRow } from "./openclaw-state-db-fixtures.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -89,7 +95,7 @@ function observePublications(observe: (path: string, publish: () => void) => voi
 }
 
 function countSessions({ db }: { db: EngineConnection }) {
-  return db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count;
+  return readRow(db, "SELECT COUNT(*) AS count FROM session_nodes")?.count;
 }
 
 afterEach(async () => {
@@ -145,6 +151,7 @@ it.each(["before handoff", "after handoff"] as const)(
       peer.agentId,
       peer.path,
       context,
+      captureGatewayStateOwner(context.admission.databasePath),
       new AgentDatabaseExecutionLifetime().state,
       () => context.admission.assertCurrent(),
       () => context.admission.assertCurrent(),
@@ -241,9 +248,9 @@ it("keeps a worker recreation private until its host creation claim joins native
   expect(opened?.db.isOpen).toBe(false);
   expect(() => assertNoOpenClawAgentDatabaseLeases(options.agentId, { env })).not.toThrow();
   using reader = openNodeSqliteDatabase(pathname, { readOnly: true });
-  expect(
-    reader.prepare("SELECT state_json FROM auth_profile_state WHERE state_key='created'").get(),
-  ).toEqual({ state_json: "{}" });
+  expectRow(reader, "SELECT state_json FROM auth_profile_state WHERE state_key='created'", {
+    state_json: "{}",
+  });
 });
 
 it("admits cold storage in its worker and lends facts to every later native handle", async () => {
@@ -318,7 +325,7 @@ it("recreates a closed database through its directory alias without revoking fre
   await expect(
     writeAgent(
       options,
-      ({ db }) => db.prepare("SELECT COUNT(*) AS count FROM auth_profile_state").get()?.count,
+      ({ db }) => readRow(db, "SELECT COUNT(*) AS count FROM auth_profile_state")?.count,
     ),
   ).resolves.toBe(0);
 });
@@ -357,7 +364,7 @@ it.each([
       await writeAgent({ ...options, agentId: "sibling" }, () => undefined);
       if (change === "idle-revoked") {
         expect(revokedProof).toBeDefined();
-        invalidateValidation(database.path);
+        invalidateValidation(database.path, "a maintenance write");
         expect(getValidation(database)).toBeUndefined();
       }
       retainedExecution = captureExecution(options);
@@ -397,13 +404,11 @@ it.each([
         expect(facts?.tables.has("session_key_contract")).toBe(true);
         expect(facts?.tables.has("rolled_back_fixture")).toBe(false);
         expect(facts?.indexes).toContain("idx_agent_cache_expiry");
-        expect(
-          reopened.db
-            .prepare(
-              "UPDATE auth_profile_state SET updated_at=updated_at+1 WHERE state_key='retained' RETURNING updated_at",
-            )
-            .get()?.updated_at,
-        ).toBe(2);
+        expectRow(
+          reopened.db,
+          "UPDATE auth_profile_state SET updated_at=updated_at+1 WHERE state_key='retained' RETURNING updated_at",
+          { updated_at: 2 },
+        );
         return countSessions(reopened);
       });
       expect(count).toBe(0);
@@ -429,7 +434,7 @@ it.each([
     if (change.endsWith("missing-index")) {
       using inspector = openNodeSqliteDatabase(database.path, { readOnly: true });
       expect(
-        inspector.prepare("SELECT sql FROM sqlite_schema WHERE name='idx_agent_cache_expiry'").get()
+        readRow(inspector, "SELECT sql FROM sqlite_schema WHERE name='idx_agent_cache_expiry'")
           ?.sql,
       ).toMatch(
         /^CREATE INDEX idx_agent_cache_expiry\s+ON cache_entries\(scope, expires_at, key\)\s+WHERE expires_at IS NOT NULL$/,
@@ -483,9 +488,7 @@ it.each([
         fs.writeFileSync(pathname, "damaged SQLite fixture");
       } else if (change !== "warm-schema") {
         using editor = openNodeSqliteDatabase(pathname);
-        const schemaBefore = metadataChange
-          ? editor.prepare("PRAGMA schema_version").get()
-          : undefined;
+        const schemaBefore = metadataChange ? readRow(editor, "PRAGMA schema_version") : undefined;
         editor.exec(
           change === "owner"
             ? "UPDATE schema_meta SET agent_id='another' WHERE meta_key='primary'"
@@ -496,7 +499,7 @@ it.each([
                 : "ALTER TABLE auth_profile_state RENAME COLUMN state_json TO drifted_state_json",
         );
         if (metadataChange) {
-          expect(editor.prepare("PRAGMA schema_version").get()).toEqual(schemaBefore);
+          expectRow(editor, "PRAGMA schema_version", schemaBefore);
         }
       }
       if (metadataChange && retainWorker) {
@@ -540,7 +543,7 @@ it.each(["before-entry", "source-revoked", "after-entry"] as const)(
       publications += 1;
       if (failure !== "after-entry") {
         // Revoke actual captured proof at the worker-to-host publication boundary.
-        invalidateValidation(pathname);
+        invalidateValidation(pathname, "a maintenance write");
         if (failure === "source-revoked") {
           current = false;
         }
@@ -723,5 +726,38 @@ it("publishes owner revocation before a host grant and rolls back the native wri
   } finally {
     await closing;
     await execution.release();
+  }
+});
+
+it("refuses worker preparation retired while filesystem identity lookup is stalled", async () => {
+  const options = executionOptions("agent-admission-identity-");
+  openAgent(options);
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  const stat = fsPromises.stat;
+  const spy = vi.spyOn(fsPromises, "stat").mockImplementation(async (...args) => {
+    if (args[0] === options.path) {
+      entered.resolve();
+      await resume.promise;
+    }
+    return Reflect.apply(stat, fsPromises, args);
+  });
+  syncBuiltinESMExports();
+  const consume = vi.fn(async () => undefined);
+  const pending = withWorkerAdmission(options, undefined, undefined, consume);
+  const refused = expect(pending).rejects.toThrow("admission closed during worker preparation");
+  let closing: Promise<unknown> | undefined;
+  try {
+    await entered.promise;
+    closing = Promise.all(revokeAgentDatabaseResources({ path: options.path }));
+    resume.resolve();
+    await refused;
+    await closing;
+    expect(consume).not.toHaveBeenCalled();
+  } finally {
+    resume.resolve();
+    await Promise.allSettled([pending, closing]);
+    spy.mockRestore();
+    syncBuiltinESMExports();
   }
 });

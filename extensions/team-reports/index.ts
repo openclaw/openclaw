@@ -5,6 +5,10 @@ import {
   definePluginEntry,
   type OpenClawPluginServiceContextV2,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createPluginRuntimeProcessEntrypoint,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { z } from "zod";
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./src/config.js";
 import { createTeamReportsHttpHandler } from "./src/http.js";
@@ -97,15 +101,19 @@ export default definePluginEntry({
       }
       const nextStore = await createTeamReportsStore({
         stateDir: ctx.stateDir,
-        workerModuleUrl: new URL(
-          `./src/store.worker${path.extname(api.runtimeSource)}`,
-          pathToFileURL(api.runtimeSource),
+        workerModuleUrl: resolveRuntimeWorkerUrl(
+          createPluginRuntimeProcessEntrypoint(
+            "teamReportsStore",
+            pathToFileURL(api.runtimeSource).href,
+          ),
         ),
       });
       const runner = new TeamReportsRunner(
-        new URL(
-          `./src/run.worker${path.extname(api.runtimeSource)}`,
-          pathToFileURL(api.runtimeSource),
+        resolveRuntimeWorkerUrl(
+          createPluginRuntimeProcessEntrypoint(
+            "teamReportsRun",
+            pathToFileURL(api.runtimeSource).href,
+          ),
         ),
       );
       const nextScheduler = new TeamReportsScheduler({

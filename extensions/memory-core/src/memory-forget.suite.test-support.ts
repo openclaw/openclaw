@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -33,7 +32,7 @@ export function memoryForgetHarness() {
     get cfg() {
       return fixture.cfg;
     },
-    set cfg(value: OpenClawConfig) {
+    set cfg(value) {
       fixture.cfg = value;
     },
     get workspaceDir() {
@@ -80,13 +79,12 @@ export function memoryForgetHarness() {
         sessionKey: `agent:main:${sessionId}`,
         message,
       }),
-    seedSession: async (sessionId: string, agentId = "main") => {
-      await upsertSessionEntry({
+    seedSession: (sessionId: string, agentId = "main") =>
+      upsertSessionEntry({
         agentId,
         sessionKey: `agent:${agentId}:${sessionId}`,
         entry: { sessionId, updatedAt: 1_000 },
-      });
-    },
+      }),
   };
 }
 
@@ -124,36 +122,19 @@ export function memoryIndexFixture(
     chunk(
       id: string,
       filePath: string,
-      options: {
-        source?: string;
-        text?: string;
-        hash?: string;
-        model?: string;
-        endLine?: number;
-        embedding?: Uint8Array;
-      } = {},
-    ) {
-      const {
+      {
         source = "sessions",
         text = "forget",
         hash = "fixture-hash",
         model = "test",
         endLine = 1,
-        embedding = new Uint8Array(),
-      } = options;
-      db.prepare(`INSERT INTO memory_index_chunks
+        embedding = new Uint8Array<ArrayBufferLike>(new ArrayBuffer(0)),
+      } = {},
+    ) {
+      const insert = db.prepare(`INSERT INTO memory_index_chunks
         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`).run(
-        id,
-        filePath,
-        source,
-        1,
-        endLine,
-        hash,
-        model,
-        text,
-        embedding,
-      );
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`);
+      insert.run(id, filePath, source, 1, endLine, hash, model, text, embedding);
     },
     source(filePath: string, source: string, hash: string) {
       db.prepare(

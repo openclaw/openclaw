@@ -8,21 +8,24 @@ import { withOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-s
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
 
-const DAY_MS = 24 * 60 * 60 * 1_000;
+const MIDNIGHT = Date.UTC(2026, 0, 2);
 
-function runtime(
-  state: OpenClawTestState,
-  capacity?: number,
-): Parameters<typeof openXGuestUsage>[0] {
+function runtime(state: OpenClawTestState, capacity?: number) {
   return {
     state: {
       resolveStateDir: () => state.stateDir,
       openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
-        const bounded =
-          capacity === undefined || options.retention === "retained"
-            ? options
-            : { ...options, maxEntries: capacity };
-        return createPluginStateKeyedStoreForTests<T>("x", { ...bounded, env: state.env });
+        if (capacity !== undefined && options.retention !== "retained") {
+          return createPluginStateKeyedStoreForTests<T>("x", {
+            ...options,
+            maxEntries: capacity,
+            env: state.env,
+          });
+        }
+        return createPluginStateKeyedStoreForTests<T>("x", {
+          ...options,
+          env: state.env,
+        });
       },
     },
   };
@@ -35,7 +38,11 @@ const request = {
   assertCurrent() {},
 };
 
-beforeEach(() => resetPluginStateStoreForTests({ closeDatabase: false }));
+beforeEach(() => {
+  resetPluginStateStoreForTests({ closeDatabase: false });
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(MIDNIGHT - 1);
+});
 afterEach(() => {
   vi.useRealTimers();
   resetPluginStateStoreForTests({ closeDatabase: false });
@@ -44,20 +51,11 @@ afterEach(() => {
 describe("X guest daily usage", () => {
   it("keeps concurrent admissions within quota, deduplicates retries, and resets at UTC midnight", async () => {
     await withOpenClawTestState({ label: "x-guest-daily-usage" }, async (state) => {
-      const midnight = Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS;
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(midnight - 1);
       const host = runtime(state);
       const usage = openXGuestUsage(host);
-      const settled = await Promise.allSettled(
+      const results = await Promise.all(
         Array.from({ length: 6 }, (_, index) => usage.admit({ ...request, postId: String(index) })),
       );
-      const results = settled.map((result) => {
-        if (result.status === "rejected") {
-          throw result.reason;
-        }
-        return result.value;
-      });
       expect(results.filter(Boolean)).toHaveLength(2);
       expect(await usage.counts("default")).toEqual({ admittedToday: 2, rateLimitedToday: 4 });
 
@@ -76,7 +74,7 @@ describe("X guest daily usage", () => {
       expect(await usage.counts("default")).toEqual({ admittedToday: 3, rateLimitedToday: 5 });
       expect(await usage.counts("secondary")).toEqual({ admittedToday: 1, rateLimitedToday: 0 });
 
-      vi.setSystemTime(midnight);
+      vi.setSystemTime(MIDNIGHT);
       expect(await usage.counts("default")).toEqual({ admittedToday: 0, rateLimitedToday: 0 });
       expect(await usage.admit({ ...request, postId: admittedPostId })).toBe(true);
       expect(await usage.counts("default")).toEqual({ admittedToday: 0, rateLimitedToday: 0 });
@@ -105,9 +103,6 @@ describe("X guest daily usage", () => {
     ["UTC rollover", "usage day changed"],
   ])("does not spend stale quota after %s during a state read", async (change, message) => {
     await withOpenClawTestState({ label: "x-guest-usage-authority" }, async (state) => {
-      const midnight = Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS;
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(midnight - 1);
       const host = runtime(state);
       const open = host.state.openKeyedStore;
       const observed = Promise.withResolvers<void>();
@@ -117,10 +112,7 @@ describe("X guest daily usage", () => {
         return {
           ...store,
           withCurrent(authority) {
-            const bound = store.withCurrent?.(authority);
-            if (!bound) {
-              throw new Error("Missing real action-bound state capability");
-            }
+            const bound = store.withCurrent!(authority);
             return {
               ...bound,
               async observe(key) {
@@ -134,15 +126,11 @@ describe("X guest daily usage", () => {
         };
       };
       const usage = openXGuestUsage(host);
-      let current = true;
+      const authority = new AbortController();
       const pending = usage.admit({
         ...request,
         postId: "retired",
-        assertCurrent() {
-          if (!current) {
-            throw new Error("request retired");
-          }
-        },
+        assertCurrent: () => authority.signal.throwIfAborted(),
       });
       try {
         await awaitGateBeforeSettlement(
@@ -151,15 +139,15 @@ describe("X guest daily usage", () => {
           "Guest admission settled before its state read",
         );
         if (change === "UTC rollover") {
-          vi.setSystemTime(midnight);
+          vi.setSystemTime(MIDNIGHT);
         } else {
-          current = false;
+          authority.abort(new Error("request retired"));
         }
       } finally {
         resume.resolve();
       }
       await expect(pending).rejects.toThrow(message);
-      vi.setSystemTime(midnight - 1);
+      vi.setSystemTime(MIDNIGHT - 1);
       expect(await usage.counts("default")).toEqual({ admittedToday: 0, rateLimitedToday: 0 });
     });
   });

@@ -47,7 +47,7 @@ import { prepareChannelParticipantObservation } from "../../sessions/session-par
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { bindUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
-import { shouldDeferFinalTtsText } from "../../tts/captioned-final.js";
+import { shouldDeferFinalTtsText } from "../../tts/captioned-final-eligibility.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import type {
   ReplyDispatchRun,
@@ -56,6 +56,7 @@ import type {
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { createLazyAcpElicitationHandler } from "./acp-elicitation-handler-lazy.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
+import { resolveAcpProjectionSettings } from "./acp-stream-settings.js";
 import {
   collectDescribedImageAttachmentIndexes,
   loadAgentTurnMediaRuntime,
@@ -193,7 +194,7 @@ export async function tryDispatchAcpReplyCore(
       : resolveAgentIdFromSessionKey(canonicalSessionKey);
   const preparedTtsPreferences = params.preparedTtsPreferences ?? (await prepareTtsPreferences());
   await input.withCurrent(() => {});
-  const shouldDeferVisibleTextForTts = shouldDeferFinalTtsText({
+  const shouldDeferVisibleTextForTts = await shouldDeferFinalTtsText({
     preparedTtsPreferences,
     cfg: params.cfg,
     ttsAuto: params.sessionTtsAuto,
@@ -203,7 +204,7 @@ export async function tryDispatchAcpReplyCore(
     inboundAudio: params.inboundAudio,
   });
   let queuedFinal = false;
-  const delivery = createAcpDispatchDeliveryCoordinator({
+  const delivery = await createAcpDispatchDeliveryCoordinator({
     ...params,
     preparedTtsPreferences,
     agentId: acpAgentId,
@@ -275,11 +276,22 @@ export async function tryDispatchAcpReplyCore(
   }
   const deliverDeferredTextFallback = async (): Promise<boolean> =>
     shouldDeferVisibleTextForTts ? await delivery.recoverBlockText() : false;
+  const isLive = resolveAcpProjectionSettings(params.cfg).deliveryMode === "live";
+  let streamedText = "";
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
     shouldSendFullToolDetails: params.shouldSendFullToolDetails,
-    deliver: delivery.deliver,
+    deliver: async (kind, payload, meta) => {
+      const delivered = await delivery.deliver(kind, payload, meta);
+      const text = isLive && kind === "block" ? delivery.getVisibleBlockDisplayText() : "";
+      const delta = text.startsWith(streamedText) ? text.slice(streamedText.length) : text;
+      if (delta && !auditOnly && !params.suppressUserDelivery) {
+        auditRuntime.emitAcpAssistantDelta({ runId: auditRunId, text, delta });
+        streamedText = text;
+      }
+      return delivered;
+    },
     getConversationContext: () => params.ctx.agentText,
     onProgress: markAcpProgress,
     provider: params.ctx.Surface ?? params.ctx.Provider,

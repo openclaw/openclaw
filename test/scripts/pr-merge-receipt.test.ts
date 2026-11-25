@@ -209,7 +209,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     const run = expectExit(f.run(), 1);
     expect(run.output).toContain("PR or main changed during observation");
     expect(run.output).toContain(`Local outcome ref ${outcomeRef}: present`);
-    expect(run.output).toContain("investigate; see scripts/AGENTS.md merge-outcome doctrine");
+    expect(run.output).toContain("Follow docs/reference/scripts/merge-recovery.md");
     expect(run.output).not.toContain("rerun merge-run; if the operation lock was retained");
     expect(f.git(["rev-parse", outcomeRef])).toBe(before);
     expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });

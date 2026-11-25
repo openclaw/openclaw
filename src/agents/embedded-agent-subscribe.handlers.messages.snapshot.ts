@@ -3,12 +3,13 @@ import {
   createStreamingDirectiveAccumulator,
   splitTrailingDirective,
 } from "../auto-reply/reply/streaming-directives.js";
-import type { AssistantMessage } from "../llm/types.js";
+import type { AssistantHistoryMessage } from "../llm/types.js";
 import {
   assistantVisibleTextFilters,
   toolCallXmlTextFilter,
 } from "../shared/text/assistant-visible-text.js";
 import { findCodeRegions } from "../shared/text/code-regions.js";
+import { findNativeToolMarkerTextBlocks } from "../shared/text/native-tool-marker.js";
 import { applyTextFilters } from "../shared/text/text-projection.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
@@ -25,11 +26,18 @@ import {
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
 
-export function extractAssistantStreamSnapshot(
+export function extractAssistantStreamSnapshot<T extends AssistantHistoryMessage>(
   ctx: EmbeddedAgentSubscribeContext,
-  message: AssistantMessage,
-  options?: { final?: boolean; throughIndex?: number; observedText?: string },
+  message: T,
+  options?: {
+    final?: boolean;
+    throughIndex?: number;
+    observedText?: string;
+    nativeToolMarkerBlocks?: ReadonlySet<number>;
+  },
 ) {
+  const nativeToolMarkerBlocks =
+    options?.nativeToolMarkerBlocks ?? findNativeToolMarkerTextBlocks(message);
   let observedMessage = message;
   if (options?.throughIndex !== undefined && Array.isArray(message.content)) {
     const content = message.content.slice(0, options.throughIndex + 1);
@@ -66,11 +74,15 @@ export function extractAssistantStreamSnapshot(
     const preparedPart = protocol.sourceText.slice(preparedStart);
     // Final prose preserves inline tag examples; generic streams still hide reasoning.
     const preparedFinal = phase === "final_answer" && !ctx.params.enforceFinalTag;
-    const visible = preparedFinal
-      ? `${separator}${preparedPart}`
-      : ctx.stripBlockTags(`${separator}${preparedPart}`, state, {
-          final: final && options?.final !== false,
-        });
+    const hidden = index !== undefined && nativeToolMarkerBlocks.has(index);
+    // Hidden markers must not leave a pending tag that can consume later prose.
+    const visible = hidden
+      ? ""
+      : preparedFinal
+        ? `${separator}${preparedPart}`
+        : ctx.stripBlockTags(`${separator}${preparedPart}`, state, {
+            final: final && options?.final !== false,
+          });
     const previous = blockSources.at(-1);
     if (
       previous &&
@@ -86,7 +98,7 @@ export function extractAssistantStreamSnapshot(
         finalAnswer: preparedFinal,
       });
     }
-    return preparedFinal ? preparedPart : visible;
+    return hidden ? "" : preparedFinal ? preparedPart : visible;
   });
   const visibleBlockSource = blockSources
     .map(({ text, separator, finalAnswer }) => ({
@@ -129,6 +141,7 @@ export function extractAssistantStreamSnapshot(
     parts,
     blockText: blockReply.text,
     message: observedMessage,
+    nativeToolMarkerBlocks,
   };
 }
 
@@ -148,6 +161,7 @@ export function reconcileBlockReplySnapshot(
     const prefix = extractAssistantStreamSnapshot(ctx, snapshot.message, {
       throughIndex: index - 1,
       final: false,
+      nativeToolMarkerBlocks: snapshot.nativeToolMarkerBlocks,
     }).blockText;
     return prefix + (snapshot.parts.find((part) => part.index === index)?.separator ?? "");
   };

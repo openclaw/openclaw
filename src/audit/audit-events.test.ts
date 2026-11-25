@@ -15,6 +15,9 @@ import { createAgentEventAuditRecorder } from "./agent-event-audit.js";
 import {
   assertAuditOverflowRetention,
   assertAuditRetentionCountDrift,
+  assertAuditRunAtomicity,
+  assertAuditRunReplay,
+  assertAuditRunWarmWrite,
 } from "./audit-event-retention.test-support.js";
 import {
   listAuditEvents,
@@ -90,6 +93,10 @@ function captureAuditWriter(inputs: AuditEventInput[]): AuditEventWriter {
     ready: Promise.resolve(),
     record: (input) => {
       inputs.push(input);
+      return true;
+    },
+    recordRun: (start, finish) => {
+      inputs.push(start, finish);
       return true;
     },
     recordExecutionIdentity: () => true,
@@ -251,6 +258,18 @@ describe("audit event persistence", () => {
     );
     expect(next?.sequence).toBe(3);
     expect((await listAuditEvents({ database, limit: 10 })).events).toEqual([next, first]);
+  });
+
+  it("writes a warm run pair with one insert and no extra SQL", () => {
+    assertAuditRunWarmWrite(openOpenClawStateDatabase(createDatabaseOptions()));
+  });
+
+  it("completes whole and partial run-pair replays without duplicating event IDs", () => {
+    assertAuditRunReplay(openOpenClawStateDatabase(createDatabaseOptions()));
+  });
+
+  it("keeps run pairs atomic and rehydrates the sequence after rollback", () => {
+    assertAuditRunAtomicity(openOpenClawStateDatabase(createDatabaseOptions()));
   });
 
   it("repairs retention count drift once without repeated pruning reads", () => {
@@ -555,13 +574,14 @@ describe("agent activity audit projection", () => {
     );
     await recorder.stop();
 
-    expect(inputs.at(-1)).toMatchObject({
+    const toolInput = inputs.find((input) => input.kind === "tool_action");
+    expect(toolInput).toMatchObject({
       actorType: "system",
       actorId: "unknown",
       agentId: "unknown",
     });
-    expect(inputs.at(-1)).not.toHaveProperty("sessionKey");
-    expect(inputs.at(-1)).not.toHaveProperty("sessionId");
+    expect(toolInput).not.toHaveProperty("sessionKey");
+    expect(toolInput).not.toHaveProperty("sessionId");
   });
 
   it("omits prompt, arguments, results, and raw errors from run and tool records", () => {

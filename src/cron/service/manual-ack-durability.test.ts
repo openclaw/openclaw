@@ -43,6 +43,8 @@ async function admissionFixture(id: string, count: number, command = false) {
     name: command ? `manual-blocker-${index}` : job.name,
   }));
   await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
+  // No spare memory, so the blockers fill exactly the default run slots.
+  vi.spyOn(process, "availableMemory").mockReturnValue(0);
   return { storePath, job, blockers };
 }
 
@@ -70,6 +72,8 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
           import { writeSync } from "node:fs";
           import { CronService } from ${JSON.stringify(serviceUrl.href)};
           import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
+          // No spare memory, so the blockers fill exactly the default run slots.
+          process.availableMemory = () => 0;
           let started = 0;
           const { promise: blockersStarted, resolve: reportStarted } = Promise.withResolvers();
           const cron = new CronService({
@@ -78,7 +82,7 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
             cronEnabled: true,
             defaultAgentId: "main",
             log: { info() {}, warn() {}, error() {}, debug() {} },
-            enqueueSystemEvent() {}, requestHeartbeat() {},
+            enqueueSystemEvent() {},
             runIsolatedAgentJob: async () => { throw new Error("unexpected execution"); },
             runCommandJob: async ({ job }) => {
               if (!job.id.startsWith("manual-blocker-")) throw new Error("unexpected execution");
@@ -143,7 +147,6 @@ it.each(["removed", "write-failed"] as const)(
       cronEnabled: false,
       log: createNoopLogger(),
       enqueueSystemEvent() {},
-      requestHeartbeat() {},
       runIsolatedAgentJob: async (params) => {
         if (blockers.some((entry) => entry.id === params.job.id)) {
           if (++blockerCount === blockers.length) {

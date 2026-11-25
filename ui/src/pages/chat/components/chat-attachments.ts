@@ -1,5 +1,7 @@
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../../lib/uploads.ts";
 import {
@@ -12,6 +14,8 @@ import { currentAttachments } from "./chat-attachment-draft.ts";
 import { dataImageClipboardFile } from "./chat-attachment-image.ts";
 import { ChatAttachmentReadLifecycle, readChatAttachmentFile } from "./chat-attachment-reads.ts";
 import { encodeTextAsDataUrl } from "./chat-attachment-text.ts";
+
+registerChatComposerEnglish();
 
 const LARGE_PASTE_TEXT_THRESHOLD = 1000;
 
@@ -96,14 +100,14 @@ export function appendChatAttachmentFiles(
     return 0;
   }
   if (!uploadsEnabled(props.uploadConfig)) {
-    showToast({ message: uploadsDisabledMessage() });
+    showToast({ severity: "error", message: uploadsDisabledMessage() });
     return 0;
   }
   const unsupported = props.imagesOnly
     ? candidates.filter((file) => !file.type.startsWith("image/"))
     : [];
   if (unsupported.length) {
-    showToast({ message: t("chat.attachments.imagesOnly") });
+    showToast({ severity: "error", message: t("chat.attachments.imagesOnly") });
   }
   const reads = props.attachmentReads ?? new ChatAttachmentReadLifecycle(() => {});
   const stagedBytes = stagedAttachmentBytes(props);
@@ -114,7 +118,6 @@ export function appendChatAttachmentFiles(
     {
       resizeImages: true,
       compressVideos: true,
-      onRejected: (file, message) => reads.reject(file, message),
     },
   );
   if (files.length === 0) {
@@ -140,6 +143,39 @@ export function appendChatAttachmentFiles(
   return files.length;
 }
 
+// Chromium drops a native paste, after beforeinput and without input, when the
+// system clipboard changes while the paste event runs. Dictation tools such as
+// Wispr Flow restore the previous clipboard right after their Cmd+V, so the
+// event's own snapshot is the only reliable copy of the text. Native input
+// retires recovery even if a later edit restores the original value.
+// Like native paste, the recovered insert keeps to maxlength.
+// Accepted edge case: the recovered insert is outside the native undo stack.
+function recoverDroppedTextPaste(e: ClipboardEvent, text: string) {
+  const target = e.target;
+  if (!text || !(target instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  const { value, selectionStart: start, selectionEnd: end } = target;
+  const stopInput = listen(target, "input", () => clearTimeout(timer), { once: true });
+  const timer = setTimeout(() => {
+    stopInput();
+    if (
+      e.defaultPrevented ||
+      target.value !== value ||
+      target.disabled ||
+      target.readOnly ||
+      target.ownerDocument.activeElement !== target
+    ) {
+      return;
+    }
+    const room = target.maxLength < 0 ? text.length : target.maxLength - value.length + end - start;
+    target.setRangeText(text.slice(0, Math.max(0, room)), start, end, "end");
+    target.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: null }),
+    );
+  }, 0);
+}
+
 export function handleChatAttachmentPaste(
   e: ClipboardEvent,
   props: ChatAttachmentControlsProps,
@@ -152,12 +188,14 @@ export function handleChatAttachmentPaste(
     const hasFiles = Array.from(e.clipboardData.items ?? []).some(
       (item) => item.kind === "file" || item.type.startsWith("image/"),
     );
-    const hasInlineImage = /^data:image\//i.test(e.clipboardData.getData("text/plain").trim());
-    if (hasFiles || hasInlineImage) {
+    const text = e.clipboardData.getData("text/plain");
+    if (hasFiles || /^data:image\//i.test(text.trim())) {
       e.preventDefault();
-      showToast({ message: uploadsDisabledMessage() });
+      showToast({ severity: "error", message: uploadsDisabledMessage() });
+      return;
     }
     // Large text remains ordinary native paste instead of becoming a file.
+    recoverDroppedTextPaste(e, text);
     return;
   }
   const imageFiles = Array.from(e.clipboardData.items ?? [])
@@ -170,16 +208,18 @@ export function handleChatAttachmentPaste(
     imageFiles.push(pasted.file);
   }
   if (imageFiles.length === 0) {
-    if (options.imagesOnly || !text || text.length <= LARGE_PASTE_TEXT_THRESHOLD) {
+    if (
+      options.imagesOnly ||
+      !text ||
+      text.length <= LARGE_PASTE_TEXT_THRESHOLD ||
+      !(props.getDraft?.() ?? props.draft ?? "")
+    ) {
+      recoverDroppedTextPaste(e, text ?? "");
       return;
     }
+    // The card is composer presentation sent as message text, so upload limits do not apply.
     e.preventDefault();
     const file = new File([text], `pasted-text-${Date.now()}.txt`, { type: "text/plain" });
-    const stagedBytes = stagedAttachmentBytes(props);
-    if (admitAttachmentFiles([file], props.attachmentLimits, stagedBytes).length === 0) {
-      // The rejection toast named the file; the clipboard still holds the text.
-      return;
-    }
     const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text), "paste");
     props.onAttachmentsChange([...currentAttachments(props), attachment]);
     return;

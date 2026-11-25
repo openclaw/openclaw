@@ -121,29 +121,18 @@ describe("policy doctor metadata", () => {
   });
 
   it("declares how every policy rule is enforced", () => {
-    const rules = POLICY_RULE_METADATA;
-    // Every rule names either its doctor checks or the invariant that satisfies it, never
-    // both and never neither, so an accepted policy key cannot enforce nothing in silence.
     expect(
-      rules
-        .filter((rule) => rule.checkIds.length > 0 === (rule.satisfiedByInvariant !== undefined))
-        .map((rule) => rule.policyPath.join(".")),
-    ).toEqual([]);
-    const invariantSources = new Set(scanPolicyDataHandling({}).map((entry) => entry.source));
-    expect(
-      rules
-        .filter((rule) => rule.satisfiedByInvariant !== undefined)
-        .map((rule) => [
-          rule.policyPath.join("."),
-          rule.satisfiedByInvariant,
-          invariantSources.has(rule.satisfiedByInvariant ?? ""),
-        ]),
-    ).toEqual([
-      [
-        "dataHandling.sensitiveLogging.requireRedaction",
-        "oc://openclaw.invariant/logging/redaction",
-        true,
-      ],
-    ]);
+      POLICY_RULE_METADATA.filter((rule) => rule.checkIds.length === 0).map((rule) =>
+        rule.policyPath.join("."),
+      ),
+    ).toEqual(["dataHandling.sensitiveLogging.requireRedaction"]);
+    expect(scanPolicyDataHandling({})).toContainEqual({
+      id: "logging-redaction",
+      kind: "sensitiveLoggingRedaction",
+      source: "oc://openclaw.invariant/logging/redaction",
+      scope: "global",
+      value: true,
+      explicit: true,
+    });
   });
 });

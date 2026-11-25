@@ -1,17 +1,10 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../infra/device-pairing.js";
 import { resetLogger } from "../logging/logger.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -19,8 +12,10 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import type { GatewayClient, GatewayClientOptions } from "./client.js";
+import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
 const OLD_TOKEN = "shared-token-old";
 type ConfigSnapshot = { hash: string; config: OpenClawConfig };
@@ -31,7 +26,6 @@ const observation = vi.hoisted(() => ({
   pause: async (_phase: Phase) => {},
   beforeRequest: async (_options: GatewayRequestOptions) => {},
   settled: (_error?: unknown) => {},
-  indexWrites: [] as string[],
 }));
 
 // Hold existing async owner hooks; all installation, auth, storage, and activation remain real.
@@ -68,21 +62,6 @@ vi.mock("../plugins/management-mutations.js", async (importOriginal) => {
     },
   };
 });
-vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../plugins/installed-plugin-index-records.js")>();
-  return {
-    ...actual,
-    writePersistedInstalledPluginIndexInstallRecordsWithLease: (
-      ...args: Parameters<typeof actual.writePersistedInstalledPluginIndexInstallRecordsWithLease>
-    ) => {
-      observation.indexWrites.push(
-        ...Object.keys(args[0]).filter((id) => args[0][id]?.acceptedSurface),
-      );
-      return actual.writePersistedInstalledPluginIndexInstallRecordsWithLease(...args);
-    },
-  };
-});
 
 vi.mock(
   "./server/ws-connection/authenticated-request-dispatch.server-methods.runtime.js",
@@ -111,15 +90,8 @@ describe("gateway plugin install authority", () => {
     state = await createOpenClawTestState({
       label: "plugin-install-authority",
       env: {
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        ...KERNEL_TEST_ENV,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       },
     });
@@ -205,23 +177,14 @@ describe("gateway plugin install authority", () => {
   }
 
   async function openDeviceTokenClient(pluginId: string) {
-    const identity = loadOrCreateDeviceIdentity({
-      path: state.path(`${pluginId}-identity`, "client", "credentials.sqlite"),
-    });
     const client = { clientName: "test", mode: "test" } as const;
-    const pending = await requestDevicePairing({
-      deviceId: identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    const { identity, issued: rotated } = await pairOperatorDeviceFixture({
+      identityPath: state.path(`${pluginId}-identity`, "client", "credentials.sqlite"),
+      scopes: ["operator.admin"],
+      tokenScopes: ["operator.admin"],
       clientId: client.clientName,
       clientMode: client.mode,
-      role: "operator",
-      scopes: ["operator.admin"],
-    });
-    await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
-    const rotated = await rotateDeviceToken({
-      deviceId: identity.deviceId,
-      role: "operator",
-      scopes: ["operator.admin"],
+      callerScopes: ["operator.admin"],
     });
     expect(rotated).toMatchObject({ ok: true, entry: { token: expect.any(String) } });
     if (!rotated.ok) {
@@ -277,10 +240,6 @@ describe("gateway plugin install authority", () => {
   it.each([
     { label: "authorized", phase: "stage", action: "keep" },
     { label: "reconnect", phase: "stage", action: "disconnect" },
-    { label: "staged-revocation", phase: "stage", action: "revoke" },
-    { label: "disconnected-revocation", phase: "stage", action: "disconnect-revoke" },
-    { label: "index-revocation", phase: "index", action: "revoke" },
-    { label: "runtime-revocation", phase: "runtime", action: "revoke" },
   ] as const)(
     "$label preserves the initiating authority at $phase",
     async ({ label, phase, action }) => {
@@ -290,15 +249,13 @@ describe("gateway plugin install authority", () => {
       await state.writeJson(`${sourceDir}/package.json`, {
         name: pluginId,
         version: "1.0.0",
-        main: "index.cjs",
         openclaw: { extensions: ["./index.cjs"] },
       });
       await state.writeJson(`${sourceDir}/openclaw.plugin.json`, {
         id: pluginId,
-        name: pluginId,
         activation: { onStartup: true },
         contracts: { tools: [`${pluginId.replaceAll("-", "_")}_probe`] },
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
+        configSchema: { type: "object", additionalProperties: false },
       });
       await state.writeText(
         `${sourceDir}/index.cjs`,
@@ -309,11 +266,9 @@ describe("gateway plugin install authority", () => {
       );
       const admin = await connect({ token: OLD_TOKEN });
       const device = await openDeviceTokenClient(pluginId);
-      const before = await admin.client.request<ConfigSnapshot>("config.get");
       const reached = createDeferredCore();
       const release = createDeferredCore();
       const finished = createDeferredCore<{ error?: unknown }>();
-      observation.indexWrites = [];
       observation.pause = async (current) => {
         if (current === phase) {
           reached.resolve();
@@ -322,40 +277,21 @@ describe("gateway plugin install authority", () => {
       };
       observation.settled = (error) => finished.resolve({ error });
       const request = device.client.request("plugins.install", { source: "local", path: source });
-      // A revoked/disconnected socket loses its reply; the actual mutation still must settle safely.
+      // A disconnected socket loses its reply; the started install still settles.
       const reply = request.then(
         (result) => ({ result }),
         (error: unknown) => ({ error }),
       );
       try {
         await wait(
-          Promise.race([
+          awaitGateBeforeSettlement(
             reached.promise,
-            reply.then((response) => {
-              if ("error" in response) {
-                throw response.error;
-              }
-              throw new Error("Install replied before boundary");
-            }),
-            finished.promise.then(({ error }) => {
-              throw error instanceof Error
-                ? error
-                : new Error("Install settled before boundary", { cause: error });
-            }),
-          ]),
+            Promise.race([request, finished.promise]),
+            "Install settled before boundary",
+          ),
           "install boundary not reached",
         );
-        if (action === "disconnect-revoke") {
-          await device.client.stopAndWait();
-        }
-        if (action === "revoke" || action === "disconnect-revoke") {
-          await admin.client.request("device.token.revoke", {
-            deviceId: device.deviceId,
-            role: "operator",
-          });
-          await wait(device.closed, "revoked socket remained open");
-          await device.client.stopAndWait();
-        } else if (action === "disconnect") {
+        if (action === "disconnect") {
           await device.client.stopAndWait();
           // A fresh connection remains possible without treating ordinary disconnect as revocation.
           await device.reconnect();
@@ -374,30 +310,14 @@ describe("gateway plugin install authority", () => {
         }
         const records = await readPersistedInstalledPluginIndexInstallRecordsAsync();
         const after = await admin.client.request<ConfigSnapshot>("config.get");
-        const revoked = action === "revoke" || action === "disconnect-revoke";
-        const committed = !revoked || phase === "runtime";
-        expect(Boolean(records?.[pluginId]?.acceptedSurface)).toBe(committed);
-        expect(Boolean(after.config.plugins?.entries?.[pluginId]?.enabled)).toBe(committed);
+        expect(Boolean(records?.[pluginId]?.acceptedSurface)).toBe(true);
+        expect(Boolean(after.config.plugins?.entries?.[pluginId]?.enabled)).toBe(true);
         const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-        expect(persisted.plugins?.entries?.[pluginId]).toEqual(
-          committed ? { enabled: true } : undefined,
-        );
-        if (revoked) {
-          expect(settled.error).toBeDefined();
-          if (phase !== "runtime") {
-            expect(observation.indexWrites).not.toContain(pluginId);
-            expect(after.hash).toBe(before.hash);
-            await expect(fs.stat(state.path(`extensions/${pluginId}`))).rejects.toMatchObject({
-              code: "ENOENT",
-            });
-          }
-          await expect(admin.client.request(`${pluginId}.probe`)).rejects.toThrow();
-        } else {
-          expect(settled.error).toBeUndefined();
-          await expect(admin.client.request(`${pluginId}.probe`)).resolves.toEqual({
-            active: true,
-          });
-        }
+        expect(persisted.plugins?.entries?.[pluginId]).toEqual({ enabled: true });
+        expect(settled.error).toBeUndefined();
+        await expect(admin.client.request(`${pluginId}.probe`)).resolves.toEqual({
+          active: true,
+        });
       } finally {
         release.resolve();
         observation.pause = async () => {};

@@ -122,15 +122,6 @@ export async function resolveBackupConfigCapture(
       throw captureError(sourcePath, "file identity could not be pinned", error);
     }
   }
-  // Watch paths include both lexical and canonical names. Every one must belong
-  // to a successfully resolved, hash-pinned file, not a partially visited graph.
-  for (const includePath of snapshot.includedPaths ?? []) {
-    if (
-      !capture.some((file) => file.sourcePath === includePath || file.canonicalPath === includePath)
-    ) {
-      throw captureError(includePath, "include inventory is incomplete");
-    }
-  }
   return {
     files: capture,
     assertRootAlias,
@@ -217,11 +208,6 @@ export async function stageBackupConfigCapture(
     await fs.writeFile(stagedPath, bytes, { flag: "wx", mode: 0o600 });
     remaps.set(stagedPath, file.canonicalPath);
   }
-  await capture?.revalidate();
-  // Seal only after every dependency has been copied. Matching all authored
-  // bytes also pins the include edges; no second resolver or mixed retry.
-  for (const file of capture?.files ?? []) {
-    await readBackupConfigCaptureFile(file);
-  }
+  await capture?.assertRootAlias?.();
   return remaps;
 }

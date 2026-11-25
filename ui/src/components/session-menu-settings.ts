@@ -1,12 +1,15 @@
 import { createEffect, createSignal } from "solid-js";
+import type { SessionsPatchMutation } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
+import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import {
-  selectSessionCommunication,
-  type SessionCommunicationMenuAction,
-} from "./session-communication-options.ts";
 import { createSessionDetails } from "./session-details.ts";
+
+export type SessionCommunicationMenuAction = {
+  kind: "set-communication";
+  communication: NonNullable<SessionsPatchMutation["communication"]> | null;
+};
 
 type SessionMenuSettingsOptions = {
   context: () => ApplicationContext | undefined;
@@ -70,9 +73,8 @@ export function createSessionMenuSettings(options: SessionMenuSettingsOptions) {
     get communicationAvailable() {
       return Boolean(communicationState().session.effectiveCommunication);
     },
-    get error() {
-      return details.error();
-    },
+    read: details.read,
+    readKey: details.readKey,
     open() {
       setActive(true);
       details.synchronize();
@@ -83,11 +85,23 @@ export function createSessionMenuSettings(options: SessionMenuSettingsOptions) {
     },
     handleSelect(value: string) {
       if (value === "reload-settings") {
-        details.reset();
-        details.synchronize();
+        details.retry();
         return true;
       }
-      return selectSessionCommunication(value, options.runAction);
+      const runAction = options.runAction;
+      if (value === "communication:reset") {
+        runAction({ kind: "set-communication", communication: null });
+        return true;
+      }
+      if (!value.startsWith("communication:")) {
+        return false;
+      }
+      const [, direction, selected] = value.split(":");
+      const mode = SESSION_COMMUNICATION_MODES.find((candidate) => candidate === selected);
+      if ((direction === "send" || direction === "receive") && mode) {
+        runAction({ kind: "set-communication", communication: { [direction]: mode } });
+      }
+      return true;
     },
   };
 }

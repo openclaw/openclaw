@@ -26,7 +26,9 @@ export async function searchMemoryForCli(
   let readRebuildWarning: () => string | undefined = () => undefined;
   let results: MemorySearchResult[];
   try {
-    readRebuildWarning = captureMemoryRebuildNotice(await readMemorySearchManagerStatus(manager));
+    readRebuildWarning = captureMemoryRebuildNotice(
+      await readMemorySearchManagerStatus(manager, { includeCounts: false }),
+    );
     results = await manager.search(query, {
       maxResults: params.maxResults,
       minScore: params.minScore,
@@ -46,7 +48,7 @@ export async function searchMemoryForCli(
     );
   }
   assertCurrent?.();
-  const status = await readMemorySearchManagerStatus(manager);
+  const status = await readMemorySearchManagerStatus(manager, { includeCounts: false });
   const staleness = resolveMemorySearchStaleness(status, agentId);
   let warning = [staleness?.warning, readRebuildWarning()].filter(Boolean).join(" ");
   const pluginConfig = resolvePluginConfigObject(cfg, "memory-core") ?? {};

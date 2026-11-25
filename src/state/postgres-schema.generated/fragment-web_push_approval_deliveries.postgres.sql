@@ -9,7 +9,7 @@ CREATE TABLE "web_push_approval_deliveries" (
   PRIMARY KEY ("approval_id", "subscription_id")
 );
 
-CREATE INDEX "idx_web_push_approval_deliveries_subscription" ON "web_push_approval_deliveries" (("subscription_id") ASC NULLS FIRST, ("approval_id") ASC NULLS FIRST);
+CREATE INDEX "idx_web_push_approval_deliveries_subscription" ON "web_push_approval_deliveries" (("subscription_id") ASC, ("approval_id") ASC);
 
 ALTER TABLE "web_push_approval_deliveries" ADD FOREIGN KEY ("subscription_id") REFERENCES "web_push_subscriptions" ("subscription_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 

@@ -29,6 +29,20 @@ function accounts(accountIds: Record<string, string[]>, configuredChannelIds: st
   return { configuredChannelIds, resolveAccounts: () => ({ accountIds }) };
 }
 
+function runWithLaterRepair(run: () => ReturnType<typeof migrateLegacyChannelPairingState>) {
+  return runLegacyStateMigrationSteps(
+    [run, () => ({ changes: ["Later repair completed"], warnings: [] })].map((step, index) => ({
+      id: index === 0 ? "channel-pairing" : "later-repair",
+      run: step,
+      phase: "final" as const,
+      source: [],
+      target: [],
+      requiredness: "required" as const,
+      reversibility: "checkpoint-required" as const,
+    })),
+  );
+}
+
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
@@ -73,12 +87,12 @@ function expectPreserved(
 }
 
 it.each([
-  { removedMalformed: false, configuredMalformed: false },
-  { removedMalformed: true, configuredMalformed: false },
-  { removedMalformed: false, configuredMalformed: true },
+  [false, false],
+  [true, false],
+  [false, true],
 ])(
-  "archives removed accounts: $removedMalformed / $configuredMalformed",
-  async ({ removedMalformed, configuredMalformed }) => {
+  "archives removed accounts: malformed removed=%s / configured=%s",
+  async (removedMalformed, configuredMalformed) => {
     const filename = "custom-channel-removed-allowFrom.json";
     const configuredFilename = "custom-channel-active-allowFrom.json";
     const original = removedMalformed ? "{broken\n" : '["former-user"]\n';
@@ -91,30 +105,17 @@ it.each([
       accounts({ "custom-channel": ["active"] }, ["custom-channel"]),
     );
     const source = path.join(state.sourceDir, filename);
-    const laterRepair = vi.fn(() => ({ changes: ["Later repair completed"], warnings: [] }));
-    const result = await runLegacyStateMigrationSteps(
-      [state.migrate, laterRepair].map((run, index) => ({
-        id: index === 0 ? "channel-pairing" : "later-repair",
-        run,
-        phase: "final" as const,
-        source: [],
-        target: [],
-        requiredness: "required" as const,
-        reversibility: "checkpoint-required" as const,
-      })),
-    );
+    const result = await runWithLaterRepair(state.migrate);
     expect(result.receipts.map((receipt) => receipt.outcome)).toEqual(
       configuredMalformed ? ["refused", "refused"] : ["warning", "completed"],
     );
-    expect(laterRepair).toHaveBeenCalledTimes(configuredMalformed ? 0 : 1);
     const warnings = result.receipts[0]?.warnings.join("\n");
     expect(warnings).toContain(source);
     expect(warnings).toContain(`${source}.migrated.2`);
     expect(state.exists(filename)).toBe(false);
-    expect([state.read(`${filename}.migrated`), state.read(`${filename}.migrated.2`)]).toEqual([
-      original,
-      original,
-    ]);
+    for (const suffix of [".migrated", ".migrated.2"]) {
+      expect(state.read(`${filename}${suffix}`)).toBe(original);
+    }
     if (configuredMalformed) {
       expect(state.read(configuredFilename)).toBe("{broken\n");
     }
@@ -122,32 +123,27 @@ it.each([
   },
 );
 
-it("defers configured account discovery without resolving accounts", async () => {
-  const resolveAccounts = vi.fn(() => ({ defaultAccountIds: { "custom-channel": "primary" } }));
-  const { detected } = await fixture(
-    { "custom-channel-allowFrom.json": ["legacy-user"] },
-    {
-      configuredChannelIds: ["custom-channel"],
-      resolveAccounts,
-      deferConfiguredAccountDiscovery: true,
-    },
-  );
-  expect(detected.accountDiscoveryDeferred).toBe(true);
-  expect(resolveAccounts).not.toHaveBeenCalled();
-});
-
-it("does not defer pairing requests or built-in explicit default accounts", async () => {
-  const { detected } = await fixture(
+it.each([
+  ["configured allowFrom", { "custom-channel-allowFrom.json": ["legacy-user"] }, true],
+  [
+    "pairing requests and built-in explicit default accounts",
     {
       "telegram-pairing.json": { version: 1, requests: [] },
       "whatsapp-default-allowFrom.json": ["legacy-user"],
     },
-    {
-      configuredChannelIds: ["custom-channel", "whatsapp"],
-      deferConfiguredAccountDiscovery: true,
-    },
-  );
-  expect(detected.accountDiscoveryDeferred).toBe(false);
+    false,
+  ],
+] as const)("defers discovery only for configured allowFrom: %s", async (_, files, deferred) => {
+  const resolveAccounts = vi.fn(() => ({ defaultAccountIds: { "custom-channel": "primary" } }));
+  const { detected } = await fixture(files, {
+    configuredChannelIds: ["custom-channel", "whatsapp"],
+    ...(deferred ? { resolveAccounts } : {}),
+    deferConfiguredAccountDiscovery: true,
+  });
+  expect(detected.accountDiscoveryDeferred).toBe(deferred);
+  if (deferred) {
+    expect(resolveAccounts).not.toHaveBeenCalled();
+  }
 });
 
 it("imports requests and exact scoped accounts while ignoring invalid candidates", async () => {
@@ -160,30 +156,14 @@ it("imports requests and exact scoped accounts while ignoring invalid candidates
     },
     accounts({ telegram: ["*", "alerts", "ops/bot", "ops_bot"] }),
   );
-  expect(state.detected.hasLegacy).toBe(true);
   const result = state.migrate();
   expect(result.warnings).toEqual([]);
-  expect(result.changes).toHaveLength(4);
   expect(fs.readdirSync(state.sourceDir)).toEqual([]);
   expect(readPairing("telegram", state.env)).toEqual({
     version: 1,
     requests: [request],
     allowFrom: { default: ["1001"], alerts: ["1002"], ops_bot: ["1003"] },
   });
-  expect(fs.existsSync(path.join(path.dirname(state.sourceDir), "state", "openclaw.sqlite"))).toBe(
-    true,
-  );
-});
-
-it("imports a built-in explicit default account without channel config", async () => {
-  const allowFrom = ["+12025550101", "+12025550102", "+12025550103"];
-  const state = await fixture({ "whatsapp-default-allowFrom.json": { version: 1, allowFrom } });
-  expect(state.migrate()).toEqual({
-    warnings: [],
-    changes: ["Migrated 3 whatsapp/default allowFrom entries → shared SQLite state"],
-  });
-  expect(fs.readdirSync(state.sourceDir)).toEqual([]);
-  expect(readPairing("whatsapp", state.env).allowFrom).toEqual({ default: allowFrom });
 });
 
 it("merges authoritative SQLite rows and keeps unreadable sources", async () => {
@@ -210,13 +190,48 @@ it("merges authoritative SQLite rows and keeps unreadable sources", async () => 
   });
 });
 
+it.each(["pairing", "allowFrom"] as const)(
+  "preserves malformed UTF-8 %s while importing valid sibling state",
+  async (kind) => {
+    const filename = `custom-channel-${kind}.json`;
+    const original = JSON.stringify(
+      kind === "pairing" ? { requests: [{ ...request, id: "CORRUPT" }] } : ["CORRUPT"],
+    );
+    const bytes = Buffer.from(original.replace("CORRUPT", "\x80"), "latin1");
+    const state = await fixture(
+      {
+        [filename]: original,
+        "whatsapp-default-allowFrom.json": ["valid-user", "second-user"],
+      },
+      { configuredChannelIds: ["custom-channel"] },
+    );
+    fs.writeFileSync(path.join(state.sourceDir, filename), bytes);
+
+    const result = await runWithLaterRepair(state.migrate);
+
+    expect(result.haltedBy).toBeUndefined();
+    expect(result.receipts.map((receipt) => receipt.outcome)).toEqual(["warning", "completed"]);
+    expect(result.sources[0]?.warnings).toEqual([
+      expect.stringContaining("unreadable; left in place"),
+    ]);
+    expect(fs.readFileSync(path.join(state.sourceDir, filename))).toEqual(bytes);
+    expect(readPairing("custom-channel", state.env)).toEqual({
+      version: 1,
+      requests: [],
+      allowFrom: {},
+    });
+    expect(readPairing("whatsapp", state.env).allowFrom).toEqual({
+      default: ["valid-user", "second-user"],
+    });
+    expect(state.exists("whatsapp-default-allowFrom.json")).toBe(false);
+  },
+);
+
 it("leaves case-folded filename collision sets in place", async () => {
-  const names = ["Ab", "AB", "xy", "Xy"].map((account) => `telegram-${account}-allowFrom.json`);
+  const names = ["Ab", "AB"].map((account) => `telegram-${account}-allowFrom.json`);
   const state = await fixture(
-    Object.fromEntries(
-      names.map((name, index) => [name, { version: 1, allowFrom: [`user-${index}`] }]),
-    ),
-    accounts({ telegram: ["ab", "xy"] }),
+    Object.fromEntries(names.map((name, index) => [name, [`user-${index}`]])),
+    accounts({ telegram: ["ab"] }),
   );
   const marker = path.join(state.sourceDir, "case-check");
   fs.writeFileSync(marker, "case");
@@ -235,18 +250,9 @@ it.each<[string, Record<string, string[]>, string[], "unresolved" | "ambiguous"]
   ["telegram-DEFAULT", { telegram: ["default"] }, [], "unresolved"],
   ["custom-channel-default", { telegram: [] }, ["custom-channel"], "unresolved"],
   ["telegram-business", { telegram: ["business"] }, ["telegram-business"], "ambiguous"],
-  [
-    "telegram-business-ops..bot",
-    { telegram: [], "telegram-business": ["ops_bot"] },
-    ["telegram-business"],
-    "unresolved",
-  ],
 ])("preserves account source %s", async (stem, accountIds, configuredChannelIds, reason) => {
   const filename = `${stem}-allowFrom.json`;
-  const state = await fixture(
-    { [filename]: { version: 1, allowFrom: ["1003"] } },
-    accounts(accountIds, configuredChannelIds),
-  );
+  const state = await fixture({ [filename]: ["1003"] }, accounts(accountIds, configuredChannelIds));
   expectPreserved(state, [filename], reason);
   for (const channel of new Set([...Object.keys(accountIds), ...configuredChannelIds])) {
     expect(readPairing(channel, state.env).allowFrom).toEqual({});

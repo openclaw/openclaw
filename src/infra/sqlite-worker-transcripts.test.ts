@@ -14,7 +14,7 @@ import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { withoutMainThreadSql as withoutParentSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { persistTranscriptSummary } from "../transcripts/capture-summary.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
@@ -23,10 +23,6 @@ import {
   getTranscriptLibrary,
   listTranscriptLibrary,
 } from "../transcripts/library.js";
-import type {
-  TranscriptSessionDescriptor,
-  TranscriptUtterance,
-} from "../transcripts/provider-types.js";
 import { readTranscriptLibraryStatus } from "../transcripts/status.js";
 import {
   TranscriptSessionConflictError,
@@ -36,6 +32,7 @@ import * as exportOwnership from "../transcripts/store-export-ownership.js";
 import { TranscriptLibraryError } from "../transcripts/store-read.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../transcripts/store.js";
 import { summarizeTranscripts } from "../transcripts/summary.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "../transcripts/types.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
@@ -137,17 +134,6 @@ function retireAt(stage: workerAdmission.SqliteWorkerAdmissionRequest["stage"]) 
   };
 }
 
-async function withoutParentSql<T>(operation: () => Promise<T>): Promise<T> {
-  const sql = observeMainThreadSql();
-  try {
-    const result = await operation();
-    sql.expectIdle();
-    return result;
-  } finally {
-    sql.restore();
-  }
-}
-
 async function withoutParentTranscriptSql(operation: () => Promise<void>) {
   const prepared = new WeakSet<StatementSync>();
   const observed: { databasePath: string | null; sql?: unknown }[] = [];
@@ -221,7 +207,7 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
       await store.readLatestEntry(),
       await store.readSession("missing"),
       await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "claws.install-schema-versions",
+        type: "templates.install-schema-versions",
         input: { artifactPreservingReadOnly: true },
       }),
     ]).toEqual([
@@ -519,7 +505,7 @@ it("returns complete stored reads and typed errors after existing-only status an
     expect(await store.readUtterancesForSession(session)).toEqual(
       storedUtterances(session, utterances),
     );
-    expect(await store.readUtterancesForSession(session, { maxUtterances: 3 })).toEqual(
+    expect((await store.readSummarySnapshot(session, 3))?.utterances).toEqual(
       storedUtterances(session, utterances.slice(-3)),
     );
     expect((await store.readSummary(session)).summary).toEqual(summary);

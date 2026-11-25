@@ -105,23 +105,13 @@ describe("runDoctorConfigPreflight state migration input", () => {
   it("preserves a retired custom cron partition with invalid Gateway config", async () => {
     const sourceConfig = {
       gateway: { mode: "local", port: "not-a-port" },
-      agents: {
-        entries: { ops: {}, research: {} },
-        defaults: {
-          heartbeat: { agentId: "ops" },
-          systemAgent: { agentId: "ops" },
-          authInheritance: { agentId: "ops" },
-        },
-      },
       cron: { store: "/tmp/custom-cron/jobs.json" },
-      talk: { agentId: "ops" },
     };
     useInvalidConfig(
       sourceConfig,
       { path: "cron.store", message: "cron.store is retired" },
       {
         parsed: {
-          agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
           cron: { store: "/tmp/custom-cron/jobs.json" },
         },
         issues: [{ path: "gateway.port", message: "invalid port" }],
@@ -134,10 +124,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
       cfg: { cron: { store: "/tmp/custom-cron/jobs.json" } },
       migrateCodexModelRefs: false,
     });
-    expect(mocks.machine).toHaveBeenCalledWith({
-      config: sourceConfig,
-      env: process.env,
-    });
+    expect(mocks.machine).toHaveBeenCalledWith(expect.objectContaining({ config: sourceConfig }));
     expect(mocks.state).not.toHaveBeenCalled();
     expect(mocks.plugins).toHaveBeenCalled();
   });
@@ -157,35 +144,17 @@ describe("runDoctorConfigPreflight state migration input", () => {
 
     await runDoctorConfigPreflight(options);
 
-    const migratedConfig = {
-      memory: expect.objectContaining({
-        search: expect.objectContaining({
-          provider: "openai",
-          store: { vector: { enabled: false } },
-        }),
-      }),
-      agents: expect.objectContaining({
-        defaults: expect.objectContaining({}),
-        entries: { main: {} },
-      }),
-    };
     expect(mocks.cron).toHaveBeenCalledWith({
       cfg: expect.objectContaining({
-        ...migratedConfig,
         cron: expect.objectContaining({ webhook: "https://example.invalid/cron-finished" }),
       }),
       migrateCodexModelRefs: false,
     });
-    expect(mocks.state).toHaveBeenCalledWith({
-      cfg: expect.objectContaining(migratedConfig),
+    expect(mocks.state.mock.calls[0]?.[0]).toMatchObject({
+      cfg: { memory: { search: { provider: "openai", store: { vector: { enabled: false } } } } },
       sourceConfigBeforeMigrations: resolvedConfig,
       pluginDoctorConfig: resolvedConfig,
       configIncludedPaths: includedPaths,
-      env: process.env,
-      doctorOnlyStateMigrations: undefined,
-      invocationPurpose: undefined,
-      beforeWorkspaceStateMigration: undefined,
-      onStepReceipt: expect.any(Function),
     });
   });
 

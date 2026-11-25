@@ -1,6 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import type { SkillStatusReport } from "../../api/types.ts";
+import type { FastMode, SkillStatusReport } from "../../api/types.ts";
 import { resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
 import {
   currentConfigObject,
@@ -38,6 +38,22 @@ export function createAgentConfigActions(params: {
       }
     });
   }
+  function setFallbacks(
+    agentId: string,
+    field: "model" | "utilityModel",
+    fallbacks: string[] | null,
+  ) {
+    return edit(agentId, fallbacks !== null, (config, target) => {
+      stage(
+        config,
+        [...target.path, field],
+        modelShape(
+          existingModelParts(target.entry[field]).primary,
+          fallbacks === null ? null : normalizeStringEntries(fallbacks),
+        ),
+      );
+    });
+  }
   return {
     models: {
       onModelChange: (agentId: string, modelId: string | null) => {
@@ -57,17 +73,38 @@ export function createAgentConfigActions(params: {
         edit(agentId, modelId !== null, (config, target) =>
           stage(config, [...target.path, "decisionModel"], modelId ?? undefined),
         ),
-      onModelFallbacksChange: (agentId: string, fallbacks: string[]) =>
-        edit(agentId, true, (config, target) => {
+      // null inherits the default primary; "" disables utility for this agent.
+      // The agent's own utility fallbacks survive every choice.
+      onUtilityModelChange: (agentId: string, modelId: string | null) =>
+        edit(agentId, modelId !== null, (config, target) => {
+          const { fallbacks } = existingModelParts(target.entry.utilityModel);
+          stage(config, [...target.path, "utilityModel"], modelShape(modelId, fallbacks));
+        }),
+      // null inherits agents.defaults.subagents.model; own fallbacks and sibling settings survive.
+      onSubagentModelChange: (agentId: string, modelId: string | null) =>
+        edit(agentId, modelId !== null, (config, target) => {
+          const subagents = asNullableRecord(target.entry.subagents);
+          const { fallbacks } = existingModelParts(subagents?.model);
+          const model = modelShape(modelId, fallbacks);
+          const siblings = Object.keys(subagents ?? {}).some((key) => key !== "model");
           stage(
             config,
-            [...target.path, "model"],
-            modelShape(
-              existingModelParts(target.entry.model).primary,
-              normalizeStringEntries(fallbacks),
-            ),
+            [...target.path, "subagents", ...(model === undefined && !siblings ? [] : ["model"])],
+            model,
           );
         }),
+      onThinkingDefaultChange: (agentId: string, level: string | null) =>
+        edit(agentId, level !== null, (config, target) =>
+          stage(config, [...target.path, "thinkingDefault"], level ?? undefined),
+        ),
+      onFastModeDefaultChange: (agentId: string, mode: FastMode | null) =>
+        edit(agentId, mode !== null, (config, target) =>
+          stage(config, [...target.path, "fastModeDefault"], mode ?? undefined),
+        ),
+      onModelFallbacksChange: (agentId: string, fallbacks: string[] | null) =>
+        setFallbacks(agentId, "model", fallbacks),
+      onUtilityFallbacksChange: (agentId: string, fallbacks: string[] | null) =>
+        setFallbacks(agentId, "utilityModel", fallbacks),
     },
     tools: {
       onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) =>
@@ -92,16 +129,25 @@ export function createAgentConfigActions(params: {
           if (!skillName.trim()) {
             return;
           }
-          stage(
-            config,
-            [...target.path, "skills"],
-            nextAgentSkillAllowlist({
-              configured: resolveAgentSkillsFilter(currentConfigObject(config.state), agentId),
-              report: params.getReport(),
-              skillName: skillName.trim(),
-              enabled,
-            }),
+          const path = [...target.path, "skills"];
+          const configured = resolveAgentSkillsFilter(currentConfigObject(config.state), agentId);
+          const report = params.getReport();
+          const selectedSkillName = skillName.trim();
+          // The first toggle snapshots reported skills; learned Workshop skills bypass allowlists.
+          const next = new Set(
+            configured ??
+              report?.agentSkillFilter ??
+              report?.skills
+                .filter((skill) => skill.name && !isWorkshopSkill(skill))
+                .map((skill) => skill.name) ??
+              [],
           );
+          if (enabled) {
+            next.add(selectedSkillName);
+          } else {
+            next.delete(selectedSkillName);
+          }
+          stage(config, path, [...next]);
         }),
       onDisableAll: (agentId: string) =>
         edit(agentId, true, (config, target) => stage(config, [...target.path, "skills"], [])),
@@ -119,11 +165,9 @@ function stage(config: RuntimeConfigCapability, path: Array<string | number>, va
 
 // Keep bare strings, fallback-only overrides, and explicit empty fallback chains.
 function modelShape(primary: string | null, fallbacks: unknown[] | null) {
-  return !primary && !fallbacks
-    ? undefined
-    : primary && fallbacks
-      ? { primary, fallbacks }
-      : primary || { fallbacks };
+  return fallbacks
+    ? { ...(primary !== null ? { primary } : {}), fallbacks }
+    : (primary ?? undefined);
 }
 
 function existingModelParts(existing: unknown): {
@@ -131,34 +175,11 @@ function existingModelParts(existing: unknown): {
   fallbacks: unknown[] | null;
 } {
   if (typeof existing === "string") {
-    return { primary: existing.trim() || null, fallbacks: null };
+    return { primary: existing, fallbacks: null };
   }
   const record = asNullableRecord(existing);
   return {
-    primary: typeof record?.primary === "string" ? record.primary.trim() || null : null,
+    primary: typeof record?.primary === "string" ? record.primary : null,
     fallbacks: Array.isArray(record?.fallbacks) ? record.fallbacks : null,
   };
-}
-
-// The first toggle snapshots reported skills; learned Workshop skills bypass allowlists.
-function nextAgentSkillAllowlist(params: {
-  configured: string[] | undefined;
-  report: SkillStatusReport | null;
-  skillName: string;
-  enabled: boolean;
-}): string[] {
-  const next = new Set(
-    params.configured ??
-      params.report?.agentSkillFilter ??
-      params.report?.skills
-        .filter((skill) => skill.name && !isWorkshopSkill(skill))
-        .map((skill) => skill.name) ??
-      [],
-  );
-  if (params.enabled) {
-    next.add(params.skillName);
-  } else {
-    next.delete(params.skillName);
-  }
-  return [...next];
 }

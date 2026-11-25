@@ -11,7 +11,6 @@ import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
   withExistingOpenClawStateDatabaseReadOnly,
-  withExistingOpenClawStateDatabaseCurrentReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -87,21 +86,18 @@ export async function readAcpSessionMetaForEntries(
 }
 
 /** Read metadata for an already selected entry without loading its session row again. */
-export async function readAcpSessionMetaForEntryAsync(
-  params: {
-    sessionKey: string;
-    agentId?: string;
-    cfg?: OpenClawConfig;
-    entry: AcpSessionEntryBinding | undefined;
-    env?: NodeJS.ProcessEnv;
-    databasePath?: string;
-  },
-  options: { current?: true; signal?: AbortSignal } = {},
-): Promise<SessionAcpMeta | undefined> {
+export async function readAcpSessionMetaForEntryAsync(params: {
+  sessionKey: string;
+  agentId?: string;
+  cfg?: OpenClawConfig;
+  entry: AcpSessionEntryBinding | undefined;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+}): Promise<SessionAcpMeta | undefined> {
   if (!params.sessionKey.trim()) {
     return undefined;
   }
-  const [metadata] = await readAcpSessionMetaForEntries({ ...params, entries: [params] }, options);
+  const [metadata] = await readAcpSessionMetaForEntries({ ...params, entries: [params] });
   return metadata ?? undefined;
 }
 
@@ -129,24 +125,13 @@ export function rowToAcpSessionMeta(
 }
 
 export function readAcpSessionMetaForEntry(
-  params: {
-    sessionKey: string;
-    agentId?: string;
-    cfg?: OpenClawConfig;
-    entry: AcpSessionEntryBinding | undefined;
-    env?: NodeJS.ProcessEnv;
-    databasePath?: string;
-  },
-  options: { current?: true } = {},
+  params: Parameters<typeof readAcpSessionMetaForEntryAsync>[0],
 ): SessionAcpMeta | undefined {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return undefined;
   }
-  const read = options.current
-    ? withExistingOpenClawStateDatabaseCurrentReadOnly
-    : withExistingOpenClawStateDatabaseReadOnly;
-  const row = read(
+  const row = withExistingOpenClawStateDatabaseReadOnly(
     ({ db }) =>
       resolveReadableAcpSessionRow({
         row: selectAcpSessionRowForStoreEntry(db, sessionKey, params.agentId, params.entry),

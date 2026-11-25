@@ -5,10 +5,9 @@ import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 const ALLOWED_PLUGIN_ICON_MIME_TYPES = new Set(["image/png", "image/svg+xml", "image/x-icon"]);
 export const SVG_ARTWORK_MIME_TYPES = new Set(["image/svg+xml"]);
 export const THEME_BACKGROUND_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
-type PluginIconAuthSource = Parameters<typeof resolveControlUiAuthCandidates>[0];
 
 type FetchProxiedIconParams = {
-  auth: PluginIconAuthSource;
+  auth: Parameters<typeof resolveControlUiAuthCandidates>[0];
   authCandidates?: readonly string[];
   resourceBasePath: string;
   gatewayUrl: string;

@@ -4,6 +4,7 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { createZeroUsage } from "../../packages/ai/src/utils/usage.js";
 import type { Usage } from "../llm/types.js";
 
 export type ContextUsage = NonNullable<Usage["contextUsage"]>;
@@ -16,16 +17,21 @@ type PromptTokenDetails = {
   cache_creation_input_tokens?: number;
 };
 
-export type UsageLike = {
+type UsageTokenFields = {
   input?: number;
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
   cacheWrite1h?: number;
+  cacheWrite5m?: number;
   cacheTelemetry?: Usage["cacheTelemetry"];
   contextUsage?: ContextUsage;
   usageReport?: Usage["usageReport"];
+  reasoningTokens?: number;
   total?: number;
+};
+
+export type UsageLike = UsageTokenFields & {
   // Common alternates across providers/SDKs.
   inputTokens?: number;
   outputTokens?: number;
@@ -39,7 +45,6 @@ export type UsageLike = {
   cache_creation_input_tokens?: number;
   // Anthropic splits cache writes by TTL; the 1h subset is billed at a higher rate.
   cache_creation?: { ephemeral_1h_input_tokens?: number };
-  reasoningTokens?: number;
   reasoning_tokens?: number;
   completion_tokens_details?: { reasoning_tokens?: number };
   output_tokens_details?: { reasoning_tokens?: number; thinking_tokens?: number };
@@ -68,17 +73,7 @@ export type UsageLike = {
   cost?: Partial<Usage["cost"]>;
 };
 
-export type NormalizedUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  cacheWrite1h?: number;
-  cacheTelemetry?: Usage["cacheTelemetry"];
-  contextUsage?: ContextUsage;
-  usageReport?: Usage["usageReport"];
-  reasoningTokens?: number;
-  total?: number;
+export type NormalizedUsage = UsageTokenFields & {
   cost?: Pick<Usage["cost"], "total" | "totalOrigin"> &
     Partial<Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">>;
   /** Aggregated candidate prices are authoritative, including zero and unavailable totals. */
@@ -90,20 +85,7 @@ export type OpenAiChatCompletionsUsage = ReturnType<typeof toOpenAiChatCompletio
 export type AssistantUsageSnapshot = Usage;
 
 export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
-    },
-  };
+  return createZeroUsage();
 }
 
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
@@ -205,6 +187,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   const cacheWrite1h = normalizeTokenCount(
     raw.cacheWrite1h ?? raw.cache_creation?.ephemeral_1h_input_tokens,
   );
+  const cacheWrite5m = normalizeTokenCount(raw.cacheWrite5m);
 
   const directInput = asFiniteNumber(raw.input);
   const rawInputValue =
@@ -282,9 +265,18 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   }
 
   if (
-    [input, output, cacheRead, cacheWrite, contextUsage, reasoningTokens, total, cost].every(
-      (value) => value === undefined,
-    )
+    [
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      cacheWrite1h,
+      cacheWrite5m,
+      contextUsage,
+      reasoningTokens,
+      total,
+      cost,
+    ].every((value) => value === undefined)
   ) {
     return undefined;
   }
@@ -295,6 +287,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     cacheRead,
     cacheWrite,
     ...(cacheWrite1h !== undefined ? { cacheWrite1h } : {}),
+    ...(cacheWrite5m !== undefined ? { cacheWrite5m } : {}),
     ...(raw.cacheTelemetry?.state === "available" || raw.cacheTelemetry?.state === "unavailable"
       ? { cacheTelemetry: { state: raw.cacheTelemetry.state } }
       : {}),
@@ -395,11 +388,9 @@ export function toOpenAiResponsesUsage(usage: NormalizedUsage | undefined) {
   };
 }
 
-export function derivePromptTokens(usage?: {
-  input?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-}): number | undefined {
+export function derivePromptTokens(
+  usage?: Pick<UsageTokenFields, "input" | "cacheRead" | "cacheWrite">,
+): number | undefined {
   if (!usage) {
     return undefined;
   }
@@ -456,11 +447,17 @@ export function deriveSessionTotalTokens(params: {
   contextTokens?: number;
   promptTokens?: number;
 }): number | undefined {
-  // SessionEntry.totalTokens is an unclamped prompt/context snapshot, excluding
-  // completion tokens. Display layers own percentage caps.
-  const tokens = deriveContextPromptTokens(params);
+  // Only the last request owns context occupancy; billing totals can span requests.
   const currentUsage = params.lastCallUsage ?? params.usage;
-  return currentUsage?.usageReport?.state === "available"
+  const promptTokens = deriveContextPromptTokens(params);
+  const tokens =
+    currentUsage?.contextUsage?.state === "available"
+      ? currentUsage.contextUsage.totalTokens
+      : promptTokens === undefined
+        ? undefined
+        : promptTokens + (currentUsage?.output ?? 0);
+  return currentUsage?.usageReport?.state === "available" ||
+    currentUsage?.contextUsage?.state === "available"
     ? asNonNegativeFiniteNumber(tokens)
     : asPositiveFiniteNumber(tokens);
 }

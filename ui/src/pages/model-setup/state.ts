@@ -18,7 +18,7 @@ export const MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS = null;
 export type ModelSetupPageState =
   | { phase: "loading" }
   | { phase: "ready"; result: SystemAgentSetupDetectResult }
-  | { phase: "detect-error"; message: string };
+  | { phase: "detect-error" };
 
 export function preparedModelPageState(
   result: SystemAgentSetupDetectResult,
@@ -59,6 +59,14 @@ export type ModelSetupVerifyState =
   | { phase: "ok"; modelRef: string; modelTarget?: "utility"; latencyMs?: number }
   | { phase: "failed"; status: ModelSetupVerifyFailure["status"]; error: string };
 
+export type ModelSetupWizardStartMethod =
+  | "mcp.authLogin"
+  | "models.authLogin"
+  | "openclaw.setup.auth.start"
+  | "openclaw.setup.prepare.start"
+  | "openclaw.setup.activate.start"
+  | "openclaw.setup.runtime.start";
+
 export type ModelSetupWizardResult =
   | WizardNextResult
   | { done: true; status: "not-admitted"; error: string };
@@ -67,6 +75,7 @@ export type ModelSetupWizardRecovery = {
   sessionId: string;
   authChoice: string;
   authKind?: ProviderLoginOption["kind"];
+  selectModel?: boolean;
 };
 
 type ModelSetupWizardPhase =
@@ -82,9 +91,13 @@ type ModelSetupWizardPhase =
     }
   | { phase: "done" }
   | { phase: "cancelled"; message: string }
-  | { phase: "error"; message: string };
+  | { phase: "error"; message: string; reason?: string };
 
-export type ModelSetupWizardState = ModelSetupWizardPhase & { authLabel?: string };
+// authBrandId is the Gateway-supplied brand of the selected sign-in, not its choice id.
+export type ModelSetupWizardState = ModelSetupWizardPhase & {
+  authLabel?: string;
+  authBrandId?: string;
+};
 export type ModelSetupWizardDraft = { stepId: string | null; value: unknown };
 
 export type ModelSetupState = {
@@ -98,10 +111,8 @@ export type ModelSetupState = {
   manualApiKey: string;
   manualError: string | null;
   moreSignInOpen: boolean;
-  nativeSessionCatalogsEnabled: boolean;
   iconUrls: Record<string, string>;
   setupRefreshWarning: string | null;
-  detectionError: string | null;
   detectionRequest: object | null;
   cancellationNotice: string | null;
 };
@@ -118,10 +129,8 @@ export function createModelSetupState(): ModelSetupState {
     manualApiKey: "",
     manualError: null,
     moreSignInOpen: false,
-    nativeSessionCatalogsEnabled: false,
     iconUrls: {},
     setupRefreshWarning: null,
-    detectionError: null,
     detectionRequest: null,
     cancellationNotice: null,
   };
@@ -142,7 +151,7 @@ export function updateModelSetupWizardDraft(
 
 export function activationTimeoutForKind(kind: string): number {
   // Match the Gateway-owned provider-auth wizard lifetime, including user sign-in.
-  if (kind === "provider-auth") {
+  if (kind === "provider-auth" || kind === "provider-login") {
     return 25 * 60 * 1000;
   }
   return MODEL_SETUP_ACTIVATE_TIMEOUT_MS;
@@ -212,10 +221,17 @@ export function wizardStateFromResult(
   if (result.done && result.status === "done") {
     return { phase: "done" };
   }
-  return {
-    phase: result.status === "cancelled" ? "cancelled" : "error",
-    message: formatUiExternalText(result.error, fallbackError),
-  };
+  const cancelled = result.status === "cancelled";
+  // The Gateway ends its own wizard sessions with the bare word "cancelled"; show our sentence instead.
+  const error = cancelled && result.error?.trim().toLowerCase() === "cancelled" ? "" : result.error;
+  const message = formatUiExternalText(error, fallbackError);
+  return cancelled
+    ? { phase: "cancelled", message }
+    : {
+        phase: "error",
+        message,
+        ...("reason" in result && result.reason ? { reason: result.reason } : {}),
+      };
 }
 
 export function initialWizardValue(step: WizardStep): unknown {

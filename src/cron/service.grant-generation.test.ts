@@ -27,7 +27,6 @@ it("preserves grant generations across non-definition edits and advances changed
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   await cron.start();

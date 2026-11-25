@@ -1,4 +1,4 @@
-import { registerListener } from "../../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { outboxPayloadMatchesOwner } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -15,10 +15,10 @@ type InitialTurnHandoff = {
 };
 
 let pending: InitialTurnHandoff | null = null;
-const listeners = new Set<() => void>();
+const listeners = createChangeListeners();
 
 export function subscribeInitialTurnHandoff(listener: () => void): () => void {
-  return registerListener(listeners, listener);
+  return listeners.subscribe(listener);
 }
 
 function clearPending(releaseAttachments: boolean): void {
@@ -41,9 +41,7 @@ export function prepareInitialTurnHandoff(
   clearPending(true);
   const timer = globalThis.setTimeout(() => clearPending(true), INITIAL_TURN_HANDOFF_TTL_MS);
   pending = { item, sessionKey, timer, retryAfter };
-  for (const listener of listeners) {
-    listener();
-  }
+  listeners.publish();
 }
 
 export function takeInitialTurnHandoff(

@@ -18,6 +18,8 @@ import {
   type RpcRequest,
   type RpcResponse,
   type CodexServerNotification,
+  type CodexConfigReadResponse,
+  type JsonObject,
 } from "./protocol.js";
 import {
   registerCodexTestSessionIdentity,
@@ -47,12 +49,62 @@ export function createLifecycleRequest(
   });
 }
 
+export const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
+  "features.reasoning_effort_override": true,
+  project_doc_max_bytes: 131_072,
+  "features.tool_suggest": false,
+  "features.recommended_plugins": false,
+  "features.goals": false,
+  "tools.update_plan.enabled": false,
+  "features.code_mode": true,
+  "features.code_mode_only": false,
+  "features.shell_tool": true,
+  "features.apply_patch_streaming_events": true,
+  suppress_unstable_features_warning: true,
+  "features.standalone_web_search": false,
+  web_search: "cached",
+} as const;
+
+export function nativeQuestionConfigFixture(enabled: boolean | undefined): CodexConfigReadResponse {
+  const metadata = {
+    name: { type: "user" as const, file: "/synthetic/codex/config.toml", profile: null },
+    version: "question-config",
+  };
+  const config: JsonObject =
+    enabled === undefined ? {} : { tools: { experimental_request_user_input: { enabled } } };
+  return {
+    // The typed tools projection omits this key; the winning raw layer retains it.
+    config: { tools: { web_search: null } },
+    origins:
+      enabled === undefined ? {} : { "tools.experimental_request_user_input.enabled": metadata },
+    layers: [
+      { ...metadata, config },
+      {
+        name: { type: "project", dotCodexFolder: "/synthetic/untrusted/.codex" },
+        version: "disabled-question-config",
+        config: { tools: { experimental_request_user_input: { enabled: true } } },
+        disabledReason: "Project is not trusted",
+      },
+    ],
+  };
+}
+
 type NativeFixtureThread = {
   response: Record<string, unknown>;
   thread: Record<string, unknown>;
   loaded: boolean;
   subscribed: boolean;
 };
+
+export function readEmptyNativeConfig(method: string) {
+  if (method === "config/read") {
+    return { config: {}, origins: {}, layers: [] };
+  }
+  if (method === "configRequirements/read") {
+    return { requirements: null };
+  }
+  throw new Error(`unexpected method: ${method}`);
+}
 
 /** A synthetic native server, not a client mock: requests still cross the real wire and guards. */
 export function createCodexLifecycleHarness(options: {
@@ -103,7 +155,10 @@ export function createCodexLifecycleHarness(options: {
     }
     if (request.method === "thread/read") {
       if (!current) {
-        throw new Error(`Unknown synthetic native thread: ${threadId}`);
+        throw new CodexAppServerRpcError(
+          { code: -32_600, message: `thread not loaded: ${threadId}` },
+          request.method,
+        );
       }
       return {
         thread: {
@@ -520,7 +575,6 @@ export function createAppServerOptions(): CodexAppServerRuntimeOptions {
       headers: {},
     },
     codeModeOnly: false,
-    loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
     approvalPolicy: "never",
     approvalsReviewer: "user",

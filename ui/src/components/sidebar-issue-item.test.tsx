@@ -6,9 +6,10 @@ import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT } from "../app/native-link-routing.ts";
 import { createApplicationOverlays } from "../app/overlays.ts";
-import type { ConfirmAndStartUpdateParams } from "../app/update-confirmation.ts";
 import { updateRunHarness } from "../app/update-run.test-support.ts";
+import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
@@ -65,7 +66,10 @@ it("renders a dismiss control only when the producer supplies the action", () =>
   expect(find(".sidebar-issues-panel__dismiss")).toBeNull();
   const onDismiss = vi.fn();
   render(() => <SidebarIssueItem item={item} handlers={{ ...shared, onDismiss }} />);
-  find(".sidebar-issues-panel__dismiss")?.click();
+  const dismiss = find(".sidebar-issues-panel__dismiss");
+  expect(dismiss?.getAttribute("aria-label")).toBe("Dismiss Nightly backup");
+  expect(dismiss?.hasAttribute("title")).toBe(false);
+  dismiss?.click();
   expect(onDismiss).toHaveBeenCalledOnce();
 });
 
@@ -115,10 +119,10 @@ describe("renderSidebarMentionItem", () => {
     const summary = details.querySelector("summary")!;
     const title = summary.querySelector(".sidebar-issues-panel__entity")!;
     expect(title.textContent).toBe("Release notes");
-    expect(title.nextElementSibling?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "Riley mentioned you · 5m ago",
+    expect(title.nextElementSibling?.textContent?.trim()).toBe("5m ago");
+    expect(summary.querySelector(".sidebar-issues-panel__state")?.textContent).toBe(
+      "Riley mentioned you",
     );
-    expect(summary.querySelector(".sidebar-issues-panel__chevron svg")).not.toBeNull();
     expect(container.querySelectorAll("[data-issue-row-focus]")).toHaveLength(1);
     expect(summary.hasAttribute("data-issue-row-focus")).toBe(true);
     expect(details).toMatchObject({ open: false });
@@ -143,7 +147,6 @@ describe("renderSidebarMentionItem", () => {
     summary.click();
     const dismiss = summary.querySelector<HTMLButtonElement>("button")!;
     expect(dismiss.getAttribute("aria-label")).toBe("Dismiss Release notes");
-    expect(dismiss.textContent?.trim()).toBe("");
     dismiss.click();
     expect(details.open).toBe(false);
     expect(onDismiss).toHaveBeenCalledOnce();
@@ -166,13 +169,6 @@ describe("renderSidebarMentionItem", () => {
   );
 });
 
-type UpdateCard = HTMLElement & {
-  updateComplete: Promise<boolean>;
-  prepareRetry: NonNullable<ConfirmAndStartUpdateParams["prepareRetry"]>;
-  canUpdate: boolean;
-  canNativeUpdate: boolean;
-  onCheckStatus?: () => Promise<boolean>;
-};
 function updateFixture(
   request: Parameters<typeof updateRunHarness>[0],
   hello: Partial<NonNullable<ApplicationContext["gateway"]["snapshot"]["hello"]>> = {},
@@ -201,7 +197,7 @@ function renderUpdate(
       watchUpdateProgress: undefined,
     }),
   );
-  return container.querySelector<UpdateCard>("openclaw-sidebar-update-card")!;
+  return container.querySelector<HTMLElement>("openclaw-sidebar-update-card")!;
 }
 const freshStatusCall = ["update.status", { refreshCheckout: true }, { timeoutMs: null }] as const;
 describe("renderSidebarUpdateSurface", () => {
@@ -214,10 +210,18 @@ describe("renderSidebarUpdateSurface", () => {
     async (revokeAccess) => {
       const entered = createDeferred();
       const response = createDeferred<unknown>();
-      const request = vi.fn(async () => {
-        entered.resolve();
-        return response.promise;
+      const run = createUpdateRunFixture({
+        status: "failed",
+        phase: "finished",
+        reason: "build-failed",
+        finishedAtMs: Date.now(),
       });
+      const request = vi
+        .fn(async () => {
+          entered.resolve();
+          return response.promise;
+        })
+        .mockResolvedValueOnce({ lastRun: run });
       const harness = updateFixture(request);
       const fresh = {
         channel: "dev",
@@ -228,13 +232,20 @@ describe("renderSidebarUpdateSurface", () => {
         upstreamRef: "origin/main",
         commitsBehind: 9,
       };
-      let preparing: Promise<unknown> | undefined;
+      const restoreDialog = installDialogPolyfill();
       try {
+        await vi.waitFor(() => expect(harness.overlays.snapshot.updateRun?.runId).toBe(run.runId));
         const card = renderUpdate(harness.context);
-        await card.updateComplete;
+        card.querySelector("summary")!.click();
+        card.querySelector<HTMLButtonElement>(".sidebar-issues-panel__action")!.click();
+        const { modal } = await getRenderedModalDialog(document.body);
         render(null);
         expect(card.isConnected).toBe(false);
-        preparing = card.prepareRetry();
+        const retry = [...modal.querySelectorAll("button")].find(
+          (button) => button.textContent?.trim() === "Retry update",
+        );
+        expect(retry).toBeDefined();
+        retry!.click();
         await entered.promise;
         if (revokeAccess) {
           harness.update({
@@ -245,16 +256,30 @@ describe("renderSidebarUpdateSurface", () => {
           });
         }
         response.resolve({ updateAvailable: fresh });
-        const target = await preparing;
         if (revokeAccess) {
-          expect(target).toBeNull();
+          await vi.waitFor(() =>
+            expect(modal.textContent).toContain(
+              "Couldn’t refresh update status. Check your connection and try again.",
+            ),
+          );
+          expect(modal.querySelector(".update-confirmation-details")).toBeNull();
         } else {
-          expect(target).toMatchObject({ updateAvailable: fresh });
+          await vi.waitFor(() => expect(modal.textContent).toContain("cccccccc"));
+          expect(modal.textContent).toContain("9 commits behind");
         }
         expect(request).toHaveBeenCalledWith(...freshStatusCall);
+        expect(request).not.toHaveBeenCalledWith(
+          "update.run",
+          expect.anything(),
+          expect.anything(),
+        );
       } finally {
         response.resolve({ updateAvailable: fresh });
-        await preparing;
+        await vi.dynamicImportSettled();
+        document
+          .querySelector("openclaw-modal-dialog")
+          ?.dispatchEvent(new CustomEvent("modal-cancel"));
+        restoreDialog();
       }
     },
   );
@@ -272,16 +297,25 @@ describe("renderSidebarUpdateSurface", () => {
         features: { methods: [method] },
       });
       const card = renderUpdate(harness.context, vi.fn());
-      await card.updateComplete;
-      expect(card).toMatchObject({ canUpdate: false, canNativeUpdate });
-      expect(Boolean(card.onCheckStatus)).toBe(canCheck);
+      vi.stubGlobal("webkit", { messageHandlers: { openclawUpdate: { postMessage: vi.fn() } } });
+      window.dispatchEvent(new Event(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT));
+      flush();
+      expect(
+        card.querySelector(".sidebar-update-card__action")?.getAttribute("aria-disabled"),
+      ).toBe(canNativeUpdate ? null : "true");
+      vi.stubGlobal("webkit", undefined);
+      window.dispatchEvent(new Event(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT));
+      flush();
+      expect(
+        card.querySelector(".sidebar-update-card__action")?.getAttribute("aria-disabled"),
+      ).toBe("true");
       const details = card.querySelector("details")!;
       const expanded = new Promise<void>((resolve) => {
         details.addEventListener("toggle", () => resolve(), { once: true });
       });
       details.open = true;
       await expanded;
-      await card.updateComplete;
+      flush();
       if (canCheck) {
         expect(request).toHaveBeenCalledWith(...freshStatusCall);
       } else {
@@ -321,12 +355,73 @@ describe("renderSidebarUpdateSurface", () => {
         ),
       };
       const dismiss = vi.fn();
-      const card = renderUpdate(context, () => dismiss(dismissal));
-      await card.updateComplete;
+      renderUpdate(context, () => dismiss(dismissal));
+      flush();
       expect(container.textContent).toContain(state === "visible" ? "OpenClaw updated" : "3.0.0");
       find(".sidebar-issues-panel__dismiss")!.click();
       expect(dismiss).toHaveBeenCalledExactlyOnceWith(expected);
       expect(overlays.snapshot.updateRunAcknowledged).toBe(state === "acknowledged");
     },
   );
+
+  it("leads with the restart that finishes the plugin updates its last run owes", async () => {
+    const now = Date.parse("2026-11-18T12:00:00Z");
+    vi.useFakeTimers({ now, toFake: ["Date"] });
+    // The update.status reply shape a live Gateway sent during an owed-plugin retry countdown
+    // (installed-package owed-plugin-retry Docker cell): the installing run succeeded but owes
+    // plugin convergence, nothing newer is available, and the campaign has no target.
+    const lastRun = createUpdateRunFixture({
+      status: "succeeded",
+      phase: "finished",
+      trigger: "cli",
+      after: { version: "2026.9.2" },
+      steps: [
+        { step: "finished", status: "completed" },
+        { step: "finalize:owed:plugin-convergence", status: "skipped", detail: "unreachable" },
+      ],
+      finishedAtMs: now - 5 * 60_000,
+    });
+    const schedule = {
+      channel: "stable",
+      autoEnabled: true,
+      install: { kind: "package" },
+      campaign: {
+        id: "campaign-owed",
+        state: "countdown",
+        announcedAtMs: now - 15_000,
+        applyAtMs: now + 45_000,
+        forceAtMs: now + 15 * 60_000,
+        updatedAtMs: now - 15_000,
+      },
+    };
+    const { overlays, context } = updateFixture(
+      async () => ({
+        sentinel: null,
+        lastRun,
+        updateAvailable: null,
+        effectiveChannel: "stable",
+        schedule,
+      }),
+      {
+        server: { version: "2026.9.2", bootId: "fixture-boot" },
+        features: { methods: ["update.run", "update.status", "update.hold"] },
+      },
+    );
+    await overlays.refreshUpdateStatus();
+    expect(overlays.snapshot.updateRun?.runId).toBe(lastRun.runId);
+
+    // The run's outcome dismissal would otherwise hide the restart with it.
+    expect(resolveSidebarUpdateAttention(context)?.dismissal).toBeNull();
+    const card = renderUpdate(context);
+    expect(card.querySelector(".sidebar-issues-panel__entity")?.textContent).toBe(
+      "Finishing update",
+    );
+    expect(card.querySelector(".sidebar-issues-panel__state")?.textContent).toBe(
+      "Restarting in 0:45 to finish plugin updates",
+    );
+    expect(card.querySelector(".sidebar-update-card__hold")?.textContent?.trim()).toBe("Hold 1 h");
+    expect(card.querySelector(".sidebar-update-card__title")?.textContent).toBe(
+      "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1); 1 warning needs attention.",
+    );
+  });
 });

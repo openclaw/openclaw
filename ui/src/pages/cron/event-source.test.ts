@@ -1,9 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import { buildCronSchedule, hasUnchangedCronSchedule } from "../../lib/cron/form-schedule.ts";
-import { createInitialCronState, startCronEdit, validateCronForm } from "../../lib/cron/index.ts";
+import { validateCronForm } from "../../lib/cron/form.ts";
+import { createInitialCronState, startCronEdit } from "../../lib/cron/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { attribute, fillInput, testId } from "./cron-assertions.test-support.ts";
+import { attribute, fillInput } from "./cron-assertions.test-support.ts";
 import * as events from "./event-source.ts";
 import { createCronViewJob, renderCronView, scheduledJob } from "./view.test-support.ts";
 
@@ -32,6 +33,7 @@ const source = {
   error: null,
   events: [definition],
   servers: ["deployments"],
+  serversError: null,
   subscriptions: [],
   statusError: null,
   onRefresh: vi.fn(),
@@ -134,10 +136,10 @@ it("retains current diagnostics when the catalog fails and ignores retired sourc
   expect(controller.loading).toBe(false);
 });
 
-it("renders the real event editor, schema error, and subscription replay gap", () => {
+it("renders the real event editor, schema error, and subscription replay gap", async () => {
   const onFormChange = vi.fn();
   const job = createCronViewJob("event-job", { schedule: buildCronSchedule(form), state: {} });
-  const container = renderCronView({
+  const container = await renderCronView({
     form,
     editingJob: job,
     onFormChange,
@@ -165,8 +167,7 @@ it("renders the real event editor, schema error, and subscription replay gap", (
   expect(onFormChange).toHaveBeenCalledWith({ eventArguments: args.value });
   expect(container.textContent).toContain("Replay gap:");
   expect(container.querySelector("#cron-cron-expr")).toBeNull();
-  expect(container.querySelector(testId("cron-submit-run"))).toBeNull();
-  expect(container.textContent).not.toContain("Delete after run");
+  expect(container.textContent).not.toContain("Delete after it runs");
   for (const field of ["eventServer", "eventName"]) {
     expect(container.querySelector(`#cron-error-${field}`)).not.toBeNull();
   }

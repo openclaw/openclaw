@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
 import { postNativeExternalLink } from "../../app/native-link-routing.ts";
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import type { BrowserRequestClient } from "./browser-client.ts";
@@ -13,8 +14,10 @@ import {
   isBrowserNavigationBlockedError,
   navigateBrowser,
   openBrowserTab,
+  requestBrowserOperatorControl,
   startBrowser,
 } from "./browser-client.ts";
+import { createBrowserPanelControl } from "./browser-panel-control.ts";
 import { createBrowserPanelDownload, type BrowserPanelDownload } from "./browser-panel-download.ts";
 import { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
 import { createBrowserPanelNative, type BrowserPanelNative } from "./browser-panel-native-owner.ts";
@@ -28,13 +31,22 @@ import type { BrowserPanelMode, BrowserPanelState } from "./browser-panel-state.
 import { BrowserPanelStream } from "./browser-panel-stream.ts";
 import { BrowserPanelViewportOwner } from "./browser-panel-viewport-owner.ts";
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
-import { normalizeBrowserUrlDraft } from "./browser-url.ts";
+import {
+  normalizeBrowserUrlDraft,
+  normalizeChromePageUrlDraft,
+  resolveBrowserAddressInput,
+} from "./browser-url.ts";
+
+registerBrowserEnglish();
 
 export type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 
 /** Synchronous browser navigation, capture and input authority; the view owns its lifetime. */
 export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
   let activeClient: GatewayBrowserClient | null = null;
+  // The shown error came from the person's own action. Passive refreshes and
+  // viewport sync keep it visible; the next action or a different error replaces it.
+  let errorFromAction = false;
   const operations = createBrowserPanelOperations(host);
   const pendingInput = new BrowserPanelPendingInput();
   const initialState: BrowserPanelState = {
@@ -45,12 +57,15 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     view: null,
     loading: false,
     errorText: null,
+    errorRetry: null,
     noticeText: null,
     mode: "interact",
     strokes: [],
     inspected: null,
     inspectPointer: null,
     evaluateUnavailable: false,
+    controlling: false,
+    controlAvailable: false,
     urlDraft: "",
     pendingNewTab: false,
     urlDraftEditing: false,
@@ -85,6 +100,13 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     },
 
     setState<Key extends keyof BrowserPanelState>(key: Key, value: BrowserPanelState[Key]): void {
+      // Recovery belongs to the displayed failure, not to the next operation.
+      if (key === "errorText" && value === null) {
+        panel.errorRetry = null;
+      }
+      if (key === "errorText") {
+        errorFromAction = false;
+      }
       if (Object.is(panel[key], value)) {
         return;
       }
@@ -158,13 +180,30 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       panel.setState("pendingNewTab", false);
       // Re-probe per connection: another gateway may have evaluate enabled.
       panel.setState("evaluateUnavailable", false);
+      control.reset();
     },
 
-    reportError(error: unknown): void {
+    reportError(error: unknown, retry: (() => Promise<unknown>) | null = null): void {
       const detail = isBrowserNavigationBlockedError(error)
         ? t("browser.navigationBlocked")
         : formatUiError(error);
+      panel.setState("errorRetry", retry);
       panel.setState("errorText", t("browser.errors.requestFailed", { error: detail }));
+    },
+
+    async retryEmptyError(): Promise<void> {
+      if (!panel.errorText || !host.available || !host.isConnected || !host.browserPanelIsOpen()) {
+        return;
+      }
+      // An explicit retry or refresh is the person's action; it replaces their error.
+      errorFromAction = false;
+      if (panel.errorRetry) {
+        await panel.errorRetry();
+      } else if (panel.running === false && !host.fixedTab) {
+        await panel.startBrowserNow();
+      } else {
+        await panel.refreshAll();
+      }
     },
 
     async refreshAll(): Promise<void> {
@@ -174,7 +213,9 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         return;
       }
       const invocation = operations.beginSnapshot(client);
-      panel.setState("errorText", null);
+      if (!errorFromAction) {
+        panel.setState("errorText", null);
+      }
       if (!native.activeTab && !stream.ownsView(panel.activeTargetId)) {
         panel.setState("loading", true);
       }
@@ -191,6 +232,9 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         }
         panel.setState("running", snapshot.running);
         panel.setState("canAutoResizeViewport", snapshot.canAutoResizeViewport);
+        if (active) {
+          control.probe(client);
+        }
         panel.setState(
           "tabs",
           native.mergeRemoteTabs(operations.retainTabSnapshot(client, snapshot.tabs)),
@@ -235,6 +279,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     async runAction(
       action: (client: BrowserRequestClient) => Promise<void>,
       refreshView = true,
+      { passive = false }: { passive?: boolean } = {},
     ): Promise<boolean> {
       const client = operations.captureClient();
       if (!client) {
@@ -243,7 +288,9 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       const epoch = operations.epoch;
       const current = () => operations.isLive(epoch, client);
       try {
-        panel.setState("errorText", null);
+        if (!passive) {
+          panel.setState("errorText", null);
+        }
         await action(client);
         if (current() && refreshView) {
           snapshots.scheduleRefresh(epoch, current);
@@ -257,6 +304,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
           panel.setState("evaluateUnavailable", true);
         }
         panel.reportError(error);
+        errorFromAction = !passive;
         if (!operations.hasPendingCapture) {
           panel.setState("loading", false);
         }
@@ -409,9 +457,22 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         return;
       }
       if (route && browserRouteKey(operations.route) !== browserRouteKey(route)) {
+        const controlledClient = panel.controlling ? operations.captureClient() : null;
+        if (controlledClient) {
+          // Control belongs to the browser being left; hand it back to the agent there.
+          void requestBrowserOperatorControl(controlledClient, "release").catch(() => {});
+        }
         operations.resetRoute(route);
         panel.resetBrowserState();
       } else if (targetId === panel.activeTargetId && !route) {
+        return;
+      } else if (
+        options?.focusBrowserTab === false &&
+        stream.ownsView(panel.activeTargetId) &&
+        panel.tabs.find((tab) => tab.id === targetId || tab.targetId === targetId)?.id ===
+          panel.activeTargetId
+      ) {
+        // A newer session result for the tab already streaming here keeps the live view.
         return;
       }
       const client = operations.captureClient();
@@ -452,6 +513,8 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         if (!selectedTargetId) {
           return;
         }
+        // Following an agent's tab skips refreshAll; ask about takeover for this route here too.
+        control.probe(actionClient);
         if (options?.focusBrowserTab !== false) {
           await focusBrowserTab(actionClient, selectedTargetId);
         }
@@ -537,6 +600,19 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       await host.updateComplete;
     },
 
+    /** Take control from the agent, or hand it back. */
+    toggleControl(): void {
+      const take = !panel.controlling;
+      panel.setState("noticeText", null);
+      void panel.runAction(async (client) => {
+        const status = await requestBrowserOperatorControl(client, take ? "take" : "release");
+        panel.setState("controlling", status.byYou);
+        if (status.byYou) {
+          control.watch();
+        }
+      }, false);
+    },
+
     /** Real page reload: re-navigate to the current URL, then re-capture. A bare
      * screenshot refresh would leave the remote document untouched. */
     reloadPage(): void {
@@ -553,7 +629,8 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         return;
       }
       const url = panel.view?.metrics?.url || panel.view?.url || panel.urlDraft;
-      const normalized = normalizeBrowserUrlDraft(url);
+      // Chrome pages open only in a new tab, so reload repaints them instead of navigating.
+      const normalized = normalizeChromePageUrlDraft(url) ? null : normalizeBrowserUrlDraft(url);
       if (panel.activeTargetId) {
         void (normalized
           ? panel.openUrl(normalized, { newTab: false })
@@ -577,12 +654,25 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       void panel.runAction((client) => goBrowserHistory(client, { targetId, delta }));
     },
 
-    commitUrlDraft(): void {
-      const url = normalizeBrowserUrlDraft(panel.urlDraft);
-      if (!url) {
-        return;
+    /**
+     * Opens the draft, or `address` when the toolbar's "Go to" option is picked.
+     * Returns false when the draft can be neither opened nor searched, so the toolbar can say so.
+     */
+    commitUrlDraft(address?: string): boolean {
+      if (!panel.urlDraft.trim()) {
+        return true;
       }
-      void panel.openUrl(url, { newTab: panel.pendingNewTab || panel.tabs.length === 0 });
+      // The search resolver rejects chrome:, so a typed Chrome page is checked first.
+      const chromePage = address === undefined ? normalizeChromePageUrlDraft(panel.urlDraft) : null;
+      const url = address ?? chromePage ?? resolveBrowserAddressInput(panel.urlDraft);
+      if (!url) {
+        return false;
+      }
+      // Chrome pages always get their own tab, so a tab the agent uses never turns into one.
+      void panel.openUrl(url, {
+        newTab: chromePage !== null || panel.pendingNewTab || panel.tabs.length === 0,
+      });
+      return true;
     },
 
     beginNewTab(): void {
@@ -664,6 +754,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       }
     },
   };
+  const control = createBrowserPanelControl(panel);
   const download = createBrowserPanelDownload(panel, notify);
   const input = new BrowserPanelInputOwner(panel);
   const stream = new BrowserPanelStream(panel);

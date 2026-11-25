@@ -1,4 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { logSessionStateChange } from "../logging/diagnostic-runtime.js";
+import { peekDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -90,17 +92,41 @@ export function installReplyOperationAdmission(
   if (mailboxClaim) {
     mailboxClaim.operation = operation;
   }
+  // Cron admits before enqueueing; its message lifecycle must count the active input first.
+  if (peekDiagnosticSessionState({ sessionKey: operation.key, sessionId })?.state === "waiting") {
+    logSessionStateChange({
+      sessionKey: operation.key,
+      sessionId,
+      state: "processing",
+      reason: "reply_operation_started",
+    });
+  }
   notify(owner);
 }
 
 /** Move the exact operation; old source custody remains retained until its producer settles. */
 export function adoptReplyOperationController(
   operation: SessionControllerOperation,
-  previousOwner: SessionControllerEntry,
+  {
+    owner: previousOwner,
+    sessionKey: previousSessionKey,
+  }: {
+    owner: SessionControllerEntry;
+    sessionKey: string;
+  },
   owner: SessionControllerEntry,
   target: SessionTarget | undefined,
   mailboxClaim?: SessionControllerMailboxClaim,
 ): void {
+  if (previousSessionKey !== operation.key) {
+    logSessionStateChange({
+      sessionKey: previousSessionKey,
+      sessionId: operation.sessionId,
+      state: "idle",
+      reason: "reply_operation_moved",
+      consumeQueuedTurn: false,
+    });
+  }
   if (owner !== previousOwner) {
     previousOwner.active = undefined;
     // An unbound reservation has no physical producer custody at its former key.
@@ -119,6 +145,12 @@ export function adoptReplyOperationController(
   if (target) {
     bindSessionControllerTarget(operation, target);
   }
+  logSessionStateChange({
+    sessionKey: operation.key,
+    sessionId: operation.sessionId,
+    state: "processing",
+    reason: "reply_operation_adopted",
+  });
   if (previousOwner !== owner) {
     notifyReplyRunEnded(previousOwner);
   }

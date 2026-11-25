@@ -1,36 +1,27 @@
-import { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type { ProgressCardPutResult } from "../../packages/gateway-protocol/src/index.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as agentWriteAdmission from "../state/openclaw-agent-write-admission.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { progressCardStore } from "./progress-card-store.js";
-import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
+import { createTestGate, readClosedDatabase } from "./server-close.lifecycle.test-support.js";
+import { createGatewayCloseRace } from "./server-close.race.test-support.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 it("settles a queued progress card across the close prelude before retiring its database", async ({
   signal,
 }) => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-progress-card-close");
-  const writerEntered = createDeferred();
-  const releaseWriter = createDeferred();
+  const race = await createGatewayCloseRace("gateway-progress-card-close", signal);
+  const { fixture, kernel } = race;
+  const gate = createTestGate(signal);
   const cardQueued = createDeferred();
-  const drainEntered = createDeferred();
+  const drainEntered = new AbortController();
   let holding: Promise<void> | undefined;
   let putting: Promise<ProgressCardPutResult> | undefined;
-  let closing: Promise<void> | undefined;
   try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
     const sessionKey = "agent:main:dashboard:accepted-close-progress";
     await replaceSessionEntry(
       { agentId: "main", sessionKey },
@@ -42,11 +33,8 @@ it("settles a queued progress card across the close prelude before retiring its 
     const writeAdmission = agentWriteAdmission.runOpenClawAgentWriteAdmission;
     const put = progressCardStore.put.bind(progressCardStore);
     vi.spyOn(progressCardStore, "put").mockImplementationOnce(async (...args) => {
-      holding = writeAdmission(databaseOptions, async () => {
-        writerEntered.resolve();
-        await releaseWriter.promise;
-      });
-      await writerEntered.promise;
+      holding = writeAdmission(databaseOptions, () => race.block());
+      await race.waitForEntry();
       return put(...args);
     });
     vi.spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmission").mockImplementation(
@@ -63,66 +51,47 @@ it("settles a queued progress card across the close prelude before retiring its 
       context: kernel.gatewayRequestContext,
       methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
     };
-    putting = dispatchGatewayRequestInProcess<ProgressCardPutResult>(
-      "progressCard.put",
-      { sessionKey, markdown: "Accepted before shutdown" },
-      dispatchOptions,
-    );
-    await withinTest(
-      awaitGateBeforeSettlement(
-        cardQueued.promise,
-        putting,
-        "Progress card settled before joining the database writer queue",
-      ),
-      signal,
+    const putCard = (markdown: string) =>
+      dispatchGatewayRequestInProcess<ProgressCardPutResult>(
+        "progressCard.put",
+        { sessionKey, markdown },
+        dispatchOptions,
+      );
+    putting = putCard("Accepted before shutdown");
+    await gate(
+      cardQueued.promise,
+      putting,
+      "Progress card settled before joining the database writer queue",
     );
     const drain = kernel.connectionWork.drain.bind(kernel.connectionWork);
     vi.spyOn(kernel.connectionWork, "drain").mockImplementation(() => {
-      drainEntered.resolve();
+      drainEntered.abort();
       return drain();
     });
-    let closed = false;
-    closing = server.close({ reason: "progress card close regression" }).then(() => {
-      closed = true;
-    });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        drainEntered.promise,
-        closing,
-        "Gateway closed before joining its accepted progress card",
-      ),
-      signal,
-    );
+    await race.close(drainEntered.signal, undefined, { reason: "progress card close regression" });
     expect(kernel.scheduler.signal.aborted).toBe(true);
     expect(kernel.connectionWork.signal.aborted).toBe(true);
-    expect(closed).toBe(false);
+    expect(race.closed).toBe(false);
     expect(shared.isOpen).toBe(true);
-    await expect(
-      dispatchGatewayRequestInProcess(
-        "progressCard.put",
-        { sessionKey, markdown: "Refused after shutdown" },
-        dispatchOptions,
-      ),
-    ).rejects.toThrow("Gateway request entry is closed");
+    await expect(putCard("Refused after shutdown")).rejects.toThrow(
+      "Gateway request entry is closed",
+    );
 
-    releaseWriter.resolve();
-    const [result] = await withinTest(Promise.all([putting, holding, closing]), signal);
+    const [result] = (await race.finish(Promise.all([putting, holding])))!;
     expect(result.card).toMatchObject({ markdown: "Accepted before shutdown", revision: 1 });
     expect(shared.isOpen).toBe(false);
-    const database = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(
-        database
-          .prepare("SELECT session_key, markdown, revision FROM session_progress_cards")
-          .all(),
-      ).toEqual([{ session_key: sessionKey, markdown: "Accepted before shutdown", revision: 1 }]);
-    } finally {
-      database.close();
-    }
+    const rows = readClosedDatabase(
+      databasePath,
+      "SELECT session_key, markdown, revision FROM session_progress_cards",
+    );
+    expect(rows).toEqual([
+      { session_key: sessionKey, markdown: "Accepted before shutdown", revision: 1 },
+    ]);
   } finally {
-    releaseWriter.resolve();
-    await Promise.allSettled([putting, holding, closing]);
-    vi.restoreAllMocks();
-    await fixture.cleanup();
+    race.onCleanup(async () => {
+      await Promise.allSettled([putting, holding]);
+      vi.restoreAllMocks();
+    });
+    await race.dispose();
   }
 });

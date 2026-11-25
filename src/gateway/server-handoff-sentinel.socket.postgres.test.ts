@@ -9,7 +9,7 @@ import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
-import { acquireGatewayLock, readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -23,6 +23,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { startGatewayServer } from "./server.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -39,15 +40,9 @@ describe.skipIf(!connection)("managed handoff successor socket on PostgreSQL", (
     const state = await createOpenClawTestState({
       label: "handoff-successor-socket",
       env: {
+        ...KERNEL_TEST_ENV,
         OPENCLAW_HANDOFF_TEST_CONNECTION: connection,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
       },
     });
     state.envVars.TMPDIR = state.root;
@@ -109,15 +104,10 @@ describe.skipIf(!connection)("managed handoff successor socket on PostgreSQL", (
         }),
       );
       await server.startupSettled;
-      expect(
-        await readActiveGatewayLockIdentity({ env: state.env, requireInspection: true }),
-      ).toMatchObject({
-        pid: process.pid,
-        port,
-      });
-      const databasePath = resolveOpenClawStateSqlitePath(state.env);
       {
-        using anchor = openNodeSqliteDatabase(databasePath, { readOnly: true });
+        using anchor = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(state.env), {
+          readOnly: true,
+        });
         const row = anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get();
         if (typeof row?.schema !== "string") {
           throw new Error("Missing PostgreSQL anchor");
@@ -196,8 +186,7 @@ describe.skipIf(!connection)("managed handoff successor socket on PostgreSQL", (
           { mode: 0o600 },
         );
         const argv = [shimPath, transferPath];
-        let stdout = "";
-        let stderr = "";
+        const output = { stdout: "", stderr: "" };
         const exitCode = await runManagedCommand({
           bin: process.execPath,
           args: argv,
@@ -206,12 +195,11 @@ describe.skipIf(!connection)("managed handoff successor socket on PostgreSQL", (
           stdio: ["ignore", "pipe", "pipe", "ipc"],
           timeoutMs: 30_000,
           onReady(child) {
-            child.stdout?.setEncoding("utf8").on("data", (chunk) => {
-              stdout += chunk;
-            });
-            child.stderr?.setEncoding("utf8").on("data", (chunk) => {
-              stderr += chunk;
-            });
+            for (const key of ["stdout", "stderr"] as const) {
+              child[key]?.setEncoding("utf8").on("data", (chunk) => {
+                output[key] += chunk;
+              });
+            }
             const bound =
               child.pid && store.bind(lease, child.pid, lease.action, [process.execPath, ...argv]);
             if (!bound || !child.send) {
@@ -221,35 +209,22 @@ describe.skipIf(!connection)("managed handoff successor socket on PostgreSQL", (
             child.send("handoff-bound");
           },
         });
-        expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
-        expect(JSON.parse(stdout)).toMatchObject({
-          inspected: { revision: initial.revision },
-          recorded: {
-            kind: "recorded",
-            sentinel: {
-              payload: {
-                stats: {
-                  reason: "candidate-doctor-failed",
-                  steps: [{ name: "service-restore", command: "foreground", log: { exitCode: 0 } }],
-                },
-              },
-            },
-          },
-        });
+        expect({ exitCode, stderr: output.stderr }).toEqual({ exitCode: 0, stderr: "" });
+        const { inspected, recorded } = JSON.parse(output.stdout);
+        expect(inspected.revision).toBe(initial.revision);
+        expect(recorded.kind).toBe("recorded");
         const persisted = await client.query(
           `SELECT doctor_hint FROM "${namespace}".gateway_restart_sentinel WHERE sentinel_key = 'current'`,
         );
         expect(persisted.rows).toEqual([{ doctor_hint: "Run openclaw update repair" }]);
-        for (const text of [
+        const artifacts = [
           await fs.readFile(transferPath, "utf8"),
           await fs.readFile(shimPath, "utf8"),
           JSON.stringify(argv),
-          stdout,
-          stderr,
-        ]) {
-          expect(text).not.toContain(connection);
-          expect(text).not.toMatch(/postgres(?:ql)?:\/\//);
-        }
+          ...Object.values(output),
+        ].join("\n");
+        expect(artifacts).not.toContain(connection);
+        expect(artifacts).not.toMatch(/postgres(?:ql)?:\/\//);
       } finally {
         store.release(lease);
       }

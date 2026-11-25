@@ -11,12 +11,14 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  SqliteSnapshotCleanupError,
+} from "./sqlite-lifecycle-errors.js";
 import {
   registerRetainedSnapshotTempDirectory,
   startRemoveTempDirectory,
   sealRetainedSnapshotTempDirectory,
-  SqliteSnapshotCleanupError,
 } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteReadOnlyNativeResourceConnection } from "./sqlite-readonly-native-resource.client.js";
 import { SQLITE_NATIVE_RESOURCE_PORT } from "./sqlite-readonly-native-resource.types.js";
@@ -78,6 +80,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     number,
     {
       directories: Set<string>;
+      abort(): void;
       startClose(): RetainedOperation<void>;
       serviceClose(): void;
       releaseIfComplete(): void;
@@ -114,7 +117,6 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       onFailure(error) {
         unavailable ??= { error };
       },
-      onDispose() {},
     });
   }
 
@@ -213,6 +215,11 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     let pendingClose: RetainedOperation<void> | undefined;
     const preparation = {
       directories: new Set<string>(),
+      abort() {
+        if (task.read().status === "pending") {
+          abort();
+        }
+      },
       startClose,
       serviceClose: () => pendingClose?.service(),
       releaseIfComplete() {
@@ -265,7 +272,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       if (pendingClose?.read().status === "pending") {
         return pendingClose;
       }
-      let removals: Array<[string, RetainedOperation<boolean>]> | undefined;
+      let removals: Array<[string, RetainedOperation<boolean>, ErrorOptions]> | undefined;
       let servicing = false;
       const closing = createRetainedOperation<void>(() => {
         if (servicing || closing.operation.read().status !== "pending") {
@@ -279,16 +286,19 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
             return;
           }
           removals ??= [...preparation.directories].map(
-            (directory): [string, RetainedOperation<boolean>] => {
-              const removal = startRemoveTempDirectory(directory);
+            (directory): [string, RetainedOperation<boolean>, ErrorOptions] => {
+              const failure: ErrorOptions = {};
+              const removal = startRemoveTempDirectory(directory, (cause) => {
+                failure.cause = cause;
+              });
               void removal.result.then(
                 () => closing.operation.service(),
                 () => closing.operation.service(),
               );
-              return [directory, removal];
+              return [directory, removal, failure];
             },
           );
-          for (const [directory, removal] of removals) {
+          for (const [directory, removal, failure] of removals) {
             removal.service();
             const outcome = removal.read();
             if (outcome.status === "pending") {
@@ -300,6 +310,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
             if (!outcome.value) {
               throw new SqliteSnapshotCleanupError(
                 `SQLite staging preparation cleanup failed: ${directory}`,
+                failure,
               );
             }
           }
@@ -343,6 +354,10 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
   };
   nativeSource.retain(owner, async () => {
     admissionClosed = true;
+    // Snapshot reads can stop; token allocation and native cleanup still join normally.
+    for (const preparation of preparations.values()) {
+      preparation.abort();
+    }
     await Promise.allSettled([...activeRequests].map((request) => request.result));
     const closures = Array.from(preparations.values()).map((preparation) =>
       preparation.startClose(),

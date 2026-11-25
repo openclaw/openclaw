@@ -63,6 +63,15 @@ function textBlock(id: string, text: string, phase = "final_answer") {
   return { type: "text", text, textSignature: JSON.stringify({ v: 1, id, phase }) };
 }
 
+/** Rendered source links follow the prose; the signature names them so replay can strip them. */
+function citedBlock(id: string, prose: string, sources: string) {
+  return {
+    type: "text",
+    text: prose + sources,
+    textSignature: JSON.stringify({ v: 1, id, phase: "final_answer", sources }),
+  };
+}
+
 const completed = { type: "response.completed", response: { id: "resp_1", status: "completed" } };
 
 async function* responseEvents(events: readonly unknown[]) {
@@ -196,3 +205,167 @@ describe("Responses cumulative message snapshots", () => {
     },
   );
 });
+
+it.each(["streamed", "terminal-only"])(
+  "collapses annotated cumulative %s snapshots by provider prose and retains earlier citations",
+  async (mode) => {
+    const { output, events, run } = captureResponses();
+    const annotated = (id: string, text: string, title: string) => ({
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        id,
+        phase: "final_answer",
+        content: [
+          {
+            type: "output_text",
+            text,
+            annotations: [{ type: "url_citation", url: `https://example.test/${title}`, title }],
+          },
+        ],
+      },
+    });
+    const first = annotated("msg_1", "Hello.", "First");
+    const next = annotated("msg_2", "Hello. More.", "Second");
+    const terminal = {
+      ...completed,
+      response: { ...completed.response, output: [first.item, next.item] },
+    };
+    await run([
+      ...(mode === "streamed"
+        ? [
+            messageAdded("msg_1"),
+            textDelta("Hello."),
+            first,
+            messageAdded("msg_2"),
+            textDelta("Hello. More."),
+            next,
+          ]
+        : []),
+      terminal,
+      terminal,
+    ]);
+    const firstText = "Hello.\n\n[First](https://example.test/First)";
+    const sources = "\n\n[First](https://example.test/First) [Second](https://example.test/Second)";
+    const finalText = "Hello. More." + sources;
+    expect(output.content).toEqual([citedBlock("msg_2", "Hello. More.", sources)]);
+    expect(eventTrace(events)).toBe(
+      mode === "streamed"
+        ? "text_start@0 text_delta@0 text_end@0 text_end@0"
+        : "text_start@0 text_end@0 text_end@0",
+    );
+    expect(
+      events.filter((event) => event.type === "text_end").map((event) => event.content),
+    ).toEqual([firstText, finalText]);
+  },
+);
+
+it.each(["Hello.", "Changed.", "Hello. Changed."])(
+  "recovers an earlier collapsed item's terminal sources only for its own completed prose: %s",
+  async (terminalProse) => {
+    const { output, events, run } = captureResponses();
+    const earlier = {
+      ...messageDone("msg_1", terminalProse).item,
+      content: [
+        {
+          type: "output_text",
+          text: terminalProse,
+          annotations: [
+            { type: "url_citation", url: "https://example.test/First", title: "First" },
+          ],
+        },
+      ],
+    };
+    const next = messageDone("msg_2", "Hello. More.");
+    const terminal = {
+      ...completed,
+      response: { ...completed.response, output: [earlier, next.item] },
+    };
+    await run([
+      messageAdded("msg_1"),
+      messageDone("msg_1", "Hello."),
+      messageAdded("msg_2"),
+      next,
+      terminal,
+      terminal,
+    ]);
+    const suffix = "\n\n[First](https://example.test/First)";
+    const accepted = terminalProse === "Hello.";
+    expect(output.content).toEqual([
+      accepted ? citedBlock("msg_2", "Hello. More.", suffix) : textBlock("msg_2", "Hello. More."),
+    ]);
+    expect(eventTrace(events)).toBe(
+      "text_start@0 text_end@0 text_end@0" + (accepted ? " text_delta@0 text_end@0" : ""),
+    );
+    expect(
+      events.filter((event) => event.type === "text_delta").map((event) => event.delta),
+    ).toEqual(accepted ? [suffix] : []);
+    expect(
+      events.filter((event) => event.type === "text_end").map((event) => event.content),
+    ).toEqual(["Hello.", "Hello. More.", ...(accepted ? ["Hello. More." + suffix] : [])]);
+    expect(
+      events.filter((event) => event.type === "text_end").map((event) => event.partial.content[0]),
+    ).toEqual([
+      textBlock("msg_1", "Hello."),
+      textBlock("msg_2", "Hello. More."),
+      ...(accepted ? [citedBlock("msg_2", "Hello. More.", suffix)] : []),
+    ]);
+  },
+);
+
+it.each(["First. More.", "Other. More."])(
+  "keeps the terminal collapse cursor on the latest distinct message after an earlier citation: %s",
+  async (nextProse) => {
+    const { output, events, run } = captureResponses();
+    const first = messageDone("msg_1", "First.");
+    const other = messageDone("msg_2", "Other.");
+    const earlier = {
+      ...first.item,
+      content: [
+        {
+          type: "output_text",
+          text: "First.",
+          annotations: [
+            { type: "url_citation", url: "https://example.test/First", title: "First" },
+          ],
+        },
+      ],
+    };
+    await run([
+      messageAdded("msg_1"),
+      first,
+      messageAdded("msg_2"),
+      other,
+      {
+        ...completed,
+        response: {
+          ...completed.response,
+          output: [earlier, other.item, messageDone("msg_3", nextProse).item],
+        },
+      },
+    ]);
+    const sources = "\n\n[First](https://example.test/First)";
+    const annotated = "First." + sources;
+    const extendsLatest = nextProse === "Other. More.";
+    expect(output.content).toEqual([
+      citedBlock("msg_1", "First.", sources),
+      ...(extendsLatest
+        ? [textBlock("msg_3", nextProse)]
+        : [textBlock("msg_2", "Other."), textBlock("msg_3", nextProse)]),
+    ]);
+    expect(eventTrace(events)).toBe(
+      "text_start@0 text_end@0 text_start@1 text_end@1 text_delta@0 text_end@0 " +
+        (extendsLatest ? "text_end@1" : "text_start@2 text_end@2"),
+    );
+    expect(
+      events
+        .filter((event) => event.type === "text_end")
+        .map((event) => [event.contentIndex, event.content]),
+    ).toEqual([
+      [0, "First."],
+      [1, "Other."],
+      [0, annotated],
+      [extendsLatest ? 1 : 2, nextProse],
+    ]);
+  },
+);

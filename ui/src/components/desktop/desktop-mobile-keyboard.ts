@@ -1,4 +1,4 @@
-import { onCleanup, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { DesktopConnectionHandle } from "./desktop-client.ts";
@@ -17,10 +17,15 @@ export function createDesktopMobileKeyboard(
   let field: HTMLTextAreaElement | undefined;
   let modifierConnection: DesktopConnectionHandle | null = null;
   const modifiers = new Map<string, KeyboardEvent>();
-  onCleanup(reset);
-
-  onSettled(() => listen(window, "blur", () => modifiers.clear()));
-  onSettled(() => listen(window, "keyup", handleWindowKeyup, true));
+  onSettled(() => {
+    const stopBlur = listen(window, "blur", () => modifiers.clear());
+    const stopKeyup = listen(window, "keyup", handleWindowKeyup, true);
+    return () => {
+      stopBlur();
+      stopKeyup();
+      reset();
+    };
+  });
 
   function handleWindowKeyup(event: Event): void {
     // noVNC stops canvas keyups from bubbling. Capture physical releases after focus moves,

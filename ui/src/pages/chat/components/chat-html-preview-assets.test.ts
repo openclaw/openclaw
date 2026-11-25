@@ -1,6 +1,6 @@
 import type { SessionsFilesAssetsResult } from "@openclaw/gateway-protocol";
 import { describe, expect, it, vi } from "vitest";
-import { prepareHtmlPreviewAssets } from "./chat-html-preview-assets.ts";
+import { inspectHtmlPreviewSource, prepareHtmlPreviewAssets } from "./chat-html-preview-assets.ts";
 
 function asset(ref: string, mimeType: string, text: string) {
   return { ref, mimeType, content: Buffer.from(text).toString("base64") };
@@ -15,6 +15,54 @@ function reader(files: ReturnType<typeof asset>[]) {
 }
 
 describe("session file HTML assets", () => {
+  it.each([
+    '<head><meta http-equiv="Content-Security-Policy" content="script-src &#39;self&#39;"></head>',
+    '<template><meta http-equiv="Content-Security-Policy" content="default-src none"></template>',
+    '<svg><meta http-equiv="Content-Security-Policy" content="default-src none" /></svg>',
+    '<noscript><meta http-equiv="Content-Security-Policy" content="default-src none"></noscript>',
+    '<meta http-equiv="CONTENT-SECURITY-POLICY-REPORT-ONLY" content="default-src none">',
+  ])("detects policy-bearing markup and keeps it out of the legacy inliner: %s", async (policy) => {
+    const source =
+      policy + '<link rel="stylesheet" href="a.css"><script defer src="a.js"></script>';
+    const fetch = reader([asset("a.css", "text/css", "body{color:red}")]);
+    expect(inspectHtmlPreviewSource(source)).toEqual({
+      hasAuthoredCsp: true,
+      hasRelativeAssets: true,
+    });
+    expect(await prepareHtmlPreviewAssets(source, true, fetch)).toEqual({
+      html: source,
+      omitted: 0,
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps policy lookalikes in scripts and comments on the ordinary asset path", async () => {
+    const source =
+      '<script>const sample = \'<meta http-equiv="Content-Security-Policy">\';</script><!-- <meta http-equiv="Content-Security-Policy"> --><img src="a.png">';
+    expect(inspectHtmlPreviewSource(source)).toEqual({
+      hasAuthoredCsp: false,
+      hasRelativeAssets: true,
+    });
+    const result = await prepareHtmlPreviewAssets(
+      source,
+      true,
+      reader([asset("a.png", "image/png", "a")]),
+    );
+    expect(result.html).toBe(source.replace('src="a.png"', 'src="data:image/png;base64,YQ=="'));
+  });
+
+  it("distinguishes self-contained policy-bearing attachments from relative-resource attachments", () => {
+    const policy = '<meta http-equiv="Content-Security-Policy" content="default-src none">';
+    expect(inspectHtmlPreviewSource(policy + "<p>Text</p>")).toEqual({
+      hasAuthoredCsp: true,
+      hasRelativeAssets: false,
+    });
+    expect(inspectHtmlPreviewSource(policy + '<img src="a.png">')).toEqual({
+      hasAuthoredCsp: true,
+      hasRelativeAssets: true,
+    });
+  });
+
   it("inlines images, a stylesheet and its nested image, and module scripts without rewriting document bytes", async () => {
     const prefix = "<!DoCtYpE html>\r\n<!-- authored -->\n";
     const suffix = '<a HREF="#details">Details</a>\r\n';
@@ -123,24 +171,18 @@ describe("session file HTML assets", () => {
     ]);
     const result = await prepareHtmlPreviewAssets(source, false, fetch);
     expect(result.omitted).toBe(0);
-    expect(result.html).toContain(
+    for (const fragment of [
       'srcset="data:image/png;base64,YQ== 1x, data:image/png;base64,Yg== 2x, data:image/png;base64,Yg== 3x"',
-    );
-    expect(result.html).toContain(
       '<source src="data:image/png;base64,YQ==" srcset="data:image/png;base64,Yg== 2x">',
-    );
-    expect(result.html).toContain(
       '<video src="data:video/mp4;base64,dg==" poster="data:image/png;base64,YQ==">',
-    );
-    expect(result.html).toContain('<audio src="data:audio/mpeg;base64,cw==">');
-    expect(result.html).toContain('<input type="IMAGE" src="data:image/png;base64,YQ==">');
-    expect(result.html).toContain('style="background:url(&quot;data:image/png;base64,YQ==&quot;)"');
-    expect(result.html).toContain(
+      '<audio src="data:audio/mpeg;base64,cw==">',
+      '<input type="IMAGE" src="data:image/png;base64,YQ==">',
+      'style="background:url(&quot;data:image/png;base64,YQ==&quot;)"',
       '/* url(fake.png) */p::after{content:"url(fake.png)"}p{background:url("data:image/png;base64,YQ==")} @font-face{src:url(font)}',
-    );
-    expect(result.html).toContain(
       '<img src="//example.test/a.png"><img src="https://example.test/a.png"><img src="#image"><img src="/absolute.png">',
-    );
+    ]) {
+      expect(result.html).toContain(fragment);
+    }
     expect(fetch).toHaveBeenCalledExactlyOnceWith(["a.png", "b.png", "clip.mp4", "sound.mp3"]);
   });
 

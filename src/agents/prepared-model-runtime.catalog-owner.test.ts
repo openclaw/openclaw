@@ -1,9 +1,11 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
+  getPreparedModelRuntimeMocks,
   getPreparedModelRuntimeTestApi,
   usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
+
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -26,12 +28,24 @@ import {
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
+import { PreparedModelRuntimeClosedError } from "./prepared-model-runtime.lifecycle.js";
 import {
   publishModelRuntimeSnapshot,
   resolvePreparedModelRuntimeOwnerBySnapshot,
 } from "./prepared-model-runtime.owner.js";
 import * as pluginLifetime from "./prepared-model-runtime.plugin-lifetime.js";
 import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.types.js";
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
+  return {
+    ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+    createSubsystemLogger: (subsystem: string) =>
+      createMockSubsystemLogger(subsystem, {
+        warn: (...args) => getPreparedModelRuntimeMocks().warn(...args),
+      }),
+  };
+});
 
 const fixture = usePreparedModelRuntimeHarness(undefined, () => {
   vi.useRealTimers();
@@ -59,11 +73,11 @@ function setCatalogApiKey(
   });
 }
 
-function holdCatalogWrite(agentDir: string) {
+function holdCatalogWrite() {
   const started = createDeferred();
-  const result = createDeferred<{ agentDir: string; wrote: false }>();
+  const result = createDeferred<Record<string, never>>();
   const pending: Promise<unknown>[] = [];
-  const release = () => result.resolve({ agentDir, wrote: false });
+  const release = () => result.resolve({});
   mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
     started.resolve();
     return await result.promise;
@@ -142,8 +156,8 @@ describe("prepared catalog owner lifecycle", () => {
     const workspaceDir = "/tmp/fresh-workspace";
     mocks.configuredWorkspaces.set("alpha", workspaceDir);
     const config = { plugins: {} };
-    await using source = holdCatalogWrite(agentDir);
-    await using auth = holdCatalogWrite(agentDir);
+    await using source = holdCatalogWrite();
+    await using auth = holdCatalogWrite();
     const phases: string[] = [];
     const unregister = registerPreparedModelRuntimePublicationListener(({ phase }) =>
       phases.push(phase),
@@ -198,7 +212,7 @@ describe("prepared catalog owner lifecycle", () => {
     mocks.configuredAgentIds = ["beta"];
     mocks.configuredAgentDirs.set("beta", agentDir);
     const freshInput = { ...input, config: { plugins: {} } };
-    await using source = holdCatalogWrite(agentDir);
+    await using source = holdCatalogWrite();
     const fresh = source.track(publishPreparedModelRuntimeSnapshot(freshInput, { force: true }));
     void fresh.catch(() => undefined);
     await source.started;
@@ -282,20 +296,15 @@ describe("prepared build candidate lifetime", () => {
       const input = { config: {}, agentDir: fixture.state.agentDir("timeout") };
       const started = createDeferred();
       const finish = createDeferred();
-      const wait = async () => {
+      const pausedBuild = async () => {
         started.resolve();
         await finish.promise;
+        return {};
       };
       if (admission) {
-        mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
-          await wait();
-          return {};
-        });
+        mocks.resolveAmbientCredentials.mockImplementationOnce(pausedBuild);
       } else {
-        mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
-          await wait();
-          return { agentDir: input.agentDir, wrote: false };
-        });
+        mocks.ensureOpenClawModelsJson.mockImplementationOnce(pausedBuild);
       }
       using builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
       const first = admission
@@ -346,7 +355,7 @@ describe("prepared build candidate lifetime", () => {
     "serializes conflicting %s publications for one catalog owner",
     async (kind) => {
       const agentDir = fixture.state.agentDir("serial-publication");
-      await using write = holdCatalogWrite(agentDir);
+      await using write = holdCatalogWrite();
       const workspace = kind === "workspace";
       const firstInput = {
         config: {},
@@ -373,11 +382,7 @@ describe("prepared build candidate lifetime", () => {
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
       if (workspace) {
         expect(await reader).toBe(initial);
-        expect(mocks.ensureOpenClawModelsJson).toHaveBeenLastCalledWith(
-          firstInput.config,
-          agentDir,
-          expect.objectContaining({ workspaceDir: "/tmp/workspace-new" }),
-        );
+        expect(next?.workspaceDir).toBe("/tmp/workspace-new");
         expect(await prepareModelRuntimeSnapshot(nextInput)).toBe(next);
       } else {
         expect(initial?.config).toBe(firstInput.config);
@@ -493,70 +498,117 @@ describe("legacy provider catalog retention", () => {
     expect(result.entries.map(({ id }) => id).toSorted()).toEqual(expected);
   });
 
-  it("does not treat native-first configured rows as a completed provider acquisition", async () => {
-    const configured = {
-      id: "configured",
-      name: "Configured",
-      reasoning: false,
-      input: ["text" as const],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 32768,
-      maxTokens: 4096,
-    };
-    const native = { provider: "custom", id: "native", name: "Native", nativeRuntime: "fixture" };
-    mocks.modelRegistry.getAll.mockReturnValue([{ ...configured, provider: "custom" }]);
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
-      const registry = createEmptyPluginRegistry();
-      registry.agentHarnesses.push({
-        pluginId: "fixture",
-        source: "fixture",
-        harness: {
-          id: "fixture",
-          label: "Fixture",
-          supports: () => ({ supported: true }),
-          runAttempt: vi.fn(),
-          loadModelCatalog: async () => [native],
-        },
+  it.each([false, true])(
+    "keeps provider acquisition ownership across native-only publication (replaced=%s)",
+    async (replaced) => {
+      const configured = {
+        id: "configured",
+        name: "Configured",
+        reasoning: false,
+        input: ["text" as const],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
+        maxTokens: 4096,
+      };
+      const native = { provider: "custom", id: "native", name: "Native", nativeRuntime: "fixture" };
+      mocks.modelRegistry.getAll.mockReturnValue([{ ...configured, provider: "custom" }]);
+      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+        const registry = createEmptyPluginRegistry();
+        registry.agentHarnesses.push({
+          pluginId: "fixture",
+          source: "fixture",
+          harness: {
+            id: "fixture",
+            label: "Fixture",
+            supports: () => ({ supported: true }),
+            runAttempt: vi.fn(),
+            loadModelCatalog: async () => [native],
+          },
+        });
+        return registry;
       });
-      return registry;
-    });
-    const config: OpenClawConfig = {
-      agents: { entries: { pro: { model: "custom/configured" } } },
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "https://catalog.example.invalid/v1",
-            api: "openai-completions",
-            models: [configured],
+      const config: OpenClawConfig = {
+        agents: { entries: { pro: { model: "custom/configured" } } },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://catalog.example.invalid/v1",
+              api: "openai-completions",
+              models: [configured],
+            },
           },
         },
-      },
-    };
-    const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
-      catalogMode: "static",
-      provenance: "standalone",
-    });
-    await owner.loadNativeModelCatalog!({
-      provider: "custom",
-      modelId: "native",
-      runtime: "fixture",
-    });
-    const stored = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
-    expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
-    expect(stored.catalogInventory?.providers.size).toBe(0);
-    expect(stored.catalogInventory?.catalog.entries).toContainEqual(
-      expect.objectContaining({ provider: "custom", id: "configured" }),
-    );
-    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-      entries: [],
-      routeVariants: [],
-      staticEntries: [starter],
-      providerOutcomes: [{ provider: "custom", status: "unavailable" }],
-    });
-    const result = await owner.loadFullModelCatalog!({ refresh: true });
-    expect(result.entries).toContainEqual(expect.objectContaining(starter));
-    expect(result.authoritative).toBe(false);
-  });
+      };
+      const input = fixture.agentInput("pro", config);
+      let owner = await publishPreparedModelRuntimeSnapshot(input, {
+        catalogMode: "static",
+        provenance: "standalone",
+      });
+      if (replaced) {
+        const accountA = { provider: "custom", id: "account-a-only", name: "Account A" };
+        mocks.runPreparedModelCatalogWorker.mockResolvedValue(makeCatalog([accountA]));
+        expect((await owner.loadFullModelCatalog!()).entries).toContainEqual(
+          expect.objectContaining(accountA),
+        );
+        mocks.authStorage.getAll.mockReturnValue({
+          custom: { type: "api_key", key: "replacement-key" },
+        });
+        owner = await publishPreparedModelRuntimeSnapshot(input, {
+          catalogMode: "static",
+          provenance: "standalone",
+          force: true,
+        });
+        mocks.runPreparedModelCatalogWorker.mockClear();
+        await owner.loadNativeModelCatalog!({
+          provider: "custom",
+          modelId: "native",
+          runtime: "missing-fixture",
+        });
+        expect(
+          resolvePreparedModelRuntimeOwnerBySnapshot(owner)!.catalogInventory?.providers.has(
+            "custom",
+          ),
+        ).toBe(true);
+      }
+      await owner.loadNativeModelCatalog!({
+        provider: "custom",
+        modelId: "native",
+        runtime: "fixture",
+      });
+      const stored = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+      expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+      expect(stored.catalogInventory?.providers.size).toBe(0);
+      expect([...(stored.catalogInventory?.acquiredProviderIds ?? [])]).toEqual(
+        replaced ? ["custom"] : [],
+      );
+      expect(
+        stored.catalogInventory?.catalog.entries.some(({ id }) => id === "account-a-only"),
+      ).not.toBe(true);
+      expect(stored.catalogInventory?.catalog.entries).toContainEqual(
+        expect.objectContaining({ provider: "custom", id: "configured" }),
+      );
+      if (replaced) {
+        owner = await publishPreparedModelRuntimeSnapshot(input, {
+          catalogMode: "static",
+          provenance: "standalone",
+          force: true,
+        });
+        expect(
+          owner.readFullModelCatalog!()?.entries.some(({ id }) => id === "account-a-only"),
+        ).not.toBe(true);
+        expect(stored.catalogInventory?.acquiredProviderIds?.has("custom")).toBe(true);
+      }
+      mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+        entries: [],
+        routeVariants: [],
+        staticEntries: [starter],
+        providerOutcomes: [{ provider: "custom", status: "unavailable" }],
+      });
+      const result = await owner.loadFullModelCatalog!({ refresh: true });
+      expect(result.entries).toContainEqual(expect.objectContaining(starter));
+      expect(result.authoritative).toBe(false);
+    },
+  );
 
   describe("failed provider discovery retry", () => {
     const unavailable = makeCatalog([], {
@@ -690,7 +742,9 @@ describe("legacy provider catalog retention", () => {
 });
 
 it("preserves the primary publication error when terminal generation cleanup also fails", async () => {
-  const primary = new Error("plugin generation retired before publication");
+  const primary = new Error("plugin generation retired before publication", {
+    cause: { generation: "superseded" },
+  });
   const cleanup = new Error("registration cleanup failed");
   let failedOwner: PreparedModelRuntimeOwner | undefined;
   vi.spyOn(pluginLifetime, "publishPreparedPluginGeneration").mockImplementationOnce((owner) => {
@@ -719,41 +773,61 @@ it("preserves the primary publication error when terminal generation cleanup als
   ).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(SuppressedError);
   expect(failure).toMatchObject({ error: cleanup, suppressed: primary });
-  expect(failedOwner?.refreshError).toBe(primary);
+  expect(failedOwner?.refreshError).not.toBe(primary);
+  expect(failedOwner?.refreshError).toMatchObject({
+    message: primary.message,
+    stack: primary.stack,
+  });
+  expect(failedOwner?.refreshError?.cause).toBeUndefined();
   expect(failedOwner?.pending).toBeUndefined();
 });
 
 describe("captured startup inventory refresh", () => {
-  it("reports redacted nested failures from the committed catalog refresh", async () => {
-    const warning = createDeferred<string>();
-    const token = "sk-abcdefghijklmnopqrstuv";
-    const failure = new AggregateError(
-      [
-        new Error("registry release failed", {
-          cause: new Error(`Authorization: Bearer ${token}`),
-        }),
-        new Error("donor close failed"),
-      ],
-      "Prepared plugin resources failed to close",
-    );
-    mocks.configuredAgentIds = ["pro"];
-    mocks.runPreparedModelCatalogWorker.mockRejectedValue(failure);
-    mocks.warn.mockImplementation((message: string) => warning.resolve(message));
+  it.each(["nested cleanup", "identical shutdown text", "wrapped shutdown"] as const)(
+    "reports %s failures from the committed catalog refresh",
+    async (kind) => {
+      const warning = createDeferred<string>();
+      const token = "sk-abcdefghijklmnopqrstuv";
+      const closedMessage = "prepared model runtime process lifetime closed";
+      const failure =
+        kind === "identical shutdown text"
+          ? new Error(closedMessage)
+          : new AggregateError(
+              [
+                new Error("registry release failed", {
+                  cause: new Error(`Authorization: Bearer ${token}`),
+                }),
+                new Error("donor close failed"),
+                ...(kind === "wrapped shutdown" ? [new PreparedModelRuntimeClosedError()] : []),
+              ],
+              "Prepared plugin resources failed to close",
+            );
+      mocks.configuredAgentIds = ["pro"];
+      mocks.runPreparedModelCatalogWorker.mockRejectedValue(failure);
+      mocks.warn.mockImplementation((message: string) => warning.resolve(message));
 
-    await refreshPreparedModelRuntimeSnapshots(
-      { agents: { entries: { pro: {} } } },
-      { gatewayLifecycle: true, catalogMode: "static" },
-    );
-    const message = await warning.promise;
+      await refreshPreparedModelRuntimeSnapshots(
+        { agents: { entries: { pro: {} } } },
+        { gatewayLifecycle: true, catalogMode: "static" },
+      );
+      const message = await warning.promise;
 
-    expect(message).toContain("provider catalog refresh failed:");
-    expect(message).toContain("Prepared plugin resources failed to close");
-    expect(message).toContain("registry release failed");
-    expect(message).toContain("donor close failed");
-    expect(message).toContain("Authorization: Bearer");
-    expect(message).not.toContain(token);
-    expect(mocks.warn).toHaveBeenCalledOnce();
-  });
+      expect(message).toContain("provider catalog refresh failed:");
+      if (kind === "identical shutdown text") {
+        expect(message).toContain(closedMessage);
+      } else {
+        expect(message).toContain("Prepared plugin resources failed to close");
+        expect(message).toContain("registry release failed");
+        expect(message).toContain("donor close failed");
+        expect(message).toContain("Authorization: Bearer");
+        if (kind === "wrapped shutdown") {
+          expect(message).toContain(closedMessage);
+        }
+      }
+      expect(message).not.toContain(token);
+      expect(mocks.warn).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not refill a successful empty refresh from the captured startup registry", async () => {
     const captured = {
@@ -787,4 +861,37 @@ describe("captured startup inventory refresh", () => {
     expect(refreshed.routeVariants).toEqual([]);
     expect(refreshed.providerOutcomes).toEqual([{ provider: "custom", status: "ready" }]);
   });
+});
+
+it("does not publish a static catalog generation superseded while its hook is running", async () => {
+  mocks.configuredAgentIds = ["default"];
+  const refreshStatic = (config: OpenClawConfig) =>
+    refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true, catalogMode: "static" });
+  const staleConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+  const latestConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+  const defaultPrepareStaticCatalog = mocks.prepareStaticCatalog.getMockImplementation();
+  const started = createDeferred();
+  const finish = createDeferred();
+  mocks.prepareStaticCatalog.mockImplementationOnce(async (...args) => {
+    started.resolve();
+    await finish.promise;
+    return await defaultPrepareStaticCatalog!(...args);
+  });
+
+  const stale = refreshStatic(staleConfig);
+  // Surface refresh failures before hook entry instead of waiting for the test timeout.
+  await Promise.race([
+    started.promise,
+    stale.then(() => {
+      throw new Error("static catalog refresh completed before its hook");
+    }),
+  ]);
+  const latest = refreshStatic(latestConfig);
+  finish.resolve();
+
+  await expect(stale).rejects.toThrow("superseded");
+  await latest;
+  expect(getPreparedModelRuntimeSnapshot(fixture.agentInput("default", latestConfig))?.config).toBe(
+    latestConfig,
+  );
 });

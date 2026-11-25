@@ -1,6 +1,7 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { listDirectoryTreeStrictSync } from "openclaw/plugin-sdk/file-access-runtime";
 import * as ts from "typescript/ast";
 import { afterAll, expect, it } from "vitest";
 import { createNativeTypeScriptParser } from "../../../../scripts/lib/native-typescript.mts";
@@ -13,7 +14,9 @@ it("never opts out of a method named by an incoming notification consumer", () =
   const root = fileURLToPath(new URL("../", import.meta.url));
   const optedOut = new Set<string>(CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS);
   const consumers: string[] = [];
-  for (const relative of readdirSync(root, { recursive: true, encoding: "utf8" })) {
+  for (const relative of listDirectoryTreeStrictSync(root).map(
+    (walkEntry) => walkEntry.relativePath,
+  )) {
     const file = relative.split(path.sep).join("/");
     if (
       !file.endsWith(".ts") ||

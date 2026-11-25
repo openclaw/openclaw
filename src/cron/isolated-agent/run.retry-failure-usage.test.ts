@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { NormalizedUsage } from "../../agents/usage.js";
+import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import { deriveSessionTotalTokens, type NormalizedUsage } from "../../agents/usage.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -16,15 +17,35 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 async function runUsageCase(
   usage: NormalizedUsage,
   lastCallUsage: NormalizedUsage,
-  totalTokens?: number,
+  currentContextSnapshot?: { tokens: number | undefined },
 ) {
   const cronSession = makeCronSession();
   resolveCronSessionMock.mockReturnValue(cronSession);
   mockRunCronFallbackPassthrough();
-  deriveSessionTotalTokensMock.mockReturnValueOnce(totalTokens);
-  runEmbeddedAgentMock.mockResolvedValueOnce({
-    payloads: [{ text: "done" }],
-    meta: { agentMeta: { usage, lastCallUsage } },
+  deriveSessionTotalTokensMock.mockImplementation(deriveSessionTotalTokens);
+  runEmbeddedAgentMock.mockImplementationOnce((params: RunEmbeddedAgentInternalParams) => {
+    if (currentContextSnapshot) {
+      if (!params.agentId || !params.sessionKey) {
+        throw new Error("Cron did not bind the accounting session");
+      }
+      params.onCompactionAccounting?.({
+        kind: "durable",
+        count: 1,
+        currentContextSnapshot,
+        target: {
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          storePath: cronSession.storePath,
+          lifecycleRevision: cronSession.lifecycleRevision,
+          activeWriterRunId: params.runId,
+        },
+      });
+    }
+    return {
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage, lastCallUsage } },
+    };
   });
   const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
   expect(result.status).toBe("ok");
@@ -34,31 +55,30 @@ async function runUsageCase(
 describe("runCronIsolatedAgentTurn usage accounting", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
+  it.each([20_000, undefined])(
+    "keeps terminal compaction context %s instead of older model usage",
+    async (tokens) => {
+      const usage = { input: 55_000, output: 1_000, cacheRead: 1_000 };
+      const { cronSession } = await runUsageCase(usage, usage, { tokens });
+      expect(cronSession.sessionEntry.totalTokens).toBe(tokens);
+      expect(cronSession.sessionEntry.totalTokensFresh).toBe(tokens !== undefined);
+    },
+  );
+
   it("uses final-call usage for the stored session token snapshot", async () => {
     const { result, cronSession } = await runUsageCase(
       { input: 75000, output: 2000, total: 56000, cacheRead: 5000, cacheWrite: 0 },
       { input: 55000, output: 1000, cacheRead: 1000, cacheWrite: 0 },
-      56000,
     );
     expect(cronSession.sessionEntry.inputTokens).toBe(75000);
     expect(cronSession.sessionEntry.outputTokens).toBe(2000);
-    expect(cronSession.sessionEntry.totalTokens).toBe(56000);
+    expect(cronSession.sessionEntry.totalTokens).toBe(57000);
     expect(cronSession.sessionEntry.totalTokensFresh).toBe(true);
     expect(result.usage).toEqual({
       input_tokens: 75000,
       output_tokens: 2000,
       total_tokens: 82000,
       cache_read_tokens: 5000,
-    });
-    expect(deriveSessionTotalTokensMock).toHaveBeenCalledWith({
-      usage: {
-        input: 55000,
-        output: 1000,
-        cacheRead: 1000,
-        cacheWrite: 0,
-      },
-      contextTokens: 128000,
-      promptTokens: undefined,
     });
   });
 
@@ -75,7 +95,6 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
     });
     expect(cronSession.sessionEntry.totalTokens).toBeUndefined();
     expect(cronSession.sessionEntry.totalTokensFresh).toBe(false);
-    expect(deriveSessionTotalTokensMock).toHaveBeenCalledTimes(1);
     expect(result.usage).toEqual({
       input_tokens: 12,
       output_tokens: 15_104,

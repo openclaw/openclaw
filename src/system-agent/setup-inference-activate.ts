@@ -5,7 +5,8 @@ import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../agents/ag
 import type { SetupRuntimeCredential } from "../agents/auth-profiles/setup-access.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
-import { findModelInCatalog, loadManifestModelCatalog } from "../agents/model-catalog.js";
+import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
+import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -52,7 +53,7 @@ import {
   SetupInferenceCancelledError,
   SetupInferenceOwnerDriftError,
   throwIfSetupInferenceCancelled,
-  validateSetupInferenceOwnerEvidence,
+  validateSetupInferenceEvidence,
   validateSetupModelTarget,
 } from "./setup-inference-core.js";
 import {
@@ -262,8 +263,19 @@ export async function activateSetupInference(
 }
 
 async function activateCandidate(
-  params: ActivateSetupInferenceParams,
+  callerParams: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
+  const effects = { credentialsSaved: false, configPersisted: false };
+  // Like cancellation, caller authority governs activation until its config is persisted;
+  // a saved activation then completes like any other committed config write.
+  const params: ActivateSetupInferenceParams = {
+    ...callerParams,
+    assertCurrent: () => {
+      if (!effects.configPersisted) {
+        callerParams.assertCurrent?.();
+      }
+    },
+  };
   const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
   const snapshot = await readSnapshot();
   if (snapshot.exists && !snapshot.valid) {
@@ -280,7 +292,7 @@ async function activateCandidate(
     workspace: params.workspace?.trim()
       ? resolveUserPath(params.workspace)
       : resolveSetupInferenceWorkspace(snapshot),
-    effects: { credentialsSaved: false },
+    effects,
     beforePersistentEffect: async () => {
       throwIfSetupInferenceCancelled(params);
       params.onActivationStarted?.();
@@ -289,13 +301,10 @@ async function activateCandidate(
     },
   };
   const staged = await stageCandidate(ctx);
+  // Each error is a complete sentence; a saved credential adds only that fact.
   const failure = (result: Extract<ActivateSetupInferenceResult, { ok: false }>) => ({
     ...result,
-    ...(ctx.effects.credentialsSaved
-      ? {
-          error: `Credentials saved; default unchanged. ${result.error} Choose the saved sign-in in Model Setup to retry without signing in again.`,
-        }
-      : {}),
+    ...(ctx.effects.credentialsSaved ? { error: `Your sign-in is saved. ${result.error}` } : {}),
     disposition: "rejected-before-promotion" as const,
   });
   if ("error" in staged) {
@@ -436,6 +445,19 @@ async function verifyAndActivateCandidate(
   params.onPreparationComplete?.();
   throwIfSetupInferenceCancelled(params);
   const progress = params.prompter?.progress("Testing your AI connection…");
+  // A silent spinner reads as a hang once a provider is slow; show the wait and the way out.
+  const checkStarted = Date.now();
+  const elapsed = progress
+    ? setInterval(() => {
+        const seconds = Math.round((Date.now() - checkStarted) / 1000);
+        if (seconds >= 3) {
+          progress.update(
+            `Testing your AI connection… ${seconds}s. You can cancel; nothing changes until the check passes.`,
+          );
+        }
+      }, 1000)
+    : undefined;
+  elapsed?.unref?.();
   const verification = await withGeneration(async () => {
     try {
       const native = await verifySetupHarness({
@@ -457,21 +479,22 @@ async function verifyAndActivateCandidate(
     } catch (error) {
       return { ok: false as const, ...describeSetupInferenceError(error, route) };
     }
-  }).finally(() => progress?.stop());
+  }).finally(() => {
+    clearInterval(elapsed);
+    progress?.stop();
+  });
   throwIfSetupInferenceCancelled(params);
   if (!verification.ok) {
     return failure(verification);
   }
-  if ("auth" in verification) {
-    const ownerFailure = validateSetupInferenceOwnerEvidence({
-      runner: route.runner,
-      configuredHarnessId:
-        route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
-      auth: verification.auth,
-    });
-    if (ownerFailure) {
-      return failure(ownerFailure);
-    }
+  const evidence =
+    "auth" in verification ? validateSetupInferenceEvidence(route, verification, params) : {};
+  if (evidence.failure) {
+    return failure(evidence.failure);
+  }
+  if (evidence.warning && params.prompter) {
+    await params.prompter.note(evidence.warning, "Context window");
+    throwIfSetupInferenceCancelled(params);
   }
   const savedCredential = staged.authProfileId
     ? (await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir)).profiles[
@@ -595,6 +618,16 @@ async function verifyAndActivateCandidate(
       write: async (_candidate, { writeOptions, captureUndo }) => {
         const { transformConfigWithPendingPluginInstalls: transform } =
           await import("../plugins/install-record-commit.js");
+        const captureFileUndo = (base: ConfigFileSnapshot, written: OpenClawConfig) =>
+          captureUndo(
+            captureSetupInferenceFileUndo(
+              {
+                ...base,
+                sourceConfig: stripPendingPluginInstallRecords(base.sourceConfig),
+              },
+              stripPendingPluginInstallRecords(written),
+            ),
+          );
         const committed = await transform({
           base: "source",
           writeOptions,
@@ -604,18 +637,17 @@ async function verifyAndActivateCandidate(
             throwIfSetupInferenceCancelled(params);
             params.onCommitStarted?.(current);
             const nextConfig = buildCandidate(current);
-            captureUndo(
-              captureSetupInferenceFileUndo(
-                {
-                  ...context.snapshot,
-                  sourceConfig: stripPendingPluginInstallRecords(context.snapshot.sourceConfig),
-                },
-                stripPendingPluginInstallRecords(nextConfig),
-              ),
-            );
+            // Covers a write that fails after persisting; success replaces it below.
+            captureFileUndo(context.snapshot, nextConfig);
             return { nextConfig };
           },
         });
+        // Undo what reached disk: the write pipeline adds metadata the candidate lacks.
+        captureFileUndo(
+          committed.snapshot,
+          committed.persistedSourceConfig ?? committed.nextConfig,
+        );
+        ctx.effects.configPersisted = true;
         return committed.nextConfig;
       },
     };
@@ -671,6 +703,6 @@ async function verifyAndActivateCandidate(
     ...(modelName ? { modelName } : {}),
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     latencyMs: verification.latencyMs,
-    lines,
+    lines: evidence.warning && !params.prompter ? [...lines, evidence.warning] : lines,
   };
 }

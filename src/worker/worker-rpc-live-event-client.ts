@@ -7,7 +7,6 @@ import { fenceForOwnershipError } from "./worker-rpc-client-shared.js";
 type WorkerLiveEventClientOptions = {
   runEpoch: number;
   initialAckedSeq?: number;
-  maxBufferedEvents?: number;
 };
 
 type BufferedLiveEvent = {
@@ -57,7 +56,7 @@ export class WorkerLiveEventClient {
     if (this.disposed || this.previewDegraded || this.connection.isTerminal()) {
       return false;
     }
-    if (this.buffered.length >= (this.options.maxBufferedEvents ?? 1_024)) {
+    if (this.buffered.length >= 1_024) {
       this.degradePreviews();
       return false;
     }

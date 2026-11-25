@@ -15,9 +15,8 @@ export const ttySource = [
   'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
 ];
 
-export function withCliHome(run: (home: string) => Promise<void>) {
-  return withTempHome(run, { prefix: "openclaw-json-contract-" });
-}
+export const withCliHome = (run: (home: string) => Promise<void>) =>
+  withTempHome(run, { prefix: "openclaw-json-contract-" });
 
 export function isolatedEnv(home: string) {
   return {
@@ -27,13 +26,11 @@ export function isolatedEnv(home: string) {
 }
 
 export function expectCleanOutput(stdout: string, stderr?: string) {
-  expect(stdout, stderr).not.toContain("\u001B");
-  expect(stdout, stderr).not.toContain("\u0007");
+  expect(stdout.includes("\u001B") || stdout.includes("\u0007"), stderr).toBe(false);
 }
 
-export function expectCliError(stdout: string, message: unknown) {
+export const expectCliError = (stdout: string, message: unknown) =>
   expect(JSON.parse(stdout)).toEqual({ ok: false, error: { type: "cli_error", message } });
-}
 
 export async function expectMissing(...paths: string[]) {
   for (const file of paths) {
@@ -44,44 +41,36 @@ export async function expectMissing(...paths: string[]) {
 export function expectFailure(
   result: ReturnType<typeof runBuiltCli>,
   message: string,
-  options: {
-    human?: boolean;
-    tty?: boolean;
-    cleanHuman?: boolean;
-    once?: boolean;
-    network?: boolean;
-  } = {},
+  options: Partial<Record<"human" | "tty" | "cleanHuman" | "once" | "network", boolean>> = {},
 ) {
   expect(result.status, result.stderr).toBe(1);
+  const { stdout, stderr } = result;
   if (!options.human || options.cleanHuman) {
-    expectCleanOutput(result.stdout, result.stderr);
+    expectCleanOutput(stdout, stderr);
   }
   if (options.human) {
-    expect(result.stdout).toBe("");
+    expect(stdout).toBe("");
   } else {
-    expectCliError(result.stdout, message);
+    expectCliError(stdout, message);
   }
-  expect(result.stderr).toContain(message);
+  expect(stderr).toContain(message);
   if (options.once) {
-    expect(result.stderr.split(message)).toHaveLength(2);
+    expect(stderr.split(message)).toHaveLength(2);
   }
   if (options.network) {
-    expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
+    expect(stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
   }
   if (options.tty) {
-    expect(result.stderr).toContain("\u001B[?25h");
+    expect(stderr).toContain("\u001B[?25h");
   }
 }
 
-export function writeJson(file: string, value: unknown, newline = false) {
-  return fs.writeFile(file, JSON.stringify(value) + (newline ? "\n" : ""), "utf8");
-}
+export const writeJson = (file: string, value: unknown, newline = false) =>
+  fs.writeFile(file, JSON.stringify(value) + (newline ? "\n" : ""), "utf8");
 
-export function preloadArgs(source: string[]) {
-  return [
-    `--import=data:text/javascript;base64,${Buffer.from(source.join("\n")).toString("base64")}`,
-  ];
-}
+export const preloadArgs = (source: string[]) => [
+  `--import=data:text/javascript;base64,${Buffer.from(source.join("\n")).toString("base64")}`,
+];
 
 export function runIsolatedCli(
   home: string,
@@ -89,26 +78,16 @@ export function runIsolatedCli(
   options: {
     env?: NodeJS.ProcessEnv;
     source?: string[];
-    tty?: boolean;
-    commander?: boolean;
-    inheritEnvironment?: boolean;
-  } = {},
+  } & Partial<Record<"tty" | "commander" | "inheritEnvironment", boolean>> = {},
 ) {
-  return runBuiltCli(
-    home,
-    args,
-    {
-      ...isolatedEnv(home),
-      ...(options.commander ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-      ...(options.tty ? { FORCE_COLOR: "1" } : {}),
-      ...options.env,
-    },
-    {
-      inheritEnvironment: options.inheritEnvironment,
-      execArgv:
-        options.source || options.tty
-          ? preloadArgs([...(options.source ?? []), ...(options.tty ? ttySource : [])])
-          : [],
-    },
-  );
+  const { env, source = [], tty, commander, inheritEnvironment } = options;
+  const preload = [...source, ...(tty ? ttySource : [])];
+  const execArgv = options.source || tty ? preloadArgs(preload) : [];
+  const environment = {
+    ...isolatedEnv(home),
+    ...(commander ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+    ...(tty ? { FORCE_COLOR: "1" } : {}),
+    ...env,
+  };
+  return runBuiltCli(home, args, environment, { inheritEnvironment, execArgv });
 }

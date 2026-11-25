@@ -1,5 +1,6 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
 import fs from "node:fs";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
@@ -70,7 +71,7 @@ export function formatQuickstartGatewaySummary(
     ...(defaults.bind === "custom" && defaults.customBindHost
       ? [
           t("wizard.setup.quickstartGatewayCustomIp", {
-            host: defaults.customBindHost,
+            host: terminalText`${defaults.customBindHost}`,
           }),
         ]
       : []),
@@ -191,14 +192,15 @@ export function createWizardInferenceConfigTarget(
     options: SetupInferenceConfigWriteOptions,
     baseSnapshot?: ConfigFileSnapshot,
   ) => {
-    const { snapshot, nextConfig } = await commit(config, {
+    const { snapshot, nextConfig, persistedSourceConfig } = await commit(config, {
       baseSnapshot,
       writeOptions: options.writeOptions,
     });
+    // Undo what reached disk: the write pipeline adds metadata the candidate lacks.
     options.captureUndo(
       captureSetupInferenceFileUndo(
         { ...snapshot, sourceConfig: stripPendingPluginInstallRecords(snapshot.sourceConfig) },
-        nextConfig,
+        stripPendingPluginInstallRecords(persistedSourceConfig ?? nextConfig),
       ),
     );
     return nextConfig;
@@ -274,7 +276,7 @@ export async function requireRiskAcknowledgement(params: {
   return applySecurityAcknowledgement(params.config);
 }
 
-function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
+export function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
   if (config.wizard?.securityAcknowledgedAt) {
     return config;
   }

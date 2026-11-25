@@ -23,6 +23,8 @@ A transcript writer ownership error means the run lost its session write claim. 
 
 Gateway write requests such as `sessions.create` also report disk-full guidance with `UNAVAILABLE` and `details.code: "SQLITE_FULL"`. Free space on the Gateway host before continuing. When the worker cannot confirm the write outcome, `retryable` is false: check whether the session or change exists before retrying. The failure does not prove that nothing was saved.
 
+If OpenClaw cannot confirm the last conversation update, it may block further work until the conversation reconciles. A known storage cause keeps its disk-space or storage guidance. Otherwise, wait for current work to finish, reopen the conversation, and restart OpenClaw if the problem persists. The internal `Session actor requires reconciliation before another command` diagnostic remains in the logs.
+
 Use `openclaw logs --follow` to correlate the run with storage activity. SQLite can contend between connections or worker threads in one Gateway process; seeing only one process with the database open does not rule out contention. See [database concurrency notes](/reference/database-schemas#integrity-checks). Avoid full database compaction while runs are active.
 
 ## Provider rejected the request

@@ -2,10 +2,13 @@ import type { MessageReactionSummary } from "../../../../../packages/gateway-pro
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button-state.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
@@ -19,18 +22,22 @@ import type {
   ChatQueueItem,
   ChatSelectionSource,
   ChatStreamSegment,
+  MessageGroup,
 } from "../../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import type { InlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 // Pane-local search, context menus, selection actions, and presentation resets.
-import type { TurnRecapWatch } from "../chat-progress.ts";
+import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
-import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
+import type { FailedMessageEditSource } from "../failed-message-edit.ts";
+import type { RealtimeTalkConversationEntry } from "../talk/conversation-state.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
-import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
+import type { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import type { ChatCommentPinsHandle } from "./chat-comment-pins.tsx";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
@@ -53,37 +60,44 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-co
 import { mountThreadMenu, type ThreadMenuAction } from "./chat-thread-menu.tsx";
 import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 import type { ChatWelcomeIdentityProps } from "./chat-welcome.tsx";
+import type { WidgetCommentEditorScope } from "./widget-comment-intent.ts";
 
 registerChatMessageMetadataEnglish();
 
-export type ChatThreadState = {
+export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>[0] & {
   threadElement?: HTMLElement;
   commentPins?: ChatCommentPinsHandle;
-  asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
-  asyncQuestionSessions?: Map<
-    string,
-    import("./chat-async-question-draft.ts").AsyncQuestionDraftSession
-  >;
-  asyncQuestionRevision: number;
-  asyncQuestionScope?: string;
-  asyncQuestionGeneration?: number;
-  asyncQuestionPresentation?: AsyncQuestionPresentation;
-  turnRecapWatch: TurnRecapWatch | null;
+  observedWorkRun?: { sessionKey: string; runId: string };
+  readerExpandedWork?: { sessionKey: string; keys: ReadonlySet<string> };
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
-    turnVideoMessages?: ReadonlyMap<
+    actions?: Pick<
+      ChatThreadProps,
+      | "onOpenSidebar"
+      | "onOpenWorkspaceFile"
+      | "onFindWorkspaceFile"
+      | "onPermissionRetry"
+      | "onOpenImage"
+      | "onAssistantAttachmentLoaded"
+      | "onOpenSessionLink"
+      | "onOpenSubagent"
+      | "onOpenSubagents"
+      | "onRetryQueuedMessage"
+      | "onSteerNow"
+      | "onRewindMessage"
+      | "onFocusComposer"
+      | "loadFullAssistantMessage"
+      | "personActivity"
+      | "displayFacts"
+    >;
+    threadMediaMessages?: ReadonlyMap<
       string,
-      readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
+      readonly import("./chat-thread-media-gallery.ts").ThreadMediaMessage[]
     >;
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
     onAsyncQuestionDiscard?: (item: ChatQueueItem) => void;
-    onAsyncQuestionSubmit?: (
-      message: string,
-      itemId?: string,
-      sourceMessageId?: string,
-    ) => Promise<boolean>;
   };
 };
 
@@ -104,13 +118,23 @@ export type ChatThreadProps = Omit<
   | "presented"
   | "agentId"
   | "mediaPolicyKey"
-  | "getTurnVideoMessages"
+  | "getThreadMediaMessages"
   | "onOpenWorkspaceFile"
 > &
-  ChatWelcomeIdentityProps &
+  Pick<
+    ChatWelcomeIdentityProps,
+    | "currentAgentId"
+    | "agents"
+    | "assistantName"
+    | "assistantAvatar"
+    | "assistantAvatarUrl"
+    | "assistantAvatarSource"
+    | "sessionHost"
+  > &
   ChatSendStatusActions &
   SubagentRoster & {
     applicationContext?: ApplicationContext;
+    onScrollPortRef?: (element: HTMLElement) => void | (() => void);
     messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
     onReact?: (messageId: string, emoji: string, remove: boolean) => void;
     branding?: ThemeBranding;
@@ -124,15 +148,20 @@ export type ChatThreadProps = Omit<
     transcriptVisible?: PresentationValue;
     gatewayClient?: GatewayBrowserClient | null;
     selectedSession: GatewaySessionRow | undefined;
+    modelCatalog?: ModelCatalogEntry[];
     transcriptMetadata?: ChatTranscriptMetadata;
     announceTranscript?: boolean;
     loading: boolean;
+    restoring?: boolean;
+    /** First-turn content was already shown by New Session; never replace it with history placeholders. */
+    initialSubmission?: boolean;
     routeLoadingSkeleton?: boolean;
-    /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
+    /** Older-history pagination: renders the in-flow boundary row. */
     historyPagination?: ChatHistoryBoundaryProps;
     messages: unknown[];
     toolMessages: unknown[];
-    latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
+    /** Existing pane owner, forwarded into the transcript's detached render root. */
+    toolMessageSource?: ChatToolMessageSource;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
     reasoning?: import("../tool-stream-contract.ts").ChatReasoning | null;
@@ -147,13 +176,17 @@ export type ChatThreadProps = Omit<
     chatBubbleMode?: boolean;
     showThinking: boolean;
     showToolCalls: boolean;
+    inlineCommands?: InlineCommandPresentation;
     persistCommentary?: boolean;
     runWorking?: boolean;
     runFinalizing?: boolean;
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
+    onStartNewSession?: (runId: string, summary: string) => void;
+    failedMessageEditSource?: FailedMessageEditSource;
     failureActionsRunId?: string;
+    onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];
     sessions: SessionsListResult | null;
@@ -170,16 +203,19 @@ export type ChatThreadProps = Omit<
     loadFullAssistantMessage?: SidebarFullMessageLoader | null;
     mediaPolicyEpoch?: number;
     autoExpandToolCalls?: boolean;
-    realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+    /** Live captions update their retained row independently of the pane frame. */
+    readRealtimeTalkConversation?: () => readonly RealtimeTalkConversationEntry[];
     typingActors?: readonly ChatTypingActorView[];
     typingOverflow?: ChatTypingOverflow;
     onOpenSidebar?: (content: SidebarContent) => void;
     onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
+    onOpenManagedArtifact?: (href: string) => boolean;
+    /** Receives settled transcript file links; links the Gateway cannot open become text. */
+    workspaceFileLinkScope?: string;
+    onWorkspaceFileLinks?: (links: HTMLElement[]) => void;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
-    onNavigate?: (routeId: "cron", options: { search: string }) => void;
-    onChatScroll?: (event: Event) => void;
+    onNavigate?: ApplicationContext["navigate"];
     onHistoryIntent?: (event: Event) => void;
-    onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
     onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);
     onSetReply?: (target: MessageReplyTarget) => void;
     replyMessageAccess?: ReplyMessageAccess;
@@ -188,8 +224,13 @@ export type ChatThreadProps = Omit<
     onFocusComposer?: () => void;
     commentAttachments?: readonly ChatAttachment[];
     commentsDisabled?: boolean;
-    onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onAddToChat?: (
+      selection: ChatSelectionSource,
+      anchorRect: DOMRect,
+      widget?: WidgetCommentEditorScope,
+    ) => void;
     onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onNewSessionSelection?: (selection: ChatSelectionSource) => void;
     /** Shows one of the session's subagents. */
     onOpenSubagent?: (sessionKey: string) => void;
     /** Shows the session's subagents; absent where the pane has no list of them to show. */
@@ -207,6 +248,7 @@ type TranscriptInteractionProps = Pick<
   | "onFocusComposer"
   | "onAddToChat"
   | "onCompanionSelection"
+  | "onNewSessionSelection"
 >;
 
 const transcriptStates = new Map<string, ChatThreadState>();
@@ -219,7 +261,6 @@ export function getTranscriptState(paneId: string): ChatThreadState {
   const state: ChatThreadState = {
     asyncQuestionDrafts: new Map(),
     asyncQuestionRevision: 0,
-    turnRecapWatch: null,
     search: new TranscriptSearchState(),
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
@@ -269,8 +310,8 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   }
   if (state) {
     state.asyncQuestionDrafts = new Map();
-    // Parked rows must commit fresh bindings on return even when visible props match.
-    state.transcriptRenderDependencies = [];
+    state.observedWorkRun = undefined;
+    state.readerExpandedWork = undefined;
     // Search input belongs to the outgoing transcript; pane preferences survive.
     state.search.reset();
   }
@@ -377,6 +418,82 @@ function toggleTouchMessageMeta(event: PointerEvent, messageElements: Iterable<H
   }
 }
 
+export function handleTranscriptSelectionMouseDown(event: MouseEvent) {
+  const thread = event.currentTarget;
+  const target = event.target;
+  if (
+    event.button !== 0 ||
+    event.detail < 2 ||
+    !(thread instanceof HTMLElement) ||
+    !(target instanceof Element) ||
+    target.closest("a, button, input, select, textarea, summary, [contenteditable]")
+  ) {
+    return undefined;
+  }
+  // A multi-click on layout can select a newline or the next list item's first word.
+  // Leave single presses native so drags can still start in the gap.
+  if (!event.shiftKey && target.matches(".chat-virtual-row, .chat-group, .chat-text :is(ul, ol)")) {
+    event.preventDefault();
+    thread.focus({ preventScroll: true });
+    thread.ownerDocument.getSelection()?.removeAllRanges();
+    return undefined;
+  }
+  const bubble = target.closest(".chat-bubble");
+  const view = thread.ownerDocument.defaultView;
+  if (!bubble || !thread.contains(bubble) || !view) {
+    return undefined;
+  }
+  // Capture the pressed message before mouseup/dblclick can target a common
+  // ancestor, including when the drag is released outside this transcript.
+  const listeners = new AbortController();
+  const stop = () => listeners.abort();
+  listen(
+    view,
+    "mouseup",
+    () => {
+      stop();
+      if (thread.isConnected && thread.contains(bubble)) {
+        boundMessageSelection(bubble);
+      }
+    },
+    { once: true, signal: listeners.signal },
+  );
+  listen(view, "blur", stop, { once: true, signal: listeners.signal });
+  return stop;
+}
+
+function boundMessageSelection(bubble: Element) {
+  const selection = bubble.ownerDocument.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount !== 1) {
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  if (
+    !range.intersectsNode(bubble) ||
+    (bubble.contains(range.startContainer) && bubble.contains(range.endContainer))
+  ) {
+    return;
+  }
+  // Intersect only this multi-click gesture; ordinary drags and Select All stay native.
+  const backwards =
+    selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset;
+  const bounded = range.cloneRange();
+  const contents = bubble.ownerDocument.createRange();
+  contents.selectNodeContents(bubble);
+  if (bounded.compareBoundaryPoints(Range.START_TO_START, contents) < 0) {
+    bounded.setStart(contents.startContainer, contents.startOffset);
+  }
+  if (bounded.compareBoundaryPoints(Range.END_TO_END, contents) > 0) {
+    bounded.setEnd(contents.endContainer, contents.endOffset);
+  }
+  selection.setBaseAndExtent(
+    backwards ? bounded.endContainer : bounded.startContainer,
+    backwards ? bounded.endOffset : bounded.startOffset,
+    backwards ? bounded.startContainer : bounded.endContainer,
+    backwards ? bounded.startOffset : bounded.endOffset,
+  );
+}
+
 export function handleTranscriptPointerUp(
   event: PointerEvent,
   props: TranscriptInteractionProps,
@@ -390,6 +507,7 @@ export function handleTranscriptPointerUp(
     paneId: props.paneId,
     onAddToChat: props.onAddToChat,
     onAskSideChat: (selection, anchorRect) => props.onCompanionSelection?.(selection, anchorRect),
+    onAskNewSession: (selection) => props.onNewSessionSelection?.(selection),
   });
 }
 
@@ -403,6 +521,32 @@ function selectionIntersectsElement(selection: Selection | null, element: Elemen
     }
   }
   return false;
+}
+
+function rewindTranscriptMessage(
+  props: Pick<ChatThreadProps, "onRewindMessage" | "onFocusComposer">,
+  entryId: string,
+): void {
+  void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
+    if (rewound) {
+      props.onFocusComposer?.();
+    }
+  });
+}
+
+export function transcriptRewindOptions(
+  group: MessageGroup,
+  props: Pick<ChatThreadProps, "onRewindMessage" | "onFocusComposer" | "runActive" | "runWorking">,
+) {
+  const entryId =
+    group.role.toLowerCase() === "user"
+      ? persistedMessageEntryId(group.messages.at(-1)?.message)
+      : null;
+  return {
+    onRewind:
+      entryId && props.onRewindMessage ? () => rewindTranscriptMessage(props, entryId) : undefined,
+    rewindDisabled: Boolean(props.runActive || props.runWorking),
+  };
 }
 
 export function handleTranscriptContextMenu(
@@ -504,11 +648,7 @@ export function handleTranscriptContextMenu(
         // SAFETY: Menu actions bind directly to their native button.
         openChatRewindConfirmation(rewindEvent.currentTarget as HTMLButtonElement, () => {
           removeReplyContextMenu();
-          void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
-            if (rewound) {
-              props.onFocusComposer?.();
-            }
-          });
+          rewindTranscriptMessage(props, entryId);
         });
       },
     });
@@ -571,6 +711,21 @@ export function handleTranscriptContextMenu(
   }
   menu.style.left = `${Math.max(0, left)}px`;
   menu.style.top = `${Math.max(0, top)}px`;
+  const { signal } = owner.listeners;
+  // Keyboard dismissal is ready before focus enters the menu, independent of paint.
+  listen(
+    document,
+    "keydown",
+    (nextEvent) => {
+      if (nextEvent.key === "Escape") {
+        nextEvent.preventDefault();
+        nextEvent.stopPropagation();
+        removeReplyContextMenu();
+        props.onFocusComposer?.();
+      }
+    },
+    { signal },
+  );
   mounted.firstButton?.focus();
   requestAnimationFrame(() => {
     if (!menu.isConnected || activeReplyContextMenu !== owner) {
@@ -581,18 +736,8 @@ export function handleTranscriptContextMenu(
         removeReplyContextMenu();
       }
     };
-    const handleKeydown = (nextEvent: KeyboardEvent) => {
-      if (nextEvent.key === "Escape") {
-        nextEvent.preventDefault();
-        nextEvent.stopPropagation();
-        removeReplyContextMenu();
-        props.onFocusComposer?.();
-      }
-    };
-    const { signal } = owner.listeners;
     listen(document, "click", handleOutsideEvent, { signal });
     // Capture closes this owner even when the next menu stops event propagation.
     listen(document, "contextmenu", handleOutsideEvent, { capture: true, signal });
-    listen(document, "keydown", handleKeydown, { signal });
   });
 }

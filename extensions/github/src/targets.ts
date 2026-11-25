@@ -1,7 +1,7 @@
 import type { ControlUiLinkReaderDetailParams } from "openclaw/plugin-sdk/control-ui-link-reader";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type GitHubItemTarget = {
+type GitHubItemTarget = {
   kind: "issue" | "pull";
   owner: string;
   repo: string;
@@ -127,11 +127,6 @@ export function parseGitHubTarget(value: unknown): GitHubTarget | null {
     return null;
   }
   return { kind, number, owner, repo };
-}
-
-export function parseGitHubItemTarget(value: unknown): GitHubItemTarget | null {
-  const target = parseGitHubTarget(value);
-  return target && target.kind !== "commit" ? target : null;
 }
 
 // Descriptor matches only supported document pages; source/download/check links

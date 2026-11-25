@@ -4,6 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { downloadVydraAsset, extractVydraResultUrls } from "./shared.js";
 
 type DownloadOptions = Parameters<typeof downloadVydraAsset>[0];
@@ -19,16 +20,17 @@ describe("downloadVydraAsset", () => {
     headers: new Headers(),
     headerOrigin: new URL(url).origin,
   });
-  const download = (fetchFn: typeof fetch, overrides: Partial<DownloadOptions> = {}) =>
-    downloadVydraAsset({
+  const download = (fetchFn: typeof fetch, overrides: Partial<DownloadOptions> = {}) => {
+    vi.stubGlobal("fetch", vi.fn(fetchFn));
+    return downloadVydraAsset({
       url: `https://cdn.vydra.example/generated/test.${overrides.kind === "video" ? "mp4" : "png"}`,
       kind: "image",
       timeoutMs: 250,
       maxBytes: 1024 * 1024,
       requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
-      fetchFn,
       ...overrides,
     });
+  };
   function respond(body: BodyInit, init?: ResponseInit): typeof fetch {
     return async () => new Response(body, init);
   }
@@ -37,6 +39,7 @@ describe("downloadVydraAsset", () => {
     clearTimeout(dripTimer);
     dripTimer = undefined;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
     if (!server) {
       return;
@@ -65,13 +68,8 @@ describe("downloadVydraAsset", () => {
       drip();
     });
     server.on("clientError", (_err, socket) => socket.destroy());
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback server address");
-    }
-    return address.port;
+    const port = await listenOnLoopback(server);
+    return port;
   }
 
   it.each([200, 500])("times out dripping HTTP %i with a frozen clock", async (statusCode) => {

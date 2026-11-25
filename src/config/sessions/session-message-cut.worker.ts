@@ -4,36 +4,64 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import { withSqliteSessionDeletionWorkerParticipant } from "./session-accessor.sqlite-deletion.js";
 import { readSessionIdentitySnapshot } from "./session-accessor.sqlite-entry-store.js";
 import { mutateSqliteSessionAtMessageInTransaction } from "./session-accessor.sqlite-message-cut.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import {
+  inPlaceSessionMessageCutPreflightNeedsWrite,
+  refuseInPlaceSessionMessageCutInDatabase,
+} from "./session-message-cut-in-place.kernel.js";
 import type {
   SessionMessageCutCandidate,
   SessionMessageCutCommit,
   SessionMessageCutIntent,
+  SessionMessageCutPreflight,
 } from "./session-message-cut.types.js";
 import { runSessionNativeBindingTransaction } from "./session-native-binding.worker.js";
 import type { SessionForkMessageCutCommit } from "./session-parent-fork.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
-export function commitSessionMessageCut(
-  input: SessionMessageCutCommit,
+/**
+ * Indexed precheck for an in-place cut, before its local workspace is retired.
+ *
+ * The commit transaction revalidates the same preconditions through the same
+ * reader, so this read only avoids retiring custody for a cut that must refuse.
+ * A lagging active-path projection would make that answer untrustworthy, so it
+ * is reconciled through its owner inside a write transaction first.
+ */
+export function preflightSessionMessageCut(
+  input: SessionMessageCutPreflight,
   context: AgentWorkerOperationContext,
 ) {
-  return commitMessageCut(input, context);
+  const refuse = (database: OpenClawAgentDatabase) =>
+    refuseInPlaceSessionMessageCutInDatabase(
+      database,
+      input.sessionId,
+      input.entry,
+      input.intent,
+      input.sourceRepositoryWorkspaceId,
+    );
+  const database = context.open();
+  return inPlaceSessionMessageCutPreflightNeedsWrite(database, input.sessionId)
+    ? context.writeTransaction(
+        "session.transcript.message-cut-preflight",
+        "Session history navigation",
+        refuse,
+      )
+    : refuse(database);
 }
 
 export function commitSessionForkMessageCut(
   input: SessionForkMessageCutCommit,
   context: AgentWorkerOperationContext,
 ) {
-  return commitMessageCut(
+  return commitSessionMessageCut(
     { agentId: input.agentId, intent: input.intent },
     context,
     input.sourceRepositoryWorkspaceId,
   );
 }
 
-function commitMessageCut(
+export function commitSessionMessageCut(
   input: Omit<SessionMessageCutCommit, "intent"> & { intent: SessionMessageCutIntent },
   context: AgentWorkerOperationContext,
   sourceRepositoryWorkspaceId?: string,

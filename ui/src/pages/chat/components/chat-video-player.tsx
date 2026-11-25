@@ -1,6 +1,9 @@
-import { createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { AttachmentCardHeader, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
@@ -14,9 +17,14 @@ import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceOwner } from "./chat-media-source.ts";
 
+registerEnglishCatalog(registerChatComposerEnglish);
+
+registerEnglishCatalog(registerChatMediaEnglish);
+
 type ChatVideoPlayerProps = {
   src: string;
   preview: boolean;
+  autoplay: boolean;
   sourceIdentity: string;
   label: string;
   mimeType: string;
@@ -45,20 +53,41 @@ function ChatVideoPlayerContent(
   let mediaVisible = false;
   let expandButton: HTMLButtonElement | undefined;
   let active = true;
-  let sourceSyncQueued = false;
+  let playRequested = false;
   const syncSource = () => {
     const currentMedia = media;
-    if (!active || !currentMedia || !host.isConnected || !mediaVisible) {
+    if (!active || !currentMedia || !host.isConnected || (!mediaVisible && !host.autoplay)) {
       return;
     }
     // The bridge holds current synchronous inputs for ref, event, and async callbacks.
-    void sourceController.sync(
+    const pending = sourceController.sync(
       currentMedia,
       host.src,
       host.sourceIdentity,
       host.playback,
       host.authToken,
     );
+    const startPlayback = () => {
+      if (
+        !active ||
+        media !== currentMedia ||
+        !currentMedia.isConnected ||
+        !host.autoplay ||
+        playRequested ||
+        sourceController.readiness !== "ready"
+      ) {
+        return;
+      }
+      playRequested = true;
+      // Native sources start in the activation turn, before metadata/first-frame events.
+      // A browser may reject delayed conversion playback; its native Play control remains usable.
+      void currentMedia.play().catch(() => undefined);
+    };
+    if (pending) {
+      void pending.then(startPlayback);
+    } else {
+      startPlayback();
+    }
   };
   function handleInputsChanged(key: keyof ChatVideoPlayerProps): void {
     if (key !== "src" && key !== "sourceIdentity" && key !== "playback" && key !== "authToken") {
@@ -78,15 +107,7 @@ function ChatVideoPlayerContent(
         media.pause();
       }
     }
-    if (sourceSyncQueued) {
-      return;
-    }
-    sourceSyncQueued = true;
-    // Native callers assign related properties together; consume their complete source once.
-    queueMicrotask(() => {
-      sourceSyncQueued = false;
-      syncSource();
-    });
+    sourceController.queueSync(syncSource);
   }
   onSettled(() => {
     inputHandlers.set(host, handleInputsChanged);
@@ -136,7 +157,7 @@ function ChatVideoPlayerContent(
       mediaVisible = true;
       syncSource();
     });
-    onCleanup(() => {
+    const playerRef = elementRef<HTMLDivElement>(() => () => {
       mediaVisible = false;
       expandButton = undefined;
       const previousMedia = media;
@@ -153,7 +174,7 @@ function ChatVideoPlayerContent(
           { "chat-assistant-attachment-card--loading": loading() },
         ]}
         aria-busy={loading() ? "true" : undefined}
-        ref={[viewport, copyRef]}
+        ref={[viewport, copyRef, playerRef]}
         data-openable={onExpand() ? "" : undefined}
         onClick={(event) => openAttachmentCardFromClick(event, onExpand())}
       >
@@ -191,7 +212,7 @@ function ChatVideoPlayerContent(
           <video
             controls
             aria-label={props.label.trim() || t("chat.attachments.video")}
-            preload={props.preview ? "auto" : "metadata"}
+            preload={props.preview || props.autoplay ? "auto" : "metadata"}
             style={dimensions()}
             ref={setMedia}
             onLoadedData={() => setFrameReady(true)}
@@ -216,12 +237,19 @@ function ChatVideoPlayerContent(
     );
   };
   return (
-    <Show
-      when={sourceState.read().readiness !== "unavailable"}
-      fallback={<CompactAttachmentCard {...card()} onExpand={props.onFallbackExpand} />}
-    >
-      <Player />
-    </Show>
+    <>
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {sourceState.read().readiness === "unavailable"
+          ? `${props.label.trim() || t("chat.attachments.video")}: ${t("chat.attachments.previewUnavailable")}`
+          : ""}
+      </span>
+      <Show
+        when={sourceState.read().readiness !== "unavailable"}
+        fallback={<CompactAttachmentCard {...card()} onExpand={props.onFallbackExpand} />}
+      >
+        <Player />
+      </Show>
+    </>
   );
 }
 
@@ -230,6 +258,7 @@ defineSolidBridge("openclaw-chat-video-player", ChatVideoPlayerContent, {
   properties: {
     src: { default: "" },
     preview: { default: false },
+    autoplay: { default: false },
     sourceIdentity: { default: "" },
     label: { default: "" },
     mimeType: { default: "" },

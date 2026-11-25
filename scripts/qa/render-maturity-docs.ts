@@ -156,7 +156,7 @@ Options:
                         Copy source YAML and QA evidence JSON for docs components
   --evidence-dir <path> Optional directory containing qa-evidence.json artifacts
   --check               Fail when output files are stale
-  --strict-inputs       Fail on score or evidence input warnings
+  --strict-inputs       Fail on evidence input warnings
   --allow-failures      Render valid incomplete QA evidence; non-passing checks earn no Coverage
   -h, --help            Show this help
 `);
@@ -1427,15 +1427,11 @@ async function main(): Promise<void> {
   const docsRouteIndex = collectDocsRouteIndex(docsRoot);
   validateTaxonomyDocsReferences(taxonomy, docsRouteIndex);
   if (args.check && !args.evidenceDir?.trim()) {
-    const { warnings } = readValidatedQaMaturityScoreSources({
+    readValidatedQaMaturityScoreSources({
       scoresPath,
       taxonomy,
       taxonomyPath,
     });
-    writeInputWarnings(warnings);
-    if (args.strictInputs) {
-      enforceStrictInputs(warnings);
-    }
     const missing = MATURITY_DOC_OUTPUTS.map((fileName) => path.join(outputDir, fileName)).filter(
       (outputPath) => !fs.existsSync(outputPath),
     );
@@ -1455,14 +1451,13 @@ async function main(): Promise<void> {
     rejectBlockingEvidence(evidenceSummaries);
   }
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
-  const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
+  const { scores } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,
     scoresPath,
     taxonomy,
     taxonomyPath,
   });
-  const evidenceWarnings = evidenceScorecardWarnings(evidenceSummaries, coverage);
-  const inputWarnings = [...scoreWarnings, ...evidenceWarnings];
+  const inputWarnings = evidenceScorecardWarnings(evidenceSummaries, coverage);
   writeInputWarnings(inputWarnings);
   if (args.strictInputs) {
     enforceStrictInputs(inputWarnings);

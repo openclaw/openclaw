@@ -9,8 +9,8 @@ import {
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
-  getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
+  peekSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../../infra/sqlite-database-admission.js";
@@ -94,11 +94,7 @@ export function readPublishedAcpSessionRows(
   databasePath: string,
   entries: readonly AcpSessionReadInput[],
 ): Array<AcpSessionRow | null> | undefined {
-  const rows = getOrLoadSqliteDatabaseAdmissionForPath(
-    databasePath,
-    metadataReceipt,
-    () => undefined,
-  );
+  const rows = peekSqliteDatabaseAdmissionForPath(databasePath, metadataReceipt);
   if (!rows || entries.some(({ keys }) => keys.some((key) => !rows.has(key)))) {
     return undefined;
   }
@@ -171,7 +167,7 @@ export function* selectAcpSessionRowsByKeys(
         ),
       );
     }
-    for (const key of new Set(cohort)) {
+    for (const key of retained ? cohort : []) {
       const row = retained?.get(key);
       if (row) {
         yield { ...row };

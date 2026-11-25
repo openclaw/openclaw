@@ -7,6 +7,7 @@ import type {
   SessionsReclaimParams,
 } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -310,4 +311,23 @@ async function invokeSessionMethod(
     sessionMutationAuthorization,
   });
   return respond;
+}
+
+export function createCodexDeviceHarness(): AgentHarness {
+  return {
+    id: "codex",
+    label: "Codex",
+    autoSelection: { providerIds: ["codex", "openai"] },
+    cloudPlacement: {
+      mode: "remote-exec",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+    },
+    supports: () => ({ supported: true, priority: 10 }),
+    async runAttempt() {
+      throw new Error("not used");
+    },
+  };
 }

@@ -23,14 +23,14 @@ import { runNodeHostWorker } from "./worker.js";
 
 const COMMAND_PATH = ["node", "worker"] as const;
 
-export function resolveMacNodeWorkerArgv(
-  argv: string[],
-):
-  | { ok: true; argv: string[]; profile: string | null; desktopSharingEnabled?: boolean }
-  | { ok: false; error: string } {
+export function resolveMacNodeWorkerArgv(argv: string[]): {
+  argv: string[];
+  profile: string | null;
+  desktopSharingEnabled?: boolean;
+} {
   const parsed = parseCliProfileArgs(argv);
   if (!parsed.ok) {
-    return parsed;
+    throw new Error(parsed.error);
   }
   const command = parsed.argv.slice(2);
   // Share the CLI's option semantics without registering its other commands.
@@ -41,19 +41,17 @@ export function resolveMacNodeWorkerArgv(
     remaining.operands.length ||
     remaining.unknown.length
   ) {
-    return { ok: false, error: "Private macOS worker accepts only: node worker" };
+    throw new Error("Private macOS worker accepts only: node worker");
   }
   return {
-    ...parsed,
+    argv: parsed.argv,
+    profile: parsed.profile,
     desktopSharingEnabled: worker.opts<{ desktopSharing?: boolean }>().desktopSharing,
   };
 }
 
 async function runMacNodeWorkerEntry(argv: string[] = process.argv): Promise<void> {
   const parsed = resolveMacNodeWorkerArgv(argv);
-  if (!parsed.ok) {
-    throw new Error(parsed.error);
-  }
   process.title = "openclaw-node-worker";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();

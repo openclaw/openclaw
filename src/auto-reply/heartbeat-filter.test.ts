@@ -41,6 +41,10 @@ function functionResult(call_id: string, output: string) {
   return user([{ type: "function_call_output", call_id, output }]);
 }
 
+function toolCall(name: string, args: unknown, id = "call_heartbeat") {
+  return { type: "toolCall", id, name, arguments: args };
+}
+
 function toolResult(toolCallId: string, text: string, isError?: boolean) {
   return {
     role: "toolResult",
@@ -69,7 +73,7 @@ function heartbeatCall(type: "toolCall" | "tool_use", attention = true) {
   return assistant([
     type === "tool_use"
       ? { type, id: "toolu_heartbeat", name: "heartbeat_respond", input: outcome }
-      : { type, id: "call_heartbeat", name: "heartbeat_respond", arguments: outcome },
+      : toolCall("heartbeat_respond", outcome),
   ]);
 }
 
@@ -100,6 +104,14 @@ describe("isHeartbeatUserMessage", () => {
         `${taskPrefix}\n\n- email-check\n\nAfter completing all due tasks, reply ${acknowledgement}.`,
       );
     }
+
+    expect(
+      isHeartbeatUserMessage(
+        user(
+          "Run the following periodic tasks (only those due based on their intervals):\n\n- email-check: Check for urgent unread emails\n\nAfter completing all due tasks, reply with exactly NO_REPLY as the entire final answer. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently.",
+        ),
+      ),
+    ).toBe(true);
 
     for (const completion of [
       "After completing all due tasks, use heartbeat_respond to report the outcome. Set notify=false when nothing needs the user's attention.",
@@ -312,18 +324,8 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     expectFiltered([
       wake,
       assistant([
-        {
-          type: "toolCall",
-          id: "call_bash",
-          name: "bash",
-          arguments: { command: "inspect monitor scratch" },
-        },
-        {
-          type: "toolCall",
-          id: "call_heartbeat",
-          name: "heartbeat_respond",
-          arguments: createHeartbeatAttentionOutcome(),
-        },
+        toolCall("bash", { command: "inspect monitor scratch" }, "call_bash"),
+        toolCall("heartbeat_respond", createHeartbeatAttentionOutcome()),
       ]),
       toolResult("call_bash", "checked monitor scratch"),
       followup,

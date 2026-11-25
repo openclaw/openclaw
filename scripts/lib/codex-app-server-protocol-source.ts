@@ -45,7 +45,7 @@ type ResolvePnpmCommandOptions = {
   platform?: NodeJS.Platform;
 };
 
-export function resolveCodexProtocolPnpmCommand(
+function resolveCodexProtocolPnpmCommand(
   args: string[],
   options: ResolvePnpmCommandOptions = {},
 ): ReturnType<typeof resolvePnpmRunner> {

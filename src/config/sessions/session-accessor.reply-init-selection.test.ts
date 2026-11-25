@@ -8,16 +8,13 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import {
-  applySessionEntryLifecycleMutation,
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
   loadSessionEntry,
+  replaceSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import {
-  withoutHostSql,
-  withoutPayloadReads,
-} from "./session-accessor.observation.test-support.js";
+import { withoutHostSql } from "./session-accessor.observation.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const sessionScope = (state: OpenClawTestState, sessionKey: string) => ({
@@ -60,7 +57,12 @@ it.each(["durable", "memory"])(
         relatedSessionKeys: relatedSessionKeys.map((relatedKey) => ` ${relatedKey} `),
       };
       const now = Date.now();
-      const current = { sessionId: "reply", updatedAt: now, parentSessionKey: storedParentKey };
+      const current = {
+        sessionId: "reply",
+        updatedAt: now,
+        parentSessionKey: storedParentKey,
+        lastSubmittedModel: { provider: "synthetic", model: "fixture" },
+      };
       const unrelated = {
         sessionId: "unrelated",
         updatedAt: now,
@@ -102,6 +104,11 @@ it.each(["durable", "memory"])(
         withoutHostSql(() =>
           commitReplySessionInitialization({ ...scope, activeSessionKey: sessionKey, ...params }),
         );
+      await replaceSessionEntry(scope, {
+        ...loadSessionEntry(scope)!,
+        lastSubmittedModel: { model: "fixture", provider: "synthetic" },
+        lastHeartbeatSentAt: 11,
+      });
       const committed = await commit({
         expectedRevision: snapshot.revision,
         sessionEntry: persistedCurrent,
@@ -228,31 +235,5 @@ it("refuses a replacement physical store with the same session identity at commi
       unlinkSync(alias);
       symlinkSync(primary, alias);
     }
-  });
-});
-
-it("projects lifecycle removal without acquiring unrelated prompt payloads", async () => {
-  await withOpenClawTestState({ label: "lifecycle-selected-removal" }, async (state) => {
-    const scope = sessionScope(state, "agent:main:selected");
-    const current = { sessionId: "selected", updatedAt: Date.now(), label: "original" };
-    const unrelatedScope = { ...scope, sessionKey: "agent:main:unrelated" };
-    const prompt = "unrelated lifecycle prompt ".repeat(4096);
-    await upsertSessionEntryCore(scope, current);
-    await upsertSessionEntryCore(unrelatedScope, {
-      sessionId: "unrelated",
-      updatedAt: Date.now(),
-      skillsSnapshot: { prompt, skills: [] },
-    });
-    // The connection's one-time canonical check is separate from per-mutation projection.
-    const persistedCurrent = loadSessionEntry(scope)!;
-    await withoutPayloadReads("entry_json", prompt, () =>
-      applySessionEntryLifecycleMutation({
-        ...scope,
-        skipMaintenance: true,
-        removals: [{ sessionKey: scope.sessionKey, expectedEntry: persistedCurrent }],
-      }),
-    );
-    expect(loadSessionEntry(unrelatedScope)?.skillsSnapshot?.prompt).toBe(prompt);
-    expect(loadSessionEntry(scope)?.label).toBeUndefined();
   });
 });

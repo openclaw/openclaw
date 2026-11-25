@@ -4,9 +4,13 @@ import * as policy from "../../agents/tool-policy.js";
 import * as identity from "../../audit/execution-identity-admission.js";
 import * as admission from "../../channels/message-access/admission-evidence.js";
 import * as ingress from "../../gateway/local-user-ingress.js";
+import { applyRunHydrationSuppression, readPersistedMediaFacts } from "../../media/media-facts.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
+import { createSteerParams } from "./agent-runner-steer-adoption.test-support.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { createQueueCase } from "./queue.case.test-support.js";
 import type { FollowupRun } from "./queue.js";
@@ -18,8 +22,6 @@ import {
 import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
 import { clearFollowupQueue } from "./queue/state.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
-import { createMockTypingController } from "./test-helpers.js";
-import { createTypingSignaler } from "./typing-mode.js";
 const evidenceCleanups = new Set<() => void>();
 function trackedQueue(...args: Parameters<typeof createQueueCase>) {
   const q = createQueueCase(...args);
@@ -71,7 +73,6 @@ it("drains the complete parked image turn after active steering rejects it", asy
     target: () => undefined,
   });
   run.userTurnTranscriptRecorder = recorder;
-  const persist = vi.spyOn(recorder, "persistApproved");
   const operation = createReplyOperation({
     sessionKey: key,
     sessionId: run.run.sessionId,
@@ -98,26 +99,16 @@ it("drains the complete parked image turn after active steering rejects it", asy
     },
   });
   operation.setPhase("running");
-  const typing = createMockTypingController();
   try {
     await expect(
-      runActiveReplySteer({
-        followupRun: run,
-        opts: undefined,
-        providedReplyOperation: operation,
-        queueKey: key,
-        replyOperationRunState: undefined,
-        resolvedQueue: { mode: "steer", debounceMs: 0 },
-        restartRecoverySourceTurnId: run.messageId,
-        runFollowup: q.runFollowup,
-        sessionCtx: {},
-        sessionKey: key,
-        touchActiveSessionEntry: async () => {},
-        typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-      }),
+      runActiveReplySteer(
+        createSteerParams(key, run, operation, {
+          sourceTurnId: run.messageId,
+          runFollowup: q.runFollowup,
+        }),
+      ),
     ).resolves.toBe("handled");
     expect(reject).toHaveBeenCalledOnce();
-    expect(persist).not.toHaveBeenCalled();
     operation.complete();
     await q.done.promise;
     expect(q.calls).toHaveLength(1);
@@ -129,7 +120,6 @@ it("drains the complete parked image turn after active steering rejects it", asy
     expect(recorder.hasPersisted()).toBe(false);
   } finally {
     operation.complete();
-    persist.mockRestore();
   }
 });
 
@@ -166,12 +156,28 @@ it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", a
   const mixed = kind === "mixed";
   const audit = admission.createChannelAdmissionAudit({ enabled: true });
   evidenceCleanups.add(() => audit.close());
-  const q = trackedQueue({ mode: "collect", debounceMs: 0 }, 1);
+  const q = trackedQueue({ mode: "collect", debounceMs: 0 }, 2);
   const turns = [
     ["a", "first", "/tmp/a.png", "image/png"],
     ["b", "second", "/tmp/b.pdf", "application/pdf"],
   ] as const;
   const media = turns.map((turn) => ({ path: turn[2], contentType: turn[3] }));
+  const requesterOrigin = {
+    sessionKey: "agent:main:test:group:shared",
+    messageProvider: "test",
+    accountId: "default",
+    senderId: "ambiguous-transport-sender",
+    senderE164: "+15550000000",
+  };
+  const owner = {
+    channelPrincipal: {
+      channelId: "test",
+      accountId: "default",
+      senderId: requesterOrigin.senderId,
+    },
+    recoveryReference: { version: 2 as const, id: "11111111-1111-4111-8111-111111111111" },
+    isCurrent: () => true,
+  };
   for (const [skillName, label, path, contentType] of turns) {
     const prompt = `[media attached: ${path} (${contentType})]\n${label}`;
     const run = createQueueTestRun({ prompt });
@@ -181,6 +187,8 @@ it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", a
     );
     run.disableTools = true;
     run.run = { ...run.run, ...structuredClone(carrierRun) };
+    run.run.requesterOrigin = { ...requesterOrigin };
+    bindCommandOwnerAuthority(run.run, owner);
     if (mixed) {
       Object.assign(run, { originatingChannel: "test", originatingTo: "room:shared" });
       Object.assign(run.run, {
@@ -241,6 +249,23 @@ it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", a
       run.toolsAllow ? policy.readToolAllowlistIntersection(run.toolsAllow) : undefined,
     ).toEqual([["exec"], ["exec", "message"]]);
     expect(run.run).toMatchObject(carrierRun);
+    expect(run.run.requesterOrigin).toEqual({
+      ...requesterOrigin,
+      ...(mixed ? { senderId: undefined, senderE164: undefined } : {}),
+    });
+    if (mixed) {
+      expect(getCommandOwnerAuthority(run.run)).toMatchObject({
+        channelPrincipal: undefined,
+        recoveryReference: undefined,
+      });
+      expect(getCommandOwnerAuthority(run.run)?.isCurrent()).toBe(false);
+    } else {
+      expect(getCommandOwnerAuthority(run.run)).toMatchObject({
+        channelPrincipal: owner.channelPrincipal,
+        recoveryReference: owner.recoveryReference,
+      });
+      expect(getCommandOwnerAuthority(run.run)?.isCurrent()).toBe(true);
+    }
     if (mixed) {
       expect(run.run).toMatchObject({
         senderId: undefined,
@@ -292,6 +317,36 @@ it.each([
       expect(q.calls[index]?.prompt).toContain(text);
     }
   }
+});
+it("pairs each collected source's run-only image skip with the transcript facts", async () => {
+  const q = trackedQueue();
+  const shared = { path: "/tmp/shared.png", contentType: "image/png" };
+  // Same path in both sources: only the second one could not be read this turn.
+  for (const [prompt, skipped] of [
+    ["one", false],
+    ["two", true],
+  ] as const) {
+    q.add({
+      ...createQueueTestRun({ prompt }),
+      media: [
+        skipped ? { ...shared, hydrationSuppressed: true, unresolvedThisTurn: true } : shared,
+      ],
+      userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+        input: { text: prompt, media: [shared] },
+        target: createTestUserTurnTranscriptTarget(),
+        updateMode: "none",
+      }),
+    });
+  }
+  await q.drain();
+  expect(q.calls).toHaveLength(1);
+  const message = await q.calls[0]?.userTurnTranscriptRecorder?.resolveMessage();
+  const recorded = message ? readPersistedMediaFacts(message) : undefined;
+  expect(
+    applyRunHydrationSuppression(recorded ?? [], q.calls[0]?.media).map(
+      (fact) => fact.hydrationSuppressed === true,
+    ),
+  ).toEqual([false, true]);
 });
 describe("queued Gateway attach evidence", () => {
   installQueueRuntimeErrorSilencer();

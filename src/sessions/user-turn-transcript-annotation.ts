@@ -10,10 +10,15 @@ import { captureSessionEntryCurrentCheckAsyncInternal } from "../config/sessions
 import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
+import { snapshotTranscriptTurnAdmission } from "../config/sessions/transcript-entry-anchor.js";
 import { getOwnedSessionTranscriptWriterFence } from "../config/sessions/transcript-write-context.js";
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { getUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-admission.js";
 import { prepareUserTurnTranscriptAnnotation } from "./user-turn-transcript-annotation-message.js";
+import {
+  prepareModelPromptProjection,
+  readModelPromptProjection,
+} from "./user-turn-transcript.message.js";
 import type {
   UserTurnTranscriptAnnotation,
   UserTurnTranscriptRecorder,
@@ -37,7 +42,7 @@ export function bindUserTurnTranscriptAnnotation(params: {
   if (!owner || !receipt || !message || owner.blocked() || message.excludeFromContext === true) {
     return undefined;
   }
-  let admission = structuredClone(receipt);
+  let admission = snapshotTranscriptTurnAdmission(receipt);
   let admittedMessage = structuredClone(message);
   const target = { ...params.target };
   const fence = getOwnedSessionTranscriptWriterFence({ sessionTarget: target });
@@ -54,6 +59,25 @@ export function bindUserTurnTranscriptAnnotation(params: {
   }
   const assertLive = () => {
     params.assertCurrent();
+    const currentAdmission = owner.receipt();
+    const currentMessage = owner.message();
+    const projection = readModelPromptProjection(currentMessage);
+    // The recorder freezes model input after host binding but before native dispatch.
+    // Follow only that exact metadata addition; edits and retargeting still invalidate us.
+    if (
+      currentAdmission &&
+      currentMessage &&
+      projection !== undefined &&
+      readModelPromptProjection(admittedMessage) === undefined &&
+      isDeepStrictEqual(currentAdmission, {
+        ...admission,
+        generation: currentAdmission.generation,
+      }) &&
+      isDeepStrictEqual(currentMessage, prepareModelPromptProjection(admittedMessage, projection))
+    ) {
+      admission = snapshotTranscriptTurnAdmission(currentAdmission);
+      admittedMessage = structuredClone(currentMessage);
+    }
     if (
       params.abortSignal?.aborted ||
       owner.blocked() ||

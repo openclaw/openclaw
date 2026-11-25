@@ -1,6 +1,6 @@
 // Synthetic viewer lifecycle and mixed presence workloads through the real Gateway transport.
 import assert from "node:assert/strict";
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, type KeyObject } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import path from "node:path";
@@ -26,7 +26,9 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     port: { type: "string", default: "41466" },
-    clients: { type: "string", default: "42" },
+    clients: { type: "string" },
+    agents: { type: "string", default: "24" },
+    "compact-payloads": { type: "boolean", default: false },
     "legacy-clients": { type: "string", default: "2" },
     "client-profile": { type: "string", default: "web" },
     rounds: { type: "string", default: "20" },
@@ -45,7 +47,9 @@ if (!values["state-dir"] || !values.output) {
 }
 const port = integer(values.port, "--port", 40000);
 assert(port <= 65535);
-const clients = integer(values.clients, "--clients", 3);
+const payloadScenario = values.scenario === "payloads";
+const clients = integer(values.clients ?? (payloadScenario ? "40" : "42"), "--clients", 3);
+const agentCount = payloadScenario ? integer(values.agents, "--agents", 1) : 1;
 const legacyClients = integer(values["legacy-clients"], "--legacy-clients", 0);
 assert(legacyClients <= clients, "--legacy-clients must not exceed --clients");
 assert(
@@ -58,7 +62,10 @@ assert(
 );
 const rounds = integer(values.rounds, "--rounds", 1);
 const interval = integer(values["interval-ms"], "--interval-ms", 250);
-assert(["churn", "traffic"].includes(values.scenario), "--scenario must be churn or traffic");
+assert(
+  ["churn", "traffic", "payloads"].includes(values.scenario),
+  "--scenario must be churn, traffic, or payloads",
+);
 let baselineOwnerLoads = 0;
 if (values["presence-owner"]) {
   const original = new URL("../../src/infra/system-presence.ts", import.meta.url).href;
@@ -87,7 +94,17 @@ writeFileSync(
       ...BASE_GATEWAY_BENCH_CONFIG.gateway,
       controlUi: { enabled: false, allowedOrigins: [`http://127.0.0.1:${port}`] },
     },
-    agents: { entries: { main: { workspace: path.join(root, "workspace") } } },
+    agents: payloadScenario
+      ? {
+          ownership: "explicit",
+          entries: Object.fromEntries(
+            Array.from({ length: agentCount }, (_, index) => {
+              const id = index === 0 ? "main" : `synthetic-${index}`;
+              return [id, { name: `Synthetic agent ${index}`, workspace: path.join(root, id) }];
+            }),
+          ),
+        }
+      : { entries: { main: { workspace: path.join(root, "workspace") } } },
     plugins: { enabled: false },
     cron: { enabled: false },
   }),
@@ -314,15 +331,82 @@ async function runTraffic(actor: (typeof peers)[number], keys: string[], session
   writeFileSync(values.output!, JSON.stringify(report, null, 2) + "\n");
   console.log(JSON.stringify(report));
 }
+const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+const distribution = (samples: number[]) => {
+  const sorted = samples.toSorted((a, b) => a - b);
+  const percentile = (fraction: number) =>
+    sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)] ?? 0;
+  return {
+    count: samples.length,
+    total: samples.reduce((sum, value) => sum + value, 0),
+    p50: percentile(0.5),
+    p99: percentile(0.99),
+  };
+};
+const makePayloadCounts = () => ({
+  frames: 0,
+  bytes: 0,
+  samples: [] as number[],
+  fieldBytes: {} as Record<string, number>,
+});
+function countPayload(counts: ReturnType<typeof makePayloadCounts>, value: unknown) {
+  const bytes = jsonBytes(value);
+  counts.frames++;
+  counts.bytes += bytes;
+  counts.samples.push(bytes);
+  const visit = (item: unknown, prefix: string, depth: number) => {
+    if (depth > 3) {
+      return;
+    }
+    if (Array.isArray(item)) {
+      for (const child of item) {
+        visit(child, `${prefix}[]`, depth);
+      }
+      return;
+    }
+    if (!isRecord(item)) {
+      return;
+    }
+    for (const [key, child] of Object.entries(item)) {
+      const field = prefix ? `${prefix}.${key}` : key;
+      counts.fieldBytes[field] = (counts.fieldBytes[field] ?? 0) + jsonBytes(child);
+      visit(child, field, depth + 1);
+    }
+  };
+  visit(value, "", 0);
+}
+const payloadWaves: Array<{
+  kind: "cold" | "reconnect";
+  elapsedMs: number;
+  hello: ReturnType<typeof makePayloadCounts>;
+  health: ReturnType<typeof makePayloadCounts>;
+  presence: ReturnType<typeof makePayloadCounts>;
+  connectMs: number[];
+  readyMs: number[];
+  healthSockets: Set<number>;
+}> = [];
+let payloadWave: (typeof payloadWaves)[number] | undefined;
+const deviceKeys = new Map<number, { publicKey: KeyObject; privateKey: KeyObject }>();
+const pairedDevices = new Set<number>();
+const maintenanceTick = Promise.withResolvers<void>();
 try {
   if (values["presence-owner"]) {
     assert(baselineOwnerLoads > 0, "baseline owner redirect was not used");
   }
   let actorHello: HelloOk | undefined;
-  for (let index = 0; index < clients; index++) {
-    const mode = index < legacyClients ? "legacy" : "delta";
+  const connectPeer = async (index: number, scopeOverride?: string[]) => {
+    const mode =
+      payloadScenario && values["client-profile"] === "web"
+        ? "delta"
+        : index < legacyClients
+          ? "legacy"
+          : "delta";
+    const activeWave = payloadWave;
+    const started = performance.now();
+    const initialPresence = Promise.withResolvers<void>();
+    received.delete(index);
     const observer =
-      mode === "delta" && values.scenario === "traffic"
+      mode === "delta" && (values.scenario === "traffic" || payloadScenario)
         ? createGatewayPresenceObserver({
             requestSnapshot: async () => {
               recoveryRequests++;
@@ -340,7 +424,7 @@ try {
             onError: (error) => failures.push(String(error)),
           })
         : undefined;
-    if (observer) {
+    if (observer && !payloadScenario) {
       observers.push(observer);
     }
     const challenge = Promise.withResolvers<{ nonce: string; ts: number }>();
@@ -348,6 +432,19 @@ try {
       url: `ws://127.0.0.1:${port}`,
       origin: `http://127.0.0.1:${port}`,
       onEvent: (event) => {
+        if (payloadScenario && index === clients && event.event === "tick") {
+          maintenanceTick.resolve();
+        }
+        if (
+          payloadWave &&
+          index < clients &&
+          (event.event === "health" || event.event === "presence")
+        ) {
+          countPayload(payloadWave[event.event], event);
+          if (event.event === "health") {
+            payloadWave.healthSockets.add(index);
+          }
+        }
         if (
           event.event === "connect.challenge" &&
           isRecord(event.payload) &&
@@ -364,8 +461,10 @@ try {
           const normalized = observer?.receive(event);
           if (normalized) {
             received.set(index, (normalized.payload as { presence: PresenceEntry[] }).presence);
+            initialPresence.resolve();
           } else if (mode === "legacy") {
             received.set(index, (event.payload as { presence: PresenceEntry[] }).presence);
+            initialPresence.resolve();
           }
           if (measured) {
             const bytes = Buffer.byteLength(JSON.stringify(event));
@@ -403,16 +502,18 @@ try {
         }
       },
     });
-    peers.push(peer);
+    peers[index] = peer;
     // Node ws can deliver hello and the first reset in one synchronous receive batch.
     observer?.synchronize(peer);
+    peer.ws.once("close", () => observer?.synchronize(null));
     await peer.waitOpen();
     const timeout = setTimeout(
       () => challenge.reject(new Error("connect challenge timed out")),
       12_000,
     );
     const { nonce, ts } = await challenge.promise.finally(() => clearTimeout(timeout));
-    const keys = generateKeyPairSync("ed25519");
+    const keys = deviceKeys.get(index) ?? generateKeyPairSync("ed25519");
+    deviceKeys.set(index, keys);
     const publicKey = publicKeyRawBase64UrlFromEd25519Pem(
       keys.publicKey.export({ type: "spki", format: "pem" }),
     );
@@ -464,7 +565,8 @@ try {
       ...nativeIdentity,
     };
     const scopes =
-      values.scenario === "traffic"
+      scopeOverride ??
+      (values.scenario === "traffic"
         ? [
             "operator.admin",
             "operator.read",
@@ -473,8 +575,8 @@ try {
             "operator.questions",
             "operator.pairing",
           ]
-        : ["operator.admin"];
-    if (nativeIdentity) {
+        : ["operator.admin"]);
+    if (nativeIdentity && !pairedDevices.has(index)) {
       // Synthetic native fixtures still pass the normal signed-device admission boundary.
       const { requestDevicePairing } = await import("../../src/infra/device-pairing.js");
       const { approveDevicePairing } = await import("../../src/infra/device-pairing-approval.js");
@@ -494,6 +596,7 @@ try {
         callerScopes: scopes,
       });
       assert.equal(approved?.status, "approved", "synthetic device pairing must be approved");
+      pairedDevices.add(index);
     }
     const signed = buildDeviceAuthPayloadV3({
       deviceId,
@@ -506,24 +609,72 @@ try {
       signedAtMs: ts,
       nonce,
     });
-    const hello = (await rpc(peer, "connect", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: identity,
-      role: "operator",
-      scopes,
-      device: {
-        id: deviceId,
-        publicKey,
-        signedAt: ts,
-        nonce,
-        signature: signEd25519Payload(
-          keys.privateKey.export({ type: "pkcs8", format: "pem" }),
-          signed,
-        ),
+    const caps = payloadScenario
+      ? values["client-profile"] === "web"
+        ? [
+            "presence-deltas",
+            "hello-health-on-demand",
+            ...(values["compact-payloads"] ? ["health-summary", "hello-presence-self"] : []),
+          ]
+        : [
+            ...(mode === "delta" ? ["presence-deltas"] : []),
+            ...(values["compact-payloads"] ? ["health-summary"] : []),
+          ]
+      : mode === "delta"
+        ? ["presence-deltas"]
+        : [];
+    const connectStarted = performance.now();
+    const response = await peer.request(
+      "connect",
+      {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: identity,
+        role: "operator",
+        scopes,
+        device: {
+          id: deviceId,
+          publicKey,
+          signedAt: ts,
+          nonce,
+          signature: signEd25519Payload(
+            keys.privateKey.export({ type: "pkcs8", format: "pem" }),
+            signed,
+          ),
+        },
+        caps,
       },
-      caps: mode === "delta" ? ["presence-deltas"] : [],
-    })) as HelloOk;
+      60_000,
+    );
+    assert(response.ok, `connect: ${JSON.stringify(response.error)}`);
+    const hello = response.payload as HelloOk;
+    if (scopeOverride) {
+      assert.deepEqual(
+        hello.auth?.scopes,
+        scopeOverride,
+        "public health control must retain read-only scopes",
+      );
+    }
+    if (activeWave && index < clients) {
+      activeWave.connectMs.push(performance.now() - connectStarted);
+      countPayload(activeWave.hello, response);
+      const presenceTimeout = setTimeout(
+        () => initialPresence.reject(new Error("initial presence timed out")),
+        60_000,
+      );
+      await initialPresence.promise.finally(() => clearTimeout(presenceTimeout));
+      activeWave.readyMs.push(performance.now() - started);
+    }
+    if (payloadScenario && identity.mode !== "cli") {
+      const self = hello.snapshot.presence.find((row) => row.connectionId === hello.server.connId);
+      assert(self, `socket ${index} hello must include its own presence row`);
+      assert.equal(self.clientId, identity.id, "hello self row must retain client identity");
+      assert.equal(
+        self.instanceId,
+        identity.instanceId,
+        "hello self row must retain instance identity",
+      );
+    }
     const capability = mode === "delta" ? "presence-deltas" : "legacy";
     const cohortKey = `${identity.id}:${identity.version}:${capability}`;
     const cohort = cohorts.get(cohortKey) ?? {
@@ -537,117 +688,259 @@ try {
     if (index === clients - 1) {
       actorHello = hello;
     }
-  }
-  assert(actorHello);
-  const actor = peers.at(-1)!;
-  const keys = ["agent:main:presence-bench-a", "agent:main:presence-bench-b"];
-  const sessionIds: string[] = [];
-  for (const key of keys) {
-    const created = await rpc(actor, "sessions.create", {
-      key,
-      visibility: "shared",
-      displayName: "Synthetic presence session",
-    });
-    assert(isRecord(created) && typeof created.sessionId === "string");
-    sessionIds.push(created.sessionId);
-  }
-  if (values.scenario === "traffic") {
-    await runTraffic(actor, keys, sessionIds[0]!);
-  } else {
-    // Adapt the live transport to the same plain owner used by mounted chat pages.
-    const gateway = {
-      snapshot: {
-        phase: "connected" as const,
-        hello: actorHello,
-        assistantAgentId: "main",
-        client: {
-          request: async (method: string, params: unknown) => {
-            if (measured) {
-              requests++;
-            }
-            try {
-              return await rpc(actor, method, params);
-            } catch (error) {
-              failures.push(String(error));
-              throw error;
-            }
-          },
-        },
-      },
-      subscribe: () => () => {},
-    };
-    // The selectable owner consumes this transport adapter, not the browser application.
-    const { sessionViewerPresenceForGateway } = (await import(
-      pathToFileURL(path.resolve(values["viewer-owner"])).href
-    )) as {
-      sessionViewerPresenceForGateway: (adapter: typeof gateway) => {
-        watch: (owner: object, sessionKeys: readonly string[]) => void;
-        unwatch: (owner: object) => void;
-      };
-    };
-    const store = sessionViewerPresenceForGateway(gateway);
-    let owner = {};
-    store.watch(owner, [keys[0]!]);
-    await delay(500);
+  };
+  if (payloadScenario) {
+    // Preparation is outside pair timing; reconnects reuse the same signed devices.
+    for (let index = 0; index <= clients; index++) {
+      deviceKeys.set(index, generateKeyPairSync("ed25519"));
+    }
+    await connectPeer(clients, ["operator.read"]);
+    const control = peers[clients]!;
+    // The first tick proves post-ready maintenance has installed the health broadcaster.
+    const tickTimeout = setTimeout(
+      () => maintenanceTick.reject(new Error("Gateway maintenance did not start")),
+      120_000,
+    );
+    await maintenanceTick.promise.finally(() => clearTimeout(tickTimeout));
+    const healthRpc = makePayloadCounts();
+    countPayload(healthRpc, await rpc(control, "health", { probe: true }));
     if (values["start-at"]) {
       const startAt = integer(values["start-at"], "--start-at", 1);
       assert(startAt > Date.now(), "pair start deadline must follow Gateway preparation");
       await delay(startAt - Date.now());
     }
-    const started = performance.now();
-    const cpu = process.cpuUsage();
-    measured = true;
-    for (let round = 0; round < rounds; round++) {
-      // Real mount cleanup followed by a replacement owner with unchanged membership.
-      store.unwatch(owner);
-      owner = {};
-      store.watch(owner, [keys[0]!]);
+    for (let round = 0; round <= rounds; round++) {
+      payloadWave = {
+        kind: round === 0 ? "cold" : "reconnect",
+        elapsedMs: 0,
+        hello: makePayloadCounts(),
+        health: makePayloadCounts(),
+        presence: makePayloadCounts(),
+        connectMs: [],
+        readyMs: [],
+        healthSockets: new Set(),
+      };
+      payloadWaves.push(payloadWave);
+      const started = performance.now();
+      await Promise.all(Array.from({ length: clients }, (_, index) => connectPeer(index)));
+      // Use the quarantine owner so the real health collector observes a changed diagnostic.
+      const { recordContextEngineQuarantine } =
+        await import("../../src/context-engine/registry-quarantine.ts");
+      const engineId = `synthetic-health-${round}`;
+      await recordContextEngineQuarantine({
+        engineId,
+        operation: "bootstrap",
+        error: new Error("Synthetic payload measurement"),
+        defaultEngineId: "legacy",
+      });
+      const deadline = Date.now() + 15_000;
+      let collected = false;
+      do {
+        const health = await rpc(control, "health", { probe: true });
+        if (
+          isRecord(health) &&
+          isRecord(health.contextEngines) &&
+          Array.isArray(health.contextEngines.quarantined) &&
+          health.contextEngines.quarantined.some(
+            (engine: unknown) => isRecord(engine) && engine.engineId === engineId,
+          )
+        ) {
+          countPayload(healthRpc, health);
+          collected = true;
+          break;
+        }
+        assert(Date.now() < deadline, "synthetic quarantine did not reach the health collector");
+        await delay(100);
+      } while (Date.now() < deadline);
+      assert(collected, "synthetic quarantine did not reach the health collector");
       await delay(interval);
+      assert.equal(
+        payloadWave.healthSockets.size,
+        clients,
+        "changed health must reach every client",
+      );
+      payloadWave.elapsedMs = performance.now() - started;
+      payloadWave = undefined;
+      const comparable = (rows: PresenceEntry[]) =>
+        rows.map((row) => (row.mode === "gateway" ? { ...row, ts: 0 } : row));
+      const authoritative = (await rpc(peers[0]!, "system-presence", {})) as PresenceEntry[];
+      for (let index = 0; index < clients; index++) {
+        assert(received.has(index), `socket ${index} did not reconstruct presence`);
+        assert.deepEqual(
+          comparable(received.get(index)!),
+          comparable(authoritative),
+          `wave ${round} socket ${index} reconstructed roster differs from system-presence`,
+        );
+      }
+      assert.equal(
+        recoveryRequests,
+        0,
+        "the UI reducer must accept every payload-wave delta without recovery",
+      );
+      assert.equal(failures.length, 0, failures.join("\n"));
+      await Promise.all(
+        peers.slice(0, clients).map(
+          (peer) =>
+            new Promise<void>((resolve) => {
+              peer.ws.once("close", () => resolve());
+              peer.close();
+            }),
+        ),
+      );
     }
-    const churn = structuredClone(traffic);
-    const churnRequests = requests;
-    const churnElapsedMs = performance.now() - started;
-    // Positive control: a real session change and final departure must still publish.
-    store.watch(owner, [keys[1]!]);
-    await delay(500);
-    store.unwatch(owner);
-    await delay(500);
-    measured = false;
-    assert.equal(failures.length, 0, failures.join("\n"));
-    assert.equal(
-      traffic.legacy.frames - churn.legacy.frames,
-      legacyClients * 2,
-      "both changes must reach legacy readers",
-    );
-    assert.equal(
-      traffic.delta.frames - churn.delta.frames,
-      (clients - legacyClients) * 2,
-      "both changes must reach delta readers",
-    );
-    const elapsedMs = performance.now() - started;
-    const used = process.cpuUsage(cpu);
+    const summarize = (counts: ReturnType<typeof makePayloadCounts>) => ({
+      frames: counts.frames,
+      bytes: counts.bytes,
+      bytesPerFrame: distribution(counts.samples),
+      fieldBytes: counts.fieldBytes,
+    });
     const report = {
+      scenario: "payloads",
       clients,
-      legacyClients,
-      rounds,
-      intervalMs: interval,
-      elapsedMs,
-      churnElapsedMs,
-      viewerRequests: requests,
-      churnRequests,
-      churn,
-      total: traffic,
-      churnFramesPerMinute: ((churn.delta.frames + churn.legacy.frames) * 60_000) / churnElapsedMs,
-      churnBytesPerMinute: ((churn.delta.bytes + churn.legacy.bytes) * 60_000) / churnElapsedMs,
-      cpuMs: (used.user + used.system) / 1000,
-      rssBytes: process.memoryUsage().rss,
+      agents: agentCount,
+      reconnectWaves: rounds,
+      compactPayloads: values["compact-payloads"],
+      clientProfile: values["client-profile"],
+      healthRpc: summarize(healthRpc),
+      waves: payloadWaves.map((wave) => ({
+        kind: wave.kind,
+        elapsedMs: wave.elapsedMs,
+        hello: summarize(wave.hello),
+        health: summarize(wave.health),
+        healthSockets: wave.healthSockets.size,
+        verifiedPresenceSockets: clients,
+        presence: summarize(wave.presence),
+        connectMs: distribution(wave.connectMs),
+        socketToHelloAndPresenceMs: distribution(wave.readyMs),
+        totalBytes: wave.hello.bytes + wave.health.bytes + wave.presence.bytes,
+      })),
+      limitations: [
+        "Synthetic agents and signed clients; plugins, channels, cron, and heartbeat execution are disabled.",
+        "Cold means first measured client attach to a Gateway whose public health is already populated; reconnects reuse devices.",
+        "Time to ready ends after hello and initial presence; no browser rendering or catalog RPCs are modeled.",
+        "Health uses the real collector and quarantine owner with synthetic failures; no health payloads are injected.",
+        "UTF-8 JSON application bytes exclude WebSocket/TCP framing and compression; nested field sizes overlap parent totals.",
+        "Control health RPC bytes are reported separately; each wave totals hello, health, and presence before disconnect.",
+      ],
     };
     writeFileSync(values.output, JSON.stringify(report, null, 2) + "\n");
     console.log(JSON.stringify(report));
+  } else {
+    for (let index = 0; index < clients; index++) {
+      await connectPeer(index);
+    }
+    assert(actorHello);
+    const actor = peers.at(-1)!;
+    const keys = ["agent:main:presence-bench-a", "agent:main:presence-bench-b"];
+    const sessionIds: string[] = [];
+    for (const key of keys) {
+      const created = await rpc(actor, "sessions.create", {
+        key,
+        visibility: "shared",
+        displayName: "Synthetic presence session",
+      });
+      assert(isRecord(created) && typeof created.sessionId === "string");
+      sessionIds.push(created.sessionId);
+    }
+    if (values.scenario === "traffic") {
+      await runTraffic(actor, keys, sessionIds[0]!);
+    } else {
+      // Adapt the live transport to the same plain owner used by mounted chat pages.
+      const gateway = {
+        snapshot: {
+          phase: "connected" as const,
+          hello: actorHello,
+          assistantAgentId: "main",
+          client: {
+            request: async (method: string, params: unknown) => {
+              if (measured) {
+                requests++;
+              }
+              try {
+                return await rpc(actor, method, params);
+              } catch (error) {
+                failures.push(String(error));
+                throw error;
+              }
+            },
+          },
+        },
+        subscribe: () => () => {},
+      };
+      // The selectable owner consumes this transport adapter, not the browser application.
+      const { sessionViewerPresenceForGateway } = (await import(
+        pathToFileURL(path.resolve(values["viewer-owner"])).href
+      )) as {
+        sessionViewerPresenceForGateway: (adapter: typeof gateway) => {
+          watch: (owner: object, sessionKeys: readonly string[]) => void;
+          unwatch: (owner: object) => void;
+        };
+      };
+      const store = sessionViewerPresenceForGateway(gateway);
+      let owner = {};
+      store.watch(owner, [keys[0]!]);
+      await delay(500);
+      if (values["start-at"]) {
+        const startAt = integer(values["start-at"], "--start-at", 1);
+        assert(startAt > Date.now(), "pair start deadline must follow Gateway preparation");
+        await delay(startAt - Date.now());
+      }
+      const started = performance.now();
+      const cpu = process.cpuUsage();
+      measured = true;
+      for (let round = 0; round < rounds; round++) {
+        // Real mount cleanup followed by a replacement owner with unchanged membership.
+        store.unwatch(owner);
+        owner = {};
+        store.watch(owner, [keys[0]!]);
+        await delay(interval);
+      }
+      const churn = structuredClone(traffic);
+      const churnRequests = requests;
+      const churnElapsedMs = performance.now() - started;
+      // Positive control: a real session change and final departure must still publish.
+      store.watch(owner, [keys[1]!]);
+      await delay(500);
+      store.unwatch(owner);
+      await delay(500);
+      measured = false;
+      assert.equal(failures.length, 0, failures.join("\n"));
+      assert.equal(
+        traffic.legacy.frames - churn.legacy.frames,
+        legacyClients * 2,
+        "both changes must reach legacy readers",
+      );
+      assert.equal(
+        traffic.delta.frames - churn.delta.frames,
+        (clients - legacyClients) * 2,
+        "both changes must reach delta readers",
+      );
+      const elapsedMs = performance.now() - started;
+      const used = process.cpuUsage(cpu);
+      const report = {
+        clients,
+        legacyClients,
+        rounds,
+        intervalMs: interval,
+        elapsedMs,
+        churnElapsedMs,
+        viewerRequests: requests,
+        churnRequests,
+        churn,
+        total: traffic,
+        churnFramesPerMinute:
+          ((churn.delta.frames + churn.legacy.frames) * 60_000) / churnElapsedMs,
+        churnBytesPerMinute: ((churn.delta.bytes + churn.legacy.bytes) * 60_000) / churnElapsedMs,
+        cpuMs: (used.user + used.system) / 1000,
+        rssBytes: process.memoryUsage().rss,
+      };
+      writeFileSync(values.output, JSON.stringify(report, null, 2) + "\n");
+      console.log(JSON.stringify(report));
+    }
   }
 } finally {
   for (const peer of peers) {
-    peer.close();
+    peer?.close();
   }
   await server.close();
 }

@@ -1,5 +1,6 @@
 import { onSettled } from "solid-js";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
@@ -14,6 +15,8 @@ import {
 import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 import browserStyles from "./browser-panel.css?inline";
 
+registerEnglishCatalog(registerBrowserEnglish);
+
 type Host = SolidBridgeElement<BrowserPanelInputs, BrowserPanelMethods>;
 
 const owners = new WeakMap<HTMLElement, BrowserPanelPresentation>();
@@ -27,14 +30,6 @@ function ownerFor(host: Host) {
   for (const key of ["hostedTabs", "activeHostedTabId"] as const) {
     Object.defineProperty(host, key, { configurable: true, get: () => owner[key] });
   }
-  const bridgePrototype = Object.getPrototypeOf(host);
-  Object.defineProperty(host, "updateComplete", {
-    configurable: true,
-    get: () =>
-      Promise.resolve(Reflect.get(bridgePrototype, "updateComplete", host)).then(() =>
-        host.isConnected ? owner.updateComplete : false,
-      ),
-  });
   return owner;
 }
 
@@ -59,6 +54,8 @@ export const BrowserPanelHost = defineSolidBridge<BrowserPanelInputs, BrowserPan
       authToken: { default: null, attribute: false },
       embedded: { default: false, type: Boolean, reflect: true },
       tabsInHeader: { default: false, type: Boolean },
+      mobilePresentation: { default: false, type: Boolean },
+      fetchFavicon: { default: undefined, attribute: false },
       presented: { default: false, type: Boolean },
       refreshOnPresentation: { default: true, type: Boolean },
       sessionKey: { default: "", attribute: false },
@@ -68,6 +65,7 @@ export const BrowserPanelHost = defineSolidBridge<BrowserPanelInputs, BrowserPan
       dashboardTarget: { default: undefined, attribute: false },
     },
     propertyChanged: (host, key) => owners.get(host)?.inputsChanged(key),
+    updateComplete: (host) => (host.isConnected ? owners.get(host)?.updateComplete : false),
     methods: {
       browserPanelIsOpen: (host) => ownerFor(host).browserPanelIsOpen(),
       toggle: (host) => ownerFor(host).toggle(),
@@ -119,6 +117,8 @@ function browserPanelContent(owner: BrowserPanelPresentation) {
           }
           embedded={panel().inputs.embedded}
           tabsInHeader={panel().inputs.tabsInHeader}
+          mobilePresentation={panel().inputs.mobilePresentation}
+          fetchFavicon={panel().inputs.fetchFavicon}
         />
       ) : null}
     </>

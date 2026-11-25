@@ -1,12 +1,12 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { MessageChannel } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import {
   createSqliteReadOnlyNativeResourceClient,
   createSqliteReadOnlyNativeResourceConnection,
@@ -87,7 +87,6 @@ function fixture() {
     onFailure(error) {
       throw error;
     },
-    onDispose() {},
   });
   const ownerPort = host.port;
   const resource = createNativeWorkerResource(port1, undefined, ownerPort);
@@ -389,7 +388,7 @@ it("rejects lost-port RPCs without declaring child death and joins outstanding w
   });
   const copy = client.runOnce(
     "/fixture/source",
-    { mode: "sync" },
+    { mode: "sync", stagingRoot: "/fixture/allocated" },
     { env: launch.env, cwd: launch.cwd, deadlineOwnedByCaller: false },
   );
   const rejected = expect(copy).rejects.toThrow("child cleanup is not acknowledged");

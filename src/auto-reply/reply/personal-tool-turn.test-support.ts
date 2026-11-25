@@ -1,11 +1,11 @@
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  createAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -118,7 +118,7 @@ type Person = {
   senderId: string;
   name: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  readCurrentRoleAssignment?: () => string | null;
+  readCurrentRoleFacts?: AdmittedRunOperatorAuthority["readCurrentRoleFacts"];
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
 };
 type PreparedRun = Pick<EmbeddedAgentQueueHandle, "toolAuthorityFingerprint">;
@@ -142,7 +142,6 @@ export async function withPersonalToolTurn<T>(
       person: Person,
       options?: { reject?: boolean; scopes?: string[] },
     ): Promise<ReplyMessageInjectionOutcome>;
-    revoke(profileId: string): void;
     complete(): Promise<void>;
     operation: ReturnType<typeof createTestReplyOperation>;
     admittedRunContext: AdmittedRunContext;
@@ -151,7 +150,6 @@ export async function withPersonalToolTurn<T>(
     authorityLeases: Array<{ profileId: string; releases: number }>;
   }) => Promise<T>,
 ): Promise<T> {
-  const revoked = new Set<string>();
   const releaseCounts = new Map<string, number>();
   const authorityLeases: Array<{ profileId: string; releases: number }> = [];
   const run = createQueueTestRun({ prompt: "Arrange my view" });
@@ -159,17 +157,12 @@ export async function withPersonalToolTurn<T>(
   const modelPolicy = prepareOperatorModelPolicy({ cfg: {}, policy: {} });
   const authority = (person: Person, scopes = ["operator.read", "operator.write"]) =>
     person.operatorAuthority ??
-    createAdmittedRunOperatorAuthority({
+    createTestOperatorAuthority({
       profileId: person.profileId,
       scopes,
       gatewayAccessGrant: null,
       modelPolicy,
-      readCurrentRoleAssignment: person.readCurrentRoleAssignment,
-      assertCurrent() {
-        if (revoked.has(person.profileId)) {
-          throw new Error("Profile access revoked");
-        }
-      },
+      readCurrentRoleFacts: person.readCurrentRoleFacts,
       retain: () => {
         const lease = { profileId: person.profileId, releases: 0 };
         authorityLeases.push(lease);
@@ -222,7 +215,7 @@ export async function withPersonalToolTurn<T>(
   let reject = false;
   let registeredHandle: EmbeddedAgentQueueHandle | undefined;
   const completionRequested = createDeferred();
-  let testOutcome: Promise<PromiseSettledResult<T>> | undefined;
+  let testOutcome: Promise<T> | undefined;
   // Post-turn assertions retain the fixture registration after native execution and custody end.
   const producer = Promise.resolve().then(async () => {
     try {
@@ -305,9 +298,6 @@ export async function withPersonalToolTurn<T>(
             completionRequested.resolve();
             await producer;
           },
-          revoke: (profileId) => {
-            revoked.add(profileId);
-          },
           steer: async (person, options) => {
             reject = options?.reject === true;
             return await queueCurrentReplyRunMessage(queued.sessionId, "Change my view", {
@@ -332,10 +322,7 @@ export async function withPersonalToolTurn<T>(
               },
             });
           },
-        }).then(
-          (value) => ({ status: "fulfilled", value }),
-          (reason: unknown) => ({ status: "rejected", reason }),
-        );
+        });
         await Promise.race([testOutcome, completionRequested.promise]);
       };
       await withGatewayToolCallerIdentity(
@@ -369,18 +356,11 @@ export async function withPersonalToolTurn<T>(
     }
   });
   try {
-    const [producerOutcome] = await Promise.allSettled([producer]);
-    const outcome = await testOutcome;
-    if (producerOutcome.status === "rejected") {
-      throw producerOutcome.reason;
-    }
-    if (!outcome) {
+    await producer;
+    if (!testOutcome) {
       throw new Error("The personal tool producer did not start its test");
     }
-    if (outcome.status === "rejected") {
-      throw outcome.reason;
-    }
-    return outcome.value;
+    return await testOutcome;
   } finally {
     if (registeredHandle) {
       clearActiveEmbeddedRun(queued.sessionId, registeredHandle, queued.sessionKey);
@@ -390,4 +370,13 @@ export async function withPersonalToolTurn<T>(
     }
     admission?.close();
   }
+}
+
+export function createPersonalToolParticipant(profileId: string, name: string) {
+  return {
+    profileId,
+    name,
+    senderId: `${profileId}-sender`,
+    gatewayUiCommandTarget: { connId: `${profileId}-tab`, profileId },
+  };
 }

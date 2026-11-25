@@ -53,13 +53,26 @@ export async function collectBootstrapFileSize(
     config: cfg,
     agentId,
   });
+  const analysis = analyzeBootstrapBudget({
+    files: buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles: contextFiles }),
+    bootstrapMaxChars,
+    bootstrapTotalMaxChars,
+  });
   return {
     bootstrapTotalMaxChars,
-    analysis: analyzeBootstrapBudget({
-      files: buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles: contextFiles }),
-      bootstrapMaxChars,
-      bootstrapTotalMaxChars,
-    }),
+    analysis: {
+      ...analysis,
+      truncatedFiles: analysis.truncatedFiles.map((file) =>
+        Object.assign(file, {
+          retention:
+            file.injectedChars === 0
+              ? "No content from this file reaches the model."
+              : file.name.toLowerCase() === "agents.md"
+                ? "The model receives start/end excerpts as space permits, plus a bounded policy digest when available; other middle text is omitted."
+                : "The model receives start/end excerpts as space permits; middle text is omitted.",
+        }),
+      ),
+    },
   };
 }
 
@@ -91,6 +104,7 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
         const truncatedChars = Math.max(0, file.rawChars - file.injectedChars);
         lines.push(
           `- ${file.name}: ${formatInt(file.rawChars)} raw / ${formatInt(file.injectedChars)} injected (${formatPercent(truncatedChars, file.rawChars)} truncated; ${formatCauses(file.causes)})`,
+          `  ${file.retention}`,
         );
       }
     } else {

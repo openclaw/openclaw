@@ -24,17 +24,36 @@ import {
   resolveDirectBundledProviderPolicySurface,
   type BundledProviderPolicySurface,
 } from "./provider-policy-surface.js";
-import { resolveProviderPolicySurface } from "./provider-public-artifacts.js";
+import {
+  prepareTrustedExternalProviderPolicySurfaces,
+  resolveProviderPolicySurface,
+} from "./provider-public-artifacts.js";
 
 type ProviderModelRouteObservation = {
   modelId?: string;
   observedRoutes?: readonly ProviderModelRouteSource[];
   routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
+  requestTransportOverrides?: ProviderRouteOverridePresence;
 };
 
 type ProviderModelRoutesResolver = (
   observed?: ProviderModelRouteObservation,
 ) => ProviderModelRouteResolution | null;
+
+function currentProviderModelPolicyMetadata() {
+  return getCurrentPluginMetadataSnapshotRequiredRuntime({
+    allowScopedSnapshot: true,
+    allowWorkspaceScopedSnapshot: true,
+  });
+}
+
+/** Doctor's source custody needs installed owners prepared before synchronous identity reads. */
+export async function prepareProviderModelPolicySurfaces(): Promise<void> {
+  const metadata = currentProviderModelPolicyMetadata();
+  if (metadata) {
+    await prepareTrustedExternalProviderPolicySurfaces(metadata);
+  }
+}
 
 /** Resolves policy through the bundled or selected trusted installed owner. */
 export function resolveProviderModelPolicySurface(
@@ -46,12 +65,7 @@ export function resolveProviderModelPolicySurface(
   if (bundled) {
     return bundled;
   }
-  const metadata =
-    metadataSnapshot ??
-    getCurrentPluginMetadataSnapshotRequiredRuntime({
-      allowScopedSnapshot: true,
-      allowWorkspaceScopedSnapshot: true,
-    });
+  const metadata = metadataSnapshot ?? currentProviderModelPolicyMetadata();
   return metadata
     ? resolveProviderPolicySurface(provider, {
         manifestRegistry: metadata,
@@ -76,13 +90,10 @@ export function resolveProviderModelCatalogId(params: {
   provider: string;
   modelId: string;
   surface?: BundledProviderPolicySurface | null;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 }): string | null {
   const provider = normalizeProviderId(params.provider);
   const surface =
-    params.surface === undefined
-      ? resolveProviderModelPolicySurface(provider, params.metadataSnapshot)
-      : params.surface;
+    params.surface === undefined ? resolveProviderModelPolicySurface(provider) : params.surface;
   const normalized = surface?.normalizeModelCatalogId?.({
     provider,
     modelId: params.modelId,
@@ -132,11 +143,6 @@ export function createProviderModelRoutesResolver(params: {
     return () => null;
   }
   const providerConfig = resolveMergedModelProviderConfig(params.config, provider);
-  // Runtime defaults copy catalog capabilities into configured model rows. Route
-  // eligibility must read the authored view or metadata looks like request behavior.
-  const authoredConfig = params.config
-    ? projectConfigOntoRuntimeSourceSnapshot(params.config)
-    : undefined;
   const configuredProvider = providerConfig
     ? { api: providerConfig.api, baseUrl: providerConfig.baseUrl }
     : undefined;
@@ -161,7 +167,10 @@ export function createProviderModelRoutesResolver(params: {
       ? () => "present" as const
       : createModelProviderRouteOverrideResolver({
           provider,
-          authoredConfig,
+          // Runtime defaults are metadata, not authored request overrides.
+          authoredConfig: params.config
+            ? projectConfigOntoRuntimeSourceSnapshot(params.config)
+            : undefined,
           canonicalizeModelId,
         });
   const providerRouteOverridePresence = resolveRouteOverridePresence();
@@ -184,9 +193,12 @@ export function createProviderModelRoutesResolver(params: {
         : configuredRuntimeId && !isDefaultAgentRuntimeId(configuredRuntimeId)
           ? { runtimeId: configuredRuntimeId, source: "explicit" as const }
           : preparedIntent;
-    const requestTransportOverrides = modelId
-      ? (routeOverridePresenceByModel.get(modelId) ?? providerRouteOverridePresence)
-      : providerRouteOverridePresence;
+    const requestTransportOverrides =
+      observed?.requestTransportOverrides === "present"
+        ? "present"
+        : modelId
+          ? (routeOverridePresenceByModel.get(modelId) ?? providerRouteOverridePresence)
+          : providerRouteOverridePresence;
     const observedRoutes = observed?.observedRoutes?.filter(
       (route) => route.api != null || (route.baseUrl !== undefined && route.baseUrl !== null),
     );

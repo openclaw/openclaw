@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-  type WorkerAdmissionHandshake,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -16,12 +12,14 @@ import {
 } from "./node-worker-tunnel.test-support.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
+import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { testState } from "./service.test-support.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
+import { gitInit } from "./workspace-recovery.test-support.js";
 
 describe("worker environment runtime upgrades", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -30,10 +28,7 @@ describe("worker environment runtime upgrades", () => {
     ...support.BOOTSTRAP_RECEIPT,
     bundleHash: "b".repeat(64),
     openclawVersion: "2026.9.27",
-    protocolFeatures: [
-      WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-      WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-    ],
+    protocolFeatures: WORKER_PROTOCOL_FEATURES.toSorted(),
   };
   const installedReceipt = { ...currentReceipt, installKind: "bundle" as const };
   type InstallNodeBundle = NonNullable<
@@ -285,10 +280,7 @@ describe("worker environment runtime upgrades", () => {
     installWorkerPlacementReconcileGuard({
       placements: h.placements,
       environments: h.service,
-      dispatch: {
-        resumeProvisioning: unsupported("Attached runtime refresh does not provision"),
-        hasPendingPlacementLifecycleOperation: () => false,
-      },
+      dispatch: { isPlacementOperationInFlight: () => false },
       isStopping: h.service.isStopping,
     });
     const reconciling = h.service.reconcileOnce();
@@ -352,6 +344,8 @@ describe("worker environment runtime upgrades", () => {
   it.each(["unchanged build", "same-version build"] as const)(
     "recovers published Gateway Stop state after restart with %s",
     async (change) => {
+      // Recovery inspects local refs; do not inherit Git metadata from the temp parent.
+      await gitInit(testState.root);
       // v2026.9.6 placement-reclaim persists these shapes; current admission owns the schema.
       const releasedReceipt = {
         ...currentReceipt,
@@ -399,6 +393,8 @@ describe("worker environment runtime upgrades", () => {
               }),
             ],
       );
+      // Recovery probes durable Git refs; own the workspace instead of discovering a parent.
+      await gitInit(testState.root);
       const fixture = await createHarness(testState.stateDb, restarted.placements, {
         workspacePath: testState.root,
       });
@@ -477,6 +473,7 @@ describe("worker environment runtime upgrades", () => {
           expect(publicationAuthority).toContain(false);
           expect(publicationAuthority).not.toContain(true);
         }
+        expect(recovery.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
         expect(h.install).toHaveBeenCalledTimes(unchanged ? 0 : 1);
         expect(h.destroy).toHaveBeenCalledOnce();
         expect(h.provision).not.toHaveBeenCalled();

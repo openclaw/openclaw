@@ -83,42 +83,35 @@ function extractImagesFromPart(images: GeneratedImageAsset[], value: unknown): v
     return;
   }
 
-  const rawBase64 = normalizeOptionalString(part.b64_json);
-  if (rawBase64) {
-    const image = generatedImageAssetFromBase64({ base64: rawBase64, index: images.length });
-    if (image) {
-      images.push(image);
+  let base64 = normalizeOptionalString(part.b64_json);
+  let mimeType: string | undefined;
+  if (!base64) {
+    if ("b64_json" in part) {
+      throwMalformedOpenRouterImageResponse();
+    }
+    const inlineData = part.inlineData ?? part.inline_data;
+    if (inlineData === undefined || inlineData === null) {
       return;
     }
-    throwMalformedOpenRouterImageResponse();
+    const inline = requireOpenRouterImageRecord(inlineData);
+    base64 = normalizeOptionalString(inline.data);
+    if (!base64) {
+      throwMalformedOpenRouterImageResponse();
+    }
+    mimeType =
+      normalizeOptionalString(inline.mimeType) ??
+      normalizeOptionalString(inline.mime_type) ??
+      "image/png";
   }
-  if ("b64_json" in part) {
-    throwMalformedOpenRouterImageResponse();
-  }
-
-  const inlineData = part.inlineData ?? part.inline_data;
-  if (inlineData === undefined || inlineData === null) {
-    return;
-  }
-  const inline = requireOpenRouterImageRecord(inlineData);
-  const data = normalizeOptionalString(inline.data);
-  if (!data) {
-    throwMalformedOpenRouterImageResponse();
-  }
-  const mimeType =
-    normalizeOptionalString(inline.mimeType) ??
-    normalizeOptionalString(inline.mime_type) ??
-    "image/png";
   const image = generatedImageAssetFromBase64({
-    base64: data,
+    base64,
     index: images.length,
-    mimeType,
+    ...(mimeType === undefined ? {} : { mimeType }),
   });
-  if (image) {
-    images.push(image);
-    return;
+  if (!image) {
+    throwMalformedOpenRouterImageResponse();
   }
-  throwMalformedOpenRouterImageResponse();
+  images.push(image);
 }
 
 function extractOpenRouterImagesFromResponse(body: unknown): GeneratedImageAsset[] {
@@ -168,43 +161,6 @@ function extractOpenRouterImagesFromResponse(body: unknown): GeneratedImageAsset
   return images;
 }
 
-function isGeminiImageModel(model: string): boolean {
-  return model.startsWith("google/gemini-");
-}
-
-function buildInputReferences(req: ImageGenerationRequest) {
-  return (req.inputImages ?? []).map((image) => ({
-    type: "image_url" as const,
-    image_url: { url: toImageDataUrl(image) },
-  }));
-}
-
-function buildDedicatedImageBody(
-  req: ImageGenerationRequest,
-  model: string,
-): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    model,
-    prompt: req.prompt,
-    n: 1,
-  };
-  if (isGeminiImageModel(model)) {
-    const aspectRatio = normalizeOptionalString(req.aspectRatio);
-    if (aspectRatio) {
-      body.aspect_ratio = aspectRatio;
-    }
-    const resolution = normalizeOptionalString(req.resolution);
-    if (resolution) {
-      body.resolution = resolution;
-    }
-  }
-  const inputReferences = buildInputReferences(req);
-  if (inputReferences.length > 0) {
-    body.input_references = inputReferences;
-  }
-  return body;
-}
-
 function normalizeDedicatedImageResponse(payload: unknown): unknown {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     return payload;
@@ -220,20 +176,8 @@ function normalizeDedicatedImageResponse(payload: unknown): unknown {
   };
 }
 
-function buildMessageContent(
-  req: ImageGenerationRequest,
-):
-  | string
-  | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> {
-  const references = buildInputReferences(req);
-  if (references.length === 0) {
-    return req.prompt;
-  }
-  return [{ type: "text", text: req.prompt }, ...references];
-}
-
 function buildImageConfig(req: ImageGenerationRequest, model: string): Record<string, string> {
-  if (!isGeminiImageModel(model)) {
+  if (!model.startsWith("google/gemini-")) {
     return {};
   }
   const imageConfig: Record<string, string> = {};
@@ -289,8 +233,39 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
 
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
       const imageConfig = buildImageConfig(req, model);
+      const aspectRatio = normalizeOptionalString(req.aspectRatio);
       const count = resolveIntegerOption(req.count, 1, { min: 1, max: MAX_IMAGE_RESULTS });
       const canonicalBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
+      const inputReferences = (req.inputImages ?? []).map((image) => ({
+        type: "image_url",
+        image_url: { url: toImageDataUrl(image) },
+      }));
+      const body = canonicalBaseUrl
+        ? {
+            model,
+            prompt: req.prompt,
+            n: 1,
+            // Every dedicated-endpoint model takes aspect_ratio. Resolution stays Gemini-only:
+            // edits infer it from the reference image, and models reject tiers outside their set.
+            ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+            ...(imageConfig.image_size ? { resolution: imageConfig.image_size } : {}),
+            ...(inputReferences.length > 0 ? { input_references: inputReferences } : {}),
+          }
+        : {
+            model,
+            messages: [
+              {
+                role: "user",
+                content:
+                  inputReferences.length > 0
+                    ? [{ type: "text", text: req.prompt }, ...inputReferences]
+                    : req.prompt,
+              },
+            ],
+            modalities: ["image", "text"],
+            n: count,
+            ...(Object.keys(imageConfig).length > 0 ? { image_config: imageConfig } : {}),
+          };
       // Dedicated image requests return one image; legacy chat endpoints accept
       // the whole count. Either route fails the batch if any request fails.
       const generated = await Promise.all(
@@ -298,15 +273,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
           const payload = await postJsonResponse<unknown>({
             url: canonicalBaseUrl ? `${canonicalBaseUrl}/images` : `${baseUrl}/chat/completions`,
             headers,
-            body: canonicalBaseUrl
-              ? buildDedicatedImageBody(req, model)
-              : {
-                  model,
-                  messages: [{ role: "user", content: buildMessageContent(req) }],
-                  modalities: ["image", "text"],
-                  n: count,
-                  ...(Object.keys(imageConfig).length > 0 ? { image_config: imageConfig } : {}),
-                },
+            body,
             timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
             fetchFn: fetch,
             allowPrivateNetwork,

@@ -27,9 +27,11 @@ import {
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../runtime.js";
+import { monotonicDeadlineAfter, monotonicNow } from "../../shared/monotonic-time.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { measureCliCommandStartup } from "../command-startup-timing.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { formatHelpExamples } from "../help-format.js";
 import { resolveMessageSecretScope } from "../message-secret-scope.js";
 import { requestExitAfterOneShotOutput } from "../one-shot-exit.js";
@@ -43,6 +45,9 @@ const requiredOptions = {
   role: ["--role-id <id>", "Role id"],
   eventName: ["--event-name <name>", "Event name"],
   startTime: ["--start-time <iso>", "Event start time"],
+  target: ["-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION],
+  messageId: ["--message-id <id>", "Message id"],
+  message: ["-m, --message <text>", "Message body"],
 } as const;
 
 const GATEWAY_STOP_TIMEOUT_MS = 2500;
@@ -64,7 +69,7 @@ function validateMessageNumericOptions(opts: Record<string, unknown>): void {
   ] as const) {
     for (const [key, flag] of options) {
       if (opts[key] !== undefined && parse(opts[key]) === undefined) {
-        throw new Error(`${flag} must be a ${kind} integer.`);
+        throwExpectedCliError(`${flag} must be a ${kind} integer.`);
       }
     }
   }
@@ -78,7 +83,8 @@ async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
       withPluginRuntimeRegistryScope(registry, () =>
         runner.runGatewayStop({ reason: "cli message action complete" }, {}),
       ),
-    Date.now() + GATEWAY_STOP_TIMEOUT_MS,
+    monotonicDeadlineAfter(GATEWAY_STOP_TIMEOUT_MS),
+    monotonicNow,
   );
   if (result === ABSOLUTE_DEADLINE_EXPIRED) {
     defaultRuntime.error(
@@ -172,7 +178,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
           async () => {
             validateMessageNumericOptions(opts);
             if (action === "poll" && opts.pollAnonymous === true && opts.pollPublic === true) {
-              throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
+              throwExpectedCliError("--poll-anonymous and --poll-public are mutually exclusive.");
             }
             const { channel: scopedChannel } = resolveMessageSecretScope({
               channel: opts.channel,
@@ -349,27 +355,12 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
     .addOption(new Option("--include-thread").hideHelp())
     .action((opts) => helpers.runMessageAction("read", opts));
 
-  helpers
-    .withMessageBase(
-      message
-        .command("edit")
-        .description("Edit a message")
-        .requiredOption("--message-id <id>", "Message id")
-        .requiredOption("-m, --message <text>", "Message body"),
-      "required",
-    )
-    .option("--thread-id <id>", "Thread id (Telegram forum thread)")
-    .action((opts) => helpers.runMessageAction("edit", opts));
+  register(message, "edit", "Edit a message", "edit", ["messageId", "message", "target"]).option(
+    "--thread-id <id>",
+    "Thread id (Telegram forum thread)",
+  );
 
-  helpers
-    .withMessageBase(
-      message
-        .command("delete")
-        .description("Delete a message")
-        .requiredOption("--message-id <id>", "Message id"),
-      "required",
-    )
-    .action((opts) => helpers.runMessageAction("delete", opts));
+  register(message, "delete", "Delete a message", "delete", ["messageId", "target"]);
   helpers
     .withMessageBase(message.command("pin").description("Pin a message"), "required")
     .requiredOption("--message-id <id>", "Message id")
@@ -425,33 +416,18 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
       await helpers.runMessageAction(request.action, request.args);
     });
 
-  helpers
-    .withMessageBase(
-      thread
-        .command("list")
-        .description("List threads")
-        .requiredOption("--guild-id <id>", "Guild id"),
-    )
+  register(thread, "list", "List threads", "thread-list", ["guild"])
     .option("--channel-id <id>", "Channel id")
     .option("--include-archived", "Include archived threads", false)
     .option("--before <id>", "Read/search before id")
-    .option("--limit <n>", "Result limit")
-    .action((opts) => helpers.runMessageAction("thread-list", opts));
+    .option("--limit <n>", "Result limit");
 
-  helpers
-    .withMessageBase(
-      thread
-        .command("reply")
-        .description("Reply in a thread")
-        .requiredOption("-m, --message <text>", "Message body"),
-      "required",
-    )
+  register(thread, "reply", "Reply in a thread", "thread-reply", ["message", "target"])
     .option(
       "--media <path-or-url>",
       "Attach media (image/audio/video/document). Accepts local paths or URLs.",
     )
-    .option("--reply-to <id>", "Reply-to message id")
-    .action((opts) => helpers.runMessageAction("thread-reply", opts));
+    .option("--reply-to <id>", "Reply-to message id");
   const emoji = message.command("emoji").description("Emoji actions");
 
   helpers
@@ -459,17 +435,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
     .option("--guild-id <id>", "Guild id (Discord)")
     .action((opts) => helpers.runMessageAction("emoji-list", opts));
 
-  helpers
-    .withMessageBase(
-      emoji
-        .command("upload")
-        .description("Upload an emoji")
-        .requiredOption("--guild-id <id>", "Guild id"),
-    )
+  register(emoji, "upload", "Upload an emoji", "emoji-upload", ["guild"])
     .requiredOption("--emoji-name <name>", "Emoji name")
     .requiredOption("--media <path-or-url>", "Emoji media (path or URL)")
-    .option("--role-ids <id>", "Role id (repeat)", collectOption, [])
-    .action((opts) => helpers.runMessageAction("emoji-upload", opts));
+    .option("--role-ids <id>", "Role id (repeat)", collectOption, []);
   const sticker = message.command("sticker").description("Sticker actions");
 
   helpers
@@ -478,18 +447,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
     .option("-m, --message <text>", "Optional message body")
     .action((opts) => helpers.runMessageAction("sticker", opts));
 
-  helpers
-    .withMessageBase(
-      sticker
-        .command("upload")
-        .description("Upload a sticker")
-        .requiredOption("--guild-id <id>", "Guild id"),
-    )
+  register(sticker, "upload", "Upload a sticker", "sticker-upload", ["guild"])
     .requiredOption("--sticker-name <name>", "Sticker name")
     .requiredOption("--sticker-desc <text>", "Sticker description")
     .requiredOption("--sticker-tags <tags>", "Sticker tags")
-    .requiredOption("--media <path-or-url>", "Sticker media (path or URL)")
-    .action((opts) => helpers.runMessageAction("sticker-upload", opts));
+    .requiredOption("--media <path-or-url>", "Sticker media (path or URL)");
   function register(
     parent: Command,
     name: string,

@@ -25,6 +25,7 @@ import {
 import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { pendingFinalSessionEntry } from "./dispatch-from-config.session-fixtures.test-support.js";
 import { sendReplyWithTranscriptMirror } from "./dispatch-from-config.transcript.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import {
@@ -74,17 +75,10 @@ async function makePendingFinalFixture() {
   const sessionKey = "agent:main:telegram:direct:123";
   await replaceSessionEntry(
     { sessionKey, storePath },
-    {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text: "final answer",
-        createdAt: Date.now(),
-        intentId: "intent-1",
-        deliveries: [{ id: "delivery-1", state: "prepared" }],
-      },
-    },
+    pendingFinalSessionEntry(
+      { sessionId: "session-1", intentId: "intent-1", deliveryId: "delivery-1" },
+      "final answer",
+    ),
   );
   const payload = setReplyPayloadMetadata(
     { text: "final answer" },

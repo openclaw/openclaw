@@ -11,7 +11,7 @@ import {
 } from "../commands/triage-update.js";
 import { resolveStateDir } from "../config/paths.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
-import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
@@ -56,6 +56,7 @@ async function writeReportText(
   // Unlike beforeRename, this synchronous dependency guard covers each new
   // mutation after an await, including rename retries and copy fallback.
   await replaceFileAtomic({
+    allowDrvfsRenameRecovery: true,
     filePath,
     content,
     mode: 0o600,
@@ -192,6 +193,7 @@ export async function writeUpdateRunReportArtifact(params: {
     | Pick<UpdateRunReport, "markdown">
     | ((run?: UpdateRunRecord) => Pick<UpdateRunReport, "markdown">);
   readRun?: () => UpdateRunRecord | undefined;
+  record?: UpdateRunRecord;
   env?: NodeJS.ProcessEnv;
   detached?: boolean;
   assertCurrent?: () => void;
@@ -208,7 +210,7 @@ export async function writeUpdateRunReportArtifact(params: {
   const outputPath = path.join(directory, `${id}.md`);
   const write = async () => {
     params.assertCurrent?.();
-    const run = params.readRun?.();
+    const run = params.record ?? params.readRun?.();
     const report = typeof params.report === "function" ? params.report(run) : params.report;
     if (params.readRun && !run) {
       const previous = await readSavedUpdateReport(outputPath);
@@ -222,7 +224,7 @@ export async function writeUpdateRunReportArtifact(params: {
     const failurePath =
       classifyUpdateOutcome(params.result) === "failed"
         ? await writeTriageUpdateFailure(
-            { result: params.result },
+            { result: { ...params.result, target: run?.target } },
             {
               env,
               assertCurrent: params.assertCurrent,

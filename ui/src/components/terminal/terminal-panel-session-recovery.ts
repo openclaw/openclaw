@@ -1,9 +1,11 @@
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { TerminalConnection, TerminalSessionInfo } from "./terminal-connection.ts";
 import { observeTerminalRestoreInput } from "./terminal-panel-session-boot.ts";
 import type {
   TerminalOperation,
+  TerminalPanelError,
   TerminalPanelSessionTab,
   TerminalRestoreBatch,
 } from "./terminal-panel-session-types.ts";
@@ -11,6 +13,8 @@ import {
   loadPersistedTerminalSessionIds,
   persistTerminalSessionIds,
 } from "./terminal-session-storage.ts";
+
+registerTerminalEnglish();
 
 type TerminalSessionRecoveryHost = {
   storageScope: () => string;
@@ -32,7 +36,7 @@ type TerminalSessionRecoveryHost = {
   discard: (tab: TerminalPanelSessionTab) => void;
   exited: (tab: TerminalPanelSessionTab) => void;
   setBooting: (booting: boolean) => void;
-  setError: (text: string) => void;
+  setError: (text: string, retryAction?: TerminalPanelError["retryAction"]) => void;
 };
 
 /** Owns saved-session custody until discovery confirms attachment, exit, or a deliberate close. */
@@ -150,7 +154,12 @@ export class TerminalPanelSessionRecovery {
       for (const sessionId of restore.pending.keys()) {
         const session = known.get(sessionId);
         if (!session) {
-          await this.restoreExitedSession(sessionId, restore);
+          const { tab } = await this.host.boot(sessionId, restore);
+          if (!this.host.isCurrent(restore.operation, restore) || tab.cancelled) {
+            this.host.discard(tab);
+          } else {
+            this.markExited(tab, sessionId);
+          }
         } else {
           const attached = await this.host.attach(
             sessionId,
@@ -171,7 +180,9 @@ export class TerminalPanelSessionRecovery {
       }
     } catch (error: unknown) {
       if (this.host.isCurrent(operation, restore)) {
-        this.host.setError(`${t("terminal.attachFailed")}: ${formatUiError(error)}`);
+        this.host.setError(`${t("terminal.attachFailed")}: ${formatUiError(error)}`, {
+          kind: "restore",
+        });
         return true;
       }
     } finally {
@@ -188,18 +199,6 @@ export class TerminalPanelSessionRecovery {
   markExited(tab: TerminalPanelSessionTab, sessionId: string): void {
     tab.gatewaySessionId = sessionId;
     this.host.exited(tab);
-  }
-
-  private async restoreExitedSession(
-    sessionId: string,
-    restore: TerminalRestoreBatch,
-  ): Promise<void> {
-    const { tab } = await this.host.boot(sessionId, restore);
-    if (!this.host.isCurrent(restore.operation, restore) || tab.cancelled) {
-      this.host.discard(tab);
-      return;
-    }
-    this.markExited(tab, sessionId);
   }
 
   retireTab(tab: TerminalPanelSessionTab): void {
