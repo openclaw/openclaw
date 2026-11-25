@@ -8,6 +8,7 @@ import { installDirectiveBehaviorE2EHooks } from "./reply.directive.directive-be
 import { handleDirectiveOnly } from "./reply/directive-handling.impl.js";
 import type { HandleDirectiveOnlyParams } from "./reply/directive-handling.params.js";
 import { parseInlineSessionDirectives } from "./reply/directive-handling.parse.js";
+import { drainFormattedSystemEvents } from "./reply/session-system-events.js";
 
 const config: OpenClawConfig = {
   commands: { text: true },
@@ -168,4 +169,45 @@ it("allows /trace for delegated gateway clients with operator.admin", async () =
   expect(allowed.text).toContain("may contain sensitive information");
   const current = await runDirectiveStatus("/trace", { sessionEntry: allowed.sessionEntry });
   expect(current.text).toContain("Current trace level: on");
+});
+
+it.each(["on", "stream", "off"] as const)(
+  "keeps /reasoning %s out of the next turn's model context",
+  async (level) => {
+    const sessionKey = "agent:main:whatsapp:+1222";
+    const start = level === "off" ? "on" : "off";
+    const sessionEntry = { sessionId: "reasoning", updatedAt: Date.now(), reasoningLevel: start };
+    const { sessionEntry: changed } = await runDirectiveStatus(`/reasoning ${level}`, {
+      sessionKey,
+      sessionEntry,
+      currentReasoningLevel: start,
+    });
+    expect(changed.reasoningLevel).toBe(level);
+    // The System: block the next turn's prompt carries, from the real event queue.
+    const nextTurnContext = await drainFormattedSystemEvents({
+      cfg: config,
+      agentId: "main",
+      sessionKey,
+      isMainSession: true,
+      isNewSession: false,
+    });
+    expect(nextTurnContext ?? "").not.toMatch(/reasoning|<think>/i);
+  },
+);
+
+it("still tells the model when /elevated changes", async () => {
+  const sessionKey = "agent:main:whatsapp:+1222";
+  await runDirectiveStatus("/elevated on", {
+    sessionKey,
+    elevatedEnabled: true,
+    elevatedAllowed: true,
+  });
+  const nextTurnContext = await drainFormattedSystemEvents({
+    cfg: config,
+    agentId: "main",
+    sessionKey,
+    isMainSession: true,
+    isNewSession: false,
+  });
+  expect(nextTurnContext).toContain("Elevated ASK - exec runs on host");
 });
