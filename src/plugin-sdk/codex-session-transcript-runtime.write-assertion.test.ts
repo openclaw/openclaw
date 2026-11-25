@@ -50,7 +50,7 @@ describe("Codex mirror write assertion", () => {
     const target = await createUnresolvedTarget();
     const params = {
       ...target,
-      assertCurrent: () => {
+      assertCurrent: (): void => {
         throw new Error("original mirror authority");
       },
     };
