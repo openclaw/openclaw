@@ -31,18 +31,9 @@ import type {
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
-// Newest accepted occurrence per session, route and notification. Each change replaces the
-// pending occurrence of its notification, so an older occurrence that settles as cancelled was
-// superseded.
-const latestNotificationOccurrences = new Map<string, string | undefined>();
-
-// Android notification keys are unique per device only, so the node is part of the identity:
-// one phone's change never replaces another phone's pending event. The queue lowercases context
-// keys, and Android keys are case-sensitive, so both parts are hex-encoded.
-function notificationContextKey(nodeId: string, key: string) {
-  const hex = (value: string) => Buffer.from(value, "utf8").toString("hex");
-  return `notification:${hex(nodeId)}:${hex(key)}`;
-}
+// Newest pending posted update per session, route and notification; an older update that
+// settles as cancelled before it started was replaced by it.
+const latestPostedUpdates = new Map<string, string | undefined>();
 
 export async function handleNodeNotificationEvent(
   ctx: NodeEventContext,
@@ -126,32 +117,37 @@ export async function handleNodeNotificationEvent(
     return pairingChangedResult(evt.event);
   }
   assertAcceptanceCurrent();
+  const posted = change === "posted";
+  // Android notification keys are unique per device only, so the node is part of the identity:
+  // one phone's update never replaces another phone's pending event. The queue lowercases context
+  // keys, and Android keys are case-sensitive, so both parts are hex-encoded.
+  const hex = (value: string) => Buffer.from(value, "utf8").toString("hex");
   const eventOptions = withSystemEventOwner(
     {
       sessionKey,
-      contextKey: notificationContextKey(nodeId, key),
+      // Removals keep their own context, so a posted update never replaces a pending removal.
+      contextKey: posted ? `notification:${hex(nodeId)}:${hex(key)}` : `notification:${key}`,
       deliveryContext: expectedTarget.deliveryContext,
-      // The newest change of one notification (posted or removed) supersedes its still-pending
-      // earlier change, so the queue holds each notification's current state once, in the order
-      // the states were reached.
-      replace: true,
+      // A posted update replaces the still-pending update of the same notification and phone.
+      replace: posted,
     },
     agentId,
   );
   const occurrence = enqueueSystemEventEntry(summary, eventOptions);
   if (occurrence) {
     const latestKey = [
-      eventOptions.sessionKey,
-      eventOptions.contextKey,
-      JSON.stringify(eventOptions.deliveryContext ?? null),
+      sessionKey,
+      occurrence.contextKey,
+      JSON.stringify(occurrence.deliveryContext ?? null),
     ].join("\u0000");
-    latestNotificationOccurrences.set(latestKey, occurrence.id);
-    const settleLatest = () => {
-      const superseded = latestNotificationOccurrences.get(latestKey) !== occurrence.id;
-      if (!superseded) {
-        latestNotificationOccurrences.delete(latestKey);
+    if (posted) {
+      latestPostedUpdates.set(latestKey, occurrence.id);
+    }
+    const replaced = () => posted && latestPostedUpdates.get(latestKey) !== occurrence.id;
+    const forget = () => {
+      if (posted && !replaced()) {
+        latestPostedUpdates.delete(latestKey);
       }
-      return superseded;
     };
     try {
       const receipt = enqueueSessionEventForHost(summary, {
@@ -169,21 +165,25 @@ export async function handleNodeNotificationEvent(
       source?.pending.push(receipt.settled);
       const accepted = await receipt.accepted;
       if (!accepted.ok) {
+        // Replacement cancels the pending claim without an error cause; the newer update carries
+        // on. Any refusal with a cause still fails this event.
+        if (!accepted.cause && replaced()) {
+          return undefined;
+        }
         throw new Error(accepted.error);
       }
       void receipt.settled.then((outcome) => {
-        const superseded = settleLatest();
-        if (outcome.status !== "completed" && !(outcome.status === "cancelled" && superseded)) {
+        const quiet =
+          outcome.status === "completed" ||
+          (outcome.status === "cancelled" && !outcome.executionStarted && replaced());
+        forget();
+        if (!quiet) {
           ctx.logGateway.warn(`notification event not delivered node=${nodeId}: ${outcome.status}`);
         }
       });
     } catch (error) {
-      const superseded = settleLatest();
+      forget();
       consumeSelectedSystemEventEntries(eventOptions.sessionKey, [occurrence]);
-      if (superseded) {
-        // A newer change of this notification replaced it before acceptance; that one carries on.
-        return undefined;
-      }
       throw error;
     }
   }

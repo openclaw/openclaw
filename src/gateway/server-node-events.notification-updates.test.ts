@@ -1,10 +1,7 @@
 import "./server-node-events.test-support.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type {
-  SessionEventOutcome,
-  SessionEventReceipt,
-} from "../auto-reply/reply/session-event-contract.js";
+import type { SessionEventOutcome } from "../auto-reply/reply/session-event-contract.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { handleNodeEvent } from "./server-node-events.js";
@@ -21,15 +18,7 @@ const realQueue = await vi.importActual<typeof import("../infra/system-events.js
 );
 
 const sessionKey = "agent:ops:main";
-const cancelled: SessionEventOutcome = {
-  status: "cancelled",
-  executionStarted: false,
-  delivered: false,
-};
-
-function receipt(id: string, settled: Promise<SessionEventOutcome>): SessionEventReceipt {
-  return { id, cancel: () => true, accepted: Promise.resolve({ ok: true as const }), settled };
-}
+const cancelled = { status: "cancelled", executionStarted: false, delivered: false } as const;
 
 function phone(nodeId: string) {
   const warn = vi.fn();
@@ -42,125 +31,82 @@ function phone(nodeId: string) {
   return { notify, warn };
 }
 
+function receipt(
+  settled: Promise<SessionEventOutcome>,
+  accepted: Promise<{ ok: true } | { ok: false; error: string; cause?: Error }> = Promise.resolve({
+    ok: true,
+  }),
+) {
+  return { id: "receipt", cancel: () => true, accepted, settled };
+}
+
 beforeEach(() => {
   resetGatewayWorkAdmission();
   resetSystemEventsForTest();
-  // The real session queue, so replacement is checked by what stays pending, not by arguments.
+  // The real session queue, so replacement is checked by what stays pending.
   enqueue.mockReset().mockImplementation(realQueue.enqueueSystemEventEntry);
   handoff.mockClear();
   lookupSession.mockImplementation((key: string) => buildSessionLookup(key));
 });
 
-describe("notification updates of one key", () => {
-  it("keep only the newest pending update of one phone's notification", async () => {
-    const { notify } = phone("phone-a");
+describe("posted notification updates", () => {
+  it("keep only the newest pending update per phone and case-sensitive key", async () => {
+    const a = phone("phone-a");
+    const b = phone("phone-b");
     for (const kb of [13, 26, 39]) {
-      await notify({ text: `Received ${kb} KB` });
+      await a.notify({ text: `Received ${kb} KB` });
     }
+    await b.notify({ text: "B 1" });
+    await a.notify({ key: "Alert", text: "Upper" });
+    await a.notify({ key: "alert", text: "Lower" });
 
     expect(peekSystemEvents(sessionKey)).toEqual([
       "Notification posted (node=phone-a key=ongoing): Received 39 KB",
-    ]);
-  });
-
-  it("never replace another phone's pending update that shares the key", async () => {
-    const a = phone("phone-a");
-    const b = phone("phone-b");
-    await a.notify({ text: "A 1" });
-    await b.notify({ text: "B 1" });
-    await a.notify({ text: "A 2" });
-
-    expect(peekSystemEvents(sessionKey)).toEqual([
       "Notification posted (node=phone-b key=ongoing): B 1",
-      "Notification posted (node=phone-a key=ongoing): A 2",
+      "Notification posted (node=phone-a key=Alert): Upper",
+      "Notification posted (node=phone-a key=alert): Lower",
     ]);
   });
 
-  it("keep keys that differ only by case apart", async () => {
-    const { notify } = phone("phone-a");
-    const upper = "0|com.example.app|7|Alert|10001";
-    const lower = "0|com.example.app|7|alert|10001";
-    await notify({ key: upper, text: "Upper 1" });
-    await notify({ key: lower, text: "Lower 1" });
-    await notify({ key: upper, text: "Upper 2" });
-    await notify({ key: lower, text: "Lower 2" });
-
-    expect(peekSystemEvents(sessionKey)).toEqual([
-      `Notification posted (node=phone-a key=${upper}): Upper 2`,
-      `Notification posted (node=phone-a key=${lower}): Lower 2`,
-    ]);
-  });
-
-  it("keep only the newest state of a notification across posts and removals", async () => {
+  it("never replace a pending removal", async () => {
     const { notify } = phone("phone-a");
     await notify({ text: "Received 13 KB" });
     await notify({ change: "removed" });
+    await notify({ text: "Received 26 KB" });
+
     expect(peekSystemEvents(sessionKey)).toEqual([
       "Notification removed (node=phone-a key=ongoing)",
-    ]);
-
-    // Posted again with the text it had before the removal: the notification is back.
-    await notify({ text: "Received 13 KB" });
-    expect(peekSystemEvents(sessionKey)).toEqual([
-      "Notification posted (node=phone-a key=ongoing): Received 13 KB",
-    ]);
-
-    await notify({ change: "removed" });
-    expect(peekSystemEvents(sessionKey)).toEqual([
-      "Notification removed (node=phone-a key=ongoing)",
+      "Notification posted (node=phone-a key=ongoing): Received 26 KB",
     ]);
   });
 
-  it("keep the queue order of states as they were reached", async () => {
-    const { notify } = phone("phone-a");
-    await notify({ key: "vpn", text: "Received 13 KB" });
-    await notify({ key: "nav", text: "Turn left" });
-    await notify({ key: "vpn", change: "removed" });
-
-    expect(peekSystemEvents(sessionKey)).toEqual([
-      "Notification posted (node=phone-a key=nav): Turn left",
-      "Notification removed (node=phone-a key=vpn)",
-    ]);
-  });
-
-  it("settle quietly when a newer change replaces an update before acceptance", async () => {
+  it("settle a replaced update quietly and still report other refusals", async () => {
     const firstAccepted = createDeferred<{ ok: false; error: string }>();
-    handoff.mockImplementationOnce(() => ({
-      id: "receipt-1",
-      cancel: () => true,
-      accepted: firstAccepted.promise,
-      settled: new Promise(() => {}),
-    }));
+    const secondSettled = createDeferred<SessionEventOutcome>();
+    handoff
+      .mockImplementationOnce(() => receipt(new Promise(() => {}), firstAccepted.promise))
+      .mockImplementationOnce(() => receipt(secondSettled.promise))
+      .mockImplementationOnce(() => receipt(new Promise(() => {})))
+      .mockImplementationOnce(() => receipt(Promise.resolve(cancelled)))
+      .mockImplementationOnce(() =>
+        receipt(
+          new Promise(() => {}),
+          Promise.resolve({ ok: false, error: "pairing changed", cause: new Error("pairing") }),
+        ),
+      );
     const { notify, warn } = phone("phone-a");
     const first = notify({ text: "Received 13 KB" });
     await vi.waitFor(() => expect(handoff).toHaveBeenCalledTimes(1));
     await notify({ text: "Received 26 KB" });
     firstAccepted.resolve({ ok: false, error: "Session event was cancelled before acceptance" });
-
     await expect(first).resolves.toBeUndefined();
-    expect(peekSystemEvents(sessionKey)).toEqual([
-      "Notification posted (node=phone-a key=ongoing): Received 26 KB",
-    ]);
-    expect(warn).not.toHaveBeenCalled();
-  });
 
-  it("do not report a superseded update as undelivered", async () => {
-    const firstSettled = createDeferred<SessionEventOutcome>();
-    handoff
-      .mockImplementationOnce(() => receipt("receipt-1", firstSettled.promise))
-      .mockImplementationOnce(() => receipt("receipt-2", new Promise(() => {})))
-      .mockImplementationOnce(() => receipt("receipt-3", Promise.resolve(cancelled)));
-    const { notify, warn } = phone("node-sup");
-    await notify({ text: "Received 13 KB" });
-    await notify({ text: "Received 26 KB" });
-    firstSettled.resolve(cancelled);
+    await notify({ text: "Received 39 KB" });
+    secondSettled.resolve(cancelled);
     await notify({ key: "other", text: "Lost" });
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    expect(warn).toHaveBeenCalledWith("notification event not delivered node=phone-a: cancelled");
 
-    await vi.waitFor(() =>
-      expect(warn).toHaveBeenCalledWith(
-        "notification event not delivered node=node-sup: cancelled",
-      ),
-    );
-    expect(warn).toHaveBeenCalledTimes(1);
+    await expect(notify({ key: "third", text: "Refused" })).rejects.toThrow("pairing changed");
   });
 });

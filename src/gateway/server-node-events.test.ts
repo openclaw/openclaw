@@ -182,8 +182,6 @@ const relayRegistration = {
   tokenDebugSuffix: "abcd1234",
 };
 
-const hex = (value: string) => Buffer.from(value, "utf8").toString("hex");
-
 describe("node exec events", () => {
   beforeEach(() => {
     registerApns.mockClear();
@@ -609,11 +607,19 @@ describe("notifications changed events", () => {
     expect(handoff).toHaveBeenCalledTimes(1);
   });
   it.each([
-    ["removed", undefined, "agent:ops:main", "ops", "com.example.mail"],
-    ["posted", "node-key", "agent:main:node-key", "main", undefined],
+    ["removed", undefined, "agent:ops:main", "ops", "com.example.mail", "notification:notif"],
+    // Posted updates are keyed by hex node id and key, so the queue's lowercasing keeps them apart.
+    [
+      "posted",
+      "node-key",
+      "agent:main:node-key",
+      "main",
+      undefined,
+      "notification:6e6f6465:6e6f746966",
+    ],
   ] as const)(
     "routes %s notifications with session key %s",
-    async (change, requestedKey, sessionKey, agentId, packageName) => {
+    async (change, requestedKey, sessionKey, agentId, packageName, contextKey) => {
       if (requestedKey) {
         lookupSession.mockReturnValueOnce({
           ...buildSessionLookup(requestedKey),
@@ -623,11 +629,7 @@ describe("notifications changed events", () => {
       const { notify } = nodeFixture();
       await notify({ change, packageName, sessionKey: requestedKey });
 
-      const routing = {
-        sessionKey,
-        // Node id and key are hex-encoded so the queue's lowercasing keeps them distinct.
-        contextKey: `notification:${hex("node")}:${hex("notif")}`,
-      };
+      const routing = { sessionKey, contextKey };
       expect(enqueue).toHaveBeenCalledWith(
         `Notification ${change} (node=node key=notif${packageName ? ` package=${packageName}` : ""})`,
         expect.objectContaining(routing),
