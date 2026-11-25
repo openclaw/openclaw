@@ -341,6 +341,7 @@ type EnglishCatalog = TranslationMap & {
       | "deleteSessionIdentityMissing"
       | "groupMenu"
       | "groupOptions"
+      | "openFolder"
       | "newSessionInGroup"
       | "groupDefaultsStale"
       | "moveToTopLevel",
@@ -798,6 +799,7 @@ const startupEnglish = {
     deleteSessionsStale: {},
     groupMenu: "Group options for {group}",
     groupOptions: "Group options",
+    openFolder: "Open {name} folder",
     openSessionsPage: "Open Sessions",
     newSessionInGroup: "New session in {group}",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
