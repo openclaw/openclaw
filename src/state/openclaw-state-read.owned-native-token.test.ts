@@ -47,9 +47,15 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
     const family = () =>
       ["", "-wal", "-shm", "-journal"].map((suffix) => {
         const file = `${database.path}${suffix}`;
-        return fs.existsSync(file)
-          ? { suffix, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") }
-          : { suffix, absent: true };
+        if (!fs.existsSync(file)) {
+          return { suffix, absent: true };
+        }
+        const bytes = fs.readFileSync(file);
+        if (suffix === "-shm") {
+          // Snapshot preparation and backup may update SQLite's WAL read marks.
+          bytes.fill(0, 100, 120);
+        }
+        return { suffix, sha256: createHash("sha256").update(bytes).digest("hex") };
       });
     const before = family();
     const shmBefore = fs.readFileSync(`${database.path}-shm`);
