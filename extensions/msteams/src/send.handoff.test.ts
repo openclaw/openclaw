@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { buffer as consumeBuffer } from "node:stream/consumers";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { awaitGateBeforeSettlement, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
@@ -333,10 +334,14 @@ describe("registered Teams delivery handoff", () => {
         actions: Array<{ type: string; verb: string; data: { openclawPollId: string } }>;
       };
     }>;
-    const [action] = attachment.content.actions;
-    const input = attachment.content.body.find((item) => item.type === "Input.ChoiceSet")!;
+    const { actions, body } = expectDefined(attachment, "posted poll attachment").content;
+    const action = expectDefined(actions[0], "posted poll action");
+    const input = expectDefined(
+      body.find((item) => item.type === "Input.ChoiceSet"),
+      "posted poll choice set",
+    );
     expect(action).toMatchObject({ type: "Action.Execute", verb: "openclaw.poll.vote" });
-    const selection = input.choices[0].value;
+    const selection = expectDefined(input.choices[0], "first poll choice").value;
     expect(selection).toBe("0");
     const vote = polls.extractMSTeamsPollVote({
       value: { action: { ...action, data: { ...action.data, [input.id]: selection } } },
