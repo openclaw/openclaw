@@ -19,6 +19,75 @@ const envSetup = [expect.stringMatching(ENV_ISOLATION_SETUP_PATH)];
 const cli = (...filters: string[]) => ["node", "vitest", "run", ...filters];
 const pureTest = 'import { it } from "vitest"; it("pure", () => {});';
 
+describe("unit-fast invocation roots", () => {
+  it("keeps direct fast-lane getters bound to each invocation root", () => {
+    const roots = [tempDirs.make("fast-getters-a-"), tempDirs.make("fast-getters-b-")];
+    const moduleUrl = pathToFileURL(path.resolve("test/vitest/vitest.unit-fast-paths.mjs")).href;
+    const result = spawnNodeEvalSync(
+      `
+      import assert from "node:assert/strict";
+      import fs from "node:fs";
+      import path from "node:path";
+      import { spawnSync } from "node:child_process";
+      const roots = ${JSON.stringify(roots)};
+      const files = ["src/agents/proof-pure.test.ts", "src/test-utils/temp-home.test.ts", "src/utils/proof-extra.test.ts"];
+      for (const [index, root] of roots.entries()) {
+        assert.equal(spawnSync("git", ["init"], { cwd: root }).status, 0);
+        const sources = index === 0
+          ? [${JSON.stringify(pureTest)}, ${JSON.stringify(pureTest)}]
+          : ['import fs from "node:fs";', 'import { vi } from "vitest"; vi.useFakeTimers();', ${JSON.stringify(pureTest)}];
+        for (const [fileIndex, source] of sources.entries()) {
+          const target = path.join(root, files[fileIndex]);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.writeFileSync(target, source);
+        }
+      }
+      const originalCwd = process.cwd();
+      try {
+        process.chdir(roots[0]);
+        const paths = await import(${JSON.stringify(moduleUrl)});
+        const getters = [paths.getUnitFastTestFiles, paths.getUnitFastIsolatedTestFiles, paths.getUnitFastTimerTestFiles];
+        const expected = [
+          [[files[0], files[1]], [files[1]], []],
+          [[files[1], files[2]], [], [files[1]]],
+        ];
+        for (const index of [0, 1, 0]) {
+          for (const [lane, getter] of getters.entries()) {
+            assert.deepEqual(getter(undefined, roots[index]), expected[index][lane]);
+            assert.deepEqual(getter(files, roots[index]), expected[index][lane]);
+          }
+          assert.deepEqual(
+            paths.getUnitFastTestFilesForIncludePatterns(["!src/missing.test.ts"], { cwd: roots[index] }),
+            expected[index][0],
+          );
+        }
+        for (const index of [0, 1, 0]) {
+          process.chdir(roots[index]);
+          for (const cwd of [undefined, ".", "./", "src/.."]) {
+            for (const [lane, getter] of getters.entries()) {
+              assert.deepEqual(getter(undefined, cwd), expected[index][lane]);
+              assert.deepEqual(getter(files, cwd), expected[index][lane]);
+            }
+            for (const patterns of [["src/**/*.test.ts"], ["!src/missing.test.ts"]]) {
+              assert.deepEqual(paths.getUnitFastTestFilesForIncludePatterns(patterns, { cwd }), expected[index][0]);
+            }
+            for (const scope of ["default", "broad"]) {
+              const candidates = scope === "broad" ? paths.collectBroadUnitFastTestCandidates : paths.collectUnitFastTestCandidates;
+              assert.deepEqual(candidates(cwd).filter((file) => files.includes(file)), files.slice(0, index === 0 ? 2 : 3));
+              assert.deepEqual(paths.collectUnitFastTestFileAnalysis(cwd, { scope }).filter((entry) => entry.unitFast).map((entry) => entry.file), expected[index][0]);
+            }
+          }
+        }
+      } finally {
+        process.chdir(originalCwd);
+      }
+      `,
+      { evalFlag: "-e" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+});
+
 describe("unit-fast vitest lane", () => {
   let unitFastTestFiles: ReturnType<typeof paths.getUnitFastTestFiles>;
   let unitFastIsolatedTestFiles: ReturnType<typeof paths.getUnitFastIsolatedTestFiles>;
