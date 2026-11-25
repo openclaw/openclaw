@@ -13,8 +13,7 @@ import {
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
 import type { CronStoredJob } from "../cron/types.js";
-import { setLoggerOverride } from "../logging/logger.js";
-import { testApi } from "../logging/logger.test-support.js";
+import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -30,7 +29,7 @@ import { retainHeartbeatMigrationInput } from "./doctor/shared/config-migration-
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     setLoggerOverride(null);
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
@@ -141,7 +140,7 @@ it.each([
       expect(warnings).toEqual([]);
     } else {
       expect(warnings).toHaveLength(1);
-      await testApi.flushFileLogQueueForTests();
+      await flushLogger();
       const logged = (await fs.readFile(logFile, "utf8"))
         .trim()
         .split("\n")
