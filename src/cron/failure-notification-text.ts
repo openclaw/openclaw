@@ -75,6 +75,13 @@ export function cronFailureDetailLines(
   if (!failureNotificationDetail) {
     return [GENERIC_FAILURE_DETAIL];
   }
+  if (failureNotificationDetail.kind === "inference-account-unrecorded") {
+    // The refusal names the stored account; keep it in automation history, not in chat.
+    return [
+      "Cause: this automation has no recorded inference account, so OpenClaw refused the selected credentials.",
+      "Select an authorized stored account with `openclaw automations edit <jobId> --model <provider/model>@<account>`, or use a configured provider key. For eligible host-managed accounts, `openclaw doctor --fix` can record the account. Check automation history for the refused credential source.",
+    ];
+  }
   if (failureNotificationDetail.kind === "invalid-target") {
     return [
       "Cause: invalid automation target. Update agentId or sessionTarget before re-enabling.",
