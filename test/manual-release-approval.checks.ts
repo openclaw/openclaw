@@ -20,8 +20,8 @@ function request(candidateSha = "b".repeat(40), referenceSha = "a".repeat(40)): 
     policy: "approved-fast-track-v1",
     action: "Approve skipping release validation",
     repository: "openclaw/openclaw",
-    releaseTag: "v2026.11.2-beta.1",
-    channel: "beta",
+    releaseTag: "v2026.11.2",
+    channel: "latest",
     candidateSha,
     reference: {
       releaseTag: "v2026.11.1",
@@ -29,7 +29,7 @@ function request(candidateSha = "b".repeat(40), referenceSha = "a".repeat(40)): 
     },
     delta: { commits: 1, added: 1, deleted: 0 },
     artifacts: [{ name: "openclaw.tgz", digest }],
-    publicationScope: ["npm:openclaw:beta"],
+    publicationScope: ["npm:openclaw:latest"],
     run: { id: "123", attempt: "1" },
     requestId: "00000000-0000-4000-8000-000000000001",
     expiresAt: "2026-11-17T12:00:00.000Z",
@@ -83,13 +83,13 @@ it("binds all immutable review fields while treating artifact and scope lists as
     { candidateSha: "c".repeat(40) },
     { reference: { ...original.reference, targetSha: "c".repeat(40) } },
     { artifacts: [{ name: "openclaw.tgz", digest: `sha256:${"b".repeat(64)}` }] },
-    { publicationScope: ["docker:openclaw:beta"] },
+    { publicationScope: ["docker:openclaw:latest"] },
     { run: { id: "124", attempt: "1" } },
     { run: { id: "123", attempt: "2" } },
     { expiresAt: "2026-11-17T13:00:00.000Z" },
     { delta: { commits: 2, added: 1, deleted: 0 } },
     { repository: "example/other" },
-    { releaseTag: "v2026.11.2-beta.2" },
+    { releaseTag: "v2026.11.3" },
     { requestId: "00000000-0000-4000-8000-000000000002" },
   ];
   for (const change of changes) {
@@ -98,7 +98,7 @@ it("binds all immutable review fields while treating artifact and scope lists as
   const pair = {
     ...original,
     artifacts: [...original.artifacts, { name: "other.tgz", digest }],
-    publicationScope: ["npm:other:beta", ...original.publicationScope],
+    publicationScope: ["npm:other:latest", ...original.publicationScope],
   };
   expect(fastTrackRequestDigest(pair)).toBe(
     fastTrackRequestDigest({
@@ -115,8 +115,10 @@ it.each([
   { action: "Approve release" },
   { policy: "authorized-beta-focused-v1" },
   { delta: { commits: -1, added: 0, deleted: 0 } },
-  { channel: "latest" },
+  { releaseTag: "v2026.11.2-beta.1" },
   { releaseTag: "v2026.11.33", channel: "latest" },
+  { reference: undefined },
+  { delta: undefined },
   { releaseTag: "v2026.11.2", channel: "extended-stable" },
   {
     artifacts: [
@@ -124,10 +126,34 @@ it.each([
       { name: "openclaw.tgz", digest },
     ],
   },
-  { publicationScope: ["npm:openclaw:beta", "npm:openclaw:beta"] },
+  { publicationScope: ["npm:openclaw:latest", "npm:openclaw:latest"] },
   { extra: "unreviewed" },
 ])("rejects ambiguous or malformed immutable requests %j", (change) => {
   expect(() => parseFastTrackRequest({ ...request(), ...change })).toThrow();
+});
+
+it("exempts beta prereleases from the reference release and delta ceiling", () => {
+  const { reference, delta, ...beta } = {
+    ...request(),
+    releaseTag: "v2026.11.2-beta.1",
+    channel: "beta" as const,
+  };
+  expect(parseFastTrackRequest(beta)).toEqual(beta);
+  expect(serializeFastTrackRequest(beta)).not.toContain("reference");
+  // Beta deltas are not measured, so a recorded baseline would be unverified evidence.
+  expect(() => parseFastTrackRequest({ ...beta, reference })).toThrow(/omit reference/u);
+  expect(() => parseFastTrackRequest({ ...beta, delta })).toThrow(/omit reference/u);
+  // A final version on the beta dist-tag can later move to latest, so it keeps the ceiling.
+  expect(() =>
+    parseFastTrackRequest({ ...beta, releaseTag: "v2026.11.2", channel: "beta" }),
+  ).toThrow(/require a published reference/u);
+  expect(() =>
+    collectFastTrackEligibility({
+      repositoryRoot: "unused",
+      request: beta,
+      validatedReference: undefined,
+    }),
+  ).toThrow(/no delta ceiling/u);
 });
 
 it("recomputes complete delta including generated files and detects caller count or anchor mismatches", () => {

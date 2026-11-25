@@ -94,7 +94,9 @@ existing release receipt verifies GitHub approval and binds the exact packet.
 Keep the original FRV run/attempt and sealed bytes. See
 [fast-track publication](references/fast-track.md).
 Use the bounded policy only within 20 commits AND 15,000 added/deleted lines
-(package manifests and enumerated lockfiles excluded from LOC only), or the
+(package manifests and enumerated lockfiles excluded from LOC only; beta
+prereleases are exempt and need no reference release, but their stable
+promotion still needs a passing stable FRV), or the
 separate partial-FRV policy with its complete outstanding-check snapshot.
 Neither policy creates a fully validated baseline. An admitted publication may
 finish after expiry only through its original packet-bound receipt and verified
