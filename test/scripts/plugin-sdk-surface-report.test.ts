@@ -21,6 +21,35 @@ beforeEach(() => {
   surfaceReport = structuredClone(baseReport);
 });
 
+it("keeps bundled harness and command menu helpers out of the public SDK", () => {
+  const publicEntries = surfaceReport.publicStats.byEntrypoint;
+  const privateEntries = surfaceReport.localOnlyStats.byEntrypoint;
+  expect(publicEntries.get("agent-harness-runtime")?.exportNames).not.toContain(
+    "AgentHarnessRuntimeUpdateRequiredError",
+  );
+  expect(privateEntries.get("agent-harness-attempt-runtime")?.exportNames).toContain(
+    "AgentHarnessRuntimeUpdateRequiredError",
+  );
+  expect(publicEntries.get("native-command-registry")?.exportNames).not.toContain(
+    "loadCommandArgMenuModelCatalog",
+  );
+  expect(privateEntries.get("command-surface")?.exportNames).toContain(
+    "loadCommandArgMenuModelCatalog",
+  );
+});
+
+it("keeps bundled agent controls private without removing the shipped reply classifier", () => {
+  const publicEntries = surfaceReport.publicStats.byEntrypoint;
+  const privateEntries = surfaceReport.localOnlyStats.byEntrypoint;
+  for (const helper of ["agentControlText", "stampAgentControlValue", "stampAgentControls"]) {
+    expect(publicEntries.get("interactive-runtime")?.exportNames).not.toContain(helper);
+    expect(privateEntries.get("agent-control-runtime")?.exportNames).toContain(helper);
+  }
+  expect(publicEntries.get("reply-runtime")?.exportNames).toContain(
+    "isReplySessionInitConflictError",
+  );
+});
+
 it("accepts frozen named facades while rejecting missing deprecated reexports", () => {
   expect(surfaceReport.deprecatedBarrelWithoutReexports).toEqual([]);
   surfaceReport.deprecatedBarrelWithoutReexports = ["fixture-facade"];

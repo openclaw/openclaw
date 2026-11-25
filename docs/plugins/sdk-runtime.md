@@ -89,6 +89,13 @@ waiting, and `resolveAgentRunLifecycleTerminalFacts({ phase, data })` classifies
 success, failure, cancellation, and timeout. Match the event's session and run
 identity before updating plugin state. These helpers grant no execution authority.
 
+## Agent-authored controls
+
+Bundled channel plugins use the private `agent-control-runtime` entrypoint for
+`agentControlText`, `stampAgentControlValue`, and `stampAgentControls`. These
+helpers preserve agent callback ownership across channel adapters without
+adding to the typed public `interactive-runtime` contract.
+
 ## Reply session initialization conflicts
 
 Use `isReplySessionInitConflictError(error)` from
@@ -1106,9 +1113,9 @@ deployment-policy denial.
 
 ## Harness runtime updates
 
-A native harness whose own runtime is too old for the requested model can return
-`AgentHarnessRuntimeUpdateRequiredError` from
-`openclaw/plugin-sdk/agent-harness-runtime` as its prompt error. Its message must
+An official native harness whose own runtime is too old for the requested model
+can return `AgentHarnessRuntimeUpdateRequiredError` from the private
+`openclaw/plugin-sdk/agent-harness-attempt-runtime` as its prompt error. Its message must
 name the update. The host records the code `harness_update_required` in the
 run's failure notice, and Control UI then offers **Start a new session**, which
 starts a session on the OpenClaw harness that asks the agent to perform the

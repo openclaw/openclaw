@@ -28,6 +28,9 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { AssistantMessage, ToolResultMessage, Usage } from "../llm/types.js";
 
+// Official harness runtime-update failures share the host lifecycle error identity.
+export { AgentHarnessRuntimeUpdateRequiredError };
+
 /** Own cancellation admission without interpreting a backend's native stop receipt. */
 export function createAgentHarnessAttemptCancellation(params: {
   upstreamSignal?: AbortSignal;
