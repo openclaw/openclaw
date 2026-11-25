@@ -487,6 +487,13 @@ OpenClaw's Anthropic adapter converts a forced tool choice to `auto`
 when thinking is enabled. State in the prompt when a particular tool must run;
 see Anthropic's [migration guide](https://platform.claude.com/docs/en/models/fable-5-1/migration-guide).
 
+Opus 5.5, Sonnet 5.5, Fable, and Mythos return
+[progress updates](https://platform.claude.com/docs/en/build-with-claude/thinking#progress-updates)
+(the short notes they write between tool calls) as signed `thinking` blocks.
+OpenClaw shows them as normal replies, so what the model says while it keeps
+working appears in chat. On the next request, OpenClaw sends the original signed
+block back unchanged.
+
 Fable 5.1 binds retained thinking to the preceding system prompt, tools, and
 conversation history. Changing that prefix can invalidate later thinking
 blocks. On direct Anthropic API-key Messages routes, OpenClaw enables

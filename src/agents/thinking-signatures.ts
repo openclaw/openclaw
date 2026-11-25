@@ -1,5 +1,6 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { readAnthropicProgressUpdateSignature } from "../../packages/ai/src/providers/anthropic-progress-update.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
 
@@ -83,11 +84,24 @@ export function isAssistantMessageWithContent(message: AgentMessage): message is
   );
 }
 
+type AssistantContentBlock = AssistantMessage["content"][number];
+
+/** Keeps an Anthropic progress update's text while dropping the signature it replays with. */
+export function unsignProgressUpdateText(block: AssistantContentBlock): AssistantContentBlock {
+  if (block.type !== "text" || !readAnthropicProgressUpdateSignature(block.textSignature)) {
+    return block;
+  }
+  const { textSignature: _signature, ...text } = block;
+  return text;
+}
+
 function stripThinkingSignaturesFromMessage(message: AssistantMessage): AssistantMessage {
   let changed = false;
   const content = Array.from(message.content, (block) => {
     if (!isThinkingLikeBlock(block)) {
-      return block;
+      const unsigned = unsignProgressUpdateText(block);
+      changed ||= unsigned !== block;
+      return unsigned;
     }
     const signatureFields = ["thinkingSignature", "signature", "thought_signature"];
     const type: unknown = Reflect.get(block, "type");

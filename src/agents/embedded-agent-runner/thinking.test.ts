@@ -17,6 +17,7 @@ import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
   stripInvalidThinkingSignatures,
+  stripThinkingBlocksFromMessage,
   wrapAnthropicStreamWithRecovery,
 } from "./thinking.js";
 
@@ -484,6 +485,23 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     expect(result).not.toBe(messages);
     expectContent(result, 1, [thinking("old"), { type: "redacted_thinking" }, text("old answer")]);
     expectContent(result, 4, [thinking("new", "fresh_sig"), text("new answer")]);
+  });
+  it("keeps a stale Anthropic progress update as text without its replay signature", () => {
+    const update = {
+      type: "text",
+      text: "Os sete PRs já estão na main.",
+      textSignature: JSON.stringify({ v: 1, anthropicProgressUpdate: "update_sig" }),
+    };
+    const unsigned = text("Os sete PRs já estão na main.");
+    const stale = [summary(), assistant([thinking("old", "stale_sig"), update], 1500)];
+    expectContent(stripStaleThinkingSignaturesForCompactionReplay(stale), 1, [
+      thinking("old"),
+      unsigned,
+    ]);
+    // Thinking-signature recovery strips the update's signature along with the reasoning.
+    expect(
+      stripThinkingBlocksFromMessage(assistant([thinking("old", "sig"), update])),
+    ).toHaveProperty("content", [unsigned]);
   });
   it("parses numeric-looking compaction strings as dates before numeric message timestamps", () => {
     const messages = [summary("2026"), assistant([thinking("old", "stale_sig")], 1_000_000)];
