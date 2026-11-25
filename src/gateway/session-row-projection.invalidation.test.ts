@@ -740,7 +740,7 @@ it("refreshes a child without revisiting parents whose child facts stayed the sa
     using _ = holdForeground();
     using projection = await createTestProjection({ cfg, modelCatalog: [] });
     await projection.ensureMaterialized();
-    const describe = (key: string) => projection.describe({ agentId, key })!;
+    const describe = (sessionKey: string) => projection.describe({ agentId, key: sessionKey })!;
     const first = describe(firstParent).materialized;
     const second = describe(secondParent).materialized;
     const other = describe(unrelated).materialized;
