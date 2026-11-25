@@ -13,8 +13,10 @@ read_when:
     `gateway.port` controls the single multiplexed port for WebSocket + HTTP (Control UI, hooks, etc.). Precedence:
 
     ```text
-    --port > OPENCLAW_GATEWAY_PORT > gateway.port > default 18789
+    --port > OPENCLAW_GATEWAY_PORT > gateway.port > named-profile default > 18789
     ```
+
+    The named-profile default is `19001` for `dev` and a port derived from the profile name for other named profiles (`--profile <name>` or `OPENCLAW_PROFILE`). When `--profile dev` selects the profile and `OPENCLAW_GATEWAY_PORT` is unset, the CLI sets `OPENCLAW_GATEWAY_PORT=19001`, so `19001` takes precedence over `gateway.port`.
 
   </Accordion>
 
@@ -103,7 +105,7 @@ read_when:
   </Accordion>
 
   <Accordion title="Can I run multiple Gateways on the same host?">
-    Usually no - one Gateway can run multiple messaging channels and agents. Use multiple Gateways only for redundancy (for example a rescue bot) or hard isolation, and isolate each with its own `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, `agents.defaults.workspace`, and unique `gateway.port`.
+    Usually no - one Gateway can run multiple messaging channels and agents. Use multiple Gateways only for redundancy (for example a rescue bot) or hard isolation, and isolate each with its own `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, `agents.defaults.workspace`, and unique `gateway.port`, with base ports at least 120 apart for the normal derived-port ranges. Explicit sandbox/browser/CDP port overrides and high-base-port fallbacks can still overlap, so check those ports separately.
 
     Recommended: `openclaw --profile <name> ...` per instance (auto-creates `~/.openclaw-<name>`), a unique `gateway.port` per profile config (or `--port` for manual runs), and a per-profile service with `openclaw --profile <name> gateway install`.
 

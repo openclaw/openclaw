@@ -1,7 +1,14 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
@@ -14,24 +21,108 @@ import {
 import { createSandboxTestContext } from "../../agents/sandbox/test-fixtures.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import * as workspaceStore from "./local-workspace-store.js";
+import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+
+const command = () => ({ command: "true", env: {}, usePty: false });
+const failedOutcome = { status: "failed" as const, exitCode: 0, timedOut: false };
+const workspaceChanged = /Local sandbox workspace (changed|was released)/;
+const writeSource = (dir: string, data: string) => fs.writeFile(path.join(dir, "source.txt"), data);
+const expectSource = async (dir: string, data: string) =>
+  expect(await fs.readFile(path.join(dir, "source.txt"), "utf8")).toBe(data);
+const finish = (backend: SandboxBackendHandle, token: unknown) =>
+  backend.finalizeExec!({ ...failedOutcome, token });
+
+function createBackend(runtimeId: string): SandboxBackendHandle {
+  return {
+    id: "docker",
+    runtimeId,
+    runtimeLabel: runtimeId,
+    workdir: "/workspace",
+    buildExecSpec: async () => ({ argv: ["true"], env: {}, stdinMode: "pipe-closed" }),
+    runShellCommand: async () => {
+      throw new Error("New shell work must remain blocked");
+    },
+  };
+}
+
+async function registerWorkspace(owner: LocalWorkspaceOwner) {
+  await insertRegistryWorktree(process.env, owner.worktree);
+  const scope = { agentId: owner.agentId, sessionKey: owner.sessionKey };
+  const { id, branch, repoRoot } = owner.worktree;
+  const entry = {
+    sessionId: owner.sessionId,
+    updatedAt: 1,
+    worktree: { id, branch, repoRoot },
+  };
+  await replaceSessionEntry(scope, entry);
+  return { scope, entry };
+}
+
+async function proveQueuedLocalWorkspaceCheckpoint(
+  owner: LocalWorkspaceOwner,
+  projection: NonNullable<Awaited<ReturnType<typeof prepareLocalSandboxWorkspace>>>,
+) {
+  await writeSource(projection.workspaceDir, "first edit\n");
+  const acquired = createDeferred();
+  const release = createDeferred();
+  const custody = withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async () => {
+    acquired.resolve();
+    await release.promise;
+  });
+  await acquired.promise;
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  const capture = vi.fn<workspaceStore.LocalWorkspaceStore["manifest"]>();
+  let afterCapture: (() => Promise<void>) | undefined;
+  const spy = vi
+    .spyOn(workspaceStore, "withLocalWorkspaceStore")
+    .mockImplementation((params, run) =>
+      withStore(params, (store) =>
+        run({
+          ...store,
+          manifest: async (...args) => {
+            const result = await store.manifest(...args);
+            if (result.kind === "scan" && !(args[1].kind === "scan" && args[1].prehash)) {
+              void capture(...args);
+              const afterScan = afterCapture;
+              afterCapture = undefined;
+              await afterScan?.();
+            }
+            return result;
+          },
+        }),
+      ),
+    );
+  const first = projection.checkpoint();
+  const second = projection.checkpoint();
+  release.resolve();
+  await Promise.all([custody, first, second]);
+  await expectSource(owner.worktree.path, "first edit\n");
+  expect(capture).toHaveBeenCalledOnce();
+
+  const captured = createDeferred();
+  const finishCapture = createDeferred();
+  afterCapture = async () => {
+    captured.resolve();
+    await finishCapture.promise;
+  };
+  const third = projection.checkpoint();
+  await captured.promise;
+  const later = projection.checkpoint();
+  finishCapture.resolve();
+  await Promise.all([third, later]);
+  expect(capture).toHaveBeenCalledTimes(3);
+
+  spy.mockRestore();
+}
 
 export async function proveStoppedLocalWorkspaceCheckpoint(
   owner: LocalWorkspaceOwner,
   disposeBeforeCheckpoint = false,
 ) {
-  await insertRegistryWorktree(process.env, owner.worktree);
-  const sessionScope = { agentId: owner.agentId, sessionKey: owner.sessionKey };
-  const entry = {
-    sessionId: owner.sessionId,
-    updatedAt: 1,
-    worktree: {
-      id: owner.worktree.id,
-      branch: owner.worktree.branch,
-      repoRoot: owner.worktree.repoRoot,
-    },
-  };
-  await replaceSessionEntry(sessionScope, entry);
+  const { scope, entry } = await registerWorkspace(owner);
   const controller = new AbortController();
   let hostCurrent = true;
   using projection = await prepareLocalSandboxWorkspace({
@@ -47,46 +138,28 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
       }
     },
   });
-  if (!projection) {
-    throw new Error("Expected managed projection");
+  assert(projection, "Expected managed projection");
+  if (!disposeBeforeCheckpoint) {
+    await proveQueuedLocalWorkspaceCheckpoint(owner, projection);
   }
-  const backend: SandboxBackendHandle = {
-    id: "docker",
-    runtimeId: "stopped-command",
-    runtimeLabel: "stopped-command",
-    workdir: "/workspace",
-    buildExecSpec: async () => ({ argv: ["true"], env: {}, stdinMode: "pipe-closed" }),
-    runShellCommand: async () => {
-      throw new Error("New shell work must remain blocked");
-    },
-  };
+  const backend = createBackend("stopped-command");
   const sandbox = createSandboxTestContext({
     overrides: { workspaceDir: projection.workspaceDir, backend },
   });
   sandbox.fsBridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
   bindLocalSandboxWorkspace(sandbox, projection);
-  const spec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-  const laterSpec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-  await fs.writeFile(path.join(projection.workspaceDir, "source.txt"), "stopped guest edit\n");
+  const spec = await backend.buildExecSpec(command());
+  const laterSpec = await backend.buildExecSpec(command());
+  await writeSource(projection.workspaceDir, "stopped guest edit\n");
   const reason = createAgentRunDirectAbortError();
   controller.abort(reason);
   if (disposeBeforeCheckpoint) {
     projection[Symbol.dispose]();
   }
-  const outcome = {
-    status: "failed" as const,
-    exitCode: 0,
-    timedOut: false,
-    token: spec.finalizeToken,
-  };
-  await expect(backend.finalizeExec!(outcome)).resolves.toBeUndefined();
-  expect(await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8")).toBe(
-    "stopped guest edit\n",
-  );
+  await expect(finish(backend, spec.finalizeToken)).resolves.toBeUndefined();
+  await expectSource(owner.worktree.path, "stopped guest edit\n");
   await expect(backend.runShellCommand({ script: "true" })).rejects.toBe(reason);
-  await expect(backend.buildExecSpec({ command: "true", env: {}, usePty: false })).rejects.toBe(
-    reason,
-  );
+  await expect(backend.buildExecSpec(command())).rejects.toBe(reason);
   await expect(
     sandbox.fsBridge.writeFile({ filePath: "late.txt", data: "must not write" }),
   ).rejects.toBe(reason);
@@ -94,70 +167,49 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
     code: "ENOENT",
   });
   if (disposeBeforeCheckpoint) {
-    await fs.writeFile(
-      path.join(projection.workspaceDir, "source.txt"),
-      "last stopped guest edit\n",
-    );
-    await backend.finalizeExec!({ ...outcome, token: laterSpec.finalizeToken });
-    expect(await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8")).toBe(
-      "last stopped guest edit\n",
-    );
-    await expect(projection.checkpoint()).rejects.toThrow(
-      "Local sandbox workspace authority changed",
-    );
+    await writeSource(projection.workspaceDir, "last stopped guest edit\n");
+    await finish(backend, laterSpec.finalizeToken);
+    await expectSource(owner.worktree.path, "last stopped guest edit\n");
+    await expect(projection.checkpoint()).rejects.toThrow(workspaceChanged);
     return;
   }
   hostCurrent = false;
   await expect(projection.checkpoint()).rejects.toThrow("Gateway owner closed");
   hostCurrent = true;
-  await fs.writeFile(path.join(projection.workspaceDir, "source.txt"), "guest conflict\n");
-  await fs.writeFile(path.join(owner.worktree.path, "source.txt"), "human conflict\n");
-  await expect(
-    backend.finalizeExec!({ ...outcome, token: laterSpec.finalizeToken }),
-  ).rejects.toThrow("conflict");
-  await fs.writeFile(path.join(owner.worktree.path, "source.txt"), "stopped guest edit\n");
+  await writeSource(projection.workspaceDir, "guest conflict\n");
+  await writeSource(owner.worktree.path, "human conflict\n");
+  await expect(finish(backend, laterSpec.finalizeToken)).rejects.toThrow("conflict");
+  await writeSource(owner.worktree.path, "stopped guest edit\n");
   await projection.checkpoint();
-  await replaceSessionEntry(sessionScope, { ...entry, sessionId: randomUUID(), updatedAt: 2 });
-  await expect(projection.checkpoint()).rejects.toThrow(
-    "Local sandbox workspace authority changed",
-  );
+  await replaceSessionEntry(scope, { ...entry, sessionId: randomUUID(), updatedAt: 2 });
+  await expect(projection.checkpoint()).rejects.toThrow(workspaceChanged);
 }
 
 export async function proveStoppedSandboxAuthority(
   owner: LocalWorkspaceOwner,
-  revoke: "operator" | "gateway",
+  revoke: "gateway" | "prepare-release" | "prepare-cancel",
+  testSignal?: AbortSignal,
 ) {
-  const [
-    { withOpenClawTestState },
-    { acquireGatewayStateOwner },
-    { resolveOpenClawStateSqlitePath },
-    { ensureCanonicalUserProfileForEmail, setCanonicalUserProfileRole },
-    { invalidateOperatorRolePolicy },
-    { captureGatewayOperatorRunAuthority },
-    { createContext, createOperatorClient },
-    { setRuntimeConfigSnapshot },
-    { resolveAttemptWorkspaceSandbox },
-    backendModule,
-  ] = await Promise.all([
+  const [state, lease, paths, users, auth, server, cfg, workspaces, backends] = await Promise.all([
     import("../../test-utils/openclaw-test-state.js"),
     import("../../infra/gateway-state-owner.js"),
     import("../../state/openclaw-state-db.paths.js"),
     import("../../state/user-profile-writes.js"),
-    import("../operator-role-policy.js"),
     import("../operator-run-authority.js"),
     import("../server-plugin-in-process-dispatch.test-support.js"),
     import("../../config/runtime-snapshot.js"),
     import("../../agents/workspace-sandbox.js"),
     import("../../agents/sandbox/backend.js"),
   ]);
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const gateway = acquireGatewayStateOwner({
-      databasePath: resolveOpenClawStateSqlitePath(),
+  await state.withOpenClawTestState({ scenario: "minimal" }, async ({ configPath }) => {
+    const gateway = lease.acquireGatewayStateOwner({
+      databasePath: paths.resolveOpenClawStateSqlitePath(),
       payload: {
         pid: process.pid,
         createdAt: new Date().toISOString(),
-        configPath: state.configPath,
+        configPath,
         role: "gateway",
+        processNamespace: readGatewayLockProcessNamespace(),
       },
     });
     try {
@@ -187,23 +239,26 @@ export async function proveStoppedSandboxAuthority(
                 agents: "*",
                 sessions: { others: "none" },
               },
-              denied: { scopes: [], agents: [], sessions: { others: "none" } },
             },
           },
         },
       };
-      setRuntimeConfigSnapshot(config);
-      const profile = await ensureCanonicalUserProfileForEmail("checkpoint-operator@example.test");
-      await setCanonicalUserProfileRole(profile.id, "writer");
-      const context = createContext();
+      cfg.setRuntimeConfigSnapshot(config);
+      const profile = await users.ensureCanonicalUserProfileForEmail(
+        "checkpoint-operator@example.test",
+      );
+      await users.setCanonicalUserProfileRole(profile.id, "writer");
+      const context = server.createContext();
       context.getRuntimeConfig = () => config;
-      const captured = await captureGatewayOperatorRunAuthority({
-        client: createOperatorClient({ profileId: profile.id, scopes: ["operator.write"] }),
+      const captured = await auth.prepareGatewayOperatorRunAuthority({
+        client: server.createOperatorClient({
+          profileId: profile.id,
+          scopes: ["operator.write"],
+        }),
         context,
       });
-      if (!captured?.authority.retain) {
-        throw new Error("Expected retained operator authority");
-      }
+      assert(captured, "Expected admitted operator request");
+      assert(captured.authority.retain, "Expected retained operator authority");
       const releaseOperator = captured.authority.retain();
       const admission = prepareSystemAgentRunAdmission(
         config,
@@ -213,34 +268,42 @@ export async function proveStoppedSandboxAuthority(
         undefined,
         captured.authority,
       );
-      const backend: SandboxBackendHandle = {
-        id: "docker",
-        runtimeId: "authority-command",
-        runtimeLabel: "authority-command",
-        workdir: "/workspace",
-        buildExecSpec: async () => ({ argv: ["true"], env: {}, stdinMode: "pipe-closed" }),
-        runShellCommand: async () => {
-          throw new Error("New shell work must remain blocked");
-        },
-      };
+      const backend = createBackend("authority-command");
       // Substitute container execution only; the authority and checkpoint owners stay real.
-      const provision = vi.spyOn(backendModule, "createSandboxBackend").mockResolvedValue(backend);
+      const provision = vi
+        .spyOn(backends, "createSandboxBackend")
+        .mockImplementation(async (params) => {
+          backend.workdir = params.workspaceDir;
+          return backend;
+        });
       try {
-        await insertRegistryWorktree(process.env, owner.worktree);
-        await replaceSessionEntry(
-          { agentId: owner.agentId, sessionKey: owner.sessionKey },
-          {
-            sessionId: owner.sessionId,
-            updatedAt: 1,
-            worktree: {
-              id: owner.worktree.id,
-              branch: owner.worktree.branch,
-              repoRoot: owner.worktree.repoRoot,
+        await registerWorkspace(owner);
+        if (revoke === "prepare-release" || revoke === "prepare-cancel") {
+          assert(testSignal, "Expected preparation proof lifetime");
+          await proveAttemptPreparationWhileLeaseHeld(
+            owner,
+            revoke === "prepare-release" ? "release" : "cancel",
+            testSignal,
+            async (controller) => {
+              const prepared = await workspaces.resolveAttemptWorkspaceSandbox({
+                config,
+                agentId: owner.agentId,
+                sessionKey: owner.sessionKey,
+                sessionId: owner.sessionId,
+                workspaceDir: owner.worktree.path,
+                abortSignal: controller.signal,
+                admittedRunContext: await admission.admit("embedded"),
+              });
+              return {
+                workspaceDir: prepared.effectiveWorkspace,
+                [Symbol.dispose]: () => prepared[Symbol.dispose](),
+              };
             },
-          },
-        );
+          );
+          return;
+        }
         const controller = new AbortController();
-        using workspace = await resolveAttemptWorkspaceSandbox({
+        using workspace = await workspaces.resolveAttemptWorkspaceSandbox({
           config,
           agentId: owner.agentId,
           sessionKey: owner.sessionKey,
@@ -250,44 +313,25 @@ export async function proveStoppedSandboxAuthority(
           admittedRunContext: await admission.admit("embedded"),
         });
         const sandbox = workspace.sandbox;
-        if (!sandbox?.backend || !sandbox.fsBridge) {
-          throw new Error("Expected managed sandbox");
-        }
+        assert(sandbox?.backend && sandbox.fsBridge, "Expected managed sandbox");
         expect(sandbox.workspaceSource).toBe("managed-worktree");
-        const accepted = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-        const pending = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-        await fs.writeFile(path.join(sandbox.workspaceDir, "source.txt"), "accepted guest edit\n");
+        const accepted = await backend.buildExecSpec(command());
+        const pending = await backend.buildExecSpec(command());
+        await writeSource(sandbox.workspaceDir, "accepted guest edit\n");
         const reason = createAgentRunDirectAbortError();
         controller.abort(reason);
         admission.close();
         captured.release();
         workspace[Symbol.dispose]();
-        const outcome = { status: "failed" as const, exitCode: 0, timedOut: false };
-        await backend.finalizeExec!({ ...outcome, token: accepted.finalizeToken });
-        expect(await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8")).toBe(
-          "accepted guest edit\n",
-        );
-        await expect(
-          backend.buildExecSpec({ command: "true", env: {}, usePty: false }),
-        ).rejects.toBe(reason);
-        await fs.writeFile(path.join(sandbox.workspaceDir, "source.txt"), "revoked guest edit\n");
-        if (revoke === "operator") {
-          await setCanonicalUserProfileRole(profile.id, "denied", {
-            onCommitted: invalidateOperatorRolePolicy,
-          });
-          expect(captured.authority.assertCurrent).toThrow();
-          await expect(
-            backend.finalizeExec!({ ...outcome, token: pending.finalizeToken }),
-          ).rejects.toThrow(/operator|source execution authority/);
-        } else {
-          gateway.release();
-          await expect(
-            backend.finalizeExec!({ ...outcome, token: pending.finalizeToken }),
-          ).rejects.toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
-        }
-        expect(await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8")).toBe(
-          "accepted guest edit\n",
-        );
+        await finish(backend, accepted.finalizeToken);
+        await expectSource(owner.worktree.path, "accepted guest edit\n");
+        await expect(backend.buildExecSpec(command())).rejects.toBe(reason);
+        await writeSource(sandbox.workspaceDir, "revoked guest edit\n");
+        gateway.release();
+        await expect(finish(backend, pending.finalizeToken)).rejects.toMatchObject({
+          code: "GATEWAY_STATE_OWNER_REQUIRED",
+        });
+        await expectSource(owner.worktree.path, "accepted guest edit\n");
       } finally {
         provision.mockRestore();
         admission.close();
@@ -298,4 +342,113 @@ export async function proveStoppedSandboxAuthority(
       gateway.release();
     }
   });
+}
+
+/** Observe workspace admission without replacing the lease or preparation owner. */
+async function proveAttemptPreparationWhileLeaseHeld(
+  owner: LocalWorkspaceOwner,
+  ending: "release" | "cancel",
+  testSignal: AbortSignal,
+  prepareAttempt: (
+    controller: AbortController,
+  ) => Promise<{ workspaceDir: string; [Symbol.dispose](): void }>,
+) {
+  const prepare = (controller: AbortController) =>
+    prepareLocalSandboxWorkspace({
+      cfg: { worktreeAcceleration: false },
+      agentId: owner.agentId,
+      sessionKey: owner.sessionKey,
+      workspaceDir: owner.worktree.path,
+      sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+      assertHost: owner.assertCurrent,
+    });
+  const seed = await prepare(new AbortController());
+  assert(seed, "Registered fixture did not prepare its managed projection");
+  const projectionPath = seed.workspaceDir;
+  seed[Symbol.dispose]();
+  const controller = new AbortController();
+  const reason = createAgentRunDirectAbortError();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const waited = createDeferred();
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  const admission = vi.spyOn(workspaceStore, "withLocalWorkspaceStore");
+  type PreparationOutcome =
+    | { kind: "returned"; value: Awaited<ReturnType<typeof prepareAttempt>> }
+    | { kind: "rejected"; error: unknown };
+  let holder: Promise<void> | undefined;
+  let preparation: Promise<PreparationOutcome> | undefined;
+  let holderOutcome:
+    | Promise<{ kind: "returned" } | { kind: "rejected"; error: unknown }>
+    | undefined;
+  let beforeRelease: PreparationOutcome | undefined;
+  let afterRelease: PreparationOutcome | undefined;
+  let afterHolder: Awaited<NonNullable<typeof holderOutcome>> | undefined;
+  try {
+    holder = withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+      entered.resolve();
+      await release.promise;
+      store.assertCurrent();
+    });
+    holderOutcome = holder.then(
+      () => ({ kind: "returned" as const }),
+      (error: unknown) => ({ kind: "rejected" as const, error }),
+    );
+    await withinTest(
+      awaitGateBeforeSettlement(entered.promise, holder, "Holder settled before acquiring custody"),
+      testSignal,
+    );
+    admission.mockImplementation((params, run) => {
+      const pending = withStore(params, run);
+      if (params.worktreeId === owner.worktree.id) {
+        waited.resolve();
+      }
+      return pending;
+    });
+    preparation = prepareAttempt(controller).then(
+      (value) => ({ kind: "returned" as const, value }),
+      (error: unknown) => ({ kind: "rejected" as const, error }),
+    );
+    await withinTest(
+      awaitGateBeforeSettlement(
+        waited.promise,
+        preparation,
+        "Preparation settled before workspace admission",
+      ),
+      testSignal,
+    );
+    if (ending === "cancel") {
+      controller.abort(reason);
+      beforeRelease = await withinTest(preparation, testSignal);
+    }
+  } finally {
+    // Release first, then join both owners even when observation/test cancellation fails.
+    release.resolve();
+    try {
+      [afterHolder, afterRelease] = await Promise.all([holderOutcome, preparation]);
+      if (afterRelease?.kind === "returned") {
+        afterRelease.value?.[Symbol.dispose]();
+      }
+    } finally {
+      admission.mockRestore();
+    }
+  }
+  expect(afterHolder?.kind).toBe("returned");
+  await expectSource(owner.worktree.path, "original\n");
+  await expectSource(projectionPath, "original\n");
+  if (ending === "release") {
+    expect(afterRelease?.kind).toBe("returned");
+    if (afterRelease?.kind === "returned") {
+      expect(afterRelease.value?.workspaceDir).toBe(projectionPath);
+    }
+  } else {
+    expect(afterRelease?.kind).toBe("rejected");
+    if (afterRelease?.kind === "rejected") {
+      expect(afterRelease.error).toMatchObject({ code: "sandbox_provisioning" });
+      expect(collectNestedErrorCandidates(afterRelease.error)).toContain(reason);
+    }
+    expect(beforeRelease?.kind).toBe("rejected");
+  }
 }

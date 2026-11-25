@@ -105,18 +105,38 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
             piSessionStoreAvailable(process.env, store)
           );
         },
-        list: async (query) =>
-          await listLocalPiSessionPage({
-            limit: query.limitPerHost,
-            ...(query.search ? { searchTerm: query.search } : {}),
-            cursor: query.cursors?.[PI_LOCAL_SESSION_HOST_ID],
-          }),
+        list: async (query) => {
+          const page = await listLocalPiSessionPage(
+            {
+              limit: query.limitPerHost,
+              ...(query.search ? { searchTerm: query.search } : {}),
+              cursor: query.cursors?.[PI_LOCAL_SESSION_HOST_ID],
+            },
+            true,
+            query.exportSource,
+          );
+          return {
+            ...page,
+            sessions: page.sessions.map((session) =>
+              Object.assign(session, {
+                exportPolicy: {
+                  origin: "native-local" as const,
+                  automatic: true,
+                  stableHostThreadIdentity: true as const,
+                },
+              }),
+            ),
+          };
+        },
         read: async (request) =>
-          await readLocalPiTranscriptPage({
-            threadId: request.threadId,
-            ...(request.limit ? { limit: request.limit } : {}),
-            ...(request.cursor !== undefined ? { cursor: request.cursor } : {}),
-          }),
+          await readLocalPiTranscriptPage(
+            {
+              threadId: request.threadId,
+              ...(request.limit ? { limit: request.limit } : {}),
+              ...(request.cursor !== undefined ? { cursor: request.cursor } : {}),
+            },
+            request.sourceHomeId,
+          ),
         assertAccess: assertPiLocalAccess,
       },
       node: {
@@ -154,7 +174,7 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
       messages: {
         invalidNodeCursor: "Pi node returned an invalid cursor",
         invalidNodeSessionPage: "Pi node returned an invalid session page",
-        invalidNodeTranscriptPage: "Pi node returned an invalid transcript page",
+        invalidNodeTranscriptPage: "Pi node returned an invalid chat history page",
         invalidHostId: "Pi session catalog hostId is invalid",
         localReadFailed: "Local Pi sessions are unavailable",
         nodeInvokeFailed: "Paired node Pi sessions are unavailable",

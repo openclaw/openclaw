@@ -22,7 +22,7 @@ struct GatewayLaunchAgentManagerTests {
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
             GatewayLaunchAgentManager.setTestingDaemonStatusPayloads(["""
             {"service":{"revision":"not-the-pin-revision",
-            "runtimeIntent":{"status":"known","revision":"observed-pin"\(definition)}}}
+            "runtimeIntent":{"status":"known","stored":false,"revision":"observed-pin"\(definition)}}}
             """])
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             defer {
@@ -68,10 +68,11 @@ struct GatewayLaunchAgentManagerTests {
                     : #"{"definition":null,"revision":"observed-pin"}"#
                 let restoration = restoring == nil ? [] : [
                     "--restore-service-cli",
-                    #"{"entrypoint":"/fixture/old package/openclaw.mjs","executable":"/fixture/node","sqliteLibrary":null}"#,
+                    #"{"entrypoint":"/fixture/old package/openclaw.mjs","# +
+                        #""executable":"/fixture/node","sqliteLibrary":null}"#,
                 ]
                 #expect(calls == [
-                    ["status", "--deep", "--json", "--no-probe"],
+                    ["status", "--runtime-intent-only", "--json"],
                     arguments + restoration + ["--expected-runtime-pin", expected],
                 ])
                 let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
@@ -81,11 +82,17 @@ struct GatewayLaunchAgentManagerTests {
     }
 
     @Test(arguments: [
-        #"{"service":{"runtimeIntent":{"status":"unknown"}}}"#,
-        #"{"ok":false,"error":"inspection failed"}"#,
-        #"{"service":{"runtimeIntent":{"status":"known","revision":42}}}"#,
+        (
+            #"{"service":{"runtimeIntent":{"status":"unknown"}}}"#,
+            GatewayLaunchAgentManager.runtimePinSelectionChanged),
+        (
+            #"{"ok":false,"error":"inspection failed"}"#,
+            GatewayLaunchAgentManager.runtimePinSelectionChanged),
+        (
+            #"{"service":{"runtimeIntent":{"status":"known","revision":42}}}"#,
+            GatewayLaunchAgentManager.runtimePinSelectionChanged),
     ])
-    func `untrusted runtime intent blocks bundled installation`(_ payload: String) async throws {
+    func `unresolved runtime intent blocks bundled installation`(_ payload: String, expected: String) async throws {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
         await TestIsolation.withIsolatedState(launchAgentHomeDirectory: home) {
@@ -98,10 +105,30 @@ struct GatewayLaunchAgentManagerTests {
             }
             let error = await GatewayLaunchAgentManager.runDaemonCommand(
                 ["install", "--force"], runtime: BundledRuntime(root: home.appendingPathComponent("runtime/build")))
-            #expect(error == "Gateway service or runtime pin changed before installation. " +
-                "The newer selection was preserved; inspect it before retrying.")
+            #expect(error == expected)
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
-                ["status", "--deep", "--json", "--no-probe"],
+                ["status", "--runtime-intent-only", "--json"],
+            ])
+        }
+    }
+
+    @Test func `pending runtime migration reaches the daemon owner without a fabricated revision`() async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        await TestIsolation.withIsolatedState(launchAgentHomeDirectory: home) {
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                #"{"service":{"runtimeIntent":{"status":"migrationPending","nextStep":"run openclaw doctor"}}}"#)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+            #expect(await GatewayLaunchAgentManager.runDaemonCommand(
+                ["install", "--force"], runtime: BundledRuntime(root: home.appendingPathComponent("runtime/build"))) ==
+                nil)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "--runtime-intent-only", "--json"], ["install", "--force"],
             ])
         }
     }
@@ -316,6 +343,28 @@ struct GatewayLaunchAgentManagerTests {
             #expect(kickstartError == nil)
             #expect(FileManager().fileExists(atPath: marker.path))
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test func `disable delegates missing plist recovery to the daemon owner`() async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        await TestIsolation.withIsolatedState(launchAgentHomeDirectory: home) {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(home.appendingPathComponent("disabled"))
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+            let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: .current)
+            #expect(!FileManager.default.fileExists(atPath: plist.path))
+
+            let error = await GatewayLaunchAgentManager.set(enabled: false, port: 18789)
+
+            #expect(error == nil)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [["uninstall"]])
         }
     }
 

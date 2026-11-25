@@ -1,5 +1,5 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
-import type { BackgroundPreference } from "../../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsRow,
@@ -7,44 +7,33 @@ import {
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { createAppearanceBackground } from "./appearance-background-state.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
-export type AppearanceBackgroundView = {
-  preference: BackgroundPreference;
-  imageUrl: string | null;
-  hasImage: boolean;
+type BackgroundView = ReturnType<ReturnType<typeof createAppearanceBackground>["viewProps"]>;
+export type AppearanceBackgroundView = Omit<
+  BackgroundView,
+  "onRetry" | "onFile" | "onRemoveImage" | "mutation"
+> & {
   busy: boolean;
-  uploadAllowed: boolean;
-  scopeHint: string;
-  message: {
-    kind: "error" | "status";
-    text: string;
-  } | null;
-  onSource: (source: BackgroundPreference["source"]["kind"]) => void;
-  onChange: (patch: Partial<BackgroundPreference>) => void;
-  onChooseImage: () => void;
-  onRemoveImage: () => void;
+  status?: JSX.Element;
   onFile: (file: File) => void;
-  onPreviewStart: (event: PointerEvent) => void;
-  onPreviewInput: () => void;
-  onPreviewEnd: (event: PointerEvent) => void;
-  onPreviewKey: (event: KeyboardEvent) => void;
-  onPreviewCancel: () => void;
-  onRetry?: () => void;
+  onRemoveImage: () => void;
+  fileRef?: (element: HTMLInputElement) => void;
+  onRetry?: BackgroundView["onRetry"];
 };
 export function AppearanceBackground(props: AppearanceBackgroundView) {
   const preference = createMemo(() => props.preference);
   const disabled = createMemo(() => props.busy || preference().source.kind === "none");
-  const presentation = createMemo(() => preference().presentation ?? "faded");
+  const presentation = () => preference().presentation ?? "faded";
   const visibility = createMemo(() => Math.round(preference().visibility * 100));
-  const placementHint = createMemo(() =>
+  const placementHint = () =>
     preference().source.kind === "none"
       ? "noneHint"
       : !preference().showOnNewSession && !preference().showInSessions
         ? "placementOffHint"
         : preference().visibility === 0
           ? "visibilityZeroHint"
-          : undefined,
-  );
+          : undefined;
   return (
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.background} class="settings-section">
       <div class="settings-section__header">
@@ -53,6 +42,7 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
       <div class="settings-group">
         <SettingsRow
           title={t("configView.appearance.background.source")}
+          description={t("configView.appearance.background.formats")}
           stacked={true}
           control={
             <div class="settings-background-artwork">
@@ -81,39 +71,29 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
                       <span class="settings-background-option__sample" aria-hidden="true">
                         {source === "custom" && props.imageUrl ? (
                           <img src={props.imageUrl} alt="" />
-                        ) : source === "none" ? (
-                          <Icon name="circleX" />
                         ) : source === "custom" ? (
                           <Icon name="image" />
-                        ) : (
-                          <Icon name="palette" />
-                        )}
+                        ) : undefined}
+                        {preference().source.kind === source ? (
+                          <span class="settings-background-option__check">
+                            <Icon name="check" />
+                          </span>
+                        ) : undefined}
                       </span>
                       <span class="settings-background-option__label">
                         {t(
                           `configView.appearance.background.${source === "none" ? "none" : `${source}Choice`}`,
                         )}
-                        {preference().source.kind === source ? (
-                          <span aria-hidden="true">
-                            <Icon name="check" />
-                          </span>
-                        ) : undefined}
                       </span>
                     </button>
                   )}
                 </For>
               </div>
               <div class="settings-background-actions">
-                {!props.hasImage ? (
-                  <span class="settings-background-formats">
-                    {t("configView.appearance.background.formats")}
-                  </span>
-                ) : undefined}
                 <button
                   type="button"
                   class="btn btn--sm"
                   data-background-upload
-                  title={t("configView.appearance.background.formats")}
                   disabled={props.busy || !props.uploadAllowed}
                   onClick={() => props.onChooseImage()}
                 >
@@ -170,7 +150,10 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
           }
           stackedOnNarrow={true}
           control={
-            <div class="settings-background-visibility">
+            <div
+              class="settings-background-visibility"
+              style={{ "--settings-range-fill": `${visibility()}%` }}
+            >
               <input
                 type="range"
                 min="0"
@@ -220,6 +203,7 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
       </div>
       <input
         type="file"
+        ref={(element) => props.fileRef?.(element)}
         data-background-file
         hidden
         accept="image/jpeg,image/png,image/webp"
@@ -232,36 +216,39 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
           }
         }}
       />
-      {placementHint() ? (
-        <p class="settings-section__desc">
-          {t(`configView.appearance.background.${placementHint()}`)}
-        </p>
-      ) : undefined}
-      <p class="settings-section__desc">{props.scopeHint}</p>
-      {props.message ? (
-        <p
-          role={props.message.kind === "error" ? "alert" : "status"}
-          class={[
-            "settings-status",
-            {
-              "settings-status--danger": props.message.kind === "error",
-              "settings-status--muted": props.message.kind !== "error",
-            },
-          ]}
-        >
-          {props.message.text}{" "}
-          {props.onRetry ? (
-            <button
-              type="button"
-              class="btn btn--sm"
-              data-background-retry
-              onClick={() => props.onRetry?.()}
+      <p class="settings-section__desc settings-section__scope settings-background-note">
+        {placementHint() ? (
+          <>{t(`configView.appearance.background.${placementHint()}`)} </>
+        ) : undefined}
+        {props.scopeHint}
+      </p>
+      <div class="settings-background-status">
+        {props.status ??
+          (props.message ? (
+            <p
+              role={props.message.kind === "error" ? "alert" : "status"}
+              class={[
+                "settings-status",
+                {
+                  "settings-status--danger": props.message.kind === "error",
+                  "settings-status--muted": props.message.kind !== "error",
+                },
+              ]}
             >
-              {t("common.retry")}
-            </button>
-          ) : undefined}
-        </p>
-      ) : undefined}
+              {props.message.text}{" "}
+              {props.onRetry ? (
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  data-background-retry
+                  onClick={() => props.onRetry?.()}
+                >
+                  {t("common.retry")}
+                </button>
+              ) : undefined}
+            </p>
+          ) : undefined)}
+      </div>
     </section>
   );
 }

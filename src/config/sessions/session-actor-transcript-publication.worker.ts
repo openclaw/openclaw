@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -24,7 +24,7 @@ type RewriteOwner = {
   rewrite<T>(database: OpenClawAgentDatabase, rewrite: Rewrite, run: () => T): T;
 };
 
-const owners = new WeakMap<DatabaseSync, RewriteOwner>();
+const owners = new WeakMap<OpenClawAgentDatabase["db"], RewriteOwner>();
 
 export function registerSessionActorTranscriptRewriteOwner(
   database: OpenClawAgentDatabase,
@@ -39,7 +39,9 @@ export function readSessionActorRewriteFacts(
   scope: { sessionKey: string; sessionId: string },
   entryId?: string,
 ): SessionActorRewriteFacts | undefined {
-  const state = owners.get(database.db)?.read(database, scope);
+  const state =
+    readSessionActorTransactionState(database, scope) ??
+    owners.get(database.db)?.read(database, scope);
   const current = state?.hot;
   const projection = state?.transcript.projection;
   const generation = current?.transcript.version.generation;

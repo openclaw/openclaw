@@ -11,7 +11,7 @@ type AnthropicCacheRetentionFamily =
 /** Matches Application Inference Profile ARNs across all AWS partitions with Bedrock. */
 const BEDROCK_APP_INFERENCE_PROFILE_ARN_RE = /^arn:aws(-cn|-us-gov)?:bedrock:/;
 
-function isAnthropicBedrockModel(modelId: string): boolean {
+function isAnthropicBedrockModel(modelId: string, allowOpaqueApplicationProfile = false): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
 
   // Direct Anthropic Claude model IDs and regional inference profiles
@@ -35,7 +35,8 @@ function isAnthropicBedrockModel(modelId: string): boolean {
     normalized.includes(":application-inference-profile/")
   ) {
     const profileId = normalized.split(":application-inference-profile/")[1] ?? "";
-    return profileId.includes("claude");
+    // Explicit cache config relies on the extension to resolve opaque profile IDs.
+    return allowOpaqueApplicationProfile || profileId.includes("claude");
   }
 
   return false;
@@ -71,17 +72,7 @@ export function resolveAnthropicCacheRetentionFamily(params: {
     params.hasExplicitCacheConfig &&
     typeof params.modelId === "string"
   ) {
-    if (isAnthropicBedrockModel(params.modelId)) {
-      return "anthropic-bedrock";
-    }
-    // Application inference profiles with opaque IDs (e.g. z27qyso459da) can't
-    // be identified as Claude from the ARN alone. When the user explicitly sets
-    // cacheRetention, honor it — the extension's GetInferenceProfile resolution
-    // handles the actual model detection at runtime.
-    if (
-      BEDROCK_APP_INFERENCE_PROFILE_ARN_RE.test(normalizeLowercaseStringOrEmpty(params.modelId)) &&
-      normalizeLowercaseStringOrEmpty(params.modelId).includes(":application-inference-profile/")
-    ) {
+    if (isAnthropicBedrockModel(params.modelId, true)) {
       return "anthropic-bedrock";
     }
   }

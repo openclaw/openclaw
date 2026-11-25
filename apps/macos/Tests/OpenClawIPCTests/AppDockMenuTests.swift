@@ -37,7 +37,7 @@ struct AppDockMenuTests {
             openSettings: { settingsOpens += 1 })
         let menu = owner.menu(entries: entries, selectedTarget: .profile("work"))
         let actions = menu.items.filter { !$0.isSeparatorItem }
-        #expect(actions.map(\.title) == ["Open Dashboard", "Local", "Work", "Backup", "Settings…"])
+        #expect(actions.map(\.title) == ["Open OpenClaw", "Local", "Work", "Backup", "Settings…"])
         #expect(actions.filter { $0.state == .on }.map(\.title) == ["Work"])
         for item in actions {
             let target = try #require(item.target as? NSObject)
@@ -48,7 +48,7 @@ struct AppDockMenuTests {
         #expect(targets == [.primary, .profile("work"), .profile("backup")])
         for limited in [[], Array(entries.prefix(1))] {
             let single = owner.menu(entries: limited, selectedTarget: .primary)
-            #expect(single.items.filter { !$0.isSeparatorItem }.map(\.title) == ["Open Dashboard", "Settings…"])
+            #expect(single.items.filter { !$0.isSeparatorItem }.map(\.title) == ["Open OpenClaw", "Settings…"])
         }
     }
 }

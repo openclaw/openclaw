@@ -845,17 +845,17 @@ mod tests {
     }
 
     #[test]
-    fn widget_identity_is_stable_until_the_document_changes() {
-        let mut widget = test_widget(
+    fn document_revision_changes_widget_identity() {
+        let first = test_widget(
             "first",
             "https://gateway.example/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/first/index.html",
             "scripts",
         );
         let generation = GatewayClient::new().generation();
-        let original_label = widget_view_label(&widget, generation);
-        assert_eq!(widget_view_label(&widget, generation), original_label);
-        widget.url.push_str("?revision=2");
-        assert_ne!(widget_view_label(&widget, generation), original_label);
+        let first_label = widget_view_label(&first, generation);
+        let mut navigated = first.clone();
+        navigated.url.push_str("?revision=2");
+        assert_ne!(widget_view_label(&navigated, generation), first_label);
     }
 
     #[test]

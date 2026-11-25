@@ -23,14 +23,11 @@ import { withClientVoiceSessionSettlement } from "../../../talk/client-voice-ses
 import {
   captureClientVoiceSessionSource,
   type ClientVoiceSessionSource,
-} from "../../../talk/client-voice-session-source.js";
-import {
-  ensureClientVoiceAgentSessionEntry,
   captureClientVoiceSessionWriter,
   type ClientVoiceSessionWriter,
-} from "../../../talk/client-voice-session-write.js";
+} from "../../../talk/client-voice-session-source.js";
+import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import {
-  appendClientVoiceTranscript,
   closeClientVoiceSession,
   closeStaleClientVoiceSessions,
   createOrResumeClientVoiceSession,
@@ -50,14 +47,13 @@ import { assertValidParams } from "../../server-methods/validation.js";
 import { resolveOperatorSessionCreation } from "../../session-creation-provenance.js";
 import { formatForLog } from "../../ws-log.js";
 import { createTalkClientAgentConsultRunner } from "../client-agent-consult.js";
-import {
-  createTalkClientGatewayControlOwner,
-  resolveTalkAgentConsultAuthority,
-} from "../client-gateway-control.js";
+import { createTalkClientGatewayControlOwner } from "../client-gateway-control.js";
 import {
   retainTalkClientRunAuthority,
   type TalkClientRunAuthority,
 } from "../client-run-authority.js";
+import { resolveTalkAgentConsultAuthority } from "../client-tool-authority.js";
+import { appendTalkClientTranscript } from "../client-transcript.js";
 import { talkRequestError } from "../request-error.js";
 import {
   assertTalkClientSessionEntryDeadline,
@@ -68,6 +64,7 @@ import {
   resolveTalkClientLaunchError,
 } from "../session-config.js";
 import { readTalkRealtimeInitialItems } from "../session-history.js";
+import { restoreTalkSessionTarget } from "../session-start.js";
 import { requirePreparedTalkSessionTarget } from "../session-target.js";
 import {
   markTalkVoiceSessionReady,
@@ -185,6 +182,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
     });
     assertTargetCurrent();
     if (resolution.provider.createBrowserSession) {
+      await restoreTalkSessionTarget(request, target, replacement?.source(target).assertCurrent);
       const initialItems = await readTalkRealtimeInitialItems(target, assertTargetCurrent);
       assertTargetCurrent();
       const controlSource =
@@ -335,7 +333,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
           closingFailure
             ? Promise.reject(toErrorObject(closingFailure.error, "Voice session close failed"))
             : withVoiceWriter((writer) =>
-                appendClientVoiceTranscript(
+                appendTalkClientTranscript(
                   {
                     agentId,
                     sessionKey,
@@ -344,8 +342,10 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
                     entryId,
                     role,
                     text,
+                    providerOwned: controlSource === "delegation",
                     config: runtimeConfig,
                   },
+                  context,
                   writer,
                 ),
               ),
@@ -518,6 +518,11 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
           replacement?.assertCurrent(target);
           gatewayControlOwner.assertOpen();
           const initialVoiceSource = captureClientVoiceSessionSource(agentId);
+          await initialVoiceSource.prepare();
+          sessionMutationCommitGuard?.();
+          sessionMutationAuthorization?.assertTargetCurrent({ ...sessionTarget, ensuredSessionId });
+          replacement?.assertCurrent(target);
+          gatewayControlOwner.assertOpen();
           voiceSessionSource = initialVoiceSource;
           // Recovering 6h-abandoned calls (and retrying their digests) is not on the
           // start path; running it inline would delay use of time-sensitive provider

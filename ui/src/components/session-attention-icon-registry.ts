@@ -1,5 +1,5 @@
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import type { icons } from "./icons.ts";
+import type { IconName } from "./icon-data.ts";
 
 export const SESSION_ATTENTION_ICON_NAMES = {
   hand: "hand",
@@ -8,4 +8,4 @@ export const SESSION_ATTENTION_ICON_NAMES = {
   flag: "flag",
   lock: "lock",
   hourglass: "circle",
-} as const satisfies Record<SessionAgentAttentionIconId, keyof typeof icons>;
+} as const satisfies Record<SessionAgentAttentionIconId, IconName>;

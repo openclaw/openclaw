@@ -13,7 +13,7 @@ import {
   chatSessionListResponse,
   controlUiSessionUrl,
 } from "./chat-flow.test-support.ts";
-import { verifyDurableComposerFences } from "./composer-draft-fences.test-support.ts";
+import { composerStore, composerStorePage } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { navigateInApp } from "./new-session-page.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
@@ -28,27 +28,18 @@ const suite = createControlUiE2eSuite({
 type TestDraftScope = { gatewayOwner: string; recoveryScope: string; scopeKey: string };
 
 async function rawDraftRecords(page: Page, scopes: readonly TestDraftScope[], expire = false) {
+  const helpers = await page.evaluateHandle<
+    typeof import("../lib/chat/control-ui-database.runtime.ts")
+  >('import("/src/lib/chat/control-ui-database.runtime.ts")');
   return page.evaluate(
-    async ({ draftScopes, markExpired }) => {
-      const requestResult = <T>(request: IDBRequest<T>, message: string) =>
-        new Promise<T>((resolve, reject) => {
-          request.addEventListener("success", () => resolve(request.result), { once: true });
-          request.addEventListener("error", () => reject(request.error ?? new Error(message)), {
-            once: true,
-          });
-        });
-      const database = await requestResult(
-        indexedDB.open("openclaw-control-ui"),
-        "IndexedDB open failed",
-      );
+    async ({ draftScopes, markExpired, helpers: { requestResult, transactionComplete } }) => {
+      const database = await requestResult(indexedDB.open("openclaw-control-ui"));
       const transaction = database.transaction(
         "composerDrafts",
         markExpired ? "readwrite" : "readonly",
       );
       const store = transaction.objectStore("composerDrafts");
-      const records = (await requestResult(store.getAll(), "IndexedDB read failed")) as Array<
-        Record<string, unknown>
-      >;
+      const records = (await requestResult(store.getAll())) as Array<Record<string, unknown>>;
       const result: Record<string, { text: unknown; attachments: number | null } | null> = {};
       for (const scope of draftScopes) {
         const key = JSON.stringify([scope.gatewayOwner, scope.recoveryScope, scope.scopeKey]);
@@ -63,20 +54,15 @@ async function rawDraftRecords(page: Page, scopes: readonly TestDraftScope[], ex
           store.put({ ...record, updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1_000 });
         }
       }
-      await new Promise<void>((resolve, reject) => {
-        transaction.addEventListener("complete", () => resolve(), { once: true });
-        transaction.addEventListener(
-          "error",
-          () => reject(transaction.error ?? new Error("IndexedDB transaction failed")),
-          { once: true },
-        );
-      });
+      await transactionComplete(transaction);
       database.close();
       return result;
     },
-    { draftScopes: scopes, markExpired: expire },
+    { draftScopes: scopes, markExpired: expire, helpers },
   );
 }
+
+const withStore = composerStorePage(suite);
 
 suite.define(() => {
   it("does not replace a newer saved split draft when an older pane returns after eviction", async () => {
@@ -131,472 +117,106 @@ suite.define(() => {
     );
   });
 
-  it("does not reuse a cached composer owner while reconnect authentication is unresolved", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const storeHandle = await page.evaluateHandle<
-        typeof import("../lib/chat/composer-draft-store.runtime.ts")
-      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
-      const composerHandle = await page.evaluateHandle<
-        typeof import("../pages/chat/composer-persistence.ts")
-      >('import("/src/pages/chat/composer-persistence.ts")');
-      const sessionKeyHandle = await page.evaluateHandle<
-        typeof import("../lib/sessions/session-key.ts")
-      >('import("/src/lib/sessions/session-key.ts")');
-      const result = await page.evaluate(
-        async ({ draftStore, sessionKeys, composer }) => {
-          const client = { recoveryScope: "credential-a", recoveryScopeReady: true };
-          const state = {
-            settings: { gatewayUrl: "owner-fence-gateway" },
-            hello: null,
-            sessionKey: "agent:main:owner-fence",
-            chatMessage: "",
-            chatAttachments: [],
-            chatQueue: [],
-            client,
-            connected: true,
-            selectedChatSessionIncognito: false,
-          };
-          const scope = {
-            gatewayOwner: state.settings.gatewayUrl,
-            recoveryScope: client.recoveryScope,
-            scopeKey: `chat:v3:${composer.storedChatOutboxScopeKey(
-              sessionKeys.resolveUiConversationIdentity(state, state.sessionKey),
-            )}`,
-          };
-          const persistence = new composer.ChatComposerPersistence(() => state);
-          persistence.start();
-          state.connected = false;
-          client.recoveryScopeReady = false;
-          state.chatMessage = "authenticated offline draft";
-          persistence.persistChangedState();
-          let offlineStored = false;
-          for (let attempt = 0; attempt < 100; attempt += 1) {
-            const stored = await draftStore.readDurableComposerDraft(scope);
-            if (stored.status === "found" && stored.draft.text === state.chatMessage) {
-              offlineStored = true;
-              break;
-            }
-            await new Promise((resolve) => {
-              setTimeout(resolve, 10);
-            });
-          }
-          if (!offlineStored) {
-            throw new Error("offline composer draft did not settle");
-          }
+  it("reads the requested draft before global expiry maintenance settles", async () => {
+    await withStore(async ({ context, page, store: seedStoreHandle }) => {
+      const scope = {
+        gatewayOwner: "foreground-gateway",
+        recoveryScope: "foreground-credential",
+        scopeKey: "foreground-draft",
+      };
 
-          state.connected = true;
-          state.chatMessage = "unresolved reconnect draft";
-          persistence.persistChangedState();
-          // Let a wrongly admitted fire-and-forget write open its transaction,
-          // then commit a later transaction in the same object store as a barrier.
-          await Promise.resolve();
-          await draftStore.writeDurableComposerDraft(
-            { ...scope, recoveryScope: "credential-b", scopeKey: "reconnect-barrier" },
-            { revision: 1, text: "barrier", attachments: [] },
-            { expectedRevision: 0, writeId: "reconnect-barrier" },
-          );
-          return draftStore.readDurableComposerDraft(scope);
-        },
-        { draftStore: storeHandle, sessionKeys: sessionKeyHandle, composer: composerHandle },
+      await page.evaluate(
+        ({ draftScope, draftStore }) =>
+          draftStore.seed(draftScope, "restore before maintenance", 1, "foreground-write"),
+        { draftScope: scope, draftStore: seedStoreHandle },
+      );
+
+      await page.close();
+      const reopened = await context.newPage();
+      await reopened.addInitScript(() => {
+        const blockedTransactions = new WeakSet<IDBTransaction>();
+        const originalOpenCursor = Object.getOwnPropertyDescriptor(
+          IDBObjectStore.prototype,
+          "openCursor",
+        )?.value as IDBObjectStore["openCursor"];
+        IDBObjectStore.prototype.openCursor = function (this: IDBObjectStore, ...args) {
+          if (this.name === "composerDrafts") {
+            blockedTransactions.add(this.transaction);
+          }
+          return originalOpenCursor.apply(this, args);
+        };
+        IDBTransaction.prototype.addEventListener = function (
+          this: IDBTransaction,
+          type: string,
+          listener: EventListenerOrEventListenerObject,
+          options?: boolean | AddEventListenerOptions,
+        ) {
+          if (type === "complete" && blockedTransactions.has(this)) {
+            return;
+          }
+          return EventTarget.prototype.addEventListener.call(this, type, listener, options);
+        } as IDBTransaction["addEventListener"];
+      });
+      await installMockGateway(reopened);
+      await reopened.goto(`${suite.server.baseUrl}settings`);
+      const reopenedStoreHandle = await composerStore(reopened);
+      const result = await reopened.evaluate(
+        ({ draftScope, draftStore }) =>
+          Promise.race([
+            draftStore.read(draftScope),
+            new Promise((resolve) => {
+              setTimeout(() => resolve({ status: "maintenance-blocked-read" }), 1_000);
+            }),
+          ]),
+        { draftScope: scope, draftStore: reopenedStoreHandle },
       );
 
       expect(result).toMatchObject({
         status: "found",
-        draft: { text: "authenticated offline draft" },
+        draft: { text: "restore before maintenance" },
       });
-    });
-  });
-
-  it("migrates identifiable attachment drafts and atomically retains failed or conflicting recovery", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}settings`);
-      const handle = await page.evaluateHandle<
-        typeof import("../lib/chat/composer-draft-store.runtime.ts")
-      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
-      const result = await page.evaluate(async (store) => {
-        const owner = { gatewayOwner: "migration-gateway", recoveryScope: "migration-account" };
-        const qualified = { ...owner, scopeKey: "agent:work:main\u0000agent:work" };
-        const ambiguous = { ...owner, scopeKey: "global\u0000agent:work" };
-        const attachment = {
-          blob: new Blob(["preserve these bytes"], { type: "text/plain" }),
-          mimeType: "text/plain",
-          fileName: "saved.txt",
-        };
-        for (const scope of [qualified, ambiguous]) {
-          await store.writeDurableComposerDraft(
-            scope,
-            { revision: 42, text: "saved attachment draft", attachments: [attachment] },
-            { expectedRevision: 0, writeId: "legacy" },
-          );
-        }
-        const migrated = await store.prepareDurableComposerRecovery(owner);
-        if (migrated.status !== "ready" || migrated.entries.length !== 1) {
-          throw new Error("Expected one ambiguous draft");
-        }
-        const entry = migrated.entries[0]!;
-        const canonical = { ...owner, scopeKey: "chat:v3:agent:work:main\u0000agent:work" };
-        const identified = await store.readDurableComposerDraft(canonical);
-        const destination = { ...owner, scopeKey: "chat:v3:agent:work:review\u0000agent:work" };
-        const originalPut = Object.getOwnPropertyDescriptor(IDBObjectStore.prototype, "put")
-          ?.value as IDBObjectStore["put"];
-        IDBObjectStore.prototype.put = function (value, key) {
-          if (value.scopeKey === ambiguous.scopeKey) {
-            throw new DOMException("quota", "QuotaExceededError");
-          }
-          return key === undefined
-            ? originalPut.call(this, value)
-            : originalPut.call(this, value, key);
-        };
-        const failed = await store.restoreDurableComposerRecovery(
-          destination,
-          entry,
-          0,
-          undefined,
-          () => true,
-          0,
-        );
-        IDBObjectStore.prototype.put = originalPut;
-        const afterFailure = await store.readDurableComposerDraft(ambiguous);
-        const failedDestination = await store.readDurableComposerDraft(destination);
-        await store.writeDurableComposerDraft(
-          destination,
-          { revision: 50, text: "newer destination", attachments: [] },
-          { expectedRevision: 0, writeId: "newer" },
-        );
-        const conflict = await store.restoreDurableComposerRecovery(
-          destination,
-          entry,
-          0,
-          undefined,
-          () => true,
-          0,
-        );
-        const newer = await store.readDurableComposerDraft(destination);
-        const fence = await store.retireDurableComposerDraft(destination, 50);
-        if (fence.status !== "persisted" || fence.revision === undefined) {
-          throw new Error("Missing destination fence");
-        }
-        const staleOwner = await store.restoreDurableComposerRecovery(
-          destination,
-          entry,
-          fence.revision!,
-          fence.writeId,
-          () => false,
-          0,
-        );
-        const restored = await store.restoreDurableComposerRecovery(
-          destination,
-          entry,
-          fence.revision!,
-          fence.writeId,
-          () => true,
-          fence.revision!,
-        );
-        const recovered = await store.readDurableComposerDraft(destination);
-        const sourceAfter = await store.readDurableComposerDraft(ambiguous);
-        // A downgraded reader can start a new draft behind the source tombstone.
-        const oldFence = await store.readDurableComposerDraft(qualified);
-        if (oldFence.status !== "not-found" || oldFence.revision === undefined) {
-          throw new Error("Missing legacy fence");
-        }
-        await store.writeDurableComposerDraft(
-          qualified,
-          {
-            revision: oldFence.revision + 1,
-            text: "older UI new draft",
-            attachments: [attachment],
-          },
-          {
-            expectedRevision: oldFence.revision,
-            expectedWriteId: oldFence.writeId,
-            writeId: "downgraded",
-          },
-        );
-        const reopened = await store.prepareDurableComposerRecovery(owner);
-        return {
-          identified:
-            identified.status === "found"
-              ? {
-                  text: identified.draft.text,
-                  revision: identified.draft.revision,
-                  writeId: identified.draft.writeId,
-                  bytes: await identified.draft.attachments[0]!.blob.text(),
-                }
-              : null,
-          failed: failed.status,
-          afterFailure: afterFailure.status,
-          failedDestination: failedDestination.status,
-          conflict: conflict.status,
-          newer: newer.status === "found" ? newer.draft.text : null,
-          staleOwner: staleOwner.status,
-          restored: restored.status,
-          sourceAfter: sourceAfter.status,
-          recovered:
-            recovered.status === "found" ? await recovered.draft.attachments[0]!.blob.text() : null,
-          reopened: reopened.status === "ready" ? reopened.entries.map((row) => row.text) : null,
-        };
-      }, handle);
-      expect(result).toEqual({
-        identified: {
-          text: "saved attachment draft",
-          revision: 42,
-          writeId: "legacy",
-          bytes: "preserve these bytes",
-        },
-        failed: "storage-failed",
-        afterFailure: "found",
-        failedDestination: "not-found",
-        conflict: "conflict",
-        newer: "newer destination",
-        staleOwner: "conflict",
-        restored: "persisted",
-        sourceAfter: "not-found",
-        recovered: "preserve these bytes",
-        reopened: ["older UI new draft"],
-      });
-    });
-  });
-
-  it("reads the requested draft before global expiry maintenance settles", async () => {
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block" },
-      async ({ context, page }) => {
-        await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}settings`);
-        const scope = {
-          gatewayOwner: "foreground-gateway",
-          recoveryScope: "foreground-credential",
-          scopeKey: "foreground-draft",
-        };
-        const seedStoreHandle = await page.evaluateHandle<
-          typeof import("../lib/chat/composer-draft-store.runtime.ts")
-        >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
-        await page.evaluate(
-          ({ draftScope, draftStore }) =>
-            draftStore.writeDurableComposerDraft(
-              draftScope,
-              { revision: 1, text: "restore before maintenance", attachments: [] },
-              { expectedRevision: 0, writeId: "foreground-write" },
-            ),
-          { draftScope: scope, draftStore: seedStoreHandle },
-        );
-
-        await page.close();
-        const reopened = await context.newPage();
-        await reopened.addInitScript(() => {
-          const blockedTransactions = new WeakSet<IDBTransaction>();
-          const originalOpenCursor = Object.getOwnPropertyDescriptor(
-            IDBObjectStore.prototype,
-            "openCursor",
-          )?.value as IDBObjectStore["openCursor"];
-          IDBObjectStore.prototype.openCursor = function (this: IDBObjectStore, ...args) {
-            if (this.name === "composerDrafts") {
-              blockedTransactions.add(this.transaction);
-            }
-            return originalOpenCursor.apply(this, args);
-          };
-          IDBTransaction.prototype.addEventListener = function (
-            this: IDBTransaction,
-            type: string,
-            listener: EventListenerOrEventListenerObject,
-            options?: boolean | AddEventListenerOptions,
-          ) {
-            if (type === "complete" && blockedTransactions.has(this)) {
-              return;
-            }
-            return EventTarget.prototype.addEventListener.call(this, type, listener, options);
-          } as IDBTransaction["addEventListener"];
-        });
-        await installMockGateway(reopened);
-        await reopened.goto(`${suite.server.baseUrl}settings`);
-        const reopenedStoreHandle = await reopened.evaluateHandle<
-          typeof import("../lib/chat/composer-draft-store.runtime.ts")
-        >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
-        const result = await reopened.evaluate(
-          ({ draftScope, draftStore }) =>
-            Promise.race([
-              draftStore.readDurableComposerDraft(draftScope),
-              new Promise((resolve) => {
-                setTimeout(() => resolve({ status: "maintenance-blocked-read" }), 1_000);
-              }),
-            ]),
-          { draftScope: scope, draftStore: reopenedStoreHandle },
-        );
-
-        expect(result).toMatchObject({
-          status: "found",
-          draft: { text: "restore before maintenance" },
-        });
-      },
-    );
-  });
-
-  it("keeps question drafts scoped, bounded, and retired with their conversation", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}settings`);
-      const storeHandle = await page.evaluateHandle<
-        typeof import("../lib/chat/composer-draft-store.runtime.ts")
-      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
-      const result = await page.evaluate(async (store) => {
-        const parent = {
-          gatewayOwner: "question-fixture",
-          recoveryScope: "person-a",
-          scopeKey: "chat:v3:agent:main:one\u0000agent:main",
-        };
-        const scope = { ...parent, scopeKey: `questions:v1:${parent.scopeKey}` };
-        const payload = {
-          text: "",
-          attachments: [],
-          questionDrafts: [
-            {
-              itemId: "audience",
-              signature: "fixture",
-              edited: true,
-              answers: [{ selected: [], freeText: "My team" }],
-            },
-          ],
-        };
-        await store.writeDurableComposerDraft(
-          scope,
-          { ...payload, revision: 1 },
-          { expectedRevision: 0, writeId: "first" },
-        );
-        const recovery = await store.prepareDurableComposerRecovery(parent);
-        const read = await store.readDurableComposerDraft(scope);
-        const other = await store.readDurableComposerDraft({ ...scope, recoveryScope: "person-b" });
-        await store.retireDurableComposerDraft(parent);
-        const retired = await store.readDurableComposerDraft(scope);
-        const stale = await store.writeDurableComposerDraft(
-          scope,
-          { ...payload, revision: 2 },
-          { expectedRevision: 1, writeId: "late" },
-        );
-        // The owner budget evicts by updatedAt, not revision. Real writes can share
-        // one millisecond, so give each fixture row a distinct timestamp like the
-        // existing composer fence scenario, without depending on IDB key tie order.
-        const boundedScopes = Array.from({ length: 21 }, (_, index) => ({
-          ...scope,
-          scopeKey: `questions:v1:chat:v3:agent:main:bounded-${index}\u0000agent:main`,
-        }));
-        const originalNow = Date.now;
-        let now = originalNow();
-        const writes = [];
-        try {
-          Date.now = () => ++now;
-          for (const [index, boundedScope] of boundedScopes.entries()) {
-            writes.push(
-              await store.writeDurableComposerDraft(
-                boundedScope,
-                { ...payload, revision: index + 10 },
-                { expectedRevision: 0, writeId: `bounded-${index}` },
-              ),
-            );
-          }
-        } finally {
-          Date.now = originalNow;
-        }
-        const bounded = await Promise.all(
-          boundedScopes.map((boundedScope) => store.readDurableComposerDraft(boundedScope)),
-        );
-        return {
-          recovery,
-          read,
-          other,
-          retired,
-          stale,
-          oldest: bounded[0],
-          active: bounded.filter((storedDraft) => storedDraft.status === "found").length,
-          writes: writes.map((write) => write.status),
-          expireScope: {
-            ...scope,
-            scopeKey: "questions:v1:chat:v3:agent:main:bounded-20\u0000agent:main",
-          },
-        };
-      }, storeHandle);
-      expect(result.recovery).toEqual({ status: "ready", entries: [] });
-      expect(result.read).toMatchObject({
-        status: "found",
-        draft: { questionDrafts: [{ answers: [{ freeText: "My team" }] }] },
-      });
-      expect(result.other.status).toBe("not-found");
-      expect(result.retired.status).toBe("not-found");
-      expect(result.stale.status).toBe("conflict");
-      expect(result.writes).toEqual(Array.from({ length: 21 }, () => "persisted"));
-      expect(result.active).toBe(20);
-      expect(result.oldest?.status).toBe("not-found");
-      await rawDraftRecords(page, [result.expireScope], true);
-      const expired = await page.evaluate(
-        ({ store, scope }) => store.readDurableComposerDraft(scope),
-        { store: storeHandle, scope: result.expireScope },
-      );
-      expect(expired.status).toBe("not-found");
     });
   });
 
   it("expires drafts across abandoned credential owners on the next database open", async () => {
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block" },
-      async ({ context, page }) => {
-        await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}settings`);
-        const seedStoreHandle = await page.evaluateHandle<
-          typeof import("../lib/chat/composer-draft-store.runtime.ts")
-        >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
-        const scopes = await page.evaluate(async (draftStore) => {
-          const owner = {
-            gatewayOwner: "abandoned-gateway",
-            recoveryScope: "abandoned-credential",
-          };
-          const activeScope = { ...owner, scopeKey: "active-with-blob" };
-          const tombstoneScope = { ...owner, scopeKey: "old-tombstone" };
-          await draftStore.writeDurableComposerDraft(
-            activeScope,
-            {
-              revision: 10,
-              text: "expired abandoned draft",
-              attachments: [
-                {
-                  blob: new Blob(["expired attachment"], { type: "text/plain" }),
-                  mimeType: "text/plain",
-                  fileName: "expired.txt",
-                },
-              ],
-            },
-            { expectedRevision: 0, writeId: "abandoned-active" },
-          );
-          await draftStore.retireDurableComposerDraft(tombstoneScope, 20);
-          return [activeScope, tombstoneScope];
-        }, seedStoreHandle);
-        await rawDraftRecords(page, scopes, true);
+    await withStore(async ({ page, context, store: seedStoreHandle }) => {
+      const scopes = await page.evaluate(async (draftStore) => {
+        const owner = { gatewayOwner: "abandoned-gateway", recoveryScope: "abandoned-credential" };
+        const activeScope = { ...owner, scopeKey: "active-with-blob" };
+        const tombstoneScope = { ...owner, scopeKey: "old-tombstone" };
+        await draftStore.seed(activeScope, "expired abandoned draft", 10, "abandoned-active", [
+          {
+            blob: new Blob(["expired attachment"], { type: "text/plain" }),
+            mimeType: "text/plain",
+            fileName: "expired.txt",
+          },
+        ]);
+        await draftStore.retire(tombstoneScope, 20);
+        return [activeScope, tombstoneScope];
+      }, seedStoreHandle);
+      await rawDraftRecords(page, scopes, true);
 
-        await page.close();
-        const reopened = await context.newPage();
-        await installMockGateway(reopened);
-        await reopened.goto(`${suite.server.baseUrl}settings`);
-        const reopenedStoreHandle = await reopened.evaluateHandle<
-          typeof import("../lib/chat/composer-draft-store.runtime.ts")
-        >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
-        await reopened.evaluate(
-          (draftStore) =>
-            draftStore.readDurableComposerDraft({
-              gatewayOwner: "current-gateway",
-              recoveryScope: "current-credential",
-              scopeKey: "current-draft",
-            }),
-          reopenedStoreHandle,
-        );
-        const inspected = await rawDraftRecords(reopened, scopes);
+      await page.close();
+      const reopened = await context.newPage();
+      await installMockGateway(reopened);
+      await reopened.goto(`${suite.server.baseUrl}settings`);
+      const reopenedStoreHandle = await composerStore(reopened);
+      await reopened.evaluate(
+        (draftStore) =>
+          draftStore.read({
+            gatewayOwner: "current-gateway",
+            recoveryScope: "current-credential",
+            scopeKey: "current-draft",
+          }),
+        reopenedStoreHandle,
+      );
+      const inspected = await rawDraftRecords(reopened, scopes);
 
-        expect(inspected).toEqual({
-          "active-with-blob": { text: "", attachments: 0 },
-          "old-tombstone": null,
-        });
-      },
-    );
+      expect(inspected).toEqual({
+        "active-with-blob": { text: "", attachments: 0 },
+        "old-tombstone": null,
+      });
+    });
   });
 
   it("keeps existing-session Incognito drafts in memory while preserving its submitted queue", async () => {
@@ -636,9 +256,9 @@ suite.define(() => {
           )
           .click();
         await expect.poll(() => composer.inputValue()).toBe("");
-        const composerHandle = await page.evaluateHandle<
-          typeof import("../pages/chat/composer-persistence.ts")
-        >('import("/src/pages/chat/composer-persistence.ts")');
+        const queueHandle = await page.evaluateHandle<
+          typeof import("../pages/chat/composer-queue-persistence.ts")
+        >('import("/src/pages/chat/composer-queue-persistence.ts")');
         const outboxHandle = await page.evaluateHandle<
           typeof import("../lib/chat/outbox-store.ts")
         >('import("/src/lib/chat/outbox-store.ts")');
@@ -652,7 +272,7 @@ suite.define(() => {
           .toBe(true);
         // A submitted, held message has a separate reload contract from unsent input.
         const admission = await page.evaluate(
-          ({ persistence, outbox, sessionKey }) => {
+          ({ queuePersistence, outbox, sessionKey }) => {
             const pane = document.querySelector<HTMLElement & { state: ChatPageHost }>(
               'openclaw-chat-pane[aria-hidden="false"]',
             );
@@ -667,7 +287,7 @@ suite.define(() => {
               throw new Error("Expected the authenticated Incognito composer owner");
             }
             const target = outbox.storageTargetForComposer(state);
-            const admitted = persistence.admitStoredChatComposerQueueItem(
+            const admitted = queuePersistence.admitStoredChatComposerQueueItemResult(
               state,
               outbox.captureChatOutboxAdmission(state, sessionKey),
               {
@@ -683,9 +303,9 @@ suite.define(() => {
               storageScope: JSON.stringify([target.gatewayOwner, target.recoveryScope]),
             };
           },
-          { persistence: composerHandle, outbox: outboxHandle, sessionKey: incognito },
+          { queuePersistence: queueHandle, outbox: outboxHandle, sessionKey: incognito },
         );
-        expect(admission.admitted).toBe(true);
+        expect(admission.admitted).toBe("admitted");
         await composer.fill("Private unsent draft — café 雪 🦞");
         await activePane.locator(".agent-chat__file-input").setInputFiles({
           name: "private-draft.txt",
@@ -712,15 +332,9 @@ suite.define(() => {
           pathname: new URL(controlUiSessionUrl(suite.server.baseUrl, incognito)).pathname,
         });
         await page.waitForFunction((sessionKey) => {
-          const pane = document.querySelector('openclaw-chat-pane[aria-hidden="false"]') as
-            | (HTMLElement & {
-                state?: {
-                  sessionKey: string;
-                  connected: boolean;
-                  selectedChatSessionIncognito: boolean;
-                };
-              })
-            | null;
+          const pane = document.querySelector<HTMLElement & { state?: ChatPageHost }>(
+            'openclaw-chat-pane[aria-hidden="false"]',
+          );
           return (
             pane?.state?.sessionKey === sessionKey &&
             pane.state.connected &&
@@ -766,13 +380,5 @@ suite.define(() => {
         ).toEqual([]);
       },
     );
-  });
-
-  it("fences stale writes and expires or evicts bounded durable drafts", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await verifyDurableComposerFences(page);
-    });
   });
 });

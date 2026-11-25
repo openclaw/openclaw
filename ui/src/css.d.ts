@@ -1,9 +1,6 @@
-declare module "*.css";
+/// <reference types="vite/client" />
 
-declare module "*.html?raw" {
-  const html: string;
-  export default html;
-}
+declare module "*.css";
 
 declare module "*.sql?raw" {
   const sql: string;

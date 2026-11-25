@@ -56,7 +56,6 @@ describe("logs cli follow across Gateway log-file changes", () => {
         readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
         execFileUtf8Tail.mockResolvedValueOnce({
           stdout: "journal bridge line\n-- cursor: s=bridge",
-          stderr: "",
           code: 0,
           truncated: false,
         });

@@ -1,10 +1,7 @@
-// Covers channel plugin status issue collection.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin, ChannelStatusIssue } from "../channels/plugins/types.public.js";
+import { afterEach, expect, it, vi } from "vitest";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 
-const mocks = vi.hoisted(() => ({
-  listChannelPlugins: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ listChannelPlugins: vi.fn() }));
 
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: mocks.listChannelPlugins,
@@ -12,180 +9,85 @@ vi.mock("../channels/plugins/index.js", () => ({
 
 import { collectChannelStatusIssues } from "./channels-status-issues.js";
 
-function createPlugin(
-  id: string,
-  collectStatusIssues?: NonNullable<ChannelPlugin["status"]>["collectStatusIssues"],
-) {
+afterEach(() => vi.clearAllMocks());
+
+function account(overrides: Partial<ChannelAccountSnapshot> = {}): ChannelAccountSnapshot {
   return {
-    id,
-    status: collectStatusIssues ? { collectStatusIssues } : undefined,
-  } as ChannelPlugin;
+    accountId: "default",
+    enabled: true,
+    configured: true,
+    running: true,
+    connected: true,
+    ...overrides,
+  };
 }
 
-describe("collectChannelStatusIssues", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.clearAllMocks();
-  });
+function collect(accounts: ChannelAccountSnapshot[], status?: ChannelPlugin["status"]) {
+  mocks.listChannelPlugins.mockReturnValue([{ id: "example", status }]);
+  return collectChannelStatusIssues({ channelAccounts: { example: accounts } });
+}
 
-  it("returns no issues when payload accounts are missing or not arrays", () => {
-    const collectTelegramIssues = vi.fn((): ChannelStatusIssue[] => [
-      {
-        channel: "telegram",
-        accountId: "default",
-        kind: "runtime",
-        message: "telegram down",
-      },
-    ]);
-    mocks.listChannelPlugins.mockReturnValue([createPlugin("telegram", collectTelegramIssues)]);
+function issue(message: string, fix = "restart the channel or gateway", accountId = "default") {
+  return { channel: "example", accountId, kind: "runtime", message, fix };
+}
 
-    expect(collectChannelStatusIssues({})).toStrictEqual([]);
-    expect(collectChannelStatusIssues({ channelAccounts: { telegram: { bad: true } } })).toEqual(
-      [],
-    );
-    expect(collectTelegramIssues).not.toHaveBeenCalled();
-  });
+it("returns no issues when payload accounts are missing or not arrays", () => {
+  const collectTelegramIssues = vi.fn(() => []);
+  const plugins = [{ id: "telegram", status: { collectStatusIssues: collectTelegramIssues } }];
+  expect(collectChannelStatusIssues({}, plugins)).toStrictEqual([]);
+  expect(
+    collectChannelStatusIssues({ channelAccounts: { telegram: { bad: true } } }, plugins),
+  ).toEqual([]);
+  expect(collectTelegramIssues).not.toHaveBeenCalled();
+});
 
-  it("uses Gateway-owned diagnostics without loading local plugins or duplicating issues", () => {
-    const statusIssues: ChannelStatusIssue[] = [
-      {
-        channel: "guildchat",
-        accountId: "work",
-        kind: "config",
-        message: "Channel configuration reload is deferred while active work finishes.",
-      },
-    ];
-    expect(collectChannelStatusIssues({ statusIssues })).toEqual(statusIssues);
-    expect(collectChannelStatusIssues({ statusIssues: [] })).toEqual([]);
-    expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
-  });
+it("uses Gateway-owned diagnostics without loading local plugins or duplicating issues", () => {
+  const statusIssues = [issue("Configuration reload is deferred.")];
+  expect(collectChannelStatusIssues({ statusIssues })).toEqual(statusIssues);
+  expect(collectChannelStatusIssues({ statusIssues: [] })).toEqual([]);
+  expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
+});
 
-  it("reports blocked lifecycle through the generic runtime path", () => {
-    mocks.listChannelPlugins.mockReturnValue([createPlugin("slack")]);
+it.each<[Partial<ChannelAccountSnapshot>, string, string]>([
+  [
+    { lifecycle: "blocked" },
+    "Channel runtime is blocked and needs operator action.",
+    "resolve the reported channel error, then restart the channel",
+  ],
+  [
+    { restartPending: true, ingressUnavailable: true },
+    "Channel cannot admit inbound events; its durable ingress queue is unavailable. Outbound may still work.",
+    "check openclaw logs for the ingress failure, then rerun openclaw doctor",
+  ],
+])("reports generic runtime diagnostics for %j", (state, message, fix) => {
+  expect(collect([account(state)])).toEqual([issue(message, fix)]);
+});
 
-    expect(
-      collectChannelStatusIssues({
-        channelAccounts: {
-          slack: [
-            {
-              accountId: "default",
-              enabled: true,
-              configured: true,
-              running: true,
-              connected: true,
-              lifecycle: "blocked",
-            },
-          ],
-        },
-      }),
-    ).toContainEqual({
-      channel: "slack",
-      accountId: "default",
-      kind: "runtime",
-      message: "Channel runtime is blocked and needs operator action.",
-      fix: "resolve the reported channel error, then restart the channel",
-    });
-  });
+it("reports stopped configured accounts without treating unknown runtime state as stopped", () => {
+  expect(
+    collect([
+      { accountId: "stopped", enabled: true, configured: true, running: false },
+      { accountId: "unknown", enabled: true, configured: true },
+      { accountId: "disabled", enabled: false, configured: true, running: false },
+      { accountId: "unconfigured", enabled: true, configured: false, running: false },
+    ]),
+  ).toEqual([
+    issue(
+      "Channel is enabled and configured, but its runtime is not running.",
+      "restart the channel or gateway",
+      "stopped",
+    ),
+  ]);
+});
 
-  it("reports stopped configured accounts without treating unknown runtime state as stopped", () => {
-    mocks.listChannelPlugins.mockReturnValue([createPlugin("discord")]);
-
-    expect(
-      collectChannelStatusIssues({
-        channelAccounts: {
-          discord: [
-            { accountId: "stopped", enabled: true, configured: true, running: false },
-            { accountId: "unknown", enabled: true, configured: true },
-            { accountId: "disabled", enabled: false, configured: true, running: false },
-            { accountId: "unconfigured", enabled: true, configured: false, running: false },
-          ],
-        },
-      }),
-    ).toEqual([
-      {
-        channel: "discord",
-        accountId: "stopped",
-        kind: "runtime",
-        message: "Channel is enabled and configured, but its runtime is not running.",
-        fix: "restart the channel or gateway",
-      },
-    ]);
-  });
-
-  it("reports dead ingress even while a restart is pending", () => {
-    mocks.listChannelPlugins.mockReturnValue([createPlugin("slack")]);
-
-    const issues = collectChannelStatusIssues({
-      channelAccounts: {
-        slack: [
-          {
-            accountId: "default",
-            enabled: true,
-            configured: true,
-            running: true,
-            connected: true,
-            restartPending: true,
-            ingressUnavailable: true,
-          },
-        ],
-      },
-    });
-
-    expect(issues).toEqual([
-      {
-        channel: "slack",
-        accountId: "default",
-        kind: "runtime",
-        message:
-          "Channel cannot admit inbound events; its durable ingress queue is unavailable. Outbound may still work.",
-        fix: "check openclaw logs for the ingress failure, then rerun openclaw doctor",
-      },
-    ]);
-  });
-
-  it("keeps plugin-specific status issues while adding generic runtime issues", () => {
-    const now = Date.now();
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-    mocks.listChannelPlugins.mockReturnValue([
-      createPlugin("signal", () => [
-        {
-          channel: "signal",
-          accountId: "default",
-          kind: "auth",
-          message: "Linked device credentials are invalid.",
-        },
-      ]),
-    ]);
-
-    const issues = collectChannelStatusIssues({
-      channelAccounts: {
-        signal: [
-          {
-            accountId: "default",
-            enabled: true,
-            configured: true,
-            running: true,
-            connected: false,
-          },
-        ],
-      },
-    });
-
-    expect(issues).toEqual([
-      {
-        channel: "signal",
-        accountId: "default",
-        kind: "runtime",
-        message: "Channel reports running, but the runtime is disconnected.",
-        fix: "restart the channel or gateway",
-      },
-      {
-        channel: "signal",
-        accountId: "default",
-        kind: "auth",
-        message: "Linked device credentials are invalid.",
-      },
-    ]);
-  });
+it("keeps plugin-specific status issues while adding generic runtime issues", () => {
+  const authIssue = {
+    channel: "example",
+    accountId: "default",
+    kind: "auth" as const,
+    message: "Linked device credentials are invalid.",
+  };
+  expect(
+    collect([account({ connected: false })], { collectStatusIssues: () => [authIssue] }),
+  ).toEqual([issue("Channel reports running, but the runtime is disconnected."), authIssue]);
 });

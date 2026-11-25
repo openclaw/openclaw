@@ -21,6 +21,7 @@ export type WorkerTurnEnvironmentService = Pick<
   | "acquireTurnCredential"
   | "destroy"
   | "get"
+  | "inspectTurnLease"
   | "startTunnel"
   | "stopTunnel"
 > &
@@ -28,6 +29,7 @@ export type WorkerTurnEnvironmentService = Pick<
     Pick<
       WorkerEnvironmentService,
       | "resolveSshIdentity"
+      | "resolveExecMemoryBoundary"
       | "supportsNodePortal"
       | "prepareComputer"
       | "readRuntimeRefresh"

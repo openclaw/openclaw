@@ -1,17 +1,13 @@
-import { render } from "lit";
-import { onTestFinished } from "vitest";
-import type { ToolCard } from "../../../lib/chat/chat-types.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
-import { ChatToolCard, type ToolCardOptions } from "./chat-tool-cards.solid.tsx";
-
-export function renderToolCard(card: ToolCard, options: ToolCardOptions) {
-  return solidContent(ChatToolCard, { card, options });
-}
+import { vi } from "vitest";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 
 export async function settleToolBridges(container: HTMLElement) {
+  flush();
+  await vi.dynamicImportSettled();
   const settled = new Set<HTMLElement>();
   // A parent commit can connect another bridge that was parked in its child fragment.
   for (;;) {
+    flush();
     const pending = Array.from(
       container.querySelectorAll<HTMLElement & { updateComplete?: Promise<unknown> }>("*"),
     ).filter((element) => element.updateComplete && !settled.has(element));
@@ -21,17 +17,4 @@ export async function settleToolBridges(container: HTMLElement) {
     pending.forEach((element) => settled.add(element));
     await Promise.all(pending.map((element) => Promise.resolve(element.updateComplete)));
   }
-}
-
-// Exercise the actual Lit entry point, including connected Solid bridge roots.
-export async function renderToolFixture(value: unknown, container: HTMLElement) {
-  if (!container.isConnected) {
-    document.body.append(container);
-    onTestFinished(() => {
-      render(null, container);
-      container.remove();
-    });
-  }
-  render(value, container);
-  await settleToolBridges(container);
 }

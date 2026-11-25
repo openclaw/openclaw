@@ -57,8 +57,8 @@ export async function prepareSkillLibraryNodeProcess(
       await node.cleanup();
     })());
   try {
-    // Worker state uses os.tmpdir(); own that root so location assertions cannot accept host-global state.
-    const workerTmpDir = path.join(node.stateDir, "tmp");
+    // Keep fallback scratch outside credentials, but inside the fixture's cleanup root.
+    const workerTmpDir = path.join(node.state.root, "tmp");
     await fs.mkdir(workerTmpDir, { recursive: true, mode: 0o700 });
     await node.state.writeConfig({
       nodeHost: { workerRuns: { enabled: true } },
@@ -146,7 +146,16 @@ export async function prepareSkillLibraryNodeProcess(
         throw error;
       }
     };
-    return { nodeId, stateDir: node.stateDir, logFile, start, stop };
+    return {
+      nodeId,
+      homeDir: node.homeDir,
+      stateDir: node.stateDir,
+      tmpDir: workerTmpDir,
+      logFile,
+      logs: () => logs,
+      start,
+      stop,
+    };
   } catch (error) {
     try {
       await stop();

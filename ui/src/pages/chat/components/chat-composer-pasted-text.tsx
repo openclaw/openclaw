@@ -1,49 +1,26 @@
 import { Icon } from "../../../components/solid/icon.tsx";
-import { base64ToBytes } from "../../../lib/bytes-base64.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
 } from "../attachment-payload-store.ts";
+import { appendPastedTextToDraft, readPastedText } from "../pasted-text-card.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
 import { AttachmentRemove } from "./chat-attachment-file.tsx";
 import { ChatPastedText } from "./chat-pasted-text.tsx";
 
-function readTextFromDataUrl(dataUrl: string): string | null {
-  const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
-  if (!match) {
-    return null;
-  }
-  const metadata = match[1]!;
-  const payload = match[2]!;
-  try {
-    return metadata.toLowerCase().includes(";base64")
-      ? new TextDecoder().decode(base64ToBytes(payload))
-      : decodeURIComponent(payload.replace(/\+/g, "%20"));
-  } catch {
-    return null;
-  }
-}
-
-function appendPastedTextToDraft(draft: string, text: string): string {
-  if (!draft.trim()) {
-    return text;
-  }
-  return `${draft.replace(/\s+$/u, "")}\n\n${text}`;
-}
+registerEnglishCatalog(registerChatComposerEnglish);
 
 function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentControlsProps): void {
-  const dataUrl = getChatAttachmentDataUrl(att);
-  const text = dataUrl ? readTextFromDataUrl(dataUrl) : null;
+  const text = readPastedText(att);
   if (!text || !props.onDraftChange) {
     return;
   }
   removeDraftAttachment(att, props);
   props.onDraftChange(appendPastedTextToDraft(props.getDraft?.() ?? props.draft ?? "", text));
-  props.onRequestUpdate?.();
 }
 
 export function ComposerPastedText(componentProps: {
@@ -81,6 +58,15 @@ export function ComposerPastedText(componentProps: {
       {t("chat.attachments.showInTextField")}
     </button>
   );
+  // Peer attachment updates must preserve the composer's focused action nodes.
+  const composerAction = restoreAction();
+  const composerRemoveAction = (
+    <AttachmentRemove
+      label={removeLabel()}
+      disabled={componentProps.controls.disabled}
+      onClick={remove}
+    />
+  );
   const open = () => {
     if (!current()) {
       return;
@@ -102,24 +88,20 @@ export function ComposerPastedText(componentProps: {
           ? { status: "ready", src, sizeBytes: attachment.sizeBytes }
           : { status: "unavailable" };
       },
-      renderActions: () =>
-        solidContent(
-          () => (
-            <>
-              {restoreAction()}
-              <button
-                class="btn btn--sm"
-                type="button"
-                aria-label={removeLabel()}
-                disabled={componentProps.controls.disabled}
-                onClick={remove}
-              >
-                <Icon name="trash" />
-              </button>
-            </>
-          ),
-          {},
-        ),
+      renderActions: () => (
+        <>
+          {restoreAction()}
+          <button
+            class="btn btn--sm"
+            type="button"
+            aria-label={removeLabel()}
+            disabled={componentProps.controls.disabled}
+            onClick={remove}
+          >
+            <Icon name="trash" />
+          </button>
+        </>
+      ),
     });
   };
   return (
@@ -128,14 +110,8 @@ export function ComposerPastedText(componentProps: {
       sizeBytes={componentProps.attachment.sizeBytes}
       scope={componentProps.attachment.id}
       onOpen={open}
-      composerAction={restoreAction()}
-      composerRemoveAction={
-        <AttachmentRemove
-          label={removeLabel()}
-          disabled={componentProps.controls.disabled}
-          onClick={remove}
-        />
-      }
+      composerAction={composerAction}
+      composerRemoveAction={composerRemoveAction}
     />
   );
 }

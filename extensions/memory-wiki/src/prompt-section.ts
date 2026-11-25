@@ -27,7 +27,7 @@ function rankPromptDigestPage(page: MemoryWikiCompiledDigestPage): number {
 function formatPromptClaim(claim: MemoryWikiCompiledDigestClaim): string {
   const qualifiers = [
     claim.status?.trim() ? `status ${claim.status.trim()}` : null,
-    typeof claim.confidence === "number" ? `confidence ${claim.confidence.toFixed(2)}` : null,
+    claim.confidence !== undefined ? `confidence ${claim.confidence.toFixed(2)}` : null,
     claim.freshnessLevel?.trim() ? `freshness ${claim.freshnessLevel.trim()}` : null,
   ].filter(Boolean);
   if (qualifiers.length === 0) {

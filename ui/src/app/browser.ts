@@ -6,6 +6,7 @@ import {
   pluginSlugCandidate,
 } from "../app-route-paths.ts";
 import { uiDevGatewayResourceBasePath } from "../dev-gateway.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { isNativeEmbedHost } from "./native-web-chrome.ts";
 
 type WindowWithControlUiBasePath = Window &
@@ -13,7 +14,7 @@ type WindowWithControlUiBasePath = Window &
     [key: string]: unknown;
   };
 
-function readControlUiResourceBasePath(): string | null {
+export function resolveControlUiPaths(pathname: string) {
   const windowValue =
     typeof window === "undefined"
       ? undefined
@@ -24,11 +25,7 @@ function readControlUiResourceBasePath(): string | null {
       : typeof document === "undefined"
         ? null
         : document.documentElement.getAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
-  return value === null ? null : normalizeBasePath(value);
-}
-
-export function resolveControlUiPaths(pathname: string) {
-  const resourceBasePath = readControlUiResourceBasePath();
+  const resourceBasePath = value === null ? null : normalizeBasePath(value);
   // Cold slug links use the declared root; known route namespaces can still use root resources.
   const basePath =
     resourceBasePath === "" && pluginSlugCandidate(pathname)
@@ -88,14 +85,10 @@ export function createBrowserHistory(): RouterHistory {
     listen: (listener) => {
       listeners.add(listener);
       if (!stopPopState) {
-        const onPopState = () => {
+        stopPopState = listen(window, "popstate", () => {
           const location = readLocation();
-          for (const subscriber of listeners) {
-            subscriber(location);
-          }
-        };
-        window.addEventListener("popstate", onPopState);
-        stopPopState = () => window.removeEventListener("popstate", onPopState);
+          listeners.forEach((subscriber) => subscriber(location));
+        });
       }
       return () => {
         listeners.delete(listener);

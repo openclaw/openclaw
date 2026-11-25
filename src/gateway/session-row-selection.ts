@@ -3,9 +3,10 @@ import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-sto
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { recordSessionRowPartitionRevision } from "../infra/gateway-work-metrics.js";
 import {
   projectSessionOwner,
-  projectSessionParticipants,
+  projectSessionRelatedProfileIds,
   projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
 import { compareSessionEntryPairs, type SessionEntryPair } from "./session-list-order.js";
@@ -15,13 +16,56 @@ import {
   type SelectionChange,
 } from "./session-row-projection-record.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
+import { sameSelectionFacts } from "./session-row-selection-facts.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
 const sentinel = (key: string) => key === "global" || key === "unknown";
-type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
-const EMPTY_KEYS: ReadonlySet<string> = new Set();
-type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair; position: number };
+type SelectionScope = Omit<
+  ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>,
+  "targets"
+>;
+const EMPTY_KEYS: ReadonlySet<string> = Object.freeze(new Set<string>());
+type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair };
+type SessionRowSelectionSource = {
+  onSelectionChange(listener: (change: SelectionChange) => void): void;
+  onMembershipChange(listener: (sessionKey?: string) => void): void;
+};
+
+// Topology retires scopes; accepted facts advance only their affected partitions.
+const sessionRowSelections = new WeakMap<
+  SessionRowSelectionSource,
+  Map<SelectionScope, Map<boolean, ReturnType<typeof createSessionRowSelection>>>
+>();
+
+export function sessionRowSelectionScopes(projection: SessionRowSelectionSource) {
+  const previous = sessionRowSelections.get(projection);
+  if (previous) {
+    return previous;
+  }
+  const scopes = new Map<
+    SelectionScope,
+    Map<boolean, ReturnType<typeof createSessionRowSelection>>
+  >();
+  sessionRowSelections.set(projection, scopes);
+  projection.onMembershipChange((key) => {
+    for (const variants of scopes.values()) {
+      variants.get(false)?.membershipChanged(key);
+    }
+  });
+  projection.onSelectionChange((change) => {
+    if (change.kind === "reset") {
+      scopes.clear();
+    } else {
+      for (const variants of scopes.values()) {
+        for (const selection of variants.values()) {
+          selection.change(change);
+        }
+      }
+    }
+  });
+  return scopes;
+}
 
 export function createSessionRowSelection(
   cfg: OpenClawConfig,
@@ -30,6 +74,7 @@ export function createSessionRowSelection(
   getContext: () => SessionListRowContext,
   indexCreators = false,
 ) {
+  // Singleton rows live only in winners; retain physical competitors only when needed.
   const groups = new Map<string, Map<string, IndexedTarget>>();
   const winners = new Map<string, IndexedTarget>();
   const duplicates = new Set<string>();
@@ -41,9 +86,32 @@ export function createSessionRowSelection(
       entries: SessionEntryPair[];
     }
   >();
+  // Archive populations own separate revisions; each winner belongs to only one partition.
+  let partitions:
+    | Array<{
+        archived: boolean;
+        revision: object;
+        // Membership publications rotate only invited views of this partition.
+        invitedRevision?: object;
+        entries: Map<string, SessionEntryPair>;
+      }>
+    | undefined;
+  const partitionFor = (key: string, target: IndexedTarget) => {
+    if (!partitions) {
+      return undefined;
+    }
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+      hash = (Math.imul(hash, 31) + key.charCodeAt(i)) | 0;
+    }
+    return partitions[(hash & 63) + (target.row.entry.archivedAt !== undefined ? 64 : 0)];
+  };
   const personalInvolvements = new Map<string, Set<string>>();
   const relatedInvolvements = new Map<string, Set<string>>();
-  const rowInvolvements = new Map<string, { personal: Set<string>; related: Set<string> }>();
+  const rowInvolvements = new Map<
+    string,
+    { personal: ReadonlySet<string>; related: ReadonlySet<string> }
+  >();
   const changedInvolvements = new Set<string>();
   const creators = new Map<string, Map<string, IndexedTarget>>();
   const creatorOrders = new Map<string, IndexedTarget[]>();
@@ -117,46 +185,37 @@ export function createSessionRowSelection(
     const identities = context.userProfileIdentityById;
     for (const key of changedInvolvements) {
       const { entry } = winners.get(key)!.row;
-      const related = new Set<string>();
       const owner = (context.identityProjection?.owner ?? projectSessionOwner)(
         entry,
         identities,
         cfg,
         configuredAgentIds,
       )?.actor;
-      if (owner?.identity?.type === "profile") {
-        related.add(owner.identity.id);
-      }
-      const participants = (context.identityProjection?.participants ?? projectSessionParticipants)(
-        entry,
-        identities,
-        cfg,
-      );
-      for (const participant of participants.values()) {
-        if (participant.identity.type === "profile") {
-          related.add(participant.identity.id);
-        }
-      }
       const states = (context.identityProjection?.involvement ?? projectSessionProfileInvolvements)(
         entry,
         identities,
       );
-      for (const [profileId, state] of states) {
-        if (state.lastMention) {
-          related.add(profileId);
-        }
-      }
-      const personal = new Set(related);
+      const related = projectSessionRelatedProfileIds(entry, identities, owner, states);
+      // Most rows have identical facets; copy only when a personal override changes membership.
+      let personal = related;
       for (const [profileId, state] of states) {
         if (state.hidden) {
-          personal.delete(profileId);
-        } else {
-          personal.add(profileId);
+          if (personal?.has(profileId)) {
+            if (personal === related) {
+              personal = new Set(related);
+            }
+            personal.delete(profileId);
+          }
+        } else if (!personal?.has(profileId)) {
+          if (personal === related) {
+            personal = new Set(related);
+          }
+          (personal ??= new Set()).add(profileId);
         }
       }
       for (const [profiles, index] of [
-        [personal, personalInvolvements],
-        [related, relatedInvolvements],
+        [personal ?? EMPTY_KEYS, personalInvolvements],
+        [related ?? EMPTY_KEYS, relatedInvolvements],
       ] as const) {
         for (const profileId of profiles) {
           const keys = index.get(profileId) ?? new Set<string>();
@@ -164,49 +223,71 @@ export function createSessionRowSelection(
           index.set(profileId, keys);
         }
       }
-      if (personal.size || related.size) {
-        rowInvolvements.set(key, { personal, related });
+      if (personal?.size || related?.size) {
+        rowInvolvements.set(key, {
+          personal: personal?.size ? personal : EMPTY_KEYS,
+          related: related ?? EMPTY_KEYS,
+        });
       }
     }
     changedInvolvements.clear();
   };
-  let position = 0;
   const keyFor = (row: Pick<SelectionTarget, "key" | "agentId">) =>
     sentinel(row.key) && activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
-  const update = (id: string, key: string, row?: SelectionTarget) => {
-    const previous = groups.get(key);
+  const update = (id: string, key: string, row?: SelectionTarget, changeScope?: string) => {
+    let group = groups.get(key);
     const oldWinner = winners.get(key);
-    const candidate = previous?.get(id);
     const eligible =
       row &&
       scope.paths.has(row.storeTarget.storePath) &&
       (!scope.agentId || row.agentId === scope.agentId) &&
       (!scope.configuredAgentIds ||
         isConfiguredGatewaySessionEntry(cfg, scope.configuredAgentIds, row.key, row.entry));
-    const group = previous ?? new Map<string, IndexedTarget>();
-    if (eligible) {
-      group.set(id, { row, pair: [key, row.entry], position: candidate?.position ?? position++ });
-      groups.set(key, group);
-    } else {
-      group.delete(id);
-      if (!group.size) {
+    if (!group && oldWinner && rowIdentity(oldWinner.row) !== id) {
+      group = new Map([[rowIdentity(oldWinner.row), oldWinner]]);
+    }
+    let winner: IndexedTarget | undefined = eligible ? { row, pair: [key, row.entry] } : undefined;
+    if (group) {
+      if (winner) {
+        group.set(id, winner);
+      } else {
+        group.delete(id);
+      }
+      winner = undefined;
+      for (const target of group.values()) {
+        if (
+          !winner ||
+          scope.paths.get(target.row.storeTarget.storePath)! <
+            scope.paths.get(winner.row.storeTarget.storePath)!
+        ) {
+          winner = target;
+        }
+      }
+      if (group.size > 1) {
+        groups.set(key, group);
+      } else {
         groups.delete(key);
       }
     }
-    let winner: IndexedTarget | undefined;
-    for (const target of group.values()) {
-      if (
-        !winner ||
-        scope.paths.get(target.row.storeTarget.storePath)! <
-          scope.paths.get(winner.row.storeTarget.storePath)!
-      ) {
-        winner = target;
-      }
-    }
-    if (group.size > 1 && !sentinel(winner!.row.key)) {
+    if (group && group.size > 1 && !sentinel(winner!.row.key)) {
       duplicates.add(key);
     } else {
       duplicates.delete(key);
+    }
+    // Raw selections without an owner snapshot still need structural comparison.
+    if (
+      winner &&
+      oldWinner &&
+      winner !== oldWinner &&
+      (oldWinner.row.selectionFactsRevision && winner.row.selectionFactsRevision
+        ? rowIdentity(oldWinner.row) === rowIdentity(winner.row) &&
+          oldWinner.row.selectionFactsRevision === winner.row.selectionFactsRevision
+        : sameSelectionFacts(oldWinner.row, winner.row))
+    ) {
+      oldWinner.row = winner.row;
+      oldWinner.pair[1] = winner.row.entry;
+      group?.set(rowIdentity(winner.row), oldWinner);
+      return;
     }
     if (winner) {
       winners.set(key, winner);
@@ -218,6 +299,20 @@ export function createSessionRowSelection(
     }
     updateCreator(oldWinner, true);
     updateCreator(winner);
+    const partition = winner && partitionFor(key, winner);
+    const previousPartition = oldWinner && partitionFor(key, oldWinner);
+    if (previousPartition && previousPartition !== partition) {
+      previousPartition.entries.delete(key);
+      previousPartition.revision = {};
+      previousPartition.invitedRevision = undefined;
+      recordSessionRowPartitionRevision(changeScope);
+    }
+    if (partition) {
+      partition.revision = {};
+      partition.invitedRevision = undefined;
+      recordSessionRowPartitionRevision(changeScope);
+      partition.entries.set(key, winner!.pair);
+    }
     if (involvementRevision) {
       // Publication records only the changed metadata; identity preparation stays in the reader.
       removeInvolvement(key);
@@ -254,7 +349,20 @@ export function createSessionRowSelection(
       update(rowIdentity(row), keyFor(row), row);
     },
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
-      update(change.id, keyFor(change), change.row);
+      update(change.id, keyFor(change), change.row, change.scope);
+    },
+    membershipChanged(key?: string) {
+      if (key === undefined) {
+        partitions?.forEach((part) => {
+          part.invitedRevision = {};
+        });
+      } else {
+        const target = winners.get(key);
+        const part = target && partitionFor(key, target);
+        if (part) {
+          part.invitedRevision = {};
+        }
+      }
     },
     createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
       assertCanonical();
@@ -288,24 +396,44 @@ export function createSessionRowSelection(
     read(
       sortBy?: SessionsListParams["sortBy"],
       candidates?: Iterable<Pick<SelectionTarget, "key" | "agentId">>,
+      residentOrder?: Iterable<Pick<SelectionTarget, "key" | "agentId" | "storeTarget">>,
     ) {
       assertCanonical();
+      if (!candidates && !partitions) {
+        partitions = Array.from({ length: 128 }, (_, index) => ({
+          archived: index >= 64,
+          revision: {},
+          entries: new Map<string, SessionEntryPair>(),
+        }));
+        for (const [key, target] of winners) {
+          partitionFor(key, target)!.entries.set(key, target.pair);
+        }
+      }
       return {
         configuredAgentIds,
+        partitions: candidates ? undefined : partitions,
         entries(this: void, archived: SessionsListParams["archived"]) {
           const orderKey = `${sortBy}:${archived ?? false}`;
           let entries = !candidates && sortBy && orders.get(orderKey)?.entries;
           if (!entries) {
             const targets = (
-              candidates
-                ? [...new Set(Array.from(candidates, keyFor))].flatMap(
-                    (key) => winners.get(key) ?? [],
-                  )
-                : [...winners.values()]
-            ).filter((target) => matchesSessionArchiveFilter(target.row.entry, archived));
-            if (!sortBy) {
-              targets.sort((a, b) => a.position - b.position);
-            }
+              residentOrder
+                ? Array.from(residentOrder, (row) => {
+                    const target = winners.get(keyFor(row));
+                    return target?.row.agentId === row.agentId &&
+                      target.row.storeTarget.storePath === row.storeTarget.storePath
+                      ? target
+                      : undefined;
+                  })
+                : candidates
+                  ? [...new Set(Array.from(candidates, keyFor))].flatMap(
+                      (key) => winners.get(key) ?? [],
+                    )
+                  : [...winners.values()]
+            ).filter(
+              (target): target is IndexedTarget =>
+                target !== undefined && matchesSessionArchiveFilter(target.row.entry, archived),
+            );
             entries = targets.map((target) => target.pair);
             if (sortBy) {
               entries.sort((a, b) => compareSessionEntryPairs(a, b, sortBy));

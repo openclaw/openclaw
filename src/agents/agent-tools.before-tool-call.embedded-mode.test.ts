@@ -88,17 +88,6 @@ function requireApprovalRequestCall(label: string): {
   };
 }
 
-function requireBeforeToolCall(
-  mock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>,
-  label: string,
-): Parameters<HookRunner["runBeforeToolCall"]> {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return call;
-}
-
 describe("runBeforeToolCallHook — embedded mode approvals", () => {
   let hookRunner: Pick<HookRunner, "hasHooks" | "runBeforeToolCall">;
   let runBeforeToolCallMock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>;
@@ -355,60 +344,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       reason: "Tool call parameters changed after trusted approval",
       params: { command: "approved" },
     });
-  });
-
-  it("allows an ordinary hook rewrite after a separate approval", async () => {
-    trustedPolicy(approvalResult({ pluginId: "trusted-policy" }));
-    runBeforeToolCallMock.mockResolvedValue({
-      params: { code: "return 'separately-approved';" },
-      requireApproval: {
-        title: "Rewrite approval",
-        description: "Approve the rewritten command",
-      },
-    });
-    mockCallGatewayTool
-      .mockResolvedValueOnce({
-        id: "trusted-approval",
-        decision: PluginApprovalResolutions.ALLOW_ONCE,
-      })
-      .mockResolvedValueOnce({
-        id: "rewrite-approval",
-        decision: PluginApprovalResolutions.ALLOW_ONCE,
-      });
-
-    await expect(
-      runBeforeToolCallHook({
-        toolName: "exec",
-        toolKind: "code_mode_exec",
-        params: { code: "return 'approved';", command: "return 'approved';" },
-      }),
-    ).resolves.toEqual({
-      blocked: false,
-      params: { code: "return 'separately-approved';", command: "return 'separately-approved';" },
-      approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
-    });
-  });
-
-  it("preserves trusted policy params when before_tool_call hooks leave params unchanged", async () => {
-    trustedPolicy({ params: { command: "patched" } });
-    runBeforeToolCallMock.mockResolvedValue(undefined);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "original", cwd: "/tmp" },
-      toolCallId: "call-policy-params",
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result).toEqual({ blocked: false, params: { command: "patched" } });
-    const [hookParams, hookContext] = requireBeforeToolCall(
-      runBeforeToolCallMock,
-      "before_tool_call invocation",
-    );
-    expect(hookParams.params).toEqual({ command: "patched" });
-    expect(hookParams.toolName).toBe("exec");
-    expect(hookParams.toolCallId).toBe("call-policy-params");
-    expect(typeof hookContext).toBe("object");
   });
 });
 

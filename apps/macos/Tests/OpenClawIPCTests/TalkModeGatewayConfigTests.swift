@@ -142,7 +142,6 @@ struct TalkModeGatewayConfigTests {
         #expect(parsed.outputFormat == nil)
         #expect(parsed.referenceAudioPath == nil)
         #expect(parsed.referenceText == nil)
-        #expect(parsed.seamColorHex == nil)
         #expect(parsed.snapshot.realtime.provider == nil)
         #expect(parsed.snapshot.realtime.modelId == nil)
         #expect(parsed.snapshot.realtime.speakerVoice == nil)

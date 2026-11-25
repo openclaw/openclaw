@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import { pathToFileURL } from "node:url";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -15,6 +16,51 @@ import {
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
+
+const oldVersion = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
+
+it.skipIf(process.platform === "win32")(
+  "reports a real sync child's SIGTERM as interrupted and refuses Doctor repair",
+  async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeConfig({ plugins: { enabled: false } });
+      const source = openOpenClawStateDatabase({ env: state.env }).path;
+      await closeStateDatabaseForTest();
+      const original = fs.readFileSync(source);
+      const preload = state.path("interrupt-read.mjs");
+      fs.writeFileSync(
+        preload,
+        `import fs from "node:fs";
+const read = fs.readSync;
+fs.readSync = (fd, ...args) => {
+  const count = read(fd, ...args);
+  if (process.argv.includes("sync") && fs.fstatSync(fd).ino === fs.statSync(${JSON.stringify(source)}).ino) {
+    process.kill(process.pid, "SIGTERM");
+  }
+  return count;
+};`,
+      );
+      vi.stubEnv(
+        "NODE_OPTIONS",
+        `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`,
+      );
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      const failure = await prepareDoctorDatabasePreflight({ scope: "state" }).catch(
+        (cause: unknown) => cause,
+      );
+      expect(failure).toMatchObject({
+        name: "DoctorUnreadableStateDatabaseError",
+        cause: { cause: { signal: "SIGTERM" } },
+      });
+      expect(String(failure)).toContain("state database inspection was interrupted");
+      expect(String(failure)).toContain("rerun the command");
+      expect(String(failure)).not.toContain("restore this file");
+      expect(fs.readFileSync(source)).toEqual(original);
+    });
+  },
+);
 
 it.each([false, true])(
   "keeps an idle WAL agent store's update generation when preserving sources: %s",
@@ -40,16 +86,17 @@ it.each([false, true])(
       for (const suffix of ["", "-wal", "-shm"]) {
         fs.copyFileSync(path.join(family, suffix || "db"), `${agentPath}${suffix}`);
       }
-      const captured = readUpdateDatabaseGenerations([agentPath]);
+      const captured = await readUpdatePhysicalDatabaseGenerations([agentPath]);
 
       const result = await prepareDoctorDatabasePreflight(
         preserveSourceArtifacts ? { preserveSourceArtifacts } : {},
       );
 
       expect(result).toMatchObject({ incompatible: [], indeterminate: [] });
-      expect(readUpdateDatabaseGenerations([agentPath])[agentPath] === captured[agentPath]).toBe(
-        preserveSourceArtifacts,
-      );
+      expect(
+        (await readUpdatePhysicalDatabaseGenerations([agentPath]))[agentPath] ===
+          captured[agentPath],
+      ).toBe(preserveSourceArtifacts);
     });
   },
 );
@@ -65,8 +112,8 @@ it.each([true, false])(
       const storeDir = state.path("custom-store");
       fs.mkdirSync(storeDir);
       const pathname = path.join(storeDir, "sessions.sqlite");
-      const writer = new DatabaseSync(state.path("fixture-writer.sqlite"));
-      try {
+      {
+        using writer = new DatabaseSync(state.path("fixture-writer.sqlite"));
         writer.exec(`
         PRAGMA journal_mode=WAL;
         PRAGMA wal_autocheckpoint=0;
@@ -74,13 +121,11 @@ it.each([true, false])(
           meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER, agent_id TEXT,
           app_version TEXT, created_at INTEGER, updated_at INTEGER
         );
-        INSERT INTO schema_meta VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}, 'retired-owner', 'fixture', 1, 1);
-        PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION - 1};
+        INSERT INTO schema_meta VALUES ('primary', 'agent', ${oldVersion}, 'retired-owner', 'fixture', 1, 1);
+        PRAGMA user_version=${oldVersion};
       `);
         fs.copyFileSync(state.path("fixture-writer.sqlite"), pathname);
         fs.copyFileSync(state.path("fixture-writer.sqlite-wal"), `${pathname}-wal`);
-      } finally {
-        writer.close();
       }
       await state.writeConfig({
         agents: { entries: { main: {} } },
@@ -98,20 +143,9 @@ it.each([true, false])(
 
       const result = await prepareDoctorDatabasePreflight();
 
-      expect(result).toMatchObject({
-        incompatible: [],
-        indeterminate: [],
-      });
-      expect(result.pendingMigrations ?? []).toEqual(
-        knownHistory
-          ? [
-              expect.objectContaining({
-                kind: "agent",
-                path: pathname,
-                foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION - 1,
-              }),
-            ]
-          : [],
+      expect(result).toMatchObject({ incompatible: [], indeterminate: [] });
+      expect(result.pendingMigrations ?? []).toMatchObject(
+        knownHistory ? [{ kind: "agent", path: pathname, foundVersion: oldVersion }] : [],
       );
       if (!knownHistory) {
         expect(result.agentDatabaseMigrationDiscovery?.discovery).toMatchObject({
@@ -120,17 +154,13 @@ it.each([true, false])(
             reason: "shared state database missing",
           },
           targets: [],
-          retainedTargets: [],
           unverifiedTargets: [
-            {
+            expect.objectContaining({
               agentId: "retired-owner",
               path: pathname,
-              realPath: fs.realpathSync.native(pathname),
               source: "configured",
-            },
+            }),
           ],
-          registryRemovals: [],
-          failures: [],
         });
       }
       expect(result.agentRefusals ?? []).toEqual([]);

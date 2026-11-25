@@ -1,13 +1,11 @@
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { listSessionSuggestionsInDatabase } from "./session-suggestion-store.kernel.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export async function listSessionSuggestions(
@@ -48,6 +46,6 @@ export async function listSessionSuggestions(
         params: filters,
         env: scope.env,
       }),
-    { dataOnly: true, lane: projectionLane },
+    { dataOnly: true, lane: sessionStoreLane },
   );
 }

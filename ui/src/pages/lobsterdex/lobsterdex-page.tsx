@@ -1,17 +1,31 @@
-import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
+import "../../styles/settings.css";
 import { pathForRoute } from "../../app-route-paths.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
+import type { getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
+import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
+import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
+import { SettingsPage, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { copyToClipboard } from "../../lib/clipboard.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
-import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
-import { LobsterdexView, type LobsterdexCopyFeedback } from "./view.tsx";
-import "../../styles/settings.css";
+import { registerEnglishCatalog, t, getLocale } from "../../lib/reactive/i18n.ts";
+// Page stars must override the shared mini-star rules loaded by lobster-pet-look.
+import "../../styles/lobsterdex.css";
+import { listen } from "../../lib/reactive/listener.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+
+registerRouteSubtitlesEnglish();
+
+registerEnglishCatalog(registerPreferencesEnglish);
+
+function formatLobsterdexDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString(getLocale());
+}
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -23,39 +37,23 @@ declare module "@solidjs/web" {
 
 export function LobsterdexPage() {
   let host!: HTMLElement;
+  const cards = new Map<string, HTMLElement>();
   const context = useApplication();
-  const branding = projectSource(
-    untrack(() => context.theme),
-    {
-      read: (theme) => theme.branding,
-      subscribe: (theme, notify) => theme.subscribe(notify),
-      equality: Object.is,
-    },
-  );
-  createEffect(
-    () => context.theme,
-    (source) => branding.replaceSource(source),
+  const branding = createMemo(() =>
+    projectOwner(context.theme, (theme) => theme.branding, Object.is),
   );
   const entries = projectLobsterdex();
-  const [copyFeedback, setCopyFeedback] = createSignal<LobsterdexCopyFeedback | null>(null);
-  let disposed = false;
-  let copyAttempt = 0;
-  let copyResetTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  onCleanup(() => {
-    disposed = true;
-    copyAttempt += 1;
-    globalThis.clearTimeout(copyResetTimer);
-  });
+  const seenCount = createMemo(
+    () => LOBSTER_PET_PALETTES.filter((palette) => entries.read().has(palette.id)).length,
+  );
+  const countLabel = () =>
+    t("quickSettings.appearance.lobsterdexSeen", {
+      seen: String(seenCount()),
+      total: String(LOBSTER_PET_PALETTES.length),
+    });
   onSettled(() => {
-    const prefix = "#lobsterdex-";
-    if (!location.hash.startsWith(prefix)) {
-      return undefined;
-    }
-    const palette = LOBSTER_PET_PALETTES.find(
-      (entry) => entry.id === location.hash.slice(prefix.length),
-    );
-    const card = palette ? host.querySelector<HTMLElement>(`#lobsterdex-${palette.id}`) : null;
-    if (!card) {
+    const card = cards.get(location.hash);
+    if (!card || !host.contains(card)) {
       return undefined;
     }
     const clearHighlight = (event: AnimationEvent) => {
@@ -63,9 +61,9 @@ export function LobsterdexPage() {
         return;
       }
       card.classList.remove("lobsterdex-page__card--highlight");
-      card.removeEventListener("animationend", clearHighlight);
+      stopHighlight();
     };
-    card.addEventListener("animationend", clearHighlight);
+    const stopHighlight = listen(card, "animationend", { handleEvent: clearHighlight });
     card.classList.add("lobsterdex-page__card--highlight");
     let secondFrame = 0;
     const firstFrame = requestAnimationFrame(() => {
@@ -74,58 +72,120 @@ export function LobsterdexPage() {
     return () => {
       cancelAnimationFrame(firstFrame);
       cancelAnimationFrame(secondFrame);
-      card.removeEventListener("animationend", clearHighlight);
+      stopHighlight();
     };
   });
 
-  async function copyLink(paletteId: LobsterPetPaletteId) {
-    const attempt = ++copyAttempt;
-    setCopyFeedback(null);
-    globalThis.clearTimeout(copyResetTimer);
-    copyResetTimer = undefined;
-    const url = `${location.origin}${location.pathname}#lobsterdex-${paletteId}`;
-    const copied = await copyToClipboard(url, () => !disposed && attempt === copyAttempt);
-    if (disposed || attempt !== copyAttempt) {
-      return;
-    }
-    setCopyFeedback({ paletteId, status: copied ? "copied" : "error" });
-    copyResetTimer = globalThis.setTimeout(() => {
-      setCopyFeedback(null);
-      copyResetTimer = undefined;
-    }, 1_500);
+  function LobsterdexView(props: { entries: ReturnType<typeof getLobsterdexEntries> }) {
+    return (
+      <section class="lobsterdex-page">
+        <section class="lobsterdex-page__grid" aria-label={countLabel()}>
+          <For each={LOBSTER_PET_PALETTES}>
+            {(palette) => {
+              const look = canonicalLobsterLook(palette);
+              const entry = createMemo(() => props.entries.get(palette.id));
+              const firstSeen = createMemo(() => {
+                const timestamp = entry()?.firstSeenAt;
+                return timestamp != null
+                  ? t("quickSettings.appearance.lobsterdexCardFirstVisited", {
+                      date: formatLobsterdexDate(timestamp),
+                    })
+                  : null;
+              });
+              const shinySeen = createMemo(() => {
+                const timestamp = entry()?.shinySeenAt;
+                return timestamp != null
+                  ? t("quickSettings.appearance.lobsterdexCardShinySeen", {
+                      date: formatLobsterdexDate(timestamp),
+                    })
+                  : null;
+              });
+              return (
+                <article
+                  id={`lobsterdex-${palette.id}`}
+                  ref={(element) => cards.set(`#lobsterdex-${palette.id}`, element)}
+                  class={["lobsterdex-page__card", { "lobsterdex-page__card--unseen": !entry() }]}
+                >
+                  <div
+                    class={[
+                      "lobsterdex-page__sprite",
+                      "lobster-pet",
+                      `lobster-pet--palette-${palette.id}`,
+                      { "lobsterdex__mini--unseen": !entry() },
+                    ]}
+                    style={lobsterLookStyle(look)}
+                  >
+                    <LobsterSvg look={look} standalone />
+                    {entry()?.shinySeenAt != null && (
+                      <span class="lobsterdex__mini-star lobsterdex-page__star" aria-hidden="true">
+                        ✦
+                      </span>
+                    )}
+                  </div>
+                  <h3>{entry() ? (entry()?.name ?? lobsterPaletteName(palette.id)) : "?"}</h3>
+                  <p class="lobsterdex-page__lore">
+                    {entry()
+                      ? LOBSTER_PALETTE_LORE[palette.id].flavor
+                      : LOBSTER_PALETTE_LORE[palette.id].hint}
+                  </p>
+                  <div class="lobsterdex-page__dates">
+                    {firstSeen() && (
+                      <p class="lobsterdex-page__date">
+                        <time>{firstSeen()}</time>
+                      </p>
+                    )}
+                    {shinySeen() && (
+                      <p class="lobsterdex-page__date">
+                        <time>{shinySeen()}</time>
+                      </p>
+                    )}
+                  </div>
+                </article>
+              );
+            }}
+          </For>
+        </section>
+      </section>
+    );
   }
 
   return (
     <openclaw-lobsterdex-page ref={(element) => (host = element)}>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <h1 class="page-title">{t("tabs.lobsterdex")}</h1>
-        </section>
-      </ShellLayoutBoundary>
-      <SettingsWorkspace>
-        {branding.read().lobsterdex ? (
-          <LobsterdexView
-            entries={entries.read()}
-            copyFeedback={copyFeedback()}
-            onCopyLink={(paletteId) => void copyLink(paletteId)}
-          />
-        ) : (
-          <section class="settings-section" role="status">
-            <p>{t("quickSettings.appearance.lobsterdexThemeHidden")}</p>
-            <a
-              class="btn btn--sm"
-              href={pathForRoute("appearance", context.basePath)}
-              onClick={(event) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  context.navigate("appearance");
-                }
-              }}
+      <SettingsPageHeader
+        title={t("tabs.lobsterdex")}
+        subtitle={branding().read().lobsterdex ? t("subtitles.lobsterdex") : undefined}
+        actions={
+          <Show when={branding().read().lobsterdex}>
+            <span
+              class={[
+                "lobsterdex-page__count",
+                { "lobsterdex-page__count--complete": seenCount() === LOBSTER_PET_PALETTES.length },
+              ]}
             >
-              {t("tabs.appearance")}
-            </a>
-          </section>
-        )}
+              {countLabel()}
+            </span>
+          </Show>
+        }
+      />
+      <SettingsWorkspace>
+        <SettingsPage wide>
+          {branding().read().lobsterdex ? (
+            <LobsterdexView entries={entries.read()} />
+          ) : (
+            <section class="settings-section" role="status">
+              <p>{t("quickSettings.appearance.lobsterdexThemeHidden")}</p>
+              <a
+                class="btn btn--sm"
+                href={pathForRoute("appearance", context.basePath)}
+                onClick={(event) =>
+                  handleNavigationClick(event, () => context.navigate("appearance"))
+                }
+              >
+                {t("tabs.appearance")}
+              </a>
+            </section>
+          )}
+        </SettingsPage>
       </SettingsWorkspace>
     </openclaw-lobsterdex-page>
   );

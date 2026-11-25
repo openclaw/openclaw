@@ -29,6 +29,27 @@ function contentTaskId(prefix: string) {
 }
 
 describe("native Slack progress stream chunks", () => {
+  it("clears an empty native snapshot once while retaining settled task history", () => {
+    const first = reconcileSlackNativeTaskChunks({
+      previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
+      chunks: [
+        { type: "plan_update", title: "Working" },
+        { type: "task_update", id: "read", title: "Read", status: "in_progress" },
+      ],
+    });
+    const cleared = reconcileSlackNativeTaskChunks({ previous: first.snapshot, chunks: undefined });
+    expect(cleared.chunks).toEqual([
+      planUpdate("Thinking"),
+      taskUpdate("read", "Read", "complete"),
+    ]);
+    const repeated = reconcileSlackNativeTaskChunks({
+      previous: cleared.snapshot,
+      chunks: undefined,
+    });
+    expect(repeated.chunks).toBeUndefined();
+    expect([...repeated.snapshot.tasks.values()]).toEqual([{ title: "Read", status: "complete" }]);
+  });
+
   it("preserves full native plan snapshots beyond the Block Kit block limit", () => {
     const chunks = buildSlackProgressStreamChunks({
       title: "Working",

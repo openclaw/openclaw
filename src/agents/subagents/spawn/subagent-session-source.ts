@@ -1,8 +1,9 @@
+import { acquireSessionActorStorage } from "../../../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../../../config/sessions/session-actor-storage-binding.js";
+import { defaultRuntime } from "../../../runtime.js";
 
 /** Retain the selected logical session; absence never creates a replacement owner. */
 export async function withSubagentSessionSource<T>(
@@ -11,6 +12,7 @@ export async function withSubagentSessionSource<T>(
     sessionKey: string;
     storePath?: string;
     assertCurrent?: () => void;
+    retainedUntil?: () => Promise<void> | undefined;
   },
   consume: (source: SessionActorStorageBinding | undefined) => Promise<T>,
 ): Promise<T> {
@@ -25,6 +27,14 @@ export async function withSubagentSessionSource<T>(
   try {
     return await runWithSessionActorStorage(source, () => consume(source));
   } finally {
-    await source.actor.release();
+    const retained = input.retainedUntil?.();
+    if (retained) {
+      const release = () => source.actor.release();
+      void retained.then(release, release).catch((error: unknown) => {
+        defaultRuntime.error(`Subagent session source release failed: ${String(error)}`);
+      });
+    } else {
+      await source.actor.release();
+    }
   }
 }

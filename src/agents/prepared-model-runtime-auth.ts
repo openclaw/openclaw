@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
@@ -105,13 +106,13 @@ export type PreparedAccountCatalogAccess = {
     includesProvider: (provider: string) => boolean,
     profileIds?: readonly string[],
   ) => void;
-  readServiceTierObservation: (params: {
+  readServiceTierObservations: (params: {
     identityKey: string;
     modelId: string;
     runtimeId: string;
     api: string;
     baseUrl: string;
-  }) => Pick<ModelServiceTierObservation, "requestedTier" | "responseTier"> | undefined;
+  }) => Pick<ModelServiceTierObservation, "requestedTier" | "responseTier">[];
   prepareServiceTierObserver: (params: {
     selectedCredential: SelectedModelCredential;
     credential?: AuthProfileCredential;
@@ -122,12 +123,20 @@ export type PreparedAccountCatalogAccess = {
     allowDiscovery: boolean;
     refresh?: boolean;
     load: () => Promise<readonly ProviderCatalogOutcome[]>;
-  }) => Promise<{ outcomes: readonly ProviderCatalogOutcome[]; isCurrent: () => boolean }>;
+  }) => Promise<{
+    outcomes: readonly ProviderCatalogOutcome[];
+    /** Distinguishes an authoritative empty publication from a cold private catalog. */
+    hasPublishedCatalog: boolean;
+    isCurrent: () => boolean;
+  }>;
 };
 
 /** Private auth facts owned by an immutable prepared model generation. */
 type RuntimeAuthBinding = {
+  /** Host-only admission binding; never exposed on public model snapshots. */
+  readPolicyConfig?: () => OpenClawConfig;
   store?: AuthProfileStore;
+  readUsage?: (store: AuthProfileStore) => AuthProfileStore;
   labels?: ModelCatalogAuthLabels;
   materializations?: readonly RuntimeAuthMaterialization[];
   load?: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
@@ -146,8 +155,15 @@ export function bindPreparedModelRuntimeAuth(snapshot: object, binding: RuntimeA
   runtimeAuth.set(snapshot, { ...runtimeAuth.get(snapshot), ...binding });
 }
 
+export function getPreparedModelRuntimePolicyConfigReader(
+  snapshot: object | undefined,
+): (() => OpenClawConfig) | undefined {
+  return snapshot ? runtimeAuth.get(snapshot)?.readPolicyConfig : undefined;
+}
+
 export function getPreparedModelRuntimeAuthStore(snapshot: object): AuthProfileStore | undefined {
-  return runtimeAuth.get(snapshot)?.store;
+  const binding = runtimeAuth.get(snapshot);
+  return binding?.store ? (binding.readUsage?.(binding.store) ?? binding.store) : undefined;
 }
 
 export function getPreparedModelRuntimeAuthLabels(snapshot: object): ModelCatalogAuthLabels {
@@ -202,7 +218,7 @@ export async function loadPreparedModelRuntimeAuth(
   if (load) {
     return await load(scope);
   }
-  const authStore = binding?.store;
+  const authStore = getPreparedModelRuntimeAuthStore(snapshot);
   return authStore ? { authStore, authModes: snapshot.authModes ?? {} } : undefined;
 }
 

@@ -5,10 +5,10 @@ export type RetainedAgentDeletion = {
   agentDir: string;
   databasePaths: string[];
   cleanupCompleted: boolean;
-  manualClawRemoval?: true;
+  manualTemplateRemoval?: true;
 };
 export type HeldAgentDatabase = { agentId: string; path: string };
-export type AgentDeletionJournalPurpose = "runtime" | "maintenance";
+export type AgentDeletionJournalPurpose = "runtime" | "runtime-discovery" | "maintenance";
 type AgentDeletionJournalPhase = "draining" | "retiring";
 
 type KnownAgentDeletionFacts = {

@@ -1,4 +1,3 @@
-// Gateway connection detail formatting for status reports.
 // Keeps verbose human text and status-all connection sections consistent.
 
 import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";

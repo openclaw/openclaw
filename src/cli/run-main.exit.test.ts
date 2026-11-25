@@ -177,9 +177,7 @@ describe("runCli exit behavior", () => {
           "[openclaw] OpenClaw hit an unexpected runtime error.",
         );
         expect(consoleErrorSpy).toHaveBeenCalledWith("[openclaw] For help, run `openclaw doctor`.");
-        expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith("uncaught exception", {
-          resumeStdinIfPaused: false,
-        });
+        expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith("uncaught exception");
         const owner = vi.fn();
         const releaseOwner = registerSignalExitOwner(owner);
         try {

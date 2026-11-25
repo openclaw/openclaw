@@ -10,32 +10,31 @@ describe("gateway usage request validation", () => {
     await withGatewayClient(async (ws) => {
       await connectOk(ws, { token: "secret", scopes: ["operator.read"] });
 
-      const conflict = await rpcReq(ws, "usage.cost", {
-        startDate: "2026-02-01",
-        endDate: "2026-02-02",
-        agentId: "main",
-        agentScope: "all",
-      });
-      expect(conflict).toMatchObject({
-        ok: false,
-        error: {
-          code: ErrorCodes.INVALID_REQUEST,
-          message: "agentScope=all cannot be combined with agentId",
-        },
-      });
-
-      for (const params of [
-        { agentId: "main" },
-        { agentScope: "all" },
-        { agentId: "  ", agentScope: "all" },
-      ]) {
+      const conflictMessage = "agentScope=all cannot be combined with agentId";
+      for (const [params, message] of [
+        [{ agentId: 42 }, "agentId must be a string"],
+        [{ agentScope: "unexpected" }, "agentScope must be 'all' when provided"],
+        [{ agentId: "main", agentScope: "all" }, conflictMessage],
+        [{}, undefined],
+        [{ agentId: "  " }, undefined],
+        [{ agentId: "main" }, undefined],
+        [{ agentScope: "all" }, undefined],
+        [{ agentId: "  ", agentScope: "all" }, undefined],
+      ] as const) {
         const response = await rpcReq<{ totals?: { totalTokens?: number } }>(ws, "usage.cost", {
           startDate: "2026-02-01",
           endDate: "2026-02-02",
           ...params,
         });
-        expect(response.ok).toBe(true);
-        expect(response.payload?.totals).toEqual(expect.any(Object));
+        if (message) {
+          expect(response).toMatchObject({
+            ok: false,
+            error: { code: ErrorCodes.INVALID_REQUEST, message },
+          });
+        } else {
+          expect(response.ok).toBe(true);
+          expect(response.payload?.totals).toEqual(expect.any(Object));
+        }
       }
     });
   });

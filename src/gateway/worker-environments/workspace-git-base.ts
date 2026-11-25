@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   commandError,
   gitEnvironment,
@@ -9,8 +9,8 @@ import {
   runGit,
 } from "../../agents/worktrees/git.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import { executeGitCommand, requireGitCommandOutput } from "../../infra/git-exec.js";
-import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import {
@@ -31,13 +31,11 @@ export type WorkerLocalProjectSnapshot = {
 export type WorkerProjectSnapshot = WorkerLocalProjectSnapshot | RepositoryWorkerProjectSnapshot;
 
 export function workerProjectSeedKey(project: Pick<WorkerProjectSnapshot, "key" | "baseCommit">) {
-  return createHash("sha256").update(`${project.key}\0${project.baseCommit}`).digest("hex");
+  return sha256Hex(`${project.key}\0${project.baseCommit}`);
 }
 
 export function workerLocalProjectKey(namespace: string, commonDir: string): string {
-  return createHash("sha256")
-    .update(JSON.stringify([namespace, commonDir]))
-    .digest("hex");
+  return sha256Hex(JSON.stringify([namespace, commonDir]));
 }
 
 export async function prepareWorkerProjectSnapshot(params: {
@@ -53,12 +51,7 @@ export async function prepareWorkerProjectSnapshot(params: {
     signal: params.signal,
     env: workerSshCommandOptions({ timeoutMs: GIT_TIMEOUT_MS }).baseEnv,
   };
-  const gitAdmin = await fsp.lstat(path.join(root, ".git")).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const gitAdmin = await fsp.lstat(path.join(root, ".git")).catch(ignoreMissingPath);
   if (!gitAdmin) {
     // Linked checkouts can retain their committed seed in a bare primary repository.
     const bare = await runGit(root, ["rev-parse", "--is-bare-repository"], options);
@@ -119,6 +112,7 @@ export async function prepareWorkerWorkspaceGitPack(params: {
   root: string;
   baseCommit: string;
   retainedCommit?: string;
+  idleIoPriority?: boolean;
   temporaryRoot: string;
   signal: AbortSignal;
   baseEnv?: NodeJS.ProcessEnv;
@@ -142,6 +136,7 @@ export async function prepareWorkerWorkspaceGitPack(params: {
       const donor = requireGitCommandOutput(
         "git cat-file",
         await executeGitCommand(root, ["cat-file", "--batch-check=%(objectname) %(objecttype)"], {
+          idleIoPriority: params.idleIoPriority,
           input: `${retainedCommit}\n`,
           baseEnv: params.baseEnv,
           env: gitEnvironment({ GIT_NO_LAZY_FETCH: "1" }),
@@ -166,6 +161,7 @@ export async function prepareWorkerWorkspaceGitPack(params: {
       );
     } else {
       await runWorkspaceInventoryCommandToFile({
+        idleIoPriority: params.idleIoPriority,
         argv: [
           "git",
           "-C",
@@ -184,6 +180,7 @@ export async function prepareWorkerWorkspaceGitPack(params: {
       await fsp.appendFile(objectListPath, `${baseCommit}\n`);
     }
     await runWorkspaceInventoryCommandToFile({
+      idleIoPriority: params.idleIoPriority,
       argv: [
         "git",
         "-C",

@@ -133,15 +133,6 @@ export async function readImmutableService(
   return { command, properties, target };
 }
 
-export async function verifyImmutableService(
-  service: ImmutableInstallDescriptor["service"],
-  root: string,
-  generationPath: string,
-  runtimePath: string,
-): Promise<void> {
-  await readImmutableService(service, root, generationPath, runtimePath);
-}
-
 export type ImmutableServiceObservation = {
   phase: "running" | "stopped" | "starting";
   definitionDigest: string;

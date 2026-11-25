@@ -33,6 +33,7 @@ describe("vercel ai gateway thinking profile", () => {
 
   it("falls through for unsupported OpenAI or untrusted namespaced refs", async () => {
     expect(await resolveThinkingProfile("openai/gpt-4.1")).toBeUndefined();
+    expect(await resolveThinkingProfile("anthropic/claude-3-5-sonnet")).toBeUndefined();
     expect(await resolveThinkingProfile("acme/gpt-5.4")).toBeUndefined();
   });
 });

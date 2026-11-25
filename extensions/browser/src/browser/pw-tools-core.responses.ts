@@ -1,5 +1,4 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Response } from "playwright-core";
 import { getPageForTargetId } from "./pw-session.js";
@@ -20,14 +19,8 @@ export async function responseBodyViaPlaywright(opts: {
   body: string;
   truncated?: boolean;
 }> {
-  const pattern = normalizeOptionalString(opts.url) ?? "";
-  if (!pattern) {
-    throw new Error("url is required");
-  }
-  const maxChars =
-    typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)
-      ? Math.max(1, Math.min(5_000_000, Math.floor(opts.maxChars)))
-      : 200_000;
+  const pattern = opts.url;
+  const maxChars = Math.max(1, Math.min(5_000_000, Math.floor(opts.maxChars ?? 200_000)));
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
   const maxBytes = maxChars * 4;
 

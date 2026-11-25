@@ -1,10 +1,9 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { streamSimple, type Context, type ProviderStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
-  streamSimple,
-  type AssistantMessage,
-  type Context,
-  type ProviderStreamOptions,
-} from "openclaw/plugin-sdk/llm";
+  mapAssistantMessageStream,
+  wrapProviderPayloadHook,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Ollama 0.40.1 tools.findTool searches the retained envelope before the JSON
@@ -50,10 +49,10 @@ function collectToolNames(context: Context): Set<string> {
   return names;
 }
 
-function mapAssistantNames(
-  message: AssistantMessage,
+function mapAssistantNames<T extends Extract<Context["messages"][number], { role: "assistant" }>>(
+  message: T,
   mapName: (name: string) => string,
-): AssistantMessage {
+): T {
   return {
     ...message,
     content: message.content.map((block) =>
@@ -171,10 +170,9 @@ export function wrapOllamaToolNames(baseFn: StreamFn | undefined): StreamFn {
     if ("toolChoice" in providerOptions) {
       providerOptions.toolChoice = mapToolChoice(providerOptions.toolChoice, mapName);
     }
-    const maybeStream = underlying(model, wireContext, {
-      ...providerOptions,
-      onPayload: async (payload, selectedModel) => {
-        const replacement = await options?.onPayload?.(payload, selectedModel);
+    providerOptions.onPayload = wrapProviderPayloadHook(
+      options?.onPayload,
+      (payload, replacement) => {
         const request = replacement === undefined ? payload : replacement;
         // OpenAI-compatible callers can choose a function through a payload hook.
         if (isRecord(request) && "tool_choice" in request) {
@@ -182,10 +180,9 @@ export function wrapOllamaToolNames(baseFn: StreamFn | undefined): StreamFn {
         }
         return replacement;
       },
-    });
+    );
+    const maybeStream = underlying(model, wireContext, providerOptions);
     const fromWire = new Map([...toWire].map(([name, alias]) => [alias, name]));
-    return "then" in maybeStream
-      ? maybeStream.then((stream) => restoreStreamNames(stream, fromWire))
-      : restoreStreamNames(maybeStream, fromWire);
+    return mapAssistantMessageStream(maybeStream, (stream) => restoreStreamNames(stream, fromWire));
   };
 }

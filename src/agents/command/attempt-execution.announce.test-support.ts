@@ -3,8 +3,46 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import type { AgentCommandOpts } from "./types.js";
 
-const SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY = "agent:main:subagent:child";
-const SUBAGENT_ANNOUNCE_REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "message"];
+const CHILD_SESSION_KEY = "agent:main:subagent:child";
+const REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "message"];
+type HandoffTarget = Omit<NonNullable<AgentCommandOpts["trustedInternalHandoff"]>, "kind">;
+type AnnounceToolOptions = {
+  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
+  disableMessageTool?: boolean;
+  requireExplicitMessageTarget?: boolean;
+  modelRun?: boolean;
+  promptMode?: "none";
+  runtimeToolsAllow?: string[];
+  trustedInternalHandoff?: boolean;
+};
+
+export function createCompletionHandoff(
+  target: HandoffTarget,
+): Pick<AgentCommandOpts, "trustedInternalHandoff" | "inputProvenance" | "internalEvents"> {
+  return {
+    trustedInternalHandoff: { kind: "subagent-completion", ...target },
+    inputProvenance: {
+      kind: "inter_session",
+      sourceSessionKey: target.sourceSessionKey,
+      sourceChannel: "internal",
+      sourceTool: "subagent_announce",
+    },
+    internalEvents: [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: target.sourceSessionKey,
+        childSessionId: target.sourceSessionId,
+        announceType: "subagent task",
+        taskLabel: "review",
+        status: "ok",
+        statusLabel: "completed",
+        result: "child output",
+        replyInstruction: "Relay this completion.",
+      },
+    ],
+  };
+}
 
 export function createSubagentAnnounceConfig(
   { operatorTools, sandboxMode }: SubagentAnnounceDeliveryCase,
@@ -17,215 +55,107 @@ export function createSubagentAnnounceConfig(
   };
 }
 
-export function createSubagentAnnounceHandoffOptions(params: {
-  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
-  targetSessionKey: string;
-  targetSessionId: string;
-  provider: string;
-  model: string;
-  disableMessageTool?: boolean;
-  requireExplicitMessageTarget?: boolean;
-  modelRun?: boolean;
-  promptMode?: "none";
-  runtimeToolsAllow?: string[];
-  trustedInternalHandoff?: boolean;
-}): Partial<AgentCommandOpts> {
+export function createSubagentAnnounceHandoffOptions(
+  params: AnnounceToolOptions &
+    Omit<HandoffTarget, "sourceSessionKey" | "sourceSessionId" | "settleBatch">,
+): Partial<AgentCommandOpts> {
+  const { trustedInternalHandoff, ...handoff } = createCompletionHandoff({
+    sourceSessionKey: CHILD_SESSION_KEY,
+    sourceSessionId: "subagent-announce-child",
+    targetSessionKey: params.targetSessionKey,
+    targetSessionId: params.targetSessionId,
+    provider: params.provider,
+    model: params.model,
+  });
   return {
+    ...handoff,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     ...(params.disableMessageTool ? { disableMessageTool: true } : {}),
     ...(params.requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     ...(params.modelRun ? { modelRun: true } : {}),
     ...(params.promptMode ? { promptMode: params.promptMode } : {}),
-    toolsAllow: params.runtimeToolsAllow ?? [...SUBAGENT_ANNOUNCE_REQUESTER_TOOLS],
-    ...(params.trustedInternalHandoff === false
-      ? {}
-      : {
-          trustedInternalHandoff: {
-            kind: "subagent-completion" as const,
-            sourceSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
-            sourceSessionId: "subagent-announce-child",
-            targetSessionKey: params.targetSessionKey,
-            targetSessionId: params.targetSessionId,
-            provider: params.provider,
-            model: params.model,
-          },
-        }),
-    inputProvenance: {
-      kind: "inter_session",
-      sourceSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
-      sourceChannel: "internal",
-      sourceTool: "subagent_announce",
-    },
-    internalEvents: [
-      {
-        type: "task_completion",
-        source: "subagent",
-        childSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
-        childSessionId: "subagent-announce-child",
-        announceType: "subagent task",
-        taskLabel: "review",
-        status: "ok",
-        statusLabel: "completed",
-        result: "child output",
-        replyInstruction: "Relay this completion.",
-      },
-    ],
+    toolsAllow: params.runtimeToolsAllow ?? [...REQUESTER_TOOLS],
+    ...(params.trustedInternalHandoff === false ? {} : { trustedInternalHandoff }),
   };
 }
 
-export type SubagentAnnounceDeliveryCase = {
+export type SubagentAnnounceDeliveryCase = AnnounceToolOptions & {
   name: string;
-  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
   disableMessageTool: boolean;
-  requireExplicitMessageTarget?: boolean;
-  modelRun?: boolean;
-  promptMode?: "none";
   inheritedToolAllow?: readonly string[];
   inheritedToolDeny?: readonly string[];
-  runtimeToolsAllow?: string[];
   operatorTools?: OpenClawConfig["tools"];
   sandboxMode?: "off" | "non-main" | "all";
-  trustedInternalHandoff?: boolean;
   expectedDisableTools: boolean;
   expectedToolsAllow?: readonly string[];
 };
 
-const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
-  {
-    name: "automatic source replies",
-    sourceReplyDeliveryMode: "automatic" as const,
-    disableMessageTool: false,
-    expectedDisableTools: true,
-  },
-  {
-    name: "message-tool-only source replies",
-    sourceReplyDeliveryMode: "message_tool_only" as const,
-    disableMessageTool: false,
-    requireExplicitMessageTarget: true,
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-
-  {
-    name: "an explicitly disabled message tool",
-    sourceReplyDeliveryMode: "message_tool_only" as const,
-    disableMessageTool: true,
-    expectedDisableTools: true,
-  },
-  {
-    name: "a coding profile with a source-bound message grant",
+function deliveryCase(
+  name: string,
+  overrides: Partial<SubagentAnnounceDeliveryCase>,
+  messageAllowed = false,
+): SubagentAnnounceDeliveryCase {
+  return {
+    name,
     sourceReplyDeliveryMode: "message_tool_only",
     disableMessageTool: false,
-    inheritedToolAllow: ["read", "exec", "sessions_spawn"],
-    operatorTools: { profile: "coding" },
+    expectedDisableTools: !messageAllowed,
+    ...(messageAllowed ? { expectedToolsAllow: ["message"] } : {}),
+    ...overrides,
+  };
+}
+const messageOnly = deliveryCase("message-tool-only", { requireExplicitMessageTarget: true }, true);
+export const SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES = [
+  deliveryCase("automatic source replies", {
+    sourceReplyDeliveryMode: "automatic",
     expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "an operator allowlist with a source-bound message grant",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    operatorTools: { allow: ["read", "exec"] },
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "an inherited explicit message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
+    expectedToolsAllow: REQUESTER_TOOLS,
+  }),
+  messageOnly,
+  deliveryCase("an explicitly disabled message tool", { disableMessageTool: true }),
+  deliveryCase(
+    "coding-profile source-bound grant",
+    {
+      inheritedToolAllow: ["read", "exec", "sessions_spawn"],
+      operatorTools: { profile: "coding" },
+    },
+    true,
+  ),
+  deliveryCase(
+    "operator-allowlist source-bound grant",
+    { operatorTools: { allow: ["read", "exec"] } },
+    true,
+  ),
+  deliveryCase("an inherited explicit message deny", {
     inheritedToolAllow: ["*"],
     inheritedToolDeny: ["message"],
-    expectedDisableTools: true,
-  },
-  {
-    name: "a current operator message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    operatorTools: { deny: ["message"] },
-    expectedDisableTools: true,
-  },
-  {
-    name: "an active sandbox message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
-    sandboxMode: "all",
-    expectedDisableTools: true,
-  },
-  {
-    name: "a non-main sandbox message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
-    sandboxMode: "non-main",
-    expectedDisableTools: true,
-  },
-
-  {
-    name: "an empty runtime allowlist",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    runtimeToolsAllow: [],
-    expectedDisableTools: true,
-  },
-  {
-    name: "an intersected runtime allowlist excluding message",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
+  }),
+  deliveryCase("a current operator message deny", { operatorTools: { deny: ["message"] } }),
+  ...(["all", "non-main"] as const).map((sandboxMode) =>
+    deliveryCase(`a ${sandboxMode} sandbox message deny`, {
+      operatorTools: { sandbox: { tools: { deny: ["message"] } } },
+      sandboxMode,
+    }),
+  ),
+  deliveryCase("an empty runtime allowlist", { runtimeToolsAllow: [] }),
+  deliveryCase("an intersected runtime allowlist excluding message", {
     runtimeToolsAllow: attachToolAllowlistIntersection(["*", "message"], [["*"], ["read"]]),
-    expectedDisableTools: true,
-  },
-  {
-    name: "an authorized messaging tool group",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    inheritedToolAllow: ["group:messaging"],
-    runtimeToolsAllow: ["group:messaging"],
-    operatorTools: { profile: "coding" },
-    expectedDisableTools: false,
-    expectedToolsAllow: ["message"],
-  },
-  {
-    name: "an untrusted completion handoff",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    trustedInternalHandoff: false,
-    expectedDisableTools: true,
-  },
+  }),
+  deliveryCase(
+    "an authorized messaging tool group",
+    {
+      inheritedToolAllow: ["group:messaging"],
+      runtimeToolsAllow: ["group:messaging"],
+      operatorTools: { profile: "coding" },
+    },
+    true,
+  ),
+  deliveryCase("an untrusted completion handoff", { trustedInternalHandoff: false }),
 ];
 
-// Only automatic Claude CLI completion replies restore requester tools.
-function createClaudeCliSubagentAnnounceDeliveryCases(): SubagentAnnounceDeliveryCase[] {
-  return SUBAGENT_ANNOUNCE_DELIVERY_CASES.map((testCase) => {
-    const retainsRequesterTools =
-      testCase.sourceReplyDeliveryMode === "automatic" && testCase.trustedInternalHandoff !== false;
-    return retainsRequesterTools
-      ? {
-          ...testCase,
-          expectedDisableTools: false,
-          expectedToolsAllow: testCase.runtimeToolsAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
-        }
-      : testCase;
-  });
-}
-export const SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES =
-  createClaudeCliSubagentAnnounceDeliveryCases();
-
-function createEmbeddedSubagentAnnounceDeliveryCases(): SubagentAnnounceDeliveryCase[] {
-  const cases: SubagentAnnounceDeliveryCase[] = [];
-  for (const testCase of SUBAGENT_ANNOUNCE_DELIVERY_CASES) {
-    if (testCase.name === "message-tool-only source replies") {
-      cases.push({
-        ...testCase,
-        expectedDisableTools: false,
-        expectedToolsAllow: SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
-      });
-    }
-  }
-  return cases;
-}
-export const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES =
-  createEmbeddedSubagentAnnounceDeliveryCases();
+export const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES = [
+  { ...messageOnly, expectedToolsAllow: REQUESTER_TOOLS },
+];
 
 export function createSubagentAnnounceSessionStore(
   requesterSessionKey: string,
@@ -234,7 +164,7 @@ export function createSubagentAnnounceSessionStore(
 ): Record<string, SessionEntry> {
   return {
     [requesterSessionKey]: requesterSessionEntry,
-    [SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY]: {
+    [CHILD_SESSION_KEY]: {
       sessionId: "subagent-announce-child",
       updatedAt: Date.now(),
       spawnedBy: requesterSessionKey,
@@ -242,23 +172,52 @@ export function createSubagentAnnounceSessionStore(
       subagentRole: "leaf",
       subagentControlScope: "none",
       inheritedToolPolicyVersion: 1,
-      inheritedToolAllow: [...(envelope.inheritedToolAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS)],
+      inheritedToolAllow: [...(envelope.inheritedToolAllow ?? REQUESTER_TOOLS)],
       ...(envelope.inheritedToolDeny ? { inheritedToolDeny: [...envelope.inheritedToolDeny] } : {}),
     },
   };
 }
 
-// Required public outputs and optional result intake share both command runtimes.
 export const INTER_SESSION_REPLY_POLICY_CASES = [
-  ["agent:main:subagent:reply-required", "discord"],
-  ["agent:main:subagent:optional-settle", "discord", true, true, "subagent_settle", "optional"],
-  ["agent:main:direct:optional-settle", "webchat", true, true, "subagent_settle", "optional"],
-  ["agent:main:direct:required-settle", "webchat", false, false, "subagent_settle", "required"],
-  ["agent:main:direct:peer-result", "webchat", false, true, "sessions_send", "optional"],
-  ["agent:main:direct:reply-required", "webchat"],
-  ["agent:main:direct:private-reply-required", "telegram", true],
-  ["agent:main:telegram:direct:reply-required", "telegram"],
-  ["agent:main:telegram:group:optional", "telegram", undefined, true],
-  ["agent:main:telegram:direct:delegated", "telegram", undefined, false, "sessions_send"],
-  ["agent:main:telegram:group:delegated", "telegram", undefined, true, "sessions_send"],
+  ["optional", "agent:main:subagent:completion", "discord"],
+  [
+    "result-required",
+    "agent:main:subagent:child-result",
+    "discord",
+    true,
+    "subagent_announce",
+    "result-required",
+  ],
+  [
+    "result-required",
+    "agent:main:subagent:settle-result",
+    "discord",
+    true,
+    "subagent_settle",
+    "result-required",
+  ],
+  [
+    "optional",
+    "agent:main:subagent:optional-settle",
+    "discord",
+    true,
+    "subagent_settle",
+    "optional",
+  ],
+  ["optional", "agent:main:direct:optional-settle", "webchat", true, "subagent_settle", "optional"],
+  [
+    "required",
+    "agent:main:direct:required-settle",
+    "webchat",
+    false,
+    "subagent_settle",
+    "required",
+  ],
+  ["optional", "agent:main:direct:peer-result", "webchat", false, "sessions_send", "optional"],
+  ["optional", "agent:main:direct:completion", "webchat"],
+  ["optional", "agent:main:direct:private-completion", "telegram", true],
+  ["optional", "agent:main:telegram:direct:completion", "telegram"],
+  ["optional", "agent:main:telegram:group:completion", "telegram"],
+  ["required", "agent:main:telegram:direct:delegated", "telegram", undefined, "sessions_send"],
+  ["optional", "agent:main:telegram:group:delegated", "telegram", undefined, "sessions_send"],
 ] as const;

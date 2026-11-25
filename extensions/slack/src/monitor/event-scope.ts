@@ -84,3 +84,30 @@ export function resolveSlackMonitorEventScope(params: {
     ...(writeClient ? { writeClient } : {}),
   };
 }
+
+export function resolveSlackInteractionEventScope(
+  ctx: Parameters<typeof resolveSlackMonitorEventScope>[0]["ctx"] & {
+    runtime: { log?: (message: string) => void };
+    shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
+  },
+  args: Pick<Parameters<typeof resolveSlackMonitorEventScope>[0], "body" | "context" | "client">,
+  kind: "action" | "shortcut" | "view_submission" | "view_closed",
+): SlackEventScope | null | undefined {
+  const eventScope = resolveSlackMonitorEventScope({
+    ctx,
+    body: args.body,
+    context: args.context,
+    client: args.client,
+    onDrop: (reason) => ctx.runtime.log?.(`slack:interaction drop ${kind} ${reason}`),
+  });
+  if (eventScope === null) {
+    return null;
+  }
+  if (ctx.shouldDropMismatchedSlackEvent?.(args.body)) {
+    ctx.runtime.log?.(
+      `slack:interaction drop ${kind === "action" ? "block action" : kind} payload (mismatched app/team)`,
+    );
+    return null;
+  }
+  return eventScope;
+}

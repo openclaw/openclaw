@@ -36,3 +36,29 @@ export function retainSafeHeadersForCrossOriginRedirect(
   }
   return safeHeaders;
 }
+
+export function restoreRedirectAuthorization(params: {
+  init?: RequestInit;
+  authorization?: string;
+}): RequestInit | undefined {
+  if (!params.authorization) {
+    return params.init;
+  }
+  const headers = new Headers(params.init?.headers);
+  headers.set("Authorization", params.authorization);
+  return { ...params.init, headers };
+}
+
+export function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
+  if (!headers) {
+    return headers;
+  }
+  const nextHeaders = new Headers(normalizeHeadersInitForFetch(headers));
+  nextHeaders.delete("content-encoding");
+  nextHeaders.delete("content-language");
+  nextHeaders.delete("content-length");
+  nextHeaders.delete("content-location");
+  nextHeaders.delete("content-type");
+  nextHeaders.delete("transfer-encoding");
+  return nextHeaders;
+}

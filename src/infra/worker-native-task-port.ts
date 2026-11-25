@@ -1,5 +1,6 @@
 import { receiveMessageOnPort, type MessagePort, type Transferable } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { materializeErrorStack } from "./error-graph-internal.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { nativePortIsOpen } from "./worker-native-port.js";
@@ -9,6 +10,7 @@ type TaskPortMessage = { type: "message"; value: unknown } | { type: "messageerr
 /** The task endpoint owns delivery only; its close never proves native execution stopped. */
 export class NativeWorkerTaskPort {
   private readonly pending: TaskPortMessage[] = [];
+  private readonly readMessage = () => receiveMessageOnPort(this.port);
   private started = false;
   private disposed = false;
   private portClosed = false;
@@ -50,6 +52,7 @@ export class NativeWorkerTaskPort {
     if (this.disposed || this.failure) {
       return;
     }
+    materializeErrorStack(error);
     this.failure = error;
     this.callbacks.unavailable();
   }
@@ -78,9 +81,7 @@ export class NativeWorkerTaskPort {
         }
         let next: ReturnType<typeof receiveMessageOnPort>;
         try {
-          next = runWithMainThreadTask("worker:message-decode", () =>
-            receiveMessageOnPort(this.port),
-          );
+          next = runWithMainThreadTask("worker:message-decode", this.readMessage);
         } catch (error) {
           this.fail(toErrorObject(error, "Native worker task channel observation failed"));
           return;
@@ -129,10 +130,10 @@ export class NativeWorkerTaskPort {
     }
   }
 
-  postMessage(value: unknown, transferList: readonly Transferable[]): void {
+  postMessage(value: unknown, transferList: Transferable[]): void {
     this.assertAvailable();
     const bytes = workerMessagePayloadBytes(value);
-    this.port.postMessage(value, [...transferList]);
+    this.port.postMessage(value, transferList);
     observeWorkerMessage(value, "to_worker", "other", bytes ?? null);
   }
 

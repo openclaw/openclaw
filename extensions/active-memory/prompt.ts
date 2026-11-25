@@ -2,7 +2,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { extractTextContentParts } from "./query.js";
 import {
   ACTIVE_MEMORY_CLOSE_TAG,
@@ -225,20 +225,18 @@ function readStructuredContentState(
   const parts = extractTextContentParts(content);
   let sawOtherState = false;
   for (const part of parts) {
-    try {
-      const state = readState(JSON.parse(part));
-      if (state === decisiveState) {
-        return decisiveState;
-      }
-      sawOtherState ||= state === !decisiveState;
-    } catch {}
+    const state = readState(safeParseJson(part));
+    if (state === decisiveState) {
+      return decisiveState;
+    }
+    sawOtherState ||= state === !decisiveState;
   }
-  try {
-    const state = readState(JSON.parse(parts.join(" ").trim()));
+  if (parts.length > 1) {
+    const state = readState(safeParseJson(parts.join(" ").trim()));
     if (state !== undefined) {
       return state;
     }
-  } catch {}
+  }
   return sawOtherState ? !decisiveState : undefined;
 }
 

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
@@ -43,7 +44,7 @@ export function registerQueuedUnknownKillAuthorityTest() {
         childSessionKey: "agent:main:subagent:unrelated",
       };
       await f.manager.registerSubagentRun(unrelated);
-      expect(f.runs.get(unrelated.runId)?.queuedLaunch).toBeDefined();
+      expect(f.runs.get(unrelated.runId)?.execution.status).toBe("queued");
       await closeOpenClawStateDatabaseAsync();
       await expect(
         mutateSubagentRuns([entry.runId], () => ({ value: true }), { runs: f.runs }),
@@ -59,7 +60,6 @@ export function registerQueuedUnknownKillAuthorityTest() {
 
   it("restores an uncertain accepted address with its original runtime and completion custody", async () => {
     await withQueuedRegistrationFixture(async (f) => {
-      expect(f.runs.size).toBe(0);
       const context = createContext();
       const resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;
@@ -93,7 +93,7 @@ export function registerQueuedUnknownKillAuthorityTest() {
           "Accepted rekey did not reach native ACK",
         );
         expect(loadSubagentRegistryFromSqlite().has(original.runId)).toBe(false);
-        expect(loadSubagentRegistryFromSqlite().get(acceptedId)?.queuedLaunch).toBeUndefined();
+        expect(loadSubagentRegistryFromSqlite().get(acceptedId)?.execution.status).toBe("running");
         ack.loseReceipt(new SqliteWorkerError("Accepted address receipt lost", "outcome-unknown"));
         await expect(accepting).rejects.toMatchObject({ outcome: "unknown" });
         expect(f.runs.get(original.runId)).toBe(original);
@@ -106,17 +106,13 @@ export function registerQueuedUnknownKillAuthorityTest() {
         }
         expect(plan).not.toHaveBeenCalled();
         await restoreSubagentRunsFromDisk({ runs: f.runs });
-        const accepted = f.runs.get(acceptedId);
-        if (!accepted) {
-          throw new Error("Canonical accepted row was not restored");
-        }
+        const accepted = expectDefined(f.runs.get(acceptedId), "canonical accepted row");
         expect(f.runs.has(original.runId)).toBe(false);
         expect(accepted).toMatchObject({
           swarmRunId: original.runId,
           taskRunId: original.taskRunId,
           execution: { status: "running" },
         });
-        expect(accepted.queuedLaunch).toBeUndefined();
         expect(getSubagentRunRuntimeKey(accepted)).toBe(runtimeKey);
         expect(getCurrentSubagentRunOwner(f.runs, original)).toBe(accepted);
         expect(retirement.observation).toMatchObject({
@@ -139,16 +135,13 @@ export function registerQueuedUnknownKillAuthorityTest() {
           }),
         ).resolves.toBe(true);
         const unrelated = structuredClone(accepted);
-        await mutateSubagentRuns(
-          [acceptedId],
-          () => ({ value: undefined, postimages: new Map([[acceptedId, null]]) }),
-          { runs: f.runs },
-        );
-        await mutateSubagentRuns(
-          [acceptedId],
-          () => ({ value: undefined, postimages: new Map([[acceptedId, unrelated]]) }),
-          { runs: f.runs },
-        );
+        for (const postimage of [null, unrelated]) {
+          await mutateSubagentRuns(
+            [acceptedId],
+            () => ({ value: undefined, postimages: new Map([[acceptedId, postimage]]) }),
+            { runs: f.runs },
+          );
+        }
         expect(isSameSubagentRunOwner(f.runs.get(acceptedId), original)).toBe(false);
         expect(getCurrentSubagentRunOwner(f.runs, original)).toBeUndefined();
       } finally {

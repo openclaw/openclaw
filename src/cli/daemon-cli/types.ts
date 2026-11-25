@@ -1,4 +1,5 @@
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { GatewayRpcOpts as SharedGatewayRpcOpts } from "../gateway-rpc.types.js";
 
 export type GatewayRpcOpts = Omit<SharedGatewayRpcOpts, "expectFinal"> & {
@@ -10,6 +11,7 @@ export type DaemonStatusOptions = {
   probe: boolean;
   requireRpc: boolean;
   json: boolean;
+  runtimeIntentOnly?: boolean;
 } & FindExtraGatewayServicesOptions;
 
 export type DaemonInstallOptions = {
@@ -33,4 +35,8 @@ export type DaemonLifecycleOptions = {
   preserveDefinition?: boolean;
   wait?: string;
   disable?: boolean;
+};
+
+export type ServiceLifecycleOptions = DaemonLifecycleOptions & {
+  restartIntent?: GatewayRestartIntent;
 };

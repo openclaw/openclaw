@@ -1,62 +1,98 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createQueueTestRun } from "./queue.test-helpers.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
+import {
+  claimSessionControllerInput,
+  releaseSessionControllerClaim,
+} from "../../sessions/session-controller.mailbox.js";
+import { createQueueTestRun as createRun, createQueueSettings } from "./queue.test-helpers.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
-import type { QueueSettings } from "./queue/types.js";
+import type { FollowupRun } from "./queue/types.js";
 
 let sequence = 0;
 let key: string;
 beforeEach(() => {
   key = `goal-priority-${++sequence}`;
 });
-const settings: QueueSettings = { mode: "followup", cap: 1, dropPolicy: "new", debounceMs: 0 };
-const createGoal = () => ({
-  ...createQueueTestRun({ prompt: "Advance", messageId: "goal-nudge" }),
-  goalContinuation: { sessionId: "sess", goalId: "goal" },
+const settings = createQueueSettings({ mode: "followup", cap: 1, dropPolicy: "new" });
+const createGoal = () =>
+  createRun({
+    prompt: "Advance",
+    messageId: "goal-nudge",
+    goalContinuation: { sessionId: "sess", goalId: "goal" },
+  });
+const enqueue = (run: FollowupRun, policy = settings) => enqueueFollowupRun(key, run, policy);
+afterEach(() => {
+  clearFollowupQueue(key);
+  vi.useRealTimers();
 });
-afterEach(() => clearFollowupQueue(key));
 
-describe("pending Goal nudge priority", () => {
-  it.each(["new", "old", "summarize"] as const)(
-    "lets user input displace a nudge before the %s capacity policy",
-    (dropPolicy) => {
-      const goal = createGoal();
-      const onSettled = vi.fn();
-      goal.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled };
-      const policy = { ...settings, dropPolicy };
-      expect(enqueueFollowupRun(key, goal, policy)).toBe(true);
-      const user = createQueueTestRun({ prompt: "New user instruction", messageId: "user-1" });
-      expect(enqueueFollowupRun(key, user, policy)).toBe(true);
-      expect(getExistingFollowupQueue(key)?.items).toEqual([user]);
-      expect(getExistingFollowupQueue(key)?.droppedCount).toBe(0);
-      expect(onSettled).toHaveBeenCalledOnce();
-    },
+it.each(["new", "old", "summarize"] as const)(
+  "lets user input displace a nudge before the %s capacity policy",
+  (dropPolicy) => {
+    const onSettled = vi.fn();
+    const goal = createGoal();
+    goal.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled };
+    const policy = { ...settings, dropPolicy };
+    expect(enqueue(goal, policy)).toBe(true);
+    const user = createRun({ prompt: "New user instruction", messageId: "user-1" });
+    expect(enqueue(user, policy)).toBe(true);
+    const queue = getExistingFollowupQueue(key);
+    expect([queue?.items, queue?.droppedCount]).toEqual([[user], 0]);
+    expect(onSettled).toHaveBeenCalledOnce();
+  },
+);
+it("wakes the Goal queue with the incoming user's callback", async ({ signal }) => {
+  vi.useFakeTimers();
+  const goal = createGoal();
+  const user = createRun({ prompt: "New user instruction", messageId: "user-1" });
+  const deliverGoal = vi.fn(async () => {});
+  const deliverUser = vi.fn(async () => {});
+  expect(
+    enqueueFollowupRun(key, goal, { ...settings, debounceMs: 10_000 }, "none", deliverGoal),
+  ).toBe(true);
+  expect(enqueueFollowupRun(key, user, settings, "none", deliverUser)).toBe(true);
+  await withinTest(
+    Promise.all([goal, user].map((run) => run.controllerInput!.settlement.promise)),
+    signal,
   );
-  it("does not retire an in-flight goal turn", () => {
-    const goal = createGoal();
-    enqueueFollowupRun(key, goal, settings);
-    const queue = getExistingFollowupQueue(key)!;
-    queue.inFlight.add(goal);
-    const user = createQueueTestRun({ prompt: "New user instruction" });
-    expect(enqueueFollowupRun(key, user, settings)).toBe(true);
-    expect(queue.items).toEqual([goal, user]);
-    queue.inFlight.delete(goal);
-  });
-  it("preserves the nudge when the incoming source refuses admission", () => {
-    const goal = createGoal();
-    enqueueFollowupRun(key, goal, settings);
-    const user = createQueueTestRun({ prompt: "Unadmitted input" });
-    user.turnAdoptionLifecycle = { onAdopted: () => {}, onDeferred: () => false };
-    expect(enqueueFollowupRun(key, user, settings)).toBe(false);
-    expect(getExistingFollowupQueue(key)?.items).toEqual([goal]);
-  });
-  it("deduplicates a source retry without displacing goal work", () => {
-    const policy = { ...settings, cap: 2 };
-    const user = createQueueTestRun({ prompt: "Original input", messageId: "user-1" });
-    const goal = createGoal();
-    enqueueFollowupRun(key, user, policy);
-    enqueueFollowupRun(key, goal, policy);
-    expect(enqueueFollowupRun(key, { ...user }, policy)).toBe(false);
-    expect(getExistingFollowupQueue(key)?.items).toEqual([user, goal]);
-  });
+  expect(deliverGoal).not.toHaveBeenCalled();
+  expect(deliverUser).toHaveBeenCalledExactlyOnceWith(user);
+});
+it("does not retire an in-flight goal turn", async () => {
+  const onSettled = vi.fn();
+  const goal = createGoal();
+  goal.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled };
+  enqueue(goal);
+  const queue = getExistingFollowupQueue(key)!;
+  const claim = await claimSessionControllerInput(goal);
+  try {
+    const user = createRun({ prompt: "New user instruction" });
+    expect(enqueue(user)).toBe(true);
+    expect(queue.claim).toBe(claim);
+    expect(claim.sources).toEqual([goal]);
+    expect(queue.items.filter((item) => !queue.inFlight.has(item))).toEqual([user]);
+    expect(user.controllerInput?.phase).toBe("waiting");
+    expect(onSettled).not.toHaveBeenCalled();
+  } finally {
+    releaseSessionControllerClaim(claim);
+    await claim.settlement.promise;
+  }
+});
+it("preserves the nudge when the incoming source refuses admission", () => {
+  const goal = createGoal();
+  enqueue(goal);
+  const user = createRun({ prompt: "Unadmitted input" });
+  user.turnAdoptionLifecycle = { onAdopted: () => {}, onDeferred: () => false };
+  expect(enqueue(user)).toBe(false);
+  expect(getExistingFollowupQueue(key)?.items).toEqual([goal]);
+});
+it("deduplicates a source retry without displacing goal work", () => {
+  const policy = { ...settings, cap: 2 };
+  const user = createRun({ prompt: "Original input", messageId: "user-1" });
+  const goal = createGoal();
+  enqueue(user, policy);
+  enqueue(goal, policy);
+  expect(enqueue({ ...user }, policy)).toBe(false);
+  expect(getExistingFollowupQueue(key)?.items).toEqual([user, goal]);
 });

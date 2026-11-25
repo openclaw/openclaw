@@ -1,10 +1,11 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntriesWithSource, readAgentRosterProperty } from "../agents/agent-roster.js";
 import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { OpenClawConfigWithLegacyRoster } from "./legacy.roster.js";
 import { resolveAgentModelPrimaryValue } from "./model-input.js";
@@ -21,16 +22,21 @@ export function hasUtilityModelSeparationMigrationMarker(raw: unknown): boolean 
   );
 }
 
-/** The shipped implicit primary never excluded a separately configured utility model. */
+/** The model that releases through 2026.11.6 ran when config named none. */
+export const LEGACY_IMPLICIT_PRIMARY_MODEL_REF = "openai/gpt-6-astra";
+
+/**
+ * The shipped implicit primary: a configured provider row, unless OpenAI listed the
+ * legacy default itself. It never excluded a separately configured utility model.
+ */
 export function resolveLegacyImplicitPrimaryModelRef(cfg: OpenClawConfig): string {
-  const fallback = resolveConfiguredProviderFallback({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  return fallback
-    ? `${fallback.provider}/${fallback.model}`
-    : `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
+  const legacyModelId = LEGACY_IMPLICIT_PRIMARY_MODEL_REF.slice("openai/".length);
+  const listsLegacyDefault = findNormalizedProviderValue(
+    cfg.models?.providers,
+    "openai",
+  )?.models?.some((model) => model?.id === legacyModelId);
+  const fallback = listsLegacyDefault ? null : resolveConfiguredProviderFallback({ cfg });
+  return fallback ? `${fallback.provider}/${fallback.model}` : LEGACY_IMPLICIT_PRIMARY_MODEL_REF;
 }
 
 function validModelParent(model: unknown): boolean {
@@ -164,14 +170,14 @@ export function materializeUtilityModelSeparation(
       !previousDefaultPrimary &&
       !nextDefaultPrimary &&
       (hadConfiguredModel ||
-        normalizeOptionalString(previousDefaults?.utilityModel) ||
+        resolveAgentModelPrimaryValue(previousDefaults?.utilityModel) ||
         listAgentEntriesWithSource(config).some(({ entry }) => {
           const prior = previousAgents.get(normalizeAgentId(entry.id));
           return (
             prior &&
             !resolveAgentModelPrimaryValue(prior.model) &&
             !resolveAgentModelPrimaryValue(entry.model) &&
-            normalizeOptionalString(prior.utilityModel ?? previousDefaults?.utilityModel)
+            resolveAgentModelPrimaryValue(prior.utilityModel ?? previousDefaults?.utilityModel)
           );
         }));
     if (
@@ -184,7 +190,7 @@ export function materializeUtilityModelSeparation(
     if (
       !previousDefaultPrimary &&
       !nextDefaultPrimary &&
-      (hadConfiguredModel || normalizeOptionalString(previousDefaults?.utilityModel))
+      (hadConfiguredModel || resolveAgentModelPrimaryValue(previousDefaults?.utilityModel))
     ) {
       config = {
         ...config,
@@ -207,7 +213,7 @@ export function materializeUtilityModelSeparation(
           !prior ||
           resolveAgentModelPrimaryValue(prior.model) ||
           resolveAgentModelPrimaryValue(entry.model) ||
-          !normalizeOptionalString(prior.utilityModel ?? previousDefaults?.utilityModel)
+          !resolveAgentModelPrimaryValue(prior.utilityModel ?? previousDefaults?.utilityModel)
         ) {
           continue;
         }

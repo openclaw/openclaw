@@ -21,12 +21,6 @@ export function setDiscordPolicyBindings(
   policyBindings.set(normalizeAccountId(accountId), { channels: bindings, guilds });
 }
 
-function listBindings(accountId: string | null | undefined, guildKey: string) {
-  return (policyBindings.get(normalizeAccountId(accountId))?.channels ?? []).filter(
-    (binding) => binding.guildKey === guildKey,
-  );
-}
-
 export function findDiscordGuildPolicyKey(
   accountId: string | null | undefined,
   guildId: string,
@@ -39,7 +33,9 @@ export function getDiscordChannelPolicyBinding(
   guildKey: string,
   channelKey: string,
 ): string | undefined {
-  return listBindings(accountId, guildKey).find((binding) => binding.channelKey === channelKey)
+  return policyBindings
+    .get(normalizeAccountId(accountId))
+    ?.channels.find((binding) => binding.guildKey === guildKey && binding.channelKey === channelKey)
     ?.channelId;
 }
 
@@ -48,6 +44,8 @@ export function findDiscordChannelPolicyKey(
   guildKey: string,
   channelId: string,
 ): string | undefined {
-  return listBindings(accountId, guildKey).find((binding) => binding.channelId === channelId)
+  return policyBindings
+    .get(normalizeAccountId(accountId))
+    ?.channels.find((binding) => binding.guildKey === guildKey && binding.channelId === channelId)
     ?.channelKey;
 }

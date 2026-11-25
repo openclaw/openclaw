@@ -1,7 +1,7 @@
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { TRANSCRIPT_FTS_ROW_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withoutSessionEntrySnapshotsSchema } from "./openclaw-agent-session-snapshots-schema.js";
-import { withDeployedTranscriptFtsRowSchema } from "./openclaw-agent-transcript-fts-schema.js";
+import { withDeployedTranscriptFtsRowSchema } from "./openclaw-agent-transcript-fts-schema-source.js";
 
 // These schema-21 definitions remain migration input until the schema-23
 // converters finish. Earlier structural/media migrations still write TEXT.

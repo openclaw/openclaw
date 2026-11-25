@@ -28,7 +28,6 @@ export type AgentSchemaInspectionResponse =
             inspectionErrors: InspectionError[];
           })
         | null;
-      schemaContracts?: StateSchemaInspection["schemaContracts"];
     };
 
 export function serializeAgentSchemaInspectionError(value: unknown): InspectionError {

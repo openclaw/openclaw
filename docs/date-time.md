@@ -1,5 +1,5 @@
 ---
-summary: "Date and time handling across envelopes, prompts, tools, and connectors"
+summary: "Date and time handling across envelopes, prompts, tools, and channel plugins"
 read_when:
   - You are changing how timestamps are shown to the model or users
   - You are debugging time formatting in messages or system prompt output
@@ -93,7 +93,9 @@ Rendered clock values follow the operating system and locale preference. OpenCla
 detects 12-hour or 24-hour display on macOS and Windows, then falls back to locale
 formatting. The detected value is cached per process.
 
-## Tool payloads + connectors (raw provider time + normalized fields)
+<a id="tool-payloads-+-connectors-raw-provider-time-+-normalized-fields" />
+
+## Tool payloads + channel plugins (raw provider time + normalized fields)
 
 Channel tools return **provider-native timestamps** and add normalized fields for consistency:
 

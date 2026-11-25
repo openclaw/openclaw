@@ -1,7 +1,5 @@
-import type {
-  ChannelMessageSendTextContext,
-  MessageReceipt,
-} from "openclaw/plugin-sdk/channel-outbound";
+import type { ChannelMessageSendTextContext } from "openclaw/plugin-sdk/channel-outbound";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import type { z } from "zod";
 import type {
   ZalouserAccountSchema,
@@ -52,10 +50,13 @@ export type ZaloInboundMessage = {
   canResolveExplicitMention?: boolean;
   implicitMention?: boolean;
   quotedGlobalMsgId?: string;
-  quotedOwnerId?: string;
   quotedBody?: string;
   eventMessage?: ZaloEventMessage;
-  raw: unknown;
+  attachment?: {
+    kind: "image" | "video" | "document";
+    url: string;
+    fileName?: string;
+  };
 };
 
 export type ZcaUserInfo = ZcaFriend;
@@ -71,6 +72,7 @@ export type ZaloSendOptions = ZaloSendHandoff & {
   mediaUrl?: string;
   caption?: string;
   isGroup?: boolean;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   textMode?: "markdown" | "plain";
@@ -79,15 +81,7 @@ export type ZaloSendOptions = ZaloSendHandoff & {
   textStyles?: Style[];
 };
 
-export type ZaloSendResult = {
-  ok: boolean;
-  messageId?: string;
-  receipt: MessageReceipt;
-  error?: string;
-};
-
 export type ZaloGroupContext = {
-  groupId: string;
   name?: string;
   members?: string[];
 };

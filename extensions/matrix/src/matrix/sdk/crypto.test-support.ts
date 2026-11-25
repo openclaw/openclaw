@@ -22,26 +22,14 @@ export class MockVerifier
   constructor(
     private readonly sasCallbacks: MatrixShowSasCallbacks | null,
     private readonly qrCallbacks: MatrixShowQrCodeCallbacks | null,
-    private readonly verifyImpl: () => Promise<void> = async () => {},
+    readonly verify: () => Promise<void> = async () => {},
   ) {
     super();
   }
 
-  verify(): Promise<void> {
-    return this.verifyImpl();
-  }
-
-  cancel(_e: Error): void {
-    void _e;
-  }
-
-  getShowSasCallbacks(): MatrixShowSasCallbacks | null {
-    return this.sasCallbacks;
-  }
-
-  getReciprocateQrCodeCallbacks(): MatrixShowQrCodeCallbacks | null {
-    return this.qrCallbacks;
-  }
+  cancel = (_e: Error): void => {};
+  getShowSasCallbacks = () => this.sasCallbacks;
+  getReciprocateQrCodeCallbacks = () => this.qrCallbacks;
 }
 
 export class MockVerificationRequest
@@ -70,9 +58,7 @@ export class MockVerificationRequest
     Object.assign(this, init);
   }
 
-  otherPartySupportsMethod(method: string): boolean {
-    return this.methods.includes(method);
-  }
+  otherPartySupportsMethod = (method: string) => this.methods.includes(method);
 
   accept = vi.fn(async () => {
     this.phase = VerificationPhase.Ready;
@@ -82,22 +68,15 @@ export class MockVerificationRequest
     this.phase = VerificationPhase.Cancelled;
   });
 
-  startVerification = vi.fn(async (_method: string) => {
+  private start() {
     if (!this.verifier) {
       throw new Error("verifier not configured");
     }
     this.phase = VerificationPhase.Started;
     return this.verifier;
-  });
-
-  scanQRCode = vi.fn(async (_qrCodeData: Uint8ClampedArray) => {
-    if (!this.verifier) {
-      throw new Error("verifier not configured");
-    }
-    this.phase = VerificationPhase.Started;
-    return this.verifier;
-  });
-
+  }
+  startVerification = vi.fn(async (_method: string) => this.start());
+  scanQRCode = vi.fn(async (_qrCodeData: Uint8ClampedArray) => this.start());
   generateQRCode = vi.fn(async () => new Uint8ClampedArray([1, 2, 3]));
 }
 
@@ -115,6 +94,7 @@ export function createMatrixCryptoApi(
     requestVerificationDM: vi.fn(async () => new MockVerificationRequest()),
     createRecoveryKeyFromPassphrase: vi.fn(async () => ({ privateKey: new Uint8Array(32) })),
     getSecretStorageStatus: vi.fn(async () => ({ ready: false, defaultKeyId: null })),
+    getOwnIdentity: vi.fn(async () => undefined),
     getDeviceVerificationStatus: vi.fn(async () => null),
     getSessionBackupPrivateKey: vi.fn(async () => null),
     loadSessionBackupPrivateKeyFromSecretStorage: vi.fn(async () => {}),

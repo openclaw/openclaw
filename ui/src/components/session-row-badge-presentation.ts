@@ -8,24 +8,39 @@ import type {
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { sessionPullRequestStateIcons } from "../lib/session-pull-request-presentation.ts";
+import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
+import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sessionMachineParts } from "./session-machine.ts";
 
-export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
+export function sidebarSessionBadgeFacts(
+  source: Pick<SessionPullRequestIndicators, "summary" | "count">,
+  row: SidebarRecentSession,
+  initialPullRequest = row.pullRequest,
+) {
+  const attention = row.attention;
+  return (
+    row.snapshot ?? {
+      // An approval the leading icon already shows needs no second badge; a question
+      // carrying approval requests leads with the question, so the badge adds the approval.
+      hasApproval:
+        (attention.kind === "question" &&
+          attention.requests.some((request) => request.kind === "approval")) ||
+        undefined,
+      pullRequest: source.summary(row.key, row.worktreeId ?? "", initialPullRequest),
+      pullRequestCount: source.count(row.key),
+    }
+  );
+}
+
+type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
 export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 
-function formatSessionPullRequestSummary(
-  summary: SessionCatalogPullRequestSummary,
-  translate: typeof t,
-): string {
-  const numbers = summary.numbers.map((number) => `#${number}`).join(", ");
-  return `${numbers} · ${translate(`chat.pullRequests.${summary.state}`)}`;
-}
-
 export type SessionRowBadgesParams = {
-  isChild?: boolean;
   incognito?: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
+  pullRequestCount?: number;
   hasApproval?: boolean;
   outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
@@ -39,9 +54,18 @@ export type SessionRowBadgesParams = {
 
 export type SessionRowBadge = {
   label: string;
-  icon: "incognito" | "gitMerge" | "gitPullRequest" | "alertTriangle" | "pencil" | "globe";
+  icon:
+    | "incognito"
+    | "gitMerge"
+    | "gitPullRequest"
+    | "gitPullRequestDraft"
+    | "gitPullRequestClosed"
+    | "alertTriangle"
+    | "draft"
+    | "globe";
   modifier: string;
   count?: number;
+  countLabel?: string;
   pullRequestState?: SessionCatalogPullRequestSummary["state"];
   placementState?: SessionPlacementState;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
@@ -53,19 +77,18 @@ export function resolveSessionRowBadges(
   translate = t,
 ): SessionRowBadge[] {
   const pullRequestLabel = params.pullRequest
-    ? formatSessionPullRequestSummary(params.pullRequest, translate)
+    ? `${params.pullRequest.numbers.map((number) => `#${number}`).join(", ")} · ${translate(`chat.pullRequests.${params.pullRequest.state}`)}`
     : undefined;
   const pullRequestState = params.pullRequest?.state;
-  const placementState = params.isChild ? undefined : params.placementState;
+  const placementState = params.placementState;
   const cloudPlacementState = isCloudWorkerPlacementState(placementState)
     ? placementState
     : undefined;
   const workspaceConflictCount = Math.max(0, Math.floor(params.workspaceConflictCount ?? 0));
-  // Child rows suppress ordinary placement chrome, but a retained conflict must stay discoverable.
   const conflictPlacementState = workspaceConflictCount > 0 ? params.placementState : undefined;
   const displayedPlacementState = cloudPlacementState ?? conflictPlacementState;
   const hasWorkspaceConflict = workspaceConflictCount > 0;
-  const diskSpaceStatus = params.isChild ? undefined : params.diskSpaceStatus;
+  const diskSpaceStatus = params.diskSpaceStatus;
   const diskSpaceLabel =
     diskSpaceStatus === "critical"
       ? translate("sessionsView.cloudWorkerDiskCritical")
@@ -123,10 +146,20 @@ export function resolveSessionRowBadges(
       modifier: "incognito",
     });
   }
-  if (pullRequestLabel) {
+  if (params.pullRequest || params.pullRequestCount) {
+    const count = params.pullRequestCount ?? params.pullRequest?.numbers.length ?? 0;
     badges.push({
-      label: pullRequestLabel,
-      icon: pullRequestState === "merged" ? "gitMerge" : "gitPullRequest",
+      label: [
+        count > 1 || !pullRequestLabel
+          ? translate("sessionsView.pullRequestCount", { count: String(count) })
+          : "",
+        pullRequestLabel,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      icon: params.pullRequest
+        ? sessionPullRequestStateIcons[params.pullRequest.state]
+        : "gitPullRequest",
       modifier: "pull-request",
       pullRequestState,
     });
@@ -149,7 +182,7 @@ export function resolveSessionRowBadges(
   if (params.hasComposerDraft) {
     badges.push({
       label: translate("sessionsView.unsentDraft"),
-      icon: "pencil",
+      icon: "draft",
       modifier: "draft",
     });
   }
@@ -163,5 +196,45 @@ export function resolveSessionRowBadges(
       workspaceConflictCount,
     });
   }
-  return badges;
+  return trimSessionRowBadges(badges);
+}
+
+// The trailing column holds two context signals at most. Badges asking for action
+// outrank passive context, and a healthy placement yields to the pull request; the
+// survivors keep their reading order.
+const SESSION_ROW_BADGE_LIMIT = 2;
+const SESSION_ROW_BADGE_PRIORITY = [
+  "attention",
+  "approval",
+  "cloud",
+  "draft",
+  "pull-request",
+  "placement",
+  "incognito",
+];
+const SESSION_ROW_COUNT_LIMIT = 99;
+
+function sessionRowBadgeRank(badge: SessionRowBadge): number {
+  const healthyPlacement =
+    badge.modifier === "cloud" &&
+    badge.placementState !== "failed" &&
+    !badge.workspaceConflictCount &&
+    (badge.diskSpaceStatus === undefined || badge.diskSpaceStatus === "ok");
+  return SESSION_ROW_BADGE_PRIORITY.indexOf(healthyPlacement ? "placement" : badge.modifier);
+}
+
+function trimSessionRowBadges(badges: SessionRowBadge[]): SessionRowBadge[] {
+  const kept = new Set(
+    badges
+      .toSorted((a, b) => sessionRowBadgeRank(a) - sessionRowBadgeRank(b))
+      .slice(0, SESSION_ROW_BADGE_LIMIT),
+  );
+  const visible = badges.filter((badge) => kept.has(badge));
+  for (const badge of visible) {
+    if ((badge.count ?? 0) > SESSION_ROW_COUNT_LIMIT) {
+      badge.count = undefined;
+      badge.countLabel = `${SESSION_ROW_COUNT_LIMIT}+`;
+    }
+  }
+  return visible;
 }

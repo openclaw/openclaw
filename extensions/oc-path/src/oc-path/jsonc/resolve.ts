@@ -13,11 +13,10 @@ import { resolveJsoncValueOcPath } from "./resolve-value.js";
 
 type JsoncOcPathMatch =
   | { readonly kind: "root"; readonly node: JsoncAst }
-  | { readonly kind: "value"; readonly node: JsoncValue; readonly path: readonly string[] }
+  | { readonly kind: "value"; readonly node: JsoncValue }
   | {
       readonly kind: "object-entry";
       readonly node: JsoncEntry;
-      readonly path: readonly string[];
     };
 
 export function resolveJsoncOcPath(ast: JsoncAst, path: OcPath): JsoncOcPathMatch | null {
@@ -31,6 +30,5 @@ export function resolveJsoncOcPath(ast: JsoncAst, path: OcPath): JsoncOcPathMatc
     return { kind: "root", node: ast };
   }
 
-  const match = resolveJsoncValueOcPath(ast.root, segments);
-  return match && { ...match, path: match.path.map(String) };
+  return resolveJsoncValueOcPath(ast.root, segments);
 }

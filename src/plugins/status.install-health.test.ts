@@ -255,7 +255,7 @@ describe("plugin inventory install health", () => {
       ? scenario === "clawhub-package-selector-fallback"
         ? `clawhub:${clawhubPackage}`
         : `clawhub:${clawhubPackage}@1.0.0`
-      : packageName;
+      : `npm:${packageName}`;
     const index = loadInstalledPluginIndex({
       config,
       env,
@@ -311,6 +311,9 @@ describe("plugin inventory install health", () => {
     }
     clearPluginMetadataLifecycleCaches();
     const status = buildPluginRegistrySnapshotReport({ config, env });
+    if (healthy) {
+      expect.soft(status.plugins[0]?.status).toBe("loaded");
+    }
     const management = await listManagedPlugins({
       config,
       env,

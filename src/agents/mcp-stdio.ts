@@ -56,7 +56,7 @@ export function resolveStdioMcpServerLaunchConfig(
 
 /** Describe a stdio MCP launch config for diagnostics. */
 export function describeStdioMcpServerLaunchConfig(config: StdioMcpServerLaunchConfig): string {
-  const redactedArgs = Array.isArray(config.args) ? redactSensitiveArgv(config.args) : [];
+  const redactedArgs = redactSensitiveArgv(config.args ?? []);
   const args = redactedArgs.length > 0 ? ` ${redactedArgs.join(" ")}` : "";
   const cwd = config.cwd ? ` (cwd=${config.cwd})` : "";
   return `${config.command}${args}${cwd}`;

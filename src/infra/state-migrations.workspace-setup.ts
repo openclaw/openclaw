@@ -308,7 +308,6 @@ async function cleanupReceiptSource(params: {
           snapshot,
           parsed,
           env: params.env,
-          previousReceipt: params.receipt,
           archivePath,
         });
         notices.push(
@@ -368,6 +367,7 @@ async function migrateOneSource(params: {
     }
     assertConfiguredWorkspaceIdentity(params.source);
     sourceRoot = await root(params.source.rootDir, {
+      allowDrvfsRenameRecovery: true,
       hardlinks: "reject",
       symlinks: "reject",
     });
@@ -453,7 +453,6 @@ async function migrateOneSource(params: {
         snapshot,
         parsed,
         env: params.env,
-        previousReceipt: receipt ?? undefined,
         archivePath,
       });
     }

@@ -1,4 +1,4 @@
-import { For, createSignal, untrack } from "solid-js";
+import { For, createSignal, createStore, untrack } from "solid-js";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { downloadTextFile } from "../../../lib/download.ts";
@@ -21,14 +21,17 @@ export function FileDraftRecoveryDialog(props: {
   settled: () => boolean;
   finish: () => void;
 }) {
-  const [remaining, setRemaining] = createSignal(untrack(() => [...props.drafts]));
+  // Review the opening batch; successful discards remove entries from this dialog.
+  const initialDrafts = untrack(() => [...props.drafts]);
+  let keepButton!: HTMLButtonElement;
+  const [remaining, setRemaining] = createStore(initialDrafts, { shallow: true });
   const [error, setError] = createSignal("");
   const [copied, setCopied] = createSignal<FileDraft>();
   const current = (draft: FileDraft) => {
     if (props.settled()) {
       return false;
     }
-    if (!remaining().includes(draft) || !draft.isCurrent()) {
+    if (!remaining.includes(draft) || !draft.isCurrent()) {
       setError(t("chat.detailPanel.draftRecovery.changed"));
       return false;
     }
@@ -38,7 +41,7 @@ export function FileDraftRecoveryDialog(props: {
     if (!current(entry)) {
       return;
     }
-    const ok = await copyToClipboard(entry.content, () => untrack(() => current(entry)));
+    const ok = await copyToClipboard(entry.content, () => current(entry));
     if (current(entry)) {
       setCopied(ok ? entry : undefined);
       setError(ok ? "" : t("chat.detailPanel.draftRecovery.copyFailed"));
@@ -46,6 +49,7 @@ export function FileDraftRecoveryDialog(props: {
   };
   return (
     <openclaw-modal-dialog
+      prop:initialFocus={() => keepButton}
       label={t("chat.detailPanel.draftRecovery.review")}
       description={t("chat.detailPanel.draftRecovery.description")}
       onModal-cancel={() => props.finish()}
@@ -57,12 +61,14 @@ export function FileDraftRecoveryDialog(props: {
             <div class="exec-approval-sub">{t("chat.detailPanel.draftRecovery.description")}</div>
           </div>
         </div>
-        <For each={remaining()} keyed={(draft) => draft}>
-          {(draft) => {
-            // The object is the row key; async actions retain it after the row is disposed.
-            const entry = untrack(draft);
+        <For each={remaining}>
+          {(entry) => {
+            let group!: HTMLElement;
             return (
               <section
+                ref={(element) => {
+                  group = element;
+                }}
                 role="group"
                 style={{ "overflow-wrap": "anywhere" }}
                 aria-label={[
@@ -109,10 +115,15 @@ export function FileDraftRecoveryDialog(props: {
                       if (!current(entry) || !entry.discard()) {
                         return;
                       }
-                      const next = remaining().filter((item) => item !== entry);
-                      setRemaining(next);
+                      const last = remaining.length === 1;
+                      if (!last && group.contains(document.activeElement)) {
+                        keepButton.focus();
+                      }
+                      setRemaining((drafts) => {
+                        drafts.splice(drafts.indexOf(entry), 1);
+                      });
                       setError("");
-                      if (!next.length) {
+                      if (last) {
                         props.finish();
                       }
                     }}
@@ -126,7 +137,15 @@ export function FileDraftRecoveryDialog(props: {
         </For>
         {error() ? <p role="alert">{error()}</p> : undefined}
         <openclaw-modal-actions class="exec-approval-actions">
-          <button type="button" class="btn" autofocus onClick={() => props.finish()}>
+          <button
+            ref={(element) => {
+              keepButton = element;
+            }}
+            type="button"
+            class="btn"
+            autofocus
+            onClick={() => props.finish()}
+          >
             {t("chat.detailPanel.draftRecovery.keep")}
           </button>
         </openclaw-modal-actions>

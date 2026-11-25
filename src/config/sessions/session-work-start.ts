@@ -14,7 +14,6 @@ type SessionWorkStartEntry = Pick<
   | "createdAt"
   | "incognito"
   | "initializationPending"
-  | "mainRestartRecovery"
   | "modelSelectionLocked"
   | "sessionId"
   | "pendingProjectGitUrl"
@@ -27,19 +26,12 @@ type SessionWorkStartEntry = Pick<
 type SessionWorkStartOptions = {
   /** Already-accepted transcript/delivery results settle without dispatching new model work. */
   purpose?: "accepted-result-settlement";
-  allowRestartTombstoneReplacement?: boolean;
   expectedSessionId?: string;
   /** Only workspace preparers and lifecycle cancellation may enter pending sessions. */
   allowPendingWorkspace?: true;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   runId?: string;
 };
-
-export function isRestartRecoveryTombstone(
-  entry: SessionWorkStartEntry | null | undefined,
-): boolean {
-  return entry?.mainRestartRecovery?.tombstone !== undefined;
-}
 
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
@@ -50,7 +42,6 @@ type SessionWorkStartBlockReason =
   | "expired"
   | "initialization_pending"
   | "provider_review"
-  | "restart_tombstone"
   | "archived"
   | "workspace_pending";
 
@@ -66,7 +57,25 @@ export class SessionWorkStartError extends Error {
   }
 }
 
-/** One work-start policy supplies both user errors and recovery disposition. */
+type WorkTargetEntry = Pick<InternalSessionEntry, "sessionId"> | null | undefined;
+
+function matchesWorkTarget(entry: WorkTargetEntry, expectedSessionId: string) {
+  return entry?.sessionId === expectedSessionId;
+}
+
+/** An explicit caller target binds retries, row checks and cancellation to the same session. */
+export function captureSessionWorkTarget({ expectedSessionId }: { expectedSessionId?: string }) {
+  if (expectedSessionId === undefined) {
+    return undefined;
+  }
+  return {
+    requestIdentity: { expectedSessionId },
+    requiredSessionId: expectedSessionId,
+    matches: (entry: WorkTargetEntry) => matchesWorkTarget(entry, expectedSessionId),
+  };
+}
+
+/** One work-start policy gates ordinary new work. */
 export function resolveSessionWorkStartBlock(
   sessionKey: string,
   entry: SessionWorkStartEntry | null | undefined,
@@ -78,7 +87,7 @@ export function resolveSessionWorkStartBlock(
       `Session "${sessionKey}" was deleted while starting work. Retry.`,
     );
   }
-  if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
+  if (options?.expectedSessionId && !matchesWorkTarget(entry, options.expectedSessionId)) {
     return new SessionWorkStartError(
       "changed",
       `Session "${sessionKey}" changed while starting work. Retry.`,
@@ -121,19 +130,6 @@ export function resolveSessionWorkStartBlock(
         `Session "${sessionKey}" provider review changed. Refresh the findings before continuing.`,
       );
     }
-  }
-  const restartRecoveryTombstone = isRestartRecoveryTombstone(entry);
-  if (restartRecoveryTombstone) {
-    // Acknowledgment owns continuation of the reviewed conversation, never its replacement.
-    if (options?.allowRestartTombstoneReplacement === true && !entry?.providerReview) {
-      return undefined;
-    }
-    return new SessionWorkStartError(
-      "restart_tombstone",
-      entry?.modelSelectionLocked === true
-        ? `Session "${sessionKey}" ended during restart recovery and cannot be replaced while model selection is locked. Open it in WebChat and use Resume in new session.`
-        : `Session "${sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`,
-    );
   }
   if (entry?.archivedAt !== undefined) {
     return new SessionWorkStartError(

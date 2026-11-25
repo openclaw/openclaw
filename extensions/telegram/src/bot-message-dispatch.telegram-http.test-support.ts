@@ -1,5 +1,7 @@
-import { createServer, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
+import { once } from "node:events";
+import { createServer, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import { buffer } from "node:stream/consumers";
 import { AbortController as TelegramAbortController } from "abort-controller";
 import { Bot } from "grammy";
 import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -9,9 +11,13 @@ import {
   unregisterSessionBindingAdapter,
   type SessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
+  addTestHook,
+  createEmptyPluginRegistry,
   createTestRegistry,
+  initializeGlobalHookRunner,
   resetGlobalHookRunner,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
@@ -21,7 +27,6 @@ import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import { telegramPlugin } from "./channel.js";
@@ -29,15 +34,64 @@ import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-supp
 import {
   clearTelegramRuntimeForTest,
   resetTelegramAccountThrottlersForTest,
-  resetTelegramReplyFenceForTest,
 } from "./runtime.test-support.js";
 
 type RecordedBotApiCall = { method: string; fields: Record<string, unknown> };
 type ReplyResolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>;
 export type ReplyResolverOptions = Parameters<ReplyResolver>[1];
+type DispatchParams = Parameters<typeof dispatchTelegramMessage>[0];
+type DispatchScenario = {
+  mode: DispatchParams["streamMode"];
+  toolProgress: boolean;
+  finalReply?: ReplyPayload | ReplyPayload[];
+  producer?: NonNullable<Parameters<typeof dispatchInboundMessage>[0]["dispatchReplyFromConfig"]>;
+  replyToMode?: DispatchParams["replyToMode"];
+  accountId?: string;
+  telegramCfg?: DispatchParams["telegramCfg"];
+  cfg?: OpenClawConfig;
+  onDispatch?: (cfg: OpenClawConfig) => void;
+  context?: TelegramMessageContext;
+  textLimit?: number;
+  allowErrors?: boolean;
+  outcome?: "completed" | "failed-retryable";
+  turnAdoptionLifecycle?: DispatchParams["turnAdoptionLifecycle"];
+  suppressFailureFallback?: boolean;
+};
 
 const BOT_TOKEN = "123456:telegram-progress-http-fixture";
 const CHAT_ID = 123;
+const MESSAGE_METHODS = new Set([
+  "sendMessage",
+  "sendRichMessage",
+  "editMessageText",
+  "sendDocument",
+  "sendPhoto",
+  "sendAudio",
+  "sendVoice",
+  "sendVideo",
+]);
+function respondJson(response: ServerResponse, result: unknown = true) {
+  response.end(JSON.stringify({ ok: true, result }));
+}
+function rejectJson(response: ServerResponse, error: { error_code: number; description: string }) {
+  response.writeHead(error.error_code).end(JSON.stringify({ ok: false, ...error }));
+}
+
+export function installTelegramDispatchHook(
+  hook: Omit<Parameters<typeof addTestHook>[0], "registry" | "pluginId">,
+  pluginId = "http-policy",
+) {
+  const registry = createEmptyPluginRegistry();
+  addTestHook({ registry, pluginId, ...hook });
+  initializeGlobalHookRunner(registry);
+}
+
+export function telegramReplyId(fields: Record<string, unknown>) {
+  const reply = fields.reply_parameters;
+  return reply && typeof reply === "object" && "message_id" in reply
+    ? reply.message_id
+    : fields.reply_to_message_id;
+}
 
 export function createTelegramDispatchHttpFixture() {
   let server: Server;
@@ -46,18 +100,17 @@ export function createTelegramDispatchHttpFixture() {
   let bot: Bot;
   let nextMessageId = 0;
   let inboundSequence = 0;
-  const sockets = new Set<Socket>();
   const calls: RecordedBotApiCall[] = [];
   const endpoints: string[] = [];
   const visibleMessages = new Map<number, string>();
   const visibleMarkup = new Map<number, unknown>();
   const acceptedCalls: RecordedBotApiCall[] = [];
-  const botApiCallWaiters = new Set<(call: RecordedBotApiCall) => void>();
+  const botApiCalls = new EventTarget();
+  const completedCalls = new WeakSet<RecordedBotApiCall>();
   const pendingDeletes: Promise<unknown>[] = [];
   let typingSend: Promise<void> = Promise.resolve();
   let lifetime: AbortController;
-  let stopped: Promise<never>;
-  let stop: (error: Error) => void;
+  let stopped: ReturnType<typeof createDeferred<never>>;
   const pendingDispatches = new Set<Promise<unknown>>();
   const pendingTranscriptMirrors: Promise<unknown>[] = [];
   let restoreTranscriptMirror: () => void;
@@ -79,12 +132,8 @@ export function createTelegramDispatchHttpFixture() {
 
   beforeAll(async () => {
     server = createServer((request, response) => {
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk: Buffer) => {
-        chunks.push(chunk);
-      });
       const respond = async () => {
-        const body = Buffer.concat(chunks);
+        const body = await buffer(request);
         const contentType = request.headers["content-type"] ?? "application/json";
         const fields: Record<string, unknown> = contentType.includes("multipart/form-data")
           ? Object.fromEntries(
@@ -103,27 +152,27 @@ export function createTelegramDispatchHttpFixture() {
         endpoints.push(request.url ?? "");
         calls.push(call);
         response.once("finish", () => {
-          for (const waiter of botApiCallWaiters) {
-            waiter(call);
-          }
+          completedCalls.add(call);
+          botApiCalls.dispatchEvent(new Event("call"));
         });
         const held = holdNextCall;
         if (held?.predicate(call)) {
           holdNextCall = undefined;
           held.arrived.resolve();
-          await Promise.race([held.release.promise, stopped]);
+          await Promise.race([held.release.promise, stopped.promise]);
         }
         response.setHeader("content-type", "application/json");
         // Idle keep-alive expiry must not race later fixture requests under load.
         response.setHeader("connection", "close");
-        const rejection = await Promise.race([Promise.resolve(respondToCall?.(call)), stopped]);
+        const rejection = await Promise.race([
+          Promise.resolve(respondToCall?.(call)),
+          stopped.promise,
+        ]);
         if (rejection) {
           if (rejection === "no-message-id") {
-            response.end(JSON.stringify({ ok: true, result: true }));
+            respondJson(response);
           } else {
-            response
-              .writeHead(rejection.error_code)
-              .end(JSON.stringify({ ok: false, ...rejection }));
+            rejectJson(response, rejection);
           }
           return;
         }
@@ -135,13 +184,7 @@ export function createTelegramDispatchHttpFixture() {
           "quote" in fields.reply_parameters
         ) {
           rejectNextQuote = false;
-          response.writeHead(400).end(
-            JSON.stringify({
-              ok: false,
-              error_code: 400,
-              description: "Bad Request: quote not found",
-            }),
-          );
+          rejectJson(response, { error_code: 400, description: "Bad Request: quote not found" });
           return;
         }
         acceptedCalls.push(call);
@@ -156,19 +199,10 @@ export function createTelegramDispatchHttpFixture() {
               }
             : { id: chatId, type: "private", first_name: "Fixture" };
         if (method === "getChat") {
-          response.end(JSON.stringify({ ok: true, result: chat }));
+          respondJson(response, chat);
           return;
         }
-        if (
-          method === "sendMessage" ||
-          method === "sendRichMessage" ||
-          method === "editMessageText" ||
-          method === "sendDocument" ||
-          method === "sendPhoto" ||
-          method === "sendAudio" ||
-          method === "sendVoice" ||
-          method === "sendVideo"
-        ) {
+        if (MESSAGE_METHODS.has(method)) {
           const messageId =
             fields.message_id === undefined ? ++nextMessageId : Number(fields.message_id);
           const caption = fields.caption;
@@ -185,21 +219,16 @@ export function createTelegramDispatchHttpFixture() {
           if (fields.reply_markup !== undefined) {
             visibleMarkup.set(messageId, fields.reply_markup);
           }
-          response.end(
-            JSON.stringify({
-              ok: true,
-              result: {
-                message_id: messageId,
-                date: 1_700_000_000,
-                chat,
-                text,
-                ...(caption === undefined ? {} : { caption }),
-                ...(fields.message_thread_id
-                  ? { message_thread_id: Number(fields.message_thread_id) }
-                  : {}),
-              },
-            }),
-          );
+          respondJson(response, {
+            message_id: messageId,
+            date: 1_700_000_000,
+            chat,
+            text,
+            ...(caption === undefined ? {} : { caption }),
+            ...(fields.message_thread_id
+              ? { message_thread_id: Number(fields.message_thread_id) }
+              : {}),
+          });
           return;
         }
         if (method === "editMessageReplyMarkup") {
@@ -209,21 +238,14 @@ export function createTelegramDispatchHttpFixture() {
           visibleMessages.delete(Number(fields.message_id));
           visibleMarkup.delete(Number(fields.message_id));
         }
-        response.end(JSON.stringify({ ok: true, result: true }));
+        respondJson(response);
       };
-      request.on("end", () => {
-        void respond().catch((error: unknown) =>
-          response.destroy(error instanceof Error ? error : new Error(String(error))),
-        );
-      });
+      void respond().catch((error: unknown) =>
+        response.destroy(error instanceof Error ? error : new Error(String(error))),
+      );
     });
-    server.on("connection", (socket) => {
-      sockets.add(socket);
-      socket.on("close", () => sockets.delete(socket));
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
     apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
 
@@ -242,10 +264,8 @@ export function createTelegramDispatchHttpFixture() {
       });
     restoreTranscriptMirror = () => observer.mockRestore();
     lifetime = new AbortController();
-    stopped = new Promise<never>((_resolve, reject) => {
-      stop = reject;
-    });
-    void stopped.catch(() => undefined);
+    stopped = createDeferred<never>();
+    void stopped.promise.catch(() => undefined);
     resetTelegramAccountThrottlersForTest();
     bot = new Bot(BOT_TOKEN, { client: { apiRoot } });
     const requestLifetime = lifetime.signal;
@@ -263,13 +283,11 @@ export function createTelegramDispatchHttpFixture() {
       if (method === "deleteMessage") {
         pendingDeletes.push(request);
       }
-      try {
-        return await request;
-      } finally {
+      return request.finally(() => {
         pendingRequests.delete(request);
         requestLifetime.removeEventListener("abort", abort);
         signal?.removeEventListener("abort", abort);
-      }
+      });
     });
     holdNextCall = undefined;
     // SQLite workers share native hrtime deadlines with the dispatching thread.
@@ -279,9 +297,9 @@ export function createTelegramDispatchHttpFixture() {
     });
     calls.length = 0;
     endpoints.length = 0;
+    acceptedCalls.length = 0;
     visibleMessages.clear();
     visibleMarkup.clear();
-    acceptedCalls.length = 0;
     respondToCall = undefined;
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(
@@ -290,7 +308,6 @@ export function createTelegramDispatchHttpFixture() {
     rejectNextQuote = false;
     nextMessageId = 0;
     resetPluginStateStoreForTests({ closeDatabase: false });
-    resetTelegramReplyFenceForTest();
     setTelegramPluginStateRuntimeForTests();
   });
 
@@ -304,7 +321,7 @@ export function createTelegramDispatchHttpFixture() {
   afterEach(async () => {
     const ended = new Error("Telegram HTTP fixture ended");
     lifetime.abort(ended);
-    stop(ended);
+    stopped.reject(ended);
     await Promise.allSettled(pendingDispatches);
     await Promise.allSettled([...pendingRequests, typingSend]);
     await settleDetachedDeletes();
@@ -320,7 +337,6 @@ export function createTelegramDispatchHttpFixture() {
     vi.useRealTimers();
     resetPluginRuntimeStateForTest();
     resetGlobalHookRunner();
-    botApiCallWaiters.clear();
     clearTelegramRuntimeForTest();
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
@@ -332,36 +348,22 @@ export function createTelegramDispatchHttpFixture() {
     if (calls.some(predicate)) {
       return;
     }
-    let waiter: (call: RecordedBotApiCall) => void;
-    const observed = new Promise<void>((resolve) => {
-      waiter = (call) => {
-        if (predicate(call)) {
-          resolve();
-        }
-      };
-      botApiCallWaiters.add(waiter);
-    });
-    try {
-      await Promise.race([observed, stopped]);
-    } finally {
-      botApiCallWaiters.delete(waiter!);
+    // A wakeup may race another recorded request whose response is still held.
+    while (!calls.some((call) => completedCalls.has(call) && predicate(call))) {
+      await once(botApiCalls, "call", { signal: lifetime.signal });
     }
   }
 
   afterAll(async () => {
-    for (const socket of sockets) {
-      socket.destroy();
-    }
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    server.closeAllConnections();
+    await once(server.close(), "close");
   });
 
   function createContext(): TelegramMessageContext {
     const text = "Run the failing command.";
     // Each turn is a new inbound message; a repeated id is dropped as a duplicate.
     const inboundMessageId = 456 + inboundSequence++;
-    const base = {
+    return {
       ctxPayload: {
         Body: text,
         BodyForAgent: text,
@@ -381,18 +383,13 @@ export function createTelegramDispatchHttpFixture() {
       chatId: CHAT_ID,
       isGroup: false,
       isForum: false,
-      groupConfig: undefined,
-      resolvedThreadId: undefined,
-      replyThreadId: undefined,
       threadSpec: { id: undefined, scope: "none" },
-      historyKey: undefined,
       historyLimit: 0,
       route: {
         agentId: "default",
         accountId: "default",
         sessionKey: `agent:default:telegram:direct:${CHAT_ID}`,
       },
-      skillFilter: undefined,
       sendTyping: async () => undefined,
       sendRecordVoice: async () => undefined,
       sendChatActionHandler: { sendChatAction: async () => undefined },
@@ -404,8 +401,7 @@ export function createTelegramDispatchHttpFixture() {
         recordInboundSession: async () => undefined,
         record: { onRecordError: () => undefined },
       },
-    };
-    return base as unknown as TelegramMessageContext;
+    } as unknown as TelegramMessageContext;
   }
 
   async function emitToolStart(
@@ -426,34 +422,15 @@ export function createTelegramDispatchHttpFixture() {
       options: ReplyResolverOptions,
       channelOptions: ReplyResolverOptions,
     ) => Promise<void>,
-    scenario?: {
-      mode: "off" | "partial" | "block" | "progress";
-      toolProgress: boolean;
-      finalReply?: ReplyPayload | ReplyPayload[];
-      producer?: NonNullable<
-        Parameters<typeof dispatchInboundMessage>[0]["dispatchReplyFromConfig"]
-      >;
-      replyToMode?: "off" | "all" | "first" | "batched";
-      accountId?: string;
-      telegramDeps?: TelegramBotDeps;
-      telegramCfg?: Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"];
-      cfg?: OpenClawConfig;
-      onDispatch?: (cfg: OpenClawConfig) => void;
-      context?: TelegramMessageContext;
-      textLimit?: number;
-      allowErrors?: boolean;
-      outcome?: "completed" | "failed-retryable";
-      turnAdoptionLifecycle?: Parameters<
-        typeof dispatchTelegramMessage
-      >[0]["turnAdoptionLifecycle"];
-      suppressFailureFallback?: boolean;
-    },
+    scenario?: DispatchScenario,
   ) {
     const caseSignal = lifetime.signal;
     const work = (async () => {
       let channelOptions: ReplyResolverOptions;
       const replyResolver: ReplyResolver = async (_ctx, options) => {
-        await options?.onReplyStart?.();
+        if (!options?.suppressTyping) {
+          await options?.onReplyStart?.();
+        }
         await options?.onAssistantMessageStart?.();
         await emitEvents(options, channelOptions);
         // The final answer follows the finished progress edit, as a model that
@@ -489,10 +466,8 @@ export function createTelegramDispatchHttpFixture() {
                 defaultAccount: scenario.accountId,
                 accounts: {
                   [scenario.accountId]: {
-                    ...telegramCfg,
                     richMessages: false,
-                    ...scenario?.telegramCfg,
-                    replyToMode,
+                    ...telegramCfg,
                     streaming: { ...telegramCfg.streaming, block: { enabled: false } },
                   },
                 },
@@ -544,7 +519,6 @@ export function createTelegramDispatchHttpFixture() {
         streamMode: scenario?.mode ?? "progress",
         textLimit: scenario?.textLimit ?? 4096,
         telegramCfg,
-        telegramDeps: scenario?.telegramDeps,
         retryDispatchErrors: true,
         turnAdoptionLifecycle: scenario?.turnAdoptionLifecycle,
         suppressFailureFallback: scenario?.suppressFailureFallback,
@@ -580,14 +554,26 @@ export function createTelegramDispatchHttpFixture() {
         .map((call) => [call.method, call.fields.message_id ?? null, call.fields.text] as const);
     })();
     pendingDispatches.add(work);
-    try {
-      return await work;
-    } finally {
-      pendingDispatches.delete(work);
-    }
+    return work.finally(() => pendingDispatches.delete(work));
   }
 
+  const callsFor = (method: string) => calls.filter((call) => call.method === method);
+  const acceptedFor = (method: string) => acceptedCalls.filter((call) => call.method === method);
+  const waitForMethod = (method: string) => waitForBotApiCall((call) => call.method === method);
+  const waitForText = (text: string, method?: string) =>
+    waitForBotApiCall((call) => (!method || call.method === method) && call.fields.text === text);
+  const waitForContaining = (text: string, method?: string) =>
+    waitForBotApiCall(
+      (call) => (!method || call.method === method) && String(call.fields.text).includes(text),
+    );
+
   return {
+    callsFor,
+    acceptedFor,
+    waitForMethod,
+    waitForText,
+    waitForContaining,
+    texts: () => [...visibleMessages.values()],
     token: BOT_TOKEN,
     get apiRoot() {
       return apiRoot;

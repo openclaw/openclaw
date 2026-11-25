@@ -91,7 +91,7 @@ The default blocks unsupported execution: active OpenClaw sandboxing disables na
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.161.0` app-server.
+This preview path uses the pinned Codex `0.162.1` app-server.
 
 ```json5
 {

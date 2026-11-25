@@ -46,7 +46,11 @@ approval dialog also offers these explicit options when supported:
 
 - **Notify the requester after approval**
 - **Also make this sender the first command owner**, shown only when no command
-  owner exists and the Control UI session has `operator.admin`
+  owner exists and you have admin access
+
+After approval, **DM access approved** confirms access even if notifying the
+requester or setting the command owner fails. Do not approve the request again.
+If the command owner could not be set, ask an admin to set one.
 
 Choose **Dismiss** to remove a pending request without approving it. Dismissal is
 not a permanent block; the sender can request access again later.
@@ -164,7 +168,7 @@ creates a device pairing request that must be approved.
 Use an already connected Control UI session with `operator.admin` access:
 
 1. Open the Control UI and go to **Settings → Devices**.
-2. On the **Devices** page, click **Pair device**.
+2. On the **Devices** page, click **Connect a device**.
 3. Keep **Full access (recommended)**, or select **Limited access** to omit
    administrative Gateway controls.
 4. Click **Create setup code**.

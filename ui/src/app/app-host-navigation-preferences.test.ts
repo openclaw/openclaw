@@ -28,10 +28,10 @@ describe("sidebar preferences across tabs", () => {
       await settleShell(shell);
       shell.routeState = { routeId: "chat" };
       await settleShell(shell);
-      const frame = shell.querySelector<HTMLElement>(".shell");
-      const divider = shell.querySelector<HTMLElement>(".sidebar-resizer");
-      expect(frame).not.toBeNull();
-      expect(divider).not.toBeNull();
+      const frame = shell.shellElement;
+      const divider = frame?.querySelector<HTMLElement>(".sidebar-resizer");
+      expect(frame).toBeInstanceOf(HTMLElement);
+      expect(divider).toBeInstanceOf(HTMLElement);
       Object.defineProperty(frame, "clientWidth", { value: 1280 });
 
       const key = settingsKeyForGateway(runtime.context.gateway.connection.gatewayUrl);

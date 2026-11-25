@@ -1,57 +1,235 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import {
-  runSubagentAnnounceDispatch,
-  type SubagentAnnounceDeliveryResult,
-} from "../announce/subagent-announce-dispatch.js";
+  loadSessionEntry,
+  loadTranscriptEvents,
+} from "../../../config/sessions/session-accessor.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
+import { retireSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { reserveSubagentControllerSource } from "../announce/subagent-announce-controller-source.js";
 import {
   mutateLifecycleRun,
   readLifecycleRun,
-  type LifecycleControllerFixtureOptions,
+  expectUndefinedFields,
+  type CompleteLifecycleRun,
+  type LifecycleTestDrivers,
   type LifecycleFixtureWrite,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
-import type {
-  SubagentLifecycleController,
-  SubagentLifecycleOptions,
-} from "./subagent-registry-lifecycle.js";
+import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle.js";
 import {
   findAuthorizedSwarmCollectorRequest,
   findSwarmCollectorSession,
   subagentRuns,
 } from "./subagent-registry-memory.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-type LifecycleControllerParams = SubagentLifecycleOptions;
-type CompleteRun = (
-  controller: SubagentLifecycleController,
-  entry: SubagentRunRecord,
-  overrides?: Omit<
-    Partial<Parameters<SubagentLifecycleController["completeSubagentRun"]>[0]>,
-    "runId"
-  >,
-) => Promise<void>;
+type AnnounceFlow = SubagentLifecycleOptions["runSubagentAnnounceFlow"];
+
+async function readVisibleChildResults(entry: SubagentRunRecord) {
+  const scope = {
+    agentId: entry.requesterAgentId,
+    sessionKey: entry.requesterSessionKey,
+    storePath: entry.requesterStorePath,
+  };
+  const events = await loadTranscriptEvents({
+    ...scope,
+    sessionId: loadSessionEntry(scope)!.sessionId,
+  });
+  return events.filter(
+    (event) =>
+      isRecord(event) && event.customType === "subagent-completion" && event.display === true,
+  );
+}
+
+function stalledAnnounce(
+  outcome: "delivered" | "undelivered",
+  send: (params: Parameters<AnnounceFlow>[0]) => Promise<void>,
+) {
+  const observed = createDeferredCore();
+  const pending = createDeferredCore();
+  const runSubagentAnnounceFlow = vi.fn<AnnounceFlow>(async (params) => {
+    try {
+      await send(params);
+      observed.resolve();
+    } catch (error) {
+      observed.reject(error);
+      throw error;
+    }
+    await pending.promise;
+    return outcome;
+  });
+  return { observed, pending, runSubagentAnnounceFlow };
+}
 
 export function registerLifecycleDeliveryReceiptCases({
   createRunEntry,
   createLifecycleController,
   completeRun,
   completeAndJoinCleanup,
-  waitForLifecycleState,
-}: {
-  createRunEntry: (
-    overrides?: Partial<SubagentRunRecord> & { endedAt?: number },
-  ) => SubagentRunRecord;
-  createLifecycleController: (
-    options: {
-      entry: SubagentRunRecord;
-      runs?: Map<string, SubagentRunRecord>;
-    } & Partial<LifecycleControllerFixtureOptions>,
-  ) => SubagentLifecycleController;
-  completeRun: CompleteRun;
-  completeAndJoinCleanup: CompleteRun;
-  waitForLifecycleState: <T>(assertion: () => T | Promise<T>) => Promise<T>;
+}: LifecycleTestDrivers & {
+  completeRun: CompleteLifecycleRun;
+  completeAndJoinCleanup: CompleteLifecycleRun;
 }) {
+  it("settles a restored consumed private completion without announcing it again", async () => {
+    const entry = createRunEntry({
+      runId: "restored-private-result",
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
+      completionTarget: "parent",
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "already consumed result" },
+      delivery: {
+        status: "pending",
+        requesterDelivery: { state: "consumed", runId: "requester-continuation", at: Date.now() },
+      },
+    });
+    const runSubagentAnnounceFlow = vi.fn<AnnounceFlow>(async () => "delivered");
+    const controller = createLifecycleController({
+      entry,
+      runSubagentAnnounceFlow,
+      maybeWakeRequesterAfterAllChildrenSettled: async () => false,
+    });
+    const visibleResultsBefore = await readVisibleChildResults(entry);
+    const join = observeRootWork();
+    expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+    await join();
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.delivery).toMatchObject({
+      status: "delivered",
+      requesterDelivery: entry.delivery?.requesterDelivery,
+    });
+    expect(await readVisibleChildResults(entry)).toEqual(visibleResultsBefore);
+  });
+
+  it("settles an undelivered completion when process custody retires", async () => {
+    const entry = createRunEntry({
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
+      completionTarget: "parent",
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "retained result" },
+    });
+    const runSubagentAnnounceFlow = vi.fn<AnnounceFlow>(async () => {
+      subagentRuns.retireCompletionAuthority(readLifecycleRun(entry));
+      return "undelivered";
+    });
+    const controller = createLifecycleController({
+      entry,
+      runSubagentAnnounceFlow,
+      maybeWakeRequesterAfterAllChildrenSettled: async () => false,
+    });
+    const join = observeRootWork();
+    expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+    await join();
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+    expect(readLifecycleRun(entry).delivery).toMatchObject({
+      status: "delivered",
+      disposition: "delivered",
+      payload: undefined,
+    });
+    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
+  });
+
+  it.each([false, true])(
+    "records private transcript consumption before cancellation (consumed: %s)",
+    async (consumed) => {
+      const entry = createRunEntry({
+        runId: `private-cancellation-${consumed}`,
+        completionTarget: "parent",
+        expectsCompletionMessage: true,
+      });
+      const releaseRequester = createDeferredCore();
+      const receiptStarted = createDeferredCore();
+      const releaseReceipt = createDeferredCore();
+      onTestFinished(() => releaseReceipt.resolve());
+      const runSubagentAnnounceFlow = vi.fn<AnnounceFlow>(async (params) => {
+        expect(readLifecycleRun(entry).delivery?.requesterDelivery).toMatchObject({
+          state: "waiting",
+          blockingRunId: "live-requester-settle",
+        });
+        releaseRequester.resolve();
+        const consumption = consumed
+          ? params.controllerInput!.onTranscriptCommitted!("requester-continuation")
+          : undefined;
+        if (consumed) {
+          await receiptStarted.promise;
+          expect(readLifecycleRun(entry).delivery?.requesterDelivery?.state).toBe("waiting");
+        }
+        const settlement = params.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          reason: "delivery_suppressed",
+          error: "private requester continuation was cancelled",
+        });
+        releaseReceipt.resolve();
+        await settlement;
+        await consumption;
+        if (consumed) {
+          expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.delivery).toMatchObject({
+            status: "delivered",
+            requesterDelivery: {
+              state: "consumed",
+              runId: "requester-continuation",
+            },
+          });
+        }
+        return "undelivered";
+      });
+      const controller = createLifecycleController({
+        entry,
+        beforeWrite: async ({ postimages }) => {
+          if (
+            postimages.get(entry.runId)?.delivery?.requesterDelivery?.state === "consumed" &&
+            postimages.get(entry.runId)?.delivery?.status === "pending"
+          ) {
+            receiptStarted.resolve();
+            await releaseReceipt.promise;
+          }
+        },
+        runSubagentAnnounceFlow,
+        maybeWakeRequesterAfterAllChildrenSettled: async () => false,
+      });
+      const visibleResultsBefore = await readVisibleChildResults(entry);
+      const blocker = await reserveSubagentControllerSource(
+        entry,
+        "synthetic-live-requester",
+        "live-requester-settle",
+      );
+      expect(blocker).toBeDefined();
+      const started = createDeferredCore();
+      const requester = withSessionTurn(
+        {
+          sessionKey: entry.requesterSessionKey,
+          target: blocker!.target,
+          controllerInput: blocker,
+        },
+        async () => {
+          started.resolve();
+          await releaseRequester.promise;
+        },
+      );
+      onTestFinished(async () => {
+        releaseRequester.resolve();
+        await requester;
+        retireSessionControllerInput(blocker!);
+      });
+      await started.promise;
+      await completeAndJoinCleanup(controller, entry, { triggerCleanup: true });
+      expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
+      expect(readLifecycleRun(entry).delivery?.requesterDelivery?.state).toBe(
+        consumed ? "consumed" : undefined,
+      );
+      controller.startSubagentAnnounceCleanupFlow(readLifecycleRun(entry));
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+      if (consumed) {
+        expect(await readVisibleChildResults(entry)).toEqual(visibleResultsBefore);
+      }
+    },
+  );
+
   it("authorizes and completes both collectors sharing a raw key across agents", async () => {
     const entries = ["main", "research"].map((childAgentId) =>
       createRunEntry({
@@ -85,7 +263,7 @@ export function registerLifecycleDeliveryReceiptCases({
           idempotencyKey: entry.swarmLaunchIdempotencyKey,
         }),
       ).toMatchObject({ runId: entry.runId });
-      await completeRun(controller, entry);
+      await completeRun(controller, entry, { terminalReply: undefined });
     }
     for (const entry of entries) {
       expect(findSwarmCollectorSession(entry.childSessionKey, entry.childAgentId)).toMatchObject({
@@ -105,28 +283,7 @@ export function registerLifecycleDeliveryReceiptCases({
   const visibleCompletion = {
     triggerCleanup: true,
     terminalReply: { disposition: "visible", text: "final completion reply" },
-  } satisfies Parameters<CompleteRun>[2];
-
-  function createReceiptFixture(
-    delivery: SubagentAnnounceDeliveryResult,
-    outcome: "delivered" | "retryable",
-    overrides?: Parameters<typeof createRunEntry>[0],
-    beforeWrite?: LifecycleControllerFixtureOptions["beforeWrite"],
-  ) {
-    const entry = createRunEntry({ expectsCompletionMessage: true, ...overrides });
-    const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
-      async (announceParams) => {
-        await announceParams.onDeliveryResult?.(delivery);
-        return outcome;
-      },
-    );
-    const controller = createLifecycleController({
-      entry,
-      beforeWrite,
-      runSubagentAnnounceFlow,
-    });
-    return { entry, controller, runSubagentAnnounceFlow };
-  }
+  } satisfies Parameters<CompleteLifecycleRun>[2];
 
   it("delivers a restored legacy completion without mutating its unbound child session", async () => {
     const entry = createRunEntry({
@@ -136,13 +293,11 @@ export function registerLifecycleDeliveryReceiptCases({
     });
     const warn = vi.fn();
     const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
-    const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
-      async (params) => {
-        expect(params.suppressChildSessionEffects).toBe(true);
-        await params.onDeliveryResult?.({ delivered: true, path: "steered", deliveredAt: 12_300 });
-        return "delivered";
-      },
-    );
+    const runSubagentAnnounceFlow = vi.fn<AnnounceFlow>(async (params) => {
+      expect(params.suppressChildSessionEffects).toBe(true);
+      await params.onDeliveryResult?.({ delivered: true, path: "steered", deliveredAt: 12_300 });
+      return "delivered";
+    });
     const controller = createLifecycleController({
       entry,
       warn,
@@ -154,165 +309,69 @@ export function registerLifecycleDeliveryReceiptCases({
 
     expect(readLifecycleRun(entry)).toMatchObject({
       execution: { status: "terminal", suppressSessionEffects: true },
-      completion: { resultText: "final completion reply" },
       delivery: { status: "delivered", deliveredAt: 12_300 },
       cleanupCompletedAt: expect.any(Number),
     });
+    expect(readLifecycleRun(entry).completion?.resultText).toBeUndefined();
+    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion).toMatchObject({
+      terminalReply: visibleCompletion.terminalReply,
+      resultText: "final completion reply",
+    });
     expect(readLifecycleRun(entry).childSessionIdentity).toBeUndefined();
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     expect(cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("records completion announcement timestamps from transcript delivery", async () => {
-    const { entry, controller } = createReceiptFixture(
-      { delivered: true, path: "steered", enqueuedAt: 4_100, deliveredAt: 12_300 },
-      "delivered",
-    );
-    await expect(completeRun(controller, entry, visibleCompletion)).resolves.toBeUndefined();
-
-    await waitForLifecycleState(() =>
-      expect(readLifecycleRun(entry).delivery?.announcedAt).toBe(12_300),
-    );
-    expect(readLifecycleRun(entry).delivery?.enqueuedAt).toBe(4_100);
-    expect(readLifecycleRun(entry).delivery?.deliveredAt).toBe(12_300);
-    expect(readLifecycleRun(entry).delivery?.lastDropReason).toBeUndefined();
-  });
-
   it.each([
-    {
-      name: "persists steer_dropped when announce mapping preserves a live-queue refusal",
-      delivery: {
-        delivered: false as const,
-        path: "none" as const,
-        reason: "steer_dropped" as const,
-      },
-      lastDropReason: "steer_dropped",
-      lastError: "steer_dropped",
-    },
-    {
-      name: "persists sink_unavailable when announce mapping reports no viable requester",
-      delivery: {
-        delivered: false as const,
-        path: "none" as const,
-      },
-      lastDropReason: "sink_unavailable",
-      lastError: "delivery path none did not complete",
-    },
-  ])("$name", async ({ delivery, lastDropReason, lastError }) => {
-    const persist = vi.fn();
-    const { entry, controller } = createReceiptFixture(
-      delivery,
-      "retryable",
-      { endedAt: 4_000, retainAttachmentsOnKeep: true },
-      persist,
-    );
-
-    await expect(
-      completeAndJoinCleanup(controller, entry, visibleCompletion),
-    ).resolves.toBeUndefined();
-
-    await waitForLifecycleState(() =>
-      expect(readLifecycleRun(entry).delivery?.lastDropReason).toBe(lastDropReason),
-    );
-    expect(readLifecycleRun(entry).delivery?.lastError).toBe(lastError);
-    expect(readLifecycleRun(entry).delivery?.status).toBe("suspended");
-    expect(persist).toHaveBeenCalledWith(expect.objectContaining({ runIds: [entry.runId] }));
-  });
-
-  it.each([
-    {
-      name: "persists a newly failed completion",
-      previousDropReason: undefined,
-      reusePreviousError: false,
-      previousDisposition: undefined,
-      persistCalls: 1,
-    },
-    {
-      name: "persists a changed drop reason when the direct error is unchanged",
-      previousDropReason: "sink_unavailable" as const,
-      reusePreviousError: true,
-      previousDisposition: "retryable" as const,
-      persistCalls: 1,
-    },
-    {
-      name: "persists a changed disposition when completion diagnostics are otherwise unchanged",
-      previousDropReason: "steer_dropped" as const,
-      reusePreviousError: true,
-      previousDisposition: undefined,
-      persistCalls: 1,
-    },
-    {
-      name: "does not persist unchanged completion diagnostics",
-      previousDropReason: "steer_dropped" as const,
-      reusePreviousError: true,
-      previousDisposition: "retryable" as const,
-      persistCalls: 0,
-    },
-  ])("$name before stalled announce bookkeeping settles", async (scenario) => {
-    const lastError = "failed; visible_reply_missing; direct-primary: failed";
-    const persist = vi.fn();
-    const entry = createRunEntry({
-      endedAt: 4_000,
-      expectsCompletionMessage: true,
-      retainAttachmentsOnKeep: true,
-      delivery: {
-        status: "pending",
-        disposition: scenario.previousDisposition,
-        ...(scenario.reusePreviousError ? { lastError } : {}),
-        ...(scenario.previousDropReason ? { lastDropReason: scenario.previousDropReason } : {}),
-      },
-    });
-    const receiptObserved = createDeferredCore();
-    const announcePending = createDeferredCore();
-    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
-      async (announceParams) => {
-        const delivery = await runSubagentAnnounceDispatch({
-          expectsCompletionMessage: true,
-          steer: async () => ({ status: "dropped" }),
-          direct: async () => ({
-            delivered: false,
-            path: "direct",
-            error: "failed",
-            reason: "visible_reply_missing",
-          }),
-        });
+    ["new failure", false, undefined, 1],
+    ["changed disposition", true, "session_queued", 1],
+  ] as const)(
+    "persists %s before stalled announce bookkeeping settles",
+    async (_name, reusePreviousError, previousDisposition, persistCalls) => {
+      const lastError = "failed";
+      const persist = vi.fn();
+      const entry = createRunEntry({
+        endedAt: 4_000,
+        expectsCompletionMessage: true,
+        retainAttachmentsOnKeep: true,
+        delivery: {
+          status: "pending",
+          disposition: previousDisposition,
+          ...(reusePreviousError ? { lastError } : {}),
+        },
+      });
+      const announce = stalledAnnounce("undelivered", async (announceParams) => {
         persist.mockClear();
-        try {
-          await announceParams.onDeliveryResult?.(delivery);
-          receiptObserved.resolve();
-        } catch (error) {
-          receiptObserved.reject(error);
-          throw error;
-        }
-        await announcePending.promise;
-        return "retryable" as const;
-      },
-    );
-    const controller = createLifecycleController({
-      entry,
-      beforeWrite: persist,
-      runSubagentAnnounceFlow,
-    });
+        await announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          error: "failed",
+        });
+      });
+      const controller = createLifecycleController({
+        entry,
+        beforeWrite: persist,
+        runSubagentAnnounceFlow: announce.runSubagentAnnounceFlow,
+      });
 
-    const join = observeRootWork();
-    try {
-      await expect(completeRun(controller, entry, visibleCompletion)).resolves.toBeUndefined();
-      await receiptObserved.promise;
-      expect(readLifecycleRun(entry).delivery?.disposition).toBe("retryable");
-      expect(readLifecycleRun(entry).delivery?.lastDropReason).toBe("steer_dropped");
-      expect(readLifecycleRun(entry).delivery?.lastError).toBe(lastError);
-      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
-      expect(persist).toHaveBeenCalledTimes(scenario.persistCalls);
-      if (scenario.persistCalls > 0) {
-        expect(persist).toHaveBeenCalledWith(expect.objectContaining({ runIds: [entry.runId] }));
+      const join = observeRootWork();
+      try {
+        await completeRun(controller, entry, visibleCompletion);
+        await announce.observed.promise;
+        expect(readLifecycleRun(entry).delivery).toMatchObject({
+          disposition: undefined,
+          lastError,
+        });
+        expectUndefinedFields(readLifecycleRun(entry).delivery, ["lastDropReason"]);
+        expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
+        expect(persist).toHaveBeenCalledTimes(persistCalls);
+      } finally {
+        announce.pending.resolve();
+        await join();
       }
-    } finally {
-      announcePending.resolve();
-      await join();
-    }
-    expect(readLifecycleRun(entry).delivery?.status).toBe("suspended");
-  });
+      expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
+    },
+  );
 
   it("persists identified completion delivery while completing the active multipart send", async () => {
     const cleanupSnapshots: SubagentRunRecord[] = [];
@@ -332,52 +391,40 @@ export function registerLifecycleDeliveryReceiptCases({
         nextAttemptAt: 13_000,
       },
     });
-    const announcePending = createDeferredCore();
     const sentChunks: number[] = [];
-    const chunksFinished = createDeferredCore();
-    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
-      async (announceParams) => {
-        try {
-          for (const chunk of [1, 2, 3]) {
-            if (announceParams.isCompletionDeliveryAllowed?.() === false) {
-              break;
-            }
-            sentChunks.push(chunk);
-            await announceParams.onDeliveryResult?.({
-              delivered: true,
-              path: "direct",
-              deliveredAt: 12_300,
-            });
-            await Promise.resolve();
-          }
-          chunksFinished.resolve();
-        } catch (error) {
-          chunksFinished.reject(error);
-          throw error;
+    const announce = stalledAnnounce("delivered", async (announceParams) => {
+      for (const chunk of [1, 2, 3]) {
+        if (announceParams.isCompletionDeliveryAllowed?.() === false) {
+          break;
         }
-        await announcePending.promise;
-        return "delivered" as const;
-      },
-    );
+        sentChunks.push(chunk);
+        await announceParams.onDeliveryResult?.({
+          delivered: true,
+          path: "direct",
+          enqueuedAt: 4_100,
+          deliveredAt: 12_300,
+        });
+        await Promise.resolve();
+      }
+    });
     const controller = createLifecycleController({
       entry,
       beforeWrite: persist,
-      runSubagentAnnounceFlow,
+      runSubagentAnnounceFlow: announce.runSubagentAnnounceFlow,
     });
 
     const join = observeRootWork();
     try {
       await completeRun(controller, entry, visibleCompletion);
-      await chunksFinished.promise;
+      await announce.observed.promise;
       expect(readLifecycleRun(entry).delivery).toMatchObject({
         status: "delivered",
+        enqueuedAt: 4_100,
         announcedAt: 12_300,
         deliveredAt: 12_300,
       });
-      expect(readLifecycleRun(entry).delivery?.lastError).toBeUndefined();
-      expect(readLifecycleRun(entry).delivery?.lastDropReason).toBeUndefined();
+      expectUndefinedFields(readLifecycleRun(entry).delivery, ["lastError", "lastDropReason"]);
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
-      expect(persist).toHaveBeenCalledWith(expect.objectContaining({ runIds: [entry.runId] }));
       expect.soft(sentChunks).toEqual([1, 2, 3]);
       await mutateLifecycleRun(entry, (draft) => {
         draft.label = "updated while sending";
@@ -391,35 +438,31 @@ export function registerLifecycleDeliveryReceiptCases({
       });
       cleanupSnapshots.length = 0;
     } finally {
-      announcePending.resolve();
+      announce.pending.resolve();
       await join();
     }
-    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
-    expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
-    expect(readLifecycleRun(entry).label).toBe("updated while sending");
-    expect(readLifecycleRun(entry).completion?.fallbackResultText).toBeUndefined();
-    expect(readLifecycleRun(entry).completion?.fallbackCapturedAt).toBeUndefined();
-    expect(readLifecycleRun(entry).wakeOnDescendantSettle).toBeUndefined();
+    const completed = readLifecycleRun(entry);
+    expect(completed.cleanupCompletedAt).toBeTypeOf("number");
+    expect(completed.label).toBe("updated while sending");
+    expectUndefinedFields(completed.delivery, ["nextAttemptAt"]);
+    expectUndefinedFields(completed.completion, ["fallbackResultText", "fallbackCapturedAt"]);
+    expectUndefinedFields(completed, ["wakeOnDescendantSettle"]);
     expect(cleanupSnapshots.length).toBeGreaterThan(0);
     for (const snapshot of cleanupSnapshots) {
       expect(snapshot.cleanupCompletedAt).toBeTypeOf("number");
-      expect(snapshot.completion?.fallbackResultText).toBeUndefined();
       expect(snapshot.label).toBe("updated while sending");
+      expect(snapshot.completion?.fallbackResultText).toBeUndefined();
     }
   });
 
   it("keeps a delivered receipt when a late failure arrives after the next turn starts", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true, generation: 1 });
     const runs = new Map([[entry.runId, entry]]);
-    let onDeliveryResult: Parameters<
-      LifecycleControllerParams["runSubagentAnnounceFlow"]
-    >[0]["onDeliveryResult"];
-    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
-      async (announceParams) => {
-        onDeliveryResult = announceParams.onDeliveryResult;
-        return "delivered" as const;
-      },
-    );
+    let onDeliveryResult: Parameters<AnnounceFlow>[0]["onDeliveryResult"];
+    const runSubagentAnnounceFlow: AnnounceFlow = vi.fn(async (announceParams) => {
+      onDeliveryResult = announceParams.onDeliveryResult;
+      return "delivered" as const;
+    });
     const retireSupersededRun = vi.fn(async () => {});
     const controller = createLifecycleController({
       entry,
@@ -443,30 +486,5 @@ export function registerLifecycleDeliveryReceiptCases({
     expect(readLifecycleRun(entry).delivery).toEqual(delivered);
     expect(retireSupersededRun).not.toHaveBeenCalled();
     expect(runs.get(newer.runId)).toBe(newer);
-  });
-
-  it("finalizes terminal visible-send failures without scheduling completion retry", async () => {
-    const { entry, controller, runSubagentAnnounceFlow } = createReceiptFixture(
-      {
-        delivered: false,
-        path: "direct",
-        error: "prompt lock failed after visible send",
-        terminal: true,
-      },
-      "delivered",
-      { endedAt: 4_000, retainAttachmentsOnKeep: true },
-    );
-
-    await expect(completeRun(controller, entry, { triggerCleanup: true })).resolves.toBeUndefined();
-
-    await waitForLifecycleState(() =>
-      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number"),
-    );
-    expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
-    expect(readLifecycleRun(entry).delivery?.lastError).toBeUndefined();
-    expect(readLifecycleRun(entry).delivery?.payload).toBeUndefined();
-    expect(readLifecycleRun(entry).delivery?.suspendedAt).toBeUndefined();
-    expect(readLifecycleRun(entry).delivery?.suspendedReason).toBeUndefined();
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 }

@@ -68,43 +68,32 @@ suite.define(() => {
           button.focus();
           return state;
         });
+        const read = () =>
+          fixture.evaluate(({ tooltip }) => ({
+            open: tooltip.hasAttribute("open"),
+            visible: tooltip
+              .shadowRoot!.querySelector(".tooltip-surface")!
+              .matches(":popover-open"),
+          }));
         try {
           await held.request;
-          expect(
-            await fixture.evaluate(({ tooltip, button }) => ({
-              focused: document.activeElement === button,
-              open: tooltip.hasAttribute("open"),
-              visible: tooltip
-                .shadowRoot!.querySelector(".tooltip-surface")!
-                .matches(":popover-open"),
-            })),
-          ).toEqual({ focused: true, open: false, visible: false });
+          expect(await fixture.evaluate(({ button }) => document.activeElement === button)).toBe(
+            true,
+          );
+          expect(await read()).toEqual({ open: false, visible: false });
           await page.keyboard.press("Escape");
           await expect.poll(() => page.locator(".cmd-palette").count()).toBe(0);
           expect(await fixture.evaluate(({ cancelled }) => cancelled)).toBe(1);
           held.release();
-          expect(
-            await fixture.evaluate(async ({ tooltip }) => {
-              await tooltip.updateComplete;
-              return {
-                open: tooltip.hasAttribute("open"),
-                visible: tooltip
-                  .shadowRoot!.querySelector(".tooltip-surface")!
-                  .matches(":popover-open"),
-              };
-            }),
-          ).toEqual({ open: false, visible: false });
+          await fixture.evaluate(({ tooltip }) => tooltip.updateComplete);
+          expect(await read()).toEqual({ open: false, visible: false });
         } finally {
           await fixture.dispose();
         }
       } finally {
         held.release();
         palette.release();
-        if (engine === "chromium") {
-          await suite.closeBrowserContext(context);
-        } else {
-          await context.close();
-        }
+        await (engine === "chromium" ? suite.closeBrowserContext(context) : context.close());
       }
     },
   );

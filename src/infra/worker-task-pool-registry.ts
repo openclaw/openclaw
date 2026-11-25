@@ -1,18 +1,34 @@
-import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
-import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
+import { joinOwnedWorkerTasks, type ResourceOwningPool } from "@openclaw/worker-runtime";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { assertOpenClawAgentWriterReleased } from "../state/openclaw-agent-write-admission-state.js";
-
-type ResourceOwningPool = { startCloseResources(key?: string): RetainedOperation<void> };
+import { throwIfSettledRejected } from "./error-graph-internal.js";
+import { releaseWorkerPoolMemoryBudget } from "./worker-memory-budget.js";
 
 const livePools = resolveGlobalSingleton(
   Symbol.for("openclaw.workerTaskPools"),
-  () => new Set<ResourceOwningPool>(),
+  () => new Set<WeakRef<ResourceOwningPool>>(),
 );
+
+// Broadcast discovery must not keep an abandoned pool and its module graph alive.
+function* reachablePools() {
+  for (const reference of livePools) {
+    const pool = reference.deref();
+    if (pool) {
+      yield { pool, reference };
+    } else {
+      livePools.delete(reference);
+    }
+  }
+}
 
 export const liveWorkerTaskPools = {
   register<T extends ResourceOwningPool>(pool: T): T {
-    livePools.add(pool);
+    for (const entry of reachablePools()) {
+      if (entry.pool === pool) {
+        return pool;
+      }
+    }
+    livePools.add(new WeakRef(pool));
     return pool;
   },
   async close(
@@ -20,23 +36,26 @@ export const liveWorkerTaskPools = {
     closures: readonly Promise<void>[],
     finish: () => Promise<void>,
   ): Promise<void> {
-    await joinOwnedWorkerTasks(closures);
-    await finish();
-    livePools.delete(pool);
+    try {
+      await joinOwnedWorkerTasks(closures);
+      await finish();
+    } finally {
+      // A closed pool starts no more workers; running ones remain in measured usage.
+      releaseWorkerPoolMemoryBudget(pool);
+    }
+    for (const entry of reachablePools()) {
+      if (entry.pool === pool) {
+        livePools.delete(entry.reference);
+      }
+    }
   },
 };
 
 async function closeResources(key: string): Promise<void> {
   const results = await Promise.allSettled(
-    [...livePools].map((pool) => pool.startCloseResources(key).result),
+    [...reachablePools()].map(({ pool }) => pool.startCloseResources(key).result),
   );
-  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Worker resource cleanup failed");
-  }
+  throwIfSettledRejected(results, "Worker resource cleanup failed");
 }
 
 /** Ask every live pool's workers to close the retained resources this key names. */

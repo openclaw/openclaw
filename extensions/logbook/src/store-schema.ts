@@ -8,7 +8,7 @@ import type {
   LogbookFrame,
 } from "./types.js";
 
-export const LOGBOOK_SCHEMA_VERSION = 1;
+export const LOGBOOK_SCHEMA_VERSION = 3;
 
 export type LogbookDatabase = {
   frames: {
@@ -159,23 +159,19 @@ export function toBatch(row: BatchRow): LogbookBatch {
 }
 
 function parseDistractions(raw: string): LogbookDistraction[] {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed.filter((entry: unknown): entry is LogbookDistraction => {
-      const record = asOptionalObjectRecord(entry);
-      return (
-        record !== undefined &&
-        typeof record.title === "string" &&
-        typeof record.startMs === "number" &&
-        typeof record.endMs === "number"
-      );
-    });
-  } catch {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed)) {
     return [];
   }
+  return parsed.filter((entry: unknown): entry is LogbookDistraction => {
+    const record = asOptionalObjectRecord(entry);
+    return (
+      record !== undefined &&
+      typeof record.title === "string" &&
+      typeof record.startMs === "number" &&
+      typeof record.endMs === "number"
+    );
+  });
 }
 
 export function toCard(row: Selectable<LogbookDatabase["cards"]>): LogbookCard {

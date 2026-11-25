@@ -63,6 +63,7 @@ const managerMocks = vi.hoisted(() => ({
 }));
 
 const auditMocks = vi.hoisted(() => ({
+  emitAcpAssistantDelta: vi.fn(),
   emitAcpLifecycleStart: vi.fn(),
   emitAcpRuntimeEvent: vi.fn(),
   emitAcpLifecycleEnd: vi.fn(),
@@ -162,12 +163,12 @@ vi.mock("./dispatch-acp-manager.runtime.js", async (importOriginal) => ({
 vi.mock("../../agents/command/acp-lifecycle.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/command/acp-lifecycle.js")>();
   return {
-    createAcpToolLifecycleTracker: actual.createAcpToolLifecycleTracker,
+    ...actual,
+    emitAcpAssistantDelta: auditMocks.emitAcpAssistantDelta,
     emitAcpLifecycleStart: auditMocks.emitAcpLifecycleStart,
     emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
     emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
     emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
-    resolveAcpLifecycleEndFields: actual.resolveAcpLifecycleEndFields,
   };
 });
 
@@ -197,9 +198,9 @@ vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 
-vi.mock("../../tts/captioned-final.js", async () => {
-  const actual = await vi.importActual<typeof import("../../tts/captioned-final.js")>(
-    "../../tts/captioned-final.js",
+vi.mock("../../tts/captioned-final-eligibility.js", async () => {
+  const actual = await vi.importActual<typeof import("../../tts/captioned-final-eligibility.js")>(
+    "../../tts/captioned-final-eligibility.js",
   );
   return {
     ...actual,
@@ -207,12 +208,10 @@ vi.mock("../../tts/captioned-final.js", async () => {
   };
 });
 
-vi.mock("../../tts/status-config.js", () => ({
-  resolveStatusTtsSnapshot: () => ({
+vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings.js")>()),
+  resolveTtsSettingsSnapshot: () => ({
     autoMode: "always",
-    provider: "auto",
-    maxLength: 1500,
-    summarize: true,
   }),
 }));
 
@@ -680,6 +679,8 @@ describe("tryDispatchAcpReplyCore", () => {
 
     const result = await runDispatch({
       bodyForAgent: "reply via message tool if needed",
+      runId: "private-acp-reply",
+      cfg: createAcpTestConfig({ acp: { enabled: true, stream: { deliveryMode: "live" } } }),
       dispatcher,
       onReplyStart,
       suppressUserDelivery: true,
@@ -694,6 +695,7 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(routeMocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpAssistantDelta).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -1877,7 +1879,6 @@ describe("tryDispatchAcpReplyCore", () => {
     ["sent", { ok: true, delivered: true, messageId: "sent" }, 1],
     ["vetoed", { ok: true, delivered: false, suppressed: true, reason: "channel_transform" }, 1],
     ["not-sent", { ok: false, delivered: false, cause: notSent }, 2],
-    ["partial", { ok: false, delivered: true }, 1],
     ["held", { ok: false, delivered: false, queueCustody: "held" }, 1],
   ] as const)(
     "retries a routed ACP voice caption only after %s permits it",
@@ -2015,8 +2016,14 @@ describe("tryDispatchAcpReplyCore", () => {
       },
     });
 
-    expect(dispatcherCall(dispatcher.sendBlockReply, 0).text).toBe("abcde");
-    expect(dispatcherCall(dispatcher.sendBlockReply, 1).text).toBe("f");
+    expect(dispatcherCall(dispatcher.sendBlockReply, 0)).toMatchObject({
+      text: "abcde",
+      textMode: "delta",
+    });
+    expect(dispatcherCall(dispatcher.sendBlockReply, 1)).toMatchObject({
+      text: "f",
+      textMode: "delta",
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

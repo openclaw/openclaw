@@ -13,6 +13,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import {
   assertCompatibleCliStartupExecutionModes,
   assertCompatibleCliStartupMemoryMetrics,
@@ -826,11 +827,7 @@ async function runSample(params: {
   try {
     return await new Promise<Sample>((resolve) => {
       const sampleEnv = {
-        HOME: runRoot,
-        USERPROFILE: runRoot,
-        OPENCLAW_HOME: runRoot,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
+        ...createBuildSmokeEnv(runRoot, {}),
         OPENCLAW_HIDE_BANNER: "1",
         NO_COLOR: "1",
         FORCE_COLOR: "0",

@@ -1,3 +1,4 @@
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,
@@ -97,8 +98,7 @@ function parseConsolidationPlan(
       if (
         typeof value.candidateKey !== "string" ||
         (value.action !== "added" && value.action !== "merged" && value.action !== "superseded") ||
-        !Array.isArray(value.priorEntries) ||
-        !value.priorEntries.every((entry): entry is string => typeof entry === "string")
+        !isStringArray(value.priorEntries)
       ) {
         return [];
       }
@@ -390,6 +390,7 @@ export async function consolidateMemory(params: {
   existingMemory: string;
   candidates: PromotionCandidate[];
   model?: string;
+  timeoutMs?: number;
   maxPriorEntryLossFraction: number;
   memoryFileMaxChars?: number;
   maxPromotedSnippetTokens?: number;
@@ -421,7 +422,7 @@ export async function consolidateMemory(params: {
         ),
         extraSystemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
         ...(params.model ? { model: params.model } : {}),
-        timeoutMs: CONSOLIDATION_TIMEOUT_MS,
+        timeoutMs: params.timeoutMs ?? CONSOLIDATION_TIMEOUT_MS,
       });
       const plan = parseConsolidationPlan(result.text, group.candidates, maxPromotedSnippetTokens);
       if (!plan) {

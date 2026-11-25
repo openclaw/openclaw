@@ -4,7 +4,7 @@ import type { JSX } from "@solidjs/web";
 import { createSignal, onCleanup } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
-import type { SolidRouteProps } from "../app-route-types.ts";
+import type { SolidRouteProps } from "../app-route-types.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { mountRouterOutlet, settleRouterOutlet } from "./router-outlet.test-support.tsx";
 
@@ -25,10 +25,7 @@ it("preserves a routed page's focused draft through loader updates and retryable
           value={draft()}
           onInput={(event) => setDraft(event.currentTarget.value)}
         />
-        <output>{draft()}</output>
-        <p>
-          {String(props.data)} / {props.loaderPending ? "loading" : "ready"}
-        </p>
+        <p>{`${String(props.data)} / ${props.loaderPending ? "loading" : "ready"}`}</p>
       </section>
     );
   }
@@ -38,23 +35,14 @@ it("preserves a routed page's focused draft through loader updates and retryable
   }
   const reload = createDeferredCore<string>();
   const failingReload = createDeferredCore<string>();
-  let loads = 0;
+  const replies = ["Initial", reload.promise, failingReload.promise];
   const router: TestRouter = createRouter({
     routes: [
       definePage({
         id: "page",
         path: "/page",
         component: () => ({ renderSolid: FirstPage }),
-        loader: () => {
-          loads += 1;
-          return loads === 1
-            ? "Initial"
-            : loads === 2
-              ? reload.promise
-              : loads === 3
-                ? failingReload.promise
-                : "Recovered";
-        },
+        loader: (context) => replies.shift() ?? `Recovered ${context.label}`,
       }),
       definePage({
         id: "next",
@@ -74,23 +62,25 @@ it("preserves a routed page's focused draft through loader updates and retryable
     input.value = "Unsaved notes";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
+    const expectDraft = (focused = true) => {
+      expect(outlet.querySelector("input")).toBe(input);
+      expect(input.value).toBe("Unsaved notes");
+      if (focused) {
+        expect(document.activeElement).toBe(input);
+      }
+      expect(firstCleanup).not.toHaveBeenCalled();
+    };
 
     const revalidation = router.revalidate(context, "page");
     await settleRouterOutlet(outlet);
     expect(outlet.querySelector("p")?.textContent).toBe("Initial / loading");
-    expect(outlet.querySelector("input")).toBe(input);
-    expect(input.value).toBe("Unsaved notes");
-    expect(document.activeElement).toBe(input);
-    expect(firstCleanup).not.toHaveBeenCalled();
+    expectDraft();
 
     reload.resolve("Loaded");
     await revalidation;
     await settleRouterOutlet(outlet);
     expect(outlet.querySelector("p")?.textContent).toBe("Loaded / ready");
-    expect(outlet.querySelector("input")).toBe(input);
-    expect(input.value).toBe("Unsaved notes");
-    expect(document.activeElement).toBe(input);
-    expect(firstCleanup).not.toHaveBeenCalled();
+    expectDraft();
 
     const failure = router.revalidate(context, "page");
     await settleRouterOutlet(outlet);
@@ -99,18 +89,21 @@ it("preserves a routed page's focused draft through loader updates and retryable
     await settleRouterOutlet(outlet);
     expect(outlet.textContent).toContain("Fixture refresh failed");
     expect(outlet.querySelector(".lazy-view-error--inline")).not.toBeNull();
-    expect(outlet.querySelector("input")).toBe(input);
-    expect(document.activeElement).toBe(input);
-    expect(firstCleanup).not.toHaveBeenCalled();
+    expectDraft();
 
-    outlet.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
-    await waitForSolid(() =>
-      expect(outlet.querySelector("p")?.textContent).toBe("Recovered / ready"),
-    );
-    expect(outlet.querySelector("input")).toBe(input);
+    const retry = outlet.querySelector<HTMLButtonElement>(".lazy-view-error__action")!;
+    retry.focus();
+    outlet.setInputs({ retryContext: { label: "retry" } });
+    await settleRouterOutlet(outlet);
+    expect(outlet.querySelector(".lazy-view-error__action")).toBe(retry);
+    expect(document.activeElement).toBe(retry);
     expect(input.value).toBe("Unsaved notes");
+    retry.click();
+    await waitForSolid(() =>
+      expect(outlet.querySelector("p")?.textContent).toBe("Recovered retry / ready"),
+    );
+    expectDraft(false);
     expect(outlet.querySelector(".lazy-view-error__action")).toBeNull();
-    expect(firstCleanup).not.toHaveBeenCalled();
 
     await router.navigate("next", context);
     await settleRouterOutlet(outlet);

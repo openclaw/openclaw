@@ -1,11 +1,11 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
-export type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
+type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
 export type GatewayLoopParams = {
   start: GatewayLoopStart;
   beginBoot?: (startedAtMs: number) => Promise<void> | void;
-  completeBoot?: (completion: unknown) => void;
+  completeBoot?: Parameters<typeof import("./run-loop.js").runGatewayLoop>[0]["completeBoot"];
   onProcessResourcesSettled?: (outcome: "drained" | "retained") => void;
   onRestartStartupFailure?: (error: unknown, signal: AbortSignal) => Promise<void>;
   ownsProcessLifecycle?: boolean;

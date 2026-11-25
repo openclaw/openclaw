@@ -1,4 +1,3 @@
-// Gateway auth resolver.
 // Combines configured auth, overrides, environment credentials, and Tailscale policy.
 import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -13,7 +12,7 @@ import { createGatewayCredentialPlan } from "./credential-planner.js";
 import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 
 /** Authentication modes after config, override, and credential inputs are combined. */
-type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+type ResolvedGatewayAuthMode = NonNullable<GatewayAuthConfig["mode"]>;
 
 /** Records which input selected the effective Gateway auth mode. */
 type ResolvedGatewayAuthModeSource = "override" | "config" | "password" | "token" | "default";

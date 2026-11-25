@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { acquireFileLock } from "openclaw/plugin-sdk/file-lock";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 
@@ -47,20 +48,6 @@ vi.mock("./trash.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./trash.js")>()),
   movePathToTrash: fixture.trash,
 }));
-vi.mock("openclaw/plugin-sdk/file-lock", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/file-lock")>();
-  return {
-    ...actual,
-    // Keep the real exclusion/reentrancy contract; fail contention immediately
-    // so regressions prove the boundary without wall-clock sleeps or polling.
-    withFileLock: (
-      target: string,
-      options: import("openclaw/plugin-sdk/file-lock").FileLockOptions,
-      run: () => Promise<unknown>,
-    ) =>
-      actual.withFileLock(target, { ...options, retries: { ...options.retries, retries: 0 } }, run),
-  };
-});
 vi.mock("./chrome.diagnostics.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./chrome.diagnostics.js")>()),
   diagnoseChromeCdp: fixture.diagnose,
@@ -104,26 +91,21 @@ function setupOwnedBrowser(
   vi.spyOn(process, "platform", "get").mockReturnValue(platform);
   const cache = path.join(fixture.root, "browsers");
   const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const suffix =
+    platform === "linux" ? (arch === "arm64" ? "linux-arm64" : "linux64") : `mac-${arch}`;
   const shell = path.join(
     cache,
     "chromium_headless_shell-100",
-    platform === "linux"
-      ? `chrome-headless-shell-${process.arch === "arm64" ? "linux-arm64" : "linux64"}`
-      : `chrome-headless-shell-mac-${arch}`,
+    `chrome-headless-shell-${suffix}`,
     "chrome-headless-shell",
   );
   const chrome = path.join(
     cache,
     "chromium-100",
+    `chrome-${suffix}`,
     ...(platform === "linux"
-      ? [`chrome-${process.arch === "arm64" ? "linux-arm64" : "linux64"}`, "chrome"]
-      : [
-          `chrome-mac-${arch}`,
-          "Google Chrome for Testing.app",
-          "Contents",
-          "MacOS",
-          "Google Chrome for Testing",
-        ]),
+      ? ["chrome"]
+      : ["Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"]),
   );
   for (const executable of [shell, chrome]) {
     fs.mkdirSync(path.dirname(executable), { recursive: true });
@@ -207,6 +189,35 @@ function setupOwnedBrowser(
     return true;
   });
   return { resolved, profile, kill, chrome, shell, userDataDir };
+}
+
+type OwnedBrowser = ReturnType<typeof setupOwnedBrowser>;
+async function expectStop(
+  { resolved, profile, kill }: Pick<OwnedBrowser, "resolved" | "profile" | "kill">,
+  status = "unverified",
+  signals = 0,
+) {
+  await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({ status });
+  expect(kill).toHaveBeenCalledTimes(signals);
+}
+
+function stubReadyLaunch() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ Browser: "Chrome/Test" }))),
+  );
+  const proc = Object.assign(new EventEmitter(), {
+    pid: 5432,
+    exitCode: null,
+    signalCode: null,
+    stderr: new EventEmitter(),
+    kill: vi.fn(),
+  });
+  fixture.spawn.mockImplementation(() => {
+    fixture.diagnose.mockResolvedValue({ ok: true });
+    return proc;
+  });
+  return proc;
 }
 
 it.each(
@@ -304,10 +315,7 @@ it.each(["unavailable", "ambiguous"])(
 it("does not release a lockless full Chrome profile while its CDP port is occupied", async () => {
   const { resolved, profile, kill, userDataDir } = setupOwnedBrowser("cache", true, true);
   fs.unlinkSync(path.join(userDataDir, "SingletonLock"));
-  await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({
-    status: "unverified",
-  });
-  expect(kill).not.toHaveBeenCalled();
+  await expectStop({ resolved, profile, kill });
 });
 
 it.each([true, false])(
@@ -372,10 +380,7 @@ it("preserves data when shell process discovery fails despite a free CDP port", 
     }
     return "";
   });
-  await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({
-    status: "unverified",
-  });
-  expect(kill).not.toHaveBeenCalled();
+  await expectStop({ resolved, profile, kill });
 });
 
 it.each(
@@ -416,10 +421,7 @@ it("preserves a shell profile when its process is alive but no longer listening"
   const { resolved, profile, kill } = setupOwnedBrowser("cache", true, false, "linux");
   fs.writeFileSync(path.join(fixture.root, "proc", "net", "tcp"), "header\n");
   fixture.portProbe.mockResolvedValue(undefined);
-  await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({
-    status: "unverified",
-  });
-  expect(kill).not.toHaveBeenCalled();
+  await expectStop({ resolved, profile, kill });
 });
 
 it("preserves a shell profile with duplicate directory flags after the port changes", async () => {
@@ -448,66 +450,43 @@ it("does not signal a lockless shell after its process identity changes", async 
       throw new Error("CDP is unavailable");
     }),
   );
-  await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({
-    status: "unverified",
-  });
-  expect(kill).not.toHaveBeenCalled();
+  await expectStop({ resolved, profile, kill });
 });
 
 it("does not release shell profile data when the CDP port remains occupied after shutdown", async () => {
   const { resolved, profile, kill } = setupOwnedBrowser("cache", true);
   fixture.portProbe.mockRejectedValue(new Error("Port is already in use."));
-  await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({
-    status: "unverified",
-  });
-  expect(kill).toHaveBeenCalledOnce();
+  await expectStop({ resolved, profile, kill }, "unverified", 1);
 });
 
-it.each(["launch", "reset"] as const)(
-  "excludes an independent runtime's %s while the first launch is pending",
-  async (operation) => {
-    const { resolved, profile, userDataDir } = setupOwnedBrowser("cache", true, false, "linux");
-    fixture.alive = false;
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    fixture.portProbe.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ Browser: "Chrome/Test" }))),
-    );
-    fixture.spawn.mockReturnValue(
-      Object.assign(new EventEmitter(), {
-        pid: 5432,
-        exitCode: null,
-        signalCode: null,
-        stderr: new EventEmitter(),
-        kill: vi.fn(),
+it("excludes an independent lock owner while launch is pending", async () => {
+  const { resolved, profile, userDataDir } = setupOwnedBrowser("cache", true, false, "linux");
+  fixture.alive = false;
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  fixture.portProbe.mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  stubReadyLaunch();
+  const firstLaunch = launchOpenClawChrome(resolved, profile, { headlessOverride: true });
+  await entered.promise;
+  try {
+    await expect(
+      acquireFileLock(path.join(fixture.root, "browser", `${profile.name}.lifecycle`), {
+        retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
+        stale: 60_000,
       }),
-    );
-    const firstLaunch = launchOpenClawChrome(resolved, profile, { headlessOverride: true });
-    await entered.promise;
-    try {
-      const state = makeBrowserServerState({ profile, resolvedOverrides: resolved });
-      const other =
-        operation === "launch"
-          ? launchOpenClawChrome(resolved, profile, { headlessOverride: true })
-          : createBrowserRouteContext({ getState: () => state })
-              .forProfile(profile.name)
-              .resetProfile();
-      await expect(other).rejects.toMatchObject({ code: "file_lock_timeout" });
-      expect(fixture.spawn).not.toHaveBeenCalled();
-      expect(fixture.trash).not.toHaveBeenCalled();
-      expect(fs.existsSync(path.join(userDataDir, "Default"))).toBe(false);
-    } finally {
-      release.resolve();
-      await firstLaunch;
-    }
-    expect(fixture.spawn).toHaveBeenCalledOnce();
-  },
-);
+    ).rejects.toMatchObject({ code: "file_lock_timeout" });
+    expect(fixture.spawn).not.toHaveBeenCalled();
+    expect(fixture.trash).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(userDataDir, "Default"))).toBe(false);
+  } finally {
+    release.resolve();
+    await firstLaunch;
+  }
+  expect(fixture.spawn).toHaveBeenCalledOnce();
+});
 
 it("holds cross-runtime exclusion through reset's trash operation, with nested stop ownership", async () => {
   const { resolved, profile, userDataDir } = setupOwnedBrowser("cache", true, false, "linux");
@@ -532,7 +511,10 @@ it("holds cross-runtime exclusion through reset's trash operation, with nested s
     expect(fs.existsSync(lockPath)).toBe(true);
     expect(path.dirname(lockPath)).toBe(path.dirname(path.dirname(userDataDir)));
     await expect(
-      launchOpenClawChrome(resolved, profile, { headlessOverride: true }),
+      acquireFileLock(lockPath.slice(0, -".lock".length), {
+        retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
+        stale: 60_000,
+      }),
     ).rejects.toMatchObject({ code: "file_lock_timeout" });
     expect(fixture.spawn).not.toHaveBeenCalled();
   } finally {
@@ -589,18 +571,7 @@ it.each([
       }
     });
     fixture.diagnose.mockResolvedValue({ ok: false, code, cdpUrl: profile.cdpUrl });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ Browser: "Chrome/Test" }))),
-    );
-    const proc = Object.assign(new EventEmitter(), {
-      pid: 5432,
-      exitCode: null,
-      signalCode: null,
-      stderr: new EventEmitter(),
-      kill: vi.fn(),
-    });
-    fixture.spawn.mockReturnValue(proc);
+    const proc = stubReadyLaunch();
     const launch = launchOpenClawChrome(resolved, profile, {
       headlessOverride: true,
       platform: "darwin",

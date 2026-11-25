@@ -251,6 +251,7 @@ async function prepareResourceFixture(
     sharingTarget: () => target,
     sharingTargetState: () => ({ status: "ready", target }),
     hasMembership: () => false,
+    memberAccess: () => undefined,
   } as unknown as SessionRowProjection;
   const context = bindSessionRowProjection(createContext(), () => projection);
   context.getRuntimeConfig = () => config;
@@ -372,6 +373,7 @@ describe("captured registered plugin tool policy", () => {
     browserRuntime.execute.mockReset();
     browserRuntime.execute.mockImplementation(async () => assertCapturedPolicy("browser"));
     vi.spyOn(profileReader, "prepareUserProfileIdentity").mockImplementation(async (profileId) => ({
+      readCurrentRevision: () => ({ profileId }),
       readCurrentProfile: () => ({ profileId, assignedRole: null }),
       emailBindingIds: [],
       readCurrentFacts: () => ({

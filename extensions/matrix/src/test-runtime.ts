@@ -102,6 +102,9 @@ function createMatrixRuntimeMediaMock(
       path: "/tmp/test-media.jpg",
       contentType: "image/jpeg",
     }) as NonNullable<PluginRuntime["channel"]>["media"]["saveMediaBuffer"],
+    deleteMediaBuffer: vi
+      .fn<NonNullable<PluginRuntime["channel"]>["media"]["deleteMediaBuffer"]>()
+      .mockResolvedValue(),
     ...overrides,
   };
 }
@@ -183,6 +186,7 @@ export function installMatrixMonitorTestRuntime(
   installMatrixTestRuntime({
     cfg: options.cfg,
     stateDir: options.stateDir,
+    logging: {},
     channel: {
       inbound: createPluginRuntimeMock().channel.inbound,
       mentions: {

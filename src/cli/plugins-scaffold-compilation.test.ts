@@ -59,8 +59,8 @@ describe("plugin scaffold compilation", () => {
       configFileName: path.join(projectDir, "tsconfig.json"),
     });
     expect(session.project.program.getConfigFileParsingDiagnostics()).toEqual([]);
-    expect(session.project.rootFiles.map((file) => path.relative(projectDir, file))).toContain(
-      path.join("src", "control-ui.ts"),
-    );
+    expect(
+      session.project.parsedCommandLine.fileNames.map((file) => path.relative(projectDir, file)),
+    ).toContain(path.join("src", "control-ui.ts"));
   });
 });

@@ -9,8 +9,6 @@ import type {
   SystemAgentApprovalResolved,
 } from "./system-agent-approvals.js";
 
-type ApprovalPhase = "pending" | "resolved" | "expired";
-
 export type ApprovalActionView = ExecApprovalActionDescriptor & {
   kind?: "command" | "decision";
 };
@@ -23,7 +21,7 @@ export type ApprovalMetadataView = {
 type ApprovalViewBase = {
   approvalId: string;
   approvalKind: ChannelApprovalKind;
-  phase: ApprovalPhase;
+  phase: "pending" | "resolved" | "expired";
   title: string;
   description?: string | null;
   metadata: ApprovalMetadataView[];
@@ -51,13 +49,15 @@ type PendingApprovalState = {
   expiresAtMs: number;
 };
 
-export type ExecApprovalPendingView = ExecApprovalViewBase & PendingApprovalState;
-
-export type ExecApprovalResolvedView = ExecApprovalViewBase & {
+type ResolvedApprovalState = {
   phase: "resolved";
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
 };
+
+export type ExecApprovalPendingView = ExecApprovalViewBase & PendingApprovalState;
+
+export type ExecApprovalResolvedView = ExecApprovalViewBase & ResolvedApprovalState;
 
 export type ExecApprovalExpiredView = ExecApprovalViewBase & {
   phase: "expired";
@@ -74,11 +74,7 @@ export type PluginApprovalViewBase = ApprovalViewBase & {
 
 export type PluginApprovalPendingView = PluginApprovalViewBase & PendingApprovalState;
 
-export type PluginApprovalResolvedView = PluginApprovalViewBase & {
-  phase: "resolved";
-  decision: ExecApprovalDecision;
-  resolvedBy?: string | null;
-};
+export type PluginApprovalResolvedView = PluginApprovalViewBase & ResolvedApprovalState;
 
 export type PluginApprovalExpiredView = PluginApprovalViewBase & {
   phase: "expired";
@@ -99,32 +95,24 @@ export type SystemAgentApprovalViewBase = ApprovalViewBase & {
   operationSummary: string;
 };
 
-type SystemAgentApprovalPendingView = SystemAgentApprovalViewBase & PendingApprovalState;
-
-type SystemAgentApprovalResolvedView = SystemAgentApprovalViewBase & {
-  phase: "resolved";
-  decision: ExecApprovalDecision;
-  resolvedBy?: string | null;
-  applicationStatus?: SystemAgentApprovalApplicationStatus;
-  terminalStatus?: "expired" | "cancelled";
-};
-
-type SystemAgentApprovalExpiredView = SystemAgentApprovalViewBase & {
-  phase: "expired";
-};
-
 export type PendingApprovalView =
   | ExecApprovalPendingView
   | PluginApprovalPendingView
-  | SystemAgentApprovalPendingView;
+  | (SystemAgentApprovalViewBase & PendingApprovalState);
 export type ResolvedApprovalView =
   | ExecApprovalResolvedView
   | PluginApprovalResolvedView
-  | SystemAgentApprovalResolvedView;
+  | (SystemAgentApprovalViewBase &
+      ResolvedApprovalState & {
+        applicationStatus?: SystemAgentApprovalApplicationStatus;
+        terminalStatus?: "expired" | "cancelled";
+      });
 export type ExpiredApprovalView =
   | ExecApprovalExpiredView
   | PluginApprovalExpiredView
-  | SystemAgentApprovalExpiredView;
+  | (SystemAgentApprovalViewBase & {
+      phase: "expired";
+    });
 export type ApprovalViewModel = PendingApprovalView | ResolvedApprovalView | ExpiredApprovalView;
 
 export type ApprovalRequest = ApprovalRequestInput;

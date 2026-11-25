@@ -6,6 +6,22 @@ read_when:
   - You need to distinguish measured workflow walls from planner estimates
 ---
 
+## Blacksmith physical allocation
+
+On November 3, 2026, the same Linux x64 label began receiving four times its
+previous CPU and memory allocation. The 8-vCPU label reported two CPUs and
+7.65 GiB in [the 18:49 UTC job](https://github.com/openclaw/openclaw/actions/runs/41696743325/job/126131569819),
+then eight CPUs and 30.95 GiB in [the 19:13 UTC job](https://github.com/openclaw/openclaw/actions/runs/41700487643/job/126144726154).
+These jobs also changed region from eu-west to us-east; the logs do not establish
+why the provider changed allocation.
+
+The planner's historical 4/8/16/32 profiles select physical 2/2/4/8-vCPU labels.
+`runner` remains the planning and timing identity; `runner_label` is the requested
+allocation. Group memory thresholds can raise that allocation: the 28-GiB
+Gateway groups retain an 8-vCPU runner even when their profile is 16.
+Static Linux x64 jobs and Testboxes request the corresponding physical size.
+Windows and ARM require separate qualification.
+
 ## Routing from measured wall time
 
 Use GitHub-hosted runners for independent checks that fit the workflow's remaining time. Retain Blacksmith where the measured job tail threatens completion. Qualify RunsOn by workload before assigning it a production tier. Requested Blacksmith 8/16/32 labels delivered 2/4/8 CPUs in the capacity check; labels are not worker counts.
@@ -84,7 +100,7 @@ measurements keep their existing estimates.
 Source-only Telegram database-worker envelopes with at least two singleton
 processes can overlap two inner processes on current self-hosted Linux runners.
 Admission requires an explicit current target (`FROZEN_TARGET=false`), one unchanged
-Node invocation from the shared runtime selector (including `bun-compatible`),
+Node invocation from the shared runtime selector,
 two workers, one outer plan, scheduler-owned caches, at least two actual CPUs, and
 7.5 GiB of effective memory. Effective memory is the smaller
 of physical memory and a positive finite process constraint. Other selections or
@@ -239,6 +255,34 @@ This replaces the stale historical `80 + 3 + 1` explanation without spending
 headroom or changing matrix caps. Manual/frozen release jobs and other workflows
 are outside this conditional arrival envelope; it does not establish complete
 organization-wide usage.
+
+## Compiler planning queue
+
+The October 15 post-batching cohort still showed a separate Blacksmith queue
+before type/lint admission. In the first three assigned planners whose PR bases
+contained both `908efae6fe8b` and `9915d01d074a`, creation-to-start wait was
+559 seconds median and 637 seconds p75. Two completed planners then took
+113 and 151 seconds. These are incomplete natural-run observations, not a
+whole-workflow speedup measurement.
+
+Same-repository hybrid PR first attempts therefore use hosted `check-plan`
+with its existing serial discovery mode. A current-source replay produced an
+identical complete plan in both modes: batched discovery took 16.7 seconds
+and serial took 87.7 seconds on the same Mac; maximum RSS fell from 16.5 GB to
+5.65 GB. A Node 24.21.0 Linux replay also returned the identical plan in 225 seconds
+under a hard two-CPU, 7-GiB limit with no swap. It reused the same pinned native
+compiler on ARM64; GitHub x64 latency remains unmeasured. These local
+measurements establish the execution tradeoff, not hosted job latency. The complete graph validator and all compiler/lint execution
+owners remain unchanged. The extra mandatory hosted row is reserved before
+optional offloads within the existing 40-row threshold and 45-row limit.
+
+Only the planner moves; memory-heavy type/lint workers retain their qualified
+runner classes. Pushes, schedules, forks, retries and manual/release overrides
+retain their routes. Natural CI must establish the new planner queue, complete
+job duration and workflow wall time. Setup plus the Linux replay suggests about
+five to six hosted runner-minutes per eligible PR, replacing one Blacksmith
+16-class assignment; this is an estimate, not billing evidence. No dispatch or
+rerun is needed for that observation.
 
 ## Ratchet admission and Node tests
 

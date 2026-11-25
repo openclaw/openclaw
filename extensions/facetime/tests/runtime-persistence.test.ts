@@ -1,9 +1,14 @@
-import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAsyncGate as barrier } from "../../test-support/async-gate.test-support.js";
 import {
   createRuntime,
   createTalkDriver,
+  carrierPeer,
+  dialReply,
+  emptyState,
+  expectNotCalled,
+  failTalkStartup,
   incomingCall,
   mocks,
   pendingDialCancellationResult,
@@ -12,52 +17,29 @@ import {
   resetRuntimeTestState,
 } from "./runtime.test-support.js";
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+const { helper, startTalk } = mocks;
 
-function emptyState() {
-  return createPluginStateKeyedStoreV2ForTests<unknown>(
-    "facetime",
-    { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
-    { assertCurrent() {} },
-  );
-}
+const deferred = () => Promise.withResolvers<void>();
 
 function suspendNextWrite(state: ReturnType<typeof emptyState>) {
-  const entered = deferred();
-  const release = deferred();
+  const pause = barrier();
   const register = state.register.bind(state);
   vi.spyOn(state, "register").mockImplementationOnce(async (...args) => {
-    entered.resolve();
-    await release.promise;
+    await pause.wait();
     await register(...args);
   });
-  return { entered: entered.promise, release: release.resolve };
+  return pause;
 }
 
 function outgoingCall(dialID: string, status: number) {
-  const event = incomingCall(status);
-  return {
-    ...event,
-    data: {
-      ...event.data,
-      dial_id: dialID,
-      call_uuid: "outbound-call",
-      is_outgoing: true,
-    },
-  };
+  return incomingCall(status, { dial_id: dialID, call_uuid: "outbound-call", is_outgoing: true });
 }
 
 describe("FaceTime runtime asynchronous persistence", () => {
   beforeEach(async () => {
     await resetRuntimeTestState();
-    mocks.helper.cancelOutgoingCall.mockResolvedValue(pendingDialCancellationResult());
-    mocks.helper.findOutgoingCall.mockResolvedValue(pendingDialCarrierResult());
+    helper.cancelOutgoingCall.mockResolvedValue(pendingDialCancellationResult());
+    helper.findOutgoingCall.mockResolvedValue(pendingDialCarrierResult());
   });
 
   it.each(["open", "lookup"] as const)(
@@ -77,7 +59,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
 
       await expect(createRuntime(state, undefined, { openKeyedStoreV2 })).rejects.toBe(failure);
       expect(openKeyedStoreV2).toHaveBeenCalledOnce();
-      expect(mocks.helper.start).not.toHaveBeenCalled();
+      expect(helper.start).not.toHaveBeenCalled();
     },
   );
 
@@ -89,7 +71,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
     try {
       await expect(runtime.dial({ handle: "owner@example.com" })).rejects.toBe(failure);
 
-      expect(mocks.helper.startCall).not.toHaveBeenCalled();
+      expect(helper.startCall).not.toHaveBeenCalled();
       expect(await state.lookup("active")).toBeUndefined();
     } finally {
       await runtime.stop();
@@ -102,16 +84,10 @@ describe("FaceTime runtime asynchronous persistence", () => {
       const state = emptyState();
       const runtime = await createRuntime(state);
       const hostSql = observeHostDataSql();
-      mocks.startTalk.mockResolvedValue(createTalkDriver({}));
-      mocks.helper.startCall.mockImplementation(async (_request: unknown, dialID: string) => {
+      startTalk.mockResolvedValue(createTalkDriver({}));
+      helper.startCall.mockImplementation(async (_request: unknown, dialID: string) => {
         expect(await state.lookup("active")).toMatchObject({ dialID, delivery: "in-flight" });
-        return {
-          dial_id: dialID,
-          call_uuid: "outbound-call",
-          muted: true,
-          is_uplink_muted: true,
-          transport: incomingCall().data.transport,
-        };
+        return dialReply("outbound-call", { dial_id: dialID });
       });
       const write = suspendNextWrite(state);
       const dialing = runtime.dial({ handle: "owner@example.com" });
@@ -125,13 +101,11 @@ describe("FaceTime runtime asynchronous persistence", () => {
         await mocks.helperParams?.onMessage(incomingCall(callStatus));
         expect((await runtime.status()).calls).toEqual([]);
 
-        expect(mocks.helper.answerCall).not.toHaveBeenCalled();
-        expect(mocks.startTalk).not.toHaveBeenCalled();
-        expect(mocks.helper.startCall).not.toHaveBeenCalled();
+        expectNotCalled(helper.answerCall, startTalk, helper.startCall);
         write.release();
         expect(await outcome).toBeUndefined();
-        expect(mocks.helper.startCall).toHaveBeenCalledOnce();
-        expect(mocks.helper.cancelOutgoingCall).not.toHaveBeenCalled();
+        expect(helper.startCall).toHaveBeenCalledOnce();
+        expect(helper.cancelOutgoingCall).not.toHaveBeenCalled();
         expect(await state.lookup("active")).toMatchObject({ delivery: "accepted" });
         const pending = (await runtime.status()).outboundCallPending!;
         await mocks.helperParams?.onMessage(outgoingCall(pending.dialID, 6));
@@ -152,18 +126,13 @@ describe("FaceTime runtime asynchronous persistence", () => {
     const state = emptyState();
     const runtime = await createRuntime(state);
     const write = suspendNextWrite(state);
-    mocks.helper.findOutgoingCall.mockResolvedValue({
+    helper.findOutgoingCall.mockResolvedValue({
       topologyComplete: true,
       topologyGeneration: 1,
       helpersContacted: 1,
       helperResults: [{ found: false, helperBundleIdentifier: "com.apple.FaceTime" }],
     });
-    mocks.helper.startCall.mockResolvedValue({
-      call_uuid: "outbound-call",
-      muted: true,
-      is_uplink_muted: true,
-      transport: incomingCall().data.transport,
-    });
+    helper.startCall.mockResolvedValue(dialReply());
     vi.useFakeTimers();
     const dialing = runtime.dial({ handle: "owner@example.com" });
     const outcome = dialing.then(
@@ -176,7 +145,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
       await vi.advanceTimersByTimeAsync(250);
       write.release();
       expect(await outcome).toMatchObject({ callUUID: "outbound-call" });
-      expect(mocks.helper.startCall).toHaveBeenCalledOnce();
+      expect(helper.startCall).toHaveBeenCalledOnce();
     } finally {
       write.release();
       await outcome;
@@ -192,19 +161,13 @@ describe("FaceTime runtime asynchronous persistence", () => {
   it("fences managed-call activation before cancellation persistence settles", async () => {
     const state = await pendingDialState();
     const runtime = await createRuntime(state);
-    const readinessEntered = deferred();
-    const releaseReadiness = deferred();
-    const talk = createTalkDriver({
-      readyForAudio: async () => {
-        readinessEntered.resolve();
-        await releaseReadiness.promise;
-      },
-    });
+    const readiness = barrier();
+    const talk = createTalkDriver({ readyForAudio: readiness.wait });
     const activated = deferred();
     talk.activate.mockImplementation(activated.resolve);
-    mocks.startTalk.mockResolvedValue(talk);
+    startTalk.mockResolvedValue(talk);
     const active = mocks.helperParams?.onMessage(outgoingCall("approved-dial", 1));
-    await readinessEntered.promise;
+    await readiness.entered;
     const write = suspendNextWrite(state);
     const hangingUp = runtime.hangup();
     const outcome = hangingUp.then(
@@ -213,17 +176,14 @@ describe("FaceTime runtime asynchronous persistence", () => {
     );
     try {
       await write.entered;
-      releaseReadiness.resolve();
+      readiness.release();
       await Promise.race([active, activated.promise]);
-      expect(talk.activate).not.toHaveBeenCalled();
-      expect(mocks.helper.setMuted).not.toHaveBeenCalled();
-      expect(mocks.helper.startTransmission).not.toHaveBeenCalled();
-      expect(mocks.helper.leaveCall).not.toHaveBeenCalled();
+      expectNotCalled(talk.activate, helper.setMuted, helper.startTransmission, helper.leaveCall);
       write.release();
       expect(await outcome).toBeUndefined();
     } finally {
       write.release();
-      releaseReadiness.resolve();
+      readiness.release();
       await Promise.all([active, outcome]);
       await runtime.stop();
     }
@@ -235,28 +195,15 @@ describe("FaceTime runtime asynchronous persistence", () => {
     const inspected = deferred();
     const helperStopped = deferred();
     const releaseStartup = deferred();
-    const startupError = new Error("capture failed during startup");
-    let startupFailure: Promise<boolean> | undefined;
-    mocks.helper.inspectCall.mockImplementation(async () => {
+    const startup = failTalkStartup(releaseStartup.promise);
+    helper.inspectCall.mockImplementation(async () => {
       inspected.resolve();
       throw new Error("carrier inspection unavailable");
     });
-    mocks.helper.stop.mockImplementation(async () => helperStopped.resolve());
+    helper.stop.mockImplementation(async () => helperStopped.resolve());
     mocks.systemRun.mockRejectedValue(new Error("carrier process cannot be terminated"));
-    mocks.startTalk.mockImplementationOnce(
-      async (params: { onFailure(error: Error): Promise<boolean> }) => {
-        startupFailure = params.onFailure(startupError);
-        await Promise.race([startupFailure, releaseStartup.promise]);
-        throw startupError;
-      },
-    );
     vi.useFakeTimers();
-    const active = mocks.helperParams?.onMessage(incomingCall(4), {
-      bundleIdentifier: "com.apple.FaceTime",
-      processId: 4321,
-      processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
-      connectionGeneration: 7,
-    });
+    const active = mocks.helperParams?.onMessage(incomingCall(4), carrierPeer);
     let stopError: unknown;
     let stopping: Promise<void> | undefined;
     try {
@@ -272,12 +219,12 @@ describe("FaceTime runtime asynchronous persistence", () => {
         }),
       );
       expect((await runtime.status()).calls).toMatchObject([{ phase: "closing" }]);
-      expect(mocks.helper.answerCall).not.toHaveBeenCalled();
+      expect(helper.answerCall).not.toHaveBeenCalled();
     } finally {
       releaseStartup.resolve();
       await active;
       await vi.advanceTimersByTimeAsync(1_000);
-      await startupFailure;
+      await startup.closure;
       await stopping;
       vi.useRealTimers();
     }
@@ -287,20 +234,19 @@ describe("FaceTime runtime asynchronous persistence", () => {
     const state = await pendingDialState();
     const runtime = await createRuntime(state);
     const talk = createTalkDriver({});
-    mocks.startTalk.mockResolvedValue(talk);
+    startTalk.mockResolvedValue(talk);
     const write = suspendNextWrite(state);
     const active = mocks.helperParams?.onMessage(outgoingCall("approved-dial", 1));
     let ended: void | Promise<void>;
     try {
       await write.entered;
       ended = mocks.helperParams?.onMessage(outgoingCall("approved-dial", 6));
-      expect(mocks.startTalk).not.toHaveBeenCalled();
+      expect(startTalk).not.toHaveBeenCalled();
 
       write.release();
       await Promise.all([active, ended]);
 
-      expect(mocks.startTalk).not.toHaveBeenCalled();
-      expect(mocks.helper.setMuted).not.toHaveBeenCalled();
+      expectNotCalled(startTalk, helper.setMuted);
       expect((await runtime.status()).calls).toEqual([]);
       expect((await runtime.status()).outboundCallPending).toBeUndefined();
       expect(await state.lookup("active")).toBeUndefined();
@@ -325,14 +271,13 @@ describe("FaceTime runtime asynchronous persistence", () => {
     try {
       await Promise.resolve();
       expect(stopped).toBe(false);
-      expect(mocks.helper.stop).not.toHaveBeenCalled();
-      expect(mocks.helper.startCall).not.toHaveBeenCalled();
+      expectNotCalled(helper.stop, helper.startCall);
 
       write.release();
       await Promise.all([rejectedDial, stopping]);
 
-      expect(mocks.helper.startCall).not.toHaveBeenCalled();
-      expect(mocks.helper.stop).toHaveBeenCalledOnce();
+      expect(helper.startCall).not.toHaveBeenCalled();
+      expect(helper.stop).toHaveBeenCalledOnce();
       expect(await state.lookup("active")).toBeUndefined();
     } finally {
       write.release();
@@ -342,52 +287,40 @@ describe("FaceTime runtime asynchronous persistence", () => {
 
   it("closes a promoted call before pending deletion settles and fences delayed readiness", async () => {
     const state = await pendingDialState();
-    const readinessEntered = deferred();
-    const releaseReadiness = deferred();
+    const readiness = barrier();
     const talkClosed = deferred();
-    const talk = createTalkDriver({
-      readyForAudio: async () => {
-        readinessEntered.resolve();
-        await releaseReadiness.promise;
-      },
-    });
-    talk.close.mockImplementation(async () => {
-      talkClosed.resolve();
-    });
-    mocks.startTalk.mockResolvedValue(talk);
-    const deletionEntered = deferred();
-    const releaseDeletion = deferred();
+    const talk = createTalkDriver({ readyForAudio: readiness.wait });
+    talk.close.mockImplementation(async () => talkClosed.resolve());
+    startTalk.mockResolvedValue(talk);
+    const deletion = barrier();
     const observe = state.observe.bind(state);
     vi.spyOn(state, "observe").mockImplementationOnce(async (...args) => {
-      deletionEntered.resolve();
-      await releaseDeletion.promise;
+      await deletion.wait();
       return await observe(...args);
     });
     const runtime = await createRuntime(state);
     const active = mocks.helperParams?.onMessage(outgoingCall("approved-dial", 1));
     let ended: void | Promise<void> = undefined;
     try {
-      await readinessEntered.promise;
+      await readiness.entered;
       ended = mocks.helperParams?.onMessage(outgoingCall("approved-dial", 6));
-      await deletionEntered.promise;
+      await deletion.entered;
 
       expect((await runtime.status()).calls).toMatchObject([{ phase: "closing" }]);
       expect(await state.lookup("active")).toMatchObject({ dialID: "approved-dial" });
-      releaseReadiness.resolve();
+      readiness.release();
       await active;
       await talkClosed.promise;
       expect(talk.close).toHaveBeenCalledWith("native-ended");
-      expect(talk.activate).not.toHaveBeenCalled();
-      expect(mocks.helper.setMuted).not.toHaveBeenCalled();
-      expect(mocks.helper.startTransmission).not.toHaveBeenCalled();
+      expectNotCalled(talk.activate, helper.setMuted, helper.startTransmission);
 
-      releaseDeletion.resolve();
+      deletion.release();
       await ended;
       expect((await runtime.status()).calls).toEqual([]);
       expect(await state.lookup("active")).toBeUndefined();
     } finally {
-      releaseReadiness.resolve();
-      releaseDeletion.resolve();
+      readiness.release();
+      deletion.release();
       await Promise.all([active, ended]);
       await runtime.stop();
     }
@@ -397,7 +330,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
     const state = await pendingDialState();
     const runtime = await createRuntime(state);
     const write = suspendNextWrite(state);
-    mocks.helper.cancelOutgoingCall.mockImplementationOnce(async () => {
+    helper.cancelOutgoingCall.mockImplementationOnce(async () => {
       expect(await state.lookup("active")).toMatchObject({
         dialID: "approved-dial",
         delivery: "cancelling",
@@ -407,12 +340,12 @@ describe("FaceTime runtime asynchronous persistence", () => {
     const hangingUp = runtime.hangup();
     try {
       await write.entered;
-      expect(mocks.helper.cancelOutgoingCall).not.toHaveBeenCalled();
+      expect(helper.cancelOutgoingCall).not.toHaveBeenCalled();
       expect(await state.lookup("active")).toMatchObject({ delivery: "accepted" });
 
       write.release();
       await expect(hangingUp).resolves.toMatchObject({ dialID: "approved-dial" });
-      expect(mocks.helper.cancelOutgoingCall).toHaveBeenCalledOnce();
+      expect(helper.cancelOutgoingCall).toHaveBeenCalledOnce();
       await mocks.helperParams?.onMessage(outgoingCall("approved-dial", 6));
       expect(await state.lookup("active")).toBeUndefined();
     } finally {
@@ -424,13 +357,11 @@ describe("FaceTime runtime asynchronous persistence", () => {
 
   it("does not republish a terminal dial when stop overlaps delivery of its deletion result", async () => {
     const state = await pendingDialState();
-    const deleted = deferred();
-    const releaseResult = deferred();
+    const deletion = barrier();
     const compareAndApply = state.compareAndApply.bind(state);
     vi.spyOn(state, "compareAndApply").mockImplementationOnce(async (...args) => {
       const result = await compareAndApply(...args);
-      deleted.resolve();
-      await releaseResult.promise;
+      await deletion.wait();
       return result;
     });
     const runtime = await createRuntime(state);
@@ -438,19 +369,18 @@ describe("FaceTime runtime asynchronous persistence", () => {
     const ended = mocks.helperParams?.onMessage(outgoingCall("approved-dial", 6));
     let stopping: Promise<void> | undefined;
     try {
-      await deleted.promise;
+      await deletion.entered;
       expect(await state.lookup("active")).toBeUndefined();
       stopping = runtime.stop();
       await Promise.resolve();
 
-      releaseResult.resolve();
+      deletion.release();
       await Promise.all([ended, stopping]);
 
-      expect(register).not.toHaveBeenCalled();
-      expect(mocks.helper.cancelOutgoingCall).not.toHaveBeenCalled();
+      expectNotCalled(register, helper.cancelOutgoingCall);
       expect(await state.lookup("active")).toBeUndefined();
     } finally {
-      releaseResult.resolve();
+      deletion.release();
       await ended;
       await (stopping ?? runtime.stop());
     }
@@ -459,23 +389,15 @@ describe("FaceTime runtime asynchronous persistence", () => {
   it("joins a late helper reply during stop after a terminal event clears the pending dial", async () => {
     const state = emptyState();
     const runtime = await createRuntime(state);
-    const helperEntered = deferred();
-    const releaseReply = deferred();
-    mocks.helper.startCall.mockImplementationOnce(async (_request: unknown, dialID: string) => {
-      helperEntered.resolve();
-      await releaseReply.promise;
-      return {
-        dial_id: dialID,
-        call_uuid: "outbound-call",
-        muted: true,
-        is_uplink_muted: true,
-        transport: incomingCall().data.transport,
-      };
+    const reply = barrier();
+    helper.startCall.mockImplementationOnce(async (_request: unknown, dialID: string) => {
+      await reply.wait();
+      return dialReply("outbound-call", { dial_id: dialID });
     });
     const dialing = runtime.dial({ handle: "owner@example.com" });
     let stopping: Promise<void> | undefined;
     try {
-      await helperEntered.promise;
+      await reply.entered;
       const dialID = (await runtime.status()).outboundCallPending!.dialID;
       await mocks.helperParams?.onMessage(outgoingCall(dialID, 6));
       expect((await runtime.status()).outboundCallPending).toBeUndefined();
@@ -486,15 +408,15 @@ describe("FaceTime runtime asynchronous persistence", () => {
 
       expect(await state.lookup("active")).toBeUndefined();
       expect(stopped).toBe(false);
-      expect(mocks.helper.stop).not.toHaveBeenCalled();
-      releaseReply.resolve();
+      expect(helper.stop).not.toHaveBeenCalled();
+      reply.release();
       await Promise.all([dialing, stopping]);
 
-      expect(mocks.helper.stop).toHaveBeenCalledOnce();
-      expect(mocks.helper.cancelOutgoingCall).not.toHaveBeenCalled();
+      expect(helper.stop).toHaveBeenCalledOnce();
+      expect(helper.cancelOutgoingCall).not.toHaveBeenCalled();
       expect(await state.lookup("active")).toBeUndefined();
     } finally {
-      releaseReply.resolve();
+      reply.release();
       await dialing.catch(() => undefined);
       await (stopping ?? runtime.stop());
     }

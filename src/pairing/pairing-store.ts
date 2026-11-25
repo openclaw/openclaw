@@ -133,7 +133,7 @@ function mutatePairing(params: PairingOptions, mutation: PairingMutation) {
   );
 }
 
-/** @deprecated Await readChannelAllowFromStore; final compatibility day: 2026-12-31. */
+/** @deprecated Await readChannelAllowFromStore; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readChannelAllowFromStoreSync(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
@@ -255,7 +255,6 @@ export async function approveChannelPairingRequest(params: {
   channel: PairingChannel;
   requestId: string;
   accountId: string;
-  env?: NodeJS.ProcessEnv;
   pairingAdapter?: ChannelPairingAdapter;
 }): Promise<{ id: string; entry: PairingRequest } | null> {
   const requestId = normalizeOptionalString(params.requestId);
@@ -269,7 +268,6 @@ export async function dismissChannelPairingRequest(params: {
   channel: PairingChannel;
   requestId: string;
   accountId: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<{ id: string; entry: PairingRequest } | null> {
   const requestId = normalizeOptionalString(params.requestId);
   return requestId

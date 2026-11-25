@@ -14,6 +14,9 @@ Related: [Nodes overview](/nodes) - [Active computer presence](/nodes/presence) 
 
 Common options on every subcommand: `--url <url>`, `--token <token>`, `--timeout <ms>` (default varies by command), `--json`.
 
+Ctrl+C cancels the lookup used to resolve `--node`, including the legacy paired-node
+fallback. Camera and location reads can be interrupted before a node command starts.
+
 For numeric options such as `--location-timeout`, `--max-age`, and `--quality`, omit
 the flag to use its default. An explicit empty or whitespace-only value is invalid
 and fails before node lookup or Gateway requests.
@@ -57,7 +60,12 @@ openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name <displayName>
 ```
 
+`pending` and `list` show **Approval scopes**: the operator permissions required to approve each request, separate from the commands and capabilities granted to the node.
+
 These commands manage the node's approved command/capability surface on its paired-device record. Device pairing (`openclaw devices approve`) gates the node's WebSocket `connect` handshake.
+
+Rename/remove confirmations and command errors escape terminal control characters.
+JSON responses preserve the original values.
 
 For manual enrollment, first approve the device request, then restart or rerun
 a node paused on `PAIRING_REQUIRED`. Its reconnect creates the separate request

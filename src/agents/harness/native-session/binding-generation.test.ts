@@ -1,11 +1,11 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import {
   captureNativeSessionGenerationAuthority,
   reclaimNativeSessionGeneration,
@@ -15,6 +15,7 @@ import {
 
 const createSupersededError = (sessionId: string) =>
   new Error(`Session generation is no longer current: ${sessionId}`);
+const tempDirs = useSessionStoreTempDirs(afterAll, "native-generation-");
 
 describe("native session binding generation", () => {
   let storePath: string;
@@ -26,14 +27,8 @@ describe("native session binding generation", () => {
   const binding = { value: "native-owner" };
   const scope = () => ({ agentId: target.agentId, sessionKey: target.sessionKey, storePath });
 
-  beforeEach(async ({ onTestFinished }) => {
-    const fixture = await createOpenClawTestState({
-      prefix: "native-generation-",
-      layout: "state-only",
-      applyEnv: false,
-    });
-    onTestFinished(() => fixture.cleanup());
-    storePath = path.join(fixture.stateDir, "sessions.json");
+  beforeEach(() => {
+    storePath = path.join(tempDirs.make(), "sessions.json");
   });
 
   it("preserves synchronous authority capture for released harness plugins", async () => {

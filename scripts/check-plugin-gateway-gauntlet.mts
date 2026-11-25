@@ -14,6 +14,7 @@ import {
 import { normalizeCsvOrLooseStringList } from "../packages/normalization-core/src/string-normalization.ts";
 import { chunkItems } from "../src/utils/chunk-items.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 import {
   parseNonNegativeInt,
@@ -381,11 +382,7 @@ function createIsolatedEnv(repoRoot: string, runRoot: string) {
     { encoding: "utf8", mode: 0o600, flag: "wx" },
   );
   return {
-    ...process.env,
-    HOME: home,
-    XDG_CONFIG_HOME: path.join(home, ".config"),
-    XDG_CACHE_HOME: path.join(home, ".cache"),
-    XDG_DATA_HOME: path.join(home, ".local", "share"),
+    ...createBuildSmokeEnv(home, process.env),
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_QA_SUITE_PROGRESS: process.env.OPENCLAW_QA_SUITE_PROGRESS ?? "1",

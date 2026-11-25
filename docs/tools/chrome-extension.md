@@ -309,6 +309,10 @@ The daemon uses the same per-host relay key and stays alive while an extension
 or CDP client is connected. After both disconnect, it exits following ten
 minutes of inactivity, checked every 30 seconds. Closing Chrome alone does not
 stop it while a CDP client remains connected. A later reconnect can wake it again.
+The daemon also exits, even with connected clients, when an app or package
+update replaces or removes the installation it was started from. Attached CDP
+clients must reconnect. The extension's reconnect starts a daemon from the
+current installation, usually within a minute.
 
 The standalone daemon defaults to **v2-only authentication**, independently of
 the Gateway relay's legacy default. Only an explicit
@@ -351,6 +355,12 @@ An agent-created tab may start at `about:blank` while a CDP client initializes
 it before navigating. The extension allows that specific initial tab, keeps it
 in the OpenClaw group, and applies the same pause and access-mode controls.
 Normal navigation keeps the tab available in either access mode.
+In-flight CDP cache, extra-header, and service-worker bypass settings also survive
+allowed navigation. Pausing access, removing a selected tab from the OpenClaw
+group, or detaching its debugger still rejects in-flight command results.
+Document reads interrupted by an allowed navigation report that the document
+changed. Inspect the current page before retrying; this error does not require
+granting access again.
 Existing blank tabs, manually grouped blanks, and other `about:` pages remain
 unavailable. Navigating away, replacing the tab, or restarting or reconnecting
 the extension ends the initial blank admission. Returning to `about:blank`
@@ -550,8 +560,9 @@ invalidate another client's snapshot refs. This is not an isolated browser per
 client or complete isolation of every CDP domain and competing client policy.
 A complete tab-list request returns an error when native targets cannot yet be
 matched to Playwright pages, rather than reporting a partial list as complete.
-Pages that Chrome permanently refuses to debug, such as the Chrome Web Store,
-are excluded from this list. The Gateway logs a warning naming the skipped tab
+Pages that Chrome permanently refuses to debug, such as the Chrome Web Store
+or tabs Chrome reports as "Cannot attach to this target.", are excluded from
+this list. The Gateway logs a warning naming the skipped tab
 and Chrome's refusal; ordinary tabs remain available. Transient attachment
 failures still fail the complete request. This handling is Gateway-side and
 does not require a new Chrome extension release.

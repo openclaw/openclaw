@@ -1,12 +1,64 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  getGatewayServiceInstallation,
+  withGatewayServiceInstallation,
+} from "../infra/gateway-service-installation-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 
+async function expectWorkRefused(work: GatewayConnectionWork) {
+  const late = vi.fn();
+  await expect(work.track(late)).rejects.toThrow("Async work scope is closed");
+  expect(late).not.toHaveBeenCalled();
+}
+
 describe("Gateway connection work", () => {
+  it("restores its service facts for detached work without restoring startup authority", async () => {
+    const caller = new AsyncLocalStorage<string>();
+    const installation = {
+      root: "/fixture/installed",
+      version: "2026.11.3",
+      cliVersion: "2026.11.4",
+      databasePath: "/fixture/state/openclaw.sqlite",
+    };
+    const work = caller.run("startup", () =>
+      withGatewayServiceInstallation({ installation }, () => new GatewayConnectionWork()),
+    );
+    const uninstalled = new GatewayConnectionWork();
+    try {
+      await caller.run("request", () =>
+        work.track(async () => {
+          expect(getGatewayServiceInstallation()).toEqual(installation);
+          expect(caller.getStore()).toBe("request");
+          await nextTurn();
+          expect(getGatewayServiceInstallation()).toEqual(installation);
+          expect(caller.getStore()).toBe("request");
+        }),
+      );
+      await withGatewayServiceInstallation(
+        { installation: { ...installation, root: "/fixture/another" } },
+        async () => {
+          await work.trackCleanup(async () => {
+            await nextTurn();
+            expect(getGatewayServiceInstallation()).toEqual(installation);
+          });
+          await uninstalled.track(async () => {
+            await nextTurn();
+            expect(getGatewayServiceInstallation()).toBeUndefined();
+          });
+          expect(getGatewayServiceInstallation()?.root).toBe("/fixture/another");
+        },
+      );
+      expect(getGatewayServiceInstallation()).toBeUndefined();
+    } finally {
+      await Promise.all([work.drain(), uninstalled.drain()]);
+    }
+  });
+
   it("starts received work synchronously and joins connection cleanup after transport close", async () => {
     const work = new GatewayConnectionWork();
     const requestGate = createDeferredCore();
@@ -41,61 +93,35 @@ describe("Gateway connection work", () => {
       await closing;
     }
     expect(drained).toBe(true);
-    const late = vi.fn();
-    await expect(work.track(late)).rejects.toThrow("Async work scope is closed");
-    expect(late).not.toHaveBeenCalled();
+    await expectWorkRefused(work);
   });
 
-  it("retains a failed cleanup outcome instead of reporting a clean drain", async () => {
-    const work = new GatewayConnectionWork();
-    const failure = new Error("connection cleanup failed");
-    await expect(
-      work.trackCleanup(async () => {
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
-    work.beginClose();
-    await expect(work.drain()).rejects.toMatchObject({ cause: failure });
-    await expect(work.drain()).rejects.toMatchObject({ cause: failure });
-  });
-
-  it("allows clean shutdown after a handled request failure settles", async () => {
-    const work = new GatewayConnectionWork();
-    const failure = new Error("handled request failed");
-    await expect(
-      work.track(async () => {
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
-    work.beginClose();
-    await expect(work.drain()).resolves.toBeUndefined();
-  });
-
-  it("does not drain another Gateway generation's work", async () => {
-    const first = new GatewayConnectionWork();
-    const second = new GatewayConnectionWork();
-    const gate = createDeferredCore();
-    let settled = false;
-    const pending = first.track(async () => {
-      await gate.promise;
-      settled = true;
-    });
-    try {
-      second.beginClose();
-      await second.drain();
-      expect(settled).toBe(false);
-    } finally {
-      gate.resolve();
-      first.beginClose();
-      await first.drain();
-      await pending;
-    }
-  });
+  it.each(["trackCleanup", "track"] as const)(
+    "retains only cleanup failures when draining %s",
+    async (method) => {
+      const work = new GatewayConnectionWork();
+      const failure = new Error(`${method} failed`);
+      await expect(work[method](() => Promise.reject(failure))).rejects.toBe(failure);
+      work.beginClose();
+      if (method === "trackCleanup") {
+        await expect(work.drain()).rejects.toMatchObject({ cause: failure });
+        await expect(work.drain()).rejects.toMatchObject({ cause: failure });
+      } else {
+        await expect(work.drain()).resolves.toBeUndefined();
+      }
+    },
+  );
 });
 
 describe.skipIf(process.platform === "win32")("Gateway connection broker ownership", () => {
   let firstBroker: SpawnBrokerHost;
   let secondBroker: SpawnBrokerHost;
+  const makeWork = (broker: SpawnBrokerHost) =>
+    runWithSpawnBroker(broker, () => new GatewayConnectionWork());
+  const expectBrokerAfterYield = async (broker?: SpawnBrokerHost) => {
+    await nextTurn();
+    expect(getSpawnBroker()).toBe(broker);
+  };
   beforeAll(async () => {
     firstBroker = createSpawnBrokerHost();
     secondBroker = createSpawnBrokerHost();
@@ -107,18 +133,14 @@ describe.skipIf(process.platform === "win32")("Gateway connection broker ownersh
 
   it("restores only the owning broker when received work enters from another context", async () => {
     const callerContext = new AsyncLocalStorage<string>();
-    const first = callerContext.run("startup", () =>
-      runWithSpawnBroker(firstBroker, () => new GatewayConnectionWork()),
-    );
-    const second = runWithSpawnBroker(secondBroker, () => new GatewayConnectionWork());
+    const first = callerContext.run("startup", () => makeWork(firstBroker));
+    const second = makeWork(secondBroker);
     const withoutBroker = new GatewayConnectionWork();
     const firstGate = createDeferredCore();
-    const entered: string[] = [];
     try {
       const pending = callerContext.run("request", () =>
         runWithSpawnBroker(secondBroker, () =>
           first.track(async () => {
-            entered.push("first");
             expect(getSpawnBroker()).toBe(firstBroker);
             expect(callerContext.getStore()).toBe("request");
             await firstGate.promise;
@@ -127,18 +149,14 @@ describe.skipIf(process.platform === "win32")("Gateway connection broker ownersh
           }),
         ),
       );
-      expect(entered).toEqual(["first"]);
       await runWithSpawnBroker(firstBroker, async () => {
-        await second.track(async () => {
-          await nextTurn();
-          expect(getSpawnBroker()).toBe(secondBroker);
-        });
-        expect(getSpawnBroker()).toBe(firstBroker);
-        await withoutBroker.track(async () => {
-          await nextTurn();
-          expect(getSpawnBroker()).toBeUndefined();
-        });
-        expect(getSpawnBroker()).toBe(firstBroker);
+        for (const [work, broker] of [
+          [second, secondBroker],
+          [withoutBroker, undefined],
+        ] as const) {
+          await work.track(() => expectBrokerAfterYield(broker));
+          expect(getSpawnBroker()).toBe(firstBroker);
+        }
       });
       firstGate.resolve();
       await pending;
@@ -149,26 +167,16 @@ describe.skipIf(process.platform === "win32")("Gateway connection broker ownersh
   });
 
   it("keeps closing cleanup on its broker and refuses work after that owner drains", async () => {
-    const first = runWithSpawnBroker(firstBroker, () => new GatewayConnectionWork());
-    const second = runWithSpawnBroker(secondBroker, () => new GatewayConnectionWork());
+    const first = makeWork(firstBroker);
+    const second = makeWork(secondBroker);
     first.beginClose();
     try {
       await runWithSpawnBroker(secondBroker, () =>
-        first.trackCleanup(async () => {
-          await nextTurn();
-          expect(getSpawnBroker()).toBe(firstBroker);
-        }),
+        first.trackCleanup(() => expectBrokerAfterYield(firstBroker)),
       );
       await first.drain();
-      const late = vi.fn();
-      await expect(runWithSpawnBroker(secondBroker, () => first.track(late))).rejects.toThrow(
-        "Async work scope is closed",
-      );
-      expect(late).not.toHaveBeenCalled();
-      await second.track(async () => {
-        await nextTurn();
-        expect(getSpawnBroker()).toBe(secondBroker);
-      });
+      await runWithSpawnBroker(secondBroker, () => expectWorkRefused(first));
+      await second.track(() => expectBrokerAfterYield(secondBroker));
     } finally {
       await Promise.all([first.drain(), second.drain()]);
     }

@@ -1,15 +1,29 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
+import * as processExec from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import * as databaseContexts from "./update-command-database-context.js";
 import { inspectGitDryRunTargetSchemaVersions } from "./update-command-git.js";
+import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 function git(root: string, ...args: string[]): string {
   return execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+}
+
+function commitFile(root: string, file: string, content: string) {
+  fs.writeFileSync(path.join(root, file), content);
+  git(root, "add", file);
+  git(root, "commit", "-m", file);
 }
 
 function createGitFixture(base: string, options: { partial?: boolean } = {}) {
@@ -22,19 +36,13 @@ function createGitFixture(base: string, options: { partial?: boolean } = {}) {
   git(source, "init", "--initial-branch=main");
   git(source, "config", "user.name", "OpenClaw Test");
   git(source, "config", "user.email", "openclaw@example.com");
-  fs.writeFileSync(
-    path.join(source, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
-  );
-  git(source, "add", "package.json");
-  git(source, "commit", "-m", "initial");
+  commitFile(source, "package.json", JSON.stringify({ name: "openclaw", version: "2026.9.1" }));
   git(source, "remote", "add", "origin", remote);
   git(source, "push", "--set-upstream", "origin", "main");
   git(
     base,
     "clone",
-    ...(options.partial ? ["--filter=blob:none", "--no-checkout"] : []),
-    ...(options.partial ? [`file://${remote}`] : [remote]),
+    ...(options.partial ? ["--filter=blob:none", "--no-checkout", `file://${remote}`] : [remote]),
     checkout,
   );
   return { checkout, source };
@@ -58,9 +66,7 @@ async function inspectFailure(root: string): Promise<{ code: string; message: st
 it("distinguishes a stale cached ref from an unreachable remote during a dry-run", async () => {
   const { checkout, source } = createGitFixture(tempDirs.make("update-git-dry-run-"));
   const cachedBefore = git(checkout, "rev-parse", "origin/main");
-  fs.writeFileSync(path.join(source, "next.txt"), "next\n");
-  git(source, "add", "next.txt");
-  git(source, "commit", "-m", "next");
+  commitFile(source, "next.txt", "next\n");
   git(source, "push", "origin", "main");
 
   const stale = await inspectFailure(checkout);
@@ -77,6 +83,41 @@ it("distinguishes a stale cached ref from an unreachable remote during a dry-run
   expect(unreachable.message).not.toContain("cached origin/main");
 });
 
+it("recovers an incomplete remote advertisement without changing cached refs", async () => {
+  const { checkout } = createGitFixture(tempDirs.make("update-git-dry-run-retry-"));
+  const refsBefore = git(checkout, "show-ref");
+  const actualRun = processExec.runCommandWithTimeout;
+  let attempts = 0;
+  const failed = Promise.withResolvers<void>();
+  vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
+    if (argv.includes("ls-remote")) {
+      attempts += 1;
+      if (attempts === 1) {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        failed.resolve();
+        return Promise.resolve(
+          createCommandResult({
+            code: 128,
+            stderr: "fatal: transfer closed with 187 bytes remaining to read",
+          }),
+        );
+      }
+      vi.useRealTimers();
+    }
+    return actualRun(argv, options);
+  });
+  const pending = inspectGitDryRunTargetSchemaVersions({
+    root: checkout,
+    timeoutMs: 5_000,
+    channel: "dev",
+  });
+  await failed.promise;
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(await pending).not.toHaveProperty("metadataUnreadable");
+  expect(attempts).toBe(2);
+  expect(git(checkout, "show-ref")).toBe(refsBefore);
+});
+
 it("explains when a dry-run cannot hydrate a promised target manifest", async () => {
   const { checkout } = createGitFixture(tempDirs.make("update-git-dry-run-partial-"), {
     partial: true,
@@ -86,8 +127,53 @@ it("explains when a dry-run cannot hydrate a promised target manifest", async ()
   const missingManifest = await inspectFailure(checkout);
   expect(missingManifest.code).toBe("target-git-cache-stale");
   expect(missingManifest.message).toContain("not fully available in the local checkout");
-  expect(missingManifest.message).toContain("dry-run leaves local refs and objects unchanged");
-  expect(missingManifest.message).toContain("real openclaw update will fetch and validate");
-  expect(missingManifest.message).not.toContain("Check Git remote access");
   expect(git(checkout, "rev-parse", "origin/main")).toBe(targetBefore);
 });
+
+it.each(["incompatible", "compatible", "uncached"] as const)(
+  "reports the %s Git target Node requirement without updating the checkout",
+  async (scenario) => {
+    const { checkout, source } = createGitFixture(tempDirs.make("git-node-preview-"));
+    const engine = scenario === "compatible" ? ">=24.0.0" : ">=999.0.0";
+    commitFile(
+      source,
+      "package.json",
+      JSON.stringify({ name: "openclaw", engines: { node: engine } }),
+    );
+    git(source, "push", "origin", "main");
+    if (scenario !== "uncached") {
+      git(checkout, "fetch", "origin");
+    }
+    const refs = git(checkout, "show-ref");
+    const manifest = fs.readFileSync(path.join(checkout, "package.json"), "utf8");
+    vi.spyOn(databaseContexts, "inspectUpdateDatabaseContexts").mockResolvedValue({
+      service: undefined,
+      services: new Map(),
+      managedEnv: undefined,
+      contexts: [],
+    });
+    const preview = await preflightUpdateCommandSchemas({
+      root: checkout,
+      updateInstallKind: "git",
+      switchToGit: false,
+      shouldRestart: false,
+      updateStepTimeoutMs: 5000,
+      managedServiceRootRedirect: null,
+      channel: "dev",
+      opts: { dryRun: true, json: true },
+      refuseUpdate: async () => {
+        throw new Error("preview attempted mutation");
+      },
+    });
+    expect(preview?.preflightNotes.join("\n")).toContain(
+      scenario === "uncached" ? "Node compatibility was not checked" : engine,
+    );
+    if (scenario === "incompatible") {
+      expect(preview?.preflightFailures).toContainEqual(
+        expect.objectContaining({ reason: "preflight-node-runtime-incompatible" }),
+      );
+    }
+    expect(git(checkout, "show-ref")).toBe(refs);
+    expect(fs.readFileSync(path.join(checkout, "package.json"), "utf8")).toBe(manifest);
+  },
+);

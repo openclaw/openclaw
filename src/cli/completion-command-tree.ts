@@ -1,19 +1,13 @@
 import type { Command, Option } from "commander";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 
-type ShellCompletionValueChoice = {
-  flags: string[];
-  choices: string[];
-  requiresValue: boolean;
-};
-
 export type ShellCompletionContext = {
   command: Command;
   pathVariants: string[][];
   completions: string[];
   valueOptions: string[];
   requiredValueOptions: string[];
-  valueChoices: ShellCompletionValueChoice[];
+  valueChoices: { flags: string[]; choices: string[]; requiresValue: boolean }[];
 };
 
 export type ShellCompletionCommandTree = ReturnType<typeof collectShellCompletionCommandTree>;
@@ -23,7 +17,9 @@ function completionFlags(option: Option): string[] {
 }
 
 export function completionOptions(command: Command): { option: Option; flags: string[] }[] {
-  const options = command.options.map((option) => ({ option, flags: completionFlags(option) }));
+  // Commander's help API includes implicit help and removes flags shadowed by real options.
+  const ownOptions = new Set([...command.options, ...command.createHelp().visibleOptions(command)]);
+  const options = [...ownOptions].map((option) => ({ option, flags: completionFlags(option) }));
   const shadowedFlags = new Set(options.flatMap(({ flags }) => flags));
   let root = command;
   while (root.parent) {

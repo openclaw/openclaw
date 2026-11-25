@@ -4,7 +4,11 @@ import {
   type AiProviderRequestCapabilities,
 } from "@openclaw/ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import "../llm/ai-transport-host.js";
+import { configureAiTransportBaseHost } from "../llm/ai-transport-host.js";
+import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
 import { getModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
@@ -35,11 +39,10 @@ import {
 } from "./provider-request-config.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
-let configured = false;
-
 /** Installs the agent and plugin ports only on paths that execute provider runtime. */
 export function configureAiTransportRuntimeHost(): void {
-  if (configured) {
+  const installation = configureAiTransportBaseHost();
+  if (installation.runtime) {
     return;
   }
   const host = getDefaultAiTransportHost();
@@ -114,16 +117,15 @@ export function configureAiTransportRuntimeHost(): void {
         capability: "llm",
         transport: "stream",
       }).headers,
-    requiresManagedTransport: (model) => {
-      const request = getModelProviderRequestTransport(model);
-      return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
-    },
     inheritManagedTransport: (source, target) =>
       inheritModelProviderRequestRouteFacts(
         source,
         attachModelProviderLocalServiceReconciler(
           attachModelProviderLocalService(
-            attachModelProviderRequestTransport(target, getModelProviderRequestTransport(source)),
+            attachModelProviderRequestTransport(
+              attachProviderAuthAuthority(target, getProviderAuthAuthority(source)),
+              getModelProviderRequestTransport(source),
+            ),
             getModelProviderLocalService(source),
           ),
           getModelProviderLocalServiceReconciler(source),
@@ -132,7 +134,7 @@ export function configureAiTransportRuntimeHost(): void {
     transformTransportMessages,
     registerCustomApi: ensureCustomApiRegistered,
   });
-  configured = true;
+  installation.runtime = true;
 }
 
 configureAiTransportRuntimeHost();

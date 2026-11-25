@@ -29,6 +29,9 @@ export const runDaemonStatus = status((runtime) => runtime.runDaemonStatus);
 export const isManagedUpdateRequesterOwner = lifecycleContext(
   (runtime) => runtime.isManagedUpdateRequesterOwner,
 );
+export const prepareManagedUpdateRequesterIdentity = lifecycleContext(
+  (runtime) => runtime.prepareManagedUpdateRequesterIdentity,
+);
 export const waitForGatewayUpdateRecovery = lifecycleContext(
   (runtime) => runtime.waitForGatewayUpdateRecovery,
 );
@@ -37,17 +40,19 @@ export const waitForGatewayUpdateRecovery = lifecycleContext(
 export {
   adoptUpdateRun,
   getUpdateRun,
+  listUpdateRuns,
   recordUpdateRunDiagnostic,
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
 export { finishDaemonUpdateRun as finishUpdateRun } from "./daemon-cli/update-run.js";
 
-export {
-  createManagedUpdateRequesterAuthority,
-  prepareManagedUpdateRequesterIdentity,
-} from "../infra/update-requester-authority.js";
+export { createManagedUpdateRequesterAuthority } from "../infra/update-requester-authority.js";
 
 export const assertForegroundUpdateOrigin = serviceHandoff(
   (runtime) => runtime.assertForegroundUpdateOrigin,
 );
+
+export const runManagedHandoffSentinelChild = createLazyRuntimeMethodBinder(
+  () => import("../infra/update-managed-service-handoff-sentinel.js"),
+)((runtime) => runtime.executeInstalledHandoffSentinelOperation);

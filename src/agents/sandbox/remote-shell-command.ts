@@ -1,7 +1,6 @@
-/** Shared remote-shell quoting, workdir validation, and directory contracts. */
-export function shellEscape(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
+import { shellEscape } from "../../shared/shell-quote.js";
+
+export { shellEscape };
 
 /** Build a remote shell command from literal argv entries. */
 export function buildRemoteCommand(argv: string[]): string {

@@ -15,6 +15,15 @@ tools. With no global Code Mode setting, automatic per-model activation applies.
 Choosing an executor in Labs preserves activation. When writing an object in
 config, include `enabled: "auto"` to retain automatic activation.
 
+An AOT standalone selects the `embedded-aot`
+[runtime execution profile](/concepts/runtime-profiles). Its Node executor
+runs VM code interpreted and returns its normal results. A one-time performance
+notice recommends a JIT build for full speed. Builds that disable runtime code
+generation, including `--disallow-code-generation-from-strings=strict`, still
+report their runtime restriction with guidance. QuickJS remains a separate guest
+runtime with its own embedded WASM and worker qualification; OpenClaw does not
+select it automatically.
+
 ## Choose an executor
 
 | Executor         | Intended use                           | Execution                                                                | Suspended state                      |
@@ -104,6 +113,7 @@ Gateway shutdown releases them. Neither survives a Gateway restart.
 `timeoutMs`, output limits, pending-call limits, suspended-run capacity, and
 `snapshotTtlSeconds` apply to both executors. The historical
 `snapshotTtlSeconds` name also controls Node's suspended-context lifetime.
+Suspended runs expire after elapsed time, unaffected by system-clock changes.
 The host enforces Node's execution deadline by terminating an overdue worker,
 including synchronous loops and promise continuations. Output emitted before
 the timeout remains available within the configured output limit.
@@ -128,15 +138,30 @@ Settled input and guest errors release their cell context and keep healthy worke
 available for reuse. Native failures, interrupted execution, and cancellation
 still retire the worker.
 
-Node keeps at most four completed workers warm. Surplus workers expire after
-30 seconds; one can remain warm for five minutes. Diagnostic memory samples and
-stability logs expose the cumulative `workerLifecycle` counters. Prometheus exports
+Node keeps at most eight completed workers warm. Their combined nominal heap
+budget is 512 MiB at the default 64 MiB per worker, or 8 GiB when every worker
+uses the maximum 1 GiB configuration. This is not an RSS limit. Surplus workers
+expire three minutes after their last completion. This cooldown keeps recent
+burst capacity warm; serial traffic reuses the newest worker without extending
+the surplus workers' deadlines. Within that eight-worker budget, the most recently used
+idle worker for each compatible host and heap limit remains warm until pressure,
+health, runtime rotation, or host shutdown retires it. Workers start only when a
+cell needs one; unused Code Mode creates no warm workers. Critical memory
+pressure retires all completed idle workers without discarding live continuations.
+GC storms above 600 major collections per minute across two consecutive windows
+of at least 10 seconds also retire warm workers. The pool admits at most one
+storm retirement per minute. Active cells and parked continuations drain through
+completion or their existing timeout or expiry before retirement; draining workers
+never return to the warm pool. The next cell acquires a healthy worker on demand.
+Diagnostic memory samples and stability logs expose the cumulative `workerLifecycle`
+counters. Prometheus exports
 `openclaw_worker_started_total{script="code-mode-node.worker.js"}` and
 `openclaw_worker_retired_total` with bounded retirement reasons: `eviction` for
 the warm-cache limit, `idle-expiry` for idle deadlines, `dispose` for explicit
 continuation or standalone cleanup, `shutdown` for host closure, `crash` for
-native worker errors, and `gc-thrash` for the near-limit GC watchdog. Memory
-pressure and runtime replacement retain `memory_pressure` and `rotation`.
+native worker errors, `gc-thrash` for the near-limit GC watchdog, and `gc-storm`
+for sustained storm containment. Memory pressure and runtime replacement retain
+`memory_pressure` and `rotation`.
 Retirement counts advance only after native exit; cleanup retries keep the first
 recorded reason. Start counts remain grouped by script, since a new worker has
 no retirement reason yet.

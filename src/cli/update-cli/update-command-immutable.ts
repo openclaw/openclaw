@@ -1,3 +1,4 @@
+import path from "node:path";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   adoptImmutableInstall,
@@ -5,7 +6,10 @@ import {
   prepareImmutableUpdate,
 } from "../../infra/update-immutable-install.js";
 import { defaultRuntime } from "../../runtime.js";
+import { hasReleaseUpdateOwner } from "../../update/installation-identity.js";
+import { resolvePrefix } from "../../update/store.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 
 const PREPARATION_ONLY =
@@ -40,6 +44,7 @@ function reportImmutableFailure(
   error: unknown,
   json?: boolean,
   reason = "immutable-preparation-refused",
+  warnings: string[] = [],
 ): never {
   const message = formatErrorMessage(error);
   if (json) {
@@ -48,6 +53,7 @@ function reportImmutableFailure(
       installKind: "immutable",
       reason,
       message,
+      ...(warnings.length ? { warnings } : {}),
     });
   } else {
     defaultRuntime.error(message);
@@ -92,8 +98,27 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
     }
     return false;
   }
+  if (!opts.dryRun && (await hasReleaseUpdateOwner())) {
+    const command = [
+      process.execPath,
+      path.join(resolvePrefix(), "openclaw-launcher.mjs"),
+      "update",
+    ]
+      .map(quoteCliArg)
+      .join(" ");
+    return reportImmutableFailure(
+      `The resident launcher owns this state directory; immutable activation cannot replace it. To update the selected release, run: ${command}`,
+      opts.json,
+    );
+  }
   let result: Awaited<ReturnType<typeof prepareImmutableUpdate>>;
+  const reportedWarnings = new Set<string>();
+  const onWarning = (warning: string) => {
+    reportedWarnings.add(warning);
+    defaultRuntime.error(`Warning: ${warning}`);
+  };
   let drainTimeoutMs: number | undefined;
+  let timeoutMs: number | undefined;
   try {
     drainTimeoutMs = parseUpdateTimeoutMs(opts.drainTimeout, "--drain-timeout");
     if (
@@ -108,14 +133,23 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
         "Immutable updates support official main or --sha only. Use openclaw update recover --root <installation-root> for retained activation recovery; channel switching and package overrides are unsupported.",
       );
     }
+    timeoutMs = parseUpdateTimeoutMs(opts.timeout);
     result = await prepareImmutableUpdate({
       root,
       sha: opts.sha,
       dryRun: opts.dryRun,
-      timeoutMs: parseUpdateTimeoutMs(opts.timeout),
+      timeoutMs,
+      onWarning,
     });
   } catch (error) {
     return reportImmutableFailure(error, opts.json);
+  }
+  if (!opts.json) {
+    for (const warning of result.warnings) {
+      if (!reportedWarnings.has(warning)) {
+        onWarning(warning);
+      }
+    }
   }
   const receipts: string[] = [];
   let activation: ActivationResult | "disabled" | "skipped" | "planned" | "not-needed" =
@@ -139,12 +173,17 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
       activation = await activateImmutableUpdate({
         root: installation.root,
         expectedPrepared,
-        timeoutMs: parseUpdateTimeoutMs(opts.timeout),
+        timeoutMs,
         drainTimeoutMs,
         onReceipt: collectReceipt(receipts, opts),
       });
     } catch (error) {
-      return reportImmutableFailure(error, opts.json, "immutable-activation-failed");
+      return reportImmutableFailure(
+        error,
+        opts.json,
+        "immutable-activation-failed",
+        result.warnings,
+      );
     }
   }
   const message =
@@ -181,9 +220,6 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
             ? `Prepared immutable generation${target}.`
             : `Immutable preparation failed: ${result.reason ?? "candidate preparation failed"}.`,
     );
-    for (const warning of result.warnings) {
-      defaultRuntime.error(`Warning: ${warning}`);
-    }
     if (result.coverage) {
       const { formatImmutableUpdateCoverage } =
         await import("../../infra/update-immutable-inspection.js");

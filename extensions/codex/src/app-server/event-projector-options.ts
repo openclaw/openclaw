@@ -1,14 +1,18 @@
 import type { runAgentHarnessBeforeCompactionHook } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import type { CodexUsageProjection } from "./event-projector-usage.js";
 import type { CodexNativePlan } from "./plan-compaction-state.js";
 import type { CodexThreadItem, JsonValue } from "./protocol.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
+import type { CodexRuntimeUpdateFacts } from "./usage-limit-error.js";
 
 export type CodexAsyncDeliverySettlement = "settled" | "retry";
 
 export type CodexAppServerEventProjectorOptions = {
   agentHookContext?: Parameters<typeof runAgentHarnessBeforeCompactionHook>[0]["ctx"];
+  /** The running Codex and its update owner, for model-version failures. */
+  codexRuntime?: CodexRuntimeUpdateFacts;
   initialContextTokens?: number;
   nativePostToolUseRelayEnabled?: boolean;
   asyncUserMessageAllowed?: boolean;
@@ -19,6 +23,7 @@ export type CodexAppServerEventProjectorOptions = {
     text: string;
   }) => CodexAsyncDeliverySettlement | Promise<CodexAsyncDeliverySettlement>;
   onNativeToolResultRecorded?: () => void | Promise<void>;
+  onResponseObserved?: (response: NonNullable<ReturnType<CodexUsageProjection["record"]>>) => void;
   onNativePlanUpdate?: (update: CodexNativePlan) => void | Promise<void>;
   prepareNativeMcpAppResultDetails?: (item: CodexThreadItem) => Promise<unknown>;
   readRecentRateLimits?: () => JsonValue | undefined;

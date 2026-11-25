@@ -4,7 +4,6 @@ import type { PluginPackageInstall } from "../plugins/manifest.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
-/** Catalog entry used by onboarding to offer or require a plugin install. */
 export type OnboardingPluginInstallEntry = {
   pluginId: string;
   label: string;
@@ -21,6 +20,8 @@ export type OnboardingPluginInstallOptions = {
   runtime: RuntimeEnv;
   workspaceDir?: string;
   promptInstall?: boolean;
+  /** Return failures for a caller that owns the final diagnostic. */
+  failureOutput?: "caller";
   autoConfirmSingleSource?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   beforePersistentApply?: () => void;
@@ -28,7 +29,6 @@ export type OnboardingPluginInstallOptions = {
   recordOfficialCapabilities?: boolean;
 };
 
-/** Config and status returned after attempting an onboarding plugin install. */
 export type OnboardingPluginInstallResult = {
   cfg: OpenClawConfig;
   installed: boolean;

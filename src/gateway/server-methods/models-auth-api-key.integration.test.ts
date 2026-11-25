@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { expect, it } from "vitest";
 import {
   type ModelsAuthSetApiKeyResult,
@@ -10,23 +11,19 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../test-helpers.e2e.js";
+import { MODELS_AUTH_INTEGRATION_ENV } from "../test-helpers.env.js";
 
-it("models.authSetApiKey validates the old wire request before the real credential writer", async () => {
+it("models.authSetApiKey validates the old wire request, saves the key, and allows its models", async () => {
   const state = await createOpenClawTestState({
     label: "models-auth-api-key",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
+    env: { ...MODELS_AUTH_INTEGRATION_ENV },
   });
   const token = "api-key-contract-fixture-token";
   const cfg = {
-    agents: { entries: { main: { workspace: state.workspaceDir } } },
+    agents: {
+      defaults: { modelPolicy: { allow: ["other/*"] } },
+      entries: { main: { workspace: state.workspaceDir } },
+    },
     plugins: { enabled: false },
     gateway: { mode: "local", auth: { mode: "token", token }, reload: { mode: "off" } },
   };
@@ -52,7 +49,10 @@ it("models.authSetApiKey validates the old wire request before the real credenti
         provider: "fixture",
         key: request.apiKey,
       });
+      const savedConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+      expect(savedConfig.agents.defaults.modelPolicy.allow).toEqual(["other/*", "fixture/*"]);
       for (const invalid of [
+        { ...request, provider: "" },
         { ...request, apiKey: "\n\t" },
         { ...request, provider: 1 },
         { ...request, agentId: "retired" },

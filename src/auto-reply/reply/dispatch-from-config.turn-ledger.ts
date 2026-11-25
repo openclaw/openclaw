@@ -4,6 +4,7 @@
 // routed transport result is recorded, so no delivery lane can bypass the
 // no-visible-reply fallback gate with a fresh inference flag.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { isReplyPayloadTerminalContent, type ReplyPayload } from "../reply-payload.js";
@@ -82,7 +83,9 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
       return;
     }
     outcomes.add(outcome);
-    if (kind === "tool" || !isReplyPayloadTerminalContent(payload)) {
+    const terminalFailureNotice =
+      kind === "final" && payload.isError === true && payload.isStatusNotice === true;
+    if (kind === "tool" || (!isReplyPayloadTerminalContent(payload) && !terminalFailureNotice)) {
       return;
     }
     if (outcome === "delivered" && !pending) {
@@ -145,35 +148,30 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
       if (abortSignal?.aborted) {
         return "aborted";
       }
-      const deadline = new AbortController();
-      const timer = setTimeout(() => deadline.abort(), SETTLE_QUEUED_TIMEOUT_MS);
-      timer.unref?.();
-      try {
-        const receipt = await waitForReplyDispatcherIdle(
-          dispatcher,
-          abortSignal ? AbortSignal.any([abortSignal, deadline.signal]) : deadline.signal,
-        );
-        if (abortSignal?.aborted) {
-          return "aborted";
-        }
-        if (deadline.signal.aborted) {
-          return "timed-out";
-        }
-        if (dispatcher.supportsSettledReceipt === true && receipt) {
-          for (const counts of Object.values(receipt.counts)) {
-            if (counts.delivered > 0) {
-              outcomes.add("delivered");
-            }
-            if (counts.failedAfterSend > 0) {
-              outcomes.add("failed-deliver");
-            }
+      const receipt = await raceWithTimeout(
+        () => waitForReplyDispatcherIdle(dispatcher),
+        SETTLE_QUEUED_TIMEOUT_MS,
+        () => "timed-out" as const,
+        { ref: false, signal: abortSignal, onAbort: () => "aborted" as const },
+      );
+      if (abortSignal?.aborted) {
+        return "aborted";
+      }
+      if (receipt === "timed-out" || receipt === "aborted") {
+        return receipt;
+      }
+      if (dispatcher.supportsSettledReceipt === true && receipt) {
+        for (const counts of Object.values(receipt.counts)) {
+          if (counts.delivered > 0) {
+            outcomes.add("delivered");
+          }
+          if (counts.failedAfterSend > 0) {
+            outcomes.add("failed-deliver");
           }
         }
-        pendingDelivery ||= receipt?.hasPendingDelivery === true;
-        return "settled";
-      } finally {
-        clearTimeout(timer);
       }
+      pendingDelivery ||= receipt?.hasPendingDelivery === true;
+      return "settled";
     },
     mayHaveDelivered,
     hasObservedDelivery: () => outcomes.has("delivered"),

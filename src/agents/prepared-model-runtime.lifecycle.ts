@@ -6,6 +6,12 @@ import type {
   PreparedModelRuntimeReplacement,
 } from "./prepared-model-runtime.types.js";
 
+export class PreparedModelRuntimeClosedError extends Error {
+  constructor() {
+    super("prepared model runtime process lifetime closed");
+  }
+}
+
 /** Notifications supplement the owner's generation and registration checks. */
 export function capturePreparedModelRuntimeGeneration(
   owner: Pick<PreparedModelRuntimeOwner, "generationRetirement">,
@@ -23,6 +29,29 @@ export function retirePreparedModelRuntimeGeneration(
     // Retained signals must not keep the retiring caller's lazy stack frames alive.
     void retirement.signal.reason.stack;
   }
+}
+
+// A remote catalog commit may replace rows without revoking the request's authority.
+// Key by the captured generation predicate, which catalog projections preserve.
+const catalogReplacements = new WeakMap<() => boolean, () => boolean>();
+
+export function recordPreparedModelCatalogReplacement(
+  previous: { isCurrent: () => boolean },
+  replacement: { isCurrent: () => boolean },
+): void {
+  catalogReplacements.set(previous.isCurrent, replacement.isCurrent);
+}
+
+export function hasCurrentPreparedModelCatalogReplacement(
+  owner: { isCurrent: () => boolean },
+  expected?: { isCurrent: () => boolean },
+): boolean {
+  const replacement = catalogReplacements.get(owner.isCurrent);
+  return (
+    !owner.isCurrent() &&
+    (!expected || expected.isCurrent === replacement) &&
+    replacement?.() === true
+  );
 }
 
 type ModelRuntimeClose = (error: Error) => Promise<void>;
@@ -43,7 +72,7 @@ export function capturePreparedModelRuntimeLifetime(): () => void {
   const epoch = lifetimes.epoch;
   const assertCurrent = () => {
     if (lifetimes.closing || epoch !== lifetimes.epoch) {
-      throw new Error("prepared model runtime process lifetime closed");
+      throw new PreparedModelRuntimeClosedError();
     }
   };
   assertCurrent();
@@ -70,7 +99,7 @@ export function closePreparedModelRuntimeSnapshots(): Promise<void> {
   const closed = createDeferredCore();
   lifetimes.closing = closed.promise;
   lifetimes.epoch += 1;
-  const error = new Error("prepared model runtime process lifetime closed");
+  const error = new PreparedModelRuntimeClosedError();
   void Promise.allSettled(
     [...lifetimes.closeCallbacks].map(async (close) => await close(error)),
   ).then(async (results) => {

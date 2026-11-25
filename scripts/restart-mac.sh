@@ -376,7 +376,9 @@ else
 fi
 
 # Bundle Gateway-hosted plugin assets.
-run_step "bundle plugin assets" /bin/bash -c "cd '${ROOT_DIR}' && pnpm plugins:assets:build"
+if [[ "${OPENCLAW_MAC_REUSE_BUILD:-0}" != "1" ]]; then
+  run_step "bundle plugin assets" /bin/bash -c "cd '${ROOT_DIR}' && pnpm plugins:assets:build"
+fi
 
 if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then
   if check_signing_keys; then

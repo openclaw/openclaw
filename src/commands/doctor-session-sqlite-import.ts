@@ -20,11 +20,12 @@ import {
   readSessionSqliteMigrationManifest,
   updateMigrationManifestTarget,
   type ActiveSessionSqliteMigrationRun,
+  type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   countTranscriptEventsForPath,
   createTranscriptEventReader,
-  readOnlySqliteValidationSnapshot,
+  readSessionImportValidationSnapshot,
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
   type ReadOnlySqliteValidationSnapshot,
@@ -81,11 +82,11 @@ export async function importLegacySessionRecords(
       return;
     }
     const importedTranscriptSources = new Set<string>();
-    const existingSnapshot = readOnlySqliteValidationSnapshot(target);
+    const existingSnapshot = readSessionImportValidationSnapshot(target, env);
     if (!existingSnapshot.ok) {
       report.issues.push({
         code: "legacy_import_deferred",
-        message: `Cannot verify the destination for ${target.storePath}: ${formatErrorMessage(existingSnapshot.error)}. Originals retained; repair the named SQLite destination before retrying openclaw doctor --fix.`,
+        message: `Cannot verify the destination for ${target.storePath}: ${formatErrorMessage(existingSnapshot.error)}. Originals retained; repair the named destination before retrying openclaw doctor --fix.`,
       });
       return;
     }
@@ -168,6 +169,15 @@ function prepareRestoredSessionIndex(
   const storePath = canonicalMigrationFilePath(target.storePath);
   const sqlitePath = resolveTargetSqlitePath(target, params.env);
   const evidence = new Map<string, MigrationArtifactIdentity>();
+  const completedMoves = new Map<SessionSqliteMigrationTargetManifest, Set<string>>();
+  const hasCompletedMove = (owner: SessionSqliteMigrationTargetManifest, key: string) => {
+    let keys = completedMoves.get(owner);
+    if (!keys) {
+      keys = new Set(owner.completedMoves.map(migrationMoveKey));
+      completedMoves.set(owner, keys);
+    }
+    return keys.has(key);
+  };
   let hasSelectedOwner = false;
   for (const refs of recoveryInventory.references.values()) {
     for (const ref of refs) {
@@ -176,9 +186,7 @@ function prepareRestoredSessionIndex(
         ref.move.sourcePath !== storePath ||
         (!ref.consumedByRestore &&
           !ref.run.manifest.restore?.restoredFiles.includes(storePath) &&
-          !ref.target.completedMoves.some(
-            (move) => migrationMoveKey(move) === migrationMoveKey(ref.move),
-          ))
+          !hasCompletedMove(ref.target, migrationMoveKey(ref.move)))
       ) {
         continue;
       }

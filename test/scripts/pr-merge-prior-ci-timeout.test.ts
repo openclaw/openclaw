@@ -1,31 +1,67 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { stringify } from "yaml";
+import {
+  expectExit,
+  expectPriorCiRefusal,
+  completedStep,
+} from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
 const { describePosix, fixture } = createMergeOutcomeFixtureHarness();
 const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
 
-function timeoutCandidate() {
-  const f = preExistingCandidate("jobs: {}\n");
-  const state = f.state();
-  const check = state.priorCi.deadline.check;
+function timeoutCandidate(source = "jobs: {}\n", cancelled?: boolean) {
+  const f = preExistingCandidate(source);
+  const live = f.state();
+  const deadline = live.priorCi.deadline;
+  const check = deadline.check;
   check.head_sha = f.head;
-  Object.assign(state.priorCi.jobs![0]!, {
+  if (cancelled !== undefined) {
+    Object.assign(check, {
+      name: "check-additional-extension-package-boundary",
+      completed_at: "2026-09-20T00:20:30Z",
+      output: { annotations_count: cancelled ? 2 : 1 },
+    });
+    deadline.annotations[0]!.message = "The job has exceeded the maximum execution time of 20m0s";
+    if (!cancelled) {
+      deadline.annotations.pop();
+    }
+  }
+  const job = live.priorCi.jobs![0]!;
+  Object.assign(job, {
+    ...(cancelled === undefined ? {} : { name: check.name }),
     conclusion: "cancelled",
     check_run_url: "https://api.github.com/repos/fixture/repo/check-runs/601",
     started_at: check.started_at,
     completed_at: check.completed_at,
-    steps: [
-      { number: 18, name: "Run Node test shard", status: "completed", conclusion: "cancelled" },
-    ],
+    steps:
+      cancelled === undefined
+        ? [completedStep(18, "Run Node test shard", "cancelled")]
+        : [
+            completedStep(1, "Set up job", "success", check.started_at, "2026-09-20T00:00:05Z"),
+            completedStep(
+              10,
+              "Run additional check shard",
+              cancelled ? "cancelled" : "success",
+              "2026-09-20T00:01:00Z",
+              "2026-09-20T00:20:25Z",
+            ),
+            completedStep(
+              27,
+              "Complete job",
+              "success",
+              "2026-09-20T00:20:29Z",
+              check.completed_at,
+            ),
+          ],
   });
-  state.priorCi.jobs = state.priorCi.jobs!.filter((job) => job.id !== 604);
-  f.save(state);
+  live.priorCi.jobs = live.priorCi.jobs!.filter((entry) => entry.id !== 604);
   const { cancellation: _cancellation, ...evidence } = f.evidence;
+  f.save(live);
   writeFileSync(f.path, JSON.stringify(evidence));
-  return f;
+  return { ...f, live, deadline, evidence, job, steps: job.steps! };
 }
 
 function boundaryTimeoutCandidate(cancelled: boolean, sourceFault?: string) {
@@ -35,64 +71,12 @@ function boundaryTimeoutCandidate(cancelled: boolean, sourceFault?: string) {
       "utf8",
     ),
   );
-  // The failed attempts used the historical 20-minute whole-job budget.
   owner["timeout-minutes"] = sourceFault === "different workflow budget" ? 30 : 20;
   if (sourceFault === "different workflow command") {
     owner.steps.find((step: { name: string }) => step.name === "Run additional check shard").run +=
       "echo changed\n";
   }
-  const f = preExistingCandidate(stringify({ jobs: { "check-additional-shard": owner } }));
-  const state = f.state();
-  const check = state.priorCi.deadline.check;
-  Object.assign(check, {
-    name: "check-additional-extension-package-boundary",
-    head_sha: f.head,
-    completed_at: "2026-09-20T00:20:30Z",
-    output: { annotations_count: cancelled ? 2 : 1 },
-  });
-  state.priorCi.deadline.annotations[0]!.message =
-    "The job has exceeded the maximum execution time of 20m0s";
-  if (!cancelled) {
-    state.priorCi.deadline.annotations.pop();
-  }
-  Object.assign(state.priorCi.jobs![0]!, {
-    name: check.name,
-    conclusion: "cancelled",
-    check_run_url: "https://api.github.com/repos/fixture/repo/check-runs/601",
-    started_at: check.started_at,
-    completed_at: check.completed_at,
-    steps: [
-      {
-        number: 1,
-        name: "Set up job",
-        status: "completed",
-        conclusion: "success",
-        started_at: check.started_at,
-        completed_at: "2026-09-20T00:00:05Z",
-      },
-      {
-        number: 10,
-        name: "Run additional check shard",
-        status: "completed",
-        conclusion: cancelled ? "cancelled" : "success",
-        started_at: "2026-09-20T00:01:00Z",
-        completed_at: "2026-09-20T00:20:25Z",
-      },
-      {
-        number: 27,
-        name: "Complete job",
-        status: "completed",
-        conclusion: "success",
-        started_at: "2026-09-20T00:20:29Z",
-        completed_at: check.completed_at,
-      },
-    ],
-  });
-  state.priorCi.jobs = state.priorCi.jobs!.filter((job) => job.id !== 604);
-  f.save(state);
-  const { cancellation: _cancellation, ...evidence } = f.evidence;
-  writeFileSync(f.path, JSON.stringify(evidence));
-  return f;
+  return timeoutCandidate(stringify({ jobs: { "check-additional-shard": owner } }), cancelled);
 }
 
 describePosix("pre-existing job deadline admission", () => {
@@ -102,161 +86,100 @@ describePosix("pre-existing job deadline admission", () => {
       const boundary = kind !== "Node cancelled";
       const cancelled = kind === "boundary cancelled";
       const f = boundary ? boundaryTimeoutCandidate(cancelled) : timeoutCandidate();
-      const result = boundary ? f.verifyPriorCi(f.path) : f.adminPriorCi(f.path);
-      expect(result.status, result.output).toBe(0);
+      const result = expectExit(boundary ? f.verifyPriorCi(f.path) : f.adminPriorCi(f.path), 0);
       const proof = boundary ? JSON.parse(result.stdout) : f.record().priorCiAdmin;
-      expect(proof.failures).toMatchObject([
-        {
-          jobId: 601,
-          deadline: {
-            conclusion: "cancelled",
-            seconds: boundary ? 1200 : 3600,
-            ...(boundary
-              ? {
-                  workflowJob: "check-additional-shard",
-                  step: { number: 10, conclusion: cancelled ? "cancelled" : "success" },
-                }
-              : { checkRunId: 601 }),
+      expect(proof).toMatchObject({
+        failures: [
+          {
+            jobId: 601,
+            deadline: {
+              conclusion: "cancelled",
+              seconds: boundary ? 1200 : 3600,
+              ...(boundary
+                ? {
+                    workflowJob: "check-additional-shard",
+                    step: { number: 10, conclusion: cancelled ? "cancelled" : "success" },
+                  }
+                : { checkRunId: 601 }),
+            },
           },
-        },
-      ]);
-      expect(proof.cancelledJobIds).toEqual([]);
+        ],
+        cancelledJobIds: [],
+      });
       expect(f.state().mutations).toBe(boundary ? 0 : 1);
     },
   );
 
-  it.each([
-    "success with cancellation annotation",
-    "cancelled without cancellation annotation",
-    "different workflow budget",
-    "different workflow command",
-    "wrong job name",
-    "wrong step ordinal",
-    "duplicate step number",
-    "another failed step",
-    "another cancelled step",
-    "missing cleanup",
-    "missing step timestamp",
-    "reversed step times",
-    "step outside job",
-    "shard ends before deadline",
-    "extra annotation",
-    "wrong annotation duration",
-    "missing independent qualification",
-    "aggregate omits root",
-  ])("refuses boundary %s without dispatch", (fault) => {
-    const cancelled = fault === "cancelled without cancellation annotation";
-    const f = boundaryTimeoutCandidate(cancelled, fault);
-    const state = f.state();
-    const deadline = state.priorCi.deadline;
-    const job = state.priorCi.jobs![0]!;
-    const steps = job.steps!;
-    if (fault === "success with cancellation annotation") {
+  const boundaryFaults: Record<
+    string,
+    (f: ReturnType<typeof boundaryTimeoutCandidate>) => unknown
+  > = {
+    "success with cancellation annotation": ({ deadline }) => {
       deadline.annotations.push({
         ...deadline.annotations[0]!,
         message: "The operation was canceled.",
       });
       deadline.check.output.annotations_count = 2;
-    }
-    if (fault === "cancelled without cancellation annotation") {
+    },
+    "cancelled without cancellation annotation": ({ deadline }) => {
       deadline.annotations.pop();
       deadline.check.output.annotations_count = 1;
-    }
-    if (fault === "wrong job name") {
-      job.name = deadline.check.name = "unrelated-check";
-    }
-    if (fault === "wrong step ordinal") {
-      steps[1]!.number = 11;
-    }
-    if (fault === "duplicate step number") {
-      steps[2]!.number = 10;
-    }
-    if (fault === "another failed step") {
-      steps[0]!.conclusion = "failure";
-    }
-    if (fault === "another cancelled step") {
-      steps[0]!.conclusion = "cancelled";
-    }
-    if (fault === "missing cleanup") {
-      steps.pop();
-    }
-    if (fault === "missing step timestamp") {
-      steps[1]!.started_at = undefined;
-    }
-    if (fault === "reversed step times") {
-      steps[1]!.started_at = "2026-09-20T00:20:26Z";
-    }
-    if (fault === "step outside job") {
-      steps[2]!.completed_at = "2026-09-20T00:20:31Z";
-    }
-    if (fault === "shard ends before deadline") {
-      steps[1]!.completed_at = "2026-09-20T00:19:59Z";
-    }
-    if (fault === "extra annotation") {
+    },
+    "different workflow budget": () => undefined,
+    "different workflow command": () => undefined,
+    "wrong job name": ({ job, deadline }) => {
+      job.name = "unrelated-check";
+      deadline.check.name = "unrelated-check";
+    },
+    "wrong step ordinal": ({ steps }) => (steps[1]!.number = 11),
+    "duplicate step number": ({ steps }) => (steps[2]!.number = 10),
+    "another failed step": ({ steps }) => (steps[0]!.conclusion = "failure"),
+    "another cancelled step": ({ steps }) => (steps[0]!.conclusion = "cancelled"),
+    "missing cleanup": ({ steps }) => steps.pop(),
+    "missing step timestamp": ({ steps }) => (steps[1]!.started_at = undefined),
+    "reversed step times": ({ steps }) => (steps[1]!.started_at = "2026-09-20T00:20:26Z"),
+    "step outside job": ({ steps }) => (steps[2]!.completed_at = "2026-09-20T00:20:31Z"),
+    "shard ends before deadline": ({ steps }) => (steps[1]!.completed_at = "2026-09-20T00:19:59Z"),
+    "extra annotation": ({ deadline }) => {
       deadline.annotations.push({ ...deadline.annotations[0]! });
       deadline.check.output.annotations_count = 2;
-    }
-    if (fault === "wrong annotation duration") {
-      deadline.annotations[0]!.message = "The job has exceeded the maximum execution time of 19m0s";
-    }
-    const evidence = JSON.parse(readFileSync(f.path, "utf8"));
-    if (fault === "missing independent qualification") {
-      evidence.failures[0].evidence = [];
-    }
-    if (fault === "aggregate omits root") {
-      evidence.aggregate.causedBy = [];
-    }
-    writeFileSync(f.path, JSON.stringify(evidence));
-    f.save(state);
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toMatch(/Prior-CI admin admission:/u);
-    expect(f.state().mutations).toBe(0);
-  });
+    },
+    "wrong annotation duration": ({ deadline }) =>
+      (deadline.annotations[0]!.message =
+        "The job has exceeded the maximum execution time of 19m0s"),
+    "missing independent qualification": ({ evidence }) => (evidence.failures[0]!.evidence = []),
+    "aggregate omits root": ({ evidence }) => (evidence.aggregate.causedBy = []),
+  };
+  it.each(Object.entries(boundaryFaults))(
+    "refuses boundary %s without dispatch",
+    (fault, mutate) => {
+      const f = boundaryTimeoutCandidate(
+        fault === "cancelled without cancellation annotation",
+        fault,
+      );
+      mutate(f);
+      f.save(f.live);
+      writeFileSync(f.path, JSON.stringify(f.evidence));
+      expectPriorCiRefusal(f, /Prior-CI admin admission:/u);
+    },
+  );
 
-  it.each([
-    "manual cancellation",
-    "foreign publisher",
-    "stale head",
-    "foreign suite",
-    "incomplete annotations",
-    "short duration",
-    "additional failed step",
-  ])("refuses %s without dispatch", (fault) => {
-    const f = timeoutCandidate();
-    const state = f.state();
-    const deadline = state.priorCi.deadline;
-    if (fault === "manual cancellation") {
-      deadline.annotations[0]!.message = "Cancelled by user";
-    }
-    if (fault === "foreign publisher") {
-      deadline.check.app.id = 999;
-    }
-    if (fault === "stale head") {
-      deadline.check.head_sha = f.base;
-    }
-    if (fault === "foreign suite") {
-      deadline.check.check_suite.id = 999;
-    }
-    if (fault === "incomplete annotations") {
-      deadline.annotations.pop();
-    }
-    if (fault === "short duration") {
+  const nodeFaults: Record<string, (f: ReturnType<typeof timeoutCandidate>) => unknown> = {
+    "manual cancellation": ({ deadline }) =>
+      (deadline.annotations[0]!.message = "Cancelled by user"),
+    "incomplete annotations": ({ deadline }) => deadline.annotations.pop(),
+    "short duration": ({ deadline, live }) => {
       deadline.check.completed_at = "2026-09-20T00:30:00Z";
-      state.priorCi.jobs![0]!.completed_at = deadline.check.completed_at;
-    }
-    if (fault === "additional failed step") {
-      state.priorCi.jobs![0]!.steps!.push({
-        number: 19,
-        name: "Other assertion",
-        status: "completed",
-        conclusion: "failure",
-      });
-    }
-    f.save(state);
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("deadline");
-    expect(f.state().mutations).toBe(0);
+      live.priorCi.jobs![0]!.completed_at = deadline.check.completed_at;
+    },
+    "additional failed step": ({ live }) =>
+      live.priorCi.jobs![0]!.steps!.push(completedStep(19, "Other assertion", "failure")),
+  };
+  it.each(Object.entries(nodeFaults))("refuses %s without dispatch", (_fault, mutate) => {
+    const f = timeoutCandidate();
+    mutate(f);
+    f.save(f.live);
+    writeFileSync(f.path, JSON.stringify(f.evidence));
+    expectPriorCiRefusal(f, "deadline");
   });
 });

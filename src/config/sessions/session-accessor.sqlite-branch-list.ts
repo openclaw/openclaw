@@ -11,8 +11,7 @@ import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers
 import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionBranchListParams, SessionBranchListResult } from "./session-accessor.types.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
-import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
 const pendingBranchReads = new Map<string, Promise<SessionBranchSummaryReadResult>>();
@@ -48,46 +47,56 @@ export async function listSessionBranches(
     }
   }
   try {
-    const resolved = await prepareSqliteScope({
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.env ? { env: params.env } : {}),
-      sessionKey: sourceKey,
-      ...(params.storePath ? { storePath: params.storePath } : {}),
-    });
+    const resolved = await prepareSqliteScope(
+      {
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.env ? { env: params.env } : {}),
+        sessionKey: sourceKey,
+        ...(params.storePath ? { storePath: params.storePath } : {}),
+      },
+      params.signal,
+    );
     const options = toDatabaseOptions(resolved);
     const database = { agentId: options.agentId, path: resolveOpenClawAgentSqlitePath(options) };
     const writeToken = readSqliteDatabaseWriteTokenForPath(database.path);
-    const cached = readCachedSessionBranchSummaries(database.path, sourceKey);
+    const cached = readCachedSessionBranchSummaries(database.path, sourceKey, writeToken);
     if (writeToken !== undefined && cached?.writeToken === writeToken) {
       return { status: "ok", branches: cloneSessionBranchSummaries(cached.branches) };
     }
     const key = JSON.stringify([database.path, sourceKey, writeToken]);
-    const snapshot = await getOrCreatePromise(
-      pendingBranchReads,
-      key,
-      async () => {
-        const { runSessionBranchSummaryWorkerRequest } =
-          await import("./session-transcript-worker-runtime.js");
-        const read = () =>
-          runSessionBranchSummaryWorkerRequest({
+    const load = async () => {
+      const { runSessionBranchSummaryWorkerRequest } =
+        await import("./session-transcript-worker-runtime.js");
+      const read = () =>
+        runSessionBranchSummaryWorkerRequest(
+          {
             database,
             sessionKey: sourceKey,
             previous: cached,
-          });
-        try {
-          return await read();
-        } catch (error) {
-          if (!(error instanceof SessionTranscriptColdError)) {
-            throw error;
-          }
-          return readRestoredSessionTranscript(
-            { ...params, agentId: resolved.agentId, sessionId: error.sessionId },
-            read,
-          );
+          },
+          params.signal,
+        );
+      try {
+        return await read();
+      } catch (error) {
+        if (!(error instanceof SessionTranscriptColdError)) {
+          throw error;
         }
-      },
-      { evictOnSettled: true },
-    );
+        const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+        await restoreSessionColdTranscript(
+          { ...params, agentId: resolved.agentId, sessionId: error.sessionId },
+          undefined,
+          undefined,
+          undefined,
+          params.signal,
+        );
+        return read();
+      }
+    };
+    // Independently cancellable callers must not abort another viewer's read or restoration.
+    const snapshot = await (params.signal
+      ? load()
+      : getOrCreatePromise(pendingBranchReads, key, load, { evictOnSettled: true }));
     if (snapshot.status !== "ok") {
       return snapshot;
     }

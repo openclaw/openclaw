@@ -1,6 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, UserMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildOpenAICompletionsParams } from "../../packages/ai/src/transports/openai-completions-params.js";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import {
@@ -9,22 +10,26 @@ import {
   makeInMemorySessionManager,
   makeModelSnapshotEntry,
   makeReasoningAssistantMessages,
-  type SanitizeSessionHistoryHarness,
   type SanitizeSessionHistoryFn,
   TEST_SESSION_ID,
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { validateReplayTurns } from "./embedded-agent-runner/replay-history.js";
+import { convertToLlm } from "./sessions/messages.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 import type { TranscriptPolicy } from "./transcript-policy.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
-vi.mock("./embedded-agent-helpers.js", async () => ({
-  ...(await vi.importActual("./embedded-agent-helpers.js")),
+vi.mock("./embedded-agent-helpers/images.js", async () => ({
+  ...(await vi.importActual<typeof import("./embedded-agent-helpers/images.js")>(
+    "./embedded-agent-helpers/images.js",
+  )),
   sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
 }));
 
+// mock-isolation: Use synthetic provider hooks without loading runtime plugin registries.
 vi.mock("../plugins/provider-hook-runtime.js", async () => {
   const clearProviderRuntimePluginCacheForTest = vi.fn();
   return {
@@ -33,14 +38,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
     prepareProviderExtraParams: vi.fn(() => undefined),
     resolveProviderHookPlugin: vi.fn(() => undefined),
     resolveProviderPluginsForHooks: vi.fn(() => []),
-    resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
-      provider === "github-copilot"
-        ? {
-            buildReplayPolicy: ({ modelId }: { modelId?: string | null }) =>
-              modelId?.includes("claude") ? { dropThinkingBlocks: true } : undefined,
-          }
-        : undefined,
-    ),
+    resolveProviderRuntimePlugin: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),
   };
 });
@@ -51,55 +49,47 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   );
   return {
     ...actual,
-    sanitizeProviderReplayHistoryWithPluginAsync: vi.fn(
-      async ({
-        provider,
-        context,
-      }: {
-        provider?: string;
-        context: {
-          messages: AgentMessage[];
-          sessionState?: {
-            appendCustomEntryAsync(customType: string, data: unknown): Promise<string>;
-          };
-        };
-      }) => {
-        if (
-          provider &&
-          provider.startsWith("google") &&
-          context.messages[0]?.role === "assistant" &&
-          context.sessionState
-        ) {
-          await context.sessionState.appendCustomEntryAsync("google-turn-ordering-bootstrap", {
-            timestamp: Date.now(),
-          });
-          return [
-            { role: "user", content: "(session bootstrap)" } as AgentMessage,
-            ...context.messages,
-          ];
-        }
-        if (provider === "replay-poison") {
-          return context.messages.filter(
-            (message) =>
-              message.role !== "toolResult" ||
-              !(
-                (message as { isError?: unknown }).isError === true &&
-                JSON.stringify((message as { content?: unknown }).content).includes("aborted")
-              ),
-          );
-        }
-        return context.messages;
-      },
-    ),
+    sanitizeProviderReplayHistoryWithPluginAsync: vi.fn<
+      typeof actual.sanitizeProviderReplayHistoryWithPluginAsync
+    >(async ({ provider, context }) => {
+      if (
+        provider &&
+        provider.startsWith("google") &&
+        context.messages[0]?.role === "assistant" &&
+        context.sessionState
+      ) {
+        await context.sessionState.appendCustomEntryAsync("google-turn-ordering-bootstrap", {
+          timestamp: Date.now(),
+        });
+        return [
+          { role: "user", content: "(session bootstrap)" } as AgentMessage,
+          ...context.messages,
+        ];
+      }
+      if (provider === "replay-poison") {
+        return context.messages.filter(
+          (message) =>
+            message.role !== "toolResult" ||
+            !(
+              (message as { isError?: unknown }).isError === true &&
+              JSON.stringify((message as { content?: unknown }).content).includes("aborted")
+            ),
+        );
+      }
+      return context.messages;
+    }),
     validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
   };
 });
 
 let sanitizeSessionHistory: SanitizeSessionHistoryFn;
-let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];
 let testTimestamp = 1;
 const nextTimestamp = () => testTimestamp++;
 const text = (value: string) => ({ type: "text" as const, text: value });
+const signedText = (value: string, signature: { id?: string; phase?: string }) => ({
+  ...text(value),
+  textSignature: JSON.stringify({ v: 1, ...signature }),
+});
 const thinking = (value: string, thinkingSignature?: string) => ({
   type: "thinking" as const,
   thinking: value,
@@ -114,12 +104,10 @@ const toolCall = (id: string, name = "read") => ({
 const toolResult = (id: string, value = "ok", name = "read") =>
   castAgentMessage(textToolResult(id, name, value, { isError: false }));
 const makeUsage = (input = 0, output = 0, totalTokens = 0): Usage => ({
+  ...makeZeroUsageSnapshot(),
   input,
   output,
-  cacheRead: 0,
-  cacheWrite: 0,
   totalTokens,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 });
 const user = (content: string, timestamp = nextTimestamp()): UserMessage => ({
   role: "user",
@@ -190,12 +178,13 @@ const metadata = [
 
 describe("sanitizeSessionHistory", () => {
   let sessionManager: ReturnType<typeof makeMockSessionManager>;
+  // Sparse and malformed transcript fixtures cross the typed boundary once, here.
   const sanitize = (
-    messages: AgentMessage[],
+    messages: unknown[],
     overrides: Partial<Parameters<SanitizeSessionHistoryFn>[0]> = {},
   ) =>
     sanitizeSessionHistory({
-      messages: structuredClone(messages),
+      messages: castAgentMessages(structuredClone(messages)),
       modelApi: "openai-responses",
       provider: "openai",
       sessionManager,
@@ -203,22 +192,52 @@ describe("sanitizeSessionHistory", () => {
       ...overrides,
     });
   const sanitizeAnthropic = (
-    messages: AgentMessage[],
+    messages: unknown[],
     overrides: Partial<Parameters<SanitizeSessionHistoryFn>[0]> = {},
   ) => sanitize(messages, { ...anthropicRoute, ...overrides });
   const validateAnthropic = (messages: AgentMessage[], policy?: TranscriptPolicy) =>
     validateReplayTurns({ messages, ...anthropicRoute, sessionId: TEST_SESSION_ID, policy });
 
   beforeAll(async () => {
-    const harness = await loadSanitizeSessionHistoryWithCleanMocks();
-    sanitizeSessionHistory = harness.sanitizeSessionHistory;
-    mockedHelpers = harness.mockedHelpers;
+    ({ sanitizeSessionHistory } = await loadSanitizeSessionHistoryWithCleanMocks());
   });
   beforeEach(() => {
     testTimestamp = 1;
     vi.clearAllMocks();
-    vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
     sessionManager = makeMockSessionManager();
+  });
+
+  it("keeps tier-suffixed model reasoning through history sanitization and request replay", async () => {
+    const model = makeProviderModelFixture<"openai-completions">({
+      id: "deepseek-v4-flash-free",
+      provider: "custom-openai-proxy",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example/v1",
+      reasoning: false,
+    });
+    const messages = await sanitize(
+      [
+        user("hello"),
+        {
+          ...assistant([thinking("Need to answer politely.", "reasoning_content"), text("Hello!")]),
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+        },
+        user("again"),
+      ],
+      { modelApi: model.api, provider: model.provider, modelId: model.id, model },
+    );
+    const request = buildOpenAICompletionsParams(
+      model,
+      { messages: convertToLlm(messages) },
+      undefined,
+    );
+    expect(request.messages).toContainEqual({
+      role: "assistant",
+      content: "Hello!",
+      reasoning_content: "Need to answer politely.",
+    });
   });
 
   it.each([
@@ -227,21 +246,19 @@ describe("sanitizeSessionHistory", () => {
   ] as const)(
     "preserves $state context snapshots while normalizing replay usage",
     async (contextUsage) => {
-      const out = await sanitizeAnthropic(
-        castAgentMessages([
-          user("hello"),
-          {
-            ...assistant([text("done")]),
-            usage: {
-              input: 12,
-              output: 15_104,
-              cacheRead: 819_661,
-              cacheWrite: 93_130,
-              contextUsage,
-            },
+      const out = await sanitizeAnthropic([
+        user("hello"),
+        {
+          ...assistant([text("done")]),
+          usage: {
+            input: 12,
+            output: 15_104,
+            cacheRead: 819_661,
+            cacheWrite: 93_130,
+            contextUsage,
           },
-        ]),
-      );
+        },
+      ]);
       expect((out[1] as AssistantMessage).usage).toMatchObject({
         contextUsage,
         totalTokens: 927_907,
@@ -251,7 +268,7 @@ describe("sanitizeSessionHistory", () => {
 
   it("lets Google provider hooks prepend a bootstrap turn and persist a marker", async () => {
     const entries: Array<{ type: string; customType: string; data: unknown }> = [];
-    const out = await sanitize(castAgentMessages([textAssistant("hello")]), {
+    const out = await sanitize([textAssistant("hello")], {
       modelApi: "google-generative-ai",
       provider: "google-vertex",
       sessionManager: makeInMemorySessionManager(entries),
@@ -263,23 +280,70 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("annotates inter-session user messages before context sanitization", async () => {
-    const out = await sanitize(
-      castAgentMessages([
-        {
-          ...user("forwarded instruction"),
-          provenance: {
-            kind: "inter_session",
-            sourceSessionKey: "agent:main:req",
-            sourceTool: "sessions_send",
-          },
+    const out = await sanitize([
+      {
+        ...user("forwarded instruction"),
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:req",
+          sourceTool: "sessions_send",
         },
-      ]),
-    );
+      },
+    ]);
     expect(out[0]?.role).toBe("user");
     const content = (out[0] as UserMessage).content;
     expect(content).toContain("[Inter-session message]");
     expect(content).toContain("sourceSession=agent:main:req");
   });
+
+  it.each([
+    {
+      appendOnlyRuntimeContext: true,
+      roles: ["user", "assistant", "user", "user", "user", "user"],
+    },
+    { appendOnlyRuntimeContext: false, roles: ["user", "assistant", "user"] },
+  ])(
+    "replays background results as labelled user input (appendOnly=$appendOnlyRuntimeContext)",
+    async ({ appendOnlyRuntimeContext, roles: expectedRoles }) => {
+      const reports = ["PR flow 18:12: green", "PR flow 19:12: green", "PR flow 20:12: green"];
+      const policy = makeAnthropicReplayPolicy({
+        appendOnlyRuntimeContext,
+        dropReasoningFromHistory: false,
+      });
+      const sanitized = await sanitizeAnthropic(
+        [
+          user("watch the PR flow"),
+          assistant([text("Watching.")], { usage: makeUsage(1, 1, 2) }),
+          ...reports.map((report) => ({
+            ...assistant([text(report)]),
+            api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+            provider: "openclaw",
+            model: "automation-result",
+            openclawAutomation: { kind: "cron", jobId: "job-1", runId: "run-1" },
+          })),
+          user("status?"),
+        ],
+        { policy },
+      );
+      const out = await validateAnthropic(sanitized, policy);
+
+      expect(roles(out)).toEqual(expectedRoles);
+      expect(assistantContent(out)).toEqual([text("Watching.")]);
+      const userText = out
+        .filter((message): message is UserMessage => message.role === "user")
+        .map((message) =>
+          typeof message.content === "string"
+            ? message.content
+            : message.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
+        )
+        .join("\n");
+      for (const report of reports) {
+        expect(userText).toContain(
+          `[OpenClaw background result] You sent the message below to the user in this chat from a separate background run. It is a record of what they saw, not a new request.\n\n${report}`,
+        );
+      }
+    },
+  );
 
   it("preserves existing usage cost while normalizing token fields", async () => {
     const cost = {
@@ -290,12 +354,10 @@ describe("sanitizeSessionHistory", () => {
       total: 4,
       totalOrigin: "provider-billed",
     };
-    const out = await sanitize(
-      castAgentMessages([
-        user("question"),
-        { ...textAssistant("answer"), usage: { output: 3, cache_read_input_tokens: 9, cost } },
-      ]),
-    );
+    const out = await sanitize([
+      user("question"),
+      { ...textAssistant("answer"), usage: { output: 3, cache_read_input_tokens: 9, cost } },
+    ]);
     expect((out[1] as AssistantMessage).usage).toEqual({
       input: 0,
       output: 3,
@@ -308,9 +370,7 @@ describe("sanitizeSessionHistory", () => {
 
   it("preserves unknown cost when token fields already match", async () => {
     const usage = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10 };
-    const out = await sanitize(
-      castAgentMessages([user("question"), { ...textAssistant("answer"), usage }]),
-    );
+    const out = await sanitize([user("question"), { ...textAssistant("answer"), usage }]);
     expect((out[1] as AssistantMessage).usage).toEqual(usage);
     expect((out[1] as AssistantMessage).usage.cost).toBeUndefined();
   });
@@ -318,42 +378,38 @@ describe("sanitizeSessionHistory", () => {
   it("keeps fresh usage after compaction timestamp in summary-first ordering", async () => {
     const timestamp = Date.parse("2026-02-26T12:00:00.000Z");
     const freshUsage = makeUsage(1_000, 250, 1_250);
-    const out = await sanitize(
-      castAgentMessages([
-        {
-          role: "compactionSummary",
-          summary: "compressed",
-          tokensBefore: 123_000,
-          timestamp: new Date(timestamp).toISOString(),
-        },
-        assistant([text("old")], {
-          timestamp: timestamp - 2_000,
-          usage: makeUsage(120_000, 3_000, 123_000),
-        }),
-        user("new question", timestamp + 1_000),
-        assistant([text("fresh")], { timestamp: timestamp + 2_000, usage: freshUsage }),
-      ]),
-    );
+    const out = await sanitize([
+      {
+        role: "compactionSummary",
+        summary: "compressed",
+        tokensBefore: 123_000,
+        timestamp: new Date(timestamp).toISOString(),
+      },
+      assistant([text("old")], {
+        timestamp: timestamp - 2_000,
+        usage: makeUsage(120_000, 3_000, 123_000),
+      }),
+      user("new question", timestamp + 1_000),
+      assistant([text("fresh")], { timestamp: timestamp + 2_000, usage: freshUsage }),
+    ]);
     expect((out[1] as AssistantMessage).usage).toEqual(makeZeroUsageSnapshot());
     expect((out[3] as AssistantMessage).usage).toEqual(freshUsage);
   });
 
   it("keeps OpenAI Responses real tool results paired without rewriting valid ids", async () => {
     const id = "call_mock_image_generate_1";
-    const out = await sanitize(
-      castAgentMessages([
-        user("generate"),
-        assistant([toolCall(id, "image_generate")], { stopReason: "toolUse" }),
-        {
-          role: "toolResult",
-          call_id: id,
-          toolName: "image_generate",
-          content: [text("Background task started.")],
-          isError: false,
-        },
-        user("inspect the attachment"),
-      ]),
-    );
+    const out = await sanitize([
+      user("generate"),
+      assistant([toolCall(id, "image_generate")], { stopReason: "toolUse" }),
+      {
+        role: "toolResult",
+        call_id: id,
+        toolName: "image_generate",
+        content: [text("Background task started.")],
+        isError: false,
+      },
+      user("inspect the attachment"),
+    ]);
     expect(roles(out)).toEqual(["user", "assistant", "toolResult", "user"]);
     expect(extractToolCallsFromAssistant(out[1] as AssistantMessage)[0]?.id).toBe(id);
     expect(out[2]).toMatchObject({
@@ -382,20 +438,18 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("repairs a message-tool delivery-mirror poisoned replay", async () => {
-    const out = await sanitize(
-      castAgentMessages([
-        user("start"),
-        assistant([toolCall("call_message|fc_message", "message")], { stopReason: "toolUse" }),
-        {
-          ...textAssistant("visible reply"),
-          provider: "openclaw",
-          model: "delivery-mirror",
-          api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
-          stopReason: "stop",
-        },
-        user("continue"),
-      ]),
-    );
+    const out = await sanitize([
+      user("start"),
+      assistant([toolCall("call_message|fc_message", "message")], { stopReason: "toolUse" }),
+      {
+        ...textAssistant("visible reply"),
+        provider: "openclaw",
+        model: "delivery-mirror",
+        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+        stopReason: "stop",
+      },
+      user("continue"),
+    ]);
     expect(roles(out)).toEqual(["user", "assistant", "toolResult", "user"]);
     expect(out.some((message) => (message as { model?: string }).model === "delivery-mirror")).toBe(
       false,
@@ -464,23 +518,17 @@ describe("sanitizeSessionHistory", () => {
 
   it("preserves phase metadata while dropping paired message ids after a model switch", async () => {
     const out = await sanitize(
-      castAgentMessages([
+      [
         {
           role: "assistant",
           content: [
             thinking("reasoning", JSON.stringify({ id: "rs_test", type: "reasoning" })),
-            { ...text("plain"), textSignature: JSON.stringify({ v: 1, id: "msg_plain" }) },
-            {
-              ...text("commentary"),
-              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-            },
-            {
-              ...text("answer"),
-              textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
-            },
+            signedText("plain", { id: "msg_plain" }),
+            signedText("commentary", { id: "msg_commentary", phase: "commentary" }),
+            signedText("answer", { id: "msg_final", phase: "final_answer" }),
           ],
         },
-      ]),
+      ],
       { modelId: "gpt-5.4", sessionManager: makeInMemorySessionManager([previousModel()]) },
     );
     expect(out).toEqual([
@@ -489,8 +537,8 @@ describe("sanitizeSessionHistory", () => {
         usage: makeZeroUsageSnapshot(),
         content: [
           text("plain"),
-          { ...text("commentary"), textSignature: JSON.stringify({ v: 1, phase: "commentary" }) },
-          { ...text("answer"), textSignature: JSON.stringify({ v: 1, phase: "final_answer" }) },
+          signedText("commentary", { phase: "commentary" }),
+          signedText("answer", { phase: "final_answer" }),
         ],
       },
     ]);
@@ -556,9 +604,13 @@ describe("sanitizeSessionHistory", () => {
     expect(assistantContent(sanitized)).toEqual([text("Pong")]);
     expect(roles(sanitized)).toEqual(["user", "assistant", "user", "user"]);
     expect(JSON.stringify(sanitized)).not.toContain("assistant copied inbound metadata omitted");
-    const validated = await validateAnthropic(sanitized);
-    expect(roles(validated)).toEqual(["user", "assistant", "user"]);
-    expect((validated[2] as UserMessage).content).toEqual([text("First"), text("Second")]);
+    // Every route keeps runtime context append-only, so the Messages API keeps both user turns.
+    expect(roles(await validateAnthropic(sanitized))).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "user",
+    ]);
   });
 
   it("strips completed Qwen reasoning but preserves the current tool-call continuation", async () => {
@@ -648,13 +700,13 @@ describe("sanitizeSessionHistory", () => {
       name: "read",
       input: { path: "IDENTITY.md" },
     };
-    const base = castAgentMessages([
+    const base = [
       user("Read IDENTITY.md"),
       { ...assistant([], { stopReason: "toolUse" }), content: [priorCall] },
       { ...textToolResult(priorId, "read", "ok", { isError: false }), toolUseId: priorId },
       assistant([text("done")]),
-    ]);
-    const extended = castAgentMessages([
+    ];
+    const extended = [
       ...base,
       user("Ask a subagent for an emoji"),
       {
@@ -663,7 +715,7 @@ describe("sanitizeSessionHistory", () => {
       },
       { ...textToolResult(laterId, "subagent", "😀", { isError: false }), toolUseId: laterId },
       assistant([text("it was 😀")]),
-    ]);
+    ];
     const sanitizedBase = await sanitizeAnthropic(base, { policy });
     const sanitizedExtended = await sanitizeAnthropic(extended, { policy });
     expect(sanitizedExtended.slice(0, sanitizedBase.length)).toEqual(sanitizedBase);

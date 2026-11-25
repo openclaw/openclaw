@@ -174,9 +174,8 @@ export function mutateNativePendingAssignments(params: {
   consume: boolean;
 }) {
   const current = normalizeNativePendingAssignments(params.current);
-  let assignment = assignmentSchema.parse(params.assignment);
-  const owner = codexNativeSubagentHistoryOwnerSchema.parse(params.owner);
-  if (!matchesNativeAssignmentLifecycle(assignment.owner, owner)) {
+  let { assignment } = params;
+  if (!matchesNativeAssignmentLifecycle(assignment.owner, params.owner)) {
     return { applied: false };
   }
   const assignments = current?.assignments ?? [];
@@ -206,7 +205,7 @@ export function mutateNativePendingAssignments(params: {
       mergeNativeAssignmentMetadata(existing, assignment);
       assignment = existing;
     } else if (existing?.recordedCompletion && !assignment.recordedCompletion) {
-      assignment.recordedCompletion = existing.recordedCompletion;
+      assignment = { ...assignment, recordedCompletion: existing.recordedCompletion };
     }
     remaining.push(assignment);
   }

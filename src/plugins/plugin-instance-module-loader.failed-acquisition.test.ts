@@ -8,6 +8,67 @@ import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 
+it("releases the first resolver owner while a later workspace keeps the dispatcher active", async () => {
+  const root = temp.make("plugin-resolver-retention-");
+  const entry = path.join(root, "current.mjs");
+  fs.writeFileSync(entry, 'export const marker = "current";');
+  const moduleUrl = (name: string) => new URL(name, import.meta.url).href;
+  const source = `
+    import assert from "node:assert/strict";
+    import { setImmediate } from "node:timers/promises";
+    import { pathToFileURL } from "node:url";
+    import { queryObjects } from "node:v8";
+    import { parentPort } from "node:worker_threads";
+    import { PluginInstance } from ${JSON.stringify(moduleUrl("./plugin-instance.ts"))};
+    import { registerPluginInstanceModuleResolver } from ${JSON.stringify(moduleUrl("./plugin-instance-module-resolver.ts"))};
+    const active = new PluginInstance("active-resolver");
+    let resolutions = 0;
+    const pass = (specifier, context, nextResolve) => nextResolve(specifier, context);
+    async function replaceFirst() {
+      const first = new PluginInstance("retired-resolver");
+      const releaseFirst = registerPluginInstanceModuleResolver("file:///retired-resolver/", {
+        instance: first, resolve: pass,
+      });
+      const releaseActive = registerPluginInstanceModuleResolver(
+        pathToFileURL(${JSON.stringify(root)} + "/").href,
+        { instance: active, resolve: (specifier, context, nextResolve) => {
+          resolutions++;
+          return nextResolve(specifier, context);
+        } },
+      );
+      releaseFirst();
+      await first.dispose();
+      return { retired: new WeakRef(first), releaseActive, control: new WeakRef({}) };
+    }
+    const { retired, releaseActive, control } = await replaceFirst();
+    try {
+      for (let pass = 0; pass < 8; pass++) {
+        await setImmediate();
+        queryObjects(PluginInstance);
+      }
+      assert.equal(control.deref(), undefined, "unowned control must collect");
+      assert.equal(retired.deref(), undefined, "dispatcher must release its first retired owner");
+      assert.equal((await import(pathToFileURL(${JSON.stringify(entry)}).href)).marker, "current");
+      assert.ok(resolutions > 0, "the active workspace still owns resolution");
+    } finally {
+      releaseActive();
+      await active.dispose();
+    }
+    parentPort.postMessage("retired resolver collected");
+  `;
+  const worker = new Worker(new URL(`data:text/javascript,${encodeURIComponent(source)}`), {
+    execArgv: resolveRuntimeWorkerThreadExecArgv(
+      new URL("./plugin-instance-module-resolver.ts", import.meta.url),
+    ),
+  });
+  try {
+    const [result] = await once(worker, "message");
+    expect(result).toBe("retired resolver collected");
+  } finally {
+    await worker.terminate();
+  }
+});
+
 it("cleans up rejected native ESM acquisitions and failed compiled evaluations", async () => {
   const root = temp.make("plugin-native-failed-acquisition-");
   const captures = temp.make("plugin-native-failed-captures-");

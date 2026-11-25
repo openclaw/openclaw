@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
@@ -24,6 +25,7 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -195,6 +197,36 @@ class WearRoundLayoutTest {
     show(WearHomePage.Chat, savedState)
 
     assertChatAndCapture("chat-after-restoration")
+  }
+
+  @Test fun repeatedUnidentifiedChatMessagesRemainReadable() {
+    val reply = WearChatMessage(id = null, role = "assistant", text = "All set.", timestamp = null)
+    snapshot = WearScreenshotFixture.snapshot.copy(messages = listOf(reply))
+    loading = false
+    show(WearHomePage.Chat)
+    compose.onNodeWithText("All set.").assertIsDisplayed()
+    capture("chat-before-repeated-message")
+
+    compose.runOnIdle {
+      val current = checkNotNull(snapshot)
+      snapshot = current.copy(messages = mergeEventMessage(current.messages, reply))
+    }
+
+    compose.onNode(hasScrollToIndexAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange)).performScrollToIndex(3)
+    capture("chat-after-repeated-message")
+    compose.onAllNodesWithText("All set.").assertCountEquals(2)
+  }
+
+  @Test fun chatMessageIdDoesNotCollideWithEndAnchor() {
+    snapshot =
+      WearScreenshotFixture.snapshot.copy(
+        messages = listOf(WearChatMessage(id = "chat-end", role = "assistant", text = "Reply received.", timestamp = 1)),
+      )
+    loading = false
+    show(WearHomePage.Chat)
+
+    compose.onNodeWithText("Reply received.").assertIsDisplayed()
+    compose.onNodeWithText("Speak latest reply").assertIsDisplayed()
   }
 
   private fun assertChatAndCapture(name: String) {

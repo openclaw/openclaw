@@ -1,9 +1,37 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { transcriptEventChargesContextBytes } from "./session-transcript-projection-append.js";
 import type { SessionTranscriptContextMetadata } from "./session-transcript-projection-facts.types.js";
+import { transcriptSerializedBytes } from "./transcript-payload.js";
 
 const MAX_CONTEXT_METADATA_ROWS = 4096;
+
+export function rewriteSessionActorContextStats(
+  database: OpenClawAgentDatabase,
+  scope: { sessionId: string },
+  rows: readonly { seq: number; eventJson: string; expectedEventJson: string }[],
+  projectionUnchanged: boolean,
+): void {
+  const actor = readSessionActorTransactionState(database, scope);
+  if (!actor) {
+    return;
+  }
+  if (!projectionUnchanged) {
+    actor.transcript.contextStats = undefined;
+    return;
+  }
+  rewriteSessionActorContextMetadata(
+    actor,
+    rows.map((row) => ({
+      rawSeq: row.seq,
+      serializedBytes: transcriptSerializedBytes(database.db, row.eventJson),
+      previousSerializedBytes: transcriptSerializedBytes(database.db, row.expectedEventJson),
+    })),
+  );
+}
 
 /** Reuse stored byte lengths; parsed navigation never establishes payload size. */
 export function projectSessionActorContextMetadata(
@@ -15,9 +43,9 @@ export function projectSessionActorContextMetadata(
     !actor.transcript.complete ||
     coldArchive ||
     !contextMetadata ||
-    !projection ||
-    projection.needsRebuild ||
-    projection.hasUnclassifiedEvents ||
+    (!projection && actor.hot.transcript.version.rawSeq !== null) ||
+    projection?.needsRebuild ||
+    projection?.hasUnclassifiedEvents ||
     [...identities.values()].some(
       (row) => row.event_type === "reset" || row.event_type === "compaction",
     ) ||
@@ -34,13 +62,16 @@ export function projectSessionActorContextMetadata(
   const priorBytes = new Map(
     contextMetadata.rows.map((row) => [row.event_seq, row.serialized_bytes]),
   );
+  const uncharged = unchargedContextSeqs(actor);
   const rows: SessionTranscriptContextMetadata["rows"] = [];
   let sizeBytes = 0;
+  let eventCount = 0;
   for (const row of active.values()) {
     if (row.context_eligible !== 1) {
       continue;
     }
-    const bytes = payloads.get(row.event_seq)?.serializedBytes ?? priorBytes.get(row.event_seq);
+    const payload = payloads.get(row.event_seq);
+    const bytes = payload?.serializedBytes ?? priorBytes.get(row.event_seq);
     if (bytes === undefined || rows.length === MAX_CONTEXT_METADATA_ROWS) {
       return undefined;
     }
@@ -49,7 +80,13 @@ export function projectSessionActorContextMetadata(
       active_position: row.active_position,
       serialized_bytes: bytes,
     });
-    sizeBytes += bytes;
+    if (
+      !uncharged.has(row.event_seq) &&
+      (!payload || transcriptEventChargesContextBytes(payload.event))
+    ) {
+      sizeBytes += bytes;
+      eventCount += 1;
+    }
   }
   let header = contextMetadata.header;
   if (!header) {
@@ -64,15 +101,45 @@ export function projectSessionActorContextMetadata(
     header,
     rows: rows.toSorted((left, right) => right.active_position - left.active_position),
     boundaryCount: 0,
-    eventCount: rows.length,
+    eventCount,
     sizeBytes,
   };
 }
 
-export function rewriteSessionActorContextMetadata(
+/** Context-eligible rows that byte accounting does not charge; see transcriptEventChargesContextBytes. */
+function unchargedContextSeqs(actor: SessionActorStoredState): Set<number> {
+  return new Set(
+    actor.transcript.navigation.flatMap((row) => (row.type === "custom" ? [row.seq] : [])),
+  );
+}
+
+function rewriteSessionActorContextMetadata(
   actor: SessionActorStoredState,
-  rewritten: SessionActorTranscriptRow[],
+  rewritten: Array<
+    Pick<SessionActorTranscriptRow, "rawSeq" | "serializedBytes"> & {
+      previousSerializedBytes: number;
+    }
+  >,
 ): void {
+  for (const row of rewritten) {
+    const stats = actor.transcript.contextStats;
+    if (!stats) {
+      break;
+    }
+    const active = actor.transcript.active.get(row.rawSeq);
+    if (
+      (!active && !actor.transcript.complete) ||
+      (active && active.active_position <= stats.boundaryActivePosition)
+    ) {
+      // Historical rewrites may touch the retained prefix; its reader owns membership.
+      actor.transcript.contextStats = undefined;
+    } else if (active?.context_eligible === 1 && !unchargedContextSeqs(actor).has(row.rawSeq)) {
+      actor.transcript.contextStats = {
+        ...stats,
+        sizeBytes: stats.sizeBytes + row.serializedBytes - row.previousSerializedBytes,
+      };
+    }
+  }
   const metadata = actor.transcript.contextMetadata;
   if (!metadata) {
     return;
@@ -86,6 +153,34 @@ export function rewriteSessionActorContextMetadata(
       serialized_bytes: bytes.get(row.event_seq) ?? row.serialized_bytes,
     })),
   };
+}
+
+export function appendSessionActorContextStats(
+  actor: SessionActorStoredState,
+  seq: number,
+  event: unknown,
+  serializedBytes: number,
+  projectionNeedsRebuild: boolean,
+): void {
+  const stats = actor.transcript.contextStats;
+  if (!stats) {
+    return;
+  }
+  if (
+    projectionNeedsRebuild ||
+    (isRecord(event) && (event.type === "reset" || event.type === "compaction"))
+  ) {
+    actor.transcript.contextStats = undefined;
+  } else if (
+    actor.transcript.active.get(seq)?.context_eligible === 1 &&
+    transcriptEventChargesContextBytes(event)
+  ) {
+    actor.transcript.contextStats = {
+      ...stats,
+      eventCount: stats.eventCount + 1,
+      sizeBytes: stats.sizeBytes + serializedBytes,
+    };
+  }
 }
 
 /** Initial bytes ride the actor's existing navigation hydration statement. */
@@ -116,6 +211,10 @@ export function seedSessionActorContextMetadata(
   if (rows.length > MAX_CONTEXT_METADATA_ROWS) {
     return;
   }
+  const uncharged = new Set(
+    stored.flatMap((row) => (row.navigation_type === "custom" ? [row.seq] : [])),
+  );
+  const charged = rows.filter((row) => !uncharged.has(row.event_seq));
   const first = stored.find(
     (row) => row.navigation_type === "session" || row.navigation_valid === 0,
   );
@@ -127,7 +226,7 @@ export function seedSessionActorContextMetadata(
     },
     rows,
     boundaryCount: 0,
-    eventCount: rows.length,
-    sizeBytes: rows.reduce((total, row) => total + row.serialized_bytes, 0),
+    eventCount: charged.length,
+    sizeBytes: charged.reduce((total, row) => total + row.serialized_bytes, 0),
   };
 }

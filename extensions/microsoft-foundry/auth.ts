@@ -75,7 +75,6 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
     let selectedSub = null;
     if (subs.length === 0) {
       tenantId ??= await promptTenantId(ctx, {
-        required: true,
         reason:
           "No enabled Azure subscriptions were found. Continue with tenant-scoped Entra ID auth instead.",
       });

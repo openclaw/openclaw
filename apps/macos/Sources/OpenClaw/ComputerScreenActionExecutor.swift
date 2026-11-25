@@ -152,7 +152,11 @@ final class ComputerScreenActionExecutor {
             let to = try requiredPoint(params, display: display)
             let from = try point(params.fromX, params.fromY, params: params, display: display)
                 ?? to
-            try await self.rawDrag(from: from, to: to, flags: modifiers)
+            try await self.rawDrag(
+                from: from,
+                to: to,
+                flags: modifiers,
+                checkExecutionAllowed: checkExecutionAllowed)
         case .leftMouseDown, .leftMouseUp:
             // Coordinate is optional: press/release at the current cursor when omitted.
             let mappedPoint = try self.point(params.x, params.y, params: params, display: display)
@@ -511,7 +515,12 @@ final class ComputerScreenActionExecutor {
         }
     }
 
-    private func rawDrag(from: CGPoint, to: CGPoint, flags: CGEventFlags) async throws {
+    func rawDrag(
+        from: CGPoint,
+        to: CGPoint,
+        flags: CGEventFlags,
+        checkExecutionAllowed: @MainActor () throws -> Void) async throws
+    {
         let down = try self.mouseEventFactory(.leftMouseDown, from, .left, 1, flags)
         let moves = try (1...Self.dragSteps).map { step in
             let fraction = Double(step) / Double(Self.dragSteps)
@@ -522,6 +531,7 @@ final class ComputerScreenActionExecutor {
         }
         let up = try self.mouseEventFactory(.leftMouseUp, to, .left, 1, flags)
 
+        try checkExecutionAllowed()
         try self.mouseEventPoster(down)
         var needsRelease = true
         defer {
@@ -532,9 +542,11 @@ final class ComputerScreenActionExecutor {
         let stepDelay = UInt64(Self.dragDurationMs) * 1_000_000 / UInt64(Self.dragSteps)
         for move in moves {
             try Task.checkCancellation()
+            try checkExecutionAllowed()
             try self.mouseEventPoster(move)
             try await Task.sleep(nanoseconds: stepDelay)
         }
+        try checkExecutionAllowed()
         try self.mouseEventPoster(up)
         needsRelease = false
     }
@@ -619,12 +631,6 @@ final class ComputerScreenActionExecutor {
         try self.rawClick(at: .zero, button: .left, count: count, flags: [])
     }
 
-    func rawDragForTesting() async throws {
-        try await self.rawDrag(
-            from: .zero,
-            to: CGPoint(x: 24, y: 24),
-            flags: [])
-    }
     #endif
 
     private func rawScroll(direction: OpenClawComputerScrollDirection, amount: Int, flags: CGEventFlags) throws {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createWorkerTranscriptCommitter } from "../../gateway/worker-environments/transcript-commit.js";
 import {
   createRequest,
@@ -11,6 +11,11 @@ import {
 } from "./session-accessor.sqlite-transcript-reports.js";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import {
+  commitMemory,
+  readMemory,
+  mutateMemory,
+} from "./session-actor-memory-publication.test-support.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { rewritePreparedTranscriptMessageAtAnchor } from "./session-message-rewrite.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
@@ -50,63 +55,40 @@ async function fixture() {
     { assertCurrent() {}, assertReadable() {} },
   );
   const storage = actor.storage!;
-  readSessionActorStorageResult(
-    await storage.mutate(
-      {
-        type: "session.metadata.initialize",
-        input: { scope, entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true } },
-      },
-      authority,
-    ),
-  );
-  readSessionActorStorageResult(
-    await storage.mutate(
-      {
-        type: "session.metadata.append",
-        input: {
-          scope,
-          options: {},
-          event: JSON.stringify({
-            type: "session",
-            version: 3,
-            id: scope.sessionId,
-            cwd: "/synthetic",
-            timestamp: "2026-10-11T00:00:00.000Z",
-          }),
-        },
-      },
-      authority,
-    ),
-  );
+  await commitMemory(storage, "session.metadata.initialize", {
+    scope,
+    entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true },
+  });
+  await commitMemory(storage, "session.metadata.append", {
+    scope,
+    options: {},
+    event: JSON.stringify({
+      type: "session",
+      version: 3,
+      id: scope.sessionId,
+      cwd: "/synthetic",
+      timestamp: "2026-10-11T00:00:00.000Z",
+    }),
+  });
   const hydrate = async () => {
-    const result = await storage.read({ type: "session.history.hydrate", input: {} }, authority);
-    if (result.kind !== "full") {
-      throw new Error("Expected complete memory transcript");
-    }
+    const result = await readMemory(storage, "session.history.hydrate", {});
+    assert(result.kind === "full", "Expected complete memory transcript");
     return result.snapshot;
   };
   const custom = async (id: string, content: string) =>
-    readSessionActorStorageResult(
-      await storage.mutate(
-        {
-          type: "session.metadata.append",
-          input: {
-            scope,
-            options: { appendIntent: "active-branch" },
-            event: JSON.stringify({
-              type: "custom_message",
-              id,
-              parentId: null,
-              customType: "status",
-              content,
-              display: true,
-              timestamp: "2026-10-11T00:00:00.000Z",
-            }),
-          },
-        },
-        authority,
-      ),
-    );
+    await commitMemory(storage, "session.metadata.append", {
+      scope,
+      options: { appendIntent: "active-branch" },
+      event: JSON.stringify({
+        type: "custom_message",
+        id,
+        parentId: null,
+        customType: "status",
+        content,
+        display: true,
+        timestamp: "2026-10-11T00:00:00.000Z",
+      }),
+    });
   return { actor, storage, hydrate, custom };
 }
 
@@ -138,30 +120,17 @@ describe("memory transcript reports and edits", () => {
       ok: true,
       value: { content: "after second" },
     });
-    const selected = await storage.read(
-      {
-        type: "session.report.prepare",
-        input: { scope: reportScope, selection: { kind: "custom", customTypes: ["status"] } },
-      },
-      authority,
-    );
-    if (!selected.ok) {
-      throw new Error("Expected report selection");
-    }
+    const selected = await readMemory(storage, "session.report.prepare", {
+      scope: reportScope,
+      selection: { kind: "custom", customTypes: ["status"] },
+    });
+    assert(selected.ok, "Expected report selection");
     const bytes = `{ "type":"custom_message", "id":"prepared-report", "parentId":${JSON.stringify(selected.value.facts.appendParentId)}, "timestamp":"2026-10-11T00:00:00.000Z", "customType":"status", "content":"exact", "display":true }`;
-    readSessionActorStorageResult(
-      await storage.mutate(
-        {
-          type: "session.report.append",
-          input: {
-            scope: reportScope,
-            version: selected.value.version,
-            report: { kind: "custom", eventJson: bytes },
-          },
-        },
-        authority,
-      ),
-    );
+    await commitMemory(storage, "session.report.append", {
+      scope: reportScope,
+      version: selected.value.version,
+      report: { kind: "custom", eventJson: bytes },
+    });
     expect((await hydrate()).eventJson?.at(-1)).toBe(bytes);
   });
 
@@ -206,24 +175,16 @@ describe("memory transcript reports and edits", () => {
       timestamp: "2026-10-11T00:00:00.000Z",
       message: { role: "user", content: "question", timestamp: 1 },
     };
-    readSessionActorStorageResult(
-      await storage.mutate(
-        {
-          type: "session.metadata.append",
-          input: {
-            scope,
-            options: {},
-            event: { ...user, type: "message" },
-            message: {
-              messageJson: JSON.stringify(user.message),
-              cwd: "/synthetic",
-              validateTurn: false,
-            },
-          },
-        },
-        authority,
-      ),
-    );
+    await commitMemory(storage, "session.metadata.append", {
+      scope,
+      options: {},
+      event: { ...user, type: "message" },
+      message: {
+        messageJson: JSON.stringify(user.message),
+        cwd: "/synthetic",
+        validateTurn: false,
+      },
+    });
     const projected = {
       ...user.message,
       __openclaw: {
@@ -284,19 +245,11 @@ describe("memory transcript reports and edits", () => {
   it("rewrites an unbound anchored message while preserving later appends and rejecting competing edits", async () => {
     const { actor, storage, hydrate } = await fixture();
     for (const content of ["first", "later"]) {
-      readSessionActorStorageResult(
-        await storage.mutate(
-          {
-            type: "session.transcript.appendMessage",
-            input: {
-              scope,
-              messageJson: JSON.stringify({ role: "user", content, timestamp: 1 }),
-              cwd: "/synthetic",
-            },
-          },
-          authority,
-        ),
-      );
+      await commitMemory(storage, "session.transcript.appendMessage", {
+        scope,
+        messageJson: JSON.stringify({ role: "user", content, timestamp: 1 }),
+        cwd: "/synthetic",
+      });
     }
     const anchor = actor.snapshot(authority)!.transcript.anchors[0]!;
     await expect(
@@ -316,26 +269,20 @@ describe("memory transcript reports and edits", () => {
     let competing: ReturnType<typeof storage.mutate> | undefined;
     await expect(
       rewritePreparedTranscriptMessageAtAnchor(currentAnchor, (message) => {
-        competing = storage.mutate(
-          {
-            type: "session.correction.commit",
-            input: {
-              scope,
-              version: before.version,
-              allowLaterAppends: true,
-              rows: [
-                {
-                  entryId: currentAnchor.entryId,
-                  expectedEventJson: before.eventJson![index]!,
-                  event: Object.assign({}, before.events[index], {
-                    message: Object.assign({}, message, { content: "competing" }),
-                  }),
-                },
-              ],
+        competing = mutateMemory(storage, "session.correction.commit", {
+          scope,
+          version: before.version,
+          allowLaterAppends: true,
+          rows: [
+            {
+              entryId: currentAnchor.entryId,
+              expectedEventJson: before.eventJson![index]!,
+              event: Object.assign({}, before.events[index], {
+                message: Object.assign({}, message, { content: "competing" }),
+              }),
             },
-          },
-          authority,
-        );
+          ],
+        });
         return Object.assign({}, message, { content: "lost update" });
       }),
     ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);

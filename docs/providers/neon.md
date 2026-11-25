@@ -140,8 +140,8 @@ rates for the three models above are $0.25 and $2.00 per million tokens for `gpt
 $3.00 for `gemini-3-flash` and $0.15 and $1.20 for `qwen3-next-80b-a3b-instruct`. OpenClaw reads
 `cost` in USD per million tokens, so those numbers drop in as written.
 
-None of the model entries set `maxTokens`, which means OpenClaw applies its own default of 8192
-output tokens, capped at the model's `contextWindow`. Neon's catalog publishes context windows but
+None of the model entries set `maxTokens`, which means OpenClaw applies its own default of 32768
+output tokens, reduced to half of the model's `contextWindow` for windows below 65,536 tokens. Neon's catalog publishes context windows but
 no per-model output ceiling, so there is no upstream number to copy here. Set `maxTokens` yourself if
 you want longer completions. The 20,000 output tokens per minute that Neon documents is a rate limit,
 not a per-request cap.

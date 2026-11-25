@@ -25,6 +25,14 @@ export const agentSessionRunProviderCompaction: unique symbol = Symbol(
   "openclaw.agent-session.run-provider-compaction",
 );
 
+/**
+ * Runs threshold compaction at a request boundary. Its first history summary comes
+ * from that request plus the given instructions, so it reads the warm prompt cache.
+ */
+export const agentSessionRunWarmCompaction: unique symbol = Symbol(
+  "openclaw.agent-session.run-warm-compaction",
+);
+
 type AgentSessionCompactionOutcome =
   | {
       status: "completed";
@@ -32,6 +40,7 @@ type AgentSessionCompactionOutcome =
       tokensAfter: number;
       willRetry: boolean;
       qualityDegraded?: true;
+      summaryRefused?: true;
     }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string }
@@ -53,7 +62,7 @@ export type AgentSessionEvent =
       willRetry: boolean;
       assistantEntryId?: string;
     }
-  | { type: "queue_update"; steering: readonly string[]; followUp: readonly string[] }
+  | { type: "queue_update" }
   | { type: "agent_settled" }
   | { type: "agent_handoff" }
   | {
@@ -65,14 +74,8 @@ export type AgentSessionEvent =
   | { type: "session_info_changed"; name: string | undefined }
   | { type: "thinking_level_changed"; level: ThinkingLevel }
   | AgentSessionCompactionEndEvent
-  | {
-      type: "auto_retry_start";
-      attempt: number;
-      maxAttempts: number;
-      delayMs: number;
-      errorMessage: string;
-    }
-  | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
+  | { type: "auto_retry_start" }
+  | { type: "auto_retry_end" };
 
 export type AgentSessionEventListener = (event: AgentSessionEvent) => unknown;
 export type AgentSessionWriteSettlementRunner = <T>(run: () => Promise<T> | T) => Promise<T>;
@@ -101,8 +104,6 @@ export interface AgentSessionConfig {
     model: Model & { compactionThinkingDefault?: ThinkLevel },
     inheritedLevel: ThinkingLevel,
   ) => ThinkingLevel;
-  /** Whether disposing this object ends the durable provider session. Defaults to true. */
-  cleanupProviderSessionResourcesOnDispose?: boolean;
 }
 
 export interface ExtensionBindings {

@@ -9,7 +9,10 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import {
+  applyAssistantDeliveryDirectives,
+  type PrepareAssistantTranscriptMessage,
+} from "../../config/sessions/transcript-assistant-delivery.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -29,6 +32,7 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { projectSessionMessagePayload } from "../session-transcript-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
@@ -294,18 +298,12 @@ async function bindFinishingOwner() {
       () => abort.signal.throwIfAborted(),
     );
   const { takeFinishingOutcome: take } = await bind();
-  const identity: WorkerConnectionIdentity = {
+  const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(claim, {
     environmentId: active.environmentId,
     credentialHash: "finishing-credential-hash",
-    bundleHash: "a".repeat(64),
-    sessionId: claim.sessionId,
-    runId: claim.runId,
-    turnClaim: claim,
     ownerEpoch: active.activeOwnerEpoch,
-    rpcSetVersion: 1,
-    protocolFeatures: [],
     credentialExpiresAtMs: Date.now() + 60_000,
-  };
+  });
   const request = {
     runEpoch: identity.ownerEpoch,
     lastAckedSeq: 0,
@@ -526,10 +524,8 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
   }
   await store.releaseTurn(placementClosedClaim);
   expect(placementGate.validateWorkerTurn(placementClosedClaim)).toBe(false);
-  expect(() => placementReceiptAuthority?.()).toThrow("worker turn authority changed");
-  await expect(placementCapability.run(async () => "stale")).rejects.toThrow(
-    "worker turn authority changed",
-  );
+  expect(() => placementReceiptAuthority?.()).toThrow("worker turn ended");
+  await expect(placementCapability.run(async () => "stale")).rejects.toThrow("worker turn ended");
   releaseAgentRunDelegatedAuthority(placementClosedAuthority);
 
   const runClosedClaim = await store.claimTurn({
@@ -558,7 +554,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
       releaseAgentRunDelegatedAuthority(runClosedAuthority);
       return "closed-after-await";
     }),
-  ).rejects.toThrow("worker turn authority changed");
+  ).rejects.toThrow("worker turn ended");
   await store.releaseTurn(runClosedClaim);
 });
 
@@ -594,18 +590,12 @@ it("lets an unaudited admitted worker complete the exact turn that closes its ow
     await getWorkerTurnExecutionIdentityCapability(store, claim)?.run((owner) => {
       expect(owner.executionIdentityToken).toBeUndefined();
     });
-    const identity: WorkerConnectionIdentity = {
+    const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(claim, {
       environmentId: active.environmentId,
       credentialHash: "worker-terminal-continuation",
-      bundleHash: "a".repeat(64),
-      sessionId: claim.sessionId,
-      runId: claim.runId,
-      turnClaim: claim,
       ownerEpoch: active.activeOwnerEpoch,
-      rpcSetVersion: 1,
-      protocolFeatures: [],
       credentialExpiresAtMs: Date.now() + 60_000,
-    };
+    });
 
     await expect(
       runWorkerTurnAdmissionContinuation(identity, async () => {
@@ -633,25 +623,19 @@ it.each(["root admission", "wrong generation"] as const)(
     });
     const instance = createOperationalRunInstanceRef(claim.runId);
     const authority = claimAgentRunDelegatedAuthority(instance);
-    const identity: WorkerConnectionIdentity = {
+    const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(claim, {
       environmentId: active.environmentId,
       credentialHash: "worker-media-publication",
-      bundleHash: "a".repeat(64),
-      sessionId: claim.sessionId,
-      runId: claim.runId,
-      turnClaim: claim,
       ownerEpoch: active.activeOwnerEpoch,
-      rpcSetVersion: 1,
-      protocolFeatures: [],
       credentialExpiresAtMs: Date.now() + 60_000,
-    };
+    });
     const text = "Prepared\nMEDIA:./owned.png\nMEDIA:./unowned.png";
-    const prepare = vi.fn(
-      (message: ReturnType<typeof makeAgentAssistantMessage>, sourceText: string | undefined) => {
-        expect(sourceText).toBe(text);
-        return applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./owned.png"] });
-      },
-    );
+    const prepareSpy = vi.fn();
+    const prepare: PrepareAssistantTranscriptMessage = (message, sourceText) => {
+      prepareSpy(message, sourceText);
+      expect(sourceText).toBe(text);
+      return applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./owned.png"] });
+    };
     const admission =
       scenario === "root admission" ? tryBeginGatewayRootWorkAdmission() : undefined;
     const target = { ...SESSION, storePath: path.join(root, "sessions.json") };
@@ -713,7 +697,7 @@ it.each(["root admission", "wrong generation"] as const)(
           content: [{ type: "text", text: current ? "Prepared\nMEDIA:./unowned.png" : text }],
         },
       });
-      expect(prepare).toHaveBeenCalledTimes(current ? 1 : 0);
+      expect(prepareSpy).toHaveBeenCalledTimes(current ? 1 : 0);
       const rows = await loadTranscriptEvents(target);
       expect(rows.at(-1)).toMatchObject({
         message: {

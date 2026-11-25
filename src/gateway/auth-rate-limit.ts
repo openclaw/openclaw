@@ -30,6 +30,11 @@ export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
 // Public join-code exchange burns SQLite state, so misses are serialized and
 // throttled before they can queue unbounded writes behind the shared DB lock.
 export const AUTH_RATE_LIMIT_SCOPE_DEVICE_JOIN = "device-join";
+// Public browser pairing writes one bounded row per request, so filing requests
+// is budgeted per source. Collect has its own budget spent only by invalid or
+// unknown requests, so filing cannot lock a waiting browser out of its answer.
+export const AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR = "browser-pair";
+export const AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR_COLLECT = "browser-pair-collect";
 // Public watchOS challenge issuance is throttled separately from credential
 // failures so challenge floods cannot displace legitimate device handshakes.
 export const AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE = "watch-challenge";
@@ -302,12 +307,10 @@ export function createGatewayAuthRateLimiter(
 
   function scheduleRelease(key: string, deadline: number): ReturnType<typeof setTimeout> {
     // Auth responses still settle while Gateway maintenance is stopping.
-    const timer = setTimeout(
+    return setTimeout(
       () => releaseLoopbackWaiters(key),
       Math.max(0, deadline - scheduler.now()),
-    );
-    timer.unref?.();
-    return timer;
+    ).unref();
   }
 
   function releaseLoopbackWaiters(key: string): void {

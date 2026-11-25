@@ -1,9 +1,12 @@
+import type { JSX } from "@solidjs/web";
+
 /**
  * Opt-out for confirms whose action is repeatable and recoverable. Callers own
  * the storage; passing this is what makes the checkbox exist at all, so serious
  * confirms stay unskippable by simply not offering one.
  */
 export type ConfirmDialogSkipPreference = {
+  label?: string;
   /** True when the operator already chose to stop being asked. */
   skipped: boolean;
   /** Persists that choice; runs only when they confirm with the box ticked. */
@@ -11,16 +14,26 @@ export type ConfirmDialogSkipPreference = {
 };
 
 export type ConfirmDialogOptions = {
-  title?: string;
+  /** A question naming the action, such as “Delete this session?”. */
+  title: string;
+  /** The consequence, such as “This can’t be undone.”. */
   message: string;
-  details?: string;
-  confirmLabel?: string;
+  /** Plain text uses the existing monospace detail box; a renderer supplies its own presentation. */
+  details?: string | (() => JSX.Element);
+  /** The action verb; never OK, Yes or Confirm. */
+  confirmLabel: string;
   cancelLabel?: string;
   danger?: boolean;
+  compact?: boolean;
   signal?: AbortSignal;
   skipPreference?: ConfirmDialogSkipPreference;
   requiredAcknowledgement?: string;
+  canConfirm?: () => boolean;
 };
 
-export type ConfirmDialogChoiceOptions = ConfirmDialogOptions & { alternativeLabel: string };
+export type ConfirmDialogChoiceOptions = ConfirmDialogOptions & {
+  alternativeLabel: string;
+  /** Keep related choices together, with Cancel below them on compact screens. */
+  groupChoicesOnMobile?: boolean;
+};
 export type ConfirmDialogChoice = "confirm" | "alternative" | null;

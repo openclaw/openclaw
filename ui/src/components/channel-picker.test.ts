@@ -3,7 +3,7 @@
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import { updatePickers, choosePickerValue } from "../test-helpers/select-picker.ts";
+import { updatePickers, openPicker, choosePickerValue } from "../test-helpers/select-picker.ts";
 import type { SelectPicker } from "./select-picker.ts";
 import { ChannelPicker } from "./solid/channel-picker.tsx";
 
@@ -29,6 +29,7 @@ describe("ChannelPicker", () => {
       { container },
     );
     await updatePickers(container);
+    await openPicker(container.querySelector("openclaw-select-picker")!);
 
     expect(
       container.querySelector('[role="option"][data-value="last"] .picker-select__leading'),
@@ -64,15 +65,13 @@ describe("ChannelPicker", () => {
     );
     await updatePickers(container);
 
-    const picker = container.querySelector<SelectPicker>("openclaw-select-picker");
+    const picker = container.querySelector<SelectPicker>("openclaw-select-picker")!;
+    await openPicker(picker);
     expect(
       container
         .querySelector('[role="option"][data-value="disabled"]')
         ?.getAttribute("aria-disabled") === "true",
     ).toBe(true);
-    if (!picker) {
-      return;
-    }
     await choosePickerValue(picker, "disabled");
     expect(onChange).not.toHaveBeenCalled();
     await choosePickerValue(picker, "telegram");

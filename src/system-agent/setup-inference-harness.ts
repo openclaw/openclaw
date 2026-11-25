@@ -3,19 +3,19 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { raceWithAbortSignal } from "../agents/agent-tools.abort.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
+import { requiresAgentHarnessPluginSelection } from "../agents/harness/runtime-plugin-load-plan.js";
 import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { requestNativeRuntimeConsent } from "../agents/harness/setup-consent.js";
 import { hasRememberedNativeRuntimeConsent } from "../config/native-runtime-consent.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCache } from "../plugins/plugin-cache.js";
 import { withPluginCache } from "../plugins/plugin-cache.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import {
-  type ActivateSetupInferenceDeps,
   type StageContext,
   type StagedCandidate,
   parseInferenceRef,
@@ -66,7 +66,6 @@ export async function prepareSetupNativeRuntimeConsent(
       agentId: ctx.routeAgentId,
     },
     pendingPluginInstalls: staged.pendingPluginInstalls,
-    resolvePluginMetadataSnapshot: ctx.deps.resolvePluginMetadataSnapshot,
   });
   throwIfSetupInferenceCancelled(ctx.params);
   const consented = await withPluginRuntimeGenerationScope(generation, async () => {
@@ -98,14 +97,17 @@ export async function prepareSetupVerificationGeneration(
   cache: PluginCache,
   preparedGeneration?: SetupInferencePluginGeneration,
 ): Promise<{ generation?: SetupInferencePluginGeneration; metadata: PluginMetadataSnapshot }> {
-  const { params, deps, routeAgentId } = ctx;
-  const resolveMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshotAsync;
+  const { params, routeAgentId } = ctx;
+  const ref = parseInferenceRef(staged.modelRef);
+  const selection = { provider: ref.provider, modelId: ref.model, agentId: routeAgentId };
+  const implicitHarness =
+    !staged.agentRuntimeId && requiresAgentHarnessPluginSelection(selection, candidate);
   const generation = preparedGeneration
     ? {
         ...preparedGeneration,
         config: candidate,
         metadataSnapshot: await withPluginCache(cache, () =>
-          resolveMetadata({
+          resolvePluginMetadataSnapshotAsync({
             config: candidate,
             workspaceDir: ctx.workspace,
             env: process.env,
@@ -114,38 +116,39 @@ export async function prepareSetupVerificationGeneration(
           }),
         ),
       }
-    : staged.pendingPluginInstalls && Object.keys(staged.pendingPluginInstalls).length > 0
-      ? await withPluginLifecycleLease({ signal: params.signal }, async () =>
+    : implicitHarness ||
+        (staged.pendingPluginInstalls && Object.keys(staged.pendingPluginInstalls).length > 0)
+      ? await withPluginLifecycleLeaseAsync({ signal: params.signal }, async () =>
           loadSetupInferencePluginGeneration({
             cache,
             config: candidate,
             workspaceDir: ctx.workspace,
             selection: {
-              provider: parseInferenceRef(staged.modelRef).provider,
-              modelId: parseInferenceRef(staged.modelRef).model,
-              runtime: staged.agentRuntimeId ?? "openclaw",
-              agentId: routeAgentId,
+              ...selection,
+              runtime: staged.agentRuntimeId ?? (implicitHarness ? undefined : "openclaw"),
             },
             pendingPluginInstalls: staged.pendingPluginInstalls,
-            resolvePluginMetadataSnapshot: resolveMetadata,
           }),
         )
       : undefined;
   const metadata =
     generation?.metadataSnapshot ??
-    (await resolveMetadata({ config: candidate, workspaceDir: ctx.workspace, env: process.env }));
+    (await resolvePluginMetadataSnapshotAsync({
+      config: candidate,
+      workspaceDir: ctx.workspace,
+      env: process.env,
+    }));
   return { generation, metadata };
 }
 
 export async function verifySetupHarness(params: {
   route: SystemAgentConfiguredRoute;
-  deps: ActivateSetupInferenceDeps;
   cache: PluginCache;
   generation?: SetupInferencePluginGeneration;
   signal?: AbortSignal;
   assertCurrent: () => void;
 }): Promise<SetupHarnessVerification | undefined> {
-  const { route, deps } = params;
+  const { route } = params;
   const runtime = route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined;
   if (route.authProfileId || !runtime || runtime === "openclaw" || runtime === "auto") {
     return undefined;
@@ -164,7 +167,6 @@ export async function verifySetupHarness(params: {
         runtime,
         agentId: route.agentId,
       },
-      resolvePluginMetadataSnapshot: deps.resolvePluginMetadataSnapshot,
     }));
   params.assertCurrent();
   return await withPluginRuntimeGenerationScope(generation, async () => {
@@ -189,16 +191,15 @@ export async function verifySetupHarness(params: {
       throw new Error("The setup verification harness has no plugin owner.");
     }
     const capture = () =>
-      (deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts)({
+      captureSystemAgentOwnerPluginArtifacts({
         config: route.runConfig,
         executionRoute: route,
-        deps,
       });
     const artifacts = capture();
     if (!artifacts.ownerPluginArtifacts.some((entry) => entry.pluginId === ownerPluginId)) {
       throw new Error("The setup verification harness has no trusted runtime artifact.");
     }
-    const timeout = AbortSignal.timeout(deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS);
+    const timeout = AbortSignal.timeout(SETUP_INFERENCE_TEST_TIMEOUT_MS);
     const signal = params.signal ? AbortSignal.any([params.signal, timeout]) : timeout;
     let open = true;
     const assertCurrent = () => {

@@ -1,4 +1,5 @@
 import { resolveMediaUnderstandingString } from "../../packages/media-understanding-common/src/openai-compatible-video.js";
+import type { AudioTranscriptionResult } from "../../packages/media-understanding-common/src/types.js";
 import { OPENAI_AUDIO_TRANSCRIPTIONS_API } from "./openai-audio-api.js";
 // OpenAI-compatible audio transcription adapter for providers exposing the
 // /audio/transcriptions API shape.
@@ -11,17 +12,17 @@ import {
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "./shared.js";
-import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "./types.js";
-
-type OpenAiCompatibleAudioParams = AudioTranscriptionRequest & {
-  defaultBaseUrl: string;
-  defaultModel: string;
-  provider?: string;
-};
+import type { AudioTranscriptionRequest } from "./types.js";
 
 /** Sends an OpenAI-compatible audio transcription request and returns validated text output. */
 export async function transcribeOpenAiCompatibleAudio(
-  params: OpenAiCompatibleAudioParams,
+  params: AudioTranscriptionRequest & {
+    defaultBaseUrl: string;
+    defaultModel: string;
+    provider?: string;
+    /** Form field that carries `language`; some models take a `languages[]` list instead. */
+    languageField?: "language" | "languages[]";
+  },
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
@@ -46,7 +47,7 @@ export async function transcribeOpenAiCompatibleAudio(
     mime: params.mime,
     fields: {
       model,
-      language: params.language,
+      [params.languageField ?? "language"]: params.language,
       prompt: params.prompt,
     },
   });

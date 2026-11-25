@@ -12,6 +12,7 @@ import {
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "../../dist/agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import { createBuildSmokeEnv } from "../lib/build-smoke-env.mts";
 
 type TranscriptEntry = {
   type?: string;
@@ -222,13 +223,10 @@ async function verifyDoctorRepair(root: string) {
   const result = spawnSync(process.execPath, [entry, "doctor", "--fix", "--yes", "--force"], {
     cwd: process.cwd(),
     env: {
-      ...process.env,
-      HOME: root,
-      OPENCLAW_CONFIG_PATH: configPath,
+      ...createBuildSmokeEnv(root, process.env),
       OPENCLAW_DISABLE_BONJOUR: "1",
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_NO_ONBOARD: "1",
-      OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_SKIP_CANVAS_HOST: "1",
       OPENCLAW_SKIP_CHANNELS: "1",
       OPENCLAW_SKIP_CRON: "1",

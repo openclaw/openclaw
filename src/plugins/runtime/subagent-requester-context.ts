@@ -35,7 +35,7 @@ export function createPluginSubagentRequesterContext(params: {
   }
   return Object.freeze({
     sessionKey,
-    origin: Object.freeze({ ...origin }),
+    origin: Object.freeze(origin),
   });
 }
 

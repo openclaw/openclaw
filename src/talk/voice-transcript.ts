@@ -11,6 +11,8 @@ export function buildPersistedVoiceMessage(params: {
   text: string;
   timestamp: number;
   provider: string;
+  /** The backing agent keeps its own visible answer; speech is separate call history. */
+  providerOwned?: boolean;
 }): Record<string, unknown> {
   const provenance = { kind: "realtime_voice", sourceChannel: "talk" };
   if (params.role === "user") {
@@ -28,6 +30,7 @@ export function buildPersistedVoiceMessage(params: {
     provider: params.provider,
     model: "realtime-voice",
     stopReason: "stop",
+    ...(params.providerOwned ? { __openclaw: { voiceTranscript: "provider-owned" } } : {}),
     timestamp: params.timestamp,
     provenance,
   };

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { z } from "zod";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
 import {
@@ -70,13 +71,15 @@ export async function prepareUpdateFailureTriage(params: {
   mode: "interactive" | "json" | "non-interactive";
   runtime: RuntimeEnv;
   invocationCwd?: string;
+  /** Invoking operator snapshot, captured before entering the managed service environment. */
+  operatorEnv?: NodeJS.ProcessEnv;
 }): Promise<(invocation: UpdateTriageInvocation) => Promise<UpdateTriageResult>> {
   const { mode, runtime } = params;
   if (mode !== "interactive") {
     return (invocation) => runUpdateFailureTriage({ ...invocation, mode, runtime });
   }
   const invocationCwd = params.invocationCwd ?? tryProcessCwd();
-  const operatorEnv = resolveServiceRefreshEnv(process.env, invocationCwd);
+  const operatorEnv = resolveServiceRefreshEnv(params.operatorEnv ?? process.env, invocationCwd);
   const operatorHome = resolveOsHomeDir(operatorEnv);
   const { triageCommand } = await import("../commands/triage.js");
   const prepared: PreparedTriage = {
@@ -195,14 +198,19 @@ async function runPreparedUpdateFailureTriage(
         throw new Error("The installed OpenClaw entrypoint is unavailable.");
       }
       const args = [
-        entryPath,
         "triage",
         "--update-result",
         contextPath,
         prepared.mode === "json" ? "--json" : "--non-interactive",
       ];
       const nodeRunner = params.target.nodeRunner ?? process.execPath;
-      const result = await runCommandWithTimeout([nodeRunner, ...args], {
+      const invocation = resolveOpenClawCliInvocation({
+        execPath: nodeRunner,
+        entryPath,
+        execArgv: [],
+        args,
+      });
+      const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
         cwd: root,
         baseEnv: {},
         env,

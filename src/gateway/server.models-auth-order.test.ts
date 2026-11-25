@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { beforeAll, expect, test } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   loadAuthProfileStoreForRuntime,
@@ -16,6 +16,11 @@ import { prepareGatewayReplyRuntimeForTest, rpcReq } from "./test-helpers.js";
 import { setupGatewaySessionsHandlerTestHarness } from "./test/server-sessions.test-helpers.js";
 
 const { createSelectedGlobalSessionStore } = setupGatewaySessionsHandlerTestHarness();
+
+// This handler fixture starts a Gateway after selecting its shared auth owner.
+beforeAll(async () => {
+  await import("./server-start.js");
+});
 
 test("models.authOrderSet keeps main priority and Reset agent-owned", async () => {
   const agentId = "main";

@@ -3,7 +3,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { killSubagentRunAdmin } from "../agents/subagents/registry/subagent-control.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
@@ -84,7 +84,7 @@ export async function handleSessionKillHttpRequest(
   const kill = async (
     entry: SessionEntry | undefined,
     canonicalKey: string,
-    assertCurrent: () => void,
+    assertCurrent?: () => void,
   ) => {
     if (!entry) {
       sendJson(res, 404, {
@@ -103,10 +103,10 @@ export async function handleSessionKillHttpRequest(
         sessionKey: canonicalKey,
         agentId: requestedAgent.agentId,
       },
-      { assertCurrent },
+      assertCurrent && { assertCurrent },
     );
 
-    assertCurrent();
+    assertCurrent?.();
     if (result.found && result.error) {
       sendJson(res, 503, {
         ok: false,
@@ -125,31 +125,21 @@ export async function handleSessionKillHttpRequest(
     const result = await withSessionActorStorage(
       { sessionKey: capturedKey, agentId: requestedAgent.agentId },
       {
-        lifetime: {
-          assertCurrent: requestAuth.assertCurrent,
-          assertReadable: requestAuth.assertCurrent,
-        },
-        authority: {
-          assertCurrent: requestAuth.assertCurrent,
-          authorize: () => requestAuth.assertCurrent(),
-        },
+        lifetime: { assertCurrent() {}, assertReadable() {} },
+        authority: { assertCurrent() {}, authorize() {} },
       },
       async (memory) => {
         const entry = memory.actor.snapshot(memory.authority)?.entry;
-        return kill(entry, capturedKey, () => {
-          requestAuth.assertCurrent();
-          memory.actor.assertReadable();
-        });
+        return kill(entry, capturedKey, () => memory.actor.assertReadable());
       },
     );
-    return result ?? kill(undefined, capturedKey, requestAuth.assertCurrent);
+    return result ?? kill(undefined, capturedKey);
   }
   const { entry, canonicalKey } = await loadGatewaySessionEntryReadOnlyInWorker({
     cfg,
     key: sessionKey,
     agentId: requestedAgent.agentId,
-    assertActive: requestAuth.assertCurrent,
     excludeInternalEffects: true,
   });
-  return kill(entry, canonicalKey, requestAuth.assertCurrent);
+  return kill(entry, canonicalKey);
 }

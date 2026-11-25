@@ -8,9 +8,7 @@ import {
   cloneEnvWithPlatformSemantics,
   createConfigRuntimeEnvBase,
   prepareConfigRuntimeEnvLoad,
-  type PreparedConfigRuntimeEnv,
 } from "./config-env-vars.js";
-import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 import { getDeferredPluginMigrationConfigFacts } from "./deferred-plugin-migration-config.js";
 import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
@@ -62,7 +60,6 @@ export function registerConfigWriteListener(
   listener: (event: ConfigWriteNotification) => void,
   options: {
     ownsRuntimeActivationFor?: string;
-    prepareSnapshot?: Parameters<typeof registerManagedRuntimeConfigWriteOwner>[2];
     preCommitRuntimePreflight?: (
       sourceConfig: OpenClawConfig,
       refreshOptions?: RuntimeConfigSnapshotRefreshOptions,
@@ -73,7 +70,6 @@ export function registerConfigWriteListener(
     ? registerManagedRuntimeConfigWriteOwner(
         options.ownsRuntimeActivationFor,
         options.preCommitRuntimePreflight,
-        options.prepareSnapshot,
       )
     : undefined;
   const unregisterListener = registerRuntimeConfigWriteListener((event) => {
@@ -120,54 +116,32 @@ type RuntimeConfigAsyncReader<T> = (() => Promise<T>) & { assertCurrent: () => v
 export function captureRuntimeConfigAsyncReader(options: {
   assertCurrent?: () => void;
   capture: true;
+  observe?: boolean;
   skipPluginValidation?: boolean;
 }): RuntimeConfigAsyncReader<CapturedRuntimeConfigRead>;
 export function captureRuntimeConfigAsyncReader(options?: {
   assertCurrent?: () => void;
   capture?: false;
+  observe?: boolean;
   skipPluginValidation?: boolean;
 }): RuntimeConfigAsyncReader<OpenClawConfig>;
 export function captureRuntimeConfigAsyncReader(
-  options: { assertCurrent?: () => void; capture?: boolean; skipPluginValidation?: boolean } = {},
+  options: {
+    assertCurrent?: () => void;
+    capture?: boolean;
+    observe?: boolean;
+    skipPluginValidation?: boolean;
+  } = {},
 ): RuntimeConfigAsyncReader<OpenClawConfig | CapturedRuntimeConfigRead> {
-  const sourceEnv = process.env;
   const cwd = tryProcessCwd();
-  const readSelectors = () =>
-    new Map([...GATEWAY_CONFIG_SELECTION_ENV_KEYS].map((key) => [key, sourceEnv[key]]));
-  let selectors = readSelectors();
   const stage = prepareConfigRuntimeEnvLoad({ previousConfig: {} });
   // Legacy cold IO chooses the root config path before dotenv changes the environment.
   const io = createConfigIO({
     env: stage.env,
+    ...(options.observe === false ? { observe: false } : {}),
     ...(options.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
   });
-  const assertCurrent = () => {
-    options.assertCurrent?.();
-    if (
-      process.env !== sourceEnv ||
-      tryProcessCwd() !== cwd ||
-      [...selectors].some(([key, value]) => sourceEnv[key] !== value)
-    ) {
-      throw new Error("Runtime config source changed during asynchronous preparation");
-    }
-  };
-  const preparePublication = (prepared: PreparedConfigRuntimeEnv): PreparedConfigRuntimeEnv => ({
-    env: prepared.env,
-    publish: () => {
-      assertCurrent();
-      const previousSelectors = selectors;
-      const publication = prepared.publish();
-      // Only this canonical publication may advance the captured selector facts.
-      selectors = readSelectors();
-      return Object.assign(
-        () => {
-          publication();
-          selectors = previousSelectors;
-        },
-        { commit: () => publication.commit() },
-      );
-    },
-  });
+  const assertCurrent = () => options.assertCurrent?.();
   let pending: Promise<OpenClawConfig | CapturedRuntimeConfigRead> | undefined;
   const read = () => {
     assertCurrent();
@@ -175,17 +149,17 @@ export function captureRuntimeConfigAsyncReader(
       try {
         assertPinned();
         try {
-          await loadDotEnvAsync({ env: stage.env, quiet: true, cwd });
+          await loadDotEnvAsync({ env: stage.env, cwd });
         } finally {
           stage.captureDotEnvBaseline();
         }
         assertPinned();
         const config = await io.loadConfigAsync({ assertCurrent: assertPinned });
         assertPinned();
-        return { config, runtimeEnv: preparePublication(stage.prepare(config)) };
+        return { config, runtimeEnv: stage.prepare(config) };
       } catch (error) {
         assertPinned();
-        const publication = preparePublication(stage.prepareFailure()).publish();
+        const publication = stage.prepareFailure().publish();
         publication.commit();
         throw error;
       }
@@ -227,20 +201,25 @@ export function readCurrentConfigForResolution(
   }
   const io = createCurrentConfigReader(params);
   let config: OpenClawConfig | undefined;
+  let loadFailure: unknown;
   try {
     const loaded = io.loadConfig({ skipSuspiciousRecovery: true });
     if (fs.existsSync(io.configPath)) {
       config = loaded;
     }
-  } catch {
-    // Directory inspection preserves access even when the config cannot be loaded.
+  } catch (error) {
+    // Directory inspection preserves access even when the config cannot be loaded,
+    // but the degradation must not erase why the file was rejected.
+    loadFailure = error;
   }
   const issues = config
     ? []
     : [
         {
           path: io.configPath,
-          message: "Config unavailable; using environment and default agent directory settings.",
+          message: loadFailure
+            ? `Config unavailable; using environment and default agent directory settings. (${formatErrorMessage(loadFailure)})`
+            : "Config unavailable; using environment and default agent directory settings.",
         },
       ];
   logConfigWarningsOnce({
@@ -264,12 +243,16 @@ export function readCurrentConfigForPolicyCheck(params: {
   return createCurrentConfigReader(params).loadConfig({ skipSuspiciousRecovery: true });
 }
 
-/** Keep the Claw Add policy reader bound to its admitted plugin-state lease. */
+/** Keep the Template Add policy reader bound to its admitted plugin-state lease. */
 export async function withCurrentConfigPolicyReader<T>(
   params: {
     configPath: string;
     env: NodeJS.ProcessEnv;
-    lease: { databasePath: string; assertOwned: () => void };
+    lease: {
+      databasePath: string;
+      assertOwned: () => void | Promise<void>;
+      assertCurrent: () => void;
+    };
   },
   run: (getCurrentConfig: () => OpenClawConfig) => Promise<T>,
 ): Promise<T> {
@@ -315,10 +298,12 @@ export async function readBestEffortConfig(options?: {
 export async function readBestEffortConfigSnapshot(options?: {
   observe?: boolean;
   skipPluginValidation?: boolean;
+  pluginValidation?: ConfigSnapshotReadOptions["pluginValidation"];
 }): Promise<BestEffortConfigSnapshot> {
   return await createConfigIO({
     ...(options?.observe === false ? { observe: false } : {}),
-    ...(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+    pluginValidation:
+      options?.pluginValidation ?? (options?.skipPluginValidation ? "skip" : undefined),
   }).readBestEffortConfigSnapshot();
 }
 
@@ -397,8 +382,10 @@ export async function recoverConfigFromJsonRootSuffix(
   return await createConfigIO().recoverConfigFromJsonRootSuffix(snapshot, assertRecoveryCandidate);
 }
 
-export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {
-  return await readConfigFileSnapshot();
+export async function readSourceConfigSnapshot(
+  options?: Pick<ConfigSnapshotReadOptions, "observe">,
+): Promise<ConfigFileSnapshot> {
+  return await readConfigFileSnapshot(options);
 }
 
 export async function readConfigFileSnapshotForRuntimeTransaction(
@@ -412,13 +399,18 @@ export async function readConfigFileSnapshotForRuntimeTransaction(
 }
 
 export async function readConfigFileSnapshotForWrite(options?: {
+  pluginValidation?: ConfigSnapshotReadOptions["pluginValidation"];
   skipPluginValidation?: boolean;
   observe?: boolean;
   deferredPluginMigrations?: ConfigWriteOptions["deferredPluginMigrations"];
   preservedLegacyRootKeys?: readonly string[];
 }): Promise<ReadConfigFileSnapshotForWriteResult> {
   const readOptions = {
-    ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+    ...(options?.pluginValidation
+      ? { pluginValidation: options.pluginValidation }
+      : options?.skipPluginValidation
+        ? { pluginValidation: "skip" as const }
+        : {}),
     ...(options?.observe === false ? { observe: false } : {}),
     ...(options?.deferredPluginMigrations !== undefined
       ? { deferredPluginMigrations: options.deferredPluginMigrations }
@@ -510,7 +502,6 @@ export async function writeConfigFile(
           expectedConfigPath: options.expectedConfigPath,
           envSnapshotForRestore: options.envSnapshotForRestore,
         }),
-        unsetPaths: resolveManagedUnsetPathsForWrite(options.unsetPaths),
         explicitSetValueSource: options.explicitSetPaths
           ? (options.explicitSetValueSource ?? cfg)
           : undefined,

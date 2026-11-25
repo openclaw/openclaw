@@ -103,7 +103,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                 self.observeVoiceChanges()
             }
         }
-        self.hotkey.setEnabled(voiceWakeSupported && enabled)
+        self.hotkey.setEnabled(enabled)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -232,7 +232,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             isPaused: self.state.isPaused,
             connection: connection,
             quickChatEnabled: self.state.quickChatEnabled,
-            voiceWakeSupported: voiceWakeSupported,
             debugEnabled: self.state.debugPaneEnabled,
             updateReady: self.updater.isAvailable && self.updater.updateStatus.isUpdateReady,
             hasUsage: self.summaries.hasUsage,
@@ -241,7 +240,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             sessionError: self.sessions.errorText,
             mainSessionKey: self.activityStore.mainSessionKey,
             approvals: self.approvals.requests,
-            gateways: DashboardGatewayMenuModel.items(from: self.dashboard.gatewayEntries))
+            gateways: DashboardGatewayMenuModel.items(from: self.dashboard.gatewayEntries),
+            removal: MacOpenClawIDFeature.isEnabled ? MacOpenClawIDDeviceStore.shared.lastRemoval() : nil,
+            openClawIDAvailable: MacOpenClawIDFeature.isEnabled && MacOpenClawIDConfiguration.current() != nil)
         if self.updater.isAvailable {
             self.renderer?.onInstallUpdate = { [weak self] in
                 guard let self, self.updater.isAvailable else { return }
@@ -314,7 +315,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                 if modeChanged, self.state.connectionMode == mode,
                    AppLaunchRuntimePlan.current.allowsAutomaticPresentation
                 {
-                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+                    CLIInstallPrompter.shared.checkAndPromptIfNeeded()
                 }
             }
             if modeChanged {
@@ -328,7 +329,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         button.appearsDisabled = false
         button.toolTip = self.state.voiceWakeMeterActive
             ? String(localized: "OpenClaw - Voice Wake live meter active")
-            : String(localized: "OpenClaw")
+            : nil
     }
 
     private func scheduleDebugMenuOpen() {

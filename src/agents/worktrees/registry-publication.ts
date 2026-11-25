@@ -9,6 +9,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { createKeyedStateDomainPublication } from "../../state/state-domain-publication.js";
@@ -131,25 +132,24 @@ export function withWorktreeRegistryPublication(
   context: OpenClawStateWorkerContext,
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
-    const owner = createAdmission(operation);
-    let pending: ReturnType<typeof publication.begin>;
+    const pending = publication.begin({
+      identity: context.admission.identity.key,
+      assertCurrent: context.assertPublicationCurrent ?? context.admission.assertCurrent,
+    });
+    let owner: ReturnType<SqliteWorkerAdmissionFactory>;
     try {
-      pending = publication.begin({
-        identity: context.admission.identity.key,
-        assertCurrent: context.assertPublicationCurrent ?? context.admission.assertCurrent,
-      });
+      owner = createAdmission(operation);
     } catch (error) {
-      owner.admission.finish();
+      try {
+        pending.finish(true, true);
+      } catch {
+        // The writer never started; preserve the original constructor failure.
+      }
       throw error;
     }
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        pending.finish(owner.admission.settlement?.kind === "completed");
-      }
-    };
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      pending.finish(owner.admission.settlement?.kind === "completed");
+    });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
       const committed = readWorkerReceiptEnvelope(facts);
       if (!committed) {

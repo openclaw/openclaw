@@ -426,8 +426,8 @@ function runProtectedShell(
   writeFileSync(join(root, "input.json"), JSON.stringify(evidence));
   const gh = join(bin, "gh");
   const protectedGh = `#!${process.execPath}
-const fs = require("node:fs");
-const cp = require("node:child_process");
+import fs from "node:fs";
+import cp from "node:child_process";
 const args = process.argv.slice(2);
 fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\\n");
 const value = JSON.parse(fs.readFileSync("input.json", "utf8"));
@@ -566,13 +566,13 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
         *'${advancedMainSha}'*|*--batch-check*) exec '${process.execPath}' '${selected}' fixture-git "$@";;
         *) exit 0;;
       esac;;
-      merge-base) exit 0;;
+      --version|merge-base) exit 0;;
       config) [ "$*" = 'config --bool remote.origin.promisor' ] && exit 1; exit 19;;
       remote) [ "$2 $3" = 'get-url origin' ] || exit 19; echo 'https://github.com/openclaw/openclaw.git';;
       merge-tree) echo candidate-tree;;
       diff) case "$*" in
-        'diff --name-only ${headSha}..${headSha}') ;;
-        'diff --name-only ${headSha}..${mainSha}'|'diff --name-only ${headSha}..${advancedMainSha}') echo fixture-mainline.txt;;
+        'diff --name-only --no-renames ${headSha}..${headSha}') ;;
+        'diff --name-only --no-renames ${headSha}..${mainSha}'|'diff --name-only --no-renames ${headSha}..${advancedMainSha}') echo fixture-mainline.txt;;
         *) echo "unexpected fixture git: $*" >&2; exit 19;;
       esac;;
       rev-parse) case "$2" in

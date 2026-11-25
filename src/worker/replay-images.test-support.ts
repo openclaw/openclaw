@@ -1,4 +1,5 @@
 import type { WorkerTranscriptMessage } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 
 type ImageHistoryMessage = Exclude<WorkerTranscriptMessage, { role: "custom" }>;
 
@@ -24,14 +25,7 @@ export function createWorkerImageHistory(userImage = false): ImageHistoryMessage
       provider: "test",
       model: "test-model",
       stopReason: "toolUse",
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 2,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createUsageFixture(1, 1, 2),
       timestamp: index * 2 + 1,
     });
     messages.push({

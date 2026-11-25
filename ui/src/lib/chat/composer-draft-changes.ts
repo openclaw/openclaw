@@ -1,4 +1,27 @@
-import { notifyListeners } from "../../../../src/shared/listeners.js";
+import { createChangeListeners, notifyListeners } from "../../../../src/shared/listeners.js";
+import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "./chat-types.ts";
+
+export type ComposerDraftSource = {
+  read(): {
+    draft: string;
+    mentions: readonly HumanMention[];
+    attachments: ChatAttachment[];
+    pendingAttachmentReads: number;
+    attachmentReadRevision?: number;
+    goalDraftMode?: ChatGoalDraftMode | null;
+  };
+  subscribe(listener: () => void): () => void;
+};
+
+/** Publishes completed owner mutations without keeping a second draft. */
+export function createComposerDraftSource(read: ComposerDraftSource["read"]) {
+  const listeners = createChangeListeners();
+  return {
+    read,
+    subscribe: listeners.subscribe,
+    publish: listeners.publish,
+  };
+}
 
 const durableComposerDraftChangeListeners = new Set<() => void>();
 

@@ -1,5 +1,4 @@
 import type { GatewaySessionRow } from "../api/types.ts";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { registerSessionPlacementEnglish } from "../i18n/locales/en-session-placement.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
@@ -7,13 +6,13 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../lib/session-owner.ts";
 import { customSnoozeStorageKey, readCustomSnooze } from "../lib/sessions/custom-snooze.ts";
-import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
-import type { SessionCommunicationMenuAction } from "./session-communication-options.ts";
-import { SessionMenuSettings } from "./session-menu-settings.ts";
-import { SessionOwnerMenu } from "./session-owner-menu.ts";
+import {
+  createSessionMenuSettings,
+  type SessionCommunicationMenuAction,
+} from "./session-menu-settings.ts";
+import { createSessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
 
-registerSessionOrganizationEnglish();
 registerSessionPlacementEnglish();
 
 export type SessionMenuData = {
@@ -74,21 +73,6 @@ export type SessionManagementAction =
 
 export type SessionManagementActionKind = SessionManagementAction["kind"];
 
-export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
-  label: "",
-  sessionId: null,
-  pinned: false,
-  unread: false,
-  archived: false,
-  snoozedUntil: null,
-  category: null,
-  icon: null,
-  color: null,
-  categoryClearReturnsToGroups: false,
-};
-
-type SessionMenuActionsHost = SolidControllerHost & HTMLElement;
-
 export type SessionMenuActionsState = {
   involvingMeContext?: boolean;
   session: SessionMenuData;
@@ -114,7 +98,6 @@ export type SessionMenuActionsState = {
 export class SessionMenuActions {
   private readonly context = useOptionalApplication();
   private readonly gateway = this.context ? projectGateway(this.context.gateway) : undefined;
-  readonly ownerMenu: SessionOwnerMenu;
   readonly advanced;
   openCustomSnooze?: () => void;
   customSnoozeKeydown?: (event: KeyboardEvent) => boolean;
@@ -125,14 +108,17 @@ export class SessionMenuActions {
   }
 
   constructor(
-    private readonly host: SessionMenuActionsHost,
+    readonly focusCurrentView: () => void,
     private readonly readState: () => SessionMenuActionsState,
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
+    readonly ownerMenu = createSessionOwnerMenu(),
   ) {
-    this.ownerMenu = new SessionOwnerMenu(host);
-    this.advanced = new SessionMenuSettings(host, {
-      context: () => this.context,
+    this.advanced = createSessionMenuSettings({
+      context: () => {
+        this.gateway?.read();
+        return this.context;
+      },
       readState: () => this.readState(),
       runAction: (action) => this.runAction(action),
     });
@@ -292,15 +278,6 @@ export class SessionMenuActions {
       return true;
     }
     return false;
-  }
-
-  focusCurrentView(): void {
-    void this.host.updateComplete.then(() => {
-      const first =
-        this.host.querySelector<HTMLElement>(".session-menu__appearance button:not(:disabled)") ??
-        this.host.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])');
-      first?.focus();
-    });
   }
 
   handleKeydown(event: KeyboardEvent, appearancePicker: { showIconGrid: () => void }): boolean {

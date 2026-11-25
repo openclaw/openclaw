@@ -1,5 +1,6 @@
 import type { CronEventAdmission } from "../event-source.js";
-import type { CronJob } from "../types.js";
+import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
+import type { CronJob, CronStoredJob } from "../types.js";
 import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 export type CronRunRequestContext = {
@@ -9,12 +10,22 @@ export type CronRunRequestContext = {
   event?: CronEventAdmission;
 };
 
-export type CronQueuedRun = { job: CronJob; runReceipt: CronRunReceiptHandle };
+export type CronQueuedRun = {
+  job: CronStoredJob;
+  runReceipt: CronRunReceiptHandle;
+  migrationPending?: boolean;
+};
 export type CronSkippedRequest = {
   job?: CronJob;
   runReceipt: CronRunReceiptHandle;
   error: string;
   eventInvalidated?: true;
+};
+
+/** Host observations used by the worker when allocating a known provider an extra slot. */
+export type CronProviderBackoffSnapshot = {
+  allowances: { provider: string; slots: number }[];
+  charges: { receiptId: string; provider?: string }[];
 };
 
 export type CronRunQueueOperations = {
@@ -45,10 +56,31 @@ export type CronRunQueueOperations = {
       nowMs: number;
       defaultAgentId?: string;
       maxConcurrentRuns: number;
+      /** At least 1 GiB was free when the host read memory: see `cronMemoryAllowsExtraRun`. */
+      memoryAllowsExtraRun?: boolean;
+      providerBackoff?: CronProviderBackoffSnapshot;
       requests: CronRunRequestContext[];
       schedulingPaused?: boolean;
+      preparingAgentIds?: string[];
+      /** Jobs continuing a conversation that is busy now; their timed occurrences stay queued. */
+      busyConversationJobIds?: string[];
+      /**
+       * The draining Gateway process. Private command schedules from another process, or a
+       * drain without this identity, retire before spending an attempt.
+       */
+      hostProcessId?: string;
+      /**
+       * Plugin instances loaded in the draining process that can serve command schedules. A
+       * restartable schedule from an earlier process re-arms onto a matching one in the claim.
+       */
+      pluginCommandHosts?: PluginCommandScheduleHost[];
     };
-    output: { launches: CronQueuedRun[]; skipped: CronSkippedRequest[] };
+    output: {
+      launches: CronQueuedRun[];
+      preparing: CronQueuedRun[];
+      skipped: CronSkippedRequest[];
+      promotedReceiptIds?: string[];
+    };
   };
   "cron.cancelRequests": {
     input: {
@@ -59,5 +91,15 @@ export type CronRunQueueOperations = {
       status?: "skipped" | "superseded";
     };
     output: { skipped: CronSkippedRequest[] };
+  };
+  /**
+   * Settle a fired condition or return a provisional extra slot after provider selection.
+   * The receipt keeps its place in the queue without holding a slot. The host asks again
+   * after each drain until another slot is granted.
+   */
+  "cron.reconcileRunSlot": {
+    input: { storeKey: string; jobId: string; receiptId: string; parkProvider?: string };
+    /** `stale`: the receipt no longer owns the job's running marker. */
+    output: { job?: CronStoredJob; runSlot: boolean; stale?: true };
   };
 };

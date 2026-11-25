@@ -13,6 +13,7 @@ import {
   readArtifactRecord,
   writeArtifactRecord,
 } from "./lib/build-artifact-cache.mts";
+import { runCancelableCommand } from "./lib/cancelable-command.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
@@ -33,7 +34,7 @@ import {
   resolveCheckMemoryCapacityBytes,
   resolveLocalCheckEnv,
 } from "./lib/local-check-runtime.mts";
-import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -46,6 +47,7 @@ type NodeStepParams = {
   shell?: boolean;
   windowsVerbatimArguments?: boolean;
   abortController?: AbortController;
+  signal?: AbortSignal;
   abortKillGraceMs?: number;
   env?: NodeJS.ProcessEnv;
   onStdoutLine?: (line: string) => boolean;
@@ -55,7 +57,6 @@ type NodeStep = Omit<NodeStepParams, "abortController"> & {
   label: string;
   timeoutMs: number;
 };
-const activeNodeSteps = new Set<Promise<number>>();
 let nodeStepParentSignal: NodeJS.Signals | undefined;
 export function parseMode(argv: string[] = process.argv.slice(2)) {
   const mode = argv.find((arg) => arg.startsWith("--mode="))?.slice("--mode=".length) ?? "all";
@@ -113,6 +114,7 @@ export async function runNodeStep(
   timeoutMs: number,
   params: NodeStepParams = {},
 ) {
+  params.signal?.throwIfAborted();
   if (params.abortController?.signal.aborted || nodeStepParentSignal) {
     throw new Error(`${label} canceled before starting`);
   }
@@ -130,7 +132,10 @@ export async function runNodeStep(
     // Artifact writers must finish before stamps, dependent readers, or lock release.
     requireProcessTreeExit: process.platform !== "win32",
     timeoutMs: resolvedTimeoutMs,
-    signal: params.abortController?.signal,
+    signal:
+      params.signal && params.abortController
+        ? AbortSignal.any([params.signal, params.abortController.signal])
+        : (params.signal ?? params.abortController?.signal),
     abortKillGraceMs: Math.max(
       0,
       Math.floor(params.abortKillGraceMs ?? DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS),
@@ -146,9 +151,12 @@ export async function runNodeStep(
       child.stderr!.on("data", (chunk: string) => stderrWriter.write(chunk));
     },
   });
-  activeNodeSteps.add(command);
   try {
     const code = await command;
+    params.signal?.throwIfAborted();
+    if (nodeStepParentSignal) {
+      throw new DOMException(`${label} canceled after parent signal`, "AbortError");
+    }
     if (code !== 0) {
       throw new Error(`${label} failed with exit code ${code}`);
     }
@@ -158,11 +166,10 @@ export async function runNodeStep(
       code === "ETIMEDOUT"
         ? new Error(`${label} timed out after ${resolvedTimeoutMs}ms`, { cause: error })
         : code === "ABORT_ERR"
-          ? new Error(`${label} canceled after sibling failure`, { cause: error })
+          ? Object.assign(new Error(`${label} canceled after sibling failure`, { cause: error }), {
+              code: "ABORT_ERR",
+            })
           : error;
-    if (nodeStepParentSignal && code === "EPROCESSGROUP_CLEANUP_FAILED") {
-      console.error(failure);
-    }
     if (params.abortController && !params.abortController.signal.aborted) {
       params.abortController.abort(failure);
     }
@@ -170,11 +177,8 @@ export async function runNodeStep(
   } finally {
     stdoutWriter.flush();
     stderrWriter.flush();
-    activeNodeSteps.delete(command);
-    // The last sibling exits only after all managed cancellation has joined.
-    if (nodeStepParentSignal && activeNodeSteps.size === 0) {
-      process.exit(signalExitCode(nodeStepParentSignal));
-    }
+    // Let the caller join sibling steps and release artifact ownership before exiting.
+    // A leaf process.exit() bypasses both that release and the inherited child claim.
   }
 }
 
@@ -284,10 +288,13 @@ export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = p
   }
 }
 
-async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process.argv.slice(2)) {
+async function prepareExtensionPackageBoundaryArtifacts(argv: string[], signal: AbortSignal) {
+  signal.throwIfAborted();
   const mode = parseMode(argv);
   await ensureKyselyTypes(repoRoot);
+  signal.throwIfAborted();
   const selectedArgument = argv.find((arg) => arg.startsWith("--extensions="));
+  const sharedSdk = process.env.OPENCLAW_CI_SHARED_SDK === "1";
   let selected: string[] | undefined;
   let discoverPreparation: typeof resolveExtensionBoundaryPreparation | undefined;
   let preparation: Awaited<ReturnType<typeof resolveExtensionBoundaryPreparation>> | undefined;
@@ -304,14 +311,18 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     selected = requested;
     ({ resolveExtensionBoundaryPreparation: discoverPreparation } =
       await import("./lib/extension-boundary-projects.mts"));
-    preparation = await discoverPreparation(repoRoot, selected);
-    process.stdout.write(
-      `selected preparation: ${preparation.sdkRoots.length} SDK roots; plugin producers: ${preparation.pluginIds.join(", ") || "none"}\n`,
-    );
+    signal.throwIfAborted();
+    // Shared SDK preparation does not need roots until its full output is verified.
+    if (!sharedSdk) {
+      preparation = await discoverPreparation(repoRoot, selected);
+      signal.throwIfAborted();
+      process.stdout.write(
+        `selected preparation: ${preparation.sdkRoots.length} SDK roots; plugin producers: ${preparation.pluginIds.join(", ") || "none"}\n`,
+      );
+    }
   }
   const compilerEnv = resolveDeclarationCompilerEnv(resolveLocalCheckEnv(process.env));
   const compilerTimeoutMs = resolveTsgoTimeoutMs(compilerEnv);
-  const sharedSdk = process.env.OPENCLAW_CI_SHARED_SDK === "1";
   const sdk = sdkBoundaryUnit(sharedSdk ? undefined : preparation?.sdkRoots);
   const plugins = BOUNDARY_PLUGIN_UNITS.map(([id, entry]) => ({
     id,
@@ -323,17 +334,26 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
   }));
   const batches = [[sdk], mode === "all" ? plugins : []].map((batch) =>
     batch.map((unit) => {
-      fs.mkdirSync(resolve(repoRoot, unit.outDir), { recursive: true });
+      const outputDir = resolve(repoRoot, unit.outDir);
+      fs.mkdirSync(outputDir, { recursive: true });
       if (unit.id !== "plugin-sdk") {
+        const modulesDir = resolve(repoRoot, unit.rootDir, "node_modules");
+        const dependencyLink = resolve(outputDir, "node_modules");
+        // Copied generated trees must not retain another checkout's dependency scope.
+        if (
+          fs.lstatSync(dependencyLink, { throwIfNoEntry: false })?.isSymbolicLink() &&
+          resolve(outputDir, fs.readlinkSync(dependencyLink)) !== modulesDir
+        ) {
+          fs.unlinkSync(dependencyLink);
+        }
         // Relocated declarations still resolve third-party types through their package owner.
-        ensureRepoNodeModulesLink(resolve(repoRoot, unit.rootDir, "node_modules"), {
-          cwd: resolve(repoRoot, unit.outDir),
-        });
+        ensureRepoNodeModulesLink(modulesDir, { cwd: outputDir });
       }
-      return { ...unit, outputRoot: fs.realpathSync.native(resolve(repoRoot, unit.outDir)) };
+      return { ...unit, outputRoot: fs.realpathSync.native(outputDir) };
     }),
   );
   const prepareBatch = async (batch: (typeof batches)[number]) => {
+    signal.throwIfAborted();
     if (!batch.length) {
       return;
     }
@@ -345,8 +365,6 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         const inputReceipt = `${unit.outDir}/.inputs.json`;
         const args = boundaryPreparationArgs(repoRoot, unit);
         const previous = readArtifactRecord(recordPath);
-        // Prime config/toolchain/topology before starting even an uncached owner.
-        before.signature(unit.config, args, [], unit.outputRoot);
         if (
           // A valid full receipt can cover a narrower request; the reverse never applies.
           [
@@ -382,6 +400,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
           label: `${unit.id} boundary dts`,
           args: unit.args,
           env: compilerEnv,
+          signal,
           timeoutMs: Math.min(
             unit.id === "plugin-sdk" ? resolveBoundaryRootShimsTimeoutMs() : 300_000,
             compilerTimeoutMs ?? Number.POSITIVE_INFINITY,
@@ -396,6 +415,8 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         };
       }),
     );
+    // Cancellation in an async gap must not admit compilers or publish receipts.
+    signal.throwIfAborted();
     if (!pending.length) {
       return;
     }
@@ -434,7 +455,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
       process.stdout.write(`[${unit.id} boundary dts] emitted ${unit.outputs.size} files\n`);
     }
   };
-  if (!preparation) {
+  if (!selected) {
     for (const batch of batches) {
       await prepareBatch(batch);
     }
@@ -448,6 +469,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     const discovered = await discoverPreparation!(repoRoot, selected!, {
       preparedSdk: true,
     });
+    signal.throwIfAborted();
     if (sharedSdk) {
       if (discovered.sdkRoots.length) {
         throw new Error(
@@ -476,5 +498,12 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   // The private entry must observe cleanup metadata before releasing its claim.
-  await withDistArtifactOwnership(repoRoot, () => prepareExtensionPackageBoundaryArtifacts());
+  process.exitCode = await runCancelableCommand(async (signal) => {
+    await withDistArtifactOwnership(
+      repoRoot,
+      () => prepareExtensionPackageBoundaryArtifacts(process.argv.slice(2), signal),
+      signal,
+    );
+    return 0;
+  });
 }

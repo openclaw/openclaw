@@ -1,6 +1,6 @@
 import { generateSecureToken } from "../../../infra/secure-random.js";
-import type { AssistantMessage } from "../../../llm/types.js";
-import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
+import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
   deriveContextPromptTokens,
@@ -14,7 +14,7 @@ import { toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.j
 import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 
 export type RuntimeAuthState = {
-  generation: number;
+  apiKey: string;
   sourceApiKey: string;
   authMode: string;
   profileId?: string;
@@ -169,12 +169,12 @@ export function buildErrorAgentMeta(params: {
 }
 
 export function resolveFinalAssistantVisibleText(
-  lastAssistant: AssistantMessage | undefined,
+  lastAssistant: AssistantHistoryMessage | undefined,
 ): string | undefined {
   if (!lastAssistant) {
     return undefined;
   }
-  const visibleText = extractAssistantVisibleText(lastAssistant).trim();
+  const visibleText = extractAssistantVisibleText(lastAssistant);
   return visibleText || undefined;
 }
 
@@ -184,7 +184,7 @@ export function resolveFinalAssistantVisibleText(
  * narration even when a later message never completed.
  */
 export function resolveFinalMessageRawText(
-  lastAssistant: AssistantMessage | undefined,
+  lastAssistant: AssistantHistoryMessage | undefined,
 ): string | undefined {
   if (
     !lastAssistant ||
@@ -197,12 +197,7 @@ export function resolveFinalMessageRawText(
 }
 
 export function resolveFinalAssistantRawText(
-  lastAssistant: AssistantMessage | undefined,
+  lastAssistant: AssistantHistoryMessage | undefined,
 ): string | undefined {
-  if (!lastAssistant) {
-    return undefined;
-  }
-  const finalAnswerText = extractAssistantTextForPhase(lastAssistant, { phase: "final_answer" });
-  const rawText = (finalAnswerText ?? extractAssistantTextForPhase(lastAssistant) ?? "").trim();
-  return rawText || undefined;
+  return lastAssistant ? resolveRawAssistantAnswerText(lastAssistant) || undefined : undefined;
 }

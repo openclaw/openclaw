@@ -2,6 +2,8 @@
 
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
+import { rememberSessionPanelToggle } from "../../components/session-panel-toggle-buffer.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import {
@@ -18,10 +20,14 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 
-it("opens the requested desktop through a cold native pane panel", async () => {
+it("replays an initial panel intent through its Solid pane and retires delivery on removal", async () => {
   installTranscriptDomMocks();
   onTestFinished(resetTranscriptTestDom);
   const sessionKey = "agent:main:panel-delivery";
+  const toggle = (open: boolean, environmentId?: string) =>
+    new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, {
+      detail: { open, sessionKey, ...(environmentId ? { environmentId } : {}) },
+    });
   const fixture = createMountedPanes([
     { key: sessionKey, kind: "direct", sessionId: "panel-delivery", updatedAt: 1 },
   ]);
@@ -49,13 +55,23 @@ it("opens the requested desktop through a cold native pane panel", async () => {
     }
     return originalRequest(method, ...args);
   });
-  const requestClient = createTestGatewayClient(request);
-  client.request = requestClient.request.bind(requestClient);
+  const testClient = createTestGatewayClient(request);
+  client.request = testClient.request.bind(testClient);
   onTestFinished(() => {
     client.request = originalRequest;
   });
+  const expectDesktopRequests = (environmentId: string, called: boolean) => {
+    const assertion = called ? expect(request) : expect(request).not;
+    assertion.toHaveBeenCalledWith("environments.status", { environmentId });
+    assertion.toHaveBeenCalledWith("desktop.observe", {
+      source: { kind: "environment", environmentId },
+      control: false,
+    });
+  };
+  rememberSessionPanelToggle("desktop", toggle(true, "requested-desktop"));
   const container = document.body.appendChild(createApplicationContextProvider(fixture.context));
   onTestFinished(() => container.remove());
+  const query = (selector: string) => container.querySelector(selector);
   const view = mountSolid(
     () => (
       <ApplicationProvider value={fixture.context}>
@@ -64,27 +80,18 @@ it("opens the requested desktop through a cold native pane panel", async () => {
     ),
     { container },
   );
-  await waitForSolid(() => {
-    expect(view.container.querySelector(".agent-chat__composer-combobox textarea")).not.toBeNull();
-  });
-  expect(view.container.querySelector("openclaw-desktop-panel")).toBeNull();
-  window.dispatchEvent(
-    new CustomEvent("openclaw:desktop-toggle", {
-      detail: { open: true, environmentId: "requested-desktop", sessionKey },
-    }),
-  );
+  await waitForSolid(() => expect(query(".agent-chat__composer-combobox textarea")).not.toBeNull());
   await vi.dynamicImportSettled();
   await waitForSolid(() => {
-    expect(request).toHaveBeenCalledWith("environments.status", {
-      environmentId: "requested-desktop",
-    });
-    expect(request).toHaveBeenCalledWith("desktop.observe", {
-      source: { kind: "environment", environmentId: "requested-desktop" },
-      control: false,
-    });
-    expect(
-      view.container.querySelector(".desktop-credentials input[type='password']"),
-    ).not.toBeNull();
+    expectDesktopRequests("requested-desktop", true);
+    expect(query(".desktop-credentials input[type='password']")).not.toBeNull();
   });
+  window.dispatchEvent(toggle(false));
+  await waitForSolid(() => expect(query("openclaw-desktop-panel")).toBeNull());
+
   view.unmount();
+  request.mockClear();
+  window.dispatchEvent(toggle(true, "retired-desktop"));
+  await vi.dynamicImportSettled();
+  expectDesktopRequests("retired-desktop", false);
 });

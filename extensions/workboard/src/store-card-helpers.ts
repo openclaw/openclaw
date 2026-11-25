@@ -173,9 +173,7 @@ function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
       (event?.kind === "moved" || event?.kind === "created") &&
       ((event.kind === "created" && card.status !== "todo") ||
         (event.kind === "moved" && event.fromStatus !== event.toStatus)) &&
-      event.toStatus === card.status &&
-      typeof event.at === "number" &&
-      Number.isFinite(event.at)
+      event.toStatus === card.status
     ) {
       return event.at;
     }
@@ -311,12 +309,24 @@ export function updateEvent(
   return { kind: "edited" };
 }
 
+export function cardHasRunAttempt(card: WorkboardCard, runId: string): boolean {
+  return Boolean(card.metadata?.attempts?.some((attempt) => attempt.runId === runId));
+}
+
 export function assertCanMutateClaimedCard(
   card: WorkboardCard,
   scope: WorkboardMutationScope | undefined,
 ) {
   if (!scope) {
     return;
+  }
+  // A retry keeps the agent (claim owner) and often the session, so only the run id tells a
+  // superseded attempt that finished late apart from the card's current one.
+  const runId = normalizeOptionalString(scope.runId);
+  if (runId && runId !== card.runId && cardHasRunAttempt(card, runId)) {
+    throw new Error(
+      `run ${runId} was superseded by a retry of this card; it can no longer change the card. Report its result in your reply instead.`,
+    );
   }
   const claim = card.metadata?.claim;
   if (!claim) {
@@ -656,18 +666,12 @@ export function closeRunningAttempts(
   );
 }
 
-export function notificationSequence(event: WorkboardNotification): number | undefined {
-  return typeof event.sequence === "number" && Number.isFinite(event.sequence)
-    ? Math.trunc(event.sequence)
-    : undefined;
-}
-
 export function compareNotifications(a: WorkboardNotification, b: WorkboardNotification): number {
   if (a.createdAt !== b.createdAt) {
     return a.createdAt - b.createdAt;
   }
-  const aSequence = notificationSequence(a);
-  const bSequence = notificationSequence(b);
+  const aSequence = a.sequence;
+  const bSequence = b.sequence;
   if (aSequence !== undefined && bSequence !== undefined) {
     return aSequence - bSequence || a.id.localeCompare(b.id);
   }

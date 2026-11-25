@@ -17,10 +17,18 @@ import { materializePersonalAuthProfile } from "./personal-profiles.js";
 import { mergeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
 import {
   resolveExternalCliOverlayOptions,
+  resolveRuntimeAuthProfileLoadOptions,
   type createAuthProfileStoreRuntimeReader,
   type LoadAuthProfileStoreOptions,
   type PreparedAuthProfileStoreReads,
 } from "./runtime-read.js";
+import {
+  captureAuthProfileStoreScope,
+  getScopedAuthProfileEnv,
+  getScopedSharedAuthStore,
+  isEnvOnlyAuthProfileRuntime,
+  resolveRuntimeAuthProfileAgentDir,
+} from "./runtime-scope.js";
 import {
   createEmptyAuthProfileStore,
   listRuntimeLocalProfileIds,
@@ -31,8 +39,9 @@ import {
 } from "./runtime-snapshot-owner.js";
 import {
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
-  type setRuntimeAuthProfileStoreSnapshot as SetRuntimeAuthProfileStoreSnapshot,
-  type updateRuntimeAuthProfileStoreSnapshot as UpdateRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore,
+  setRuntimeAuthProfileStoreSnapshot,
+  updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import {
   resolveAuthProfileDatabasePath as resolveAgentAuthPath,
@@ -54,16 +63,11 @@ type EnsureAuthProfileStoreOptions = Pick<
   | "readOnly"
   | "syncExternalCli"
 >;
-type StoreReadHost = Pick<
-  RuntimeReadHost,
-  | "isEnvOnlyAuthProfileRuntime"
-  | "getScopedAuthProfileEnv"
-  | "resolveRuntimeAuthProfileAgentDir"
-  | "resolveRuntimeAuthProfileLoadOptions"
-  | "loadAuthProfileStoreForAgent"
-  | "captureScope"
-> & {
-  getScopedSharedAuthStore: () => AuthProfileStore | undefined;
+type StoreReadHost = Pick<RuntimeReadHost, "loadAuthProfileStoreForAgent"> & {
+  findPersistedAuthProfileCredentialAsync: (params: {
+    agentDir?: string;
+    profileId: string;
+  }) => Promise<AuthProfileStore["profiles"][string] | undefined>;
   resolvePersistedLoadOptions: (
     options: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt" | "database"> | undefined,
   ) => { allowKeychainPrompt?: boolean; database?: AuthProfileDatabase };
@@ -73,8 +77,9 @@ type StoreReadHost = Pick<
   overlayExternalAuthProfiles: ReturnType<
     typeof createExternalAuthRuntime
   >["overlayExternalAuthProfiles"];
-  setRuntimeAuthProfileStoreSnapshot: typeof SetRuntimeAuthProfileStoreSnapshot;
-  updateRuntimeAuthProfileStoreSnapshot: typeof UpdateRuntimeAuthProfileStoreSnapshot;
+  withPreparedExternalAuthProfiles: ReturnType<
+    typeof createExternalAuthRuntime
+  >["withPreparedExternalAuthProfiles"];
 };
 
 function hasScopedExternalCliOverlay(options: ExternalCliOverlayOptions): boolean {
@@ -121,18 +126,11 @@ function* readSharedAuthPath(): AuthProfileStoreReadSequence<string> {
 
 export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
   const {
-    isEnvOnlyAuthProfileRuntime,
-    getScopedAuthProfileEnv,
-    getScopedSharedAuthStore,
-    resolveRuntimeAuthProfileAgentDir,
-    resolveRuntimeAuthProfileLoadOptions,
     resolvePersistedLoadOptions,
     loadAuthProfileStoreForAgent,
-    captureScope,
     withPreparedAuthProfileStoreReads,
     overlayExternalAuthProfiles,
-    setRuntimeAuthProfileStoreSnapshot,
-    updateRuntimeAuthProfileStoreSnapshot,
+    withPreparedExternalAuthProfiles,
   } = host;
 
   function readAuthProfileStoreSynchronously(
@@ -166,7 +164,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
       }
       step = reads.next(result);
     }
-    return profileId && !captureScope().isolated
+    return profileId && !captureAuthProfileStoreScope().isolated
       ? materializePersonalAuthProfile(step.value, profileId)
       : step.value;
   }
@@ -217,17 +215,30 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     ) => AuthProfileStoreReadSequence,
     agentDir?: string,
     options?: EnsureAuthProfileStoreOptions,
+    withExternalProfiles = false,
   ): Promise<AuthProfileStore> {
     if (isEnvOnlyAuthProfileRuntime()) {
       return Promise.resolve(createEmptyAuthProfileStore());
     }
     return withPreparedAuthProfileStoreReads(agentDir, options, async (prepared) => {
-      const store = await readAuthProfileStoreAsynchronously(
-        prepared,
-        (directory, preparedOptions, env) =>
-          createReads(directory, { ...preparedOptions, profileId: undefined }, env),
-      );
-      return prepared.materializePersonalProfile(store);
+      const read = async () => {
+        prepared.assertCurrent();
+        const store = await readAuthProfileStoreAsynchronously(
+          prepared,
+          (directory, preparedOptions, env) =>
+            createReads(directory, { ...preparedOptions, profileId: undefined }, env),
+        );
+        return prepared.materializePersonalProfile(store);
+      };
+      return withExternalProfiles
+        ? withPreparedExternalAuthProfiles(
+            {
+              config: resolveExternalCliOverlayOptions(prepared.options).config,
+              env: prepared.env,
+            },
+            read,
+          )
+        : read();
     });
   }
 
@@ -318,7 +329,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return stripRuntimeExternalProfileMetadata(mergeAuthProfileStores(persistedStore, localStore));
   }
 
-  /** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Supported through 2026-12-31. */
+  /** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   function loadAuthProfileStoreWithoutExternalProfiles(
     agentDir?: string,
     loadOptions?: Pick<
@@ -401,7 +412,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return yield* readAuthProfileStoreFromSources(effectiveAgentDir, options, env, true);
   }
 
-  /** @deprecated Use ensureAuthProfileStoreAsync. Supported through 2026-12-31. */
+  /** @deprecated Use ensureAuthProfileStoreAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   function ensureAuthProfileStore(
     agentDir?: string,
     options?: EnsureAuthProfileStoreOptions,
@@ -422,7 +433,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     agentDir?: string,
     options?: Parameters<typeof ensureAuthProfileStore>[1],
   ): Promise<AuthProfileStore> {
-    return readPreparedAuthProfileStore(ensureAuthProfileStoreReads, agentDir, options);
+    return readPreparedAuthProfileStore(ensureAuthProfileStoreReads, agentDir, options, true);
   }
 
   function* ensureAuthProfileStoreReads(
@@ -480,7 +491,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return materialized;
   }
 
-  /** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Supported through 2026-12-31. */
+  /** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   function ensureAuthProfileStoreWithoutExternalProfiles(
     agentDir?: string,
     options?: Omit<
@@ -568,7 +579,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
         );
   }
 
-  /** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Supported through 2026-12-31. */
+  /** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthProfileStore {
     warnPluginSdkDeprecation({
       family: "auth-profiles",
@@ -654,6 +665,20 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     );
   }
 
+  /** Prepare a recorded provider without putting persisted SQLite reads on the caller's thread. */
+  async function prepareAuthProfileProvider(params: {
+    agentDir: string;
+    profileId: string;
+  }): Promise<{ provider: string | undefined }> {
+    const provider = getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)?.profiles[
+      params.profileId
+    ]?.provider;
+    if (provider || isEnvOnlyAuthProfileRuntime()) {
+      return { provider };
+    }
+    return { provider: (await host.findPersistedAuthProfileCredentialAsync(params))?.provider };
+  }
+
   async function prepareAuthProfileStoreForModelRuntime(
     agentDir: string,
     options: { config: OpenClawConfig; inheritedAuthDir?: string; skipCredentials?: boolean },
@@ -698,5 +723,6 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     ensureAuthProfileStoreForLocalUpdate,
     ensureAuthProfileStoreForLocalUpdateAsync,
     prepareAuthProfileStoreForModelRuntime,
+    prepareAuthProfileProvider,
   };
 }

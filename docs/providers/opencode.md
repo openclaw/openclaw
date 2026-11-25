@@ -24,11 +24,11 @@ OpenAI Responses transports. This header remains enabled when prompt caching is
 disabled. Low-level SDK stream callers should supply `sessionId` in their stream
 options.
 
-Zen and Go discovery requests and model requests on the OpenAI-compatible and
-Anthropic transports identify the client as `openclaw/<version>` on their native
-endpoints. Custom proxy URLs do not inherit this attribution. The
-`google-generative-ai` SDK path does not yet apply this User-Agent policy.
-OpenClaw does not impersonate the OpenCode client.
+Zen and Go discovery requests and model requests on the OpenAI-compatible,
+Anthropic, and Gemini transports identify the client as `openclaw/<version>` on
+their native endpoints, including the current `/inference/...` routes returned
+by upstream discovery and the retained `/zen/...` aliases. Custom proxy URLs do
+not inherit this attribution. OpenClaw does not impersonate the OpenCode client.
 
 Standalone `openclaw infer model run --local` calls and the
 [prepared completion helper](/plugins/sdk-runtime/models#prepared-completion-sdk-compatibility)
@@ -105,6 +105,26 @@ or caller routing headers are preserved regardless of header name casing.
   </Tab>
 </Tabs>
 
+## Browser sign-in
+
+Instead of an API key, OpenClaw can sign in to an OpenCode Console workspace in
+your browser. OpenClaw signs in as its own Console client, so this sign-in is
+separate from the OpenCode Console CLI's.
+
+```bash
+openclaw models auth login --provider opencode --method oauth
+openclaw models auth login --provider opencode-go --method oauth
+```
+
+Open the link OpenClaw prints, confirm the code, and pick a workspace. The Zen
+and Go catalogs sign in separately: Console refresh tokens are single-use, so
+each provider keeps its own sign-in. Sign in to Go only when the workspace has a
+Go subscription.
+
+Tokens refresh automatically. You can also choose **OpenCode Console (browser
+sign-in)** or **OpenCode Go (browser sign-in)** during `openclaw onboard`, with
+`/login` in chat, or from the Models page.
+
 ## Config example
 
 ```json5
@@ -171,10 +191,10 @@ may also show [**Ultra**](/tools/thinking), a separate harness mode.
 
 ### Go
 
-| Property         | Value                                                                             |
-| ---------------- | --------------------------------------------------------------------------------- |
-| Runtime provider | `opencode-go`                                                                     |
-| Example models   | `opencode-go/kimi-k3`, `opencode-go/deepseek-v4-flash`, `opencode-go/qwen3.8-max` |
+| Property         | Value                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------- |
+| Runtime provider | `opencode-go`                                                                       |
+| Example models   | `opencode-go/kimi-k3`, `opencode-go/deepseek-v4.1-flash`, `opencode-go/qwen3.8-max` |
 
 See [OpenCode Go](/providers/opencode-go) for discovery, routing, and access
 requirements. Go's model-list endpoint advertises its general lineup; listing

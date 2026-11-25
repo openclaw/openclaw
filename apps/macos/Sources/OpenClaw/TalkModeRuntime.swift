@@ -310,7 +310,6 @@ actor TalkModeRuntime {
             self.logger.error("talk recognizer unavailable")
             return false
         }
-        self.logger.debug("talk recognizer locale=\(recognizer.locale.identifier, privacy: .public)")
 
         let selection = AudioInputDeviceObserver.resolveSelection(selectedInputUID)
         // Preparation above crosses MainActor. Hardware can become owned/running only
@@ -318,6 +317,11 @@ actor TalkModeRuntime {
         guard self.canCommitRecognitionStart(
             lifecycleGeneration: lifecycleGeneration,
             recognitionAttempt: recognitionAttempt) else { return false }
+
+        // The native pause window must follow the recognizer, including automatic locale fallback.
+        self.silenceWindow = Self.nativeSilenceWindow(
+            configuredTimeoutMs: self.config?.snapshot.silenceTimeoutMs ?? Self.defaultSilenceTimeoutMs,
+            recognitionLocale: recognizer.locale)
 
         // AVAudioEngine materializes inputNode from the system default before CurrentDevice can bind.
         // Without a usable default, accessing inputNode can SIGABRT even when another UID is alive.
@@ -497,7 +501,7 @@ actor TalkModeRuntime {
         }
         let sendChime = await MainActor.run { self.state()?.voiceWakeSendChime ?? .none }
         if sendChime != .none {
-            await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "talk.send") }
+            await MainActor.run { VoiceWakeChimePlayer.play(sendChime) }
         }
         self.stopRecognition()
         await sendAndSpeak(text)
@@ -572,27 +576,22 @@ extension TalkModeRuntime {
             await self.gateway.mainSessionKey()
         }
         let runId = UUID().uuidString
-        self.logger.info(
-            "talk send start runId=\(runId, privacy: .public) " +
-                "session=\(sessionKey, privacy: .public) " +
-                "chars=\(prompt.count, privacy: .public)")
 
         do {
             let route = try await self.gateway.captureRequiredRoute()
             guard self.isCurrent(gen), !Task.isCancelled else { return }
-            let response = try await self.gateway.chatSend(
-                sessionKey: sessionKey,
-                message: prompt,
-                thinking: nil,
-                idempotencyKey: runId,
-                attachments: [],
-                ifCurrentRoute: route)
+            let response = try await withGatewayStartupAdmission(method: "chat.send") {
+                guard self.isCurrent(gen) else { throw CancellationError() }
+                return try await self.gateway.chatSend(
+                    sessionKey: sessionKey,
+                    message: prompt,
+                    thinking: nil,
+                    idempotencyKey: runId,
+                    attachments: [],
+                    ifCurrentRoute: route)
+            }
             guard self.isCurrent(gen) else { return }
             let normalizedStatus = ChatSendStatus.normalized(response.status)
-            self.logger.info(
-                "talk chat.send ok runId=\(response.runId, privacy: .public) " +
-                    "status=\(normalizedStatus, privacy: .public) " +
-                    "session=\(sessionKey, privacy: .public)")
             if ChatSendStatus.acceptance(of: response.status) == .terminalFailure {
                 self.logger.warning(
                     "talk chat.send terminal ack runId=\(response.runId, privacy: .public) " +
@@ -625,7 +624,6 @@ extension TalkModeRuntime {
             }
             guard !self.isPaused else { return }
 
-            self.logger.info("talk assistant text len=\(assistantText.count, privacy: .public)")
             await self.playAssistant(text: assistantText)
             guard self.isCurrent(gen) else { return }
             await self.resumeListeningIfNeeded()
@@ -925,31 +923,21 @@ extension TalkModeRuntime {
         if !parse.unknownKeys.isEmpty {
             self.logger
                 .warning(
-                    "talk directive ignored keys: " +
-                        "\(parse.unknownKeys.joined(separator: ","), privacy: .public)")
+                    "talk directive ignored unknown keys count=\(parse.unknownKeys.count, privacy: .public)")
         }
 
         let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.config?.snapshot.voiceAliases ?? [:])
         if let requestedVoice, !requestedVoice.isEmpty, resolvedVoice == nil {
-            self.logger.warning("talk unknown voice alias \(requestedVoice, privacy: .public)")
+            self.logger.warning("talk unknown voice alias")
         }
-        if let voice = resolvedVoice {
-            if directive?.once == true {
-                self.logger.info("talk voice override (once) voiceId=\(voice, privacy: .public)")
-            } else {
-                self.currentVoiceId = voice
-                self.voiceOverrideActive = true
-                self.logger.info("talk voice override voiceId=\(voice, privacy: .public)")
-            }
+        if let voice = resolvedVoice, directive?.once != true {
+            self.currentVoiceId = voice
+            self.voiceOverrideActive = true
         }
 
-        if let model = directive?.modelId {
-            if directive?.once == true {
-                self.logger.info("talk model override (once) modelId=\(model, privacy: .public)")
-            } else {
-                self.modelOverride = model
-            }
+        if let model = directive?.modelId, directive?.once != true {
+            self.modelOverride = model
         }
 
         let apiKey = self.config?.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1368,29 +1356,16 @@ extension TalkModeRuntime {
     }
 
     func applyTalkConfig(_ cfg: TalkModeGatewayConfigState) async {
-        guard let locale = await MainActor.run(body: { () -> String? in
-            guard let state = self.state() else { return nil }
-            state.seamColorHex = cfg.seamColorHex
-            return state.voiceWakeLocaleID
-        }) else { return }
-        self.commitTalkConfig(cfg, locale: locale)
+        guard await MainActor.run(body: { self.state() != nil }) else { return }
+        self.commitTalkConfig(cfg)
     }
 
-    func commitTalkConfig(_ cfg: TalkModeGatewayConfigState, locale: String) {
+    func commitTalkConfig(_ cfg: TalkModeGatewayConfigState) {
         self.config = cfg
         if !self.voiceOverrideActive {
             self.currentVoiceId = cfg.voiceId
         }
-        let configuredSilenceMs = cfg.snapshot.silenceTimeoutMs
-        let isCJKLocale = locale.hasPrefix("ko") || locale.hasPrefix("ja") || locale.hasPrefix("zh")
-        let effectiveSilenceMs = isCJKLocale ? max(configuredSilenceMs, 2000) : configuredSilenceMs
-        if isCJKLocale, configuredSilenceMs < 2000 {
-            self.logger
-                .info(
-                    "talk CJK locale: silence timeout clamped " +
-                        "\(configuredSilenceMs, privacy: .public)ms -> 2000ms")
-        }
-        self.silenceWindow = TimeInterval(effectiveSilenceMs) / 1000
+        self.silenceWindow = TimeInterval(cfg.snapshot.silenceTimeoutMs) / 1000
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
         let voiceLabel = cfg.voiceId.flatMap { $0.isEmpty ? nil : $0 } ?? "none"
         let modelLabel = cfg.modelId.flatMap { $0.isEmpty ? nil : $0 } ?? "none"
@@ -1408,6 +1383,12 @@ extension TalkModeRuntime {
                     "realtimeTransport=\(cfg.snapshot.realtime.transport ?? "default", privacy: .public) " +
                     "realtimeBrain=\(cfg.snapshot.realtime.brain ?? "default", privacy: .public) " +
                     "macOSRealtimeOptIn=\(self.macOSRealtimeRelayOptIn, privacy: .public)")
+    }
+
+    static func nativeSilenceWindow(configuredTimeoutMs: Int, recognitionLocale: Locale) -> TimeInterval {
+        let language = recognitionLocale.language.languageCode?.identifier
+        let isCJK = language == "ko" || language == "ja" || language == "zh"
+        return TimeInterval(isCJK ? max(configuredTimeoutMs, 2000) : configuredTimeoutMs) / 1000
     }
 
     // MARK: - Audio level handling

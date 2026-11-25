@@ -6,7 +6,6 @@ import {
   isValidAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 
 type SessionDiagnosticContext = {
@@ -17,19 +16,11 @@ type SessionDiagnosticContext = {
 
 type SessionDiagnosticTarget = {
   sessionKey?: string;
-  activeSessionId?: string;
 };
-
-let logGeneration = 0;
-
-export function retireSessionDiagnosticLogs(): void {
-  logGeneration += 1;
-}
 
 async function withSessionDiagnosticContext(
   params: SessionDiagnosticTarget,
   consume: (context: SessionDiagnosticContext) => void,
-  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   const sessionKey = params.sessionKey?.trim();
   const parsed = parseAgentSessionKey(sessionKey);
@@ -48,55 +39,18 @@ async function withSessionDiagnosticContext(
     kind === "cron" && cronJobId
       ? { cronJobId, cronRunId: runIndex >= 0 ? rest[runIndex + 1] : undefined }
       : {};
-  const sessionId = params.activeSessionId?.trim();
-  let identityChanged = false;
-  const unsubscribe = onSessionIdentityMutation((mutation) => {
-    if (
-      mutation.previous.sessionKeys.includes(sessionKey) ||
-      ("current" in mutation && mutation.current.sessionKeys.includes(sessionKey)) ||
-      (mutation.agentId === parsed.agentId &&
-        sessionId &&
-        mutation.previous.sessionId === sessionId)
-    ) {
-      identityChanged = true;
+  if (context.cronJobId) {
+    try {
+      const resolveName = await prepareCronJobNameResolver([context.cronJobId]);
+      context.cronJobName = resolveName(context.cronJobId);
+    } catch {
+      // Display enrichment is optional, including a retired resolver.
     }
-  });
-  const assertCurrent = () => {
-    if (identityChanged || !isCurrent()) {
-      throw new Error("Diagnostic session context is no longer current");
-    }
-  };
-  let consumed = false;
-  let resolveName: ((jobId: string) => string | undefined) | undefined;
-  const publish = (value: SessionDiagnosticContext) => {
-    assertCurrent();
-    if (value.cronJobId) {
-      value.cronJobName = resolveName?.(value.cronJobId);
-    }
-    consumed = true;
-    consume(value);
-  };
-  try {
-    assertCurrent();
-    if (context.cronJobId) {
-      resolveName = await prepareCronJobNameResolver([context.cronJobId]).catch(() => undefined);
-      assertCurrent();
-    }
-    publish(context);
-  } catch {
-    // Optional cron metadata cannot delay recovery or outlive its session.
-    if (!consumed && isCurrent()) {
-      consume(identityChanged ? {} : context);
-    }
-  } finally {
-    unsubscribe();
   }
+  consume(context);
 }
 
-function formatSessionDiagnosticFields(
-  context: SessionDiagnosticContext,
-  cronNameLabel: "cronJob" | "stopped" = "cronJob",
-): string {
+function formatSessionDiagnosticFields(context: SessionDiagnosticContext): string {
   const quote = (value: string) => {
     const oneLine = value.replace(/\s+/g, " ").trim();
     const bounded = oneLine.length > 140 ? `${truncateUtf16Safe(oneLine, 137)}...` : oneLine;
@@ -105,7 +59,7 @@ function formatSessionDiagnosticFields(
   return [
     context.cronJobId ? `cronJobId=${context.cronJobId}` : "",
     context.cronRunId ? `cronRunId=${context.cronRunId}` : "",
-    context.cronJobName ? `${cronNameLabel}=${quote(context.cronJobName)}` : "",
+    context.cronJobName ? `cronJob=${quote(context.cronJobName)}` : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -116,23 +70,12 @@ export function logWithSessionDiagnosticContext(
   params: SessionDiagnosticTarget & {
     level: "debug" | "warn";
     format: (fields: string) => string;
-    cronNameLabel?: "cronJob" | "stopped";
   },
 ): Promise<void> | undefined {
-  const generation = logGeneration;
-  const isCurrent = () => areDiagnosticsEnabledForProcess() && generation === logGeneration;
-  if (!isCurrent() || !diag.isEnabled(params.level)) {
+  if (!areDiagnosticsEnabledForProcess() || !diag.isEnabled(params.level)) {
     return undefined;
   }
-  return withSessionDiagnosticContext(
-    params,
-    (context) => {
-      if (isCurrent() && diag.isEnabled(params.level)) {
-        diag[params.level](
-          params.format(formatSessionDiagnosticFields(context, params.cronNameLabel)),
-        );
-      }
-    },
-    isCurrent,
-  );
+  return withSessionDiagnosticContext(params, (context) => {
+    diag[params.level](params.format(formatSessionDiagnosticFields(context)));
+  });
 }

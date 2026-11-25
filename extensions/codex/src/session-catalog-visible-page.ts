@@ -1,10 +1,6 @@
 import { startCodexCatalogListTiming } from "./session-catalog-diagnostics.js";
 import { CodexCatalogListRequest } from "./session-catalog-list-request.js";
-import {
-  filterCatalogPageByTitle,
-  MAX_TITLE_SEARCH_CATALOG_PAGES,
-  parseCatalogPage,
-} from "./session-catalog-parsing.js";
+import { MAX_TITLE_SEARCH_CATALOG_PAGES } from "./session-catalog-parsing.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogPage,
@@ -61,9 +57,9 @@ export class CodexCatalogVisiblePage {
     const params = this.params;
     params.signal?.throwIfAborted();
     const finishTiming = startCodexCatalogListTiming("controlWaitSumMs", "controlPageCalls");
-    let rawPage: CodexSessionCatalogPage;
+    let page: CodexSessionCatalogPage;
     try {
-      rawPage = await params.control.listPage({
+      page = await params.control.listPage({
         limit: params.limit - this.sessions.length,
         ...(this.cursor ? { cursor: this.cursor } : {}),
         ...(params.searchTerm ? { searchTerm: params.searchTerm } : {}),
@@ -74,13 +70,13 @@ export class CodexCatalogVisiblePage {
     }
     this.request.assertActive();
     params.signal?.throwIfAborted();
-    const page = filterCatalogPageByTitle(parseCatalogPage(rawPage), params.searchTerm);
     if (this.pages++ === 0) {
       this.backwardsCursor = page.backwardsCursor;
     }
     let excludedFromPage = false;
-    for (const managed of rawPage.managedThreads ?? []) {
+    for (const managed of page.managedThreads ?? []) {
       excludedFromPage = true;
+      this.request.assertActive();
       params.signal?.throwIfAborted();
       await params.onExcludedThread?.(managed);
     }
@@ -90,6 +86,7 @@ export class CodexCatalogVisiblePage {
         continue;
       }
       excludedFromPage = true;
+      this.request.assertActive();
       params.signal?.throwIfAborted();
       await params.onExcludedThread?.({ threadId: session.threadId });
     }

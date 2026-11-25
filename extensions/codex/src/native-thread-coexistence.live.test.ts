@@ -8,6 +8,7 @@ import type { CodexAppServerClient } from "./app-server/client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
 import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS } from "./app-server/protocol.js";
+import type { CodexThreadListParams } from "./app-server/protocol.js";
 import { createIsolatedCodexAppServerClient } from "./app-server/shared-client.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 
@@ -29,6 +30,17 @@ async function withClient<T>(
   }
 }
 
+function createThreadListParams(): CodexThreadListParams {
+  return {
+    archived: false,
+    limit: 100,
+    modelProviders: [],
+    sortKey: "recency_at",
+    sortDirection: "desc",
+    sourceKinds: [...CODEX_INTERACTIVE_THREAD_SOURCE_KINDS],
+  };
+}
+
 async function materializeUserTurn(
   client: CodexAppServerClient,
   threadId: string,
@@ -41,18 +53,9 @@ async function materializeUserTurn(
   );
   let materialized = false;
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const listed = await client.request(
-      "thread/list",
-      {
-        archived: false,
-        limit: 100,
-        modelProviders: [],
-        sortKey: "recency_at",
-        sortDirection: "desc",
-        sourceKinds: [...CODEX_INTERACTIVE_THREAD_SOURCE_KINDS],
-      },
-      { timeoutMs: 60_000 },
-    );
+    const listed = await client.request("thread/list", createThreadListParams(), {
+      timeoutMs: 60_000,
+    });
     materialized = listed.data.some((thread) => thread.id === threadId);
     if (materialized) {
       break;
@@ -139,18 +142,9 @@ describeLive("native Codex thread coexistence", () => {
           let listedSource;
           let listedThreads: Array<{ id: string; source?: unknown }> = [];
           for (let attempt = 0; attempt < 50; attempt += 1) {
-            const listed = await second.request(
-              "thread/list",
-              {
-                archived: false,
-                limit: 100,
-                modelProviders: [],
-                sortKey: "recency_at",
-                sortDirection: "desc",
-                sourceKinds: [...CODEX_INTERACTIVE_THREAD_SOURCE_KINDS],
-              },
-              { timeoutMs: 60_000 },
-            );
+            const listed = await second.request("thread/list", createThreadListParams(), {
+              timeoutMs: 60_000,
+            });
             listedThreads = listed.data;
             listedSource = listed.data.find((thread) => thread.id === started.thread.id);
             if (listedSource) {
@@ -215,18 +209,9 @@ describeLive("native Codex thread coexistence", () => {
         });
 
         await withClient(clientOptions, async (fourth) => {
-          const finalList = await fourth.request(
-            "thread/list",
-            {
-              archived: false,
-              limit: 100,
-              modelProviders: [],
-              sortKey: "recency_at",
-              sortDirection: "desc",
-              sourceKinds: [...CODEX_INTERACTIVE_THREAD_SOURCE_KINDS],
-            },
-            { timeoutMs: 60_000 },
-          );
+          const finalList = await fourth.request("thread/list", createThreadListParams(), {
+            timeoutMs: 60_000,
+          });
           expect(finalList.data).toEqual(
             expect.arrayContaining([
               expect.objectContaining({

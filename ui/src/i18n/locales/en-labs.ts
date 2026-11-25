@@ -3,36 +3,32 @@ import { en } from "./en.ts";
 
 const enLabs = {
   labsPage: {
-    configure: "Configure",
-    configureFeature: "Configure {name}",
+    swarm: {
+      groupTitle: "Parallel tasks",
+      progress: "{complete} of {total}",
+      active: "{running} running · {queued} queued · {failed} failed or stopped",
+      finished: "{done} completed · {failed} failed or stopped",
+      completed: "{done} completed",
+      failedOrStopped: "Failed or stopped",
+      childOutcome: "Subagents finished. Check the conversation for the final reply.",
+      childOutcomeProcessing: "Subagents finished. The parent agent is processing their results.",
+      details: "Subagent details",
+      detailsUnavailable:
+        "Subagent details are unavailable. Counts include all accepted subagents.",
+      otherGroups: "{count} more active groups",
+    },
     decisionAssistance: {
       title: "Decision assistance",
-      description:
-        "Enable experimental assistance from your configured Decision model. See the documentation for supported uses, setup, and data handling.",
+      description: "Enable experimental assistance from your configured Decision model.",
       optedIn: "Preference saved.",
       loading: "Loading setting…",
       unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
       refresh: "Refresh configuration",
     },
-    codeMode: {
-      title: "Code Mode",
+    usageRankedToolIndex: {
+      title: "Usage-ranked tool index",
       description:
-        "Set the global default for compact JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
-      executor: "Code Mode executor",
-      executorDescription:
-        "Node.js is for trusted code; its VM is not a security sandbox. QuickJS runs code in an isolated WebAssembly runtime. Calls through OpenClaw tools use the same permissions. Applies to new runs; agent overrides take precedence.",
-      executorNode: "Node.js (default)",
-      executorQuickjs: "QuickJS (isolated)",
-    },
-    toolSearch: {
-      title: "Tool Search for all models",
-      description:
-        "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
-    },
-    advisor: {
-      title: "Advisor",
-      description:
-        "Every few tool calls or minutes of agent work, Advisor reviews the conversation on the session's own model. If it spots avoidable work (drifting from the request, repeated or stalled tool calls), it offers one short correction to the active run, or the next turn when steering is unavailable. Adds model calls.",
+        "Prefer frequently and recently used tools in Code Mode, Tool Search, and MCP tool directory prompt indexes. Off by default. Stores tool IDs, scores, and timestamps for 90 days in operator-owned storage, excluding incognito sessions. Changes apply at the next prompt-prefix boundary. Inspect, import, or reset with openclaw tools usage.",
     },
     composerPredictions: {
       title: "Composer predictions",
@@ -40,9 +36,9 @@ const enLabs = {
         "Suggest a next message after a reply in the active conversation. Adds a tool-free model call using conversation context. Tab accepts the suggestion into your draft; it never sends automatically. Off by default.",
       model: "Prediction model",
       modelDescription:
-        "Utility is recommended for short, lower-cost predictions. Conversation uses the current chat model; Default uses the agent's configured primary model. An unavailable choice skips predictions instead of switching models.",
+        "Utility uses the agent’s utility model and may try its configured fallback models. Session uses the current session model; Default uses the agent’s configured primary model. Without a utility model, Utility skips predictions.",
       utility: "Utility model (recommended)",
-      conversation: "Conversation model",
+      conversation: "Session model",
       default: "Default model",
     },
     chatBubbles: {
@@ -50,25 +46,29 @@ const enLabs = {
       description:
         "Try speech bubbles with compact tool activity. Home uses bubbles by default while enabled; each browser keeps its explicit conversation choices. Disabling this lab restores the standard view without clearing those choices.",
     },
-    customPluginUi: {
-      title: "Custom plugin UI",
-      description:
-        "Let installed plugins add pages, widgets, and custom views. Their JavaScript runs with your signed-in permissions, so enable only plugins you trust. Bundled plugin views remain available. Reload this tab to clear previously loaded plugin code.",
-    },
     hostDesktop: {
-      title: "Host Desktop",
+      title: "Desktop on the computer running OpenClaw",
       description:
-        "Watch and control this Gateway machine from the Desktop panel through its existing VNC or Screen Sharing server.",
+        "Watch and control the computer running OpenClaw from the Desktop panel through its existing VNC or Screen Sharing server.",
+    },
+    openclawId: {
+      title: "OpenClaw ID remote access",
+      description:
+        "Open this claw from your other devices and invite people. To get started, sign in from the account menu and choose Turn on remote access. Manage who has access on the Access page. While off, this feature does not contact OpenClaw ID.",
     },
     workerDesktop: {
-      title: "Cloud Worker Desktop",
+      title: "Cloud device desktop",
       description:
-        "Watch and control node-carried desktops from capable Crabbox AWS, Azure, or Hetzner profiles with desktop: true.",
+        "Watch and control cloud device desktops from Crabbox AWS, Azure, or Hetzner profiles with desktop support enabled.",
     },
   },
 } satisfies TranslationMap;
 
 export const registerLabsEnglish = Object.assign(
-  () => Object.assign(en.labsPage, enLabs.labsPage),
+  () => {
+    const { swarm, ...labsPage } = enLabs.labsPage;
+    Object.assign(en.labsPage, labsPage);
+    Object.assign(en.labsPage.swarm, swarm);
+  },
   { catalog: enLabs },
 );

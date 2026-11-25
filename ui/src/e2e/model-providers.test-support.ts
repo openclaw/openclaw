@@ -1,13 +1,33 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
+import { expect } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import type { MockGatewayControls, MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
+
+export async function openMoreModelSettings(scope: Locator) {
+  const more = scope.getByRole("button", { name: "More settings", exact: true });
+  if ((await more.getAttribute("aria-expanded")) === "false") {
+    await more.click();
+  }
+}
+
+export async function openAgentFallbackChain(editor: Locator) {
+  await openMoreModelSettings(editor);
+  const row = editor
+    .locator(".settings-row")
+    .filter({ has: editor.page().getByText("Fallback model", { exact: true }) });
+  const edit = row.getByRole("button", { name: "Edit fallback chain", exact: true });
+  if ((await edit.getAttribute("aria-expanded")) === "false") {
+    await edit.click();
+  }
+  return row.locator("openclaw-multi-select");
+}
 
 export function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   const params = request.params;
   if (!params || typeof params !== "object" || Array.isArray(params)) {
-    throw new Error("Expected config.patch params");
+    throw new Error("Expected config mutation params");
   }
   return JSON.parse(String((params as Record<string, unknown>).raw)) as Record<string, unknown>;
 }
@@ -46,4 +66,21 @@ export function createProviderProofCapture(getArtifactDir: () => string) {
       await takeControlUiViewportScreenshot(page, page.locator(".shell"), [content]),
     );
   };
+}
+
+/**
+ * Opens a connected provider row so its accounts, credentials and actions
+ * render. Rows that are already open (by the user or because they need
+ * attention) stay open.
+ */
+export async function expandProvider(page: Page, providerId: string): Promise<Locator> {
+  const row = page.locator(`li.provider-row[data-provider-id="${providerId}"]`);
+  const summary = row.locator("button.provider-row__summary");
+  await summary.waitFor();
+  if ((await summary.getAttribute("aria-expanded")) !== "true") {
+    await summary.click();
+  }
+  await expect.poll(() => summary.getAttribute("aria-expanded")).toBe("true");
+  await row.locator(".provider-row__detail").waitFor();
+  return row;
 }

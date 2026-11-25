@@ -3,10 +3,6 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 
-type ProviderReplaySanitizeMode = "full" | "images-only";
-
-type ProviderReplayToolCallIdMode = "strict" | "strict9";
-
 export type ProviderReasoningOutputMode = "native" | "tagged";
 
 /**
@@ -17,9 +13,9 @@ export type ProviderReasoningOutputMode = "native" | "tagged";
  * with its default policy.
  */
 export type ProviderReplayPolicy = {
-  sanitizeMode?: ProviderReplaySanitizeMode;
+  sanitizeMode?: "full" | "images-only";
   sanitizeToolCallIds?: boolean;
-  toolCallIdMode?: ProviderReplayToolCallIdMode;
+  toolCallIdMode?: "strict" | "strict9";
   duplicateToolCallIdStyle?: "openai";
   preserveNativeAnthropicToolUseIds?: boolean;
   preserveSignatures?: boolean;
@@ -64,10 +60,10 @@ export type ProviderReplaySessionEntry = {
   data?: unknown;
 };
 
-/** @deprecated Use ProviderReplaySessionStateV2; final compatibility day: 2026-12-31. */
+/** @deprecated Use ProviderReplaySessionStateV2; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export type ProviderReplaySessionState = {
   getCustomEntries(): ProviderReplaySessionEntry[];
-  /** @deprecated Use ProviderReplaySessionStateV2.appendCustomEntryAsync; final compatibility day: 2026-12-31. */
+  /** @deprecated Use ProviderReplaySessionStateV2.appendCustomEntryAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   appendCustomEntry(customType: string, data: unknown): void;
 };
 
@@ -81,7 +77,7 @@ export type ProviderReplaySessionStateV2 = ProviderReplaySessionState & {
  *
  * Runs after core applies generic transcript cleanup so plugins can make
  * provider-specific replay rewrites without owning the whole compaction flow.
- * @deprecated Use ProviderSanitizeReplayHistoryContextV2; final compatibility day: 2026-12-31.
+ * @deprecated Use ProviderSanitizeReplayHistoryContextV2; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
  */
 export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext & {
   sessionId: string;

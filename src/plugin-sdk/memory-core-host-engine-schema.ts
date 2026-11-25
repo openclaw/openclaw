@@ -1,5 +1,15 @@
 // Memory schema operations shared by host maintenance and native publication workers.
 export {
+  memoryPathPostgresExpressions,
+  MEMORY_PATH_POSTGRES_INDEXES,
+  MEMORY_PATH_POSTGRES_INDEX_SQL,
+} from "../../packages/memory-host-sdk/src/host/memory-path-postgres.js";
+export {
+  memoryStandingIntentSearchSchema,
+  memoryTextSearchSchema,
+  memoryVectorSearchSchema,
+} from "../../packages/memory-host-sdk/src/host/memory-search-schema.js";
+export {
   dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
   ensureMemoryChunkProvenance,
@@ -8,6 +18,8 @@ export {
   markInvalidImportedMemoryEmbeddings,
   rebuildMemoryChunkFts,
   ensureMemoryIndexSchema,
+  readRepairedMemoryIndexSchema,
+  publishRepairedMemoryIndexSchema,
   stageMemoryIndexSchemaExtension,
   ensureMemoryPathFtsTriggers,
   ensureMemoryRecallMetadataSchema,
@@ -23,4 +35,4 @@ export {
 export {
   loadSqliteVecExtension,
   loadSqliteVecExtensionFromPath,
-} from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
+} from "../infra/database-engine/sqlite-vec.js";

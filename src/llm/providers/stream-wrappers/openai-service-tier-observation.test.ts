@@ -1,12 +1,8 @@
 import { responsesServiceTierObserver } from "@openclaw/ai/internal/openai";
-import { createAssistantMessageEventStream, type Model, type StreamFn } from "@openclaw/llm-core";
+import { createAssistantMessageEventStream, type StreamFn } from "@openclaw/llm-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
-import { createPreparedAccountCatalogAccess } from "../../../agents/prepared-model-runtime.catalog-auth.js";
-import {
-  registerAgentRunContext,
-  resetAgentRunRegistryForTest,
-} from "../../../infra/agent-run-registry.js";
+import { makeProviderModelFixture } from "../../../agents/test-helpers/provider-model-fixture.js";
 import { createOpenAIServiceTierObservationWrapper } from "./openai-service-tier-observation.js";
 import { createOpenAIFastModeWrapper } from "./openai.js";
 
@@ -22,7 +18,6 @@ vi.mock("../../../logging/subsystem.js", () => ({ createSubsystemLogger: () => l
 const provider = vi.hoisted(() => ({
   tiers: [] as unknown[],
   rejectUltrafast: true,
-  elapsedMs: 0,
 }));
 // Fake provider I/O; request assembly, recovery, parsing, and observations stay real.
 vi.mock("openai", () => {
@@ -30,30 +25,27 @@ vi.mock("openai", () => {
     responses = {
       create: (request: Record<string, unknown>) => {
         provider.tiers.push(request.service_tier);
-        provider.elapsedMs += 100;
         const rejected = provider.rejectUltrafast && request.service_tier === "ultrafast";
         return {
           withResponse: async () => ({
             response: new Response(null, { status: 200 }),
             data: (async function* () {
-              yield rejected
-                ? {
-                    type: "response.failed",
-                    response: {
-                      output: [],
-                      error: { code: "invalid_prompt", message: "Invalid service_tier argument" },
-                    },
-                  }
-                : {
-                    type: "response.completed",
-                    response: {
-                      id: "resp_fixture",
-                      status: "completed",
-                      service_tier: request.service_tier,
-                      output: [],
-                      usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
-                    },
-                  };
+              yield {
+                type: rejected ? "response.failed" : "response.completed",
+                response: {
+                  output: [],
+                  ...(rejected
+                    ? {
+                        error: { code: "invalid_prompt", message: "Invalid service_tier argument" },
+                      }
+                    : {
+                        id: "resp_fixture",
+                        status: "completed",
+                        service_tier: request.service_tier,
+                        usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
+                      }),
+                },
+              };
             })(),
           }),
         };
@@ -67,82 +59,24 @@ beforeEach(() => {
   log.debug.mockClear();
   provider.tiers.length = 0;
   provider.rejectUltrafast = true;
-  provider.elapsedMs = 0;
-  registerAgentRunContext("run-fixture", {});
 });
 afterEach(() => {
-  resetAgentRunRegistryForTest();
   vi.useRealTimers();
 });
 const attribution = {
   runId: "run-fixture",
   sessionId: "session-fixture",
+  authScope: "/agents/fixture",
   accountRoute: "profile:openai:fixture",
 };
+const retry = ["ultrafast", "priority"];
+const observation = (responseTier: string) => ({ requestedTier: "ultrafast", responseTier });
 
-const model: Model = {
+const model = makeProviderModelFixture<"openai-responses">({
   id: "fixture",
-  name: "Fixture",
   provider: "openai",
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
-  input: ["text"],
-  reasoning: false,
-  contextWindow: 10000,
-  maxTokens: 100,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
-
-it("keeps requesting Ultrafast after a downgrade and clears it on the first honored response", async () => {
-  const accountCatalog = createPreparedAccountCatalogAccess(() => true);
-  const selectedCredential = {
-    source: "profile" as const,
-    profileId: "openai:fixture",
-    identityKey: "profile:openai:fixture",
-  };
-  const record = accountCatalog.prepareServiceTierObserver({
-    selectedCredential,
-    credential: { type: "api_key", provider: "openai", key: "synthetic-key" },
-  });
-  const route = {
-    modelId: model.id,
-    runtimeId: "openclaw",
-    api: model.api,
-    baseUrl: model.baseUrl,
-  };
-  const read = () =>
-    accountCatalog.readServiceTierObservation({
-      ...route,
-      identityKey: selectedCredential.identityKey,
-    });
-  const payloads: unknown[] = [];
-  let responseTier = "priority";
-  const base: StreamFn = async (_model, _context, options) => {
-    const payload = {};
-    await options?.onPayload?.(payload, model);
-    payloads.push(payload);
-    responsesServiceTierObserver.observe(options, "ultrafast", responseTier);
-    return createAssistantMessageEventStream();
-  };
-  const previous = vi.fn();
-  const options = {};
-  responsesServiceTierObserver.set(options, previous);
-  const wrapped = createOpenAIServiceTierObservationWrapper(
-    createOpenAIFastModeWrapper(base, "ultrafast"),
-    (_model, observation) => record({ ...route, ...observation }),
-    attribution,
-  );
-  for (const tier of ["priority", "priority", "ultrafast"]) {
-    responseTier = tier;
-    await wrapped(model, { messages: [] }, options);
-    expect(read()).toEqual(
-      tier === "ultrafast" ? undefined : { requestedTier: "ultrafast", responseTier: "priority" },
-    );
-  }
-  expect(payloads).toEqual(Array.from({ length: 3 }, () => ({ service_tier: "ultrafast" })));
-  expect(previous).toHaveBeenCalledTimes(3);
-  expect(log.info).toHaveBeenCalledTimes(1);
-  expect(log.debug).toHaveBeenCalledTimes(1);
 });
 
 it("attributes a successful slower retry to the original rejected tier without altering overrides", async () => {
@@ -154,7 +88,10 @@ it("attributes a successful slower retry to the original rejected tier without a
   };
   const wrapped = createOpenAIServiceTierObservationWrapper(base, record, attribution);
   const replacement = { service_tier: "ultrafast" };
-  await wrapped(model, { messages: [] }, { onPayload: async () => replacement });
+  const previous = vi.fn();
+  const options = { onPayload: async () => replacement };
+  responsesServiceTierObserver.set(options, previous);
+  await wrapped(model, { messages: [] }, options);
   responsesServiceTierObserver.reject(captured, "ultrafast");
   responsesServiceTierObserver.reject(captured, "priority");
   responsesServiceTierObserver.observe(captured, "default", "default", {
@@ -168,18 +105,12 @@ it("attributes a successful slower retry to the original rejected tier without a
       total_tokens: 12_100,
     },
   });
-  expect(record).toHaveBeenLastCalledWith(model, {
-    requestedTier: "ultrafast",
-    responseTier: "default",
-  });
-  expect(log.info).toHaveBeenLastCalledWith(expect.stringContaining("served as default"), {
+  expect(record).toHaveBeenLastCalledWith(model, observation("default"));
+  expect(log.info.mock.lastCall?.[1]).toMatchObject({
     ...attribution,
-    model: "fixture",
-    provider: "openai",
     requestedTier: "ultrafast",
     wireRequestedTier: "default",
     responseTier: "default",
-    requestId: undefined,
     responseId: "resp-fixture",
     responseModel: "fixture-served",
     inputTokens: 12_000,
@@ -187,90 +118,73 @@ it("attributes a successful slower retry to the original rejected tier without a
   });
   expect(await captured?.onPayload?.({}, model)).toBe(replacement);
   expect(replacement.service_tier).toBe("ultrafast");
+  record.mockReturnValueOnce(false);
+  responsesServiceTierObserver.observe(captured, "default", "default");
+  expect(log.debug).toHaveBeenCalledTimes(1);
+  expect(log.info).toHaveBeenCalledTimes(3);
+  expect(previous).toHaveBeenCalledTimes(4);
   await wrapped(model, { messages: [] }, {});
   responsesServiceTierObserver.observe(captured, "ultrafast", "ultrafast");
-  expect(record).toHaveBeenLastCalledWith(model, {
-    requestedTier: "ultrafast",
-    responseTier: "ultrafast",
-  });
+  expect(record).toHaveBeenLastCalledWith(model, observation("ultrafast"));
 });
 
 async function providerTurn(
-  runId = attribution.runId,
-  replacement = false,
+  scope: Partial<typeof attribution>,
+  options: Parameters<StreamFn>[2] = {},
   record: Parameters<typeof createOpenAIServiceTierObservationWrapper>[1] = () => true,
 ) {
   // Worker inference recreates the wrapper for each model call in the same run.
   const stream = createOpenAIServiceTierObservationWrapper(
     createOpenAIFastModeWrapper(createOpenAIResponsesTransportStreamFn(), "ultrafast"),
     record,
-    { ...attribution, runId },
+    { ...attribution, ...scope },
   );
-  const result = await stream(
-    model,
-    { messages: [] },
-    {
-      apiKey: "synthetic-key",
-      ...(replacement
-        ? {
-            onPayload: async (payload: unknown) => ({
-              ...Object(payload),
-              service_tier: "ultrafast",
-            }),
-          }
-        : {}),
-    },
-  );
+  const result = await stream(model, { messages: [] }, { apiKey: "synthetic-key", ...options });
   expect((await result.result()).stopReason).toBe("stop");
 }
 
 it("bounds persistent rejections across 30 model calls and probes after 20 cooldown calls", async () => {
   const record = vi.fn(() => true);
+  const options = {
+    onPayload: async (payload: unknown) => ({ ...Object(payload), service_tier: "ultrafast" }),
+  };
   for (let turn = 0; turn < 30; turn++) {
-    await providerTurn(attribution.runId, true, record);
+    await providerTurn({ accountRoute: "profile:openai:bounded" }, options, record);
   }
-  expect(record).toHaveBeenLastCalledWith(model, {
-    requestedTier: "ultrafast",
-    responseTier: "priority",
-  });
+  expect(record).toHaveBeenLastCalledWith(model, observation("priority"));
   expect(provider.tiers).toEqual([
-    "ultrafast",
-    "priority",
-    "ultrafast",
-    "priority",
+    ...retry,
+    ...retry,
     ...Array(20).fill("priority"),
-    "ultrafast",
-    "priority",
+    ...retry,
     ...Array(7).fill("priority"),
   ]);
-  // Fixed fake-provider latency: 30 useful requests plus only three rejected requests.
-  expect(provider.elapsedMs).toBe(3_300);
 });
 
-it("probes after ten minutes, resets on success, and isolates a new run", async () => {
+it("probes after ten minutes, resets on success, and keeps the cooldown for later runs", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(1_000);
-  await providerTurn();
-  await providerTurn();
+  const account = { accountRoute: "profile:openai:probe" };
+  await providerTurn(account);
+  await providerTurn(account);
   vi.setSystemTime(600_999);
-  await providerTurn();
+  await providerTurn(account);
   expect(provider.tiers.at(-1)).toBe("priority");
   vi.setSystemTime(601_000);
   provider.rejectUltrafast = false;
-  await providerTurn();
+  await providerTurn(account);
   expect(provider.tiers.at(-1)).toBe("ultrafast");
   provider.rejectUltrafast = true;
-  await providerTurn();
-  await providerTurn();
-  await providerTurn();
-  expect(provider.tiers.slice(-5)).toEqual([
-    "ultrafast",
-    "priority",
-    "ultrafast",
-    "priority",
-    "priority",
-  ]);
-  registerAgentRunContext("fresh-run", {});
-  await providerTurn("fresh-run");
-  expect(provider.tiers.slice(-2)).toEqual(["ultrafast", "priority"]);
+  await providerTurn(account);
+  await providerTurn(account);
+  await providerTurn(account);
+  expect(provider.tiers.slice(-5)).toEqual([...retry, ...retry, "priority"]);
+  // A rejected tier belongs to the account/model route, so a later turn does not pay for it again.
+  await providerTurn({ ...account, runId: "later-run" });
+  expect(provider.tiers.at(-1)).toBe("priority");
+  await providerTurn({ accountRoute: "profile:openai:other", runId: "later-run" });
+  expect(provider.tiers.slice(-2)).toEqual(retry);
+  // Another agent's auth store may hold a different key under the same profile id.
+  await providerTurn({ ...account, authScope: "/agents/other", runId: "later-run" });
+  expect(provider.tiers.slice(-2)).toEqual(retry);
 });

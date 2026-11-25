@@ -1,0 +1,8 @@
+{
+  "pluginId": "acpx",
+  "plugin": "ACPX",
+  "icon": "pi",
+  "key": "piSessionCatalog",
+  "labelKey": "configView.sessionSources.pi",
+  "order": 40
+}

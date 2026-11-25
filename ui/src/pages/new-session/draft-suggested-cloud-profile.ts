@@ -1,3 +1,4 @@
+import { formatUiError } from "../../lib/format-error.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type {
   DraftCloudProfileSelection,
@@ -6,8 +7,15 @@ import type {
 } from "./draft-place-contract.ts";
 import { environmentCloudDisabledReason } from "./hosted-environments.ts";
 
+export type SuggestedProfileAdoption = {
+  completion: Promise<void>;
+  retired: Promise<void>;
+  isCurrent: () => boolean;
+  reportError: (error: unknown) => void;
+};
+
 export class DraftSuggestedCloudProfile {
-  private adoption: object | null = null;
+  private adoption: PromiseWithResolvers<void> | null = null;
 
   constructor(
     private readonly gateway: DraftGatewayState,
@@ -21,6 +29,7 @@ export class DraftSuggestedCloudProfile {
   }
 
   cancel() {
+    this.adoption?.resolve();
     this.adoption = null;
   }
 
@@ -31,13 +40,12 @@ export class DraftSuggestedCloudProfile {
       !snapshot.submitting &&
       !snapshot.pendingPlacementSessionKey &&
       !this.place.requiredPlacement &&
-      this.place.isAdmin() &&
       profile !== undefined &&
       !environmentCloudDisabledReason(this.place.modelControl, profile)
     );
   }
 
-  async adopt() {
+  async adopt(onStarted?: (request: SuggestedProfileAdoption) => void) {
     const snapshot = this.read();
     if (
       this.pending ||
@@ -50,10 +58,26 @@ export class DraftSuggestedCloudProfile {
     ) {
       return;
     }
-    const adoption = {};
+    const adoption = Promise.withResolvers<void>();
     this.adoption = adoption;
     this.callbacks.onError(null);
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
+    const completion = this.settle(adoption);
+    onStarted?.({
+      completion,
+      retired: adoption.promise,
+      isCurrent: () => this.adoption === adoption,
+      reportError: (error) => {
+        if (this.adoption === adoption) {
+          this.callbacks.onError(formatUiError(error));
+          this.callbacks.changed();
+        }
+      },
+    });
+    return completion;
+  }
+
+  private async settle(adoption: PromiseWithResolvers<void>) {
     try {
       const profileId = await this.gateway.adoptSuggestedProfile();
       if (this.adoption === adoption && profileId) {
@@ -61,12 +85,12 @@ export class DraftSuggestedCloudProfile {
       }
     } catch (error) {
       if (this.adoption === adoption) {
-        this.callbacks.onError(error instanceof Error ? error.message : String(error));
+        this.callbacks.onError(formatUiError(error));
       }
     } finally {
       if (this.adoption === adoption) {
-        this.adoption = null;
-        this.callbacks.requestUpdate();
+        this.cancel();
+        this.callbacks.changed();
       }
     }
   }

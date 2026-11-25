@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   prepareSessionEntryPatch,
   type SessionEntry,
@@ -64,9 +64,7 @@ export async function projectCodexSessionWarning(params: {
   }
   // Native thread/client ids are transport identities, not warning content.
   // Include diagnostic location so different policy errors remain distinguishable.
-  const hash = createHash("sha256")
-    .update(JSON.stringify([message, body.path ?? null, body.range ?? null]))
-    .digest("hex");
+  const hash = sha256Hex(JSON.stringify([message, body.path ?? null, body.range ?? null]));
   let foundSession = false;
   let projectionAttempted = false;
   const project = async () => {

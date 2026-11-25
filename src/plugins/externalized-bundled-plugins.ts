@@ -14,8 +14,6 @@ export type ExternalizedBundledPluginBridge = {
   clawhubSpec?: string;
   /** Optional ClawHub base URL for non-default registries. */
   clawhubUrl?: string;
-  /** Bundled directory name, when it differs from bundledPluginId. */
-  bundledDirName?: string;
   /** Previous bundled manifest default enablement from the persisted registry. */
   enabledByDefault?: boolean;
   /** Legacy ids that should be treated as this plugin during enablement checks. */
@@ -62,6 +60,5 @@ export function getExternalizedBundledPluginLookupIds(
 export function getExternalizedBundledPluginLegacyPathSuffix(
   bridge: ExternalizedBundledPluginBridge,
 ): string {
-  const bundledDirName = bridge.bundledDirName ?? bridge.bundledPluginId;
-  return ["extensions", bundledDirName].join("/");
+  return ["extensions", bridge.bundledPluginId].join("/");
 }

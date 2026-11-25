@@ -5,11 +5,42 @@ import type {
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
   WorkboardSessionsBoardView,
+  WorkboardSessionsColumn,
 } from "@openclaw/workboard-contract";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
-import { sessionMatchesColumn, sessionsBoardFallback } from "./sessions-board-rules.js";
 import type { WorkboardBoardStore } from "./store-boards.js";
+
+function sessionMatchesColumn(
+  facts: WorkboardSessionFacts,
+  column: WorkboardSessionsColumn,
+): boolean {
+  if (!column.match) {
+    return false;
+  }
+  const rules = Array.isArray(column.match) ? column.match : [column.match];
+  return rules.some(
+    (match) =>
+      (match.health === undefined ||
+        (facts.observerDigest !== undefined &&
+          match.health.includes(facts.observerDigest.health))) &&
+      (match.run === undefined || match.run.includes(facts.run)) &&
+      (match.archived === undefined || match.archived === facts.archived) &&
+      (match.pullRequest === undefined ||
+        (!facts.pullRequestsUnavailable &&
+          (facts.pullRequests.length === 0
+            ? match.pullRequest.includes("none")
+            : facts.pullRequests.some((pr) => match.pullRequest?.includes(pr.state))))),
+  );
+}
+
+function sessionsBoardFallback(board: WorkboardSessionsBoard): WorkboardSessionsColumn {
+  const column = board.sessions.columns.find((entry) => entry.fallback);
+  if (!column) {
+    throw new Error("Sessions board requires a fallback column.");
+  }
+  return column;
+}
 
 type Gateway = Pick<
   OpenClawPluginApi["runtime"]["gateway"],
@@ -18,7 +49,6 @@ type Gateway = Pick<
 type SessionsBoardServiceParams = {
   store: WorkboardBoardStore;
   gateway: Gateway;
-  now?: () => number;
 };
 type CallerAuthority = { assertCurrent: () => void };
 type Operations = {
@@ -106,11 +136,22 @@ function createOwner(
   context: ParametersOfStart,
   isCurrent: () => boolean,
 ): Owner {
+  const readiness = params.store.repairSessionPlacements().then((repaired) => {
+    if (repaired.placements) {
+      context.logger.info(`Sessions board removed ${repaired.placements} non-operator placements.`);
+    }
+    if (repaired.boards) {
+      context.logger.info(`Sessions board updated default rules on ${repaired.boards} boards.`);
+    }
+  });
+  void readiness.catch((error: unknown) => {
+    context.serviceHealth?.reportFailure(error);
+    context.logger.error(`Sessions board initialization failed: ${String(error)}`);
+  });
   const lastKnown = new Map<string, CachedFacts>();
   const projections = new Map<string, PreparedProjection>();
   const boards = new Map<string, Promise<WorkboardSessionsBoard>>();
   let revision = params.store.sessionsRevision;
-  const now = params.now ?? Date.now;
   let stopped = false;
   let hasRead = false;
   let factsFailureLogged = false;
@@ -198,7 +239,7 @@ function createOwner(
     const prWarnings = new Map<string, number>();
     for (const [key, cached] of resolved) {
       const { facts, source: row } = cached;
-      if (!inScope(facts, board, now())) {
+      if (!inScope(facts, board, Date.now())) {
         continue;
       }
       if (facts.pullRequestsUnavailable || facts.pullRequestsRateLimited) {
@@ -272,6 +313,7 @@ function createOwner(
     caller?: CallerAuthority,
   ): Promise<WorkboardSessionsBoardRead> => {
     const assertReadCurrent = interactiveAuthority(caller);
+    await readiness;
     assertReadCurrent();
     hasRead = true;
     if (revision !== params.store.sessionsRevision) {
@@ -295,7 +337,7 @@ function createOwner(
     return params.gateway.withSessionFacts(sessionSelection(board, view), async (source) => {
       assertReadCurrent();
       const key = JSON.stringify([id, view, source.scope ?? source.revision]);
-      const admittedAt = now();
+      const admittedAt = Date.now();
       const previous = projections.get(key);
       let projection = previous;
       if (
@@ -378,9 +420,11 @@ function createOwner(
     cancel,
     async stop() {
       cancel();
+      await readiness.catch(() => {});
     },
     async update(id, patch, caller) {
       const assertWriteCurrent = interactiveAuthority(caller);
+      await readiness;
       assertWriteCurrent();
       return await params.store.updateSessionsBoard(id, patch, assertWriteCurrent);
     },
@@ -401,7 +445,7 @@ function createOwner(
         (entry) =>
           entry.key === sessionKey &&
           entry.sessionId === visible.sessionId &&
-          inScope(entry, board, now()),
+          inScope(entry, board, Date.now()),
       );
       if (!facts) {
         throw new Error("Session is not available in this board's scope.");
@@ -418,7 +462,7 @@ function createOwner(
             source: "operator",
             reason: "Moved by operator",
             factsHash: "",
-            updatedAt: now(),
+            updatedAt: Date.now(),
             expectedUpdatedAt: previous?.updatedAt,
           },
           { expectedSpec: board.sessions, assertCurrent: assertWriteCurrent },
@@ -451,15 +495,6 @@ export function createWorkboardSessionsBoardService(
       const state = activeState();
       await state.owner?.stop();
       state.owner = undefined;
-      const repaired = await params.store.repairSessionPlacements();
-      if (repaired.placements) {
-        context.logger.info(
-          `Sessions board removed ${repaired.placements} non-operator placements.`,
-        );
-      }
-      if (repaired.boards) {
-        context.logger.info(`Sessions board updated default rules on ${repaired.boards} boards.`);
-      }
       const owner = createOwner(params, context, () => activeState().owner === owner);
       owned = state.owner = owner;
     },

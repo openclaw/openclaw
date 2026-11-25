@@ -2,8 +2,14 @@ import os from "node:os";
 import path from "node:path";
 import { shortenPathWithHome } from "../../infra/home-display.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import type { SkillUsagePath } from "../../skills/types.js";
 import { normalizeSandboxInputPath, resolveSandboxInputPath } from "../sandbox-paths.js";
 import type { SandboxFsBridgeContext } from "./backend-handle.types.js";
+import type {
+  ReadOnlyWorkspaceSkillMount,
+  SandboxFsMount,
+  SandboxFsPreparation,
+} from "./fs-bridge.types.js";
 import {
   isSandboxHostPathAbsolute,
   resolveSandboxHostPathViaExistingAncestor,
@@ -13,14 +19,12 @@ import {
   normalizeContainerPathCore,
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
-import { resolveSandboxMountSelection, resolveSandboxBindMounts } from "./workspace-mounts.js";
-
-export type SandboxFsMount = {
-  hostRoot: string;
-  containerRoot: string;
-  writable: boolean;
-  source: "workspace" | "agent" | "bind" | "protectedSkill";
-};
+import {
+  resolveSandboxMountSelection,
+  resolveSandboxBindMounts,
+  resolveSandboxTmpfsMounts,
+  resolveReadOnlyWorkspaceSkillMounts,
+} from "./workspace-mounts.js";
 
 export type SandboxResolvedFsPath = {
   hostPath: string;
@@ -29,7 +33,10 @@ export type SandboxResolvedFsPath = {
   writable: boolean;
 };
 
-export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFsMount[] {
+export function buildSandboxFsMounts(
+  sandbox: SandboxFsBridgeContext,
+  readOnlyWorkspaceSkillMounts?: readonly ReadOnlyWorkspaceSkillMount[],
+): SandboxFsMount[] {
   return resolveSandboxMountSelection({
     workspaceDir: sandbox.workspaceDir,
     agentWorkspaceDir: sandbox.agentWorkspaceDir,
@@ -38,12 +45,116 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     workspaceAccess: sandbox.workspaceAccess,
     binds: sandbox.docker.binds,
     readOnlyResourceMounts: sandbox.readOnlyResourceMounts,
+    readOnlyWorkspaceSkillMounts,
   }).mounts.map((mount) => ({
     hostRoot: path.resolve(mount.hostPath),
     containerRoot: mount.containerPath,
     writable: !mount.readOnly,
     source: mount.source,
   }));
+}
+
+/** Prepare one run's mount/provenance projection on the skills filesystem worker. */
+export function resolveSandboxFsPreparation(input: {
+  sandbox: Omit<SandboxFsBridgeContext, "backend" | "fsPreparation">;
+  skillUsagePaths: SkillUsagePath[];
+}): SandboxFsPreparation {
+  const { sandbox } = input;
+  const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
+    ...sandbox,
+    workdir: sandbox.containerWorkdir,
+  });
+  const mounts = buildSandboxFsMounts(sandbox, readOnlyWorkspaceSkillMounts).map((mount) =>
+    Object.assign(mount, {
+      canonicalHostRoot: resolveSandboxHostPathViaExistingAncestor(mount.hostRoot),
+    }),
+  );
+  const containerOnlyMounts = resolveSandboxTmpfsMounts(sandbox.docker.tmpfs).map(
+    (mount) => mount.containerPath,
+  );
+  const writableMounts = mounts
+    .filter((mount) => mount.writable)
+    .map((mount) => ({
+      mount,
+      hostRoot: mount.canonicalHostRoot,
+    }));
+  const protectedSkills: SandboxFsPreparation["protectedSkills"] = [];
+  for (const usage of input.skillUsagePaths) {
+    const sourceFile = usage.sourceFilePath ?? usage.skillFile;
+    const containerRoot = resolveProtectedSandboxDirectory(
+      sandbox,
+      mounts,
+      containerOnlyMounts,
+      writableMounts,
+      path.dirname(usage.readPath),
+      path.dirname(sourceFile),
+    );
+    if (containerRoot) {
+      protectedSkills.push({ name: usage.skillName, sourceFile, containerRoot });
+    }
+  }
+  return { mounts, readOnlyWorkspaceSkillMounts, protectedSkills };
+}
+
+/** Select a read-only copy whose original source is also protected from guest writes. */
+function resolveProtectedSandboxDirectory(
+  sandbox: SandboxFsBridgeContext,
+  mounts: SandboxFsMount[],
+  containerOnlyMounts: string[],
+  writableMounts: Array<{ mount: SandboxFsMount; hostRoot: string }>,
+  hostDirectory: string,
+  originalSourceDirectory: string,
+): string | null {
+  let resolved: SandboxResolvedFsPath;
+  try {
+    resolved = resolveSandboxFsPathWithMounts({
+      filePath: hostDirectory,
+      cwd: sandbox.workspaceDir,
+      defaultWorkspaceRoot: sandbox.workspaceDir,
+      defaultContainerRoot: sandbox.containerWorkdir,
+      mounts,
+      containerOnlyMounts,
+    });
+  } catch {
+    // Unmapped or container-only sources cannot establish installation provenance.
+    return null;
+  }
+  const source = resolveSandboxHostPathViaExistingAncestor(hostDirectory);
+  const writableAlias = [
+    source,
+    resolveSandboxHostPathViaExistingAncestor(originalSourceDirectory),
+  ].some((canonicalDirectory) => {
+    return writableMounts.some(({ mount, hostRoot }) => {
+      const relative = isPathInside(hostRoot, canonicalDirectory)
+        ? path.relative(hostRoot, canonicalDirectory)
+        : isPathInside(canonicalDirectory, hostRoot)
+          ? ""
+          : null;
+      if (relative === null) {
+        return false;
+      }
+      const alias = path.posix.join(mount.containerRoot, ...relative.split(path.sep));
+      // The normal writable workspace is safe when its protected child wins here;
+      // a second visible writable mapping still permits replacement of the source.
+      return (
+        resolveSandboxFsMount(mounts, alias, containerOnlyMounts, {
+          containerOnlyAsUnmapped: true,
+        }) === mount
+      );
+    });
+  });
+  if (
+    resolved.writable ||
+    writableAlias ||
+    resolveSandboxHostPathViaExistingAncestor(resolved.hostPath) !== source ||
+    [...mounts.map((mount) => mount.containerRoot), ...containerOnlyMounts].some(
+      (root) =>
+        root !== resolved.containerPath && isPathInsideContainerRoot(resolved.containerPath, root),
+    )
+  ) {
+    return null;
+  }
+  return resolved.containerPath;
 }
 
 export function resolveWritableSandboxBindHostRoots(

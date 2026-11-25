@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -27,16 +28,10 @@ function family(root: string) {
     .toSorted()
     .map((name) => {
       const file = path.join(root, name);
-      const { dev, ino, mtimeMs, ctimeMs, size } = fs.lstatSync(file);
-      return {
-        name,
-        dev,
-        ino,
-        mtimeMs,
-        ctimeMs,
-        size,
-        bytes: fs.lstatSync(file).isFile() ? fs.readFileSync(file) : null,
-      };
+      const stat = fs.lstatSync(file);
+      const { dev, ino, mtimeMs, ctimeMs, size } = stat;
+      const bytes = stat.isFile() ? fs.readFileSync(file) : null;
+      return { name, dev, ino, mtimeMs, ctimeMs, size, bytes };
     });
 }
 describe("explicit agent preflight", () => {
@@ -81,7 +76,7 @@ describe("explicit agent preflight", () => {
       );
       expect(result.requiresWrite).toBe(false);
       expect(result.databasePath).toBe(input);
-      expect(family(f.root)).toEqual(before);
+      expectFilesEqual(family(f.root), before);
     });
   }
 });

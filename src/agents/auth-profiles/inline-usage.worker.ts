@@ -1,13 +1,12 @@
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
-  assertTransactionUsable,
   runSqliteWorkerTransactionSync,
-  runSqliteDeferredTransactionSync,
+  runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
-import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
+import { encodeSqliteWorkerDomainError } from "../../infra/sqlite-worker-domain-error.js";
 import { enrollAuthProfileAuthorizationInDatabase } from "./authorization-enrollment.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
 import {
@@ -45,7 +44,7 @@ export function bindSqliteWorkerBackend(
         return true;
       }
       if (command.type === "authProfiles.inlineSnapshot") {
-        return runSqliteDeferredTransactionSync(context.database, () => ({
+        return runSqliteReadSnapshotSync(context.database, () => ({
           store: inspectAuthProfileJsonCell(context.database, "store", "agent"),
           state: inspectAuthProfileJsonCell(context.database, "state", "agent"),
           cacheable: false,
@@ -85,16 +84,7 @@ export function bindSqliteWorkerBackend(
         );
       } catch (error) {
         if (!committed || !result) {
-          // A confirmed rollback is a domain refusal, not an unsettled executor.
-          assertTransactionUsable(context.database);
-          if (!context.database.isOpen || context.database.isTransaction) {
-            throw error;
-          }
-          const failure = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
-          if (!failure) {
-            throw error;
-          }
-          return { ok: false, error: failure };
+          return { ok: false, error: encodeSqliteWorkerDomainError(context.database, error) };
         }
         reportCommittedInlineAuthFailure(
           "Auth usage committed before transaction cleanup failed",

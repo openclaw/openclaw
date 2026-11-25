@@ -16,12 +16,11 @@ const content = `type CodeModeResultReference = {
  * when the current reply ends, or on abort, catalog replacement, permission
  * changes, or restart. Never reuse reference ids from earlier turns; use store
  * for small JSON values needed later.
- * Saved data is a snapshot, not current external state. Result operations are
- * unavailable in restartSafe cells because references are transient.
+ * Saved data is a snapshot, not current external state.
  * Oversized final objects/arrays are saved automatically in interactive exec/wait
  * when possible: value is {truncated:true, reference:CodeModeResultReference, guidance:string}.
  * Failed retention stays completed with a truncation marker explaining why it was not retained.
- * No automatic references in headless or restartSafe execution.
+ * No automatic references in headless execution.
  * Array discovery visits at most 128 nodes, 5 levels, and 16 object keys per node;
  * arrays sample first/middle/last, with the 8 largest discovered arrays shown first.
  * Sample values visit 2 levels/6 fields, with bounded text. A descriptor is at most
@@ -46,7 +45,7 @@ declare const results: {
  * Failed, timed-out, aborted, expired, or disposed cells discard their writes.
  * A persistence failure leaves the cell completed with a warning and the run projection unchanged;
  * verify the transcript before relying on the write, since its durable outcome may be uncertain.
- * Available only in interactive cells bound to a session, never headless or restartSafe cells.
+ * Available only in interactive cells bound to a session, never headless cells.
  */
 declare function store(key: string, value: unknown): Promise<void>;
 /** Read a detached JSON copy, or undefined when missing, including this cell's pending writes.

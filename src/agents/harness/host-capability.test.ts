@@ -1,9 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Type } from "typebox";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+  type InternalToolExecutionPreparer,
+} from "../../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
@@ -17,25 +26,28 @@ import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import * as processExec from "../../process/exec.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
-  prepareAgentRunAdmission,
-  type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
+import * as agentTools from "../agent-tools.async.js";
+import { findSkillUsageMatch } from "../agent-tools.before-tool-call.diagnostics.js";
 import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
-import * as agentTools from "../agent-tools.js";
-import { createAgentRunRestartAbortError } from "../run-termination.js";
+import { commandResult } from "../github-identity.test-support.js";
 import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-  type InternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
+  clearNativeGitHubTokenCache,
+  readNativeGitHubConfiguration,
+  refreshNativeGitHubConfiguration,
+} from "../github-read-identity.js";
+import { createAgentRunRestartAbortError } from "../run-termination.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
   getGatewayToolCallerIdentity,
@@ -44,6 +56,12 @@ import {
 import { callGatewayTool } from "../tools/gateway.js";
 import { getInProcessGatewayToolContext } from "../tools/in-process-gateway.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import {
+  admissionFixture,
+  bindTool,
+  testTool,
+  workspaceDefaults,
+} from "./host-capability.shard.test-support.js";
 import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilities.js";
 
 vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
@@ -56,82 +74,77 @@ vi.mock("../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 const mockRewrap = vi.mocked(rewrapToolWithBeforeToolCallHook);
 const mockRunBefore = vi.mocked(runBeforeToolCallHook);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
-type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
-
-const admissions: PreparedAgentRunAdmission[] = [];
-
-async function admittedAttempt(
-  runId = "run-1",
-  overrides: Omit<Partial<HostAttempt>, "admittedRunContext" | "runId"> = {},
-): Promise<{ attempt: HostAttempt; admission: PreparedAgentRunAdmission }> {
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "host-capability-test", state: "present" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-  });
-  admissions.push(admission);
-  const admittedRunContext = await admission.admit("plugin-harness", `harness-${runId}`);
-  return {
-    admission,
-    attempt: {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runId,
-      cwd: "/attempt/worktree",
-      workspaceDir: "/workspace",
-      currentChannelId: "chat-1",
-      messageChannel: "telegram",
-      ...overrides,
-      admittedRunContext,
-    },
-  };
-}
-
-function testTool(execute = vi.fn(async () => ({ content: [], details: {} }))): {
-  tool: AnyAgentTool;
-  execute: typeof execute;
-} {
-  return {
-    execute,
-    tool: {
-      name: "read",
-      label: "Read",
-      description: "read",
-      parameters: Type.Object({}),
-      execute,
-    },
-  };
-}
-
-function bindTool(
-  attempt: HostAttempt,
-  tool: AnyAgentTool,
-): {
-  host: ReturnType<typeof createAgentHarnessHostCapabilities>;
-  bound: AnyAgentTool;
-} {
-  const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-  const [bound] = host.capabilities.bindToolSurface([tool]);
-  if (!bound) {
-    throw new Error("expected bound tool");
-  }
-  return { host, bound };
-}
+const { admittedAttempt, closeAdmissions } = admissionFixture(workspaceDefaults);
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  for (const admission of admissions.splice(0)) {
-    admission.close();
-  }
+  closeAdmissions();
   resetAgentRunRegistryForTest();
 });
 
 describe("agent harness host capability", () => {
+  it("keeps native GitHub specs and thread fingerprint stable across background discovery", async () => {
+    const codex = await loadBundledPluginFacade<{
+      createCodexDynamicToolSpecsForPromptSnapshot: (params: {
+        tools: AnyAgentTool[];
+        directToolNames: string[];
+      }) => unknown[];
+      codexDynamicToolsFingerprint: (specs: readonly unknown[]) => string;
+    }>({ pluginId: "codex", artifactBasename: "test-api.js" });
+    const config = { agents: { entries: { main: {} } }, tools: { profile: "coding" as const } };
+    vi.stubEnv("GH_TOKEN", undefined);
+    vi.stubEnv("GITHUB_TOKEN", undefined);
+    setRuntimeConfigSnapshot(config);
+    clearNativeGitHubTokenCache();
+    using native = vi
+      .spyOn(processExec, "runCommandBuffered")
+      .mockResolvedValue(commandResult("", 1));
+    let turn = 0;
+    const render = async (trigger: "user" | "event") => {
+      const { attempt } = await admittedAttempt("github-native-listing-" + turn++, {
+        config,
+        trigger,
+        githubPublicationAvailable: true,
+      });
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      try {
+        const tools = (await host.capabilities.createToolSurfaceAsync!({ config })).filter((tool) =>
+          tool.name.startsWith("github_"),
+        );
+        const specs = codex.createCodexDynamicToolSpecsForPromptSnapshot({
+          tools,
+          directToolNames: tools.map((tool) => tool.name),
+        });
+        return {
+          publicationSchema: tools.find((tool) => tool.name === "github_publish")?.parameters,
+          specs,
+          fingerprint: codex.codexDynamicToolsFingerprint(specs),
+        };
+      } finally {
+        host.close();
+      }
+    };
+    try {
+      const initial = await render("user");
+      expect(initial.publicationSchema).toMatchObject({
+        properties: { action: { enum: expect.arrayContaining(["publish"]) } },
+      });
+      native.mockImplementation(async (argv) =>
+        commandResult(argv[2] === "status" ? '{"hosts":{}}' : "", argv[2] === "status" ? 0 : 1),
+      );
+      await refreshNativeGitHubConfiguration();
+      expect(readNativeGitHubConfiguration("github.com")).toBe("unconfigured");
+      expect(await render("event")).toEqual(initial);
+      native.mockResolvedValue(commandResult("", 1));
+      await refreshNativeGitHubConfiguration();
+      expect(readNativeGitHubConfiguration("github.com")).toBe("unknown");
+      expect(await render("user")).toEqual(initial);
+    } finally {
+      clearNativeGitHubTokenCache();
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it.each([
     "host close",
     "run replacement",
@@ -220,7 +233,7 @@ describe("agent harness host capability", () => {
 
   it.each([
     { available: undefined, expected: [] },
-    { available: false, expected: ["github_identity_status"] },
+    { available: false, expected: ["github_identity_status", "github_publish"] },
     { available: true, expected: ["github_identity_status", "github_publish"] },
   ])(
     "captures GitHub availability independently of plugin inputs: $available",
@@ -384,12 +397,36 @@ describe("agent harness host capability", () => {
 
   it("keeps policy snapshots independent from later attempt mutation", async () => {
     const config = { tools: { loopDetection: { enabled: true } } };
-    const skillsSnapshot = { prompt: "safe", version: 1, skills: [{ name: "safe" }] };
+    const skill = createCanonicalFixtureSkill({
+      name: "safe",
+      description: "Synthetic",
+      filePath: "/synthetic/safe/SKILL.md",
+      baseDir: "/synthetic/safe",
+      source: "workspace",
+    });
+    const skillsSnapshot = {
+      prompt: "safe",
+      version: 1,
+      skills: [{ name: "safe" }],
+      resolvedSkills: [skill],
+    };
     const { attempt } = await admittedAttempt("run-snapshot", { config, skillsSnapshot });
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
 
     config.tools.loopDetection.enabled = false;
     skillsSnapshot.skills[0]!.name = "forged";
+    using createTools = vi
+      .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
+      .mockResolvedValue([]);
+    await host.capabilities.createToolSurfaceAsync!({
+      skillsSnapshot: { prompt: "remapped", skills: [{ name: "prompt-view" }] },
+    });
+    expect(createTools.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        skillsSnapshot: expect.objectContaining({ skills: [{ name: "prompt-view" }] }),
+        pluginExecutionSkillsSnapshot: expect.objectContaining({ skills: [{ name: "safe" }] }),
+      }),
+    );
     await host.capabilities.runBeforeToolCall({ toolName: "read", params: {} });
 
     expect(mockRunBefore).toHaveBeenLastCalledWith(
@@ -400,6 +437,11 @@ describe("agent harness host capability", () => {
         }),
       }),
     );
+    const ctx = mockRunBefore.mock.lastCall?.[0].ctx;
+    expect(Object.isFrozen(ctx?.skillsSnapshot)).toBe(true);
+    expect(
+      findSkillUsageMatch({ toolName: "read", toolParams: { path: skill.filePath }, ctx }),
+    ).toMatchObject({ skillName: "safe", activation: "read", skillSource: "workspace" });
   });
 
   it("closes prepared mutable-file approval revalidators with the admitted run", async () => {
@@ -443,10 +485,10 @@ describe("agent harness host capability", () => {
     });
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
     const [bound] = host.capabilities.bindToolSurface([tool]);
-    const preparer = bound ? getInternalToolExecutionPreparer(bound) : undefined;
-    if (!preparer) {
-      throw new Error("expected bound preparer");
-    }
+    const preparer = expectDefined(
+      bound && getInternalToolExecutionPreparer(bound),
+      "bound preparer",
+    );
 
     await withPluginRuntimeGatewayRequestScope(
       { context: replacement, isWebchatConnect: () => false },
@@ -472,10 +514,7 @@ describe("agent harness host capability", () => {
     });
     const { attempt } = await admittedAttempt("run-reply-media");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    const prepare = host.capabilities.prepareReplyMedia;
-    if (!prepare) {
-      throw new Error("expected reply media capability");
-    }
+    const prepare = expectDefined(host.capabilities.prepareReplyMedia, "reply media capability");
     const request = {
       kind: "payload" as const,
       payload: { text: "Artifact ready\nMEDIA:./artifact.txt" },
@@ -566,7 +605,7 @@ describe("agent harness host capability", () => {
   it("rejects a deferred policy result after exact authority release", async () => {
     const { attempt } = await admittedAttempt("run-policy-race");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    const hookStarted = createDeferred<(() => boolean | void) | undefined>();
+    const hookStarted = createDeferred<(() => void) | undefined>();
     const hookResult = createDeferred<{ blocked: false; params: { command: string } }>();
     mockRunBefore.mockImplementationOnce(async () => {
       hookStarted.resolve(getGatewayToolCallerIdentity()?.receiptAuthority);
@@ -580,7 +619,7 @@ describe("agent harness host capability", () => {
     const receiptAuthority = await hookStarted.promise;
     expect(receiptAuthority).toEqual(expect.any(Function));
     closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
-    expect(receiptAuthority?.()).toBe(false);
+    expect(receiptAuthority).toThrow("no longer active");
     hookResult.resolve({ blocked: false, params: { command: "true" } });
     await expect(pending).rejects.toThrow("no longer active");
   });
@@ -813,10 +852,7 @@ describe("agent harness host capability", () => {
       return await preparationResult.promise;
     });
     const { host, bound } = bindTool(attempt, tool);
-    const boundPreparer = getInternalToolExecutionPreparer(bound);
-    if (!boundPreparer) {
-      throw new Error("expected retained bound execution preparer");
-    }
+    const boundPreparer = expectDefined(getInternalToolExecutionPreparer(bound), "bound preparer");
 
     const pending = boundPreparer({ toolCallId: "call-prepare-close-race", args: {} });
     await preparationStarted.promise;
@@ -847,10 +883,7 @@ describe("agent harness host capability", () => {
       dispose() {},
     }));
     const { host, bound } = bindTool(attempt, tool);
-    const boundPreparer = getInternalToolExecutionPreparer(bound);
-    if (!boundPreparer) {
-      throw new Error("expected retained bound execution preparer");
-    }
+    const boundPreparer = expectDefined(getInternalToolExecutionPreparer(bound), "bound preparer");
     const prepared = await boundPreparer({ toolCallId: "call-ready-close-race", args: {} });
     if (prepared.kind !== "ready") {
       throw new Error("expected ready execution preparation");
@@ -901,7 +934,9 @@ describe("agent harness host capability", () => {
         return [];
       }
       assertCurrent() {
-        return current;
+        if (!current) {
+          throw new Error("agent tool caller authority is no longer active");
+        }
       }
       release() {
         this.releases += 1;
@@ -909,7 +944,11 @@ describe("agent harness host capability", () => {
     }
     const source = new PreparedReceipt();
     const receipt = Object.assign(
-      vi.fn(() => current),
+      vi.fn(() => {
+        if (!current) {
+          throw new Error("agent tool caller authority is no longer active");
+        }
+      }),
       {
         prepareSessionSource: async () => source,
       },

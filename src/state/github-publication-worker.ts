@@ -3,6 +3,11 @@ import {
   bindGitHubPublicationSource,
   type GitHubPublicationSourceCapability,
 } from "../gateway/github-publication-source.js";
+import { placementAuthorityOwnerFor } from "../gateway/worker-environments/placement-authority-owner.js";
+import {
+  isPublishedPlacementTurnClaimCurrent,
+  readPlacementReplica,
+} from "../gateway/worker-environments/placement-turn-authority.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -15,13 +20,14 @@ import type {
   PublicationReadOperations,
 } from "./github-publication-worker.types.js";
 import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
-import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 
 type MutationCommand = SqliteWorkerCommand<
   Pick<
     PublicationWorkerOperations,
+    | "githubPublications.personalRestart"
     | "githubPublications.personal"
     | "githubPublications.repository"
     | "githubPublications.shared"
@@ -33,15 +39,7 @@ type MutationCommand = SqliteWorkerCommand<
 export async function readGitHubPublicationInWorker(
   command: SqliteWorkerCommand<PublicationReadOperations>,
 ) {
-  const context = captureOpenClawStateReadWorkerContext();
-  const captured = structuredClone(command);
-  const result = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute(captured),
-    { existingOnly: true },
-  );
-  context.admission.assertCurrent();
-  return result;
+  return await executeExistingOpenClawStateRead({}, command, { current: true });
 }
 
 /** A publication execution retains FIFO writes through native settlement. */
@@ -89,7 +87,9 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
       const expectedKind =
         commandSnapshot.type === "githubPublications.insert"
           ? commandSnapshot.input.kind
-          : commandSnapshot.type.slice("githubPublications.".length);
+          : commandSnapshot.type === "githubPublications.personalRestart"
+            ? "personal"
+            : commandSnapshot.type.slice("githubPublications.".length);
       const readReceipt = (facts: unknown): PublicationMutationReceipt => {
         if (
           !isRecord(facts) ||
@@ -104,6 +104,29 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
         return facts as PublicationMutationReceipt;
       };
       return enqueue(async () => {
+        if (
+          commandSnapshot.type === "githubPublications.shared" &&
+          commandSnapshot.input.operation === "defer" &&
+          commandSnapshot.input.selection.kind === "orphaned"
+        ) {
+          const owner = placementAuthorityOwnerFor(context.admission.identity);
+          // A release after this snapshot leaves its receipt for the next recovery pass.
+          commandSnapshot.input.selection.localClaims = [...owner.localClaimSessions].flatMap(
+            (sessionId) => {
+              const claim = owner.placements.get(sessionId)?.placement?.turnClaim;
+              return claim?.owner === "local" && claim.ownerEpoch === null
+                ? [
+                    {
+                      sessionId,
+                      claimId: claim.claimId,
+                      runId: claim.runId,
+                      placementGeneration: claim.generation,
+                    },
+                  ]
+                : [];
+            },
+          );
+        }
         let retainedSource: GitHubPublicationSourceCapability | undefined;
         try {
           let binding: ReturnType<typeof bindGitHubPublicationSource> | undefined;
@@ -111,7 +134,31 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
             assertCurrent();
             retainedSource = typeof source === "function" ? await source() : source;
             assertCurrent();
-            binding = bindGitHubPublicationSource(retainedSource);
+            const request =
+              commandSnapshot.type === "githubPublications.insert" &&
+              commandSnapshot.input.kind === "shared"
+                ? commandSnapshot.input.input
+                : undefined;
+            const claim = request?.claim;
+            binding = bindGitHubPublicationSource(
+              retainedSource,
+              request && claim?.owner.kind === "local" && claim.owner.environmentId === undefined
+                ? () => {
+                    const placement = readPlacementReplica(
+                      context.admission.identity,
+                      claim.sessionId,
+                    )?.placement;
+                    if (
+                      placement?.state !== "local" ||
+                      placement.agentId !== request.request.agentId ||
+                      placement.sessionKey !== request.request.sessionKey ||
+                      !isPublishedPlacementTurnClaimCurrent(context.admission.identity, claim)
+                    ) {
+                      throw new Error("GitHub publication turn ended. Retry the publication.");
+                    }
+                  }
+                : undefined,
+            );
             if (
               binding.context.admission.databasePath !== context.admission.databasePath ||
               binding.context.admission.identity.key !== context.admission.identity.key ||
@@ -121,10 +168,10 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
             }
           }
           const captured = binding
-            ? structuredClone({
+            ? {
                 ...commandSnapshot,
                 input: { ...commandSnapshot.input, source: binding.predicate },
-              })
+              }
             : commandSnapshot;
           const operationContext = binding?.context ?? context;
           let admission: SqliteWorkerOperationAdmission | undefined;

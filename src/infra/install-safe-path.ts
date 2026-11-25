@@ -1,4 +1,7 @@
 // Provides safe path helpers for plugin installation targets.
+import fs from "node:fs/promises";
+import path from "node:path";
+
 export {
   assertCanonicalPathWithinBase,
   resolveSafeInstallDir,
@@ -25,4 +28,41 @@ export function packageNameMatchesId(packageName: string, id: string): boolean {
   }
 
   return trimmedId === trimmedPackageName || trimmedId === unscopedPackageName(trimmedPackageName);
+}
+
+export const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
+
+export async function assertInstallBaseStable(params: {
+  installBaseDir: string;
+  expectedRealPath: string;
+}): Promise<void> {
+  const baseStat = await fs.stat(params.installBaseDir);
+  if (!baseStat.isDirectory()) {
+    throw new Error(INSTALL_BASE_CHANGED_ERROR_MESSAGE);
+  }
+  const currentRealPath = await fs.realpath(params.installBaseDir);
+  if (currentRealPath !== params.expectedRealPath) {
+    throw new Error(INSTALL_BASE_CHANGED_ERROR_MESSAGE);
+  }
+}
+
+export async function resolveInstallPublishTarget(params: {
+  installBaseDir: string;
+  targetDir: string;
+}): Promise<{ installBaseRealPath: string; canonicalTargetDir: string }> {
+  const installBaseResolved = path.resolve(params.installBaseDir);
+  const targetResolved = path.resolve(params.targetDir);
+  const targetRelativePath = path.relative(installBaseResolved, targetResolved);
+  if (
+    !targetRelativePath ||
+    targetRelativePath === ".." ||
+    targetRelativePath.startsWith(`..${path.sep}`)
+  ) {
+    throw new Error("invalid install target path");
+  }
+  const installBaseRealPath = await fs.realpath(params.installBaseDir);
+  return {
+    installBaseRealPath,
+    canonicalTargetDir: path.join(installBaseRealPath, targetRelativePath),
+  };
 }

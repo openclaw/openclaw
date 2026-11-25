@@ -106,6 +106,10 @@ export async function resolveXIngress(
     cfg,
     identity: {
       key: "x-user-id",
+      // Polling and Activity streams both obtain author_id from the authenticated X API.
+      authentication: "verified",
+      resolveParticipant: ({ stableId }) =>
+        typeof stableId === "string" ? { domain: "x", idKind: "user-id", id: stableId } : undefined,
       normalize: (value) => normalizeXUserId(value) ?? "",
       sensitivity: "pii",
       entryIdPrefix: "x-entry",

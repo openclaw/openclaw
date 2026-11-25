@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setLoggerOverride } from "../logging.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { defaultRuntime } from "../runtime.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const pluginRegistryMocks = vi.hoisted(() => {
@@ -69,6 +70,10 @@ describe("channelsLogsCommand", () => {
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+    vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) =>
+      runtime.log(JSON.stringify(value, null, 2)),
+    );
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockClear();
   });
 
@@ -89,7 +94,7 @@ describe("channelsLogsCommand", () => {
       ].join(""),
     );
 
-    await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
+    await channelsLogsCommand({ channel: "external-chat", json: true });
 
     expect(pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledWith({
       includeDisabled: true,
@@ -118,14 +123,14 @@ describe("channelsLogsCommand", () => {
       ].join(""),
     );
 
-    await channelsLogsCommand({ channel: fixture.channel, json: true }, runtime);
+    await channelsLogsCommand({ channel: fixture.channel, json: true });
 
     const payload = readJsonPayload();
     expect(payload.lines.map((line) => line.message)).toEqual(["match opaque=opaque…7890"]);
     expect(JSON.stringify(payload)).not.toContain(fixtureCredential);
 
     runtime.log.mockClear();
-    await channelsLogsCommand({ channel: fixture.channel }, runtime);
+    await channelsLogsCommand({ channel: fixture.channel });
 
     const output = runtime.log.mock.calls.flat().join("\n");
     expect(output).toContain("2026-04-25T12:00:00.000Z info match");
@@ -140,7 +145,7 @@ describe("channelsLogsCommand", () => {
       logLine({ module: "gateway/channels/slack/send", message: "unrelated message" }),
     );
 
-    const error = await channelsLogsCommand({ channel: "slakc", json: true }, runtime).catch(
+    const error = await channelsLogsCommand({ channel: "slakc", json: true }).catch(
       (cause: unknown) => cause,
     );
     expect(error).toBeInstanceOf(Error);
@@ -167,10 +172,11 @@ describe("channelsLogsCommand", () => {
         .join(""),
     );
 
-    await channelsLogsCommand(
-      { channel: lines === undefined ? undefined : "all", lines, json: true },
-      runtime,
-    );
+    await channelsLogsCommand({
+      channel: lines === undefined ? undefined : "all",
+      lines,
+      json: true,
+    });
 
     const payload = readJsonPayload();
     expect(payload.channel).toBe("all");
@@ -186,7 +192,7 @@ describe("channelsLogsCommand", () => {
     ];
     await fs.writeFile(logPath, lines.join(""));
 
-    await channelsLogsCommand({ channel: "slack", lines: 2000, json: true }, runtime);
+    await channelsLogsCommand({ channel: "slack", lines: 2000, json: true });
 
     expect(readJsonPayload().lines.map((line) => line.message)).toEqual([
       "first match",
@@ -199,11 +205,11 @@ describe("channelsLogsCommand", () => {
     const filler = logLine({ module: "gateway/health", message: "x".repeat(1000) });
     await fs.writeFile(logPath, `${omitted}${filler.repeat(1100)}`);
 
-    await channelsLogsCommand({ channel: "slack", json: true }, runtime);
+    await channelsLogsCommand({ channel: "slack", json: true });
     expect(readJsonPayload()).toMatchObject({ truncated: true, lines: [] });
 
     runtime.log.mockClear();
-    await channelsLogsCommand({ channel: "slack" }, runtime);
+    await channelsLogsCommand({ channel: "slack" });
     expect(runtime.log.mock.calls.flat().join("\n")).toContain(
       "Log tail truncated; earlier entries were omitted.",
     );

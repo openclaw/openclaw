@@ -54,12 +54,24 @@ await a scope's `stop()` from one of its own running callbacks.
 
 The host first closes scheduling admission and signals cancellation, then invokes
 the service's stop hook. Retirement waits for both that hook and scheduled work.
+For managed plugins, service startup, scheduled callbacks, and cleanup use the
+instance's background readers, so a startup or reload caller ending does not retire them.
 Plugins retain ownership of reconnection policy, sockets, watchers, durable flush
 ordering, and delivery custody. Stop transports and flush pending delivery in the
 owner's required order, then join its child scope before closing resources used
 by that work. Pass the lifetime signal to operations that support cancellation,
 and finish admitted writes before returning. Scheduling creates no durable jobs
 and changes no stored config or state; an update requires no state migration.
+
+Config-only service restarts share plugin replacement's five-second startup
+observation budget. Service startup and cleanup observation budgets measure elapsed
+time, so system-clock changes cannot shorten or extend them. If startup exceeds its
+budget, the host reports a service health
+failure and closes scheduling and managed capability admission. Raw startup
+remains owned until it settles, then the service's final stop runs exactly once.
+This does not forcibly terminate native plugin work: shutdown still waits for
+physical cleanup. After cleanup, reload the plugin to retry a timed-out service.
+This changes no stored config or state and requires no migration on update.
 
 Channel Gateway adapters opt in with `apiVersion: 2`. Their `startAccount` and
 `stopAccount` callbacks receive `ChannelGatewayContextV2`, including the required
@@ -94,6 +106,64 @@ command reports the diagnostic failure and continues. Exporter shutdown retires
 only its service scope, leaving the CLI scheduler available to other work.
 
 ## Gateway and node namespaces
+
+### Request authority
+
+A Gateway-authenticated HTTP route or registered operator RPC handler can call
+`getGatewayRequestAuthorityV1()` from `openclaw/plugin-sdk/gateway-request-authority`.
+It returns the scopes admitted for that request, an optional client IP, and the
+plugin ID of any access grant explicitly required by the caller's role.
+`personProfileId` identifies an authenticated individual. Use `attributionProfileId`
+for display. Shared credentials can carry Gateway owner attribution.
+
+The Gateway authenticates the request once. `authority.assertCurrent()` checks
+the admitted handler's lifetime and identity. Credential rotation and ordinary
+policy edits apply to the next HTTP request. A grant-owned operation can require
+its original grant with `authority.assertCurrent(pluginId)`, including at a
+synchronous commit. `await authority.revalidate(pluginId)` also waits for the
+transport's check. A mismatch or ended grant rejects the operation.
+A nested plugin RPC inherits the exact HTTP caller and its lifetime. Outside an
+admitted handler the getter returns `undefined`. Retained guards expire at settlement.
+
+### Session control
+
+The session controller owns turn admission, queued input, and Stop. Gateway
+handler context does not expose writable `chatAbortControllers` or
+`chatQueuedTurns` maps. Reading either removed property fails with code
+`PLUGIN_CAPABILITY_REMOVED` and migration guidance.
+
+An authenticated plugin handler can compose existing Gateway methods through
+`dispatchGatewayMethod` from `openclaw/plugin-sdk/gateway-method-runtime` when its manifest declares
+`contracts: { gatewayMethodDispatch: ["authenticated-request"] }`. The call
+retains the current client and its scopes; the declaration grants no additional
+authority. Use `chat.send` for input, `chat.abort` with `{ sessionKey, runId? }`
+for chat cancellation, `sessions.abort` with `{ key, runId?, clearQueued? }` for
+session cancellation, and `agent.wait` to await a run. There is no public
+controller mutation API.
+
+After `sessions.catalog.resolve` returns a destination, use
+`sendToResolvedSession({ target, message, idempotencyKey })` from the same SDK
+subpath. Pass the returned `{ sessionKey, sessionId }` as `target`. The Gateway
+checks that the same session still owns the key. The helper returns `accepted`
+when the Gateway acknowledges that request as started or already in flight,
+`forbidden` when the caller lacks permission, and `unconfirmed` when it cannot
+establish admission. Keep the original request key when reconciling an
+unconfirmed send.
+
+For status displays, use `sessions.list` to observe aggregate activity. Bundled
+or trusted official plugins can also use `api.runtime.gateway.request(...)`,
+`readSessionFacts(...)`, and `subscribeSessionChanges(...)` as described below.
+These runtime capabilities retain their existing trust restriction. A projection
+or run ID is an observation, not permission to mutate or cancel work.
+
+Consumers of `context.createAgentTurnFacade` receive a captured start owner
+through `onStartOwner`. Its observation uses optional nullable
+`startDeadlineAtMs`, replacing `expiresAtMs` without an alias. A finite value is
+the execution-start deadline; `null` means a live controller wait has no finite
+deadline, and an absent field means no deadline is available yet. An absent
+observation means that owner is no longer current. Once `executionStarted` is
+true, the start watch is complete. See the
+[migration details](/plugins/sdk-migration#agent-turn-start-observation).
 
 ### Session resource methods
 
@@ -149,7 +219,9 @@ The Gateway resolves `requiredByRole` from the person's effective role and this
 plugin's ID; role-bound policies use that fact instead of inferring a binding
 from the default role's name.
 Return `undefined` when the policy does not govern that person. Otherwise return
-`{ assertCurrent, signal }`; reject admission when the required access is absent.
+`{ assertCurrent, signal }`. For an explicit role binding, return `undefined` when
+the required grant is absent; otherwise deny access with an already-aborted signal.
+Throw only when evaluation is unavailable, not to report a policy denial.
 
 A named Gateway role can set `accessPolicyPlugin` to your plugin ID. That role
 requires a current authority from your registered policy, including when the
@@ -166,6 +238,21 @@ owner and initialize it before accepting person access.
 Return a native `AbortSignal`. Registration preserves native cancellation and
 cleanup while keeping the assertion and callable abort-reason values bound to
 the plugin instance. Plugin retirement also ends captured access.
+
+The registration owner records a closed diagnostic `failureCause` when the grant
+or plugin lifetime ends. An internal assertion error, including a closed invocation
+scope or a temporarily quiesced plugin, refuses the operation without revoking the
+person or their admitted runs. The Gateway reevaluates the captured grant before
+treating an unclassified exception as a denial. An unavailable evaluation returns
+`UNAVAILABLE` with `details.code: "OPERATOR_ACCESS_UNAVAILABLE"`; before dispatch,
+it is retryable and does not authorize the failed operation. After dispatch starts,
+the response instead warns that execution may have completed and is not automatically
+retryable. HTTP authentication returns a retryable 503 for policy unavailability.
+Later HTTP revalidation failures return 503 with the uncertain-outcome warning;
+an already-started response is closed without framing partial data as complete.
+The log includes the redacted inner
+error name and message. Successful responses remain subject to current authority,
+and the next operation checks the policy again.
 
 The Gateway binds the returned authority to the original person and carries it
 through WebSocket and HTTP requests, and through commands admitted for a linked
@@ -226,8 +313,10 @@ applicable policy also requires fresh publication admission.
     }
     ```
 
-    Requests use `operator.write` scope and do not grant admin scope. Calls from arbitrary external
-    plugins are rejected. Failed methods throw a `GatewayClientRequestError`, preserving structured
+    Requests default to `operator.write` scope. Trusted plugins can request a method-specific scope,
+    such as `operator.approvals` for `plugin.approval.request`, through the third argument; this does
+    not exceed an authenticated caller's scopes. Calls from arbitrary external plugins are rejected.
+    Failed methods throw a `GatewayClientRequestError`, preserving structured
     `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
     before choosing this path from tools that can also run in standalone agent processes.
 
@@ -267,6 +356,17 @@ applicable policy also requires fresh publication admission.
     can ignore them. Unchanged facts need no age-based retry.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
+
+    `await api.runtime.gateway.appendAgentMessage({ sessionKey, agentId?, text, mentions?, idempotencyKey })`
+    adds one agent-authored message to an existing session without running the
+    model. Bundled or trusted official plugins can call it only while handling
+    an authenticated person's Gateway request, and only for a session that
+    person may write, such as their own session. The text is normalized like
+    typed chat input. `mentions` select `@label` spans; each mentioned person
+    gets the usual Inbox entry and involvement, with the caller named as the
+    sender, under the same rules as a typed mention. A retry with the same
+    `idempotencyKey` returns the original message with `replayed: true`
+    instead of writing another.
 
     `api.runtime.gateway.withSessionFacts(select, async (snapshot) => result)`
     selects immutable facts through the same session-list filtering owner,
@@ -464,6 +564,12 @@ applicable policy also requires fresh publication admission.
     dispatch through the supplied `invokeNode` callback, which revalidates the
     current connection and pairing before forwarding the command.
 
+    A policy for `mcp.tools.call.v1` can provide
+    `allowLocalMcpTool({ nodeId, server, tool, pluginConfig })`. Returning
+    `true` admits that exact tool to same-node execution without calling the
+    Gateway handler. Other results, errors, and policies without this callback
+    retain Gateway dispatch.
+
     `allow-always` remains one policy decision unless the node-invoke policy explicitly declares `standingApproval: { kind: "placement", scope: "<capability>" }`. That opt-in permits later launches only for a high-risk command on the same current managed placement, node pairing, environment owner, workspace, and semantic capability scope, for at most 30 days and never across Gateway restart. Use a stable, content-free scope for a capability whose approval deliberately covers later argument changes. Do not opt in when the approved target or other request arguments must remain exact.
 
     A node command may declare `prepare(context)` for asynchronous native startup.
@@ -503,6 +609,13 @@ before dispatch and each frame. Closing the service cancels open channels.
 Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operations
 already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
 `removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
+
+Cron operations that require an agent owner reject with error code
+`AGENT_SELECTION_REQUIRED` when no explicit or ambient owner resolves. The
+in-process service handle preserves the error object and its `code` property.
+Pass an explicit `agentId` or configure `agents.defaults.systemAgent.agentId`;
+optional background services can handle this code to defer creation until an
+owner is available. Match the code rather than the human-readable message.
 
 Current service handles also expose `enqueueRun(id, mode)` for service-owned
 work. It uses the normal cron admission queue with the service's live authority,
@@ -681,3 +794,39 @@ The reporter is revoked when the service stops or its plugin registry generation
 late callback from an old generation cannot overwrite current health. Prefer returning the startup
 promise when the service is not usable until that promise settles; use the reporter only for
 deliberately nonblocking work that owns its own stop path.
+
+## Publication-reader device admission
+
+`openclaw/plugin-sdk/gateway-runtime` exports
+`prepareGatewayPublicationReaderV1(request)` for a registered publication reader.
+It returns the authenticated `deviceId` and an `assertCurrent()` guard, not a
+person profile or a reusable credential. Call the guard after awaited source
+reads and immediately before returning data. The guard checks the host's actual
+request authority; wire parameters and a caller-supplied callback cannot create
+this admission.
+
+The host admits this connection only with a signed paired-device handshake and
+an existing operator token whose stored and requested scopes are both exactly
+`["operator.session-share.read"]`. Requesting that scope with a broader token is
+not sufficient. Omitting it from a restricted token does not enter ordinary
+operator admission. Existing device-token approval, rotation, and revocation
+remain the credential owners.
+
+These connections have no human profile or owner role. Their hello contains no
+session, health, presence, UI, or recovery data. Only registered methods with the
+exact scope and `profileAccess: "independent"` are callable. Ordinary reads,
+preferences, scope upgrades, and writes are denied. The host scope alone does not
+publish any session: the source plugin must separately authorize the exact
+device against its live publication grant, and enforce its group and canonical
+person selection before each disclosure. That source grant is not supplied by
+this host capability. It grants no human steering authority.
+
+### Existing named reader identity
+
+`loadGatewayReaderIdentityV1(identityKey)` from
+`openclaw/plugin-sdk/gateway-runtime` reads a preprovisioned signing identity from
+the host credential owner. Empty, whitespace-padded and `primary` keys are
+rejected. Missing identities throw; the helper never creates or enrolls a device.
+Pass the returned identity explicitly to `GatewayClient` with an explicit device
+token. The identity is signing material, not session authorization. Never expose
+its private key in logs or responses.

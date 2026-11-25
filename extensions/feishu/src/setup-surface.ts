@@ -276,9 +276,6 @@ async function runNewAppFlow(params: {
   })) as "allowlist" | "open" | "disabled";
 
   const configProgress = prompter.progress(t("wizard.feishu.configuring"));
-  await new Promise((resolve) => {
-    setTimeout(resolve, 50);
-  });
 
   next = patchFeishuConfig(next, targetAccountId, {
     ...(appId && appSecret ? { appId, appSecret, connectionMode: "websocket" } : {}),
@@ -301,7 +298,6 @@ async function runEditFlow(params: {
   const { cfg, prompter, options } = params;
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
 
-  // Check existing appId (top-level or first configured account).
   // Supports both plain string and SecretRef (env-backed) appId values.
   const resolveAppIdLabel = (value: unknown): string | undefined => {
     const asString = normalizeString(value);
@@ -359,9 +355,7 @@ export async function runFeishuLogin(params: {
 export const feishuSetupWizard: ChannelSetupWizard = {
   channel,
   resolveAccountIdForConfigure: ({ accountOverride, defaultAccountId, cfg }) =>
-    (typeof accountOverride === "string" && accountOverride.trim()
-      ? accountOverride.trim()
-      : undefined) ??
+    (accountOverride?.trim() || undefined) ??
     resolveDefaultFeishuAccountId(cfg) ??
     defaultAccountId,
   resolveShouldPromptAccountIds: () => false,
@@ -380,7 +374,9 @@ export const feishuSetupWizard: ChannelSetupWizard = {
         try {
           const { probeFeishu } = await import("./probe.js");
           probeResult = await probeFeishu(account);
-        } catch {}
+        } catch {
+          // The optional connection probe must not prevent configuring credentials offline.
+        }
       }
       if (!configured) {
         return [`Feishu: ${t("wizard.channels.statusNeedsAppCredentials")}`];

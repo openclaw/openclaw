@@ -22,25 +22,12 @@ describe("Codex native hook callback configuration", () => {
   });
 
   it.each([
-    { url: "http://gateway.example/hooks", credentialDirectory: "/private/hooks" },
-    { url: "https://gateway.example/hooks?token=secret", credentialDirectory: "/private/hooks" },
-    { url: "https://gateway.example/hooks", credentialDirectory: "relative/hooks" },
-  ])("rejects unsafe remote hook callback configuration: $url", (nativeHookRelay) => {
-    expect(() => resolveAppServer({ nativeHookRelay })).toThrow();
-  });
-
-  it.each([
-    { username: "example-user", password: "" },
-    { username: "", password: "example-password-not-real" },
-    { username: "example-user", password: "example-password-not-real" },
-  ])("rejects native hook callback userinfo: $username / $password", ({ username, password }) => {
-    const url = new URL("https://gateway.example/hooks");
-    url.username = username;
-    url.password = password;
-    expect(() =>
-      resolveAppServer({
-        nativeHookRelay: { url: url.href, credentialDirectory: "/private/hooks" },
-      }),
-    ).toThrow();
+    ["http://gateway.example/hooks", "/private/hooks"],
+    ["https://gateway.example/hooks?token=secret", "/private/hooks"],
+    ["https://gateway.example/hooks", "relative/hooks"],
+    ["https://example-user@gateway.example/hooks", "/private/hooks"],
+    ["https://:example-password-not-real@gateway.example/hooks", "/private/hooks"],
+  ])("rejects unsafe remote hook callback %s in %s", (url, credentialDirectory) => {
+    expect(() => resolveAppServer({ nativeHookRelay: { url, credentialDirectory } })).toThrow();
   });
 });

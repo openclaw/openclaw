@@ -9,29 +9,18 @@ import {
   type OpenClawPluginApi,
   type OpenClawPluginDefinition,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  resolveFaceTimeConfig,
-  validateFaceTimeConfig,
-  type FaceTimeConfig,
-} from "./src/config.js";
+import { resolveFaceTimeConfig, validateFaceTimeConfig } from "./src/config.js";
 import { inspectFaceTimeDriver, uninstallFaceTimeDriver } from "./src/driver-setup.js";
 import { inspectFaceTimeNativePackage } from "./src/plugin-paths.js";
-import { stopRetainedRuntime } from "./src/runtime-lifecycle.js";
 import { runFaceTimeSetup } from "./src/setup.js";
 import { inspectFaceTimeStaticStatus } from "./src/static-status.js";
 import { createFaceTimeCallTool, resolveFaceTimeToolApproval } from "./src/tool.js";
-
-const faceTimeConfigSchema = {
-  parse(value: unknown): FaceTimeConfig {
-    return resolveFaceTimeConfig(value);
-  },
-};
 
 const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
   id: "facetime",
   name: "FaceTime",
   description: "Experimental private FaceTime realtime voice carrier for OpenClaw agents",
-  configSchema: faceTimeConfigSchema,
+  configSchema: { parse: resolveFaceTimeConfig },
   register(api: OpenClawPluginApi) {
     const config = resolveFaceTimeConfig(api.pluginConfig);
     const validation = validateFaceTimeConfig(config);
@@ -82,12 +71,16 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
         runCommandWithTimeout: api.runtime.system.runCommandWithTimeout,
       });
     };
-    const stopRuntime = () =>
-      stopRetainedRuntime(runtimePromise, (stopped) => {
-        if (runtimePromise === stopped) {
-          runtimePromise = undefined;
-        }
-      });
+    const stopRuntime = async () => {
+      const current = runtimePromise;
+      if (!current) {
+        return;
+      }
+      await (await current).stop();
+      if (runtimePromise === current) {
+        runtimePromise = undefined;
+      }
+    };
 
     api.registerTool(() => createFaceTimeCallTool({ ensureRuntime, getStatus }), {
       name: "facetime_call",
@@ -187,7 +180,7 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
         });
         return {
           ok: true,
-          guidance: "Quit and reopen FaceTime and Phone before re-enabling this plugin.",
+          guidance: "Quit and reopen FaceTime before re-enabling this plugin.",
         };
       } finally {
         uninstalling = false;

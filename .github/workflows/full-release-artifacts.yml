@@ -24,7 +24,7 @@ on:
       preflight_phase:
         type: choice
         default: all
-        options: [all, prepare]
+        options: [all, prepare, build-only]
       release_candidate_branch:
         type: string
         default: ""
@@ -34,6 +34,10 @@ on:
       prepared_npm_bundle_json:
         type: string
         default: ""
+      npm_preflight_use_github_hosted_runners:
+        description: Run the npm stage's preflight jobs on GitHub-hosted ubuntu-24.04
+        type: boolean
+        default: false
 
 # Separate runs own immutable publication bytes. Retrying the FRV collectors
 # cannot hide their producer artifacts or require a rebuild of successful work.
@@ -57,7 +61,9 @@ env:
 jobs:
   admit:
     name: Validate artifact producer request
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_runner_ubuntu >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     outputs:
       request_sha256: ${{ steps.request.outputs.request_sha256 }}
@@ -70,7 +76,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - id: request
@@ -98,6 +104,7 @@ jobs:
       preflight_phase: ${{ inputs.preflight_phase }}
       npm_dist_tag: ${{ inputs.npm_dist_tag }}
       release_candidate_branch: ${{ inputs.release_candidate_branch }}
+      use_github_hosted_runners: ${{ inputs.npm_preflight_use_github_hosted_runners }}
 
   candidate:
     name: Prepare validation candidate
@@ -123,7 +130,7 @@ jobs:
     name: Seal artifact producer receipt
     needs: [admit, npm, candidate, docker]
     if: ${{ !cancelled() && needs.admit.result == 'success' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 5
     steps:
       - name: Require successful artifact stage
@@ -138,7 +145,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - id: receipt

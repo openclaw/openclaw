@@ -7,6 +7,12 @@ import {
 } from "../chat/tool-call-grouping.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 
+/** Display cue only: suffixes can collide and never replace the full routing or lifecycle identity. */
+export function formatSubagentProgressReference(id: string | undefined): string | undefined {
+  const uuid = id?.match(/(?:^|:)([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/i)?.[1];
+  return uuid ? `…${uuid.slice(-4)}` : undefined;
+}
+
 /**
  * A successfully completed wrapper is replaced only by a recorded call beneath it
  * that stays visible in progress. A wrapper whose recorded calls are all routine
@@ -83,13 +89,22 @@ export function projectAgentActivityItem<
   ) {
     return { ...item, status: "failed" };
   }
+  const args = asRecord(facts.args);
+  // The internal source sink reports sent only after delivery; an intended destination
+  // or a dry-run sourceReply payload does not mean there is a visible duplicate.
+  const sourceReply =
+    name === "message" &&
+    item.status === "completed" &&
+    details?.sourceReplySink === "internal-ui" &&
+    details.deliveryStatus === "sent";
   const routine =
     facts.nativeOperation === "wait" ||
     facts.nativeOperation === "process.poll" ||
     isAgentPlanProgressToolName(name) ||
     name === "sessions_yield" ||
-    (name === "process" && asRecord(facts.args)?.action === "poll") ||
-    (name === "message" && asRecord(facts.args)?.action === "react");
+    (name === "process" && args?.action === "poll") ||
+    (name === "message" && args?.action === "react") ||
+    sourceReply;
   return routine && (item.status === "running" || item.status === "completed")
     ? { ...item, hideFromChannelProgress: true }
     : item;
@@ -116,6 +131,7 @@ export function summarizeAgentActivity(
     status?: string;
     hideFromChannelProgress?: boolean;
     suppressChannelProgress?: boolean;
+    unpairedCall?: boolean;
   }[],
   opts: { ownSessionLaunches?: ReadonlySet<string> } = {},
 ) {
@@ -159,7 +175,7 @@ export function summarizeAgentActivity(
     total += 1;
     if (outcome) {
       outcomes[outcome] += 1;
-    } else if (!item.status) {
+    } else if (!item.status && !item.unpairedCall) {
       outcomes.unknown += 1;
     }
   }

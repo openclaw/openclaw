@@ -41,6 +41,31 @@ async function expectOpenClawRuntime(client: SkillLibraryWireClient, key: string
   });
 }
 
+function waitForAgent(client: SkillLibraryWireClient, runId: string) {
+  return client.request(
+    "agent.wait",
+    { runId, timeoutMs: PROOF_TIMEOUT_MS },
+    PROOF_TIMEOUT_MS + 5_000,
+  );
+}
+
+async function expectHistory(
+  client: SkillLibraryWireClient,
+  key: string,
+  messages: Array<{ role: string; text: unknown }>,
+) {
+  await vi.waitFor(
+    async () => {
+      const actual = (await history(client, key)).map((entry) => ({
+        role: entry.role,
+        text: wireMessageText(entry),
+      }));
+      expect(actual).toEqual(messages);
+    },
+    { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
+  );
+}
+
 async function runProfileWireProof<P extends WireProvider>(
   startProvider: () => Promise<P>,
   proof: (fixture: {
@@ -48,7 +73,6 @@ async function runProfileWireProof<P extends WireProvider>(
     provider: P;
     admin: SkillLibraryWireClient;
     alice: SkillLibraryWireClient;
-    bob: SkillLibraryWireClient;
     aliceId: string;
     bobId: string;
     reconnectAlice: () => Promise<SkillLibraryWireClient>;
@@ -104,25 +128,11 @@ async function runProfileWireProof<P extends WireProvider>(
         controlUiEnabled: false,
         enabledPluginIds: ["openai"],
       });
-      await instance.state.writeConfig({
-        ...config,
-        // Preserve the proxy identity and scope caps, not just the auth-mode field.
-        gateway: authConfig.gateway,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            models: {
-              ...config.agents?.defaults?.models,
-              [MODEL_REF]: {
-                ...config.agents?.defaults?.models?.[MODEL_REF],
-                agentRuntime: { id: "openclaw" },
-              },
-            },
-          },
-        },
-        tools: { ...config.tools, codeMode: false, exec: { mode: "full" } },
-      });
+      // buildQaGatewayConfig creates the selected model entry; retain its transport params.
+      config.agents!.defaults!.models![MODEL_REF]!.agentRuntime = { id: "openclaw" };
+      config.gateway = authConfig.gateway;
+      config.tools = { ...config.tools, codeMode: false, exec: { mode: "full" } };
+      await instance.state.writeConfig(config);
       await instance.startGateway();
       const connect = async (options?: Parameters<typeof SkillLibraryWireClient.connect>[1]) => {
         const connected = await SkillLibraryWireClient.connect(instance, options);
@@ -158,7 +168,6 @@ async function runProfileWireProof<P extends WireProvider>(
         provider,
         admin,
         alice,
-        bob,
         aliceId,
         bobId,
         reconnectAlice: () => connectWriter(SKILL_LIBRARY_ALICE),
@@ -270,13 +279,7 @@ describe("profile binding through an authenticated child Gateway", () => {
                 expectedProfileId,
               }),
             ).resolves.toMatchObject({ runId: marker, status: "started" });
-            await expect(
-              alice.request(
-                "agent.wait",
-                { runId: marker, timeoutMs: PROOF_TIMEOUT_MS },
-                PROOF_TIMEOUT_MS + 5_000,
-              ),
-            ).resolves.toMatchObject({ status: "ok" });
+            await expect(waitForAgent(alice, marker)).resolves.toMatchObject({ status: "ok" });
             await vi.waitFor(
               async () => {
                 const replies = (await history(alice, key)).filter(
@@ -288,19 +291,15 @@ describe("profile binding through an authenticated child Gateway", () => {
             );
             expect(await fs.readFile(allowed.sentinel, "utf8")).toBe(marker);
             const requests = (await journal()).filter((request) => request.prompt.includes(marker));
-            expect(
-              requests.some(
-                (request) =>
-                  request.plannedToolName === "exec" &&
-                  request.plannedToolArgs?.command === allowed.command,
-              ),
-            ).toBe(true);
-            expect(
-              requests.some(
-                (request) =>
-                  request.requestKind === "tool-continuation" && request.outcome === "success",
-              ),
-            ).toBe(true);
+            expect(requests).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  plannedToolName: "exec",
+                  plannedToolArgs: expect.objectContaining({ command: allowed.command }),
+                }),
+                expect.objectContaining({ requestKind: "tool-continuation", outcome: "success" }),
+              ]),
+            );
             await expectOpenClawRuntime(alice, key);
           };
 
@@ -344,14 +343,9 @@ describe("profile binding through an authenticated child Gateway", () => {
             timeout: REQUEST_TIMEOUT_MS,
             interval: 20,
           });
-          await vi.waitFor(
-            async () => {
-              const messages = await history(alice, key);
-              expect(messages.map((entry) => entry.role)).toEqual(["user"]);
-              expect(wireMessageText(messages[0])).toContain(message);
-            },
-            { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
-          );
+          await expectHistory(alice, key, [
+            { role: "user", text: expect.stringContaining(message) },
+          ]);
           await expectOpenClawRuntime(alice, key);
           const committed = await history(alice, key);
           await alice.close();
@@ -372,22 +366,14 @@ describe("profile binding through an authenticated child Gateway", () => {
           expect(provider.requests).toHaveLength(1);
           expect(await history(reconnected, key)).toEqual(committed);
           provider.release();
-          await expect(
-            reconnected.request(
-              "agent.wait",
-              { runId, timeoutMs: PROOF_TIMEOUT_MS },
-              PROOF_TIMEOUT_MS + 5_000,
-            ),
-          ).resolves.toMatchObject({ status: "ok", runId });
-          await vi.waitFor(
-            async () => {
-              const messages = await history(reconnected, key);
-              expect(messages.map((entry) => entry.role)).toEqual(["user", "assistant"]);
-              expect(wireMessageText(messages[0])).toContain(message);
-              expect(wireMessageText(messages[1])).toBe(CUSTODY_REPLY);
-            },
-            { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
-          );
+          await expect(waitForAgent(reconnected, runId)).resolves.toMatchObject({
+            status: "ok",
+            runId,
+          });
+          await expectHistory(reconnected, key, [
+            { role: "user", text: expect.stringContaining(message) },
+            { role: "assistant", text: CUSTODY_REPLY },
+          ]);
           const terminalHistory = await history(reconnected, key);
           await expect(
             reconnected.request("agent", params, REQUEST_TIMEOUT_MS, binding),

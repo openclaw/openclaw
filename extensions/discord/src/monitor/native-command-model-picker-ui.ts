@@ -1,3 +1,4 @@
+import { ComponentType, type APIContainerComponent } from "discord-api-types/v10";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
   resolveEffectiveAgentRuntime,
@@ -18,12 +19,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  Container,
-  TextDisplay,
-  type BaseComponentInteraction,
-  type CommandInteraction,
-} from "../internal/discord.js";
+import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import { splitDiscordModelRef } from "./model-picker-preference-primitives.js";
 import {
   readDiscordModelPickerRecentModels,
@@ -99,9 +95,16 @@ export function resolveDiscordModelPickerPreferenceScope(params: {
   };
 }
 
-export function buildDiscordModelPickerNoticePayload(message: string): { components: Container[] } {
+export function buildDiscordModelPickerNoticePayload(message: string): {
+  components: APIContainerComponent[];
+} {
   return {
-    components: [new Container([new TextDisplay(message)])],
+    components: [
+      {
+        type: ComponentType.Container,
+        components: [{ type: ComponentType.TextDisplay, content: message }],
+      },
+    ],
   };
 }
 
@@ -145,10 +148,13 @@ export async function resolveDiscordNativeChoiceContext(params: {
       sessionEntry,
       loadSessionEntry,
       sessionKey: route.sessionKey,
-      defaultProvider: fallback.provider,
+      defaultProvider: fallback?.provider,
     });
-    const provider = override?.provider || fallback.provider;
-    const model = override?.model || fallback.model;
+    const provider = override?.provider || fallback?.provider;
+    const model = override?.model || fallback?.model;
+    if (!provider || !model) {
+      return { agentId: route.agentId };
+    }
     return {
       provider,
       model,
@@ -172,20 +178,23 @@ export async function resolveDiscordModelPickerCurrentModel(params: {
   route: ResolvedAgentRoute;
   data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>;
   sessionEntry: SessionEntry | undefined;
-}): Promise<string> {
-  const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
+}): Promise<string | undefined> {
+  const resolvedDefault = params.data.resolvedDefault;
+  const fallback = resolvedDefault
+    ? `${resolvedDefault.provider}/${resolvedDefault.model}`
+    : undefined;
   try {
     const loadSessionEntry = createDiscordModelPickerSessionReader(params, "latest");
     const override = await resolveStoredModelOverrideAsync({
       sessionEntry: params.sessionEntry,
       loadSessionEntry,
       sessionKey: params.route.sessionKey,
-      defaultProvider: params.data.resolvedDefault.provider,
+      defaultProvider: resolvedDefault?.provider,
     });
     if (!override?.model) {
       return fallback;
     }
-    const provider = (override.provider || params.data.resolvedDefault.provider).trim();
+    const provider = (override.provider || resolvedDefault?.provider || "").trim();
     if (!provider) {
       return fallback;
     }
@@ -196,8 +205,6 @@ export async function resolveDiscordModelPickerCurrentModel(params: {
 }
 
 export function resolveDiscordModelPickerCurrentRuntime(params: {
-  cfg: OpenClawConfig;
-  route: ResolvedAgentRoute;
   sessionEntry: SessionEntry | undefined;
 }): string {
   return normalizeOptionalString(params.sessionEntry?.agentRuntimeOverride) ?? "auto";
@@ -210,7 +217,6 @@ export async function replyWithDiscordModelPickerProviders(params: {
   userId: string;
   accountId: string;
   threadBindings: ThreadBindingManager;
-  preferFollowUp: boolean;
   safeInteractionCall: SafeDiscordInteractionCall;
 }) {
   const route = await resolveDiscordModelPickerRoute(params);
@@ -225,13 +231,12 @@ export async function replyWithDiscordModelPickerProviders(params: {
   const quickModels = await readDiscordModelPickerRecentModels({
     scope: resolveDiscordModelPickerPreferenceScope(params),
     allowedModelRefs: buildDiscordModelPickerAllowedModelRefs(data),
-    limit: 5,
   });
-  const parsedCurrentRef = splitDiscordModelRef(currentModel);
+  const parsedCurrentRef = currentModel ? splitDiscordModelRef(currentModel) : null;
   const initialProvider =
     parsedCurrentRef && data.byProvider.has(parsedCurrentRef.provider)
       ? parsedCurrentRef.provider
-      : (data.providers[0] ?? data.resolvedDefault.provider);
+      : (data.providers[0] ?? data.resolvedDefault?.provider ?? "");
   const initialResolved =
     parsedCurrentRef && parsedCurrentRef.provider === initialProvider
       ? resolveDiscordModelPickerPageForModel({
@@ -261,7 +266,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
   };
 
   const delivered = await params.safeInteractionCall("model picker reply", async () => {
-    await params.interaction[params.preferFollowUp ? "followUp" : "reply"](payload);
+    await params.interaction.followUp(payload);
   });
   if (delivered !== null) {
     await recordDeliveredCommandExchange({

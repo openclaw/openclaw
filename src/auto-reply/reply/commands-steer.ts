@@ -1,5 +1,4 @@
 // Implements explicit steering through the durable prepared-reply queue path.
-import { logVerbose } from "../../globals.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -23,9 +22,6 @@ export const handleSteerCommand: CommandHandler = defineAuthorizedTextCommand(
       sessionKey: params.sessionKey,
       commandBody: params.command.commandBodyNormalized,
     });
-    if (!steerTargetSessionKey) {
-      logVerbose("steer: no active run; continuing with /steer payload as a normal prompt");
-    }
     // Session routing resolves the active :direct:/:dm: alias before session
     // preparation. From here the ordinary prepared reply path owns media,
     // transcript persistence, stable queue identity, cancellation, lifecycle

@@ -3,24 +3,7 @@ import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admissio
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import type { SessionStoreWorkerReadScope } from "./session-entry-read-runtime.types.js";
-import { maintenanceLane } from "./session-transcript-worker-resources.js";
-
-/** Discover saved-input candidates without opening every session's history. */
-export async function readPendingInputRecoveryEntriesInWorker(input: SessionStoreWorkerReadScope) {
-  return withSessionStoreReaderInWorker(
-    input,
-    async ({ reader, database }) => {
-      const { entries } = await reader.readEntries({
-        agentId: database.agentId,
-        storePath: database.path,
-        env: database.env,
-        pendingInputRecovery: true,
-      });
-      return entries;
-    },
-    { lane: maintenanceLane, dataOnly: true },
-  );
-}
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 /** Keep the physical reader owner through a registry maintenance consumer and its commit guard. */
 export function withSessionRegistryEntriesInWorker(
@@ -50,7 +33,7 @@ export function withSessionRegistryEntriesInWorker(
         afterSessionKey = nextCronRunSessionKey ?? undefined;
       } while (afterSessionKey !== undefined);
     },
-    { lane: maintenanceLane },
+    { lane: sessionStoreLane },
   );
 }
 
@@ -74,6 +57,6 @@ export async function readExpiredCronRunEntriesInWorker(
       });
       return { entries, nextCronRunUpdatedAt };
     },
-    { lane: maintenanceLane, dataOnly: true },
+    { lane: sessionStoreLane, dataOnly: true },
   );
 }

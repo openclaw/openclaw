@@ -13,6 +13,7 @@ import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-pr
 import type { GatewayAuthPolicy } from "../../auth-policy.types.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import type { GitHubIdentityPreparationTiming } from "../../github-user-identity.types.js";
 import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.types.js";
@@ -67,12 +68,16 @@ export type GatewayWsMessageHandlerParams = {
   pluginNodeCapabilities?: PluginNodeCapabilitySurface[];
   connectNonce: string;
   getResolvedAuth: () => ResolvedGatewayAuth;
+  /** Fixed at startup and advertised to admins, because flags can differ from config. */
+  gatewayExposure?: { bindHost: string; tailscaleMode: "off" | "serve" | "funnel" };
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
+  isConnectPending?: () => boolean;
+  startupMethodsReady?: Promise<void>;
   isStartupPending?: () => boolean;
   isPendingWorkerNodeSetup?: (setupId: string, deviceId: string) => boolean;
   admitsNodeSetupCompletion?: (setup: CloudWorkerSetupMutationAdmission) => boolean;
@@ -100,17 +105,20 @@ export type GatewayWsMessageHandlerParams = {
 };
 
 export type GatewayConnectAttachTiming =
+  | GitHubIdentityPreparationTiming
   | "deviceAuthorizationMs"
   | "deviceLookupMs"
-  | "deviceMetadataMs"
   | "deviceTokensMs"
   | "nodePreparationMs"
   | "identityMs"
   | "profileEnsureMs"
   | "profileAuthorityMs"
+  | "profileProjectionMs"
   | "scopeGrantMs"
   | "operatorDeviceMs"
-  | "sessionRegistrationMs";
+  | "sessionRegistrationMs"
+  | "snapshotMs"
+  | "helloDescriptorsMs";
 
 export type GatewayConnectPhaseContext = {
   handler: GatewayWsMessageHandlerParams;
@@ -142,8 +150,14 @@ export type GatewayConnectPhaseContext = {
   onPairingWait: () => void;
   /** Nested wall times for the connect response log; direct bootstrap callers may omit it. */
   recordAttachTiming?: (phase: GatewayConnectAttachTiming, startedAt: number) => void;
+  setConnectPhase?: (phase: "profile-ensure" | "profile-authority" | "registration") => void;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   runDetachedConnectWork: (run: () => Promise<void>, onError: (error: unknown) => void) => void;
+  pendingDeviceMetadata?: {
+    deviceId: string;
+    identity: import("../../../infra/device-pairing-access.js").DevicePairingAccessIdentity;
+    patch: Partial<import("../../../infra/device-pairing-core.types.js").PairedDeviceMetadataPatch>;
+  };
   pendingNodePairingCleanup: {
     value?: import("../../../infra/device-pairing-node.js").NodePairingCleanupClaim;
   };
@@ -163,6 +177,8 @@ export type AuthenticatedGatewayConnect = {
   role: GatewayRole;
   scopes: string[];
   hasRequestedScopes: boolean;
+  /** Original reserved claim before ordinary unbound-scope clearing. */
+  publicationTransportScopes?: readonly string[];
   isControlUi: boolean;
   isBrowserOperatorUi: boolean;
   isWebchat: boolean;
@@ -189,6 +205,12 @@ export type AuthenticatedGatewayConnect = {
 };
 
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
+  publicationTransport?: import("../../publication-reader.js").PublicationTransportAdmission;
+  isDeviceTokenSubjectCurrent?: () => boolean;
+  prepareDeviceTokens?: (
+    subject: import("../../operator-role-enforcement.js").OperatorRoleSubject,
+    isSubjectCurrent: () => boolean,
+  ) => Promise<Pick<DeviceAuthorizedGatewayConnect, "deviceToken" | "bootstrapDeviceTokens">>;
   deviceToken: DeviceAuthToken | null;
   bootstrapDeviceTokens: Array<{
     deviceToken: string;

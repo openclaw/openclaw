@@ -23,10 +23,14 @@ import {
 } from "./context-engine-projection.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
+import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
-import { buildDeveloperInstructions } from "./thread-prompt.js";
+import {
+  buildDeveloperInstructions,
+  resolveCodexOpenClawBaseInstructions,
+} from "./thread-prompt.js";
 
 export async function prepareCodexAttemptContext(
   runtime: CodexAttemptRuntime,
@@ -67,7 +71,6 @@ export async function prepareCodexAttemptContext(
     const messages = await readMirroredSessionHistoryMessages({
       ...activeTranscriptTarget,
       signal: connection.runAbortController.signal,
-      contextTokenBudget: effectiveContextTokenBudget,
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
     connection.runAbortController.signal.throwIfAborted();
@@ -111,6 +114,7 @@ export async function prepareCodexAttemptContext(
       : {}),
     trigger: params.trigger,
     inputProvenance: params.inputProvenance,
+    requesterDeviceId: params.approvalReviewerDeviceId,
     ...buildAgentHookContextChannelFields({
       sessionKey: contextSessionKey,
       messageChannel: params.messageChannel,
@@ -142,6 +146,9 @@ export async function prepareCodexAttemptContext(
     await bootstrapHarnessContextEngine({
       hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
+      ...(runtimeParams.authoredContextTokenCap && effectiveContextTokenBudget
+        ? { tokenBudget: effectiveContextTokenBudget }
+        : {}),
       sessionId: runtimeParams.sessionId,
       sessionKey: contextSessionKey,
       sessionFile: runtimeParams.sessionFile,
@@ -182,6 +189,7 @@ export async function prepareCodexAttemptContext(
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
     dynamicTools: toolBridge.availableSpecs,
+    remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
   });
   // This section uses the existing native thread carrier only when there is no
   // managed parent-local inference route; it is separate from immutable policy.
@@ -190,15 +198,28 @@ export async function prepareCodexAttemptContext(
       skillsInstructions,
       workspaceBootstrapContext.sharedPersonaInstructions,
       workspaceBootstrapContext.memoryInstructions,
+      workspaceBootstrapContext.sessionProjectGuidance,
     ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
-      dynamicTools: toolBridge.availableSpecs,
+      // The lifecycle restores this section to creation policy if no relay is selected.
+      omitConversationTurnContext: true,
+      dynamicTools: toolBridge.specs,
+      nativeCodeModeEnabled: runtime.nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled:
         runtime.nativeToolSurfaceEnabled && connection.appServer.codeModeOnly,
     }),
     agentWorkspaceDeveloperInstructions,
   );
+  // Pre-startup estimate of the base the thread lifecycle places, for history budgets and
+  // early reports. Reports adopt the lifecycle's own render once the thread is ready.
+  const startupBinding = connection.mutable.startupBinding;
+  const openClawBaseInstructions = resolveCodexOpenClawBaseInstructions(runtimeParams, {
+    dynamicTools: toolBridge.specs,
+    nativeCodeModeEnabled: runtime.nativeToolSurfaceEnabled,
+    nativeModelProvider:
+      startupBinding?.connectionScope === "supervision" ? startupBinding.modelProvider : undefined,
+  });
   const watchedSessionsContext = await prepareCodexWatchedSessionsContext({
     attempt: runtimeParams,
     dynamicTools: toolBridge.availableSpecs,
@@ -217,11 +238,24 @@ export async function prepareCodexAttemptContext(
         : undefined,
       watchedSessionsContext,
     });
-  const promptState = {
+  const promptState: {
+    promptText: string;
+    promptContextRange: CodexProjectedContextRange | undefined;
+    developerInstructions: string;
+    contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
+    historyBootstrapItems:
+      | JsonValue[]
+      | ((assertCurrent: () => void) => Promise<JsonValue[]>)
+      | undefined;
+    historyDeltaItems: JsonValue[] | undefined;
+    noEngineContinuityProjectionApplied: boolean;
+  } = {
     promptText: params.prompt,
-    promptContextRange: undefined as CodexProjectedContextRange | undefined,
+    promptContextRange: undefined,
     developerInstructions: baseDeveloperInstructions,
-    contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,
+    contextEngineProjection: undefined,
+    historyBootstrapItems: undefined,
+    historyDeltaItems: undefined,
     // Set by the no-engine continuity appliers; gates calibration recording so a
     // dense direct or active-engine prompt can never persist a density sample
     // that later shrinks continuity history it did not measure.
@@ -246,6 +280,7 @@ export async function prepareCodexAttemptContext(
     workspaceBootstrapContext,
     agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
+    openClawBaseInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
     refreshableInstructions,

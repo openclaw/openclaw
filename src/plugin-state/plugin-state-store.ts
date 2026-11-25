@@ -4,11 +4,17 @@ import type {
   SessionEntryCurrentCheck,
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { validatePluginStateComparison } from "./plugin-state-observation.js";
 import { createPluginStateOperation } from "./plugin-state-operation.js";
-import { assertPluginStatePublicationSettled } from "./plugin-state-publication.js";
+import {
+  assertPluginStatePublicationSettled,
+  isPluginStatePublicationUnavailable,
+  reconcilePluginStatePublication,
+} from "./plugin-state-publication.js";
 import {
   preparePluginStateJournalValue,
   type PluginStateSequencedJournalParams,
@@ -22,10 +28,7 @@ import {
   bindPluginStateNativeBindingStore,
   type PluginStateOperationModuleSource,
 } from "./plugin-state-store.native-binding.js";
-import {
-  validatePluginStateKeyRange,
-  type PluginStateKeyRangeParams,
-} from "./plugin-state-store.reads.js";
+import { validatePluginStateKeyRange } from "./plugin-state-store.reads.js";
 import {
   closePluginStateDatabase,
   MAX_PLUGIN_STATE_VALUE_BYTES,
@@ -36,6 +39,7 @@ import type {
   PluginStateActionAuthority,
   PluginStateCompareResult,
   PluginStateEntry,
+  PluginStateKeyRangeParams,
   PluginStateKeyedStore,
   PluginStateObservation,
   PluginStateStoreError,
@@ -58,6 +62,7 @@ import {
 import {
   comparePluginStateDeleteInWorker,
   comparePluginStateUpdateInWorker,
+  confirmPluginStateCommittedInWorker,
   observePluginStateInWorker,
   clearPluginStateInWorker,
   consumePluginStateInWorker,
@@ -116,7 +121,15 @@ function createReadAvailabilityAssertion(
     assertCurrent?.();
     context ??= captureOpenClawStateWorkerContext({ env: options.env });
     (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
-    assertPluginStatePublicationSettled(context.admission.identity.key);
+    const identity = context.admission.identity.key;
+    if (isPluginStatePublicationUnavailable(identity)) {
+      // This check still fails closed; a later check observes the re-validated committed state.
+      const captured = context;
+      void reconcilePluginStatePublication(identity, () =>
+        confirmPluginStateCommittedInWorker(captured, options),
+      );
+    }
+    assertPluginStatePublicationSettled(identity, options);
   };
 }
 
@@ -162,9 +175,9 @@ function createKeyedStoreForPluginId<T>(
         moduleSource,
       );
     },
-    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. */
+    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     update: async (...args) => getLegacyStore().update(...args),
-    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. */
+    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     deleteIf: async (...args) => getLegacyStore().deleteIf(...args),
   };
   return bindPluginStateNativeBindingStore(
@@ -343,8 +356,12 @@ function createAsyncKeyedStore<T>(
       });
     },
     entries: async () => {
+      const entries = await listPluginStateInWorker({
+        ...scope,
+        signal: getAsyncWorkSignal(),
+      });
       // SAFETY: Entries come from this namespace and retain the caller's JSON value type.
-      return (await listPluginStateInWorker(scope)) as PluginStateEntry<T>[];
+      return entries as PluginStateEntry<T>[];
     },
     entriesInKeyRange: async (range) => {
       const params = {
@@ -478,8 +495,15 @@ export function createPluginStateRuntimeStores(
         },
         captureModuleSource?.(),
       ),
-    openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-      createSyncKeyedStoreForPluginId<T>(pluginId, options, true, pluginId),
+    openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+      warnPluginSdkDeprecation({
+        pluginId,
+        family: "plugin-state-keyed-store",
+        method: "api.runtime.state.openSyncKeyedStore",
+        replacement: "api.runtime.state.openKeyedStoreV2 and await its operations",
+      });
+      return createSyncKeyedStoreForPluginId<T>(pluginId, options, true, pluginId);
+    },
   };
 }
 
@@ -492,6 +516,12 @@ export function createPluginStateSyncKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
 ): Required<PluginStateSyncKeyedStore<T>> {
+  warnPluginSdkDeprecation({
+    pluginId,
+    family: "plugin-state-keyed-store",
+    method: "createPluginStateSyncKeyedStore",
+    replacement: "createPluginStateKeyedStoreV2 and await its operations",
+  });
   if (pluginId.startsWith("core:")) {
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
@@ -573,7 +603,7 @@ export async function registerPluginStateSequencedJournalEntry(params: {
   });
 }
 
-/** Internal bounded read through the same shared-state worker as journal writes. */
+/** Internal bounded read after preceding journal writes have settled. */
 export async function pluginStateEntriesInKeyRange(
   params: PluginStateKeyRangeParams & { env?: NodeJS.ProcessEnv },
 ): Promise<PluginStateEntry<unknown>[]> {
@@ -607,7 +637,7 @@ export function createCorePluginStateKeyedStoreV2<T>(
 
 /** Bind a core catalog read and its later replacement to the same physical store. */
 export function prepareCorePluginStateReplacement<T>(
-  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+  options: OpenAsyncKeyedStoreOptions & { ownerId: `core:${string}` },
 ) {
   const prepared = prepareKeyedStoreOptions(options.ownerId, options);
   const context = captureOpenClawStateWorkerContext({ env: prepared.env });
@@ -617,11 +647,11 @@ export function prepareCorePluginStateReplacement<T>(
       // SAFETY: This namespace stores the core caller's serialized JSON value type.
       return (await listPluginStateInWorker(scope)) as PluginStateEntry<T>[];
     },
-    async replace(entries: ReadonlyMap<string, T>): Promise<void> {
+    async replace(entries: ReadonlyMap<string, T>, assertCurrent?: () => void): Promise<void> {
       const values = Array.from(entries, ([key, value]) =>
         prepareRegisterParams(key, value, prepared.defaultTtlMs, undefined, prepared.namespace),
       );
-      await replacePluginStateInWorker({ ...scope, entries: values });
+      await replacePluginStateInWorker({ ...scope, entries: values, assertCurrent });
     },
   };
 }

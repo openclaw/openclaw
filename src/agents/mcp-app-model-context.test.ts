@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import type { ContentBlock } from "@modelcontextprotocol/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { INTERNAL_RUNTIME_CONTEXT_END } from "./internal-runtime-context.js";
 import {
   clearMcpAppModelContextForView,
   getMcpAppModelContext,
   leaseMcpAppModelContextForTurn,
+  projectMcpAppModelContextInput,
   removeMcpAppModelContextItem,
   revokeMcpAppModelContext,
   subscribeMcpAppModelContext,
@@ -15,8 +17,13 @@ const runtime = () => ({ sessionId: "session-1" }) as SessionMcpRuntime;
 const text = (value: string) => ({ content: [{ type: "text", text: value }] });
 
 describe("MCP App model context", () => {
+  let active: SessionMcpRuntime;
+  let view: object;
+  beforeEach(() => {
+    active = runtime();
+    view = {};
+  });
   it("replaces only one App instance and isolates runtimes", () => {
-    const active = runtime();
     const sibling = runtime();
     const first = {};
     const second = {};
@@ -31,51 +38,34 @@ describe("MCP App model context", () => {
   });
 
   it("preserves rich host metadata but excludes it from actual model input", () => {
-    const active = runtime();
-    const view = {};
-    updateMcpAppModelContext(active, view, {
-      content: [
-        {
-          type: "text",
-          text: "selection",
-          _meta: {
-            "openai/title": "Part",
-            "openai/thumbnail": { src: "https://example.com/part.png" },
-          },
-          annotations: { audience: ["assistant"] },
-        },
-        {
-          type: "image",
-          data: "AA==",
-          mimeType: "image/png",
-          _meta: { "openai/title": "Drawing" },
-        },
-        { type: "resource_link", uri: "parts://bolt", name: "bolt", _meta: { private: true } },
-        {
-          type: "resource",
-          resource: { uri: "parts://note", text: "note", _meta: { private: true } },
-        },
-      ],
-      structuredContent: { selection: 1 },
-    });
-    expect(getMcpAppModelContext(active, view)?.content?.[0]?._meta).toHaveProperty(
-      "openai/title",
-      "Part",
-    );
-    const lease = leaseMcpAppModelContextForTurn({ runtime: active });
-    expect(lease?.modelContext[0]?.content).toEqual([
+    const content: ContentBlock[] = [
       { type: "text", text: "selection", annotations: { audience: ["assistant"] } },
       { type: "image", data: "AA==", mimeType: "image/png" },
       { type: "resource_link", uri: "parts://bolt", name: "bolt" },
       { type: "resource", resource: { uri: "parts://note", text: "note" } },
-    ]);
-    expect(lease?.modelContext[0]?.structuredContent).toEqual({ selection: 1 });
-    expect(lease?.context.text).not.toContain("_meta");
+    ];
+    updateMcpAppModelContext(active, view, {
+      content: content.map((block) => ({
+        ...structuredClone(block),
+        _meta: { "openai/title": "Part" },
+        ...(block.type === "resource"
+          ? { resource: { ...block.resource, _meta: { private: true } } }
+          : {}),
+      })),
+      structuredContent: { selection: 1 },
+    });
+    expect(getMcpAppModelContext(active, view)?.content?.[0]?._meta?.["openai/title"]).toBe("Part");
+    const lease = leaseMcpAppModelContextForTurn({ runtime: active });
+    expect(lease?.modelContext[0]).toEqual({ content, structuredContent: { selection: 1 } });
+    const input = projectMcpAppModelContextInput(lease!.modelContext);
+    expect(input.context.text).not.toContain("_meta");
+    expect(getMcpAppModelContext(active, view)?.content?.[3]).toMatchObject({
+      _meta: { "openai/title": "Part" },
+      resource: { _meta: { private: true } },
+    });
   });
 
   it("keeps idempotent update IDs and notifies user removals without accepting stale edits", () => {
-    const active = runtime();
-    const view = {};
     const changed = vi.fn();
     const stop = subscribeMcpAppModelContext(view, changed);
     const params = { content: [...text("one").content, ...text("two").content] };
@@ -95,8 +85,6 @@ describe("MCP App model context", () => {
   });
 
   it("rejects audio, malformed blocks, structured arrays, and oversized context", () => {
-    const active = runtime();
-    const view = {};
     for (const params of [
       { content: [{ type: "audio", data: "AA==", mimeType: "audio/wav" }] },
       { content: [{ type: "image", data: 1 }] },
@@ -108,8 +96,6 @@ describe("MCP App model context", () => {
   });
 
   it("keeps replacement subscriptions active after a stale unsubscribe", () => {
-    const active = runtime();
-    const view = {};
     const oldListener = vi.fn();
     const unsubscribeOld = subscribeMcpAppModelContext(view, oldListener);
     unsubscribeOld();
@@ -123,8 +109,6 @@ describe("MCP App model context", () => {
   });
 
   it("reserves each snapshot once, rolls back failures and preserves newer replacements", () => {
-    const active = runtime();
-    const view = {};
     updateMcpAppModelContext(active, view, text("leased"));
     const first = leaseMcpAppModelContextForTurn({ runtime: active });
     expect(leaseMcpAppModelContextForTurn({ runtime: active })).toBeUndefined();
@@ -140,8 +124,6 @@ describe("MCP App model context", () => {
   });
 
   it("clears only the sending snapshots after successful input custody", () => {
-    const active = runtime();
-    const view = {};
     const changed = vi.fn();
     subscribeMcpAppModelContext(view, changed);
     updateMcpAppModelContext(active, view, text("pending"));
@@ -153,8 +135,6 @@ describe("MCP App model context", () => {
   });
 
   it("revokes every instance and refuses updates after retirement", () => {
-    const active = runtime();
-    const view = {};
     const changed = vi.fn();
     subscribeMcpAppModelContext(view, changed);
     updateMcpAppModelContext(active, view, text("pending"));
@@ -165,12 +145,12 @@ describe("MCP App model context", () => {
   });
 
   it("escapes legacy delimiters without modifying the rich conversation data", () => {
-    const active = runtime();
     const params = text("Literal " + INTERNAL_RUNTIME_CONTEXT_END);
     updateMcpAppModelContext(active, {}, params);
     const lease = leaseMcpAppModelContextForTurn({ runtime: active });
     expect(lease?.modelContext).toEqual([params]);
-    expect(lease?.context.kind).toBe("conversation-data");
-    expect(lease?.legacyText).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+    const input = projectMcpAppModelContextInput(lease!.modelContext);
+    expect(input.context.kind).toBe("conversation-data");
+    expect(input.legacyText).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
   });
 });

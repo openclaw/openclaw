@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_RESTART_UNAVAILABLE_REASON } from "../../packages/gateway-protocol/src/restart-unavailable.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
@@ -33,9 +34,11 @@ function isPendingNodeCompletion({ req, client, context }: RequestEntryOptions):
 /** One Gateway's preparation leases; handler execution belongs to its existing runtime owner. */
 export class GatewayRequestEntryLifetime {
   private readonly stopping = new AbortController();
+  private readonly retained = new AbortController();
   private readonly active = new Set<Promise<void>>();
   private sealed = false;
   readonly signal = this.stopping.signal;
+  readonly retainedSignal = this.retained.signal;
 
   enter(options: RequestEntryOptions): GatewayRequestEntry {
     let released = false;
@@ -49,6 +52,8 @@ export class GatewayRequestEntryLifetime {
           code: ErrorCodes.UNAVAILABLE,
           message: "Gateway request entry is closed",
           retryable: true,
+          retryAfterMs: 1_000,
+          details: { reason: GATEWAY_RESTART_UNAVAILABLE_REASON },
         });
       }
     };
@@ -72,12 +77,18 @@ export class GatewayRequestEntryLifetime {
     this.stopping.abort();
   }
 
+  /** Accepted ingress authority outlives admission until restart custody is recorded. */
+  retire(reason?: Error): void {
+    this.retained.abort(reason);
+  }
+
   async waitForPendingEntries(): Promise<void> {
     await Promise.all(this.active);
   }
 
   async sealAndJoin(): Promise<void> {
     this.sealed = true;
+    this.retire();
     await this.waitForPendingEntries();
   }
 }
