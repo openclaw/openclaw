@@ -108,6 +108,29 @@ patch(
   "38, 39, 40].includes(sourceVersion)",
   `38, 39, 40, ${previous.schema}].includes(sourceVersion)`,
 );
+// This boot point is after the private migration has been swapped into live state.
+patch(
+  "src/gateway/server-start.ts",
+  "    const transport = await createGatewayHttpTransport({",
+  `
+    {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
+      const database = resolveOpenClawStateSqlitePath();
+      const marker = path.join(path.dirname(database), "crash-after-migration.json");
+      if (fs.existsSync(marker)) {
+        const { DatabaseSync } = await import("node:sqlite");
+        const db = new DatabaseSync(database, { readOnly: true });
+        const schema = db.prepare("PRAGMA user_version").get();
+        const rows = db.prepare("SELECT * FROM fixture_update_migration").all();
+        db.close();
+        fs.writeFileSync(marker, JSON.stringify({ schema, rows, pid: process.pid }));
+        process.exit(1);
+      }
+    }
+    const transport = await createGatewayHttpTransport({`,
+);
 const env = {
   ...process.env,
   GIT_COMMIT: previous.commit,

@@ -272,9 +272,9 @@ Main-tier and selected manual/release CI run the [published-driver update cell](
 
 Relevant update, state, update CLI, daemon/launcher, and survivor-harness PRs
 also select `release-update-survivor` in the existing Docker seed job.
-It adds one source-built successor and one Linux npm update that commits
-a schema migration. Crash-after-migration enforcement belongs to the
-store-custody change that makes its rollback assertions pass.
+It adds one source-built successor and two serial Linux npm updates: a
+committed schema migration and a crash after migration with rollback.
+Schema-changing selections also retain the isolated downgrade leg.
 The lane has a 55-minute total budget; each container keeps its 20-minute
 limit. No new job, matrix row, runner class, or concurrency slot is added.
 An update-only PR can newly select the existing Docker seed job (at most one

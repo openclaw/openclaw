@@ -27,12 +27,14 @@ import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import { releaseOpenClawStateDatabaseCustody } from "../state/openclaw-state-db-cache.js";
 import { VERSION } from "../version.js";
 import {
   checkUpdateInstallationSlot,
   resolveInstalledPackageFrontend,
   resolveUpdateInstallationIdentity,
 } from "./installation-identity.js";
+import { TRIAL_BUDGET_MS } from "./launcher.js";
 import { PREPARE_DEADLINE_MS, markForwarding, prepareUpdate } from "./run.js";
 import { readTrial, resolvePrefix } from "./store.js";
 import { resolveTarget } from "./target.js";
@@ -91,17 +93,29 @@ export async function tryAdoptInstalledPackageForGateway(opts: {
   return prepared?.phase === "pending" ? prepared.runId : undefined;
 }
 
-/** Native readiness can also mean rollback; only the update owner knows the trial outcome. */
-export async function waitForReleaseUpdateFailure(runId: string): Promise<string | undefined> {
-  const trial = await readTrial();
-  if (trial?.phase === "pending") {
-    const record = await getUpdateRunAsync(runId);
-    defaultRuntime.error(
-      `Gateway ${record?.before.version ?? "previous release"} is still running. OpenClaw ${trial.version} is prepared. Run: ${formatCliCommand("openclaw gateway restart")}`,
-    );
-    return undefined;
+/** Preparation serializes one trial; its launcher-owned outcome is observed without opening state. */
+export async function waitForReleaseUpdateFailure(): Promise<string | undefined> {
+  let deadline = Date.now() + TRIAL_BUDGET_MS;
+  for (;;) {
+    const trial = await readTrial();
+    if (!trial) {
+      return "The update trial is no longer available. Run `openclaw update status` to see the result.";
+    }
+    if (trial.phase === "committed") {
+      return undefined;
+    }
+    if (trial.phase === "rolled-back") {
+      return `Update failed: ${trial.outcome?.reason ?? "new build failed to start"}`;
+    }
+    if (trial.phase !== "pending" && trial.createdAt > 0) {
+      deadline = Math.min(deadline, trial.createdAt + TRIAL_BUDGET_MS);
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return "The update did not finish in time. Run `openclaw update status` to see it.";
+    }
+    await sleep(Math.min(POLL_MS, remaining));
   }
-  return updateFailure(await followRun(runId, true, RUN_DEADLINE_MS));
 }
 
 async function delegateInstalledPackageUpdate(
@@ -175,6 +189,7 @@ async function delegateInstalledPackageUpdate(
     ...(opts.timeoutMs ? ["--timeout", String(Math.ceil(opts.timeoutMs / 1000))] : []),
   ];
   const preparationJson = Boolean(action && opts.json);
+  await releaseOpenClawStateDatabaseCustody();
   const result = await runCommandWithTimeout(argv, {
     timeoutMs: opts.timeoutMs ?? RUN_DEADLINE_MS,
     stdinFileDescriptor: process.stdin.fd,
@@ -374,6 +389,7 @@ async function requestLocalGatewayRestart(timeoutMs = 30_000): Promise<boolean> 
       method: "gateway.restart.request",
       params: { reason: "update.run" },
       timeoutMs: Math.min(30_000, timeoutMs),
+      prepareDispatchCurrent: releaseOpenClawStateDatabaseCustody,
     });
     if (!response.ok) {
       throw new Error("The Gateway refused to restart into the prepared release.");
@@ -426,6 +442,7 @@ async function requestGatewayUpdate(
           params.acceptCapabilities = opts.acceptCapabilities;
         }
       },
+      prepareDispatchCurrent: releaseOpenClawStateDatabaseCustody,
       assertDispatchCurrent: () => {
         if (consentRetry && !supportsConsent) {
           throw new Error(

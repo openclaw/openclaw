@@ -226,6 +226,18 @@ agent-directory configuration. Do not move an open database or separate its WAL
 from its main file. Restart the old Gateway and verify readiness before retrying
 the update.
 
+The release switch requires exclusive access to the state stores. The old Gateway
+records its shutdown, closes shared-state consumers and identity descriptors, then
+releases its ownership lock. Process cleanup and a final canonical state closure
+finish before a standalone successor spawns. Its successor observer uses only HTTP
+and captured configuration. Update and restart commands release their local readers
+before activation and observe the outcome through RPC or the launcher's trial file.
+
+For package adoption, a committed trial completes `gateway restart` even when
+this CLI cannot make operator-scoped health requests. A connection without
+`operator.read` is reported separately, with the credentials and status command
+needed to inspect detailed health. Startup observations have a deadline.
+
 Before a startup migration replaces a SQLite database, the swap owner drains its
 readers and retires the retained admission descriptors for both the live database
 and its prepared replacement. Closing SQLite alone does not release those identity
@@ -267,11 +279,10 @@ found that earlier receipts did not prove what they claimed.
 The `release-update-survivor` CI lane covers the Linux npm/container cell on
 PRs that touch update, state, update CLI, or launcher owners. It installs the
 PR-head build, builds a distinct successor from the same source with a
-disposable schema migration, then runs `openclaw update`. The healthy case
-checks the serving version, committed trial, schema, and seeded row counts
-and contents. Crash-after-migration enforcement is being added with the
-store-custody fix; it is not claimed by this lane yet. The fixture changes
-scratch source only, without changing the shipped schema or other platform cells.
+disposable schema migration, then runs `openclaw update`. Separate healthy and
+crash-after-migration cases check the serving version, trial outcome, schema,
+and seeded row counts and contents. The fixture changes scratch source only;
+it does not change the shipped schema or replace the other platform cells.
 
 For schema-version or migration changes, CI additionally boots the tested
 merge build on a fixture created by the PR fork-point release, kills it

@@ -590,8 +590,8 @@ if [ "$SCENARIO" = "release-update" ]; then
     "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE" "${OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA:-}"
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
   case "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" in
-    "") release_cases=(healthy) ;;
-    healthy|downgrade) release_cases=("$OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE") ;;
+    "") release_cases=(healthy crash) ;;
+    healthy|crash|downgrade) release_cases=("$OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE") ;;
     *) echo "Unknown release survivor case" >&2; exit 1 ;;
   esac
   downgrade_selected="$(node -p "require(process.argv[1]).selected" "$UPGRADE_SCENARIO_STAGE/downgrade-source.json")"
@@ -608,6 +608,7 @@ if [ "$SCENARIO" = "release-update" ]; then
     docker_e2e_run_with_harness \
       --init \
       --user root \
+      -e OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE="$release_case" \
       -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
       -v "$ARTIFACT_DIR/$release_case:/tmp/openclaw-upgrade-survivor-artifacts" \
       -v "$UPGRADE_SCENARIO_STAGE:/tmp/openclaw-release-fixtures:ro" \
