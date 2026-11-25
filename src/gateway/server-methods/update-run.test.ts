@@ -16,6 +16,12 @@ import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.
 import { resolvePrefix } from "../../update/store.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
+// Channel inference must not change when the checkout becomes a beta release.
+vi.mock("../../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../version.js")>()),
+  VERSION: "2026.11.9",
+}));
+
 const prepareUpdate = vi.hoisted(() => vi.fn(async () => ({ status: "failed" })));
 const install = vi.hoisted((): { root: string; kind: "git" | "package" | "unknown" } => ({
   root: "/tmp/openclaw-checkout",
