@@ -557,6 +557,31 @@ per-control receipts, the sealed seed when available, and terminal evidence on
 failure. It is qualification evidence only; it does not enable timing admission
 or publish a report.
 
+#### Admit prepared workload qualification
+
+The `node-cache-qualification-admission` CLI validates existing disabled, empty
+and seeded receipts against the same committed harness, physical workload,
+runtime and sealed seed. It writes a v2 `manifest.json`, bound provenance in
+`qualification.json` and a terminal manifest to a new physical output directory
+outside both checkouts and the qualification directory.
+
+```bash
+node scripts/vitest-pair-benchmark.mts --mode node-cache-qualification-admission \
+  --definition /work/definition.json --workload /work/prepared \
+  --qualification /work/control-proof --output /work/admission \
+  --harness-sha <exact-harness-commit> --pnpm-bin /tools/pnpm-native \
+  --timeout-ms 600000 --run-attempt 1
+```
+
+Admission has one explicit deadline of at most ten minutes. Success requires
+final revalidation; rejected receipts retain a failure terminal manifest after
+the output directory is admitted. Earlier-harness receipts, including `ff3d6bec`,
+cannot admit the new harness: produce fresh controls at its exact commit.
+This mode does not run controls or measurements, install dependencies, change
+workflows, or grant timing admission. `timingAdmission` remains `false`.
+It binds the recorded prepared-inventory digest; a measurement consumer must
+compare a fresh whole-workload inventory before starting measured calls.
+
 ## Security Review reconciler
 
 Every ten minutes, Security Review reconciles CI completions
