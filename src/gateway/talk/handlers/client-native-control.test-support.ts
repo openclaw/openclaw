@@ -186,6 +186,7 @@ export async function withNativePlugin(
       const config: OpenClawConfig = {
         agents: {
           ownership: "explicit",
+          defaults: { model: "anthropic/claude-opus-4-6" },
           entries: {
             voice: { agentDir: state.agentDir(AGENT_ID), workspace: state.workspaceDir },
             other: {},

@@ -210,7 +210,7 @@ export function createTalkClientAgentRuntime(params: {
                     allowModelOverride: false,
                     messageChannel: runParams.messageProvider,
                     messageProvider: runParams.messageProvider,
-                    senderIsOwner: runParams.senderIsOwner === true,
+                    senderIsOwner: runParams.senderIsOwner,
                     toolsAllow: runParams.toolsAllow,
                     toolBindings: runParams.toolBindings,
                     clientCaps: runParams.clientCaps,
@@ -247,7 +247,7 @@ export function createTalkClientAgentRuntime(params: {
                             "Talk consultation source registration is no longer current",
                           );
                         }
-                        source.adapter.authority?.assertCurrent();
+                        source.adapter.authority?.assertCurrent?.();
                         updateRpcSourceSessionId(source, nextSessionId);
                       }
                       adoptExecRequestSession({

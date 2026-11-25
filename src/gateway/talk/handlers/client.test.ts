@@ -321,7 +321,7 @@ beforeEach(async () => {
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-talk-transcript-")),
   );
   setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-  setRuntimeConfigSnapshot({});
+  setRuntimeConfigSnapshot({ agents: { defaults: { model: "anthropic/claude-opus-4-6" } } });
   await replaceSessionEntry({ agentId: "main", sessionKey }, { sessionId, updatedAt: Date.now() });
 });
 

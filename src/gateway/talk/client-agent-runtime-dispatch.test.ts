@@ -82,6 +82,30 @@ it("runs the consult in the published runtime leased for the session's own model
   expect(modelLease[Symbol.asyncDispose]).toHaveBeenCalledOnce();
 });
 
+it("releases the dispatch lease without starting a consult when no model is configured", async () => {
+  const dispatchLease = lease("dispatch");
+  prepared.load.mockImplementation(async (params: { onRuntimeLease: (l: unknown) => void }) => {
+    params.onRuntimeLease(dispatchLease);
+    return {
+      agentId: "main",
+      agentDir: "/a",
+      workspaceDir: "/w",
+      config: {},
+      pluginGeneration: {},
+    };
+  });
+  const run = vi.fn();
+  await expect(
+    withTalkConsultPublishedRuntime(
+      { agentId: "main", sessionKey: "agent:main:main", sessionEntry: undefined },
+      run,
+    ),
+  ).rejects.toThrow("No model is configured");
+  expect(dispatchLease[Symbol.asyncDispose]).toHaveBeenCalledOnce();
+  expect(prepared.acquire).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
+});
+
 it("keeps the command owner's own loading when no runtime is published", async () => {
   prepared.load.mockResolvedValue(undefined);
   const run = vi.fn(async (context: unknown) => context);

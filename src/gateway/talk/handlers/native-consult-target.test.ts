@@ -304,6 +304,7 @@ beforeEach(async () => {
   config = {
     agents: {
       ownership: "explicit",
+      defaults: { model: "anthropic/claude-opus-4-6" },
       entries: { primary: {}, voice: { workspace: state.workspaceDir } },
     },
     talk: { agentId: "voice" },

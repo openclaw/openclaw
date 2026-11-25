@@ -112,7 +112,10 @@ describe("authenticated Talk permission parity", () => {
   beforeAll(async () => {
     state = await createOpenClawTestState({ label: "voice-permission-parity", applyEnv: true });
     config = {
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      agents: {
+        defaults: { model: "anthropic/claude-opus-4-6" },
+        entries: { main: { workspace: state.workspaceDir } },
+      },
       plugins: { enabled: false },
       tools: { exec: { host: "gateway", mode: "full" } },
     };

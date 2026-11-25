@@ -1,4 +1,5 @@
 import type { PreparedAgentCommandRuntimeContext } from "../../agents/command/prepare.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "../../agents/prepared-model-runtime-admission-errors.js";
 import {
   scopePreparedModelRuntimeLease,
@@ -56,6 +57,9 @@ export async function withTalkConsultPublishedRuntime<T>(
   try {
     const sessionEntry = params.sessionEntry;
     const sessionModel = resolveSessionModelRef(published.config, sessionEntry, params.agentId);
+    if (!sessionModel) {
+      throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+    }
     modelLease = await borrowed.run(() =>
       acquireAgentRunPreparedModelRuntime(
         {
