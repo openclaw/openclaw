@@ -169,14 +169,15 @@ export function createCodexNativeSubagentNotificationRouter(
           }
           return state;
         }
+        const tool = normalizeIdentifier(readString(item, "tool"));
         const isCompletedSpawnAgentTool =
           notification.method === "item/completed" &&
           readString(item, "type") === "collabAgentToolCall" &&
-          normalizeIdentifier(readString(item, "tool")) === "spawnagent" &&
+          tool === "spawnagent" &&
           normalizeIdentifier(readString(item, "status")) === "completed";
-        if (normalizeIdentifier(readString(item, "tool")) === "closeagent") {
-          // closeAgent names an existing child before shutdown; treating its
-          // receiver as discovery resurrects completed tasks and repins parents.
+        if (tool === "closeagent" || tool === "resumeagent") {
+          // Closing or reopening a runtime doesn't submit work. Discovery here
+          // would resurrect completed assignments and pin the parent.
           return state;
         }
         if (parentThreadId !== state.parentThreadId && !isCompletedSpawnAgentTool) {
@@ -189,12 +190,14 @@ export function createCodexNativeSubagentNotificationRouter(
         const childThreadIds = new Set(readNativeSubagentThreadIds(item?.receiverThreadIds));
         let accepted = true;
         for (const childThreadId of childThreadIds) {
-          accepted =
-            Boolean(
-              isCompletedSpawnAgentTool
-                ? registerSpawn(childThreadId)
-                : deps.registerChildThread(state, childThreadId),
-            ) && accepted;
+          const child = isCompletedSpawnAgentTool
+            ? registerSpawn(childThreadId)
+            : deps.registerChildThread(state, childThreadId);
+          const spawnId = isCompletedSpawnAgentTool && readString(item, "id");
+          if (child && spawnId && owner && turnId && owner.turnId === turnId) {
+            (owner.spawnCalls ??= new WeakMap()).set(child, spawnId);
+          }
+          accepted = Boolean(child) && accepted;
         }
         if (!accepted) {
           return undefined;

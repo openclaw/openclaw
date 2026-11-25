@@ -344,6 +344,7 @@ export function createCodexNativeHookRelay(params: {
                 await codexNativeSubagentMonitorRuntime.prepareModelInput({
                   ...request,
                   target: targetThreadId,
+                  returnsSubmissionId: toolName === CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL,
                   readQualification: admission.readQualification,
                   signal: preparation.signal,
                   assertCurrent: preparation.assertCurrent,

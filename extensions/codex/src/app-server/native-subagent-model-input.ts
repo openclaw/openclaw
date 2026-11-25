@@ -1,6 +1,7 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readThreadParentThreadId, readThreadSpawnSource } from "./native-subagent-assignment.js";
 import { buildCodexNativeSubagentAgentPathKey } from "./native-subagent-delivery-receipts.js";
+import { readLastAgentMessage } from "./native-subagent-history-recovery.js";
 import { resolveNativeModelParentOwner } from "./native-subagent-model-lookup.js";
 import {
   createNativeModelSourceOwner,
@@ -45,6 +46,8 @@ export function assertNativeModelInputCompatible(sender: ParentOwner, receiver: 
   }
 }
 
+type CompletedReceiver = { nativeTurnId: string; result: string };
+
 type InputDependencies = {
   client: NativeSubagentMonitorClient;
   parents: ReadonlyMap<string, ParentState>;
@@ -57,6 +60,12 @@ type InputDependencies = {
   retiredChildren: RetiredNativeChildPaths;
   prepareReceiver: (state: ParentState, threadId: string, nativeParentThreadId?: string) => boolean;
   registerChildThread: AdmissionDrainDependencies["registerChildThread"];
+  restoreCompletedReceiver: (
+    state: ParentState,
+    childThreadId: string,
+    predecessor: CompletedReceiver,
+    agentPath?: string,
+  ) => void;
   admit: (
     state: ParentState,
     owner: ParentOwner,
@@ -319,17 +328,14 @@ export async function prepareNativeModelToolInput(
       targetRouting?.assertCurrent();
     };
     assertCurrent();
+    const signal =
+      request.signal && capture.source?.signal
+        ? AbortSignal.any([request.signal, capture.source.signal])
+        : (request.signal ?? capture.source?.signal);
     const { thread } = await dependencies.client.request(
       "thread/read",
       { threadId: targetThreadId, includeTurns: false },
-      {
-        signal:
-          request.signal && capture.source?.signal
-            ? AbortSignal.any([request.signal, capture.source.signal])
-            : (request.signal ?? capture.source?.signal),
-        timeoutMs: 30_000,
-        assertCurrent,
-      },
+      { signal, timeoutMs: 30_000, assertCurrent },
     );
     const nativeParentThreadId = readThreadParentThreadId(thread);
     metadataRead = true;
@@ -418,14 +424,67 @@ export async function prepareNativeModelToolInput(
     if (targetChild && nativeParentThreadId !== targetChild.nativeParentThreadId) {
       throw new Error("Codex native input receiver lineage changed during preparation");
     }
+    let predecessor: CompletedReceiver | undefined;
+    const spawn = readThreadSpawnSource(thread);
+    if (
+      request.returnsSubmissionId &&
+      !targetParent &&
+      !targetChild &&
+      request.threadId === state.parentThreadId &&
+      thread.parentThreadId === request.threadId &&
+      (!spawn || spawn.parent_thread_id === request.threadId) &&
+      !thread.forkedFromId &&
+      (thread.status?.type === "idle" || thread.status?.type === "notLoaded")
+    ) {
+      // After a restart the initial assignment may already be acknowledged.
+      // Its sole terminal turn and final message disambiguate late native receipts.
+      const assertReceiverCurrent = () => {
+        assertCurrent();
+        configurationQualification?.assertCurrent();
+        state.submissionStore?.assertCurrent();
+        state.assignmentStore?.assertCurrent();
+        if (
+          resolveSender().owner !== owner ||
+          resolveInputTarget(request, dependencies) !== thread.id
+        ) {
+          throw new Error("Codex native input changed during receiver recovery");
+        }
+      };
+      assertReceiverCurrent();
+      const page = await dependencies.client.request(
+        "thread/turns/list",
+        { threadId: thread.id, limit: 1, sortDirection: "desc", itemsView: "summary" },
+        { signal, timeoutMs: 3_000, assertCurrent: assertReceiverCurrent },
+      );
+      assertReceiverCurrent();
+      const turn = page.data.length === 1 && page.nextCursor == null ? page.data[0] : undefined;
+      const completedAt = turn?.completedAt ?? 0;
+      if (
+        turn?.id.trim() &&
+        (turn.threadId === undefined || turn.threadId === thread.id) &&
+        turn.status === "completed" &&
+        turn.error == null &&
+        readString(turn, "itemsView") === "summary" &&
+        Number.isSafeInteger(completedAt) &&
+        completedAt > 0 &&
+        completedAt >= (turn.startedAt ?? 0)
+      ) {
+        const result = readLastAgentMessage(turn);
+        if (result) {
+          predecessor = { nativeTurnId: turn.id, result };
+        }
+      }
+    }
     if (!dependencies.prepareReceiver(state, thread.id, nativeParentThreadId)) {
       throw new Error("Codex native input receiver cannot retain this sender's admitted source");
     }
     if (!dependencies.knownChildren.has(thread.id) && !dependencies.parents.has(thread.id)) {
-      dependencies.registerChildThread(state, thread.id, {
-        nativeParentThreadId,
-        agentPath: readString(readThreadSpawnSource(thread), "agent_path"),
-      });
+      const agentPath = readString(spawn, "agent_path")?.trim();
+      if (predecessor) {
+        dependencies.restoreCompletedReceiver(state, thread.id, predecessor, agentPath);
+      } else {
+        dependencies.registerChildThread(state, thread.id, { nativeParentThreadId, agentPath });
+      }
     }
     const { state: currentState, owner: currentOwner } = resolveSender();
     if (

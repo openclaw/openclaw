@@ -3,6 +3,7 @@ import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce
 import { releaseCompletionCustody } from "./native-subagent-admission-custody.js";
 import type { CodexNativeSubagentAssignmentInventory } from "./native-subagent-assignment-inventory.js";
 import type { CodexNativeSubagentCloseOwner } from "./native-subagent-close-owner.js";
+import type { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
 import {
   createNativeModelSourceOwner,
@@ -67,7 +68,7 @@ type ParentDependencies = {
     "restore" | "bind" | "drain" | "observeHookAcknowledgement" | "settleWrites"
   >;
   closes: Pick<CodexNativeSubagentCloseOwner, "bind" | "prune" | "settlements">;
-  deliverDetached: (state: ParentState) => void;
+  delivery: Pick<CodexNativeSubagentCompletionDelivery, "deliverDetached" | "holdInitialWait">;
   drainAdmissions: (state: ParentState, owner: ParentOwner, turnId: string) => void;
   clearAdmissions: () => void;
   prune: (state: ParentState) => void;
@@ -255,7 +256,7 @@ export async function registerNativeSubagentParent(
     state.assignmentStore ??= params.assignmentStore;
     state.owners.set(ownerKey, owner);
     state.preparing = undefined;
-    dependencies.deliverDetached(state);
+    dependencies.delivery.deliverDetached(state);
   } catch (error) {
     releaseRootModelBinding();
     state.owners.delete(ownerKey);
@@ -281,6 +282,25 @@ export async function registerNativeSubagentParent(
   let settlement: Promise<void> | undefined;
   return {
     ready,
+    holdInitialWait: (turnId) => {
+      const bound = owner;
+      // Client close may already have cleared owners. Only this registration
+      // can reconcile its spawns, until unregister or rebinding.
+      const ownsTurn = () =>
+        registered &&
+        bound === owner &&
+        bound.turnId === turnId &&
+        !bound.descendantsCancelled &&
+        // Releasing the root binding on close cancels execution. History
+        // still needs fresh source admission and the child's delivery custody.
+        !cancellationReported &&
+        (!bound.modelExecutionCancelled || dependencies.isClosed()) &&
+        !bound.modelExecutionSettled &&
+        !bound.isTurnYielded?.();
+      return ownsTurn()
+        ? dependencies.delivery.holdInitialWait(registeredState, bound, ownsTurn)
+        : undefined;
+    },
     observeSubmissionAcknowledgement: async (receipt, assertCurrent) => {
       assertCurrent();
       if (!registered || !isCurrent() || registeredState.owners.get(ownerKey) !== owner) {
@@ -313,6 +333,7 @@ export async function registerNativeSubagentParent(
       if (current.turnId && current.turnId !== turnId) {
         current = {
           ...current,
+          spawnCalls: undefined,
           modelMapping: undefined,
           modelExecutionCancelled: undefined,
           modelExecutionSettled: registeredState.completedModelTurnsBeforeBinding?.has(turnId)
@@ -382,7 +403,7 @@ export async function registerNativeSubagentParent(
           current.completedModelTurnsBeforeBinding = undefined;
         }
         dependencies.clearAdmissions();
-        dependencies.deliverDetached(current);
+        dependencies.delivery.deliverDetached(current);
       }
       owner.modelSource?.release();
       notifyNativeModelSourceWaiters(registeredState);

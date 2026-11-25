@@ -12,6 +12,7 @@ import type {
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 import type { NativeSubagentAssignment } from "./native-subagent-assignment.js";
+import type { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import type { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import type {
@@ -90,12 +91,14 @@ export type NativeModelInputRequest = {
 };
 export type NativeModelToolInputRequest = Omit<NativeModelInputRequest, "targetThreadId"> & {
   target: string;
+  returnsSubmissionId?: boolean;
   signal?: AbortSignal;
   readQualification: (threadId: string) => CodexInferenceThreadQualification | undefined;
   assertCurrent: () => void;
 };
 
 export type ParentOwner = {
+  spawnCalls?: WeakMap<ChildState, string>;
   requestCustody?: NativeRequestCustody;
   cancelChildProcesses?: (
     threadId: string,
@@ -137,6 +140,9 @@ export type NativePendingChild = {
 };
 
 export type ParentRegistrationHandle = {
+  holdInitialWait: (
+    turnId: string,
+  ) => ReturnType<CodexNativeSubagentCompletionDelivery["holdInitialWait"]>;
   ready: Promise<void>;
   observeSubmissionAcknowledgement: (
     receipt: CodexNativeSubagentSubmissionAcknowledgement,

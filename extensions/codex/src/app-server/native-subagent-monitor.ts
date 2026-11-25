@@ -521,7 +521,7 @@ class Monitor {
       submissions: this.submissions,
       assignments: this.assignments,
       closes: this.childCloses,
-      deliverDetached: (state) => this.completionDelivery.deliverDetached(state),
+      delivery: this.completionDelivery,
       drainAdmissions: (state, owner, turnId) =>
         this.drainPendingChildAdmissionEvidence(state, owner, turnId, true),
       clearAdmissions: () => this.clearUnconsumablePendingChildAdmissionEvidence(),
@@ -924,20 +924,21 @@ class Monitor {
       knownChildren: this.knownChildren,
       isCurrent: (state) => this.isCurrentParent(state),
       interruptModelExecution: this.interruptModelExecution,
-      currentModelExecution: (threadId) =>
-        currentNativeModelExecution(
-          threadId,
-          this.parentStates,
-          this.knownChildren,
-          this.childStates,
-        ),
+      currentModelExecution: (id) =>
+        currentNativeModelExecution(id, this.parentStates, this.knownChildren, this.childStates),
       admissions: this.admissionCustody.entries,
       canPrepareReceiver: (state, threadId) => this.canPrepareReceiverChild(state, threadId),
       retiredChildren: this.retiredChildren,
-      prepareReceiver: (state, threadId, nativeParentThreadId) =>
-        this.prepareReceiverChild(state, threadId, nativeParentThreadId),
-      registerChildThread: (state, threadId, options) =>
-        this.registerChildThread(state, threadId, options),
+      prepareReceiver: this.prepareReceiverChild.bind(this),
+      registerChildThread: this.registerChildThread.bind(this),
+      restoreCompletedReceiver: (state, childThreadId, { nativeTurnId, result }, agentPath) => {
+        const runId = codexNativeSubagentRunId(childThreadId);
+        this.restoreKnownChild(state, { runId, childThreadId, nativeTurnId }, [], true);
+        state.deliveryReceipts.record(runId, [childThreadId], result);
+        if (agentPath) {
+          this.registerAgentPath(state, childThreadId, agentPath);
+        }
+      },
       admit: (state, owner, input, count, preparedOwner) =>
         this.submissions.modelInputs.admitModelInput(state, owner, input, count, preparedOwner),
     });
@@ -2407,6 +2408,7 @@ class Monitor {
     state: ParentState,
     assignment: NativeSubagentAssignment,
     observedTurns: readonly NativeTurnObservation[] = [],
+    terminal = false,
   ): void {
     const currentIndex = observedTurns.findIndex((turn) => turn.turnId === assignment.nativeTurnId);
     const pendingTurns: KnownChild["pendingTurns"] = observedTurns
@@ -2439,10 +2441,7 @@ class Monitor {
       nativeParentThreadId:
         this.childStates.get(assignment.runId)?.nativeParentThreadId ?? state.parentThreadId,
       deliveryReceipts: this.resolveChildReceiptOwner(state, assignment.childThreadId),
-      assignment: {
-        ...assignment,
-        terminal: false,
-      },
+      assignment: { ...assignment, terminal },
       turnId: pendingTurns.at(-1)?.turnId ?? assignment.nativeTurnId,
       observedTurns: new Map(
         [

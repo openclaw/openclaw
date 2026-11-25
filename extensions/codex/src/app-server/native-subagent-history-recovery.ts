@@ -21,7 +21,7 @@ import type {
   ThreadRecovery,
 } from "./native-subagent-monitor-types.js";
 import { readCodexNativeSubagentNotification } from "./native-subagent-notification.js";
-import type { CodexTurn, JsonObject } from "./protocol.js";
+import type { CodexThread, CodexTurn, JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 const THREAD_READ_TIMEOUT_MS = 30_000;
@@ -228,30 +228,21 @@ export class CodexNativeSubagentHistoryRecovery {
       threadState = "other";
     }
     const parentThreadId = readThreadParentThreadId(thread);
-    const child = rawTurns.length === 1 ? rawTurns[0] : undefined;
     let waitReceipt: ThreadRecovery["waitReceipt"];
     if (
       options.readParentTurn &&
       parentThreadId &&
       !recordedCompletion &&
       !this.knownChildren.has(childThreadId) &&
-      !thread.forkedFromId &&
-      (threadStatus === "idle" || threadStatus === "notloaded") &&
       recovery.nativeTurnId &&
-      child?.status === "completed" &&
-      !child.error &&
-      (!child.threadId || child.threadId === childThreadId) &&
-      typeof child.startedAt === "number" &&
-      typeof child.completedAt === "number" &&
-      child.completedAt >= child.startedAt &&
       recovery.completion?.statusLabel === "task_complete"
     ) {
-      waitReceipt = initialWaitReceipt(
-        await options.readParentTurn(),
+      waitReceipt = await initialWaitReceipt(
+        options.readParentTurn,
         parentThreadId,
+        response.thread,
+        recovery.nativeTurnId,
         recovery.completion,
-        child.startedAt,
-        child.completedAt,
       );
     }
     return {
@@ -271,21 +262,40 @@ export class CodexNativeSubagentHistoryRecovery {
 
 // V1 records the returned states but no child turn ID. A new spawn followed by
 // its wait in the same turn can only name the sole, non-forked child result.
-function initialWaitReceipt(
-  parent: CodexTurn | undefined,
+export async function initialWaitReceipt(
+  readParent: () => Promise<CodexTurn | undefined>,
   threadId: string,
+  thread: CodexThread,
+  childTurnId: string,
   { childThreadId, result }: RecoveredCompletion,
-  startedAt: number,
-  completedAt: number,
-): ThreadRecovery["waitReceipt"] {
+  spawnId?: string,
+): Promise<ThreadRecovery["waitReceipt"]> {
+  const child = thread.turns?.length === 1 ? thread.turns[0] : undefined;
+  if (
+    thread.id !== childThreadId ||
+    readThreadParentThreadId(thread) !== threadId ||
+    thread.forkedFromId ||
+    (thread.status?.type !== "idle" && thread.status?.type !== "notLoaded") ||
+    child?.id !== childTurnId ||
+    child.status !== "completed" ||
+    child.error ||
+    (child.threadId && child.threadId !== childThreadId) ||
+    typeof child.startedAt !== "number" ||
+    typeof child.completedAt !== "number" ||
+    child.completedAt < child.startedAt ||
+    readLastAgentMessage(child) !== result
+  ) {
+    return;
+  }
+  const parent = await readParent();
   if (
     !parent?.id ||
     parent.status !== "completed" ||
     parent.error ||
     typeof parent.startedAt !== "number" ||
     typeof parent.completedAt !== "number" ||
-    parent.startedAt > startedAt ||
-    parent.completedAt < completedAt ||
+    parent.startedAt > child.startedAt ||
+    parent.completedAt < child.completedAt ||
     (parent.threadId && parent.threadId !== threadId) ||
     !Array.isArray(parent.items)
   ) {
@@ -303,6 +313,7 @@ function initialWaitReceipt(
     spawn?.tool !== "spawnAgent" ||
     wait?.tool !== "wait" ||
     !spawn.id ||
+    (spawnId !== undefined && spawn.id !== spawnId) ||
     !wait.id ||
     spawn.id === wait.id ||
     calls.some(
@@ -418,7 +429,7 @@ export function readTurnCompletion(
   return undefined;
 }
 
-function readLastAgentMessage(turn: JsonObject | CodexTurn, after = -1): string | undefined {
+export function readLastAgentMessage(turn: JsonObject | CodexTurn, after = -1): string | undefined {
   const items = Array.isArray(turn.items) ? turn.items : [];
   let legacyResult: string | undefined;
   for (let index = items.length - 1; index > after; index -= 1) {

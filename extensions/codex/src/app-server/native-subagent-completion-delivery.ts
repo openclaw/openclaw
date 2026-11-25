@@ -5,12 +5,15 @@ import {
   readCodexNativeSubagentRunId,
 } from "./native-subagent-assignment.js";
 import { assertHistoryOwnerMatchesRegistration } from "./native-subagent-history-owner.js";
+import { initialWaitReceipt } from "./native-subagent-history-recovery.js";
 import type {
   ChildState,
   NativeSubagentMonitorRuntime,
+  ParentOwner,
   ParentState,
 } from "./native-subagent-monitor-types.js";
 import { delayForAttempt } from "./native-subagent-retry.js";
+import type { CodexThread, CodexTurn } from "./protocol.js";
 
 type CompletionDeliveryDependencies = {
   deliver: NativeSubagentMonitorRuntime["deliverAgentHarnessCompletion"];
@@ -33,9 +36,106 @@ const COMPLETION_DELIVERY_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_
 const completionDeliveryOwners = new Map<string, ChildState>();
 
 export class CodexNativeSubagentCompletionDelivery {
+  private readonly recovering = new WeakSet<ChildState>();
   private readonly attempts = new Map<ChildState, Promise<void>>();
 
   constructor(private readonly dependencies: CompletionDeliveryDependencies) {}
+
+  // Close handlers run synchronously in either order. Reserve only pending
+  // results before the queued detached attempt can admit a wake.
+  holdInitialWait(state: ParentState, owner: ParentOwner, ownsTurn: () => boolean) {
+    if (!owner.spawnCalls) {
+      return;
+    }
+    const held = [];
+    for (const child of this.dependencies.children.values()) {
+      const spawnId = owner.spawnCalls.get(child);
+      const { nativeTurnId, pendingCompletion } = child;
+      if (
+        spawnId &&
+        nativeTurnId &&
+        child.terminal &&
+        pendingCompletion?.status === "succeeded" &&
+        child.runId === codexNativeSubagentRunId(child.childThreadId) &&
+        child.parentThreadId === state.parentThreadId &&
+        child.nativeParentThreadId === state.parentThreadId &&
+        !child.nativeCompletionDelivered &&
+        !child.cancellationRequested &&
+        !this.recovering.has(child) &&
+        this.isCurrent(state, child)
+      ) {
+        this.recovering.add(child);
+        held.push({ child, spawnId, nativeTurnId, pendingCompletion });
+      }
+    }
+    if (!held.length) {
+      return;
+    }
+    const children = held;
+    return {
+      read: async (
+        turn: CodexTurn,
+        readChild: (id: string, assertCurrent: () => void) => Promise<CodexThread>,
+      ) => {
+        const receipts = await Promise.allSettled(
+          children.map(async (entry) => {
+            const { child, spawnId, nativeTurnId, pendingCompletion } = entry;
+            if (
+              !ownsTurn() ||
+              turn.id !== owner.turnId ||
+              !turn.items?.some(
+                (item) =>
+                  item.tool === "wait" &&
+                  Array.isArray(item.receiverThreadIds) &&
+                  item.receiverThreadIds.includes(child.childThreadId),
+              )
+            ) {
+              return;
+            }
+            const current = () =>
+              ownsTurn() &&
+              this.recovering.has(child) &&
+              this.isCurrent(state, child) &&
+              child.nativeTurnId === nativeTurnId &&
+              child.pendingCompletion === pendingCompletion &&
+              !child.cancellationRequested &&
+              this.claim(state, child);
+            const thread = await readChild(child.childThreadId, () => {
+              if (!current()) {
+                throw new Error("Codex wait recovery is no longer current");
+              }
+            });
+            const receipt = await initialWaitReceipt(
+              async () => turn,
+              state.parentThreadId,
+              thread,
+              nativeTurnId,
+              pendingCompletion,
+              spawnId,
+            );
+            return receipt && { child, receipt, current };
+          }),
+        );
+        return () => {
+          for (const result of receipts) {
+            if (result.status !== "fulfilled" || !result.value) {
+              continue;
+            }
+            const { child, receipt, current } = result.value;
+            if (current() && child.deliveryReceipts.observe([receipt]).includes(child.runId)) {
+              this.applyReceipts(state, [child.runId]);
+            }
+          }
+        };
+      },
+      [Symbol.dispose]: () => {
+        for (const { child } of children) {
+          this.recovering.delete(child);
+          void this.join(child).then(() => this.deliverPending(state, child));
+        }
+      },
+    };
+  }
 
   deliverPending(state: ParentState, childState: ChildState): Promise<void> {
     const existing = this.attempts.get(childState);
@@ -101,6 +201,7 @@ export class CodexNativeSubagentCompletionDelivery {
       // native receipts deduplicate both paths.
       if (
         state.owners.size > 0 ||
+        this.recovering.has(childState) ||
         !state.completionScope ||
         this.dependencies.isParentThreadRetained(state.parentThreadId)
       ) {

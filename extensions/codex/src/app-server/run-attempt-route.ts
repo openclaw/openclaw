@@ -2,6 +2,7 @@ import { AsyncResource } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import { codexNativeSubagentHistoryConnectionFingerprint } from "./native-subagent-history-owner.js";
 import { prepareCodexServerNotification } from "./protocol-validators.js";
@@ -29,7 +30,10 @@ async function recoverDisconnectedTurn(
   if (!fingerprint) {
     return;
   }
-  const signal = AbortSignal.any([runAbortController.signal, AbortSignal.timeout(10_000)]);
+  const timeoutMs = 10_000;
+  const deadline = performance.now() + timeoutMs;
+  const signal = AbortSignal.any([runAbortController.signal, AbortSignal.timeout(timeoutMs)]);
+  using waits = resources.state.nativeSubagentMonitor?.holdInitialWait(turnId);
   let reader: CodexAppServerClient | undefined;
   const read = async () => {
     await turnRoute?.drain({ afterClose: true });
@@ -81,9 +85,12 @@ async function recoverDisconnectedTurn(
         : undefined;
     };
     let turn = await latest();
-    // The external server may still be finishing the accepted request. Bound
-    // history replays even on older servers which scan an entire rollout.
-    if (turn?.status === "inProgress") {
+    // Codex can label unfinished history interrupted if the live turn ended
+    // after the rollout read. Allow one reread, still requiring a proven final.
+    if (
+      turn?.status === "inProgress" ||
+      (turn?.status === "interrupted" && turn.completedAt == null && turn.error == null)
+    ) {
       await sleepWithAbort(5_000, signal, { ref: false });
       turn = await latest();
     }
@@ -117,7 +124,26 @@ async function recoverDisconnectedTurn(
     if (!notification.completedTurn || notification.turnId !== turnId) {
       return;
     }
+    // Reserve half the remaining time to revalidate and project the parent.
+    // A stalled read forfeits only that child's receipt.
+    const budgetMs = Math.floor((deadline - performance.now()) / 2);
+    let applyReceipts: (() => void) | undefined;
+    if (waits && budgetMs > 0) {
+      const childSignal = AbortSignal.any([signal, AbortSignal.timeout(budgetMs)]);
+      applyReceipts = await waits.read(turn, async (childId, assertCurrent) => {
+        const response = await racePromiseWithAbortSignal(
+          peer.request(
+            "thread/read",
+            { threadId: childId, includeTurns: true },
+            { signal: childSignal, withCurrent, assertCurrent },
+          ),
+          childSignal,
+        );
+        return response.thread;
+      });
+    }
     await withCurrent(() => {
+      applyReceipts?.();
       resources.projectorRef.current!.settlement.turnTainted = true;
       notifications.noteNotificationReceived(notification, { threadId, turnId }, Date.now());
       void notifications.enqueueNotification(notification);

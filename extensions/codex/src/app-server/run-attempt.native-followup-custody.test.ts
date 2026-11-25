@@ -15,10 +15,15 @@ import {
 import { beforeEach, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
-import { collabItem, observeCompletionAttempts } from "./native-subagent-monitor.test-support.js";
-import type { CodexServerNotification, JsonObject } from "./protocol.js";
+import {
+  collabItem,
+  observeCompletionAttempts,
+  registerCodexNativeSubagentMonitor,
+} from "./native-subagent-monitor.test-support.js";
+import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 import {
   createTestParams,
   createCodexRuntimePlanFixture,
@@ -455,3 +460,138 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
     }
   }
 });
+
+it.each([
+  "provisional",
+  "interrupted",
+  "stalled sibling",
+  "monitor closes first",
+  "wrong child turn",
+  "no receipt",
+])(
+  "reconciles a terminal child before waking its disconnected foreground parent (%s)",
+  async (scenario) => {
+    const params = createTestParams();
+    const host = await admitHost(params, "early-completion");
+    const persisted = Promise.withResolvers<void>();
+    params.onUserMessagePersisted = () => persisted.resolve();
+    const harness = createStartedThreadHarness();
+    const delivery = observeDelivery();
+    const attempts = observeCompletionAttempts();
+    const history = Promise.withResolvers<void>();
+    const parent = "thread-1";
+    const child = "early-child";
+    const stalled = scenario === "stalled sibling";
+    const children = stalled ? [child, "stalled"] : [child];
+    const reading = Promise.withResolvers<void>();
+    let reads = 0;
+    const answer = { type: "agentMessage", id: "answer", phase: "final_answer", text: "Done" };
+    const completed = { status: "completed", startedAt: 1, completedAt: 2, itemsView: "full" };
+    const wait = (id: string) =>
+      collabItem("wait", [id], {
+        id: `wait-${id}`,
+        senderThreadId: parent,
+        agentsStates: { [id]: { status: "completed", message: id } },
+      });
+    const peer = createFakeCodexAppServerClient(async (method, request) => {
+      reading.resolve();
+      await history.promise;
+      if (method === "thread/turns/list") {
+        reads++;
+        return {
+          data: [
+            {
+              ...completed,
+              ...(reads === 1 && scenario === "provisional"
+                ? { status: "interrupted", completedAt: null }
+                : {}),
+              ...(reads === 1 && scenario === "interrupted" ? { status: "interrupted" } : {}),
+              id: "turn-1",
+              items: [
+                ...children.flatMap((id) => [
+                  collabItem("spawnAgent", [id], { id: `spawn-${id}`, senderThreadId: parent }),
+                  ...(scenario === "no receipt" ? [] : [wait(id)]),
+                ]),
+                answer,
+              ],
+            },
+          ],
+        };
+      }
+      if (method === "thread/read") {
+        if (isJsonObject(request) && request.threadId === "stalled") {
+          return new Promise(() => {});
+        }
+        return {
+          thread: {
+            id: child,
+            parentThreadId: parent,
+            status: { type: "idle" },
+            turns: [
+              {
+                ...completed,
+                id: scenario === "wrong child turn" ? "other" : "child-turn",
+                items: [{ ...answer, text: child }],
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`Unexpected request ${method}`);
+    });
+    peer.client.initialize = async () => {};
+    peer.client.close = vi.fn();
+    harness.client.getDisconnectedPeer = () => () => peer.client;
+    if (scenario === "monitor closes first") {
+      const previous = await registerCodexNativeSubagentMonitor({
+        client: harness.client,
+        parentThreadId: "previous",
+      });
+      await previous.unregister();
+    }
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:8123" } },
+    });
+    try {
+      await run.waitForTurnAccepted();
+      const { spawn, turn, parentItem } = childNotifications(harness);
+      await persisted.promise;
+      for (const id of children) {
+        await spawn(id, "child-turn");
+        await turn(id, "child-turn", id);
+        await parentItem({ ...wait(id), status: "inProgress", agentsStates: {} }, "item/started");
+      }
+      vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), ms);
+        return controller.signal;
+      });
+      harness.close(new Error("WebSocket disconnected"));
+      await attempts.settle();
+      const earlyWakes = delivery.mock.calls.length;
+      await reading.promise;
+      if (stalled) {
+        // A slow parent read leaves only two seconds for both receipts and projection.
+        await vi.advanceTimersByTimeAsync(8_000);
+      }
+      history.resolve();
+      await vi.advanceTimersByTimeAsync(stalled ? 2_000 : 5_000);
+      const result = await run;
+      await attempts.settle();
+      expect(result.assistantTexts).toEqual(scenario === "interrupted" ? [] : ["Done"]);
+      expect(earlyWakes).toBe(0);
+      expect(delivery.mock.calls.map(([wake]) => wake.result)).toEqual(
+        stalled
+          ? ["stalled"]
+          : ["wrong child turn", "no receipt", "interrupted"].includes(scenario)
+            ? [child]
+            : [],
+      );
+    } finally {
+      history.resolve();
+      host.close();
+      delivery.mockRestore();
+    }
+  },
+);
