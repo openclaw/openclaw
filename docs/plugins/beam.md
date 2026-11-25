@@ -261,7 +261,7 @@ the next poll. A released source cannot be recreated by uploading. Deleting its 
 Beam publication is not remote control.
 
 - The logical conversation continues in a Gateway-owned session. Beam itself has no filesystem, terminal, tool, or node capability.
-- It accepts text-only normalized transcript items, not HTML, scripts, archives, attachments, or server-fetched URLs.
+- Transcript items contain normalized text. A v2 publisher can also include one reviewed PNG by sending its bytes in the [screenshot envelope](#share-a-screenshot).
 - The official skill removes raw tool results, reasoning, prompts, local paths, credentials, cookies, and auth material before upload.
 - The receiver treats every transcript as untrusted text. The first message in the Beam composer is the explicit operator action that copies it into a new session.
 - Requests are rate-limited and concurrency-limited before the body is read.
@@ -322,6 +322,17 @@ The mirror converts newest-first catalog pages into chronological uploads before
 The mirror shares sessions from this Gateway’s machine. The v2 poller rotates through acknowledged enrollments and reselects each exact source locally. Each poll can update up to 32 active and 32 completed sessions. An unacknowledged update keeps its original request and can be retried after restart even when the source has gone idle. Older enrollments acquire their local locator as the service pages through eligible sources. The v1 poller selects the newest 32 active sessions and finalizes an inactive session after confirming its exact source.
 
 When browsing Claude sessions on paired nodes, update those nodes alongside the Gateway. Older node builds without block-resume metadata report an update-required error when a mixed row spans pages.
+
+## Share a screenshot
+
+With a Beam CLI that supports screenshot publishing, send a reviewed v2 packet and one PNG through the same Gateway link:
+
+```sh
+beam bundle create task.beam.json --attach screenshot.png --out task.beam.zip
+beam share task.beam.zip --to https://gateway.example
+```
+
+Open the returned snapshot link to view or download the image. The Gateway advertises `publishScreenshot` only to callers with publishing access. Each PNG can contain up to 512 KiB and 16,777,216 pixels. The screenshot is part of the reviewed publication and retains its original metadata. Its visibility and seven-day lifetime follow the snapshot. Sharing the packet alone removes the screenshot. Handing off the same packet keeps the existing preview. Pull and continuation use the original text packet.
 
 ## Troubleshooting
 

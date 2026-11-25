@@ -430,10 +430,11 @@ describe("grouped chat rendering", () => {
 
   it.each([
     [
-      "qualified local profile",
+      "qualified local profile using the Mac app",
       {
         senderId: "profile-buns",
         senderIdentity: { type: "profile", id: "profile-buns" },
+        transport: { clients: [{ id: "openclaw-macos", mode: "ui" }] },
       },
       { userId: "profile-buns", userName: "Buns" },
       "Buns",

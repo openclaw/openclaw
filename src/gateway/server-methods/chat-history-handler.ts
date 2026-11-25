@@ -189,8 +189,8 @@ export async function handleChatHistoryRequest({
       allowPluginNormalization: false,
     });
     const max = limit ?? 200;
-    const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
     // Bound default responses independently of recovery lookahead and explicit back-scroll budgets.
+    const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
     const maxResponseBytes = Math.min(maxBytes ?? 512 * 1024, maxHistoryBytes);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
@@ -200,12 +200,12 @@ export async function handleChatHistoryRequest({
               { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
               {
                 before: pendingBefore,
+                audience: { profileId: client?.authenticatedUserProfile?.profileId ?? "" },
                 limit: max,
                 maxChars: effectiveMaxChars,
                 queuedRunIds,
                 cronStorePath: context.cronStorePath,
-                resolveGatewayContext: context.resolveGatewayContext,
-                physicalPaths: rowProjection.physicalPaths,
+                ...runtimeScope,
               },
             ),
           )
