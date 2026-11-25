@@ -215,7 +215,7 @@ it("trims a prose push chunk even when a later table retains code spaces", async
   await sendPayload("Umixed", `${prose}       next paragraph\n\n${table}`);
   const messages = requests.flatMap((request) => request.body.messages);
   expect(messages[0]?.text).toBe(prose);
-  expect(messages.at(-1)?.text).toMatch(/• Value:  go $/);
+  expect(messages.at(-1)?.text).toMatch(/• Value: {2}go $/);
 });
 
 it.each(["push", "reply"] as const)(
