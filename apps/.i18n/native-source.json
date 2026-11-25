@@ -4802,7 +4802,7 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.e934017adeb4afba","source":"Search threads"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatOutboxEditViews.swift","kind":"ui-call","surface":"apple","id":"native.apple.2718a02d13a49cdc","source":"Delete"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatOutboxEditViews.swift","kind":"ui-call","surface":"apple","id":"native.apple.e00ba94979473403","source":"Edit"},
-    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatOutboxEditViews.swift","kind":"ui-call","surface":"apple","id":"native.apple.89ec22b6b9eccbb8","source":"Retry Send"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatOutboxEditViews.swift","kind":"ui-call","surface":"apple","id":"native.apple.0c82be78a751608c","source":"Try Again"},
     {"path":"apps/macos/Sources/OpenClaw/StatusMenuSessions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.7ce3d011e8d4c74a","source":"Approval requested"},
     {"path":"apps/macos/Sources/OpenClaw/StatusMenuSessions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.504b712bfbd064c0","source":"Color"},
     {"path":"apps/macos/Sources/OpenClaw/StatusMenuSessions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.73ef7f4fe41213c4","source":"Compact"},

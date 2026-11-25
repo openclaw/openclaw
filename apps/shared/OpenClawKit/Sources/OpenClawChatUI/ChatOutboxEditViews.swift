@@ -12,7 +12,7 @@ struct ChatOutboxMessageActions: View {
             Button {
                 self.viewModel.retryOutboxMessage(self.messageID)
             } label: {
-                chatActionLabel("Retry Send", systemImage: "arrow.clockwise")
+                chatActionLabel("Try Again", systemImage: "arrow.clockwise")
             }
         }
         if self.viewModel.canEditOutboxMessage(self.messageID) {
