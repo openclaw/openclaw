@@ -1001,12 +1001,46 @@
   color: var(--warn);
 }
 
+.chat-thread {
+  --chat-activity-row-gap: 4px;
+}
+
+/* An adjacent standalone activity is not part of this run. Keep its neighbor's
+   identity available, without reserving a second row between operations. */
+.chat-virtual-row--compact-activity > .chat-group.assistant {
+  grid-template: auto / var(--chat-avatar-column) minmax(0, 1fr) fit-content(30%);
+}
+
+.chat-virtual-row--compact-activity > .chat-group.assistant > .chat-avatar,
+.chat-virtual-row--compact-activity > .chat-group.assistant > .chat-avatar-slot {
+  width: 21px;
+  height: 21px;
+  margin-block-end: 0;
+  grid-row: 1;
+  justify-self: center;
+}
+
+.chat-virtual-row--compact-activity > .chat-group.assistant > .chat-group-footer {
+  grid-area: 1 / 3;
+  width: auto;
+  min-height: 0;
+  margin-block-start: 0;
+}
+
+.chat-group.chat-group--frame-fragment {
+  margin-block-end: calc(var(--chat-run-block-gap) - 2px);
+}
+
+.chat-virtual-row--compact-activity > .chat-group {
+  margin-block-end: var(--chat-activity-row-gap);
+}
+
 /* Expanded operations stay compact inside their own rail. The transcript owns
    list scrolling; individual output blocks retain their existing bounds. */
 .chat-activity-group__body {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--chat-activity-row-gap, 4px);
   margin: 0;
 }
 

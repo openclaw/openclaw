@@ -759,11 +759,13 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    const compaction = page.locator(".chat-compaction-activity");
+    await compaction.locator("summary").click();
     await page.getByText("saved 875.3k tokens (97.3%)", { exact: true }).waitFor();
     const frame = await takeControlUiScreenshotFrame(
       page,
       page.locator(".chat-thread"),
-      [page.locator(".chat-compaction")],
+      [compaction],
       { animations: "disabled" },
     );
     await writeFile(join(suite.artifactDir, "compaction-savings.png"), frame.png);
