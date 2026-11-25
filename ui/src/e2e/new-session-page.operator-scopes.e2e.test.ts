@@ -194,7 +194,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const submit = page.getByRole("button", { name: "Start session" });
       await pollDisabled(submit).toBe(true);
-      expect(await tooltipTitleText(submit)).toContain("operator.sessions.write");
+      expect(await tooltipTitleText(submit)).toBe("You don’t have permission to create a session.");
       const picker = page.locator(".chat-controls__model-picker > summary");
       await picker.click();
       await page.locator(".chat-controls__model-search").waitFor();
@@ -283,7 +283,7 @@ suite.define(() => {
               const incognito = page.getByRole("switch", { name: "Incognito" });
               await pollDisabled(incognito).toBe(true);
               expect(await incognito.getAttribute("title")).toBe(
-                "This action requires operator.admin access.",
+                "You don’t have permission to start an Incognito session.",
               );
             }
             await submit.click({ force: true });
@@ -403,7 +403,26 @@ suite.define(() => {
       await page.locator(".new-session-page__message").press("Enter");
       await pollLocatorText(
         page.locator('.new-session-page__blocked-submit[role="status"]'),
-      ).toContain("This action requires operator.admin access.");
+      ).toContain("You don’t have permission to turn on Full access.");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+    });
+  });
+
+  it("explains why a retained Incognito draft cannot start after losing admin scope", async () => {
+    await withDraft(adminScopes, async ({ gateway, page }) => {
+      await page.getByRole("switch", { name: "Incognito" }).click();
+      await gateway.setOperatorScopes(writeScopes);
+      await gateway.closeLatest(1001, "permission scope downgraded");
+      await expect.poll(async () => (await gateway.getRequests("connect")).length).toBe(2);
+      const submit = page.getByRole("button", { name: "Start session" });
+      await pollDisabled(submit).toBe(true);
+      await expect
+        .poll(() => tooltipTitleText(submit))
+        .toBe("You don’t have permission to start an Incognito session.");
+      await page.locator(".new-session-page__message").press("Enter");
+      await pollLocatorText(
+        page.locator('.new-session-page__blocked-submit[role="status"]'),
+      ).toContain("You don’t have permission to start an Incognito session.");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     });
   });

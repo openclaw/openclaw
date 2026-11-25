@@ -1,4 +1,4 @@
-import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
+import { OperatorRefusalError } from "../operator-refusal.js";
 import { restoreGatewayQueuedOperatorRecovery } from "../operator-run-recovery.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -67,7 +67,7 @@ export async function restoreWorkerProvisionSource(
     });
   } catch (error) {
     signal.throwIfAborted();
-    if (error instanceof GatewayOperatorRecoveryAuthorizationError) {
+    if (error instanceof OperatorRefusalError) {
       throw new WorkerProvisionSourceChangedError(error);
     }
     // A failed identity read or an unavailable runtime context does not prove revocation.

@@ -117,18 +117,13 @@ const SessionsToolSchema = Type.Object(
     pinned: Type.Optional(
       Type.Boolean({
         description:
-          "Pin session (root and Home-linked sessions only; spawned, subagent, and nested-child sessions cannot be pinned)",
+          "Set the requesting person’s sidebar pin. Send separately from shared session settings. Only roots and Home-linked conversations can be pinned; rail-only shortcuts are independent.",
       }),
     ),
     archived: Type.Optional(
       Type.Boolean({ description: "True archives without deleting; false restores the session." }),
     ),
-    model: Type.Optional(
-      Type.String({
-        description:
-          "Model override. Pass only the model ID unless the user requested a specific provider; use provider/model to require it.",
-      }),
-    ),
+    model: Type.Optional(Type.String({ description: "Model override" })),
     thinkingLevel: Type.Optional(Type.String({ description: "Thinking override" })),
     ownerType: Type.Optional(
       stringEnum(["human", "agent"] as const, {

@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openFromForeground, scenario } from "./command-palette.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Client-side video compression" });
@@ -17,6 +19,74 @@ const upload = (page: Page, name: string, buffer = oversized) =>
     .setInputFiles({ name, mimeType: "video/mp4", buffer });
 
 suite.define(() => {
+  it("explains an oversized video before compression and sends only the prepared copy", () =>
+    suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          ...scenario({
+            "sessions.create": { key: "agent:main:dashboard:video", runStarted: true },
+          }),
+          attachmentMaxBytes: limit,
+        });
+        const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
+        await input.fill("Review this screen recording.");
+        await input.evaluate((element, data) => {
+          const dataTransfer = new DataTransfer();
+          dataTransfer.items.add(
+            new File([Uint8Array.fromBase64(data)], "Screen recording.mp4", { type: "video/mp4" }),
+          );
+          element.dispatchEvent(
+            new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }),
+          );
+        }, oversized.toString("base64"));
+        const compress = button(page, "Compress to fit");
+        await compress.waitFor();
+        const inputBounds = await input.boundingBox();
+        await input.press("ControlOrMeta+Enter");
+        const notice = palette.locator(".cmd-palette__creation-error");
+        await notice.waitFor();
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "video-offer.png"),
+          animations: "disabled",
+        });
+        const noticeBox = (await notice.boundingBox())!;
+        expect(noticeBox.y).toBeGreaterThanOrEqual(0);
+        expect(noticeBox.y + noticeBox.height).toBeLessThanOrEqual(inputBounds!.y);
+        expect(await input.boundingBox()).toEqual(inputBounds);
+        expect(await input.evaluate((element) => element === document.activeElement)).toBe(true);
+        expect(await notice.textContent()).toBe(
+          "Video is too large to send. Compress a copy or remove it.",
+        );
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "video-offer-mobile.png"),
+          animations: "disabled",
+        });
+        const narrowBox = (await notice.boundingBox())!;
+        expect(narrowBox.x).toBeGreaterThanOrEqual(0);
+        expect(narrowBox.x + narrowBox.width).toBeLessThanOrEqual(390);
+        expect(narrowBox.y).toBeGreaterThanOrEqual(0);
+        expect(narrowBox.y + narrowBox.height).toBeLessThanOrEqual((await input.boundingBox())!.y);
+        await Promise.all([
+          notice.filter({ hasText: "Compressing video…" }).waitFor(),
+          compress.click(),
+        ]);
+        const start = button(page, "Start new session in background");
+        await expect.poll(() => start.isEnabled()).toBe(true);
+        expect(await gateway.getRequests("sessions.create")).toEqual([]);
+        await start.click();
+        const request = await gateway.waitForRequest("sessions.create");
+        expect(request.params).toMatchObject({
+          message: "Review this screen recording.",
+          attachments: [{ fileName: expect.stringMatching(/^Screen recording\.(mp4|webm)$/u) }],
+        });
+        const { attachments } = request.params as { attachments: Array<{ content: string }> };
+        expect(Buffer.from(attachments[0]!.content, "base64").length).toBeGreaterThan(0);
+        expect(Buffer.from(attachments[0]!.content, "base64").length).toBeLessThanOrEqual(limit);
+      },
+    ));
+
   it("contains the mobile offer, loads the encoder only after consent, and sends a playable copy", () =>
     suite.withPage(
       { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
@@ -38,6 +108,10 @@ suite.define(() => {
         const compress = button(page, "Compress to fit");
         await compress.waitFor();
         expect(await send.isDisabled()).toBe(true);
+        expect(await send.getAttribute("aria-busy")).toBe("false");
+        expect(await page.locator(".chat-attachments-status").textContent()).toContain(
+          "Compress a copy or remove it.",
+        );
         expect(encoderRequests()).toEqual([]);
         const normal = page
           .locator(".chat-attachment-thumb")

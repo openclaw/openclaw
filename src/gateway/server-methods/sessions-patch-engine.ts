@@ -3,7 +3,6 @@ import type {
   ErrorShape,
   SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveSessionSubmittedModelRef } from "../../agents/session-model-ref.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
@@ -34,10 +33,8 @@ import {
 } from "./sessions-patch-archive.js";
 import {
   createSessionPatchCatalogPreparation,
-  projectSessionPatchRoute,
   type SessionPatchCatalogResult,
 } from "./sessions-patch-catalog-preparation.js";
-import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { discoverSessionPatchTargets } from "./sessions-patch-discovery.js";
 import * as patchEffects from "./sessions-patch-effects.js";
 import {
@@ -48,42 +45,27 @@ import {
 import * as sessionPatchExpectations from "./sessions-patch-expectations.js";
 import * as patchGroups from "./sessions-patch-groups.js";
 import * as modelSelection from "./sessions-patch-model-selection.js";
+import { isParticipationPermissionTightening } from "./sessions-patch-participation.js";
 import {
   prepareSessionPatchReplacement,
   createSessionPatchGroupWriter,
 } from "./sessions-patch-replacement.js";
 import type { PreparedSessionPatchExecutionPermission } from "./sessions-patch-sandbox.runtime.js";
 import type {
+  ExecuteSessionPatchMutationsParams,
   GroupMutationOperation,
   MutationOutcome,
-  MutationTarget,
   PreparedPatchTarget,
 } from "./sessions-patch-types.js";
 import { prepareSessionWorkerPlacementPatchValidation } from "./sessions-shared.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  SessionMutationAuthorization,
-} from "./types.js";
+import type { SessionMutationAuthorization } from "./types.js";
 import { preparePersonalModelSelection } from "./users-model-account-access.js";
 
-type PatchTargetIdentity = sessionUnreadAck.SessionPatchTargetIdentity;
 const { resolveSessionUnreadAck, validateSessionUnreadAck } = sessionUnreadAck;
 
 type ArchiveTransition = Awaited<ReturnType<typeof prepareSessionPatchArchiveTransition>>;
 
-export async function executeSessionPatchMutations(params: {
-  client: GatewayClient | null;
-  context: GatewayRequestContext;
-  signal?: AbortSignal;
-  diagnostics?: SessionPatchDiagnostics;
-  operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
-  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
-  readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
-  onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
-  patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
-  targets: readonly MutationTarget[];
-}) {
+export async function executeSessionPatchMutations(params: ExecuteSessionPatchMutationsParams) {
   const { client } = params;
   const timing = params.diagnostics?.scope("preflight");
   let personalModelSelection: UserModelAccountSelection | undefined;
@@ -432,10 +414,10 @@ export async function executeSessionPatchMutations(params: {
                         });
                         continue;
                       }
-                      const projected = await projectSessionPatchRoute({
-                        catalogs,
+                      const projection = await catalogs.project({
                         agentId: target.targetAgentId,
-                        // Detached preparation cannot replay earlier targets when a later one needs the catalog.
+                        // Detached preparation must not replay earlier restoration or
+                        // permission owners when a later target needs the catalog.
                         mode:
                           admission === "admitted" || group.length === 1 ? "prepare" : "ordered",
                         catalog: catalogPreparation,
@@ -451,19 +433,54 @@ export async function executeSessionPatchMutations(params: {
                           personalModelSelection,
                           operatorAuthority,
                         },
-                        context: params.context,
-                        callerCanConsent: callerIsAdmin,
-                        timing: groupTiming,
                       });
-                      if ("kind" in projected) {
-                        return { result: projected };
+                      if (projection.kind === "model-catalog") {
+                        // Nothing has committed. Release provisional permission handles
+                        // with this writer snapshot, then project again from fresh rows.
+                        return { result: projection };
                       }
+                      const projected = projection.result;
                       if (!projected.ok) {
-                        projectedOutcomes.push({ ok: false, error: projected.error });
+                        projectedOutcomes.push(projected);
                         continue;
                       }
-                      const runtimeSelection = projected.runtime;
+                      groupTiming?.mark("runtimeSelection");
+                      const runtimeSelection =
+                        await modelSelection.prepareSessionPatchRuntimeSelection({
+                          cfg,
+                          agentId: target.targetAgentId,
+                          patch: target.fullPatch,
+                          entry: projected.entry,
+                          expectedEntry: existingEntry,
+                          callerCanConsent: callerIsAdmin,
+                          operatorAuthority,
+                          catalog: (await catalogs.available(target.targetAgentId))?.entries,
+                          validateModelSelection: projected.validateModelSelection,
+                          placement: { context: params.context, sessionKey: primaryKey },
+                        });
+                      groupTiming?.mark("projection");
+                      if (!runtimeSelection.ok) {
+                        projectedOutcomes.push(runtimeSelection);
+                        continue;
+                      }
                       runtimeSelections.push(runtimeSelection);
+                      if (
+                        params.participationOnly &&
+                        !(await isParticipationPermissionTightening({
+                          cfg: getCurrentConfig(),
+                          agentId: target.targetAgentId,
+                          sessionKey: primaryKey,
+                          before: existingEntry,
+                          after: projected.entry,
+                        }))
+                      ) {
+                        projectedOutcomes.push(
+                          invalidSessionRequest(
+                            "Participants may only tighten the current effective permission policy.",
+                          ),
+                        );
+                        continue;
+                      }
                       const permissionChanged =
                         projected.entry.permissionMode !== existingEntry?.permissionMode;
                       const sandboxChanged =

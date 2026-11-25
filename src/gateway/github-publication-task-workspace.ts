@@ -10,6 +10,7 @@ import {
 import { commandError, requireGit, runGit } from "../agents/worktrees/git.js";
 import { resolveRepositoryIdentity } from "../agents/worktrees/repository-paths.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-read.js";
+import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
@@ -62,7 +63,10 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
   };
   // One task owns each checkout's publication for this conversation, so later
   // publications from the checkout update the same branch and PR.
-  const hash = createHash("sha256").update(`${origin.sessionKey}\0${source}`).digest("hex");
+  const participant = requester.snapshot.participation?.ceiling.profileId;
+  const hash = createHash("sha256")
+    .update(`${origin.sessionKey}\0${source}${participant ? `\0${participant}` : ""}`)
+    .digest("hex");
   const label = `github-publication-${hash.slice(0, 32)}`;
   const incognito = parent.entry.incognito === true || isIncognitoSessionKey(parent.canonicalKey);
   // Accepted retries retain their original task, including renamed and older tasks.
@@ -78,6 +82,7 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
       entry.parentSessionKey !== origin.sessionKey ||
       entry.createdVia !== "spawn" ||
       entry.projectId !== parent.entry.projectId ||
+      (participant && sessionCreatorProfileId(entry.createdActor) !== participant) ||
       (receipt && entry.sessionId !== receipt.session_id) ||
       (entry.worktree?.canonicalWorkspaceDir !== source && entry.spawnedCwd !== source)
     ) {
@@ -113,6 +118,7 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     const matches = children.filter(
       ({ entry }) =>
         entry.createdVia === "spawn" &&
+        (!participant || sessionCreatorProfileId(entry.createdActor) === participant) &&
         entry.label?.startsWith("github-publication-") &&
         (entry.worktree?.canonicalWorkspaceDir === source || entry.spawnedCwd === source),
     );

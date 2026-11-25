@@ -22,3 +22,34 @@ export function matchesOperatorApprovalReviewerBinding(
   // only the legacy adapters in approval-shared.
   return true;
 }
+
+/** One session's live participation approvals, resolved for one client before a bounded read. */
+export type OperatorApprovalExecSelection = Readonly<{
+  include: readonly string[];
+  exclude: readonly string[];
+  /** False when the client may see only the included approvals. */
+  ordinary: boolean;
+}>;
+
+/** Selection overrides reviewer bindings only for exec approvals it names. */
+export function matchesOperatorApprovalSelection(
+  record: { id: string; kind: string; reviewerDeviceIds?: readonly string[] | null },
+  reviewerDeviceId: string | undefined,
+  selection: OperatorApprovalExecSelection | undefined,
+): boolean {
+  if (record.kind === "exec" && selection) {
+    if (selection.exclude.includes(record.id)) {
+      return false;
+    }
+    if (selection.include.includes(record.id)) {
+      return true;
+    }
+    if (!selection.ordinary) {
+      return false;
+    }
+  }
+  return (
+    reviewerDeviceId === undefined ||
+    matchesOperatorApprovalReviewerBinding(record, reviewerDeviceId)
+  );
+}

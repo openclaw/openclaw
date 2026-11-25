@@ -60,6 +60,7 @@ import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagen
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { registerSubagentRegistrationOwnershipTests } from "./subagent-registry.registration-ownership.test-support.js";
 import { registerRequesterAutomationCustodyTests } from "./subagent-registry.requester-automation-custody.test-support.js";
+import { registerRequesterIdentityTests } from "./subagent-registry.requester-identity.test-support.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
@@ -156,6 +157,8 @@ afterEach(async () => {
 describe("registered completion source custody", () => {
   registerSubagentRegistrationOwnershipTests({ registration, updateRun });
   registerCompletedFollowupAuthorityTests({ registration, updateRun });
+
+  registerRequesterIdentityTests({ registration, updateRun });
 
   it.each([
     "current",

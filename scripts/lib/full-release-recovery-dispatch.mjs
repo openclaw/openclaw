@@ -231,6 +231,7 @@ export async function discoverReceiptRecoveryRequest(
     jobs,
     client,
     plan?.candidate,
+    admission.request.inputs,
   );
   const requestId = randomUUID();
   let policyQualification;
@@ -548,7 +549,7 @@ export async function dispatchReceiptRecovery(options, client) {
       parent.status === "completed" && ["success", "failure"].includes(parent.conclusion),
       "original parent is not terminal",
     );
-    await verifyWaiverPolicyCommit(client, parent.head_sha, options.policySha);
+    await verifyWaiverPolicyCommit(client, admission, options.policySha, { preparing: true });
     return {
       qualificationRequest: receiptRecoveryPolicyRequest(
         admission,

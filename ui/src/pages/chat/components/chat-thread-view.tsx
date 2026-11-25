@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { Loading, Show, lazy, createMemo, createSignal, onSettled, useContext } from "solid-js";
 import { routeIdFromPath } from "../../../app-route-paths.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
@@ -127,6 +128,7 @@ type ChatThreadInput = {
   transcript: ChatTranscript;
   bindViewport?: (element: HTMLDivElement) => () => void;
   historySupplement?: TranscriptHeader;
+  children?: JSX.Element;
 };
 
 export function ChatThread(input: ChatThreadInput) {
@@ -264,8 +266,16 @@ function ChatThreadContent(
     const stopSearch = searchState.subscribe(() => {
       const nextQuery = searchState.snapshot.query.trim();
       if (nextQuery && nextQuery !== query) {
-        // A live reply remains below the matches; end-follow must not hide them.
-        input.transcript.scrollToOffset(0);
+        // A live reply can sit below the matches. Only ask for the first result
+        // after this query has rendered rows to receive that scroll command.
+        onSettled(() => {
+          if (
+            searchState.snapshot.query.trim() === nextQuery &&
+            input.transcript.scrollElement === element
+          ) {
+            input.transcript.scrollToOffset(0);
+          }
+        });
       }
       query = nextQuery;
     });
@@ -592,6 +602,7 @@ function ChatThreadContent(
         />
         <div class="chat-thread-content">
           {contents()}
+          {input.children}
           <Show when={input.props.applicationContext}>
             {(context) => (
               <TemplateCreatorReview context={context()} sessionKey={input.props.sessionKey} />

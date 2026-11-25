@@ -10,7 +10,6 @@ import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { createTestSessionCapability } from "../lib/sessions/session-capability.test-support.ts";
 import {
   createContext,
-  createGateway,
   createGatewayHarness,
   createSessions,
   mountSidebarContext,
@@ -18,11 +17,12 @@ import {
 import "../test-helpers/app-sidebar-suite.ts";
 import { domProbe, allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { AppSidebarOnline } from "./app-sidebar-online.tsx";
-import { renderSidebarAgentCard } from "./app-sidebar-render.tsx";
+import { renderSidebarAgentCard, SidebarNewSessionAction } from "./app-sidebar-render.tsx";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import { AppSidebarOwner, type AppSidebarElement } from "./app-sidebar.tsx";
@@ -43,10 +43,8 @@ const emptySnapshot: SidebarSnapshotModel = {
 };
 
 function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<SidebarSnapshotModel>) {
-  const context = createContext(
-    createGateway(createTestGatewayClient(async () => ({}))),
-    createSessions("main", []),
-  );
+  const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
+  const context = createContext(gateway.gateway, createSessions("main", []));
   const container = document.createElement("div");
   const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
   props.sidebarAgentsMode = mode;
@@ -61,7 +59,7 @@ function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<Sideb
   if (snapshot) {
     host.restoreSidebarSnapshot({ ...emptySnapshot, ...snapshot });
   }
-  return { host, container, context, dom: domProbe(container) };
+  return { host, container, context, gateway, dom: domProbe(container) };
 }
 
 function mountRow(
@@ -503,6 +501,80 @@ it("keeps the rendered preview slot after caching without restoring live run aut
     dom.all("[data-sidebar-session-pin]:enabled, [data-sidebar-session-archive]:enabled"),
   ).toHaveLength(0);
 });
+
+it.each([
+  {
+    name: "connected with creation access",
+    connected: true,
+    methods: ["sessions.create"],
+    scopes: ["operator.sessions.write"],
+    allowed: true,
+  },
+  {
+    name: "disconnected",
+    connected: false,
+    methods: ["sessions.create"],
+    scopes: ["operator.sessions.write"],
+    allowed: false,
+  },
+  {
+    name: "read-only",
+    connected: true,
+    methods: ["sessions.create"],
+    scopes: ["operator.read"],
+    allowed: false,
+  },
+  {
+    name: "creation unavailable",
+    connected: true,
+    methods: [],
+    scopes: ["operator.sessions.write"],
+    allowed: false,
+  },
+])(
+  "uses live New session access while cached row actions stay disabled: $name",
+  ({ connected, methods, scopes, allowed }) => {
+    const { host, container, gateway, dom } = createHost("chip", {});
+    host.connected = connected;
+    gateway.publish({
+      phase: connected ? "connected" : "reconnecting",
+      hello: gatewayHelloForMethods([...methods, "sessions.patch"], scopes),
+    });
+    const open = vi.fn();
+    host.onOpenNewSession = open;
+    const row = restoreSnapshotSession(
+      {
+        key: "agent:main:cached",
+        label: "Cached session",
+        pinned: false,
+        isChild: false,
+        children: [],
+      },
+      "",
+    );
+    mountObservedHost(host, container, (observedHost) => (
+      <>
+        <SidebarNewSessionAction host={observedHost} class="sidebar-new-session" />
+        <SessionTree host={observedHost} session={row} />
+      </>
+    ));
+    const create = dom.query<HTMLAnchorElement>(".sidebar-new-session")!;
+    expect(create.getAttribute("href")).toBe(allowed ? "/new?agent=main" : null);
+    expect(create.getAttribute("aria-disabled")).toBe(allowed ? null : "true");
+    create.click();
+    expect(open).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    if (allowed) {
+      expect(open).toHaveBeenCalledWith("main");
+    }
+    const actions = dom.all<HTMLButtonElement>(
+      "[data-sidebar-session-pin], [data-sidebar-session-archive]",
+    );
+    expect(actions).toHaveLength(2);
+    for (const action of actions) {
+      expect(action.disabled).toBe(true);
+    }
+  },
+);
 
 it("keeps a restored pin's badges after roster handoff until its own descriptor replaces it", () => {
   const { host, container, dom } = createHost("chip");

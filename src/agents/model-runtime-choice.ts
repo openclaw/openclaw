@@ -19,6 +19,7 @@ import { modelKey, type ModelRef } from "./model-ref-shared.js";
 import { resolveConfiguredModelPolicyAllow } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
 
 // Cache process-stable modules, not the catalog/auth facts read from each request's owner.
@@ -341,8 +342,7 @@ export async function prepareModelChoice(params: {
   );
 }
 
-/** Bind runtime selection and its commit check to the current published model owner. */
-export async function preparePublishedModelRuntimeChoice(params: {
+type PublishedRuntimeChoiceParams = {
   cfg: OpenClawConfig;
   agentId: string;
   workspaceDir?: string;
@@ -358,7 +358,131 @@ export async function preparePublishedModelRuntimeChoice(params: {
     SessionEntry,
     "authProfileOverride" | "authProfileOverrideSource" | "providerOverride" | "modelProvider"
   >;
-}): Promise<
+};
+
+async function prepareAccountDecisions(
+  owner: PreparedModelRuntimeSnapshot,
+  params: PublishedRuntimeChoiceParams,
+) {
+  const { getPreparedModelRuntimeAuthStore } = await loadPreparedRuntimeAuth();
+  const { prepareModelCatalogDecisions } = await loadModelCatalogDecisions();
+  const authStore = getPreparedModelRuntimeAuthStore(owner);
+  if (!authStore) {
+    return undefined;
+  }
+  return await prepareModelCatalogDecisions({
+    cfg: owner.config,
+    agentId: owner.agentId ?? params.agentId,
+    agentDir: owner.agentDir,
+    workspaceDir: owner.workspaceDir,
+    snapshot: owner.modelCatalog,
+    metadataSnapshot: owner.metadataSnapshot,
+    preparedAuthStore: authStore,
+    preparedRuntimeAuthModes: owner.authModes,
+    pluginRegistry: owner.pluginRegistry,
+    observationConfig: owner.observationConfig,
+    isCurrent: owner.isCurrent,
+    preferredProfileId: params.sessionEntry?.authProfileOverride,
+    pinnedProfileId:
+      params.sessionEntry?.authProfileOverrideSource === "user"
+        ? params.sessionEntry.authProfileOverride
+        : undefined,
+    profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
+  });
+}
+
+function describeUnavailableAccount(
+  unavailableSubject: string,
+  evaluation: ModelAuthAvailabilityEvaluation,
+  provider: string,
+  runtimeId?: string,
+): string {
+  const reason = evaluation.availability === true ? undefined : evaluation.unavailableReason;
+  if (!reason) {
+    return `${unavailableSubject}. Refresh the model catalog and choose again.`;
+  }
+  if (
+    (reason === "missing-auth" || reason === "auth-failed") &&
+    evaluation.selectedProfileId &&
+    !evaluation.runtimeAuth
+  ) {
+    // Shared replies must not expose the owner/account locator of a personal credential.
+    const account = isUserModelAuthProfileId(evaluation.selectedProfileId)
+      ? "personal account"
+      : `account "${evaluation.selectedProfileId}"`;
+    return `${unavailableSubject}: selected ${account} is unavailable. Restore that account, or change the explicit or default account selection.`;
+  }
+  const claudeCli = resolveModelRuntimeRoute(provider, runtimeId) === "claudeCli";
+  switch (reason) {
+    case "missing-auth":
+      return `${unavailableSubject}: sign-in needed. ${claudeCli ? CLAUDE_CLI_SETUP_GUIDANCE : "Connect its provider account, or choose another model."}`;
+    case "auth-failed":
+      return `${unavailableSubject}: sign-in failed. ${claudeCli ? CLAUDE_CLI_SETUP_GUIDANCE : "Sign in to its provider again, or choose another model."}`;
+    case "cooldown":
+      return `${unavailableSubject}: temporarily unavailable. Try again later or choose another model.`;
+    default:
+      return `${unavailableSubject}. Refresh the model catalog and choose again.`;
+  }
+}
+
+function selectedRouteVariants(snapshot: ModelCatalogSnapshot, entry: ModelCatalogEntry) {
+  const identity = createModelCatalogIdentityKeyResolver();
+  const key = identity(entry);
+  const variants = snapshot.routeVariants.filter((row) => identity(row) === key);
+  return variants.length ? variants : [entry];
+}
+
+/** Inspect the requested host route only. Do not discover models or select a runtime for it. */
+export async function readPublishedHostModelAccountFailure(
+  params: Pick<
+    PublishedRuntimeChoiceParams,
+    "cfg" | "agentId" | "workspaceDir" | "provider" | "model" | "sessionEntry"
+  >,
+): Promise<{ message: string; pinned: boolean } | undefined> {
+  const { getPublishedPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
+    await loadPreparedModelCatalog();
+  const published = getPublishedPreparedModelCatalogOwnerSnapshot({
+    config: params.cfg,
+    agentId: params.agentId,
+    workspaceDir: params.workspaceDir,
+  });
+  const decisions =
+    published &&
+    (await prepareAccountDecisions(materializePreparedModelCatalogOwner(published), params));
+  if (!decisions) {
+    return undefined;
+  }
+  const entry = findModelInCatalog(decisions.snapshot.entries, params.provider, params.model) ?? {
+    provider: params.provider,
+    id: params.model,
+    name: params.model,
+  };
+  const account = decisions.evaluateEntry(
+    entry,
+    selectedRouteVariants(decisions.snapshot, entry),
+    "openclaw",
+  );
+  if (
+    account.availability === true ||
+    (account.unavailableReason !== "missing-auth" && account.unavailableReason !== "auth-failed")
+  ) {
+    return undefined;
+  }
+  return {
+    pinned: decisions.hasPinnedAccount(entry),
+    message: describeUnavailableAccount(
+      `Runtime "openclaw" is not available for ${params.provider}/${params.model}`,
+      account,
+      params.provider,
+      "openclaw",
+    ),
+  };
+}
+
+/** Bind runtime selection and its commit check to the current published model owner. */
+export async function preparePublishedModelRuntimeChoice(
+  params: PublishedRuntimeChoiceParams,
+): Promise<
   | { kind: "unavailable"; message: string }
   | {
       kind: "ready";
@@ -370,8 +494,6 @@ export async function preparePublishedModelRuntimeChoice(params: {
   const catalog = await loadPreparedModelCatalog();
   const { getPublishedPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
     catalog;
-  const { getPreparedModelRuntimeAuthStore } = await loadPreparedRuntimeAuth();
-  const { prepareModelCatalogDecisions } = await loadModelCatalogDecisions();
   const catalogParams = {
     config: params.cfg,
     agentId: params.agentId,
@@ -433,29 +555,10 @@ export async function preparePublishedModelRuntimeChoice(params: {
     }
   }
   const owner = materializePreparedModelCatalogOwner(published, nativeCatalog);
-  const authStore = getPreparedModelRuntimeAuthStore(owner);
-  if (!authStore) {
+  const decisions = await prepareAccountDecisions(owner, params);
+  if (!decisions) {
     return { kind: "unavailable", message: unavailable };
   }
-  const decisions = await prepareModelCatalogDecisions({
-    cfg: owner.config,
-    agentId: owner.agentId ?? params.agentId,
-    agentDir: owner.agentDir,
-    workspaceDir: owner.workspaceDir,
-    snapshot: owner.modelCatalog,
-    metadataSnapshot: owner.metadataSnapshot,
-    preparedAuthStore: authStore,
-    preparedRuntimeAuthModes: owner.authModes,
-    pluginRegistry: owner.pluginRegistry,
-    observationConfig: owner.observationConfig,
-    isCurrent: owner.isCurrent,
-    preferredProfileId: params.sessionEntry?.authProfileOverride,
-    pinnedProfileId:
-      params.sessionEntry?.authProfileOverrideSource === "user"
-        ? params.sessionEntry.authProfileOverride
-        : undefined,
-    profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
-  });
   const { resolveCatalogDecisionRuntime } = await loadCatalogDecisionRuntime();
   const configuredRuntime = (entry: ModelCatalogEntry, variants?: readonly ModelCatalogEntry[]) =>
     resolveCatalogDecisionRuntime({
@@ -467,26 +570,11 @@ export async function preparePublishedModelRuntimeChoice(params: {
       resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
     })?.id ?? "openclaw";
   // Recovery belongs to the failed account, which may differ from the runtime's native login.
-  const describeUnavailable = async (
+  const describeUnavailable = (
     row: ModelCatalogEntry,
     evaluation: ModelAuthAvailabilityEvaluation,
     runtimeId: string | undefined,
-  ): Promise<string> => {
-    const reason = evaluation.availability === true ? undefined : evaluation.unavailableReason;
-    if (!reason) {
-      return unavailable;
-    }
-    if (
-      (reason === "missing-auth" || reason === "auth-failed") &&
-      evaluation.selectedProfileId &&
-      !evaluation.runtimeAuth
-    ) {
-      // Shared replies must not expose the owner/account locator of a personal credential.
-      const account = isUserModelAuthProfileId(evaluation.selectedProfileId)
-        ? "personal account"
-        : `account "${evaluation.selectedProfileId}"`;
-      return `${unavailableSubject}: selected ${account} is unavailable. Restore that account, or change the explicit or default account selection.`;
-    }
+  ): string => {
     const routeRuntimeId =
       runtimeId ??
       resolveCatalogDecisionRuntime({
@@ -497,17 +585,12 @@ export async function preparePublishedModelRuntimeChoice(params: {
         pluginRegistry: owner.pluginRegistry,
         resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
       })?.id;
-    const claudeCli = resolveModelRuntimeRoute(params.provider, routeRuntimeId) === "claudeCli";
-    switch (reason) {
-      case "missing-auth":
-        return `${unavailableSubject}: sign-in needed. ${claudeCli ? CLAUDE_CLI_SETUP_GUIDANCE : "Connect its provider account, or choose another model."}`;
-      case "auth-failed":
-        return `${unavailableSubject}: sign-in failed. ${claudeCli ? CLAUDE_CLI_SETUP_GUIDANCE : "Sign in to its provider again, or choose another model."}`;
-      case "cooldown":
-        return `${unavailableSubject}: temporarily unavailable. Try again later or choose another model.`;
-      default:
-        return unavailable;
-    }
+    return describeUnavailableAccount(
+      unavailableSubject,
+      evaluation,
+      params.provider,
+      routeRuntimeId,
+    );
   };
   let entry =
     findModelInCatalog(decisions.snapshot.entries, params.provider, params.model) ??
@@ -536,7 +619,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
     if (selectedAuth.availability !== true || !authProfileMode) {
       return {
         kind: "unavailable",
-        message: await describeUnavailable(requestedEntry, selectedAuth, materializationRuntime),
+        message: describeUnavailable(requestedEntry, selectedAuth, materializationRuntime),
       };
     }
     const resolved = await resolveModelAsync(
@@ -563,12 +646,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
     }
     entry = modelCatalogRowToEntry(resolved.model);
   }
-  const identityKey = createModelCatalogIdentityKeyResolver();
-  const selectedIdentity = identityKey(entry);
-  const variants = decisions.snapshot.routeVariants.filter(
-    (row) => identityKey(row) === selectedIdentity,
-  );
-  const entryVariants = variants.length ? variants : [entry];
+  const entryVariants = selectedRouteVariants(decisions.snapshot, entry);
   const choices = decisions.runtimeChoices(entry, entryVariants);
   const runtimeId =
     params.runtimeId ??
@@ -585,7 +663,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
     );
     return {
       kind: "unavailable",
-      message: await describeUnavailable(entry, evaluation, requestedRuntimeId),
+      message: describeUnavailable(entry, evaluation, requestedRuntimeId),
     };
   }
   const host = decisions.evaluateEntry(entry, entryVariants, runtimeId);

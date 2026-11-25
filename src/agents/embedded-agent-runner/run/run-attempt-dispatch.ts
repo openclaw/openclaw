@@ -3,7 +3,7 @@ import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import * as runAdmission from "../../admitted-run-context.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import { resizeExecApprovalContinuationPrompt } from "../../bash-tools.exec-approval-output.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
@@ -12,6 +12,7 @@ import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import { resolveTurnCyberAccessProgram } from "../../model-catalog-access-programs.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
+import { assertParticipationRuntime } from "../../participation-ceiling.js";
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
@@ -77,7 +78,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     notifyRunProgress,
     resolveAttemptFastModeParam,
   } = runInput.progressController;
-  const { createAttemptControls } = runInput.laneController;
   const {
     provider,
     modelId,
@@ -91,6 +91,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     resolveRunAttemptAuthProfileStore,
   } = preparedRuntime;
   const runtime = preparedRuntime.snapshot();
+  const ceiling = runAdmission.readRunOperatorAuthority(params)?.participationCeiling;
+  assertParticipationRuntime(ceiling, runtime.agentHarness.id);
   const effectiveModel = attachModelProviderRuntimePluginHandle(
     runtime.effectiveModel,
     runtime.providerRuntimeHandle,
@@ -156,7 +158,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   }
   const admittedRunContext = params.admittedRunContext;
   const requireActiveAssertion = (signal?: AbortSignal) => {
-    const assertion = resolveAdmittedRunActiveAssertion(admittedRunContext, signal);
+    const assertion = runAdmission.resolveAdmittedRunActiveAssertion(admittedRunContext, signal);
     if (!assertion) {
       throw new Error("embedded attempt reached dispatch without an active admitted run");
     }
@@ -346,11 +348,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       admission: runInput.sessionAdmission,
       assertCallerCurrent: assertActiveRun,
     });
-  const attemptControls = createAttemptControls({
+  const attemptControls = runInput.laneController.createAttemptControls({
     admittedRunContext,
-    onAbort: () => {
-      params.replyOperation?.abortByUser();
-    },
+    onAbort: () => params.replyOperation?.abortByUser(),
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
   const preparedSessionTarget =

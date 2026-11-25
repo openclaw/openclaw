@@ -65,6 +65,7 @@ import {
 import {
   AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
   AGENT_MEMBER_ACCESS_POSTGRES_MIGRATION_SQL,
+  getAgentMemberAccessMinReader,
   withoutAgentPostgresMemberAccess,
 } from "./openclaw-agent-member-access-schema.js";
 import { withLegacyAgentPostgresMemoryPaths } from "./openclaw-agent-memory-path-migration.js";
@@ -427,6 +428,9 @@ function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
     },
     {
       version: AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+      get minReader() {
+        return getAgentMemberAccessMinReader();
+      },
       fromSchema: {
         postgres: agentPostgresV43Sql,
         postgresVectorDecoderVersion: 2,
@@ -509,6 +513,7 @@ function admitAgentPostgres(
       agentId,
       role: "agent",
       schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      minReader: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
   }
   const metadata = readExistingAgentSchemaMeta(db);
@@ -518,7 +523,13 @@ function admitAgentPostgres(
     pathname,
     agentEngineSchema.version,
   );
-  if (getPostgresPhysicalFacts(db)?.version !== agentEngineSchema.version) {
+  const facts = getPostgresPhysicalFacts(db);
+  if (
+    !facts ||
+    facts.version < agentEngineSchema.version ||
+    facts.minReader > agentEngineSchema.version ||
+    metadata?.schemaVersion !== facts.version
+  ) {
     throw new Error("Agent database has no current PostgreSQL schema admission");
   }
   // Nested worker writes must see the identity anchor's completed native admission.

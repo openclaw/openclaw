@@ -43,7 +43,7 @@ import {
   type ZaloMessage,
   type ZaloUpdate,
 } from "./api.js";
-import { normalizeZaloAllowEntry, resolveZaloRuntimeGroupPolicy } from "./group-access.js";
+import { resolveZaloRuntimeGroupPolicy, zaloIngressIdentity } from "./group-access.js";
 import type { ZaloRuntimeEnv, ZaloStatusSink } from "./monitor.types.js";
 import {
   prepareHostedZaloMediaUrl,
@@ -269,12 +269,7 @@ async function authorizeZaloMessage(
     await core.channel.inbound.ingress.resolveStable({
       channelId: "zalo",
       accountId: account.accountId,
-      identity: {
-        key: "zalo-user-id",
-        normalize: normalizeZaloAllowEntry,
-        sensitivity: "pii",
-        entryIdPrefix: "zalo-entry",
-      },
+      identity: zaloIngressIdentity,
       cfg: config,
       readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
       subject: { stableId: senderId },
