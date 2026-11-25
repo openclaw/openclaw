@@ -1687,6 +1687,7 @@
   "ui/src/pages/chat/chat-typing-presence.ts",
   "ui/src/pages/chat/chat-view-frame.ts",
   "ui/src/pages/chat/chat-view-notices.tsx",
+  "ui/src/pages/chat/chat-view-transcript.tsx",
   "ui/src/pages/chat/chat-view.tsx",
   "ui/src/pages/chat/chat-viewer-presence.ts",
   "ui/src/pages/chat/chat-work-context.ts",

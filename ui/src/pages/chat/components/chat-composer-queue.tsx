@@ -24,6 +24,7 @@ import {
 } from "../chat-send-presentation.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { handleQueueEditKeydown } from "./chat-composer-keydown.ts";
+import { ChatQueueCopyAction } from "./chat-composer-queue-copy.tsx";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {
@@ -606,14 +607,7 @@ function ChatQueueItem(rowProps: {
       )}
       <span class="chat-queue__actions">
         {item().cancelled ? (
-          <button
-            type="button"
-            class="chat-queue__action"
-            aria-label={t("common.copy")}
-            onClick={() => rowProps.controls.onQueueCopy?.(item().id)}
-          >
-            <Icon name="copy" />
-          </button>
+          <ChatQueueCopyAction onCopy={() => rowProps.controls.onQueueCopy?.(item().id)} />
         ) : null}
         {failed() && !editing() && rowProps.controls.onQueueRetry
           ? renderDeliveryAction("retry")
