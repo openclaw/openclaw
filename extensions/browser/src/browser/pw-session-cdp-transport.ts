@@ -1,5 +1,4 @@
 import type { lookup as dnsLookupCb } from "node:dns";
-import { posix, win32 } from "node:path";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
@@ -18,19 +17,6 @@ type CdpSocketLookup = typeof dnsLookupCb;
 const FIRST_INTERNAL_COMMAND_ID = -10_000;
 const MAX_DIAGNOSTIC_TARGETS = 3;
 const MAX_DIAGNOSTIC_TARGET_ID_CHARS = 128;
-
-async function windowsDownloadPath(downloadPath: string): Promise<string> {
-  try {
-    const { stdout } = await runExec("wslpath", ["-w", downloadPath], 1000);
-    const translated = stdout.trimEnd();
-    if (win32.isAbsolute(translated)) {
-      return translated;
-    }
-  } catch {
-    // Keep the connection usable if WSL path translation is unavailable.
-  }
-  return downloadPath;
-}
 
 export class UnresponsiveCdpTargetError extends Error {
   constructor(targetIds: string[]) {
@@ -245,20 +231,20 @@ export async function connectOverCdpTransport(
         if (windowsBrowser && method === "Browser.setDownloadBehavior") {
           const params = asOptionalRecord(command?.params);
           const downloadPath = readStringField(params, "downloadPath");
-          if (
-            params?.behavior === "allowAndName" &&
-            downloadPath &&
-            posix.isAbsolute(downloadPath)
-          ) {
-            // Playwright still reads and cleans up its original WSL-local directory.
-            void windowsDownloadPath(downloadPath)
-              .then((translatedPath) => {
+          if (downloadPath) {
+            // Windows Chrome cannot write to a WSL path; Playwright keeps reading and
+            // cleaning up the original directory. Without wslpath, send it unchanged.
+            void runExec("wslpath", ["-w", downloadPath], 1000)
+              .then(
+                ({ stdout }) => ({
+                  ...command,
+                  params: { ...params, downloadPath: stdout.trim() },
+                }),
+                () => message,
+              )
+              .then((next) => {
                 if (!closingReason && !transportClosed) {
-                  const translated = {
-                    ...command,
-                    params: { ...params, downloadPath: translatedPath },
-                  };
-                  wire.send(normalizer?.send(translated) ?? translated);
+                  wire.send(normalizer?.send(next) ?? next);
                 }
               })
               .catch((error: unknown) => closeTransportSocket(formatErrorMessage(error)));
