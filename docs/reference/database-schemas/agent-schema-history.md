@@ -59,7 +59,7 @@ backup and its matching build, not just reinstalling the older package.
 | 40      | Durable session creation receipts bound to the original session incarnation                                                                                                                                                                            | `v2026.11.10-beta.1` |
 | 41      | Active transcript byte and dependency facts in an initially empty companion table                                                                                                                                                                      | `v2026.11.10-beta.1` |
 | 42      | Opt-in aggregate successful tool usage scores, without transcript backfill                                                                                                                                                                             | `v2026.11.10-beta.1` |
-| 43      | Pending-input terminal causes and original-source storage; legacy user Stop and dismissal facts become `user-stop` without changing accepted message bytes                                                                                             | `v2026.11.15-beta.1` |
+| 43      | Pending-input terminal causes and original-source storage; legacy user Stop and dismissal facts become `user-stop` without changing accepted message bytes                                                                                             | `v2026.12.1-beta.1`  |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
