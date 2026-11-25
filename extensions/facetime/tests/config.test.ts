@@ -70,11 +70,15 @@ describe("FaceTime doctor config compatibility", () => {
       ownerHandles: ["owner@example.com", "+12065550123"],
       realtime,
     });
+    expect(result.config.commands).toEqual({
+      ownerAllowFrom: ["facetime:owner@example.com", "facetime:+12065550123"],
+    });
     expect(result.changes).toEqual([
       "Moved plugins.entries.facetime.config.whitelistHandles to plugins.entries.facetime.config.ownerHandles.",
       "Removed retired plugins.entries.facetime.config.helperHost.",
       "Removed retired plugins.entries.facetime.config.helperPort.",
       "Removed retired plugins.entries.facetime.config.realtime.brain.",
+      expect.stringContaining("Added FaceTime owner handles to commands.ownerAllowFrom"),
     ]);
   });
 
@@ -90,10 +94,32 @@ describe("FaceTime doctor config compatibility", () => {
     });
     expect(first.changes).toEqual([
       "Removed plugins.entries.facetime.config.whitelistHandles; plugins.entries.facetime.config.ownerHandles is authoritative.",
+      expect.stringContaining("(facetime:current@example.com)"),
     ]);
     expect(normalizeCompatibilityConfig({ cfg: first.config })).toEqual({
       config: first.config,
       changes: [],
     });
+  });
+
+  it("copies owner handles into commands.ownerAllowFrom once, keeping existing owners", () => {
+    const first = normalizeCompatibilityConfig({
+      cfg: {
+        ...wrap({ ownerHandles: ["MAILTO:Owner@Example.com", "tel:+1 (206) 555-0123", "a@b.c"] }),
+        commands: { ownerAllowFrom: ["discord:123", 456] },
+      },
+    });
+    expect(first.config.commands?.ownerAllowFrom).toEqual([
+      "discord:123",
+      456,
+      "facetime:owner@example.com",
+      "facetime:+12065550123",
+      "facetime:a@b.c",
+    ]);
+
+    // The operator takes owner tools away from one caller; Doctor keeps that choice.
+    const edited = structuredClone(first.config);
+    edited.commands = { ownerAllowFrom: ["discord:123", "facetime:owner@example.com"] };
+    expect(normalizeCompatibilityConfig({ cfg: edited })).toEqual({ config: edited, changes: [] });
   });
 });

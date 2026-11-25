@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { faceTimeSenderId } from "./src/call-events.js";
 
 const CONFIG_PATH = ["plugins", "entries", "facetime", "config"] as const;
 const RETIRED_CONFIG_KEYS = ["helperHost", "helperPort"] as const;
@@ -28,7 +29,10 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   },
 ];
 
-/** Moves or removes retired prototype keys so runtime sees only the canonical config shape. */
+/**
+ * Moves or removes retired prototype keys so runtime sees only the canonical config shape, and
+ * copies FaceTime callers into `commands.ownerAllowFrom` once, when they last meant "owner".
+ */
 export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;
   changes: string[];
@@ -42,7 +46,13 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   const retiredKeys = RETIRED_CONFIG_KEYS.filter((key) => Object.hasOwn(pluginConfig, key));
   const realtime = asObjectRecord(pluginConfig.realtime);
   const hasRetiredBrain = Boolean(realtime && Object.hasOwn(realtime, "brain"));
-  if (!hasLegacyOwnerHandles && retiredKeys.length === 0 && !hasRetiredBrain) {
+  // One-shot by state: once any FaceTime owner is listed, the operator edits owners there.
+  const ownerAllowFrom = cfg.commands?.ownerAllowFrom ?? [];
+  const copiesOwners =
+    !ownerAllowFrom.some((owner) => String(owner).trim().startsWith("facetime:")) &&
+    normalizeTrimmedStringList(pluginConfig.ownerHandles ?? pluginConfig.whitelistHandles).length >
+      0;
+  if (!hasLegacyOwnerHandles && retiredKeys.length === 0 && !hasRetiredBrain && !copiesOwners) {
     return { config: cfg, changes: [] };
   }
 
@@ -82,6 +92,16 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   if (hasRetiredBrain && nextRealtime) {
     delete nextRealtime.brain;
     changes.push(`Removed retired ${[...CONFIG_PATH, "realtime", "brain"].join(".")}.`);
+  }
+
+  if (copiesOwners) {
+    const added = normalizeTrimmedStringList(nextPluginConfig.ownerHandles)
+      .map(faceTimeSenderId)
+      .filter((owner, index, owners) => owner !== "facetime:" && owners.indexOf(owner) === index);
+    nextConfig.commands = { ...nextConfig.commands, ownerAllowFrom: [...ownerAllowFrom, ...added] };
+    changes.push(
+      `Added FaceTime owner handles to commands.ownerAllowFrom (${added.join(", ")}). ${[...CONFIG_PATH, "ownerHandles"].join(".")} now only lists who may call; remove an entry from commands.ownerAllowFrom to take away owner tools.`,
+    );
   }
 
   return { config: nextConfig, changes };
