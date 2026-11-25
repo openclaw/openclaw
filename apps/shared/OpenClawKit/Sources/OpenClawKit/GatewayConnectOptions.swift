@@ -1,3 +1,4 @@
+import Foundation
 import OpenClawProtocol
 
 public enum OpenClawGatewayClientCapability {
@@ -115,6 +116,27 @@ public struct GatewayAuthBinding: Equatable, Sendable {
 }
 
 extension GatewayConnectOptions {
+    func validatePersonalSignInRequest(token: String?, bootstrapToken: String?, password: String?) throws {
+        if self.requiredAuthMethod != nil,
+           self.role != "operator" || token?.trimmedNonEmpty != nil ||
+           bootstrapToken?.trimmedNonEmpty != nil || password?.trimmedNonEmpty != nil
+        {
+            throw NSError(domain: "Gateway", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Personal sign-in requires a credentialless operator connection",
+            ])
+        }
+    }
+
+    func validatePersonalSignInHello(method: String?, recoveryScope: String?) throws {
+        if let requiredAuthMethod = self.requiredAuthMethod,
+           method != requiredAuthMethod.rawValue || recoveryScope?.trimmedNonEmpty == nil
+        {
+            throw NSError(domain: "Gateway", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The Gateway did not verify the selected personal sign-in",
+            ])
+        }
+    }
+
     var allowsDeviceAuthPersistence: Bool {
         // Legacy callers must rotate credentials in the same unscoped namespace they read.
         // Fresh pairing instead supplies an owner; explicit ownerless handoffs set false/nil.

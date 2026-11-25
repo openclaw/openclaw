@@ -575,14 +575,8 @@ public actor GatewayChannelActor {
         let clientDisplayName = options.clientDisplayName ?? InstanceIdentity.displayName
         let role = options.role
         let protocols = self.supportedProtocols
-        if options.requiredAuthMethod != nil,
-           role != "operator" || self.token?.trimmedNonEmpty != nil ||
-           self.bootstrapToken?.trimmedNonEmpty != nil || self.password?.trimmedNonEmpty != nil
-        {
-            throw NSError(domain: "Gateway", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Personal sign-in requires a credentialless operator connection",
-            ])
-        }
+        try options.validatePersonalSignInRequest(
+            token: self.token, bootstrapToken: self.bootstrapToken, password: self.password)
         let identity = try Self.loadDeviceIdentityForConnect(
             includeDeviceIdentity: options.includeDeviceIdentity,
             profile: options.deviceIdentityProfile)
@@ -997,14 +991,8 @@ extension GatewayChannelActor {
         }
         let payloadData = try self.encoder.encode(payload)
         let ok = try decoder.decode(HelloOk.self, from: payloadData)
-        if let method = options.requiredAuthMethod,
-           ok.auth["method"]?.stringValue != method.rawValue ||
-           ok.auth["recoveryScope"]?.stringValue?.trimmedNonEmpty == nil
-        {
-            throw NSError(domain: "Gateway", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "The Gateway did not verify the selected personal sign-in",
-            ])
-        }
+        try options.validatePersonalSignInHello(
+            method: ok.auth["method"]?.stringValue, recoveryScope: ok.auth["recoveryScope"]?.stringValue)
         if let tick = ok.policy["tickIntervalMs"]?.doubleValue {
             self.tickIntervalMs = tick
         }
