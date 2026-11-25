@@ -4200,7 +4200,7 @@ async function main() {
     try {
       log = stripVTControlCharacters(await client.getJobLog(jobId));
     } catch (error) {
-      if (!/HTTP 404\b/u.test(String(error?.stderr ?? ""))) {
+      if (!/\b(?:HTTP|returned status) 404\b/iu.test(String(error?.stderr ?? ""))) {
         throw error;
       }
       // The archive can be missing while the job runs. A 404 alone cannot distinguish this

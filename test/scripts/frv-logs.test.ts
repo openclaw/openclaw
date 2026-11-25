@@ -57,12 +57,11 @@ describe("frv logs", () => {
     expect(result.stdout).toBe("FAIL first\nFAIL third\n");
   });
 
+  const retryAdvice =
+    'Job 123 "tests" is in_progress. Retry the log request after the job completes.';
   it.each([
-    [
-      "gh: HTTP 404",
-      "in_progress",
-      'Job 123 "tests" is in_progress. Retry the log request after the job completes.',
-    ],
+    ["gh: HTTP 404", "in_progress", retryAdvice],
+    ["error: github returned status 404", "in_progress", retryAdvice],
     ["gh: HTTP 404", "completed", "gh: HTTP 404"],
     ["gh: HTTP 403", undefined, "gh: HTTP 403"],
   ] as const)("reports unavailable logs for %s (%s)", (error, status, expected) => {
