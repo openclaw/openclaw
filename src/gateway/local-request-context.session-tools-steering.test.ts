@@ -149,7 +149,7 @@ describe("sessions_send steering custody", () => {
                       sessionId: "session-tools-requester-id",
                       storePath: sessionToolsStorePath(cfg),
                     },
-                    assertCommitAllowed: captured.authority.assertCurrent,
+                    assertCommitAllowed: () => captured.authority.signal?.throwIfAborted(),
                     withTranscriptWrite: async (write) => await write(),
                   },
                   () =>
@@ -212,7 +212,6 @@ describe("sessions_send steering custody", () => {
     ["abort", false],
     ["replaced run end", false],
     ["sender completed", true],
-    ["source revoked", true],
     ["receiver cancelled", true],
   ] as const)(
     "settles accepted steering custody after %s (backend settlement: %s)",
@@ -296,9 +295,6 @@ describe("sessions_send steering custody", () => {
                 }
                 receiver.end();
               }
-            } else if (outcome === "source revoked") {
-              turn.revoke(alice.profileId);
-              await receiver.commit();
             } else if (outcome === "receiver cancelled") {
               await receiver.cancel();
               expect(receiver.pendingCount()).toBe(0);
@@ -317,7 +313,7 @@ describe("sessions_send steering custody", () => {
             )
               .map(readTranscriptEventMessage)
               .filter((message) => message?.idempotencyKey === "participant-delayed-steer:user");
-            const committed = outcome === "sender completed" || outcome === "source revoked";
+            const committed = outcome === "sender completed";
             expect(messages).toHaveLength(committed ? 1 : 0);
             if (committed) {
               expect(messages[0]).toMatchObject({

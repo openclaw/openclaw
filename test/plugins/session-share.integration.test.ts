@@ -538,9 +538,14 @@ describe("session-share receiver identity integration", () => {
         invoke.mockImplementation(async ({ command }) =>
           command === commands[0] ? { sessions: [human, agent, unmatched] } : transcript,
         );
-        const namespacedHuman = remoteHuman(human.threadId, "4242", hostId);
-        const namespacedUnmatched = remoteHuman(unmatched.threadId, "9999", hostId);
-        expect(await refresh()).toEqual([namespacedHuman, agent, namespacedUnmatched]);
+        const exportPolicy = { origin: "federated", automatic: false };
+        const namespacedHuman = { ...remoteHuman(human.threadId, "4242", hostId), exportPolicy };
+        const namespacedUnmatched = {
+          ...remoteHuman(unmatched.threadId, "9999", hostId),
+          exportPolicy,
+        };
+        const namespacedAgent = { ...agent, exportPolicy };
+        expect(await refresh()).toEqual([namespacedHuman, namespacedAgent, namespacedUnmatched]);
         expect(
           (await catalog.read({ hostId, threadId: nativeSession.threadId })).items[0]?.sender
             ?.identity,
@@ -554,7 +559,9 @@ describe("session-share receiver identity integration", () => {
           config = nodeConfig({ [nodeId]: identityConfig });
           const rows = await refresh();
           expect(rows[linksHumans ? 0 : 1]?.createdActor).toMatchObject(linkedActor(profile.id));
-          expect(rows[linksHumans ? 1 : 0]).toEqual(linksHumans ? agent : namespacedHuman);
+          expect(rows[linksHumans ? 1 : 0]).toEqual(
+            linksHumans ? namespacedAgent : namespacedHuman,
+          );
           expect(rows[2]).toEqual(namespacedUnmatched);
         }
         const page = await catalog.read({ hostId, threadId: nativeSession.threadId });

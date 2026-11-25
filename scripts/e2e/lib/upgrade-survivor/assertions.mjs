@@ -1886,9 +1886,27 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
   }
 }
 
+// Published releases print the command result; newer candidates print the lifecycle record.
+// Drop the command-result branch once no tested release prints it. Returns true for a record.
+function requireCompletedUpdate(result) {
+  if (result?.phase === undefined) {
+    assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+    return false;
+  }
+  assert(
+    result.phase === "finished" && result.status === "succeeded" && result.runId,
+    `update did not finish successfully: ${String(result.phase)}/${String(result.status)}`,
+  );
+  assert(
+    result.steps?.every((step) => step.status === "completed" || step.status === "skipped"),
+    "successful update contained an unfinished step",
+  );
+  return true;
+}
+
 function assertSuccessfulUpdateResult(result, expectedVersion) {
   const plugins = result?.postUpdate?.plugins;
-  assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+  const lifecycle = requireCompletedUpdate(result);
   if (["projects-doctor", "projects-startup-migration"].includes(getScenario())) {
     assertStrict.equal(
       result.before?.version,
@@ -1918,6 +1936,9 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
     result?.after?.version === expectedVersion,
     `successful update version changed: ${String(result?.after?.version)}`,
   );
+  if (lifecycle) {
+    return;
+  }
   const rejectedStepIndex = Array.isArray(result?.steps)
     ? result.steps.findIndex(
         (step) =>

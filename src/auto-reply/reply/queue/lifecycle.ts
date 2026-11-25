@@ -128,7 +128,6 @@ export function markFollowupRunEnqueued(run: FollowupRun): boolean {
   const state = custody(run);
   const authority = run.operatorAuthority;
   authority?.signal?.throwIfAborted();
-  authority?.assertCurrent();
   if (!state.enqueued) {
     // Deferral publishes the source and can synchronously wake its RPC waiters.
     state.enqueued = true;
@@ -185,7 +184,7 @@ export async function prepareFollowupRunOperatorAuthority(
     const restored = await restore({
       context,
       agentId: run.run.agentId,
-      source: captureQueuedOperatorRecoverySource(run.operatorAuthority),
+      source: captureQueuedOperatorRecoverySource(run.operatorAuthority) ?? { kind: "unavailable" },
       liveAuthority: run.operatorAuthority,
       operatorSource: operatorSource && decodeGatewayOperatorRecoverySource(operatorSource.source),
       assertCurrent: () => {

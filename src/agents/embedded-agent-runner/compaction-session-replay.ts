@@ -1,4 +1,4 @@
-import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
+import { isOpenAIResponsesApi, preserveCompactionReplayWindow } from "@openclaw/ai/transports";
 import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
@@ -28,10 +28,7 @@ export async function prepareCompactionSessionReplay({
 }) {
   const { params, effectiveModel, modelId, provider, effectiveWorkspace, allowedToolNames } =
     runtime;
-  const responsesApi =
-    effectiveModel.api === "openai-responses" ||
-    effectiveModel.api === "openai-chatgpt-responses" ||
-    effectiveModel.api === "azure-openai-responses";
+  const responsesApi = isOpenAIResponsesApi(effectiveModel.api);
   const replayContext = () => ({
     modelApi: effectiveModel.api,
     modelId,

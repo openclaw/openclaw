@@ -65,7 +65,6 @@ function invokeTool<T>(
           agentId: "main",
           sessionKey: SESSION_KEY,
           operationalRunInstance: { instanceId: "publication-tool", runId: "publication-run" },
-          receiptAuthority: () => caller.operatorAuthority?.assertCurrent(),
           gatewayContextResolver: () => context,
           ...caller,
         },
@@ -118,12 +117,10 @@ it.each([
   { operation: "modify", allowed: false, actor: "operator", route: "tool" },
   { operation: "ordinary", allowed: false, actor: "operator", route: "tool" },
   { operation: "modify", allowed: true, actor: "admin", route: "tool" },
-  { operation: "modify", allowed: false, actor: "narrowed", route: "tool" },
   { operation: "modify", allowed: true, actor: "system", route: "tool" },
   { operation: "modify", allowed: false, actor: "system", route: "tool" },
   { operation: "modify", allowed: false, actor: "unscoped-system", route: "tool" },
   { operation: "modify", allowed: true, actor: "admin", route: "gateway" },
-  { operation: "modify", allowed: false, actor: "admin", route: "gateway-session" },
   { operation: "modify", allowed: false, actor: "admin", route: "gateway-empty" },
   { operation: "modify", allowed: false, actor: "system", route: "gateway-write" },
   { operation: "modify", allowed: true, actor: "system", route: "gateway-write" },
@@ -161,8 +158,7 @@ it.each([
 
     const system =
       actor === "system" || actor === "unscoped-system" || actor === "system-missing-scopes";
-    const nativeFullSource =
-      route !== "rpc" && !system && (allowed || actor === "admin" || actor === "narrowed");
+    const nativeFullSource = route !== "rpc" && !system && (allowed || actor === "admin");
     if (nativeFullSource) {
       await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
       invalidateOperatorRolePolicy(f.guestProfile);
@@ -170,8 +166,7 @@ it.each([
     const source = nativeFullSource
       ? await createGitHubPublicationRequesterFixture({
           profileId: f.guestProfile,
-          scopes:
-            actor === "admin" || actor === "narrowed" ? ["operator.admin"] : ["operator.write"],
+          scopes: actor === "admin" ? ["operator.admin"] : ["operator.write"],
           agentId: "main",
           sessionKey: SESSION_KEY,
         })
@@ -202,12 +197,7 @@ it.each([
         onTestFinished(original.release);
       }
       const accepted = vi.spyOn(f.coordinator, "requestForSessionV2");
-      const scopedClient =
-        actor === "unscoped-system"
-          ? undefined
-          : actor === "narrowed"
-            ? { ...client, connect: { ...client.connect, scopes: guestScopes } }
-            : client;
+      const scopedClient = actor === "unscoped-system" ? undefined : client;
       const scopes: OperatorScope[] =
         route === "gateway-empty"
           ? []

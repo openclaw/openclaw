@@ -66,7 +66,15 @@ it.skipIf(!available).each([true, false])(
           "templates.drafts.review",
           "templates.drafts.publish",
         ],
-        historyMessages,
+        historyMessages: [
+          historyMessages[0],
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "I’m preparing your draft for review." }],
+          },
+          ...historyMessages.slice(1),
+        ],
+        methodDelays: { "templates.drafts.review": "forever" },
         methodResponses: {
           "config.get": {
             config,
@@ -117,32 +125,40 @@ it.skipIf(!available).each([true, false])(
         return;
       }
       const compact = inline.getByRole("region", { name: "Publish Template" });
-      await compact.getByRole("heading", { name: "Research Brief", exact: true }).waitFor();
-      expect(await page.getByRole("dialog").count()).toBe(0);
-      await compact.getByRole("button", { name: "Preview", exact: true }).click();
+      await gateway.waitForRequest("templates.drafts.review");
+      const progress = page.getByText("I’m preparing your draft for review.", { exact: true });
+      await progress.waitFor();
       const dialog = page.getByRole("dialog", { name: "Preview Template" });
       const card = dialog.getByRole("region", { name: "Review your Template" });
+      const capture = async (
+        stage: string,
+        target: Locator = card,
+        content = target.getByRole("heading", { level: 2 }),
+      ) => {
+        if (!proof) {
+          return;
+        }
+        const frame = await takeControlUiScreenshotFrame(page, target, [content], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(proof, stage + ".png"), frame.png);
+        await page.waitForTimeout(600);
+      };
+      await capture("preparing", progress, progress);
+      expect(await inline.evaluate((element) => element.childElementCount)).toBe(0);
+      await gateway.setMethodDelay("templates.drafts.review", null);
+      await compact.getByRole("heading", { name: "Research Brief", exact: true }).waitFor();
+      await compact.getByRole("button", { name: "Publish", disabled: false }).waitFor();
+      await capture("prepared", compact);
+      expect(await page.getByRole("region", { name: "Publish Template" }).count()).toBe(1);
+      expect(await page.getByRole("dialog").count()).toBe(0);
+      await compact.getByRole("button", { name: "Preview", exact: true }).click();
       await card.getByRole("heading", { name: "Research Brief", exact: true }).waitFor();
       expect(await page.getByText("Template ready for review", { exact: true }).count()).toBe(0);
       await card
         .locator(".template-creator__header")
         .getByText("Unpublished", { exact: true })
         .waitFor();
-      const capture = async (stage: string, target: Locator = card) => {
-        if (!proof) {
-          return;
-        }
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          target,
-          [target.getByRole("heading", { level: 2 })],
-          {
-            animations: "disabled",
-          },
-        );
-        await writeFile(path.join(proof, stage + ".png"), frame.png);
-        await page.waitForTimeout(600);
-      };
       await dialog.evaluate((element) =>
         Promise.all(element.getAnimations().map((animation) => animation.finished)),
       );
@@ -222,7 +238,7 @@ it.skipIf(!available).each([true, false])(
       await compact.locator("header [role=status]").getByText("Pending", { exact: true }).waitFor();
       expect(
         await compact.getByRole("link", { name: "View submission" }).getAttribute("href"),
-      ).toBe(publication.url);
+      ).toBe("https://example.test/maker/templates/research-brief?view=submission");
       await capture("pending", compact);
       expect(await compact.getByText("Published", { exact: true }).count()).toBe(0);
       await gateway.setMethodResponse("templates.drafts.review", {

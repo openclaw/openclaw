@@ -12,7 +12,10 @@ import {
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { CONNECTION_CHECK_PROMPT } from "../agents/connection-check.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import type { AgentHarnessPluginSelection } from "../agents/harness/runtime-plugin-load-plan.js";
+import {
+  requiresAgentHarnessPluginSelection,
+  type AgentHarnessPluginSelection,
+} from "../agents/harness/runtime-plugin-load-plan.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -599,13 +602,32 @@ export async function verifySetupInferenceConfig(
   const baselineRoute = requireExecutionOwner
     ? await projectInferenceRoute(params.config, route.agentId, { modelTarget: params.modelTarget })
     : undefined;
+  await using cache = requireExecutionOwner ? createPluginCache() : null;
+  let generation: SetupInferencePluginGeneration | undefined;
+  const withGeneration = <T>(run: () => T): T =>
+    generation ? withPluginRuntimeGenerationScope(generation, run) : run();
   let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
-  if (requireExecutionOwner) {
+  if (cache) {
     try {
-      stagedOwnerPluginArtifacts = captureSystemAgentOwnerPluginArtifacts({
-        config: route.sourceConfig,
-        executionRoute: route,
-      });
+      const selection = { provider: route.provider, modelId: route.model, agentId: route.agentId };
+      if (
+        route.runner === "embedded" &&
+        !route.agentHarnessRuntimeOverride &&
+        requiresAgentHarnessPluginSelection(selection, route.runConfig)
+      ) {
+        generation = await loadSetupInferencePluginGeneration({
+          cache,
+          config: route.runConfig,
+          workspaceDir: resolveAgentWorkspaceDir(route.runConfig, route.agentId, process.env),
+          selection,
+        });
+      }
+      stagedOwnerPluginArtifacts = withGeneration(() =>
+        captureSystemAgentOwnerPluginArtifacts({
+          config: route.sourceConfig,
+          executionRoute: route,
+        }),
+      );
     } catch (error) {
       return {
         ok: false,
@@ -614,14 +636,16 @@ export async function verifySetupInferenceConfig(
       };
     }
   }
-  const turn = await runSetupInferenceTurn({
-    route,
-    timeoutMs: params.timeoutMs,
-    requireExecutionOwner,
-    runtime: params.runtime,
-    assertSourceCurrent: params.assertSourceCurrent,
-    signal: params.signal,
-  });
+  const turn = await withGeneration(() =>
+    runSetupInferenceTurn({
+      route,
+      timeoutMs: params.timeoutMs,
+      requireExecutionOwner,
+      runtime: params.runtime,
+      assertSourceCurrent: params.assertSourceCurrent,
+      signal: params.signal,
+    }),
+  );
   if (!turn.ok) {
     return { ...turn, error: await redactSetupInferenceError(turn.error) };
   }

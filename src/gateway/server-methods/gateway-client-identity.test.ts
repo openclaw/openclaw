@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolveSessionToolListingClientCaps } from "../../agents/openclaw-tools.client-caps.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
+import { parseCanonicalSqliteSessionEntry } from "../../config/sessions/session-entry-json.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { prepareTurn } from "./chat-send-user-turn-family.test-support.js";
 import { createClientInfo } from "./chat-send-user-turn.test-support.js";
@@ -96,6 +99,56 @@ describe("chat send command authority", () => {
       ...overrides,
     };
   }
+  it.each([false, true])(
+    "only a live client updates recorded capability metadata (synthetic=%s)",
+    (synthetic) => {
+      const client = createClient({ internal: synthetic ? { syntheticClient: true } : undefined });
+      client.connect.caps = [];
+      const ctx = resolveChatSendCallerContext(client);
+      const existing = {
+        sessionId: "restart-source",
+        updatedAt: 1,
+        clientCapabilities: ["approvals", "webchat-prompt-reactions"],
+      };
+      const updated = {
+        ...existing,
+        ...deriveSessionMetaPatch({
+          ctx,
+          sessionKey: "agent:main:dashboard:restart-source",
+          existing,
+        }),
+      };
+      expect(ctx.GatewayClientCaps).toEqual(synthetic ? undefined : []);
+      expect(updated.clientCapabilities).toEqual(
+        synthetic ? existing.clientCapabilities : ["webchat-prompt-reactions"],
+      );
+    },
+  );
+
+  it.each([{ clientCapabilities: ["approvals", "webchat-prompt-reactions"] }, {}])(
+    "replays stored sessions written before this change (catalog=$clientCapabilities)",
+    ({ clientCapabilities }: { clientCapabilities?: string[] }) => {
+      const sessionKey = "agent:main:dashboard:stored-before-upgrade";
+      // Row JSON as earlier releases persisted it; the stored shape is unchanged.
+      const entry_json = JSON.stringify({ sessionId: "stored", updatedAt: 1, clientCapabilities });
+      const existing = parseCanonicalSqliteSessionEntry({ entry_json })!;
+      expect(existing.clientCapabilities).toEqual(clientCapabilities);
+      const ctx = resolveChatSendCallerContext(
+        createClient({ internal: { syntheticClient: true } }),
+      );
+      const entry = { ...existing, ...deriveSessionMetaPatch({ ctx, sessionKey, existing }) };
+      expect(entry.clientCapabilities).toEqual(clientCapabilities);
+      // Listing reads the recorded catalog; without one it falls back to the turn's capabilities.
+      expect(
+        resolveSessionToolListingClientCaps({
+          sessionKey,
+          clientCaps: [...(ctx.GatewayClientCaps ?? [])],
+          preparedSessionEntry: { sessionKey, entry },
+        }),
+      ).toEqual(clientCapabilities ?? []);
+    },
+  );
+
   function authorize(
     context: ReturnType<typeof resolveChatSendCallerContext>,
     entry = "profile-ada",

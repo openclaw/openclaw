@@ -25,6 +25,7 @@ import {
 import { refreshRuntimeAuthProfileStoreSources } from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { RuntimeAuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { signInNeedsApiKeyForVoice } from "../../agents/voice-sign-in-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -520,6 +521,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               ? { profileOrderLocked: "auth-config" as const }
               : {}),
           ...(apiKey ? { apiKey } : {}),
+          ...(!apiKey &&
+          !prov.profiles.some((profile) => profile.type === "api_key") &&
+          signInNeedsApiKeyForVoice(store, prov.provider)
+            ? { voiceApiKeyRequired: true as const }
+            : {}),
           usage:
             usage && usageKey
               ? {

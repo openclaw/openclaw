@@ -29,7 +29,6 @@ function issueAuthority(profileId: string, scopes: readonly string[] = ["operato
     profileId,
     scopes,
     signal: controller.signal,
-    assertCurrent: () => {},
   });
   return {
     authority,
@@ -60,7 +59,7 @@ describe("session control source capability", () => {
       canonicalIdentity: null,
       profileId: authority.profileId,
       scopes: authority.scopes,
-      assertCurrent: () => {},
+      grant: authority.grant,
     };
     for (const unissued of [forged, { ...authority }]) {
       expect(() => captureSessionControlAuthority(unissued)).toThrow(/issued by the host/i);

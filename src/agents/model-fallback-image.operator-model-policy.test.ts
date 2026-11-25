@@ -19,11 +19,10 @@ const cfg: OpenClawConfig = {
   },
 };
 
-function operator(assertCurrent: () => void = () => {}) {
+function operator() {
   return createTestOperatorAuthority({
     profileId: "image-reader",
     scopes: ["operator.write"],
-    assertCurrent,
     modelPolicy: prepareOperatorModelPolicy({
       cfg,
       policy: { sourceAgent: "main", allow: ["test-provider/allowed", "test-provider/backup"] },
@@ -60,7 +59,6 @@ describe("operator model policy on image fallback", () => {
         : createTestOperatorAuthority({
             profileId: "staff-reader",
             scopes: ["operator.write"],
-            assertCurrent: () => {},
           });
       await expect(
         runWithImageModelFallback({ cfg, manifestPlugins: [], operatorAuthority: authority, run }),
@@ -75,21 +73,4 @@ describe("operator model policy on image fallback", () => {
       );
     },
   );
-
-  it("stops the chain when the original requester retires", async () => {
-    let active = true;
-    const authority = operator(() => {
-      if (!active) {
-        throw new Error("requester retired");
-      }
-    });
-    const run = vi.fn(async () => {
-      active = false;
-      throw new Error("provider unavailable");
-    });
-    await expect(
-      runWithImageModelFallback({ cfg, manifestPlugins: [], operatorAuthority: authority, run }),
-    ).rejects.toThrow(/retired|no longer active/);
-    expect(run).toHaveBeenCalledOnce();
-  });
 });

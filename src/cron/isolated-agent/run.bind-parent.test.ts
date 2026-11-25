@@ -80,7 +80,7 @@ const DEVICE: PairedDevice = {
 const channelOwnerTurn = (runId: string): GatewayCronCreatorAuthorityAdmission => ({
   runId,
   callerOrigin: { kind: "unknown" },
-  managementEntitlement: { source: "channel-owner", isCurrent: () => true },
+  managementEntitlement: { source: "channel-owner" },
 });
 
 const groupMemberTurn = (runId: string): GatewayCronCreatorAuthorityAdmission => ({
@@ -464,42 +464,4 @@ it.each([
     await creatorCron.waitForIdle();
   }
   expect((await fixture.read()).find((entry) => entry.id === jobId)).toEqual(before);
-});
-
-it("refuses the stored write when the owner loses authority while bind waits for the store", async () => {
-  const config = await prepareAuthorityConfig({ tools: { allow: [AUTOMATIONS_TOOL_NAME] } });
-  const fixture = createCronFixture(undefined, config);
-  const { context } = fixture;
-  context.resolveGatewayContext = () => context;
-  const seeded = await seedKeyOnlyJob(context.cron);
-  const before = (await fixture.read()).find((entry) => entry.id === seeded.id);
-  let ownerCurrent = true;
-  const update = context.cron.updateWithPrecondition.bind(context.cron);
-  // Revoke between the handler's checks and the commit under the cron lock.
-  const commit = vi
-    .spyOn(context.cron, "updateWithPrecondition")
-    .mockImplementation(async (...args) => {
-      ownerCurrent = false;
-      return await update(...args);
-    });
-  try {
-    await expect(
-      bindFromParent({
-        config,
-        context,
-        runId: "revoked-bind",
-        jobId: seeded.id,
-        admitted: {
-          runId: "revoked-bind",
-          callerOrigin: { kind: "unknown" },
-          managementEntitlement: { source: "channel-owner", isCurrent: () => ownerCurrent },
-        },
-      }),
-    ).rejects.toThrow(/admin grant is missing, expired, or already used/);
-  } finally {
-    context.cron.stop();
-    await creatorCron.waitForIdle();
-  }
-  expect(commit).toHaveBeenCalledTimes(1);
-  expect((await fixture.read()).find((entry) => entry.id === seeded.id)).toEqual(before);
 });

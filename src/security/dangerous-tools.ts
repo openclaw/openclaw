@@ -2,7 +2,6 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 // Shared tool-risk constants.
 // Keep these centralized so gateway HTTP restrictions and security audits don't drift.
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 
 /**
  * Tools denied via Gateway HTTP `POST /tools/invoke` by default.
@@ -88,7 +87,7 @@ function isGatewayOwnerOnlyCoreTool(toolName: string): boolean {
   return gatewayOwnerOnlyCoreToolNames.has(toolName);
 }
 
-/** Live admin is owner-tool eligible, as at interactive agent admission; it is not sender identity. */
+/** An admitted turn's grant decides owner tools; the sender flag decides only unadmitted turns. */
 export function hasGatewayOwnerToolAuthority(
   senderIsOwner: boolean | undefined,
   operatorAuthority?: AdmittedRunOperatorAuthority,
@@ -98,15 +97,7 @@ export function hasGatewayOwnerToolAuthority(
   if (turnTainted && senderIsOwner !== true) {
     return false;
   }
-  if (operatorAuthority) {
-    operatorAuthority.assertCurrent();
-    return roleScopesAllow({
-      role: "operator",
-      requestedScopes: ["operator.admin"],
-      allowedScopes: operatorAuthority.scopes,
-    });
-  }
-  return senderIsOwner === true;
+  return operatorAuthority ? operatorAuthority.grant.owner : senderIsOwner === true;
 }
 
 export function assertGatewayOwnerToolAuthority(

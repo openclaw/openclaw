@@ -8,8 +8,12 @@ it("binds opaque transcript cursors to the exact relationship and canonical enco
   expect(paging.decodeScopedCursor(undefined, owned)).toBeUndefined();
   const scoped = paging.encodeScopedCursor("opaque", owned);
   expect(paging.decodeScopedCursor(scoped, owned)).toBe("opaque");
-  for (const cursor of [scoped, "invalid", scoped + "="]) {
-    expect(() => paging.decodeScopedCursor(cursor, involving)).toThrow(
+  for (const [cursor, query] of [
+    [scoped, involving],
+    ["invalid", owned],
+    [scoped + "=", owned],
+  ] as const) {
+    expect(() => paging.decodeScopedCursor(cursor, query)).toThrow(
       "cursor does not belong to this relationship query",
     );
   }

@@ -179,7 +179,11 @@ export const cronHandlers: GatewayRequestHandlers = {
         : callerScope && { ...callerScope, manageAll: undefined };
     let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
     let inference: Awaited<ReturnType<typeof captureCronUpdatedInferenceBinding>>;
-    let operatorCapture: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
+    let operatorCapture:
+      | (Awaited<ReturnType<typeof captureCronCreatorSession>> & {
+          assertOperatorSourceCurrent?: () => void;
+        })
+      | undefined;
     // The native process is authorized by whoever approves it now; the payload keeps its requester.
     let processSource: OperatorRunRecoverySnapshot | undefined;
     let operatorSourceExecutionRevision: string | undefined;

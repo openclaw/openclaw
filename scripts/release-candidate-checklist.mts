@@ -35,6 +35,7 @@ import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
 import { gitIsAncestor, validateCandidateChangelog } from "./lib/release-candidate-changelog.mts";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
+import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
 import { evaluateReleasePublishGates } from "./lib/release-publish-gates.mts";
 import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-evidence.mts";
 import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
@@ -1461,17 +1462,37 @@ async function waitForSuccessfulRun(
       if (info.conclusion !== "success") {
         throw new Error(summarizeFailedRun(info));
       }
+      // Only these workflow paths can supply recovery candidates. The strict
+      // verifier below authenticates the exact recovery operation and producer.
+      const workflowPath =
+        typeof info.workflowPath === "string" ? info.workflowPath.split("@", 1)[0] : undefined;
+      const isFullReleaseValidation = expected.workflowName === "Full Release Validation";
       const receiptRecovery =
-        expected.workflowName === "Full Release Validation" &&
-        info.workflowPath === ".github/workflows/full-release-receipt-recovery.yml";
-      if (info.workflowName !== expected.workflowName && !receiptRecovery) {
+        isFullReleaseValidation &&
+        workflowPath === ".github/workflows/full-release-receipt-recovery.yml";
+      const sealedRecovery =
+        isFullReleaseValidation &&
+        workflowPath === ".github/workflows/openclaw-release-prepare.yml";
+      const protectedRecoveryTag =
+        sealedRecovery &&
+        PUBLISH_TOOLING_TAG_PATTERN.test(info.headBranch ?? "") &&
+        info.headBranch?.startsWith(`release-publish/${info.headSha.slice(0, 12)}-`);
+      if (
+        info.workflowName !== expected.workflowName &&
+        !receiptRecovery &&
+        !(sealedRecovery && (info.headBranch === "main" || protectedRecoveryTag))
+      ) {
         throw new Error(
           `run ${runId} workflow mismatch: expected ${expected.workflowName}, got ${info.workflowName}`,
         );
       }
       const acceptsPinnedWorkflow =
         expected.allowShaPinnedWorkflowRef && isShaPinnedReleaseValidationBranch(info.headBranch);
-      if (info.headBranch !== expected.workflowRef && !acceptsPinnedWorkflow) {
+      if (
+        info.headBranch !== expected.workflowRef &&
+        !acceptsPinnedWorkflow &&
+        !protectedRecoveryTag
+      ) {
         throw new Error(
           `run ${runId} branch mismatch: expected ${expected.workflowRef}, got ${info.headBranch}`,
         );
@@ -1557,7 +1578,6 @@ export function buildPrepareCommand(
     ["plugin_publish_scope", options.pluginPublishScope],
     ["publish_openclaw_npm", "true"],
     ["release_profile", "from-validation"],
-    ["wait_for_clawhub", "false"],
   ];
   if (options.npmTelegramRunId) {
     fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
@@ -1837,8 +1857,10 @@ async function runTelegramIfNeeded(
   if (coversPackageTelegram && options.telegramProviderMode === "mock-openai") {
     const waived = qualificationManifest.waivers?.some(
       (waiver: JsonRecord) =>
-        waiver.jobName ===
-        "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+        waiver.childRole === "releaseChecksCandidate" &&
+        (waiver.jobName === undefined ||
+          waiver.jobName ===
+            "Run package acceptance / Telegram package acceptance / Run package Telegram E2E"),
     );
     if (waived) {
       return { status: "waived", providerMode: "mock-openai" };
@@ -2200,7 +2222,10 @@ async function main() {
     runId: options.fullReleaseRunId,
     runAttempt: fullRun.runAttempt,
     sourceSha: targetSha,
-    toolingSha: fullRun.headSha,
+    toolingSha:
+      retainedPublicationArtifactSource(fullManifest)?.workflow.sha ??
+      fullValidationEvidence.qualification?.qualificationSha ??
+      fullRun.headSha,
     outputDir: npmDir,
     token: run("gh", ["auth", "token"], { capture: true }).trim(),
   });

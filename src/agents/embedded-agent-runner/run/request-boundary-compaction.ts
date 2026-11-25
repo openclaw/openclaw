@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import {
   captureOpenAIResponsesCompaction,
   requestPreparedOpenAIResponsesCompaction,
@@ -141,9 +142,13 @@ export function createRequestBoundaryCompaction(params: {
         sessionId: requestOptions.sessionId,
       },
     };
-    // A matching measured predecessor prices the unchanged prefix once, as the
-    // mid-turn precheck this boundary replaces does. Without one, keep the
-    // conservative preflight estimate, which honors persisted session usage.
+    // Price hard admission from the projected request, not maintenance headroom.
+    const outgoing = resolveProjectedRequestPressure({
+      ...budget,
+      context,
+      previousRequest: requestAnchor,
+    });
+    // Saved usage and preflight's margin can still request early maintenance.
     const preflight = requestAnchor
       ? undefined
       : shouldPreemptivelyCompactBeforePrompt({
@@ -155,27 +160,32 @@ export function createRequestBoundaryCompaction(params: {
             ? Math.ceil(fixedTokenPressure.toolTokens * SAFETY_MARGIN)
             : estimateToolSchemaTokenPressure(context.tools),
         });
-    const outgoing = preflight
-      ? (preflight.compactionReplay ?? preflight)
-      : resolveProjectedRequestPressure({ ...budget, context, previousRequest: requestAnchor });
-    // The boundary sends the complete window plus its summary request. Leave room
-    // for the next tool result instead of waiting for the reserve-based limit.
+    const maintenance = preflight ? (preflight.compactionReplay ?? preflight) : outgoing;
+    // The boundary sends the complete window plus its summary request. It starts at
+    // the client threshold ratio, capped by the reserve-based prompt budget, so every
+    // route compacts at the same occupancy and the summary request keeps headroom.
     const contextTokens = Math.min(
       params.contextTokenBudget,
       model.contextWindow ?? params.contextTokenBudget,
     );
     const softTriggerTokens = Math.min(
       outgoing.promptBudgetBeforeReserve,
-      Math.max(1, Math.floor(contextTokens * 0.9)),
+      Math.max(
+        1,
+        resolveCompactionThreshold({ contextWindowTokens: contextTokens, reserveTokensFloor: 0 }),
+      ),
     );
-    if (outgoing.estimatedPromptTokens < softTriggerTokens) {
+    if (
+      Math.max(outgoing.estimatedPromptTokens, maintenance.estimatedPromptTokens) <
+      softTriggerTokens
+    ) {
       return undefined;
     }
     const fallback = (reason: string) => {
-      // The early V2 trigger must not move the client's compaction threshold, and a
+      // The V2 trigger must not move the client's compaction threshold, and a
       // soft fallback waits for a boundary where the tool batch can continue. The
       // text variant replaces the client threshold, so its maintenance is due.
-      const maintenanceDue = !native || outgoing.route !== "fits";
+      const maintenanceDue = !native || maintenance.route !== "fits";
       const pressure = decideContextPressure({
         estimatedPromptTokens: outgoing.estimatedPromptTokens,
         windowTokens: model.contextWindow ?? params.contextTokenBudget,

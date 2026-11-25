@@ -164,7 +164,7 @@
   transition: opacity 120ms ease-out;
 }
 
-.chat-group-footer:has(.msg-meta[open]) {
+.chat-group-footer:has(.msg-meta[open], .chat-send-status) {
   --chat-footer-disclosure-opacity: 1;
   --chat-footer-disclosure-pointer-events: auto;
   opacity: 1;
@@ -225,6 +225,8 @@
 .chat-group-footer-actions,
 .chat-message-actions-row {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   align-items: center;
   justify-content: flex-end;
   gap: 4px;

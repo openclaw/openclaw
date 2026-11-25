@@ -52,7 +52,39 @@ function resolveModelCatalogServiceTiers(params: {
   ) {
     return undefined;
   }
-  // API-key Responses tiers are a route contract; the ChatGPT catalog cannot describe them.
+  const readAccountTiers = () => {
+    if (
+      route.requestTransportOverrides === "present" ||
+      snapshot.refreshFailed ||
+      snapshot.pendingProviders?.some(
+        (provider) => normalizeProviderId(provider) === normalizeProviderId(entry.provider),
+      )
+    ) {
+      return undefined;
+    }
+    const outcome = snapshot.providerOutcomes?.find(
+      (candidate) =>
+        normalizeProviderId(candidate.provider) === normalizeProviderId(entry.provider) &&
+        candidate.profileId ===
+          (credential.source === "profile" ? credential.profileId : undefined),
+    );
+    if (outcome?.status !== "ready") {
+      return undefined;
+    }
+    const observation = outcome.modelServiceTiers?.find(
+      (candidate) =>
+        candidate.modelId === entry.id &&
+        candidate.runtimeId === runtimeId &&
+        modelMatchesProviderModelRoute({
+          provider: entry.provider,
+          api: candidate.api,
+          baseUrl: candidate.baseUrl,
+          route,
+        }),
+    );
+    return observation ? [...observation.serviceTiers] : undefined;
+  };
+  // API-key Responses accept every tier unless the key's account catalog says otherwise.
   if (
     runtimeId === "openclaw" &&
     normalizeProviderId(entry.provider) === "openai" &&
@@ -61,38 +93,9 @@ function resolveModelCatalogServiceTiers(params: {
     route.api === "openai-responses" &&
     supportsOpenAIResponsesFastMode({ provider: "openai", ...route })
   ) {
-    return [...(params.modelServiceTiers ?? ["priority", "ultrafast"])];
+    return readAccountTiers() ?? [...(params.modelServiceTiers ?? ["priority", "ultrafast"])];
   }
-  if (
-    credential.source !== "profile" ||
-    route.requestTransportOverrides === "present" ||
-    snapshot.refreshFailed ||
-    snapshot.pendingProviders?.some(
-      (provider) => normalizeProviderId(provider) === normalizeProviderId(entry.provider),
-    )
-  ) {
-    return undefined;
-  }
-  const outcome = snapshot.providerOutcomes?.find(
-    (candidate) =>
-      normalizeProviderId(candidate.provider) === normalizeProviderId(entry.provider) &&
-      candidate.profileId === credential.profileId,
-  );
-  if (outcome?.status !== "ready") {
-    return undefined;
-  }
-  const observation = outcome.modelServiceTiers?.find(
-    (candidate) =>
-      candidate.modelId === entry.id &&
-      candidate.runtimeId === runtimeId &&
-      modelMatchesProviderModelRoute({
-        provider: entry.provider,
-        api: candidate.api,
-        baseUrl: candidate.baseUrl,
-        route,
-      }),
-  );
-  return observation ? [...observation.serviceTiers] : undefined;
+  return credential.source === "profile" ? readAccountTiers() : undefined;
 }
 
 /** Harness policy can remove tiers from account/route evidence, never grant new ones. */

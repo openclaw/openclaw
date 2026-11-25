@@ -129,7 +129,9 @@ export async function runOpenAiCompatibleAgentCommand(params: {
       throw new ToolAuthorizationError(GATEWAY_UPLOADS_DISABLED_MESSAGE);
     }
     if (!admitted && params.hasCurrentClientAuthority?.() === false) {
-      throw new ToolAuthorizationError("Gateway requester authority changed");
+      throw new ToolAuthorizationError(
+        "Gateway requester changed during admission. Retry the request.",
+      );
     }
   };
   assertSourceCurrent();
@@ -161,7 +163,6 @@ export async function runOpenAiCompatibleAgentCommand(params: {
     : undefined;
   try {
     assertSourceCurrent();
-    captured?.authority.assertCurrent();
     const sourceSignal = captured?.authority.signal;
     const abortSignal =
       params.abortSignal && sourceSignal
@@ -196,7 +197,6 @@ export async function runOpenAiCompatibleAgentCommand(params: {
       defaultRuntime,
       createDefaultDeps(),
     );
-    captured?.authority.assertCurrent();
     return result;
   } finally {
     captured?.release();
