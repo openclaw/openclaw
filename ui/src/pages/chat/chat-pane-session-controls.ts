@@ -84,11 +84,12 @@ export function readChatPaneMutationAccess(
   session?: GatewaySessionRow,
   sessionAbsent = false,
 ) {
-  const scopedPatchAccess = (patch: SessionPatch) =>
+  const scopedPatchAccess = (patch: SessionPatch, missingScopeReasonKey?: string) =>
     readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, ...patch },
       sessionScope: true,
+      missingScopeReasonKey,
       session,
     });
   return {
@@ -100,12 +101,18 @@ export function readChatPaneMutationAccess(
       sessionAbsent,
     }),
     model: scopedPatchAccess({ model: null }),
-    effort: scopedPatchAccess({ thinkingLevel: null }),
+    effort: scopedPatchAccess(
+      { thinkingLevel: null },
+      "chat.modelControls.thinkingPermissionDenied",
+    ),
     contextWindow: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, contextWindow: null },
     }),
-    permission: scopedPatchAccess({ permissionMode: "guarded" }),
+    permission: scopedPatchAccess(
+      { permissionMode: "guarded" },
+      "chat.permissionControls.changePermissionDenied",
+    ),
     unarchive: scopedPatchAccess({ archived: false }),
     pendingInputDismiss: readSessionMethodAccess(snapshot, {
       method: "chat.pendingInputs.dismiss",
@@ -160,7 +167,7 @@ export function renderChatPaneComposerControls(params: {
   contextWindowAccess: SessionMethodAccess;
   permissionAccess: SessionMethodAccess;
   canSelectFull: boolean;
-  onModelSetup: () => void;
+  onModelSetup: (provider?: string) => void;
   onProviderSettings?: (provider: string) => void;
   onModelAccounts?: () => void;
 }): {
@@ -342,6 +349,7 @@ export function renderChatPaneComposerControls(params: {
             }),
         sessionKey: state.sessionKey,
         selectedSession,
+        sessionRowCurrent: !cachedSessionStatePending && !snapshot,
         sessionsResult: state.sessionsResult,
         get stream() {
           return state.chatStream;

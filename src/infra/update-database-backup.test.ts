@@ -131,7 +131,7 @@ async function fixture(externalAgents = false) {
       }
     } else {
       db.exec(
-        "CREATE TABLE schema_meta(meta_key TEXT, role TEXT, agent_id TEXT); INSERT INTO schema_meta VALUES ('primary','agent','main');",
+        "CREATE TABLE schema_meta(meta_key TEXT, role TEXT, agent_id TEXT, schema_version INTEGER); INSERT INTO schema_meta VALUES ('primary','agent','main',17);",
       );
       db.prepare("UPDATE payload SET value = ?").run(path.basename(path.dirname(file)));
     }

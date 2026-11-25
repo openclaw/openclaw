@@ -1,6 +1,7 @@
 // Runtime LLM tests cover plugin provider hooks inside the model runtime adapter.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "../../agents/embedded-agent-runner/context-engine-maintenance.js";
 import { buildAfterTurnRuntimeContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
@@ -254,6 +255,7 @@ describe("runtime.llm.complete", () => {
   it("does not trust a fallback-derived agent in the after-turn caller", async () => {
     const attempt = {
       sessionKey: "legacy-session",
+      admittedRunContext: createTestAdmittedRunContext("after-turn"),
       config: cfg,
       skillsSnapshot: undefined,
       provider: "openai",

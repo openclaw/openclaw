@@ -311,7 +311,7 @@ describe("patchSessionRows", () => {
       "operator.write missing",
       { scopes: ["operator.read"] },
       { archived: true },
-      "This action requires operator.write access.",
+      "You don’t have permission to do this.",
     ],
   ])("sends no mutation when %s", async (_name, options, patch, error) => {
     const h = createHarness(options);

@@ -1,12 +1,14 @@
 import { expect, it, vi } from "vitest";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   createHostIngressFixture,
   ingressInput,
   ingressMessage,
 } from "../../channels/message-access/host-ingress.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { getCommandOwnerAuthority } from "../command-owner-authority.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import {
+  createReplyCronAuthorityFactory,
   logReplyCronOwnerWithoutAuthority,
   resolveReplyCronChannelRequester,
 } from "./get-reply-run.cron-requester.js";
@@ -100,4 +102,32 @@ it.each(["telegram", "discord", "slack"])("rejects an unbound %s owner", (channe
     resolveReplyCronChannelRequester({}, { channel, senderId: "123", accountId: "work" }),
   ).toBeUndefined();
   expect(recordedReason({}, { channel, accountId: "work" })).toBe("ingress-identity-unbound");
+});
+
+it.each([
+  ["linked to a non-admin profile", ["operator.write"], false],
+  ["admitted as the owner principal", ["operator.admin"], true],
+  ["on an asserted channel (no admitted grant)", undefined, true],
+] as const)("mints channel-owner management for an owner %s: %s", (_label, scopes, mints) => {
+  const context = {};
+  bindCommandOwnerAuthority(context, {
+    channelPrincipal: { channelId: "discord", accountId: "default", senderId: "123" },
+    ...(scopes
+      ? {
+          operatorAuthority: createTestOperatorAuthority({
+            profileId: "person",
+            scopes: [...scopes],
+          }),
+        }
+      : {}),
+    isCurrent: () => true,
+  });
+  const params = { channel: "discord", senderId: "123" };
+  const factory = createReplyCronAuthorityFactory(context, params);
+  expect(factory?.("run-1")?.managementEntitlement).toEqual(
+    mints ? { source: "channel-owner" } : undefined,
+  );
+  if (!mints) {
+    expect(recordedReason(context, params)).toBe("grant-without-manage");
+  }
 });

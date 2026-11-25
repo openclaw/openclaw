@@ -19,6 +19,7 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { parsePackageOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import {
@@ -185,7 +186,7 @@ export async function observeOriginalManagedServiceRuntime(
   assertCurrent();
   try {
     const root = await fs.realpath(verdict.root);
-    if (root === (await fs.realpath(params.root))) {
+    if (updateInstallRootsMatch(root, params.root)) {
       return undefined;
     }
     if (process.platform === "win32") {

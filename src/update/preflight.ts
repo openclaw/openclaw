@@ -25,7 +25,7 @@ import type { UpdateTarget } from "./target.js";
 export type PreflightResult = { ok: true } | { ok: false; reason: string; message: string };
 
 /** Enumerate files without opening a database or admitting a schema migration. */
-export async function listStateDatabases(stateDir: string): Promise<string[]> {
+async function listStateDatabases(stateDir: string): Promise<string[]> {
   const files: string[] = [];
   const visited = new Set<string>();
   const walk = async (dir: string): Promise<void> => {

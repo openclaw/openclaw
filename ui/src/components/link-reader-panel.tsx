@@ -177,14 +177,6 @@ function PanelView(
     hostedTabs: { configurable: true, get: () => owner.hostedTabs() },
     activeHostedTabId: { configurable: true, get: () => owner.state.activeId },
   });
-  const bridgePrototype = Object.getPrototypeOf(host);
-  Object.defineProperty(host, "updateComplete", {
-    configurable: true,
-    get: () =>
-      Promise.resolve(Reflect.get(bridgePrototype, "updateComplete", host)).then(() =>
-        host.isConnected ? owner.updateComplete : false,
-      ),
-  });
   onSettled(() => {
     let disposed = false;
     const connect = () => {
@@ -577,6 +569,7 @@ export const LinkReaderPanel = defineSolidBridge<LinkReaderPanelProps, Methods>(
   PanelView,
   {
     propertyChanged: (host) => owners.get(host)?.inputsChanged(),
+    updateComplete: (host) => (host.isConnected ? owners.get(host)?.updateComplete : false),
     properties: {
       client: { default: null, attribute: false },
       available: { default: false },

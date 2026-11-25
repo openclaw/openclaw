@@ -9,10 +9,6 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../infra/agent-run-registry.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals-core.js";
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptParamsV2,
-} from "../plugin-sdk/agent-harness-runtime.js";
 import { expectCollected } from "../test-utils/retention.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
@@ -57,7 +53,7 @@ function createManagementFixture(
   const scope = createScope(
     runId,
     callerOrigin,
-    controlUiAdmin ? { source: "control-ui-admin" } : undefined,
+    controlUiAdmin ? { source: "operator" } : undefined,
     () => continuationCurrent,
   );
   const operation = new AbortController();
@@ -115,16 +111,6 @@ describe("cron creator authority grants", () => {
     expect(() => signal.throwIfAborted()).toThrow(signal.reason);
   });
 
-  it("preserves the Control UI admin SDK projection without granting creator authority", () => {
-    const scope = createScope("sdk-compat", { kind: "unknown" }, { source: "control-ui-admin" });
-    const legacy: Pick<EmbeddedRunAttemptParams, "cronCreatorAuthorityCapability"> = {
-      cronCreatorAuthorityCapability: scope,
-    };
-    const current: Pick<EmbeddedRunAttemptParamsV2, "cronCreatorAuthorityCapability"> = legacy;
-    expect(legacy.cronCreatorAuthorityCapability?.controlUiAdmin).toBe(true);
-    expect(current.cronCreatorAuthorityCapability?.controlUiAdmin).toBe(true);
-    expect(() => mint(scope)).toThrow("Automation creation is not granted");
-  });
   it("carries direct-local origin without claiming channel requester authority", () => {
     const local = createScope("run-local", { kind: "local" });
     const grant = mint(local, undefined, undefined, undefined, "requester");
@@ -160,11 +146,10 @@ describe("cron creator authority grants", () => {
   });
 
   it("records a channel owner's external origin without granting runtime authority", () => {
-    let current = true;
     const scope = createScope(
       "telegram-owner",
       { kind: "external", channel: "telegram" },
-      { source: "channel-owner", isCurrent: () => current },
+      { source: "channel-owner" },
     );
     const grant = mint(scope, undefined, undefined, undefined, "requester");
     expect(provenance(grant, scope.runId)).toEqual({
@@ -172,10 +157,6 @@ describe("cron creator authority grants", () => {
       callerOrigin: { kind: "external", channel: "telegram" },
     });
     expect(consume(grant).authority).toBeUndefined();
-    current = false;
-    expect(() => mint(scope, undefined, undefined, undefined, "requester")).toThrow(
-      "access has ended",
-    );
   });
 
   it("rejects run substitution and transports private runtime authority only once", () => {
@@ -195,21 +176,14 @@ describe("cron creator authority grants", () => {
     expect(() => consume(grant)).toThrow("This run's MCP cron access has ended");
   });
 
-  it.each([
-    "issuer",
-    "scope",
-    "scope abort",
-    "run settlement",
-    "operation",
-    "channel owner",
-  ] as const)(
+  it.each(["issuer", "scope", "scope abort", "run settlement", "operation"] as const)(
     "rejects retained creator authority when its original %s is revoked after consumption",
     async (revoked) => {
-      const current = { issuer: true, scope: true, channel: true };
+      const current = { issuer: true, scope: true };
       const scope = createScope(
         "retained-creator",
         { kind: "local" },
-        { source: "channel-owner", isCurrent: () => current.channel },
+        { source: "channel-owner" },
         () => current.scope,
       );
       const operation = new AbortController();
@@ -224,8 +198,6 @@ describe("cron creator authority grants", () => {
       await Promise.resolve();
       if (revoked === "issuer" || revoked === "scope") {
         current[revoked] = false;
-      } else if (revoked === "channel owner") {
-        current.channel = false;
       } else if (revoked === "run settlement") {
         revokeScope(scope);
         expect(scope.signal.aborted).toBe(true);
