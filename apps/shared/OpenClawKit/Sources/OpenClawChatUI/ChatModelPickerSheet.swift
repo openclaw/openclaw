@@ -270,7 +270,7 @@ private struct ChatModelPickerModelRow: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if isCurrent {
-                    ChatModelPickerCheck()
+                    ChatSelectionCheck()
                 }
             }
         }
@@ -312,10 +312,12 @@ private struct ChatModelPickerCloseButton: View {
     }
 }
 
-private struct ChatModelPickerCheck: View {
+/// The mark for the selected row in a selection list. Its weight matches the row's regular body text, as SF
+/// Symbols are drawn to, so it reads as a mark rather than a bold glyph; it takes the list's tint.
+struct ChatSelectionCheck: View {
     var body: some View {
         Image(systemName: "checkmark")
-            .font(.body.weight(.semibold))
+            .font(.body.weight(.regular))
             .foregroundStyle(.tint)
             .accessibilityHidden(true)
     }
