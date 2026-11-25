@@ -60,8 +60,9 @@ final class CommandSessionsPartialRosterUITests: XCTestCase {
         self.capture("partial-roster", in: app)
         let retry = app.buttons["Sessions.PartialLoad.Refresh"]
         XCTAssertTrue(retry.waitForExistence(timeout: 5))
-        // The first row sits under the top bar's soft scroll edge, whose accessibility element wins the
-        // hit test although it takes no touches; a tap at the button's center is what a finger does.
+        // Every control in the root shell reports isHittable false on this runtime (the chat screen's too),
+        // while onboarding and system apps report true; the cause is not identified. Tap the center, as a
+        // finger does; the recovery below proves the tap reached the button.
         XCTAssertGreaterThanOrEqual(retry.frame.height, 44)
         XCTAssertEqual(retry.label, "Try again")
         // Capture the control's identity while it still exists; resolving it after
