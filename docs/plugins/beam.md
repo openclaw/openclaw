@@ -261,7 +261,7 @@ the next poll. A released source cannot be recreated by uploading. Deleting its 
 Beam publication is not remote control.
 
 - The logical conversation continues in a Gateway-owned session. Beam itself has no filesystem, terminal, tool, or node capability.
-- It accepts text-only normalized transcript items, not HTML, scripts, archives, attachments, or server-fetched URLs.
+- Transcript items contain normalized text. A v2 publisher can also include one reviewed PNG by sending its bytes in the [screenshot envelope](#share-a-screenshot).
 - The official skill removes raw tool results, reasoning, prompts, local paths, credentials, cookies, and auth material before upload.
 - The receiver treats every transcript as untrusted text. The first message in the Beam composer is the explicit operator action that copies it into a new session.
 - Requests are rate-limited and concurrency-limited before the body is read.
