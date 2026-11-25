@@ -23,7 +23,10 @@ import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { createSqliteReadOnlyWorkerError } from "../infra/sqlite-readonly-worker-protocol.js";
 import { readBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../plugins/test-helpers/installed-plugin-index.js";
+import {
+  createInstalledPluginIndex,
+  readPersistedInstalledPluginIndexRowSync,
+} from "../plugins/test-helpers/installed-plugin-index.js";
 import {
   AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
@@ -313,7 +316,7 @@ it("waits through temporary schema custody before reading startup configuration 
   });
 });
 
-it.each(["config", "schema"] as const)(
+it.for(["config", "schema"] as const)(
   "settles config source admission before reporting a %s refusal",
   async (refusal, { signal }) => {
     await withDoctorConfigPreflightHome(async (home) => {
@@ -392,12 +395,18 @@ it("reads live startup metadata without copying the state database while writers
     const readIndex = () =>
       readPersistedInstalledPluginIndexRowSync({ env: process.env })?.value_json;
     try {
+      const beforeIndex = JSON.stringify(
+        createInstalledPluginIndex({ plugins: [], generatedAtMs: 1 }),
+      );
+      const afterIndex = JSON.stringify(
+        createInstalledPluginIndex({ plugins: [], generatedAtMs: 2 }),
+      );
       const setMetadata = writer.prepare(
         `INSERT INTO config_machine_state(state_key, value_json, updated_at_ms)
            VALUES ('plugins.bundledDiscovery', ?, 1), ('plugins.installedIndex', ?, 1)
            ON CONFLICT(state_key) DO UPDATE SET value_json = excluded.value_json`,
       );
-      setMetadata.run('"compat"', '{"generation":"before"}');
+      setMetadata.run('"compat"', beforeIndex);
       const result = await readAdmittedConfigSnapshot({
         env: process.env,
         readSnapshot: async () => {
@@ -405,18 +414,18 @@ it("reads live startup metadata without copying the state database while writers
           expect(getActiveOpenClawStateDatabaseReadSnapshot(options)?.location).toBe(databasePath);
           expect(readBundledDiscoveryMode(options)).toBe("compat");
           writer.exec("BEGIN IMMEDIATE");
-          setMetadata.run('"allowlist"', '{"generation":"after"}');
+          setMetadata.run('"allowlist"', afterIndex);
           withExistingOpenClawStateDatabaseReadOnly(() => {
-            expect(readIndex()).toBe('{"generation":"before"}');
+            expect(readIndex()).toBe(beforeIndex);
             writer.exec("COMMIT");
-            expect(readIndex()).toBe('{"generation":"before"}');
+            expect(readIndex()).toBe(beforeIndex);
           }, options);
-          expect(readIndex()).toBe('{"generation":"after"}');
+          expect(readIndex()).toBe(afterIndex);
           return { snapshot };
         },
         beforeStatePreparation: async () => {
           expect(readBundledDiscoveryMode(options)).toBe("allowlist");
-          expect(readIndex()).toBe('{"generation":"after"}');
+          expect(readIndex()).toBe(afterIndex);
           return true;
         },
       });
@@ -492,7 +501,7 @@ it.each([
         runStartupConfigPreflight({ gateway: true, observe: false }),
       ).rejects.toMatchObject({
         code: 78,
-        message: expect.stringContaining("Legacy client credentials require migration"),
+        message: expect.stringContaining("Legacy device identity is invalid or unsupported"),
       });
       expect(fs.readFileSync(identityPath, "utf8")).toBe(identityRaw);
     } else {

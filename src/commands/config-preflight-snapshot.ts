@@ -11,12 +11,12 @@ import {
   type ConfigSnapshotReadOptions,
 } from "../config/io.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
-import { materializeRuntimeConfig } from "../config/materialize.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { isExistingLegacySessionStore } from "../config/sessions/legacy-store-source.js";
 import { describeConfigSnapshotInputChange } from "../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import {
   getDatabaseEngineSelection,
@@ -213,13 +213,22 @@ async function readConfigPreflightSnapshot(
                 config: projected.config,
                 env,
               });
-              const config = materializeRuntimeConfig(projected.runtimeConfig ?? projected.config, {
+              const validation = validateConfigObjectWithPlugins(projected.sourceConfig, {
                 env,
-                manifestRegistry: pluginMetadataSnapshot?.manifestRegistry,
+                pluginMetadataSnapshot,
+                deferredPluginMigrations: deferred,
               });
+              const config = validation.ok ? validation.config : projected.config;
               result = {
                 ...result,
-                snapshot: { ...projected, runtimeConfig: config, config },
+                snapshot: {
+                  ...projected,
+                  runtimeConfig: config,
+                  config,
+                  valid: validation.ok,
+                  issues: validation.ok ? [] : validation.issues,
+                  warnings: validation.warnings,
+                },
                 pluginMetadataSnapshot,
               };
             }
@@ -363,12 +372,12 @@ export async function readAdmittedConfigSnapshot(params: {
                 let read = await measureDoctorConfigPreflightStep(
                   "admission.plugin-config",
                   async () => {
-                    const read = await withLiveStateReads(
+                    const result = await withLiveStateReads(
                       () => params.readSnapshot(coreRecovery ? { isolateEnv: true } : undefined),
                       { startupConfig: true },
                     );
-                    metadataMetrics = read.pluginMetadataSnapshot?.metrics ?? {};
-                    return read;
+                    metadataMetrics = result.pluginMetadataSnapshot?.metrics ?? {};
+                    return result;
                   },
                   undefined,
                   () => metadataMetrics,
@@ -426,17 +435,23 @@ export async function readAdmittedConfigSnapshot(params: {
   if (admitted.snapshot.valid) {
     try {
       await withLiveStateReads(async () => {
-        await upgradeStateOnGatewayStart(
-          env,
-          () =>
-            getGatewayStartGuardErrors({
-              configExists: admitted.snapshot.exists,
-              mode: admitted.snapshot.config.gateway?.mode,
-            }).length === 0,
-        );
-        // Only completed maintenance shortens the launcher's preparation trial.
-        if (env.OPENCLAW_LAUNCHER_IPC === "1" && process.connected && process.send) {
-          process.send({ type: "openclaw.trial", phase: "trial" }, () => {});
+        // Recovery has not authored its selected config yet. Migrating the live
+        // clobbered source under the recovered config's guard would mutate the
+        // wrong owners before readiness can refuse. The recovery owner applies
+        // that candidate only after the unchanged readiness checks below admit it.
+        if (!admitted.recovery) {
+          await upgradeStateOnGatewayStart(
+            env,
+            () =>
+              getGatewayStartGuardErrors({
+                configExists: admitted.snapshot.exists,
+                mode: admitted.snapshot.config.gateway?.mode,
+              }).length === 0,
+          );
+          // Only completed maintenance shortens the launcher's preparation trial.
+          if (env.OPENCLAW_LAUNCHER_IPC === "1" && process.connected && process.send) {
+            process.send({ type: "openclaw.trial", phase: "trial" }, () => {});
+          }
         }
         await assertStartupStateReady({ cfg: admitted.snapshot.sourceConfig, env });
         await params.prepareClientCredentials?.(admitted.snapshot);

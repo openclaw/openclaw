@@ -654,7 +654,7 @@ describe("runDoctorConfigPreflight", () => {
       ).toEqual(clobbered);
     });
   });
-  it("repairs session keys with a legacy roster through Doctor and preserves the authored backup", async () => {
+  it("migrates session keys and a legacy roster at startup and preserves the authored backup", async () => {
     await withUnscopedDoctorConfigPreflightHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
         gateway: { mode: "local" },
@@ -664,9 +664,14 @@ describe("runDoctorConfigPreflight", () => {
       const original = await fs.readFile(configPath, "utf-8");
 
       const startup = await runStartupConfigPreflight({ gateway: true });
-      expect(startup.snapshot.valid).toBe(false);
-      expect(await fs.readFile(configPath, "utf-8")).toBe(original);
-      await expect(fs.access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(startup.snapshot.valid).toBe(true);
+      expect(startup.snapshot.sourceConfig.session).toEqual({
+        reset: { mode: "idle", idleMinutes: 45 },
+      });
+      expect(startup.snapshot.sourceConfig.agents?.entries).toHaveProperty("work");
+      expect(await fs.readFile(`${configPath}.bak`, "utf-8")).toBe(original);
+      const migrated = await fs.readFile(configPath, "utf-8");
+      expect(JSON.parse(migrated).agents).not.toHaveProperty("list");
 
       const preflight = await runUnobservedDoctorConfigPreflight(doctorRepairOptions);
 
@@ -676,11 +681,8 @@ describe("runDoctorConfigPreflight", () => {
       });
       expect((await readConfigFileSnapshot()).valid).toBe(true);
       expect(await fs.readFile(`${configPath}.bak`, "utf-8")).toBe(original);
+      expect(await fs.readFile(configPath, "utf-8")).toBe(migrated);
       expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
-      expect(noteMock).toHaveBeenCalledWith(
-        expect.stringContaining("Moved session.idleMinutes"),
-        "Doctor changes",
-      );
     });
   });
 
@@ -713,7 +715,7 @@ describe("runDoctorConfigPreflight", () => {
     });
   });
 
-  it("leaves historical transcript bytes at startup and normalizes them in later plain Doctor", async () => {
+  it("normalizes historical transcripts at startup and preserves them through later plain Doctor", async () => {
     await withUnscopedDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync(
         {
@@ -780,13 +782,6 @@ describe("runDoctorConfigPreflight", () => {
 
             await runStartupConfigPreflight({ gateway: true });
 
-            expect(readEventJson()).toBe(originalJson);
-            // Preserve the same process: readiness must not suppress plain Doctor.
-            await using doctor = await prepareDoctorContext(configPath, {
-              options: { nonInteractive: true },
-            });
-
-            expect(doctor.prompter.shouldRepair).toBe(false);
             expect(JSON.parse(String(readEventJson()))).toEqual({
               ...historicalEvent,
               message: {
@@ -796,6 +791,14 @@ describe("runDoctorConfigPreflight", () => {
                 openclawDelivery: { replyToCurrent: true },
               },
             });
+            const normalizedJson = readEventJson();
+            // Plain Doctor must leave the already-normalized event unchanged.
+            await using doctor = await prepareDoctorContext(configPath, {
+              options: { nonInteractive: true },
+            });
+
+            expect(doctor.prompter.shouldRepair).toBe(false);
+            expect(readEventJson()).toBe(normalizedJson);
           } finally {
             await cleanupSessionStateForTest({ stateDir });
           }

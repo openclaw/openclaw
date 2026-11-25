@@ -53,8 +53,8 @@ import {
   createDanglingSkillWorkshopReviewIndex,
   readDanglingSkillWorkshopReviewIndex,
 } from "./openclaw-state-db-corruption.test-support.js";
+import * as stateRepair from "./openclaw-state-db-doctor-repair.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
-import * as stateRepair from "./openclaw-state-db-doctor-schema.js";
 import {
   downgradeWorkerPlacementsToV7,
   expectedStateMigrationsFromV27,

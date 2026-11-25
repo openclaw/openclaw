@@ -150,7 +150,9 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   } else if (
     userVersion === 0 &&
     !hasApplicationSchema &&
-    database.prepare("PRAGMA page_count").get()?.page_count === 0
+    database // sqlite-allow-raw -- Physical empty-file admission precedes application ownership.
+      .prepare("PRAGMA page_count")
+      .get()?.page_count === 0
   ) {
     // Publish a fresh empty database's owner before another local caller resolves its store.
     // Yielding first leaves an occupied, unowned file that custom selectors must avoid.

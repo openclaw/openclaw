@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { runInNewContext } from "node:vm";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
 import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
 import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
@@ -100,13 +101,23 @@ describe("startup retained deletion", () => {
             INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
               VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', 1, 1);`);
         }
-        // A current fixture includes the content owners' committed completion metadata.
+        // Prepare both Doctor content owners before treating the agent as current.
         const prepared = await autoMigrateLegacyState({
           cfg: {},
           env: { OPENCLAW_STATE_DIR: seedDir },
           doctorOnlyStateMigrations: true,
         });
         throwIfDoctorStateMigrationRefused(prepared.stepReceipts);
+        await noteSessionTranscriptHealth({
+          cfg: {},
+          env: { OPENCLAW_STATE_DIR: seedDir },
+          shouldRepair: true,
+          ...(prepared.postSessionPluginMigration
+            ? { postSessionPluginMigration: prepared.postSessionPluginMigration }
+            : {}),
+          postSessionPluginMigrationPlanBound: true,
+          onStepReceipt: (receipt) => throwIfDoctorStateMigrationRefused([receipt]),
+        });
         await closeOpenClawAgentDatabasesAsync();
         await closeOpenClawStateDatabaseAsync();
         fs.renameSync(seedPath, activePath);

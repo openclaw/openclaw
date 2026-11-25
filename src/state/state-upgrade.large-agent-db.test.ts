@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
 import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
 import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import { sha256File } from "../infra/crypto-digest.js";
@@ -15,6 +16,7 @@ import {
 } from "../infra/state-migrations.doctor.js";
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
 import { detectSharedAuthStoreMigration } from "../infra/state-migrations.shared-auth-store.js";
+import { prepareLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
@@ -68,6 +70,17 @@ describe("startup canonical ownership", () => {
         doctorOnlyStateMigrations: true,
       });
       throwIfDoctorStateMigrationRefused(prepared.stepReceipts);
+      // Session rows and content-completion metadata must also be canonical-current.
+      await noteSessionTranscriptHealth({
+        cfg: {},
+        env: { OPENCLAW_STATE_DIR: seedDir },
+        shouldRepair: true,
+        ...(prepared.postSessionPluginMigration
+          ? { postSessionPluginMigration: prepared.postSessionPluginMigration }
+          : {}),
+        postSessionPluginMigrationPlanBound: true,
+        onStepReceipt: (receipt) => throwIfDoctorStateMigrationRefused([receipt]),
+      });
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
       fs.renameSync(seedPath, agentPath);
@@ -195,6 +208,7 @@ describe("startup canonical ownership", () => {
       env,
       doctorOnlyStateMigrations: true,
       artifactPreservingReadOnly: true,
+      legacySessionSurfaces: await prepareLegacySessionSurfaces({ config: {}, env }),
     });
     expect(pending.preview).toEqual([]);
     const exec = vi.spyOn(DatabaseSync.prototype, "exec");

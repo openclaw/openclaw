@@ -70,6 +70,17 @@ function schemaMetadata(databasePath: string) {
     return {
       userVersion: db.prepare("PRAGMA user_version").get()?.user_version,
       schemaMeta: db.prepare("SELECT * FROM schema_meta ORDER BY rowid").all(),
+      rows: Object.fromEntries(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+          )
+          .all()
+          .map(({ name }) => {
+            assert(typeof name === "string");
+            return [name, db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all()];
+          }),
+      ),
     };
   } finally {
     db.close();
@@ -118,7 +129,7 @@ it.each<[string, AdmissionCase]>([
   ["Missing config", { config: "absent", consolidated: true }],
   ["Configured plugin load path is unavailable", { consolidated: true, unavailablePlugin: true }],
   ["OpenClaw config is invalid", { consolidated: true, unavailablePlugin: true, repairable: true }],
-  ["Legacy client credentials require migration", { identityFile: "device.json" }],
+  ["Legacy device identity is invalid or unsupported", { identityFile: "device.json" }],
   ["__CANONICAL_IDENTITY_READY__", { identityFile: "device.json", canonicalIdentity: true }],
 ])(
   "startup admission preserves shipped state: %s (%j)",
@@ -193,7 +204,9 @@ it.each<[string, AdmissionCase]>([
       }
       if (config !== "absent") {
         writeJson(configPath, {
-          gateway: { mode: "local" },
+          // A missing plugin path is advisory; an invalid port must still refuse
+          // before state writes, even when the session keys can be migrated.
+          gateway: { mode: "local", ...(repairable ? { port: "invalid" } : {}) },
           plugins: unavailablePlugin
             ? { load: { paths: [path.join(root, "missing-plugin")] } }
             : { enabled: false },
@@ -359,6 +372,36 @@ it.each<[string, AdmissionCase]>([
             expect(after[file], file).toBe(hash);
           }
         }
+      } else if (identityFile && !canonicalIdentity) {
+        // Outside a launcher trial, a later identity refusal retains completed
+        // schema steps. The recovery image preserves every original table row.
+        expect(fs.readFileSync(configPath, "utf8")).toBe(configBefore);
+        const after = manifest(stateDir);
+        for (const [file, hash] of Object.entries(before)) {
+          if (!file.startsWith(path.join("state", "openclaw.sqlite"))) {
+            expect(after[file], file).toBe(hash);
+          }
+        }
+        const backups = fs
+          .readdirSync(path.dirname(databasePath))
+          .filter(
+            (name) =>
+              name.startsWith("openclaw.sqlite.pre-startup-migration-") &&
+              name.endsWith(".bak") &&
+              !name.endsWith(".scoped.bak"),
+          );
+        expect(backups).toHaveLength(1);
+        expect(schemaMetadata(path.join(path.dirname(databasePath), backups[0]!))).toEqual(
+          schemaBefore,
+        );
+        const live = schemaMetadata(databasePath);
+        expect(live.userVersion).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        expect(live.schemaMeta).toContainEqual(
+          expect.objectContaining({
+            meta_key: "primary",
+            schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+          }),
+        );
       } else if (!canonicalIdentity) {
         const after = manifest(stateDir);
         const wal = path.relative(stateDir, `${databasePath}-wal`);

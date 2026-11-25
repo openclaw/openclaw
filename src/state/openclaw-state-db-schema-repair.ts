@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   canRepairLegacyAuditEventsSchema,
   hasCanonicalAuditEventsSchema,
@@ -43,36 +44,42 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 /** Decode historical BLOB values in typed columns before migration readers consume them. */
 export function normalizeSqliteText(db: DatabaseSync): void {
-  // Keys change type in place; their parents and children are decoded in the same pass.
+  // Keys and references must settle together, or retain their original storage classes.
+  const { foreign_keys: foreignKeys } = db.prepare("PRAGMA foreign_keys").get() as {
+    foreign_keys: number;
+  };
   db.exec("PRAGMA foreign_keys = OFF");
-  const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
-  const tables = db
-    .prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
-    )
-    // SAFETY: the statement fixes the column names and types of each row.
-    .all() as Array<{ name: string }>;
-  for (const { name } of tables) {
-    // SAFETY: table_xinfo fixes the names and types of these catalog columns.
-    const columns = db.prepare(`PRAGMA table_xinfo(${quote(name)})`).all() as Array<{
-      name: string;
-      type: string;
-      hidden: number;
-    }>;
-    for (const column of columns) {
-      // Declared BLOB and typeless columns may hold real bytes.
-      if (column.hidden !== 0 || column.type === "" || /BLOB/iu.test(column.type)) {
-        continue;
+  try {
+    runSqliteImmediateTransactionSync(db, () => {
+      const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+      const tables = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
+        )
+        // SAFETY: the statement fixes the column names and types of each row.
+        .all() as Array<{ name: string }>;
+      for (const { name } of tables) {
+        // SAFETY: table_xinfo fixes the names and types of these catalog columns.
+        const columns = db.prepare(`PRAGMA table_xinfo(${quote(name)})`).all() as Array<{
+          name: string;
+          type: string;
+          hidden: number;
+        }>;
+        for (const column of columns) {
+          // Declared BLOB and typeless columns may hold real bytes.
+          if (column.hidden !== 0 || column.type === "" || /BLOB/iu.test(column.type)) {
+            continue;
+          }
+          const c = quote(column.name);
+          // Preserve SQLite's constraint diagnostic, including the conflicting table and key.
+          db.prepare(
+            `UPDATE ${quote(name)} SET ${c} = CAST(${c} AS TEXT) WHERE typeof(${c}) = 'blob'`,
+          ).run();
+        }
       }
-      const c = quote(column.name);
-      try {
-        db.prepare(
-          `UPDATE ${quote(name)} SET ${c} = CAST(${c} AS TEXT) WHERE typeof(${c}) = 'blob'`,
-        ).run();
-      } catch {
-        // A constraint on the decoded value leaves it for the canonical repair to refuse.
-      }
-    }
+    });
+  } finally {
+    db.exec(`PRAGMA foreign_keys = ${foreignKeys ? "ON" : "OFF"}`);
   }
 }
 

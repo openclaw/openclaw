@@ -14,7 +14,7 @@ import {
   ensureOpenClawAgentDatabaseSchemaSteps,
   ensureOpenClawAgentSchema,
 } from "../state/openclaw-agent-db-schema.js";
-import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-doctor-schema.js";
+import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-doctor-repair.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
   openOpenClawStateDatabaseForDoctor,
