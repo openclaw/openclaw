@@ -74,8 +74,10 @@ extension OpenClawChatComposer {
     #if os(iOS)
     func cleanPhoneEditor(expanded: Bool) -> some View {
         CleanComposerPhoneLayout(expanded: expanded) {
+            // Open, the field hugs its lines so the layout can place them; closed, it takes the
+            // controls' full height, which centers the line on them and keeps the whole pill tappable.
             self.editorOverlay
-                .frame(maxWidth: .infinity, minHeight: self.textMinHeight, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: expanded ? nil : self.cleanControlHeight, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture { self.focusDraft() }
             HStack(spacing: 0) {
@@ -582,7 +584,7 @@ private struct CleanComposerPhoneLayout: Layout {
         let field = subviews[0].sizeThatFits(ProposedViewSize(width: fieldWidth, height: nil))
         let controlsHeight = max(leading.height, trailing.height)
         let height = self.expanded ? controlsHeight : max(controlsHeight, field.height)
-        let controlsY = self.expanded ? top + field.height + gap : top
+        let controlsY = self.expanded ? top + field.height + CleanChatComposerMetrics.expandedControlsGap : top
         let fieldY = self.expanded ? top : top + (height - field.height) / 2
         return [
             CGRect(x: fieldX, y: fieldY, width: fieldWidth, height: field.height),

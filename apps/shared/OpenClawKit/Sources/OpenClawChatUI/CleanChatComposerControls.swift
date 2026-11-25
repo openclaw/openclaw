@@ -60,8 +60,12 @@ enum CleanChatComposerMetrics {
     static let expandedControlInset: CGFloat = 4
     /// Open, the 14 pt `+` glyph shares the draft's leading edge.
     static let expandedLeadingControlInset: CGFloat = 0
-    /// Puts the first line's cap height about as far from the top edge as the footer glyphs sit from the bottom.
+    /// The space above the first line's capitals equals the space from the last baseline to the top of the
+    /// primary disc. Inter's capitals sit in the middle of its line box (ascender minus cap height equals
+    /// the descender), so the two spaces stay equal at every text size: inset + ascender − cap height on
+    /// top, descender + gap + the disc's inset in its row below.
     static let expandedEditorTopInset: CGFloat = 11
+    static let expandedControlsGap: CGFloat = expandedEditorTopInset - (controlTouchSize - primaryVisualSize) / 2
     /// Concentric with the primary disc: its 16 pt radius plus its 10 pt inset.
     static let expandedCornerRadius: CGFloat = 26
     /// Collapsed, the same controls sit concentric with the capsule.

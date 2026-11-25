@@ -867,7 +867,8 @@ struct OpenClawChatComposer: View {
                 text: self.inputText,
                 focusRequested: self.isFocused,
                 isEnabled: self.isComposerEnabled,
-                minHeight: self.textMinHeight,
+                // Clean: as tall as its lines, so it centers like the placeholder; the editor frame sets the target.
+                minHeight: self.composerChrome == .clean ? 0 : self.textMinHeight,
                 maxHeight: self.textMaxHeight,
                 onFocusChange: { focused in
                     self.isFocused = focused
@@ -1324,7 +1325,7 @@ extension OpenClawChatComposer {
     }
     #endif
 
-    var textMinHeight: CGFloat {
+    private var textMinHeight: CGFloat {
         #if os(macOS)
         if self.usesDesktopModelMenu {
             return self.scaledBodyLineHeight
