@@ -273,7 +273,7 @@ export async function prepareUserChannelIdentityAuthority(
       return { linked: reply.linked, isCurrent };
     }
   }
-  throw new Error("Profile authority changed while preparing the channel request");
+  throw new Error("The profile snapshot could not settle. Retry the channel request");
 }
 
 export async function prepareUserProfileRoleAuthority(
@@ -399,5 +399,5 @@ async function prepareUserProfileAuthorityRead<Profile extends { profileId: stri
       };
     }
   }
-  throw new Error("Profile authority changed while preparing the administrative request");
+  throw new Error("The profile snapshot could not settle. Retry the administrative request");
 }

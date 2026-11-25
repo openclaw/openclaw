@@ -210,15 +210,31 @@ export type CliBackendLiveSessionCapability = {
 export type CliBackendMessageInjection = {
   isAvailable(): boolean;
   /**
+   * True when `queueMessage` delivers `options.images` to the model;
+   * otherwise, input with images waits for the next turn.
+   */
+  acceptsImages?: boolean;
+  /**
    * Ask the host to prepare current authority and invoke the synchronous native write.
    * Resolve only after the runtime acknowledges consumption, not after the write.
+   * A native transcript owner can return the accepted input and session IDs.
    */
   queueMessage(
     text: string,
     withCurrent: (submit: () => void) => Promise<void>,
     /** Per-input attribution and private context; never inherit the initial turn's. */
-    options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext">,
-  ): Promise<void>;
+    options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext"> & {
+      /** Prepared base64 images, in order; passed only when `acceptsImages` is true. */
+      images?: readonly CliBackendInputImage[];
+    },
+  ): Promise<void | { cliSessionId: string; externalId: string }>;
+};
+
+/** One prepared image for same-turn input. */
+export type CliBackendInputImage = {
+  /** Base64-encoded image data. */
+  data: string;
+  mimeType: string;
 };
 
 /** Graceful end of the admitted turn without retiring its reusable native session. */

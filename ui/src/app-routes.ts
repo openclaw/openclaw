@@ -62,6 +62,7 @@ import { canonicalPluginsRouteLocation } from "./pages/plugins/route-data.ts";
 import { pages as pluginsPages } from "./pages/plugins/route.tsx";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
+import { page as projectsPage } from "./pages/projects/route.tsx";
 import { page as searchPage } from "./pages/search/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
@@ -117,6 +118,7 @@ const APP_ROUTE_TREE = [
   profilePage,
   workboardPage,
   worktreesPage,
+  projectsPage,
   sessionsPage,
   systemsPage,
   secretsPage,

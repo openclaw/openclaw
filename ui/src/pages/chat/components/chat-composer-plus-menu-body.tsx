@@ -40,7 +40,11 @@ function rootRenderInputs(menu: ChatComposerPlusMenuContentProps) {
   for (const action of menu.pluginActions ?? []) {
     inputs.push(action.pluginId, action.pluginName);
   }
-  inputs.push(uploadsEnabled(menu.attachments.uploadConfig), menu.showCapabilities);
+  inputs.push(
+    uploadsEnabled(menu.attachments.uploadConfig),
+    menu.showCapabilities,
+    Boolean(menu.capabilityMenu),
+  );
   for (const toggle of menu.rootToggles ?? []) {
     inputs.push(
       toggle.value,
@@ -78,30 +82,32 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
     }),
   );
   const finish = (): MenuEntry[] => {
-    const rows: MenuEntry[] = [
+    if (plugins.length) {
+      if (entries.length) {
+        entries.push(menuDivider("plugin-actions-divider"));
+      }
+      entries.push(...plugins);
+    }
+    if (!entries.length) {
+      return attachments;
+    }
+    if (attachments.length) {
+      entries.push(menuDivider("attachment-divider"));
+    }
+    // Capabilities can arrive mid-click. Grow their scroll region above the
+    // attachment controls so those controls stay at the menu's anchored edge.
+    return [
+      { kind: "group", id: "root-list", class: "chat-plugin-menu-scroll", items: entries },
       ...attachments,
-      ...(entries.length && attachments.length ? [menuDivider("attachment-divider")] : []),
-      ...entries,
-      ...(plugins.length && (entries.length || attachments.length)
-        ? [menuDivider("plugin-actions-divider")]
-        : []),
-      ...plugins,
     ];
-    return plugins.length
-      ? [
-          {
-            kind: "group",
-            id: "root-list",
-            class: "chat-plugin-menu-scroll",
-            items: rows,
-          },
-        ]
-      : rows;
   };
   if (menu.showCapabilities || menu.rootToggles?.length) {
     entries.push(...(menu.rootToggles ?? []).map(renderCapabilityToggleRow));
   }
   if (!menu.showCapabilities) {
+    if (menu.capabilityMenu && !attachments.length && !entries.length && !plugins.length) {
+      entries.push({ id: "plus-menu-loading", label: t("common.loading"), disabled: true });
+    }
     return finish();
   }
   for (const view of ["skills", "connectors"] as const) {

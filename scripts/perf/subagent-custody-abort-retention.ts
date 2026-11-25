@@ -46,7 +46,13 @@ function createOwner(index: number): Owner {
     requesterAgentId: "main",
     targetSessionKey: "agent:main:child",
     targetAgentId: "main",
-    custody: { signal: new AbortController().signal, assertCurrent: noop, release: noop, run },
+    custody: {
+      signal: new AbortController().signal,
+      assertCurrent: noop,
+      release: noop,
+      run,
+      runWithRequester: run,
+    },
   });
 }
 

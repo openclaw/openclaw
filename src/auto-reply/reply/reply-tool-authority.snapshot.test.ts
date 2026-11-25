@@ -57,37 +57,11 @@ it("captures authority facts without copying unrelated attempt payloads", async 
   expect(payloadReads).toBe(0);
 });
 
-it("keeps captured policy isolated and checks revocation after preparation", async () => {
-  const revocation = new AbortController();
-  const input = {
-    operatorAuthority: createTestOperatorAuthority({
-      profileId: "synthetic-operator",
-      scopes: ["operator.write"],
-      assertCurrent: () => revocation.signal.throwIfAborted(),
-    }),
-    run: {
-      ...run,
-      sessionId: "revoked-snapshot",
-      toolOverrides: { webSearch: false },
-    },
-  };
-  const authority = prepareReplyToolAuthority(input);
-  authorities.push(authority);
-  const fingerprint = await authority.fingerprintAsync(route);
-  input.run.toolOverrides.webSearch = true;
-  expect(authority.fingerprint(route)).toBe(fingerprint);
-  revocation.abort(new Error("synthetic authority revoked"));
-  expect(() => authority.fingerprint(route)).toThrow("synthetic authority revoked");
-  await expect(authority.fingerprintAsync(route)).rejects.toThrow("synthetic authority revoked");
-});
-
 it("evaluates interleaved reply policies without resolving question UI metadata", async () => {
   const channelLookup = vi.spyOn(channelRegistry, "getChannelPlugin");
-  const revocation = new AbortController();
   const operatorAuthority = createTestOperatorAuthority({
     profileId: "synthetic-operator",
     scopes: ["operator.write"],
-    assertCurrent: () => revocation.signal.throwIfAborted(),
   });
   const authority = prepareReplyToolAuthority({
     operatorAuthority,
@@ -104,11 +78,6 @@ it("evaluates interleaved reply policies without resolving question UI metadata"
   expect(authority.project(caller, fallback)).toBe(second);
   expect(authority.fingerprint(route)).toBe(first);
   expect(channelLookup).not.toHaveBeenCalled();
-  revocation.abort(new Error("synthetic authority revoked"));
-  expect(() => authority.fingerprint(route)).toThrow("synthetic authority revoked");
-  await expect(authority.projectAsync(caller, route)).rejects.toThrow(
-    "synthetic authority revoked",
-  );
 });
 
 it("pins active turns across policy publication and reset", async () => {

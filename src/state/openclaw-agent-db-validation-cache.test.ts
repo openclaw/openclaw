@@ -50,6 +50,11 @@ import {
   setOpenClawAgentDatabaseValidation as setValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
+  agentDatabaseValidationKey,
+  describeAgentDatabaseValidationMismatch,
+  revokeAgentDatabaseValidation,
+} from "./openclaw-agent-db-validation-facts.js";
+import {
   closeOpenClawAgentDatabaseByPath as closePath,
   closeOpenClawAgentDatabasesAsync as closeDatabases,
   openOpenClawAgentDatabase as openDatabase,
@@ -237,7 +242,7 @@ describe("canonical proof on physical database validation", () => {
     syncBuiltinESMExports();
     activeObservers(database.path)[0]!.notify(path.basename(database.path), "rename");
     try {
-      invalidateValidation(database.path);
+      invalidateValidation(database.path, "a maintenance write");
       const successor = setValidation(database);
       resume.resolve();
       const admitted = await captureReadValidation(database);
@@ -369,7 +374,7 @@ describe("canonical proof on physical database validation", () => {
     publish(delayed.identity, delayed);
     expect(() => reader!.assertCurrent()).not.toThrow();
     expect(getTransfer(alias)).toBe(receipt);
-    invalidateValidation(database.path);
+    invalidateValidation(database.path, "a maintenance write");
     expect(() => reader!.assertCurrent()).toThrow("Session reader validation is no longer current");
   });
 
@@ -394,7 +399,7 @@ describe("canonical proof on physical database validation", () => {
         expect(adoptSchema(database)).toBe(false);
         refreshSchema(database, () => {});
         if (receipt === "replacement") {
-          invalidateValidation(database.path);
+          invalidateValidation(database.path, "a maintenance write");
           setValidation(database);
         }
         expectFlag(original.valid, 0);
@@ -522,7 +527,7 @@ describe("canonical proof on physical database validation", () => {
       expectFlag(receipt.canonicalReady, 1);
 
       // A retired reader's path tombstone must not clear a later owner's ready receipt.
-      invalidateValidation(database.path);
+      invalidateValidation(database.path, "a maintenance write");
       releaseReadValidation(candidates);
       const adopt = captureTransfer(database);
       expect(adopt(receipt.identity, receipt)).toBe(true);
@@ -564,7 +569,7 @@ describe("canonical proof on physical database validation", () => {
         const publish = capturePublication(database);
         const adopt = captureTransfer(database);
         if (race === "capture") {
-          invalidateValidation(database.path);
+          invalidateValidation(database.path, "a maintenance write");
         } else {
           const cell =
             race === "captured proof"
@@ -628,7 +633,7 @@ describe("canonical proof on physical database validation", () => {
         expect(getTransfer(database)).toBeUndefined();
         const publish = capturePublication(database);
         if (transition === "invalidation") {
-          invalidateValidation(database.path);
+          invalidateValidation(database.path, "a maintenance write");
         } else if (transition === "registration") {
           registerDatabase({ ...options, path: database.path });
         } else if (transition === "replacement") {
@@ -702,7 +707,7 @@ describe("canonical proof on physical database validation", () => {
         expect(hasCanonical(database)).toBe(true);
         expect(getTransfer(database)).toBeUndefined();
         if (state === "revoked") {
-          invalidateValidation(database.path);
+          invalidateValidation(database.path, "a maintenance write");
         }
 
         expect(adopt(received.identity, received)).toBe(state === "current");
@@ -716,14 +721,16 @@ describe("canonical proof on physical database validation", () => {
       const received = independentWorkerReceipt(database);
       clearValidation(database.path);
 
-      for (const revoke of [invalidateValidation, invalidateValidation, clearValidation]) {
+      const revokePath = (pathname: string) =>
+        invalidateValidation(pathname, "a maintenance write");
+      for (const revoke of [revokePath, revokePath, clearValidation]) {
         const beforeRevocation = captureTransfer(database);
         revoke(database.path);
         expect(beforeRevocation(received.identity, received)).toBe(false);
       }
 
       // A path can be revoked before its first native opener associates an agent.
-      invalidateValidation(database.path);
+      invalidateValidation(database.path, "a maintenance write");
       const beforeAgentInvalidation = captureTransfer(database);
       invalidateAgent(database.agentId, []);
       expect(beforeAgentInvalidation(received.identity, received)).toBe(false);
@@ -735,7 +742,7 @@ describe("canonical proof on physical database validation", () => {
       expect(getTransfer(database)?.valid).toBe(received.valid);
       expect(hasCanonical(database)).toBe(false);
 
-      invalidateValidation(database.path);
+      invalidateValidation(database.path, "a maintenance write");
       const successor = { path: database.path, agentId: "successor" };
       const beforeOwnerRevocation = captureTransfer(successor);
       invalidateAgent(successor.agentId, []);
@@ -778,7 +785,7 @@ describe("canonical proof on physical database validation", () => {
           });
         }
 
-        invalidateValidation(alias.path);
+        invalidateValidation(alias.path, "a maintenance write");
 
         expectFlag(replacement.valid, 0);
         expect(getTransfer(database)).toBeUndefined();
@@ -817,7 +824,7 @@ describe("canonical proof on physical database validation", () => {
       }
       expect(adopt(received.identity, received)).toBe(true);
       expect(getTransfer(database)?.valid).toBe(received.valid);
-      invalidateValidation(database.path);
+      invalidateValidation(database.path, "a maintenance write");
       expectFlag(received.valid, 0);
       expect(getTransfer(database)).toBeUndefined();
     });
@@ -837,7 +844,7 @@ describe("canonical proof on physical database validation", () => {
       if (cache === "cold") {
         clearValidation(database.path);
       }
-      invalidateValidation(database.path);
+      invalidateValidation(database.path, "a maintenance write");
       if (admission === "adopt") {
         expect(adoptValidation(database, transferred)).toBe(true);
         expect(getValidation(database)).toBe(transferred);
@@ -900,7 +907,7 @@ describe("canonical proof on physical database validation", () => {
         expect(hasCanonical({ agentId: "other", db: opened.database.db })).toBe(false);
         expectFlag(transferred.canonicalReady, 1);
         if (mode === "transferred") {
-          invalidateValidation(database.path);
+          invalidateValidation(database.path, "a maintenance write");
           expect(adoptValidation(opened.database, transferred)).toBe(false);
           expect(hasCanonical(opened.database)).toBe(false);
         }
@@ -944,7 +951,7 @@ describe("canonical proof on physical database validation", () => {
         writeTransaction((current) => {
           expect(markCanonical(current)).toBe(true);
           if (outcome === "revoked") {
-            invalidateValidation(current.path);
+            invalidateValidation(current.path, "a maintenance write");
             setValidation(current);
           } else if (outcome === "nested commit") {
             expect(hasCanonical(current)).toBe(false);
@@ -1020,4 +1027,25 @@ describe("canonical proof on physical database validation", () => {
       expect(fresh(received.identity, received)).toBe(true);
     },
   );
+});
+
+baseIt("revokes and reports a receipt sealed before revoker cells existed", () => {
+  const valid = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  Atomics.store(new Int32Array(valid), 0, 1);
+  // The shape an older release seals at clean close and restores on restart.
+  const sealed = {
+    agentId: "main",
+    identity: "1:2",
+    birthtime: "3",
+    receiptId: "sealed",
+    valid,
+    canonicalReady: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+  };
+  const restored = agentDatabaseValidationKey.read(sealed);
+  assert(restored);
+  revokeAgentDatabaseValidation(restored, "a maintenance write");
+  expect(Atomics.load(new Int32Array(restored.valid), 0)).toBe(0);
+  expect(
+    describeAgentDatabaseValidationMismatch({ db: undefined as never, agentId: "main" }, restored),
+  ).toBe("the receipt was revoked by a maintenance write");
 });

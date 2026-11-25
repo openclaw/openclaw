@@ -24,6 +24,7 @@ const roles = [
   "releaseChecksIndependent",
   "releaseChecksCandidate",
   "pluginPrereleaseCandidate",
+  "stableClientCompatibility",
 ];
 const directories: string[] = [];
 afterEach(() => {
@@ -159,14 +160,20 @@ function fixture(candidateSha = Q) {
         _verification: Parameters<
           typeof import("../../scripts/release-qualification-admission.mjs").verifyQualificationAdmission
         >[0],
-      ) => ({ coverage: { children: roles.map((key) => ({ key, parentJobName: key })) } }),
+      ) => ({
+        request: { inputs: {} },
+        baselinePolicy: { candidateVersion: "2026.11.1" },
+        coverage: { children: roles.map((key) => ({ key, parentJobName: key })) },
+      }),
     ),
-    getWorkflowSource: vi.fn((sha: string) =>
-      sha === P
-        ? 'env:\n  FULL_RELEASE_RECEIPT_RECOVERY_CONTRACT: "1"\n  FULL_RELEASE_RECEIPT_RECOVERY_REQUEST_CONTRACT: "1"\nrun-name: Receipt Recovery ' +
-          "$" +
-          "{{ fromJSON(inputs.request).requestId }}"
-        : "jobs:\n  npm:\n    name: npm\n    env:\n      CHILD_WORKFLOW_KIND: artifact-npm\n  candidate:\n    name: candidate\n    env:\n      CHILD_WORKFLOW_KIND: artifact-candidate\n  docker:\n    name: docker\n    env:\n      CHILD_WORKFLOW_KIND: artifact-docker\n",
+    getWorkflowSource: vi.fn((sha: string, sourcePath?: string) =>
+      sourcePath === "scripts/lib/release-validation-waivers.json"
+        ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] })
+        : sha === P
+          ? 'env:\n  FULL_RELEASE_RECEIPT_RECOVERY_CONTRACT: "1"\n  FULL_RELEASE_RECEIPT_RECOVERY_REQUEST_CONTRACT: "1"\nrun-name: Receipt Recovery ' +
+            "$" +
+            "{{ fromJSON(inputs.request).requestId }}"
+          : "jobs:\n  npm:\n    name: npm\n    env:\n      CHILD_WORKFLOW_KIND: artifact-npm\n  candidate:\n    name: candidate\n    env:\n      CHILD_WORKFLOW_KIND: artifact-candidate\n  docker:\n    name: docker\n    env:\n      CHILD_WORKFLOW_KIND: artifact-docker\n",
     ),
     getRef: vi.fn(async () => ({ object: { type: "commit", sha: P } })),
     listRecoveryRuns: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
@@ -202,21 +209,41 @@ function fixture(candidateSha = Q) {
 }
 
 describe("retained receipt recovery operator", () => {
-  it.each([false, true])(
-    "recovers missing parent source from authenticated inputs (changed=%s)",
-    async (changed) => {
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+  ])(
+    "recovers missing parent source from authenticated inputs (changed=%s, preflight first=%s)",
+    async (changed, preflightFirst) => {
       const f = fixture();
-      const original = candidatePublicationFixture({ candidateSha: Q, runId: "10" });
+      const original = candidatePublicationFixture({
+        candidateSha: Q,
+        runId: "10",
+        preflightFirst,
+      });
       f.artifacts.set("10", []);
       for (const child of original.admission.receipt.coverage.children) {
         f.jobs.find((job) => job.name === child.key)!.name = child.parentJobName;
       }
       f.runs.get(10)!.head_branch = original.branch;
+      if (preflightFirst) {
+        for (const [stage, name] of [
+          ["npm", "Prepare initial release npm artifacts"],
+          ["candidate", "Acquire full release candidate"],
+          ["docker", "Prepare release Docker artifacts"],
+        ] as const) {
+          f.jobs.find((job) => job.name === stage)!.name = name;
+        }
+      }
       const frozen = f.client.getWorkflowSource(Q);
-      f.client.getWorkflowSource.mockImplementation(
-        () =>
-          frozen +
-          `
+      f.client.getWorkflowSource.mockImplementation((_sha, path) =>
+        path === "scripts/lib/release-validation-waivers.json"
+          ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] })
+          : preflightFirst
+            ? readFileSync(".github/workflows/full-release-validation.yml", "utf8")
+            : frozen +
+              `
   resolve_target:
     name: Resolve target ref
     steps:
@@ -264,6 +291,61 @@ describe("retained receipt recovery operator", () => {
       }
     },
   );
+  it("rejects an unmatchable new grant before preparing its admission request", async () => {
+    const f = fixture();
+    const original = candidatePublicationFixture({ candidateSha: Q, runId: "10" });
+    const policySha = "e".repeat(40);
+    const ledger = "scripts/lib/release-validation-waivers.json";
+    const grant = {
+      targetVersion: original.admission.receipt.baselinePolicy.candidateVersion,
+      targetSha: Q,
+      childRole: "normalCi",
+      jobName: "new job",
+      aggregates: [{ jobName: "gate", stepName: "Verify", causes: ["new job"] }],
+      reason: "Synthetic approval",
+    };
+    const client = {
+      ...f.client,
+      verifyQualificationAdmission: async () => original.admission.receipt,
+      getCommit: async () => ({
+        sha: policySha,
+        parents: [{ sha: Q }],
+        commit: { verification: { verified: true } },
+        files: [{ filename: ledger, status: "modified" }],
+      }),
+      getWorkflowSource: (sha: string) =>
+        JSON.stringify({
+          schema: "openclaw.release-validation-waivers/v1",
+          waivers: sha === Q ? [] : [grant],
+        }),
+    };
+    await expect(
+      dispatchReceiptRecovery({ ...f.options, preparePolicyAdmission: true, policySha }, client),
+    ).rejects.toThrow("new job");
+  });
+
+  it("does not read the witness or receipt for an undispatched waived role", async () => {
+    const f = fixture();
+    const originalSource = f.client.getWorkflowSource.getMockImplementation()!;
+    f.client.getWorkflowSource.mockImplementation((sha, path) =>
+      path === "scripts/lib/release-validation-waivers.json"
+        ? JSON.stringify({
+            schema: "openclaw.release-validation-waivers/v1",
+            waivers: [
+              { targetVersion: "2026.11.1", childRole: "normalCi", reason: "Synthetic omission" },
+            ],
+          })
+        : originalSource(sha, path),
+    );
+    const roleJob = f.jobs.find((job) => job.name === "normalCi")!;
+    f.logs.delete(roleJob.id);
+    f.runs.delete(30);
+    const request = await discoverReceiptRecoveryRequest("10", P, f.client);
+    expect(Object.keys(request.children)).toEqual(roles.filter((role) => role !== "normalCi"));
+    expect(f.client.getJobLog).not.toHaveBeenCalledWith(roleJob.id);
+    expect(f.client.getRunArtifacts).not.toHaveBeenCalledWith("30");
+  });
+
   it("discovers a rerun parent without changing qualification attempt 1", async () => {
     const f = fixture();
     const parent = f.runs.get(10)!;
@@ -399,6 +481,8 @@ describe("retained receipt recovery operator", () => {
     const f = fixture();
     f.client.verifyQualificationAdmission
       .mockImplementationOnce(async () => ({
+        request: { inputs: {} },
+        baselinePolicy: { candidateVersion: "2026.11.1" },
         coverage: { children: roles.map((key) => ({ key, parentJobName: key })) },
       }))
       .mockRejectedValueOnce(new Error("admission authority revoked"));
@@ -456,6 +540,19 @@ describe("retained receipt recovery operator", () => {
     ).toMatchObject({ workflowSha: P, runId: "10" });
     for (const args of [
       ["--reconcile-request", "x", "--run", "10"],
+      ["--reconcile-request", "x", "--policy-sha", Q],
+      ["--run", "10", "--workflow-sha", P, "--request-file", "x", "--policy-sha", Q],
+      [
+        "--run",
+        "10",
+        "--workflow-sha",
+        P,
+        "--prepare-policy-admission",
+        "--policy-sha",
+        Q,
+        "--policy-admission-run",
+        "8",
+      ],
       ["--run", "10", "--run", "20"],
       ["--children", "{}"],
       [],

@@ -23,6 +23,7 @@ export function inspectPublishReleasePage(input: {
   sourceSha: string;
   toolingSha: string;
   retiredLineReason?: string;
+  dependencyEvidenceRequired?: boolean;
   runGh: PublishPreflightGh;
 }) {
   // Initial publication always renders the frozen notes, including when no
@@ -97,7 +98,11 @@ export function inspectPublishReleasePage(input: {
       (asset) => asset.name === `openclaw-${input.tag.slice(1)}-dependency-evidence.zip`,
     );
     const hasProof = body.includes("### Release verification");
-    if (!canonical.matches || !hasAsset || (hasProof && !body.includes(input.sourceSha))) {
+    if (
+      !canonical.matches ||
+      (input.dependencyEvidenceRequired !== false && !hasAsset) ||
+      (hasProof && !body.includes(input.sourceSha))
+    ) {
       throw new Error(
         "Public release has incomplete or noncanonical postpublish evidence for this exact source. Reconcile that release before retrying the initial publisher.",
       );

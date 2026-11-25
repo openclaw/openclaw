@@ -546,7 +546,9 @@ describe.skipIf(!connection)("PostgreSQL pending-input endings migration", () =>
               (session_key, current_session_id, entry_json, updated_at)
               VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained"}', 1);
               INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
-              VALUES ('retained', 'agent:main:retained', 1, 1);`);
+              VALUES ('retained', 'agent:main:retained', 1, 1);
+              INSERT INTO session_members (session_key, identity_id, added_by, added_at)
+              VALUES ('agent:main:retained', 'reader', 'owner', 1);`);
             const rows = [
               [
                 "nested-stop",
@@ -568,7 +570,17 @@ describe.skipIf(!connection)("PostgreSQL pending-input endings migration", () =>
             db.close();
             publishSqliteDatabaseSchemaChange(anchor);
             db = open(agentEngineSchema);
-            expect(getPostgresPhysicalFacts(db)?.version).toBe(43);
+            expect(getPostgresPhysicalFacts(db)?.version).toBe(agentEngineSchema.version);
+            expect(db.prepare("SELECT identity_id, access FROM session_members").all()).toEqual([
+              { identity_id: "reader", access: null },
+            ]);
+            db.exec("UPDATE session_members SET access='suggest'");
+            expect(db.prepare("SELECT access FROM session_members").get()).toEqual({
+              access: "suggest",
+            });
+            expect(() => db.exec("UPDATE session_members SET access='admin'")).toThrow(
+              /check constraint/i,
+            );
             expect(
               db
                 .prepare(`SELECT column_name, data_type, is_nullable
@@ -596,7 +608,7 @@ describe.skipIf(!connection)("PostgreSQL pending-input endings migration", () =>
             );
           }
           expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-            schema_version: 43,
+            schema_version: absentPendingTable ? 43 : agentEngineSchema.version,
           });
         } finally {
           if (db.isOpen) {

@@ -296,6 +296,7 @@ export function SettingsNavRow(
 export function SettingsToggle(
   props: SettingsToggleControl & {
     ariaLabel: string;
+    ariaDescription?: string;
     size?: SwitchSize;
     inputRef?: (element: HTMLInputElement) => void;
   },

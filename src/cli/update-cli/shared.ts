@@ -27,6 +27,7 @@ import {
   resolveExpectedInstalledVersionFromSpec,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
+import { describeUnavailableMacosSystemGit } from "../../infra/update-macos-git.js";
 import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
 import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
@@ -36,6 +37,7 @@ import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { reportUpdateStepCompletion, runStep } from "../../infra/update-runner-command.js";
 import {
   describeUpdateInstallRoot,
+  looksLikeGitCheckout,
   resolveUnmanagedUpdateInstallReason,
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
@@ -534,6 +536,29 @@ export async function assertGlobalUpdateOwner(
   }
 }
 
+export async function assertMacosGitForUnownedCheckout(
+  { root, timeoutMs }: { root: string; timeoutMs: number },
+  options: { hasPackageOwner?: boolean; missingGit?: string } = {},
+): Promise<void> {
+  if (process.platform !== "darwin" || !(await looksLikeGitCheckout(root))) {
+    return;
+  }
+  // Git discovery cannot establish checkout ownership when Apple's shim is unavailable.
+  // A confirmed package owner still takes precedence over the checkout marker.
+  const missing =
+    options.missingGit ??
+    (await describeUnavailableMacosSystemGit(runCommandWithTimeout, { cwd: root, timeoutMs }));
+  if (
+    missing &&
+    !(
+      options.hasPackageOwner ??
+      Boolean(await detectGlobalInstallManagerForRoot(runCommandWithTimeout, root, timeoutMs))
+    )
+  ) {
+    throw new UpdatePreMutationError("git-version-unsupported", missing);
+  }
+}
+
 export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -551,6 +576,7 @@ export async function resolveGlobalManager(params: {
       diagnostics,
     );
     if (!detected) {
+      await assertMacosGitForUnownedCheckout(params, { hasPackageOwner: false });
       const reason = resolveUnmanagedUpdateInstallReason();
       const failure = createUpdatePreflightFailure(
         "installation-unclassified",

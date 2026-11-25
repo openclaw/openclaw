@@ -21,6 +21,7 @@ import {
 } from "./subagent-registry-memory.js";
 import { createSubagentSessionListReadIndex } from "./subagent-registry-read-index.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
+import { bindSubagentRunRecord, rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import * as runGeneration from "./subagent-run-generation.js";
 import { bindSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -446,3 +447,25 @@ describe("subagent run memory indexes", () => {
     },
   );
 });
+
+it.each([false, true])(
+  "never gives a restored participant completion owner authority without custody (collector=%s)",
+  (collect) => {
+    const record = createRun("participant-source-loss", {
+      collect,
+      completion: { required: true },
+      delivery: { status: "pending" },
+      requiresCompletionAuthority: true,
+    });
+    const restored = rowToSubagentRunRecord(bindSubagentRunRecord(record))!;
+    subagentRuns.set(restored.runId, restored);
+    const ownerEffect = vi.fn();
+    expect(() => subagentRuns.runWithCompletionAuthority(restored, ownerEffect)).toThrow(
+      /Constrained/,
+    );
+    expect(() => subagentRuns.runWithCompletionBatchAuthority([restored], ownerEffect)).toThrow(
+      /Constrained/,
+    );
+    expect(ownerEffect).not.toHaveBeenCalled();
+  },
+);

@@ -833,6 +833,24 @@ describe("Claude native stdio boundary", () => {
     },
   );
 
+  it.each([
+    { text: "look at this", textBlocks: [{ type: "text", text: "look at this" }] },
+    { text: "", textBlocks: [] },
+  ])(
+    "sends same-turn images as native image blocks (text: '$text')",
+    async ({ text, textBlocks }) => {
+      const { running, injection } = await startInjection("steer-merged");
+      expect(injection.acceptsImages).toBe(true);
+      await injection.queueMessage(text, async (submit) => submit(), {
+        images: [{ data: "aW1hZ2U=", mimeType: "image/png" }],
+      });
+      expect(resultDetail(await running).user).toEqual([
+        ...textBlocks,
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "aW1hZ2U=" } },
+      ]);
+    },
+  );
+
   it("rejects steering before admitted private context is submitted", async () => {
     let injection: CliBackendMessageInjection | undefined;
     const context = await createContext("steer-prompt-pending", {

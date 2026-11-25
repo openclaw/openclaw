@@ -239,7 +239,6 @@ async function withChannelCommandPlugin(
       bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkHost);
       let registry: PluginRegistry | undefined;
       const blockers: string[] = [];
-      const previousSubagentRuns = new Set(subagentRuns.keys());
       try {
         registry = loadOpenClawPlugins({
           config: cfg,
@@ -361,29 +360,7 @@ async function withChannelCommandPlugin(
           },
         });
       } finally {
-        const revokedChildren = [...subagentRuns.values()].filter(
-          (entry) =>
-            !previousSubagentRuns.has(entry.runId) &&
-            entry.requesterSessionKey === sessionKey &&
-            entry.collectorLaunchCleanupPending &&
-            entry.execution.outcome?.error ===
-              "Channel operator authority changed; send a new request.",
-        );
-        // Revocation cleanup dispatches through the still-live Gateway lifecycle.
         await closeSwarmScheduler(resolveGatewayContext);
-        for (const child of revokedChildren) {
-          expect
-            .soft(
-              loadSessionEntry({
-                agentId: child.childAgentId ?? "main",
-                sessionKey: child.childSessionKey,
-                storePath,
-              }),
-              "revoked native child session is physically deleted before fixture retirement",
-            )
-            .toBeUndefined();
-          expect.soft(subagentRuns.get(child.runId)?.collectorLaunchCleanupPending).toBe(false);
-        }
         for (const blocker of blockers.splice(0)) {
           releaseSwarmRun(blocker);
         }

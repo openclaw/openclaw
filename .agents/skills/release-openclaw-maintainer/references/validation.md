@@ -191,9 +191,13 @@ source, including soak and blocking performance. Beta confidence may inform
 diagnosis but cannot substitute for required stable evidence.
 
 Preserve the validation parent and successful children when continuation is
-eligible; parents that produced sealed candidate artifacts need a new parent
-with verified evidence reuse. Diagnose failures and retry only the affected
-surface within the controller's budget. Classify every selected test failure as
+eligible. If sealing/collection failed or same-parent continuation cannot restore
+the original plan, assess [receipt-backed aggregate recovery](../../release-openclaw-ci/SKILL.md#receipt-backed-aggregate-recovery)
+before starting a new full qualification. It can authenticate the original
+admission, C/Q, completed child receipts, and unchanged publication bytes under
+a reviewed trusted P; the original failed parent stays failed. Missing required
+evidence or invalid bytes still block recovery. Diagnose failures and retry only
+the affected surface within the controller's budget. Classify every selected test failure as
 a real blocker or a flake under the
 [shared release boundaries](../SKILL.md#shared-release-boundaries): flakes get
 bounded recorded reruns on the same Release SHA and a fix-in-parallel issue or
@@ -219,8 +223,33 @@ On timeout, inspect the affected lane instead of leaving it running. Serialize
 build/package mutations before VM packing so a concurrent build cannot remove
 `dist`; avoid load-induced noise.
 
-Fix related required failures at their owner and rerun affected evidence. For
-PR preparation/landing or observed hosted-runner stalls, use
+### Hand off a release fix
+
+Record the tested commit, the affected job or stage, the command or hosted job
+link, and its result. For npm source checks, follow the stage in
+[OpenClaw NPM Preflight](../../../../.github/workflows/openclaw-npm-preflight.yml)
+at the pinned Tooling SHA. Use the repaired source and its frozen dependencies.
+On targets with staged checks, rerun `lint-extensions` with its worker settings.
+
+```bash
+CI=true OPENCLAW_LOCAL_CHECK=0 OPENCLAW_OXLINT_SHARD_CONCURRENCY=1 \
+  node --import tsx scripts/run-oxlint-shards.mts --only=extensions
+```
+
+That stage [caught an invalid Promise aggregation](https://github.com/openclaw/openclaw/actions/runs/45346835361/job/138283524117)
+in a [release test](https://github.com/openclaw/openclaw/commit/9e93dae531c8c114520a6343c70422c81771fec7).
+
+The `types` stage runs `pnpm check --include-test-types --include-architecture --stage typecheck`.
+On targets without `--stage` or `--only`, `guards` runs the complete
+`pnpm check --include-test-types --include-architecture`. Record that job's result.
+For declaration build errors, use the package producer's
+`OPENCLAW_CONTROL_UI_RELEASE_BUILD=1 pnpm build`.
+Label local results as local. If you skipped the stage or used different settings
+or a different Git comparison base, mark it unverified and name its hosted job.
+For hosted proof, follow the [npm source and package build readback](../../../../docs/reference/full-release-validation/dispatch.md#check-the-hosted-npm-source-and-package-build)
+on the active FRV producer or an optional standalone diagnostic.
+
+For PR preparation/landing or observed hosted-runner stalls, use
 `$openclaw-pr-maintainer` / `$openclaw-ci-limits`; never synthesize prepare
 artifacts or replace canonical `scripts/pr` with PR-controlled scripts. Record
 unrelated main failures instead of adopting them into release scope.

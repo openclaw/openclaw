@@ -850,7 +850,7 @@ it.each([
         "--message": "hello",
       }),
     ],
-    "Invalid --at",
+    "OpenClaw couldn’t use that run time.",
   ],
   [
     [...EDIT, "--webhook", "https://example.invalid/cron", "--announce"],

@@ -340,6 +340,8 @@ async function resetDirectChatSession() {
   resetConfigRuntimeState();
 }
 
+// An authless Gateway: a local socket on it is admitted as the local host.
+const NO_AUTH = { authMethod: "none" };
 function createControlUiClient(
   scopes = ["operator.write", "operator.admin"],
   properties: Record<string, unknown> = {},
@@ -348,6 +350,7 @@ function createControlUiClient(
     ...properties,
     connect: {
       client: { id: GATEWAY_CLIENT_NAMES.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT },
+      role: "operator",
       scopes,
     },
   } as never;
@@ -432,11 +435,9 @@ async function sendControlUiChat(params: {
     req: { type: "req", id: params.idempotencyKey, method: "chat.send", params: requestParams },
     params: requestParams,
     client: createControlUiClient(undefined, {
-      ...(params.localClient ? { internal: { isLocalClient: true } } : {}),
-      ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
-      ...(params.authenticatedUserProfile
-        ? { authenticatedUserProfile: params.authenticatedUserProfile }
-        : {}),
+      ...(params.localClient ? { internal: { isLocalClient: true }, authPolicy: NO_AUTH } : {}),
+      authenticatedUserId: params.authenticatedUserId,
+      authenticatedUserProfile: params.authenticatedUserProfile,
     }),
     isWebchatConnect: () => true,
     respond: params.respond,

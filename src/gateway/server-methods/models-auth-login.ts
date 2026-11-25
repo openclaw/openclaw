@@ -91,9 +91,6 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
       }
       const assertLoginCurrent = () => {
         assertOwner?.();
-        if (client.invalidated || !client.connect.scopes?.includes("operator.admin")) {
-          throw new Error("Provider login authority is no longer active.");
-        }
         const current = resolveChoice();
         if (
           !current ||

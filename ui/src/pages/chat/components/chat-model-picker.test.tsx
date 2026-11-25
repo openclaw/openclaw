@@ -586,7 +586,7 @@ it.each(["missing-auth", "auth-failed"] as const)(
     expect(onModelSelect).not.toHaveBeenCalled();
     expect(container.querySelectorAll("[data-chat-model-auth-state] button")).toHaveLength(1);
     container.querySelector<HTMLButtonElement>("[data-chat-model-auth-state] button")!.click();
-    expect(onModelSetup).toHaveBeenCalledOnce();
+    expect(onModelSetup).toHaveBeenCalledExactlyOnceWith("openai");
     expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
   },
 );

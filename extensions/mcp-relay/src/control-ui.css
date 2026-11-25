@@ -161,8 +161,16 @@
 
   .mcp-connected-apps__header,
   .mcp-connected-apps__toolbar {
-    align-items: start;
-    flex-direction: column;
+    flex-wrap: wrap;
+  }
+
+  .mcp-connected-apps__header > div {
+    flex: 1 1 12rem;
+  }
+
+  .mcp-connected-apps__header p,
+  .mcp-connected-apps__toolbar p {
+    margin-block: var(--space-2);
   }
 
   .mcp-connected-apps__consent,

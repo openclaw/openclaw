@@ -5,10 +5,13 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
+import ai.openclaw.app.PersonalSessionPinAccess
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewaySession
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
@@ -492,7 +495,24 @@ class RootScreenFoldTest {
             }
             original(method, params)
           }
-          restoreRequest = { requestField.set(controller, original) }
+          // Drag-to-pin writes a personal pin, so it needs a personal-pin connection and its request lease.
+          ReflectionHelpers.getField<MutableStateFlow<PersonalSessionPinAccess>>(runtime, "personalSessionPinAccessState").value =
+            PersonalSessionPinAccess.Verified(ownSessionsOnly = false)
+          val leaseField = ChatController::class.java.getDeclaredField("captureRequestLease").apply { isAccessible = true }
+          val originalLease = leaseField.get(controller)
+          leaseField.set(
+            controller,
+            { _: ChatCacheScope? ->
+              GatewaySession.RequestLease("fixture", advertisedCapabilities = setOf("personal-session-pins")) { method, params, _, enqueue ->
+                enqueue {}
+                request(method, params)
+              }
+            },
+          )
+          restoreRequest = {
+            requestField.set(controller, original)
+            leaseField.set(controller, originalLease)
+          }
           requestField.set(controller, request)
         },
       ) { model ->

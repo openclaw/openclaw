@@ -1,3 +1,4 @@
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
@@ -9,7 +10,7 @@ import { isAgentDatabaseOwnershipMismatchError } from "../state/agent-database-a
 
 /** Admission, final reads and in-process restarts share the same terminal refusal facts. */
 export function isStartupConfigRefusal(error: unknown): boolean {
-  // Only explicit maintenance or a known storage/ownership refusal can park a managed Gateway.
+  // Explicit maintenance and known config/storage/ownership refusals park a managed Gateway.
   // Unavailable reads, scratch allocation, and cleanup retain their ordinary failure.
   return (
     Boolean(findStartupMaintenanceRequiredError(error)) ||
@@ -18,6 +19,7 @@ export function isStartupConfigRefusal(error: unknown): boolean {
       (failure) =>
         failure instanceof Error &&
         (failure instanceof OpenClawStateOwnershipError ||
+          failure instanceof ConfigMutationConflictError ||
           isSqliteSchemaMismatchError(failure) ||
           isTerminalSqliteIntegrityError(failure) ||
           failure.name === "SqliteRepairableForeignKeyError"),
@@ -30,7 +32,12 @@ export function rethrowStartupConfigFailure(error: unknown): never {
   if (error instanceof ExitError || !isStartupConfigRefusal(error)) {
     throw error;
   }
-  return throwStartupMigrationRefusal(formatErrorMessage(error), error);
+  return throwStartupMigrationRefusal(
+    error instanceof ConfigMutationConflictError
+      ? `${formatErrorMessage(error)}. Retry startup so the changed config can be validated.`
+      : formatErrorMessage(error),
+    error,
+  );
 }
 
 function throwStartupMigrationRefusal(message: string, cause?: unknown): never {

@@ -403,7 +403,7 @@ describe("opencode-go provider plugin", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
     expect(result).toMatchObject({
-      provider: { apiKey: expect.not.stringContaining("console-access") },
+      provider: { apiKey: "oauth:opencode-go" },
     });
     expect(result && "provider" in result && result.provider.models.map((m) => m.id)).toEqual([
       "kimi-k3",

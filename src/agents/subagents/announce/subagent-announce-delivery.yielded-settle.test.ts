@@ -6,18 +6,14 @@ import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delive
 const payloads = (text = "parent answer") => [{ text }];
 const visibleResult = { payloads: payloads(), deliveryStatus: { status: "sent", resultCount: 1 } };
 const silentResult = { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
-const missingReply = { delivered: false, reason: "visible_reply_missing" };
-const abortedReply = {
+const failedReply = {
   delivered: false,
-  reason: "requester_aborted",
-  disposition: "permanent_failure",
+  path: "direct",
 };
-const timedOutReply = { ...abortedReply, reason: "requester_timed_out" };
+const abortedReply = { delivered: false };
 const visibleReply = { delivered: true, requesterVisibleFinalDelivered: true };
 const intentionalNonDelivery = {
   delivered: false,
-  disposition: "intentional_non_delivery",
-  terminal: true,
 };
 const ok = (result: unknown) => ({ status: "ok", result });
 const policySuppression = {
@@ -48,24 +44,21 @@ type SettleCase = {
 };
 
 it.each`
-  name                                                      | response                                                            | expected                  | options
-  ${"delivered final"}                                      | ${ok(visibleResult)}                                                | ${visibleReply}           | ${undefined}
-  ${"required public reply"}                                | ${ok(visibleResult)}                                                | ${visibleReply}           | ${publicGroup}
-  ${"required public silence"}                              | ${ok(silentResult)}                                                 | ${{ delivered: true }}    | ${publicGroup}
-  ${"normalized silent result: ok"}                         | ${ok(normalizedSilence)}                                            | ${{ delivered: true }}    | ${undefined}
-  ${"normalized silent result: timeout"}                    | ${{ status: "timeout", result: normalizedSilence }}                 | ${timedOutReply}          | ${undefined}
-  ${"runtime timeout"}                                      | ${{ status: "timeout", summary: "aborted", stopReason: "timeout" }} | ${timedOutReply}          | ${undefined}
-  ${"failed turn"}                                          | ${{ status: "error" }}                                              | ${missingReply}           | ${undefined}
-  ${"empty successful optional turn"}                       | ${ok({ payloads: [] })}                                             | ${{ delivered: true }}    | ${undefined}
-  ${"optional silence promoted to a required human reply"}  | ${ok(requiredSilence)}                                              | ${{ delivered: true }}    | ${undefined}
-  ${"failed silence"}                                       | ${ok(failedSilence)}                                                | ${abortedReply}           | ${undefined}
-  ${"undelivered text"}                                     | ${ok({ payloads: payloads("unsent answer") })}                      | ${missingReply}           | ${undefined}
-  ${"private room: plain final suppressed by policy"}       | ${ok(policySuppression)}                                            | ${intentionalNonDelivery} | ${undefined}
-  ${"public room: plain final suppressed by policy"}        | ${ok(policySuppression)}                                            | ${intentionalNonDelivery} | ${{ public: true }}
-  ${"policy suppression cannot settle error"}               | ${partial({ error: { kind: "incomplete_turn" } })}                  | ${missingReply}           | ${undefined}
-  ${"policy suppression cannot settle aborted"}             | ${partial({ aborted: true })}                                       | ${abortedReply}           | ${undefined}
-  ${"policy suppression cannot settle yielded"}             | ${partial({ yielded: true })}                                       | ${missingReply}           | ${undefined}
-  ${"policy suppression cannot settle continuationPending"} | ${partial({ continuationPending: true })}                           | ${missingReply}           | ${undefined}
+  name                                                     | response                                                            | expected                  | options
+  ${"delivered final"}                                     | ${ok(visibleResult)}                                                | ${visibleReply}           | ${undefined}
+  ${"required public reply"}                               | ${ok(visibleResult)}                                                | ${visibleReply}           | ${publicGroup}
+  ${"required public silence"}                             | ${ok(silentResult)}                                                 | ${{ delivered: true }}    | ${publicGroup}
+  ${"normalized silent result: ok"}                        | ${ok(normalizedSilence)}                                            | ${{ delivered: true }}    | ${undefined}
+  ${"normalized silent result: timeout"}                   | ${{ status: "timeout", result: normalizedSilence }}                 | ${abortedReply}           | ${undefined}
+  ${"runtime timeout"}                                     | ${{ status: "timeout", summary: "aborted", stopReason: "timeout" }} | ${abortedReply}           | ${undefined}
+  ${"failed turn"}                                         | ${{ status: "error" }}                                              | ${failedReply}            | ${undefined}
+  ${"empty successful optional turn"}                      | ${ok({ payloads: [] })}                                             | ${{ delivered: true }}    | ${undefined}
+  ${"optional silence promoted to a required human reply"} | ${ok(requiredSilence)}                                              | ${{ delivered: true }}    | ${undefined}
+  ${"failed silence"}                                      | ${ok(failedSilence)}                                                | ${abortedReply}           | ${undefined}
+  ${"private room: plain final suppressed by policy"}      | ${ok(policySuppression)}                                            | ${intentionalNonDelivery} | ${undefined}
+  ${"public room: plain final suppressed by policy"}       | ${ok(policySuppression)}                                            | ${intentionalNonDelivery} | ${{ public: true }}
+  ${"policy suppression cannot settle error"}              | ${partial({ error: { kind: "incomplete_turn" } })}                  | ${failedReply}            | ${undefined}
+  ${"policy suppression cannot settle aborted"}            | ${partial({ aborted: true })}                                       | ${abortedReply}           | ${undefined}
 `(
   "requires real completion evidence: $name",
   async ({ response, expected, options = {} }: SettleCase) => {

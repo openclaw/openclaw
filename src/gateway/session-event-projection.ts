@@ -18,6 +18,7 @@ import {
   type ConnectionSessionRows,
 } from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { receivesLegacySessionPins } from "./session-pin-compatibility.js";
 import {
   createSessionRowDeltaDiffer,
   prepareSessionRowDeltaFields,
@@ -175,7 +176,12 @@ export function prepareSessionEventProjection(
             return messageBytes;
           }
         : undefined;
-    const presentRecipient = prepareSessionRowPublication(projection, Date.now(), rows);
+    const presentRecipient = prepareSessionRowPublication(
+      projection,
+      Date.now(),
+      rows,
+      receivesLegacySessionPins,
+    );
     const ancestors =
       prepared && "ancestors" in prepared
         ? prepared.ancestors
@@ -299,6 +305,12 @@ export function prepareSessionEventProjection(
           plan,
           payload: {
             ...base,
+            // Restore only slots owned by this producer; compact message envelopes never had pin fields.
+            pinned: Object.hasOwn(base, "pinned") ? row.pinned : undefined,
+            pinnedAt:
+              Object.hasOwn(base, "pinnedAt") && row.pinned !== undefined
+                ? (row.pinnedAt ?? null)
+                : undefined,
             session: plan.rows ? plan.rows.wire[0] : row,
             cyberAccessProgram: row.cyberAccessProgram ?? null,
             fastMode: row.fastMode,
