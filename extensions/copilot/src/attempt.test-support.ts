@@ -133,6 +133,9 @@ function createFakeSession(id: string) {
       history: {
         cancelBackgroundCompaction: vi.fn(async () => ({ cancelled: true })),
       },
+      remote: {
+        disable: vi.fn(async () => ({})),
+      },
     },
     send: vi.fn<SendFn>(async () => "user-message-id"),
     sendAndWait: vi.fn<SendAndWaitFn>(async () => makeAssistantMessageEvent()),

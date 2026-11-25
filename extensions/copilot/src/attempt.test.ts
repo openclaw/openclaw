@@ -2080,7 +2080,6 @@ describe("runCopilotAttempt", () => {
         mcpServers: {},
         memory: { enabled: false },
         pluginDirectories: [],
-        remoteSession: "off",
         requestCanvasRenderer: false,
         requestExtensions: false,
         skillDirectories: [],

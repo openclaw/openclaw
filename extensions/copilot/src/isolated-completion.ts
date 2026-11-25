@@ -8,13 +8,16 @@ import { buildAssistantMessage } from "./event-bridge-transcript.js";
 import { createCopilotAbortError } from "./prompt-error.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
-import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
+import {
+  createCopilotIsolatedSessionRestrictions,
+  denyCopilotIsolatedSessionRemote,
+} from "./session-restrictions.js";
 
 type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
 
-type IsolatedSession = Pick<CopilotSession, "abort" | "disconnect" | "sendAndWait">;
+type IsolatedSession = Pick<CopilotSession, "abort" | "disconnect" | "rpc" | "sendAndWait">;
 
 type CompletionBoundary = {
   abortSignal?: AbortSignal;
@@ -215,6 +218,10 @@ export async function runCopilotIsolatedCompletion(
       },
     });
     session = createdSession;
+    await awaitWithinCompletionBoundary({
+      boundary,
+      start: () => denyCopilotIsolatedSessionRemote(createdSession),
+    });
     const requestHeaders = sessionProvider.provider?.headers;
     const event = await awaitWithinCompletionBoundary({
       boundary,
