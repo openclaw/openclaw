@@ -31,7 +31,8 @@ import {
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 
-type PlacementRow = Selectable<WorkerSessionPlacements>;
+// The v42 recovery field is reserved; existing placement reads and writes do not consume it.
+type PlacementRow = Omit<Selectable<WorkerSessionPlacements>, "confirmed_loss_recovery_json">;
 type PlacementDatabase = Pick<
   StateDatabase,
   | "worker_environments"

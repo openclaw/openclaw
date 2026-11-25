@@ -392,7 +392,6 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
-        senderIsOwner,
         requestAuth: handled.requestAuth,
         operatorScopes: handled.operatorScopes,
         resolveGatewayContext: opts.resolveGatewayContext,

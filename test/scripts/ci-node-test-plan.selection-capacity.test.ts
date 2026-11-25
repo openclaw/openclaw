@@ -8,10 +8,10 @@ import * as inventoryOwner from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
-  isRuntimeTestFileIncluded,
   type NodeTestVolumeContext,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { isRuntimeTestFileIncluded } from "../../scripts/lib/ci-runtime-test-eligibility.mts";
 import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 
 it("retains the original eligible denominator across selected subsets and runtime copies", () => {

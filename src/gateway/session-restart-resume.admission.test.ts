@@ -52,7 +52,7 @@ import {
   resumeMarkedSessions,
   persistRunningSessionsForRestart,
 } from "./session-restart-resume.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 
 it.for(["current-writer", undefined] as const)(
   "logs the interrupted writer (%s), not a historical run, with the refusal notice",

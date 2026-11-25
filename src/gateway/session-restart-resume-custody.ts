@@ -53,7 +53,7 @@ import type {
   PreparedRestartStore,
   RestartResumeParams,
 } from "./session-restart-resume-discovery.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 
 /** Fixed wording: no requester, grant, or result content reaches the chat. */
 const RESTART_COMPLETION_REFUSED_NOTICE =

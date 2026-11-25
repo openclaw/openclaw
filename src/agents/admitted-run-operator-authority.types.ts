@@ -51,8 +51,6 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   /** Verified configured-owner sender; admission re-checks `commands.ownerAllowFrom` per start. */
   channelOwner?: Readonly<UserChannelIdentity>;
   scopes: readonly string[];
-  /** Command-owner decision fixed at this run's start. */
-  requesterOwner?: boolean;
   /** The only answer to what this turn may do; scopes above are its operator ceiling. */
   grant: TurnGrant;
   /** Original access dependency; null is proven independent, undefined is unclassified. */

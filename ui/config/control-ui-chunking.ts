@@ -85,7 +85,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
 
   if (
     normalized.endsWith("/ui/src/styles/settings.css") ||
-    normalized.endsWith("/ui/src/styles/hub-tabs.css")
+    normalized.endsWith("/ui/src/styles/hub-tabs.css") ||
+    normalized.endsWith("/ui/src/components/solid/model-settings-rows.css")
   ) {
     // Share document CSS without coupling style-only consumers to page chrome or inline CSS text.
     return "route-chrome-styles";

@@ -399,7 +399,6 @@ export async function prepareSessionEventTargetForHost(
       restored = await restoreScheduledAutomationOperator({
         agentId: target.agentId,
         source: { kind: "gateway", snapshot: scope.operatorSource.snapshot },
-        operatorSource: scope.operatorSource,
         context,
         assertCurrent: assertAcceptance,
       });
