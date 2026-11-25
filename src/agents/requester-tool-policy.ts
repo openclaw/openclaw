@@ -429,11 +429,10 @@ export function resolveRequesterToolPolicies(
     groupPolicy,
     senderPolicy,
     inheritedToolPolicySource:
-      inheritedEnvelope?.inheritedToolPolicySource === "sender" ||
-      toolPolicyRestrictsTools(groupPolicy) ||
-      toolPolicyRestrictsTools(senderPolicy)
+      inheritedEnvelope?.inheritedToolPolicySource ??
+      (toolPolicyRestrictsTools(groupPolicy) || toolPolicyRestrictsTools(senderPolicy)
         ? "sender"
-        : undefined,
+        : undefined),
 
     subagentPolicy,
     inheritedToolPolicy,

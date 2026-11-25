@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, expect, it } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -9,16 +9,20 @@ import {
   claimAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
 } from "../../infra/agent-run-registry.js";
+import { ensureCanonicalGatewayOwnerProfile } from "../../state/user-profile-writes.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import {
   consumeCronCreatorAuthorityGrant,
   mintCronCreatorAuthorityGrant,
 } from "../cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
-  retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
+import { decideTurnGrant } from "../operator-admission.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
   isDirectGatewayChatUserTurn,
@@ -49,16 +53,22 @@ function createClient(
   } as unknown as GatewayClient;
 }
 
+// The admitted grant of a socket with these connect scopes; transport facts never change it.
+const grantFor = (client: GatewayClient | null | undefined) =>
+  decideTurnGrant(client?.connect.scopes ?? []);
+
 function admitAgent({
   request,
   ...overrides
 }: Partial<Omit<Parameters<typeof resolveGatewayCronCreatorAuthorityAdmission>[0], "request">> & {
   request?: Partial<AgentRunRequest>;
 } = {}) {
+  const client = "client" in overrides ? overrides.client : createClient();
   return resolveGatewayCronCreatorAuthorityAdmission({
     runId: "run-local-operator",
     resolvedSessionKey: "agent:main:main",
-    client: createClient(),
+    client,
+    grant: grantFor(client),
     isOneShotModelRun: false,
     ...overrides,
     request: { message: "create an automation", idempotencyKey: "run-local-operator", ...request },
@@ -80,7 +90,7 @@ it.each([
   ["swarm collector", { request: { swarmCollector: true } }],
   ["completion event", { request: { internalEvents: [{ type: "task_completion" }] } }],
   ["ACP spawn", { request: { acpTurnSource: "manual_spawn" } }],
-  ["subagent lane", { request: { lane: "subagent" } }],
+  ["subagent lane without an admitted grant", { request: { lane: "subagent" }, grant: undefined }],
   ["plugin run", { client: createClient({ pluginRuntimeOwnerId: "memory-core" }) }],
   ["synthetic run", { client: createClient({ syntheticClient: true }) }],
   ["delegated run", { client: createClient({ delegatedToolPolicyHandoffId: "handoff-1" }) }],
@@ -95,14 +105,15 @@ it.each([
 });
 type ChatParams = Parameters<typeof resolveGatewayChatCronCreatorAuthorityAdmission>[0];
 function createChatParams(overrides: Partial<ChatParams> = {}): ChatParams {
+  const client = "client" in overrides ? overrides.client : createClient();
   return {
     runId: "run-local-chat",
     resolvedSessionKey: "agent:main:main",
-    client: createClient(),
+    client,
+    grant: grantFor(client),
     hasExplicitOrigin: false,
     hasRestoredCronContinuation: false,
     isIncognito: false,
-    isReconnectResume: false,
     isSystemGenerated: false,
     turnKind: "main",
     isDirectExternalUser: true,
@@ -118,11 +129,34 @@ it.each([
   ["agent", admitAgent, "run-local-operator"],
   ["chat", admitChat, "run-local-chat"],
 ] as const)("mints for a direct local-admin %s turn", (_entry, admit, runId) => {
-  expect(admit()).toEqual({ runId, callerOrigin: { kind: "local" } });
+  expect(admit()).toEqual({
+    runId,
+    callerOrigin: { kind: "local" },
+    managementEntitlement: { source: "operator" },
+  });
+});
+
+it.each([
+  ["owner", ["operator.admin"], { managementEntitlement: { source: "operator" } }],
+  ["writer", ["operator.write"], {}],
+] as const)("gives a subagent child its parent's %s automations grant", (_label, scopes, rest) => {
+  const grant = decideTurnGrant(scopes);
+  expect(
+    admitAgent({
+      client: createClient({ syntheticClient: true }),
+      grant,
+      request: { lane: "subagent" },
+    }),
+  ).toEqual({
+    runId: "run-local-operator",
+    callerOrigin: { kind: "unknown" },
+    callerScopedCreation: true,
+    ...rest,
+  });
 });
 
 it.each(["agent", "chat"] as const)(
-  "keeps %s creator grants bound to the original caller after request completion",
+  "keeps %s creator grants after the issuing device is revoked mid-run, until the run closes",
   async (entry) => {
     const context = {};
     const caller = captureGatewayDeviceRevocation(
@@ -131,44 +165,36 @@ it.each(["agent", "chat"] as const)(
       () => true,
     );
     const admission = expectDefined(
-      entry === "agent"
-        ? admitAgent({ isCurrent: caller.isCurrent })
-        : admitChat({ isCurrent: caller.isCurrent }),
+      entry === "agent" ? admitAgent() : admitChat(),
       "expected direct operator admission",
     );
-    const release = retainGatewayDeviceRevocation(admission.isCurrent);
-    caller.release();
     const capability = expectDefined(
       createCronCreatorAuthorityCapability(
         admission.runId,
         admission.callerOrigin,
         admission.managementEntitlement,
-        admission.isCurrent,
       ),
       "expected creator capability",
     );
+    let unspent: CronCreatorAuthorityGrant | undefined;
     try {
       await runWithCronCreatorAuthorityCapability(capability, async () => {
         const grant = mintCronCreatorAuthorityGrant(capability);
         invalidateGatewayDeviceRevocation(context, "original-device", "operator");
-        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
-          "cron authority is no longer active",
-        );
+        expect(consumeCronCreatorAuthorityGrant(grant).assertCurrent).not.toThrow();
+        unspent = mintCronCreatorAuthorityGrant(capability);
       });
     } finally {
       caller.release();
-      release?.();
     }
+    expect(() => consumeCronCreatorAuthorityGrant(unspent!)).toThrow("cron access has ended");
   },
 );
 
-it.each([
-  ["Incognito", { isIncognito: true }],
-  ["fresh message after reconnect", { isReconnectResume: true }],
-] as const)("keeps %s dashboard input separate from cron authority", (_label, mode) => {
+it("keeps Incognito dashboard input separate from cron authority", () => {
   const params = createChatParams({
     client: createClient({ isLocalClient: undefined, controlUiAdmin: true }),
-    ...mode,
+    isIncognito: true,
   });
   expect(isDirectGatewayChatUserTurn(params)).toBe(true);
   expect(resolveGatewayChatCronCreatorAuthorityAdmission(params)).toBeUndefined();
@@ -181,7 +207,6 @@ it.each([
   ["non-WebChat client", { client: createClient() }],
   ["supervised child", { isUncontrolledDashboardChild: false }],
   ["internal input", { isSystemGenerated: true }],
-  ["resumed input", { isReconnectResume: true }],
   ["incognito", { isIncognito: true }],
 ] as const)("keeps %s outside the dashboard handoff exception", (_label, overrides) => {
   const params = createChatParams({
@@ -194,57 +219,29 @@ it.each([
   expect(resolveGatewayChatCronCreatorAuthorityAdmission(params)).toBeUndefined();
 });
 
-it.each([true, undefined] as const)(
-  "retains host-attested Control UI admin authority with locality %s",
-  (isLocalClient) => {
-    const client = createClient({ isLocalClient, controlUiAdmin: true });
+it.each([
+  ["remote Control UI", { controlUiAdmin: true as const }, "openclaw-control-ui", "webchat"],
+  ["remote native app", { authenticatedOperator: true as const }, "openclaw-macos", "ui"],
+  ["remote CLI", {}, "cli", "cli"],
+] as const)(
+  "gives an owner on a %s the grant's management, not a transport's",
+  (_label, internal, id, mode) => {
+    const client = createClient({ isLocalClient: undefined, ...internal });
+    client.connect.client = { id, mode, version: "test", platform: "test" } as never;
     expect(admitChat({ client })).toEqual({
       runId: "run-local-chat",
-      callerOrigin: { kind: isLocalClient ? "local" : "unknown" },
-      ...(!isLocalClient ? { callerScopedCreation: true } : {}),
-      managementEntitlement: { source: "control-ui-admin" },
+      callerOrigin: { kind: "unknown" },
+      callerScopedCreation: true,
+      managementEntitlement: { source: "operator" },
+    });
+    client.connect.scopes = ["operator.write"];
+    expect(admitChat({ client })).toEqual({
+      runId: "run-local-chat",
+      callerOrigin: { kind: "unknown" },
+      callerScopedCreation: true,
     });
   },
 );
-
-it.each([true, undefined] as const)(
-  "admits authenticated native-app admin chat management with locality %s",
-  (isLocalClient) => {
-    const client = createClient({ isLocalClient, authenticatedOperator: true });
-    client.connect.client = {
-      id: "openclaw-macos",
-      mode: "ui",
-      version: "test",
-      platform: "macOS",
-    };
-    expect(admitChat({ client })?.managementEntitlement).toEqual({ source: "native-app-admin" });
-    client.connect.scopes = ["operator.write"];
-    expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
-    client.connect.scopes = ["operator.admin"];
-    client.internal!.authenticatedOperator = undefined;
-    expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
-    client.internal!.authenticatedOperator = true;
-    expect(admitChat({ client, isReconnectResume: true })).toBeUndefined();
-    expect(admitChat({ client, isSystemGenerated: true })).toBeUndefined();
-    client.connect.client.mode = "node";
-    expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
-  },
-);
-
-it("does not derive Control UI authority from a claimed client name or session route", () => {
-  const client = createClient({ isLocalClient: undefined });
-  client.connect.client = {
-    id: "openclaw-control-ui",
-    mode: "webchat",
-    version: "test",
-    platform: "web",
-  };
-  expect(admitChat({ client, resolvedSessionKey: "agent:main:telegram:direct:operator" })).toEqual({
-    runId: "run-local-chat",
-    callerOrigin: { kind: "unknown" },
-    callerScopedCreation: true,
-  });
-});
 
 it.each(["operator.read", "operator.sessions.write"])(
   "rejects a Control UI connection narrowed to %s",
@@ -255,7 +252,6 @@ it.each(["operator.read", "operator.sessions.write"])(
 
 it.each([
   ["channel-origin turn", { hasExplicitOrigin: true }],
-  ["reconnect", { isReconnectResume: true }],
   ["spawned turn", { spawnedBy: "agent:main:parent" }],
   ["cron continuation", { hasRestoredCronContinuation: true }],
   ["internal entry", { isDirectExternalUser: false }],
@@ -268,7 +264,6 @@ it.each([
 it.each([
   ["internal re-entry", { isDirectExternalUser: false }],
   ["explicit origin", { hasExplicitOrigin: true }],
-  ["reconnect", { isReconnectResume: true }],
   ["system-generated", { isSystemGenerated: true }],
   ["BTW turn", { turnKind: "btw" }],
   ["incognito", { isIncognito: true }],
@@ -280,15 +275,11 @@ it.each([
   expect(admitChat(overrides)).toBeUndefined();
 });
 
-it.each(["setup", "ordinary internal", "non-admin", "claimed UI", "synthetic"] as const)(
-  "admits automation creation only for the real administrator Template setup: %s",
+it.each(["setup", "ordinary internal", "non-admin", "synthetic"] as const)(
+  "admits automation creation only for an owner's Template setup: %s",
   (kind) => {
     const client = createClient(
-      {
-        isLocalClient: undefined,
-        ...(kind !== "claimed UI" ? { controlUiAdmin: true as const } : {}),
-        ...(kind === "synthetic" ? { syntheticClient: true } : {}),
-      },
+      { isLocalClient: undefined, ...(kind === "synthetic" ? { syntheticClient: true } : {}) },
       kind === "non-admin" ? ["operator.write"] : ["operator.admin"],
     );
     const admission = resolveGatewayTemplateSetupCronAuthorityAdmission({
@@ -304,10 +295,42 @@ it.each(["setup", "ordinary internal", "non-admin", "claimed UI", "synthetic"] a
     if (kind === "setup") {
       expect(admission).toMatchObject({
         callerScopedCreation: true,
-        managementEntitlement: { source: "control-ui-admin" },
+        managementEntitlement: { source: "operator" },
       });
     } else {
       expect(admission).toBeUndefined();
     }
   },
 );
+
+it("keeps the request's invocation lifetime when it admits an authless local socket", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    await ensureCanonicalGatewayOwnerProfile("Owner");
+    const invocation = new AbortController();
+    const release = vi.fn();
+    const admitted = expectDefined(
+      await prepareGatewayOperatorRunAuthority({
+        client: {
+          connect: { role: "operator", scopes: ["operator.admin"] },
+          authPolicy: { authMethod: "none" },
+          internal: { isLocalClient: true },
+        } as never,
+        context: { getRuntimeConfig: () => ({}) },
+        invocationAuthority: {
+          assertCurrent: () => invocation.signal.throwIfAborted(),
+          signal: invocation.signal,
+          release,
+        },
+      }),
+      "local-host admission",
+    );
+    expect(admitted.authority).toMatchObject({
+      profileId: "gateway-owner",
+      grant: { automations: "manage" },
+    });
+    invocation.abort();
+    expect(admitted.authority.signal?.aborted).toBe(true);
+    admitted.release();
+    expect(release).toHaveBeenCalledOnce();
+  });
+});

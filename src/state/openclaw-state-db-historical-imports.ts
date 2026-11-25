@@ -10,7 +10,7 @@ import {
   migratePredicateColumnsV21,
   statePredicateColumnMigration,
 } from "./openclaw-state-db-schema-v21-columns.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 
 const table = "worker_session_placements";
 const archivalColumn = "repository_preparation TEXT";
@@ -26,7 +26,8 @@ function migrateHistoricalRepositoryPreparation(db: DatabaseSync): boolean {
   if (!tableHasColumn(db, table, "repository_preparation")) {
     return false;
   }
-  const canonical = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table).replace(
+  // Match the v21 layout before the ordinary version steps add newer placement columns.
+  const canonical = extractSqliteTableSchema(getOpenClawStatePredecessorSchema(21), table).replace(
     "  remote_workspace_dir TEXT,",
     "  " + archivalColumn + ",\n  remote_workspace_dir TEXT,",
   );

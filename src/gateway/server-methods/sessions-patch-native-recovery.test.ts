@@ -80,7 +80,6 @@ const operatorAuthority = (accessOnly: boolean): AdmittedRunOperatorAuthority =>
   createTestOperatorAuthority({
     profileId: "runtime-policy-fixture",
     scopes: ["operator.admin"],
-    assertCurrent() {},
     ...(accessOnly
       ? {
           rolePolicy: {
@@ -121,7 +120,6 @@ it("retains admitted native policy and checks runtime availability at commit", a
   const authority = createTestOperatorAuthority({
     profileId: "runtime-policy-fixture",
     scopes: ["operator.admin"],
-    assertCurrent() {},
     get modelPolicy() {
       return policy;
     },

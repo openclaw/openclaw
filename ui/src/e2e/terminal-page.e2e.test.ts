@@ -18,7 +18,8 @@ suite.define(() => {
           title: "Workspace",
           cwd: "/workspace/site",
         });
-        const other = terminalSession("preview", { title: "Preview", cwd: "/workspace/preview" });
+        const previewName = "Preview · international release documentation · German";
+        const other = terminalSession("preview", { title: previewName, cwd: "/workspace/preview" });
         const gateway = await installMockGateway(page, {
           terminalEnabled: true,
           featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
@@ -40,7 +41,20 @@ suite.define(() => {
         const picker = terminal.getByRole("region", { name: "Terminal sessions" });
         const back = picker.getByRole("button", { name: "Back", exact: true });
         await sessions.click();
-        await picker.getByText("Preview", { exact: true }).waitFor();
+        const name = picker.getByText(previewName, { exact: true });
+        await name.waitFor();
+        await page.evaluate(() => document.fonts.ready.then(() => {}));
+        expect(
+          await name.evaluate((label) => {
+            const text = document.createRange();
+            text.selectNodeContents(label);
+            const bounds = label.getBoundingClientRect();
+            return [...text.getClientRects()].every(
+              (line) => line.left >= bounds.left - 1 && line.right <= bounds.right + 1,
+            );
+          }),
+          "the distinguishing end of the terminal title stays inside the picker row",
+        ).toBe(true);
         await page.keyboard.press("Escape");
         expect(await picker.isVisible()).toBe(false);
         expect(await sessions.evaluate((el) => el === document.activeElement)).toBe(true);
@@ -52,7 +66,7 @@ suite.define(() => {
         expect((await gateway.waitForRequest("terminal.attach")).params).toMatchObject({
           sessionId: other.sessionId,
         });
-        await terminal.getByRole("tab", { name: "Preview", selected: true }).waitFor();
+        await terminal.getByRole("tab", { name: previewName, selected: true }).waitFor();
         expect(await picker.isVisible()).toBe(false);
         await page.setViewportSize({ width: 1440, height: 900 });
         await sessions.click();
@@ -62,19 +76,15 @@ suite.define(() => {
       },
     );
   });
-  it("keeps the initial connection distinct from terminal unavailability", async () => {
+  it("shows the current shell after the initial connection without refreshing", async () => {
     await suite.withPage(
       { serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
         await nativeAuth(page, "synthetic-terminal-auth");
         const gateway = await installMockGateway(page, {
-          deferredMethods: ["connect"],
+          deferredMethods: ["connect", "terminal.open"],
           terminalEnabled: true,
           featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
-          methodResponses: {
-            "terminal.list": { sessions: [] },
-            "terminal.open": terminalSession("audit-cold-terminal"),
-          },
         });
         await page.goto(new URL("/terminal", suite.server.baseUrl).toString());
         await gateway.waitForRequest("connect");
@@ -103,6 +113,9 @@ suite.define(() => {
         expect(
           await page.locator("openclaw-terminal-page > openclaw-panel-loading-skeleton").count(),
         ).toBe(0);
+        await gateway.resolveDeferred("terminal.open");
+        await content.locator(".tp-session.is-current").waitFor({ timeout: 5_000 });
+        expect(await content.locator(".tp-session-empty").count()).toBe(0);
       },
     );
   });

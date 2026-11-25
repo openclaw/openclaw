@@ -347,6 +347,14 @@ suite.define(() => {
                     .getByRole("menuitem", { name: "Connect a device", exact: true })
                     .focus();
                   await page.keyboard.press("ArrowUp");
+                  const unlink = menu.getByRole("menuitem", {
+                    name: "Unlink from OpenClaw ID",
+                    exact: true,
+                  });
+                  expect(await unlink.evaluate((node) => node === document.activeElement)).toBe(
+                    true,
+                  );
+                  await page.keyboard.press("ArrowUp");
                   expect
                     .soft(await button.evaluate((node) => node === document.activeElement))
                     .toBe(true);

@@ -566,6 +566,13 @@
   padding-inline-start: var(--chat-markdown-indent);
 }
 
+.chat-text :where(ul, ol) {
+  /* Separate item formatting contexts keep WebKit's native selection paint
+     on the text instead of extending it across the list at item boundaries. */
+  display: flex;
+  flex-direction: column;
+}
+
 .chat-text :where(li + li) {
   margin-top: 0.4em;
 }
@@ -708,13 +715,14 @@
   --chat-text-link-hover: var(--link-hover);
 }
 
-.chat-text :where(a) {
+/* Attachment actions own their color even when rendered inline with Markdown. */
+.chat-text :where(a:not(.chat-assistant-attachment-card__action)) {
   color: var(--chat-text-link, var(--link));
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 2px;
 }
 
-.chat-text :where(a:hover) {
+.chat-text :where(a:not(.chat-assistant-attachment-card__action):hover) {
   color: var(--chat-text-link-hover, var(--link-hover));
 }
 

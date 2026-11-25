@@ -377,7 +377,9 @@ describe("extractEnvAssignmentKeysFromDispatchWrappers", () => {
       ["BAR", "FOO"],
     ],
     [["nice", "-n", "5", "env", "-u", "PATH", "TERM=xterm", "bash", "-lc", "echo hi"], ["TERM"]],
-    [["env", "--split-string", "FOO=bar", "bash", "-lc", "echo hi"], []],
+    [["env", "--split-string", "FOO=bar", "bash", "-lc", "echo hi"], ["FOO"]],
+    [["env", "-SBASH_ENV=/tmp/payload.sh", "bash", "-c", "echo hi"], ["BASH_ENV"]],
+    [["env", "-S", "env -SBASH_ENV=/tmp/payload.sh bash", "-c", "echo hi"], ["BASH_ENV"]],
     [["env", "--", "bash", "-lc", "echo hi"], []],
   ])("extracts env assignment prelude keys for %j", (argv, expected) => {
     expect(extractEnvAssignmentKeysFromDispatchWrappers(argv)).toEqual(expected);

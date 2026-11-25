@@ -7,6 +7,7 @@ import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/mode
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createMediaQueryList } from "../../test-helpers/media-query.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -17,6 +18,7 @@ import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { setChatRunOwner } from "./history-merge.ts";
 import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
 
@@ -132,6 +134,19 @@ async function createControlsFixture(
 }
 
 describe("chat pane model-setting permissions", () => {
+  it("explains why a read-only connection cannot change thinking level or session permissions", async () => {
+    const { controls, container } = await createControlsFixture("operator.read");
+    expect(
+      container.querySelector("[data-chat-thinking-select]")?.getAttribute("aria-description"),
+    ).toBe("You don’t have permission to change the thinking level.");
+    const picker = mountSolid(ChatPermissionPicker, controls.permissionPicker!);
+    expect(
+      picker.container
+        .querySelector("[data-chat-permission-select]")
+        ?.getAttribute("aria-description"),
+    ).toBe("You don’t have permission to change this session’s permissions.");
+  });
+
   it("uses live permission facts while the model catalog is still unavailable", async () => {
     const { state, selectedSession, access } =
       await createControlsFixture("operator.sessions.write");

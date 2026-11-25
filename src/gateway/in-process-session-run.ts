@@ -36,7 +36,9 @@ export function bindInProcessSessionRun<T extends Record<string, unknown>>(
     expectedExistingSessionId: launch.sessionId,
     expectedExistingSessionLifecycleRevision: launch.lifecycleRevision,
   };
-  runs.set(bound, { ...launch });
+  runs.set(bound, {
+    ...launch,
+  });
   return bound;
 }
 

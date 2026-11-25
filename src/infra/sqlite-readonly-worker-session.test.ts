@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -418,3 +419,55 @@ it("counts admitted SQLite children in spawn diagnostics", () => {
     clock.mockRestore();
   }
 });
+
+it.each([
+  [undefined, true],
+  ["0", false],
+] as const)(
+  "makes natively spawned readers the preferred Linux OOM victim unless opted out (%s)",
+  (optOut, adjusted) => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const previous = process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ;
+    if (optOut === undefined) {
+      delete process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ;
+    } else {
+      process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ = optOut;
+    }
+    const write = vi.spyOn(fs.promises, "writeFile").mockResolvedValue();
+    const syncWrite = vi.spyOn(fs, "writeFileSync");
+    const child = Object.assign(new MockChild(), { pid: 4242 });
+    mock.spawn.mockReturnValueOnce(child);
+    try {
+      const session = createSqliteReadOnlyWorkerSession({
+        env: { OPENCLAW_STATE_DIR: "/fixture/state" },
+        cwd: "/fixture/launch",
+        transport: { kind: "native" },
+        argv: ["--fixture-readonly-session"],
+        retainLifetime: false,
+        retainOnOperationError: true,
+        requestArgs: (file: string, { mode }: { mode: string }) => [mode, file],
+        readBudget: async () => ({ timeoutMs: 60_000, size: "fixture" }),
+        deadlineOwnedByCaller: () => true,
+        timeoutError: () => new Error("fixture budget expired"),
+        closeTimeoutMs: 60_000,
+      });
+      sessions.push({ session, child });
+      expect(
+        write.mock.calls.filter(
+          ([file]) => typeof file === "string" && file.endsWith("/oom_score_adj"),
+        ),
+      ).toEqual(adjusted ? [["/proc/4242/oom_score_adj", "1000"]] : []);
+      // Readers spawn on request paths, so the score write stays off the event loop.
+      expect(syncWrite).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore();
+      syncWrite.mockRestore();
+      platform.mockRestore();
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ;
+      } else {
+        process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ = previous;
+      }
+    }
+  },
+);

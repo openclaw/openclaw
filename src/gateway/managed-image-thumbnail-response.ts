@@ -3,19 +3,23 @@ import path from "node:path";
 import { buildManagedMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 import { createHttpImageRepresentation } from "./http-image-response.js";
+import type { ManagedImageThumbnail } from "./managed-image-thumbnail-cache.js";
 
 export function handleManagedImageThumbnailResponse(
   req: IncomingMessage,
   res: ServerResponse,
-  params: { thumbnail: Buffer; filename: string | null; cacheControl: string },
+  params: { thumbnail: ManagedImageThumbnail; filename: string | null; cacheControl: string },
 ): true {
   const sourceName = path.parse(params.filename ?? "generated-image").name;
-  const image = createHttpImageRepresentation(params.thumbnail, "image/webp");
+  const image = createHttpImageRepresentation(params.thumbnail.data, params.thumbnail.mimeType);
   res.setHeader("etag", image.etag);
   res.setHeader("cache-control", params.cacheControl);
   res.setHeader(
     "content-disposition",
-    buildManagedMediaContentDisposition(`${sourceName}-thumbnail.webp`, "image/webp"),
+    buildManagedMediaContentDisposition(
+      `${sourceName}-thumbnail${params.thumbnail.extension}`,
+      params.thumbnail.mimeType,
+    ),
   );
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");

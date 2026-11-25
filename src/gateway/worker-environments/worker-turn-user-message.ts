@@ -73,7 +73,7 @@ export async function persistWorkerTurnUserMessage(params: {
   const assertCurrent = () => {
     params.assertRunCurrent?.();
     if (!params.isAuthorized()) {
-      throw new Error("Worker turn authority changed before transcript write");
+      throw new Error("Worker turn ended before transcript write. Start a new turn.");
     }
     resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
   };

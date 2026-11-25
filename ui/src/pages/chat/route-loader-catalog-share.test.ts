@@ -4,11 +4,11 @@ import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { resolveCatalogContinuation } from "./route-loader-catalog-share.runtime.ts";
 import { loadCatalogShareRouteFromLocation } from "./route-loader-catalog-share.ts";
 import { loadRoute, routeLocation } from "./route-loading.test-support.ts";
 
 const fullId = "0123456789abcdef0123456789abcdef";
+const querySearch = `?catalog=beam&host=gateway&thread=${fullId}`;
 const SHARE_ROUTE = {
   kind: "thread-id-prefix",
   routeSegment: "beam",
@@ -73,22 +73,40 @@ describe("catalog share route resolution", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(request).not.toHaveBeenCalled();
   });
-  it("resolves a Visitor owned Beam link without requesting the operator catalog", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method !== "beam.owned.list") {
-        throw new Error("missing scope: operator.read");
+  it("opens a restricted cold link whose route and catalog IDs differ", async () => {
+    const catalog = beamCatalog([{ threadId: fullId, name: "Shared notebook" }]).catalogs[0];
+    const route = {
+      catalogId: "notebook",
+      routeSegment: "notes",
+      methods: { list: "notebook.mine.list", read: "notebook.mine.read" },
+    };
+    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "sessions.catalog.route") {
+        expect(params).toEqual({ routeSegment: "notes" });
+        return route;
       }
-      return beamCatalog([{ threadId: fullId, name: "Owned synthetic Beam" }]);
+      expect(method).toBe(route.methods.list);
+      expect(params.catalogId).toBe(route.catalogId);
+      return {
+        catalogs: [
+          {
+            ...catalog,
+            id: route.catalogId,
+            shareRoute: { ...SHARE_ROUTE, routeSegment: route.routeSegment },
+          },
+        ],
+      };
     });
     const context = catalogContext(request);
     context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["beam.owned.list", "beam.owned.read"],
+      ["sessions.catalog.route", "notebook.mine.list", "notebook.mine.read"],
       ["operator.sessions.write"],
     );
-    await expect(loadRoute(context, "/beam/0123456789ab")).resolves.toMatchObject({
+    await expect(loadRoute(context, "/notes/0123456789ab")).resolves.toMatchObject({
       kind: "session",
-      sessionKey: `agent:research:catalog:beam:gateway:${fullId}`,
+      sessionKey: `agent:research:catalog:notebook:gateway:${fullId}`,
     });
+    expect(request).toHaveBeenCalledTimes(2);
   });
   it("resolves an external-style provider descriptor without catalog-specific UI policy", async () => {
     const result = beamCatalog([{ threadId: fullId, name: "External session" }]);
@@ -258,12 +276,7 @@ it.each([
   const loading =
     route === "share"
       ? loadRoute(context, "/beam/0123456789ab")
-      : resolveCatalogContinuation(
-          context,
-          { catalogId: "beam", hostId: "gateway", threadId: fullId },
-          "research",
-          new AbortController().signal,
-        );
+      : loadRoute(context, "/chat/research", querySearch);
   await entered.promise;
   Object.assign(
     context.gateway.snapshot,
@@ -293,13 +306,12 @@ it.each([null, { sessionKey: "agent:analysis:dashboard:handoff" }])(
   async (result) => {
     const request = vi.fn(async () => result);
     await expect(
-      resolveCatalogContinuation(
-        catalogContext(request),
-        { catalogId: "beam", hostId: "gateway", threadId: fullId },
-        "research",
-        new AbortController().signal,
-      ),
-    ).resolves.toEqual(result ? { ...result, agentId: "analysis" } : undefined);
+      loadRoute(catalogContext(request), "/chat/research", querySearch),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: result?.sessionKey ?? `agent:research:catalog:beam:gateway:${fullId}`,
+      agentId: result ? "analysis" : "research",
+    });
     expect(request).toHaveBeenCalledExactlyOnceWith(
       "sessions.catalog.resolve",
       { catalogId: "beam", hostId: "gateway", threadId: fullId, agentId: "research" },
@@ -313,13 +325,8 @@ it("preserves a query resolution denial without falling back to discovery", asyn
   const request = vi.fn(async () => {
     throw denied;
   });
-  await expect(
-    resolveCatalogContinuation(
-      catalogContext(request),
-      { catalogId: "beam", hostId: "gateway", threadId: fullId },
-      "research",
-      new AbortController().signal,
-    ),
-  ).rejects.toBe(denied);
+  await expect(loadRoute(catalogContext(request), "/chat/research", querySearch)).rejects.toBe(
+    denied,
+  );
   expect(request).toHaveBeenCalledTimes(1);
 });

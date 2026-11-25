@@ -20,12 +20,13 @@ async function start(runtime?: ReturnType<typeof createQaRunnerRuntime>) {
   }
   return {
     ...lab,
-    send(text: string) {
+    send(text: string, timestamp?: number) {
       lab.state.addInboundMessage({
         accountId: "default",
         conversation: { kind: "direct", id: "alice" },
         senderId: "alice",
         text,
+        timestamp,
       });
     },
     [Symbol.asyncDispose]: () => lab.stop(),
@@ -37,8 +38,11 @@ afterEach(() => {
 });
 
 it("dispatches a QA Channel inbound turn through the embedded runner", async () => {
-  await using lab = await start();
-  lab.send("ping");
+  const runtime = createQaRunnerRuntime();
+  vi.spyOn(runtime.channel.session, "readSessionUpdatedAtAsync").mockResolvedValue(60_000);
+  const dispatch = vi.spyOn(runtime.channel.inbound, "dispatch");
+  await using lab = await start(runtime);
+  lab.send("ping", 180_000);
   await expect(
     lab.state.waitFor({
       kind: "message-text",
@@ -46,6 +50,7 @@ it("dispatches a QA Channel inbound turn through the embedded runner", async () 
       textIncludes: "qa-echo: ping",
     }),
   ).resolves.toMatchObject({ direction: "outbound", text: "qa-echo: ping" });
+  expect(dispatch.mock.calls[0]?.[0].ctxPayload.Body).toContain("[QA Channel alice +2m ");
 });
 
 it("marks and detects text-only errors across QA delivery paths", async () => {

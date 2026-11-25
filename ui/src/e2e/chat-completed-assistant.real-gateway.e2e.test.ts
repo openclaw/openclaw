@@ -3,7 +3,10 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished } from "vitest";
 import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
-import { appendTranscriptMessages } from "../../../src/config/sessions/session-accessor.ts";
+import {
+  appendTranscriptMessages,
+  patchSessionEntryCore,
+} from "../../../src/config/sessions/session-accessor.ts";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.ts";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
@@ -68,6 +71,104 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("recovers a newly completed turn when returning to the retained conversation", async () => {
+    const key = "agent:main:retained-completion";
+    const other = "agent:main:retained-neighbor";
+    const runId = "workspace-check";
+    const question = "Inspect the workspace.";
+    const reply = "The workspace is clean.";
+    const scope = { agentId: "main", sessionKey: key, env: instance.env };
+    const { sessionId } = await client.request<{ sessionId: string }>("sessions.create", {
+      key,
+      agentId: "main",
+      label: "Workspace check",
+    });
+    const neighbor = await client.request<{ sessionId: string }>("sessions.create", {
+      key: other,
+      agentId: "main",
+      label: "Other conversation",
+    });
+    await appendTranscriptMessages(
+      { ...scope, sessionId },
+      {
+        messages: [
+          { eventId: "prompt", message: { role: "user", content: [text(question)] } },
+          {
+            eventId: "call",
+            message: {
+              role: "assistant",
+              stopReason: "toolUse",
+              content: [
+                { type: "toolCall", name: "read", id: "check", arguments: { path: "README.md" } },
+              ],
+            },
+          },
+          {
+            eventId: "result",
+            message: {
+              role: "toolResult",
+              toolName: "read",
+              toolCallId: "check",
+              content: [text("Inspection complete.")],
+            },
+          },
+        ],
+      },
+    );
+    await appendTranscriptMessages(
+      { ...scope, sessionKey: other, sessionId: neighbor.sessionId },
+      {
+        messages: [
+          { eventId: "neighbor", message: { role: "user", content: [text("Another chat.")] } },
+        ],
+      },
+    );
+    await suite.withPage({ viewport, permissions: ["local-network-access"] }, async ({ page }) => {
+      await pairFixture(page, instance);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      await waitForControlUiGatewayReady(page);
+      await assertServedUi(page, suite.server.baseUrl);
+      const visible = chatControls(page).pane;
+      const select = (target: string) =>
+        page.locator(`.sidebar-recent-session[data-session-key="${target}"] a`).click();
+      await visible.getByText(question, { exact: true }).waitFor();
+      await select(other);
+      await visible.getByText("Another chat.", { exact: true }).waitFor();
+      // A separate writer persists the turn. The Gateway publishes its roster row, not the message body.
+      await appendTranscriptMessages(
+        { ...scope, sessionId },
+        {
+          messages: [
+            {
+              eventId: "completed-answer",
+              message: {
+                role: "assistant",
+                stopReason: "stop",
+                content: [text(reply)],
+                __openclaw: { runId },
+              },
+            },
+          ],
+        },
+      );
+      await patchSessionEntryCore(scope, () => ({
+        status: "done",
+        lastRunId: runId,
+        endedAt: Date.now(),
+      }));
+      await client.request("sessions.patch", { key, label: "Completed check" });
+      await page
+        .locator(`.sidebar-recent-session[data-session-key="${key}"]`)
+        .getByText("Completed check", { exact: true })
+        .waitFor();
+      await select(key);
+      await visible
+        .locator(".chat-bubble")
+        .getByText(reply, { exact: true })
+        .waitFor({ timeout: 5_000 });
+    });
+  });
+
   it("restores completed history on reload without empty replies or lost drafts", async () => {
     const created = await client.request<{ sessionId: string }>("sessions.create", {
       key: sessionKey,

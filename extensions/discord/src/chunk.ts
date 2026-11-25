@@ -1,3 +1,4 @@
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { chunkByParagraph, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
@@ -396,6 +397,43 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
     }
     return low;
   };
+  // Bullet tables emit a standalone strong span for each row label. Read its source
+  // offsets from the Markdown tree so escaped stars and code never become delimiters.
+  const labels: DiscordFrame[] = [];
+  // Two markers and one full Unicode scalar must fit in a continuation.
+  if (maxChars >= 6 && /^\*\*\S.*\*\*\r?$/mu.test(source)) {
+    for (const block of fromMarkdown(source).children) {
+      if (block.type !== "paragraph") {
+        continue;
+      }
+      for (const child of block.children) {
+        const start = child.position?.start.offset;
+        const end = child.position?.end.offset;
+        if (
+          child.type === "strong" &&
+          start !== undefined &&
+          end !== undefined &&
+          child.position?.start.column === 1 &&
+          child.position.start.line === child.position.end.line &&
+          source.startsWith("**", start) &&
+          source.startsWith("**", end - 2) &&
+          (end === source.length || source[end] === "\n" || source[end] === "\r")
+        ) {
+          labels.push({ start, end });
+        }
+      }
+    }
+  }
+  const labelAtCut = (position: number) => {
+    const label =
+      labels[
+        firstMatchingIndex(
+          labels.length,
+          (index) => expectDefined(labels[index], "Discord row label").end <= position,
+        )
+      ];
+    return label && label.start < position ? label : undefined;
+  };
   // The parser emits disjoint inline spans in source order.
   const firstSpanEndingAfter = (position: number) =>
     firstMatchingIndex(
@@ -412,7 +450,7 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
     ];
   const overlaps = (start: number, end: number) => {
     const span = spans[firstSpanEndingAfter(start)];
-    return Boolean(span && span.start < end);
+    return Boolean((span && span.start < end) || labelAtCut(start) || labelAtCut(end));
   };
   const joins = (end: number, start: number) => {
     if (end > start) {
@@ -477,7 +515,16 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
       }
       cursor = Math.min(end, span.end);
     }
-    return text + source.slice(cursor, end);
+    let body = text + source.slice(cursor, end);
+    // A physical message can start or end next to whitespace. Keep those bytes
+    // outside a synthetic delimiter so the delimiter still opens or closes.
+    if (labelAtCut(start)) {
+      body = body.replace(/^(\s*)(?=\S)/u, "$1**");
+    }
+    if (labelAtCut(end)) {
+      body = body.replace(/(?<=\S)(\s*)$/u, "**$1");
+    }
+    return body;
   };
   // The scanner emits disjoint fences in source order, including an open final fence.
   const fenceEndingAtOrAfter = (position: number) =>
@@ -497,7 +544,36 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
       : undefined;
   };
   const cutBoundary = (start: number, end: number) => {
-    const safe = boundary(start, end);
+    let safe = boundary(start, end);
+    const label = labelAtCut(safe);
+    if (label) {
+      if (start < label.start) {
+        return label.start;
+      }
+      // Leave both original markers attached to content. A synthetic marker also
+      // needs a nonspace neighbor and must not bisect a backslash escape.
+      const floor = Math.max(start, label.start + 2);
+      let cut = boundary(start, Math.min(safe, label.end - 3));
+      const fallback = cut;
+      while (cut > floor) {
+        let slash = cut;
+        while (slash > start && source[slash - 1] === "\\") {
+          slash--;
+        }
+        if ((cut - slash) % 2 === 0 && !/\s/u.test(source.slice(cut - 1, cut + 1))) {
+          break;
+        }
+        const previous = boundary(start, cut - 1);
+        if (previous >= cut) {
+          break;
+        }
+        cut = previous;
+      }
+      safe = cut > floor ? cut : fallback;
+      if (safe <= label.start + 2) {
+        return label.start;
+      }
+    }
     // Keep marker lines intact and leave an opening fence with its body.
     const range = fenceEndingAtOrAfter(safe);
     if (range) {

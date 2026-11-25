@@ -8,14 +8,12 @@ import {
   resolveProviderIdForAuth,
 } from "../../agents/provider-auth-aliases.js";
 import { resolveScheduledToolCallerContext } from "../../agents/scheduled-tool-policy.js";
-import { intersectSessionPermissionModes } from "../../agents/session-permission-exec-mode.js";
 import { resolveChannelConfigActivationFacts } from "../../config/channel-config-activation.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import { serializeConfigResolutionFacts } from "../../config/resolution-facts.js";
 import { getRuntimeConfigCapture } from "../../config/runtime-config-capture-state.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
-import { intersectSessionToolOverrides } from "../../config/sessions/session-tool-overrides.js";
 import { SessionWorkStartChangedError } from "../../config/sessions/work-start-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronJobToolPolicyContext } from "../../cron/execution-context-admission.js";
@@ -24,26 +22,11 @@ import type { CronStoredJob } from "../../cron/types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseConcreteConfigPathTokens } from "../../shared/dot-path.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
-import type { SessionEventTarget } from "./session-event-contract.js";
 
 type PolicySelection = Omit<
   Parameters<NonNullable<GetReplyOptions["onModelSelected"]>>[0],
   "thinkLevel"
 >;
-
-/** A delayed producer can retain restrictions, never replace current session authority. */
-export function narrowSessionEventSettings(
-  retained: SessionEventTarget["settings"],
-  current: SessionEventTarget["settings"],
-): NonNullable<SessionEventTarget["settings"]> {
-  return {
-    permissionMode: intersectSessionPermissionModes(
-      retained?.permissionMode,
-      current?.permissionMode,
-    ),
-    toolOverrides: intersectSessionToolOverrides(retained?.toolOverrides, current?.toolOverrides),
-  };
-}
 
 /** Policy publications an accepted occurrence may outlive before it settles as failed. */
 const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
@@ -314,37 +297,5 @@ export function captureSessionEventConfigRelevance(
         getRuntimeConfigCapture(candidate)?.source ?? candidate,
       )
     );
-  };
-}
-
-/** Nested callers intersect ceilings; only an unrestricted same-session owner retains the exemption. */
-export function inheritSessionEventToolPolicy(
-  identity: {
-    agentId: string;
-    sessionKey: string;
-    sessionEventToolsAllow?: readonly string[];
-    sessionEventToolsAllowSessionScoped?: true;
-  },
-  owner?: {
-    agentId: string;
-    sessionKey: string;
-    sessionEventToolsAllow?: readonly string[];
-    sessionEventToolsAllowSessionScoped?: true;
-  },
-) {
-  return {
-    sessionEventToolsAllow:
-      identity.sessionEventToolsAllow && owner?.sessionEventToolsAllow
-        ? identity.sessionEventToolsAllow.filter((name) =>
-            owner.sessionEventToolsAllow!.includes(name),
-          )
-        : (identity.sessionEventToolsAllow ?? owner?.sessionEventToolsAllow),
-    sessionEventToolsAllowSessionScoped:
-      !owner ||
-      (owner.agentId === identity.agentId.trim() &&
-        owner.sessionKey === identity.sessionKey.trim() &&
-        (!owner.sessionEventToolsAllow || owner.sessionEventToolsAllowSessionScoped))
-        ? identity.sessionEventToolsAllowSessionScoped
-        : undefined,
   };
 }

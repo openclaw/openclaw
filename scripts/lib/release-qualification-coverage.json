@@ -13,6 +13,17 @@
       ]
     },
     {
+      "key": "stableClientCompatibility",
+      "workflow": "stable-release-source-compatibility.yml",
+      "name": "Stable Release Source Compatibility",
+      "parentJobName": "Run stable client compatibility",
+      "dispatchName": "Dispatch stable client compatibility",
+      "suffix": "-stable-client",
+      "requiredJobs": [
+        "Verify stable client compatibility"
+      ]
+    },
+    {
       "key": "pluginPrereleaseIndependent",
       "workflow": "plugin-prerelease.yml",
       "name": "Plugin Prerelease",
@@ -84,6 +95,7 @@
   "profiles": {
     "beta": [
       "normalCi",
+      "stableClientCompatibility",
       "pluginPrereleaseIndependent",
       "pluginPrereleaseCandidate",
       "releaseChecksIndependent",
@@ -91,6 +103,7 @@
     ],
     "stable": [
       "normalCi",
+      "stableClientCompatibility",
       "pluginPrereleaseIndependent",
       "pluginPrereleaseCandidate",
       "releaseChecksIndependent",
@@ -99,6 +112,7 @@
     ],
     "full": [
       "normalCi",
+      "stableClientCompatibility",
       "pluginPrereleaseIndependent",
       "pluginPrereleaseCandidate",
       "releaseChecksIndependent",
