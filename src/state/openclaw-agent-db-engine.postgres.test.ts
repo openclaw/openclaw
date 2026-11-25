@@ -666,7 +666,7 @@ it.skipIf(!connection)(
 );
 
 it.skipIf(!connection)(
-  "upgrades a populated PostgreSQL v44 without rewriting nodes and refuses a v44 reopen",
+  "upgrades a populated PostgreSQL v44 without rewriting nodes and keeps the v44 reader floor",
   () => {
     withEngineStoreAdmission(() => {
       const step = agentEngineSchema.postgresMigrations!.find(
@@ -720,7 +720,10 @@ it.skipIf(!connection)(
           .get(db.schema),
       ).toEqual({ data_type: "text", is_nullable: "YES", column_default: null });
       fixture.invalidate();
-      expect(() => fixture.open(source)).toThrow(/newer|version.*45/iu);
+      // The nullable marker is never issued on PostgreSQL, so a v44 reader may still open v45.
+      const previousReader = fixture.open(source);
+      expect(previousReader.prepare(retained).all()).toEqual(before);
+      previousReader.close();
       db.close();
       fixture.invalidate();
       const reopened = fixture.open(agentEngineSchema);
