@@ -14,7 +14,7 @@ const driverSource = fileURLToPath(
 /** The shadow mounts an empty tmpfs over the launching shell's own /proc/<pid>/task,
  * so per-thread children files disappear while /proc/<pid>/stat stays readable. */
 function selectShadowWrapper(): string | undefined {
-  const candidates = process.getuid() === 0 ? ["unshare -m", "unshare -Urm"] : ["unshare -Urm"];
+  const candidates = process.getuid?.() === 0 ? ["unshare -m", "unshare -Urm"] : ["unshare -Urm"];
   for (const unshare of candidates) {
     const probe = spawnSync("sh", [
       "-c",
@@ -44,7 +44,7 @@ describe.skipIf(shadowWrapper === "")("real child subreaper e2e with children fi
       "--packages=external",
       "--outfile=" + driverBundle,
     ]);
-    expect(bundle.status, bundle.stderr).toBe(0);
+    expect(bundle.status, bundle.error?.message ?? String(bundle.stderr)).toBe(0);
   });
 
   afterAll(() => {

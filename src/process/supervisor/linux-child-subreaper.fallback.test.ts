@@ -172,7 +172,7 @@ it("still fails when the owner's own stat read reports ESRCH", () => {
     if (path === "/proc/1/stat") {
       return "1 (systemd) S 0 1 1 0 -1 0 0 0 0 0";
     }
-    enoent();
+    return enoent();
   });
   expect(() => acquireLinuxChildSubreaper()).toThrow("no such process");
 });
