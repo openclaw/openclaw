@@ -7,7 +7,17 @@ export function resolveContainerPublishedGatewayPort(): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
-  const port = parseTcpPort(raw);
+  // Compose accepts host-qualified or dynamically allocated publish mappings.
+  // Only a concrete IPv4 loopback/wildcard host port supplies localhost defaults.
+  const mapped = /^(?:127\.0\.0\.1|0\.0\.0\.0):(\d+)$/.exec(raw);
+  if (!mapped && (raw.includes(":") || /^\d+-\d+$/.test(raw))) {
+    return undefined;
+  }
+  const value = mapped?.[1] ?? raw;
+  if (/^0+$/.test(value)) {
+    return undefined;
+  }
+  const port = parseTcpPort(value);
   if (port === null) {
     throw new Error("Invalid container published Gateway port; expected 1–65535.");
   }

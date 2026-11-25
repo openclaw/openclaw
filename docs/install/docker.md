@@ -9,7 +9,10 @@ title: "Docker"
 
 Docker is **optional**. Use it for an isolated, throwaway Gateway environment or a host without local installs. If you already develop on your own machine, use the normal install flow instead.
 
-Container launch supplies the published Gateway port automatically. When
+Container launch supplies the published Gateway port automatically. Existing host-qualified
+publish mappings remain valid; only concrete ports published on IPv4 loopback or
+the IPv4 wildcard inherit localhost defaults. Dynamic publish mappings do not
+claim a fixed localhost port. When
 `gateway.controlUi.allowedOrigins` is omitted, the Gateway allows `localhost`
 and `127.0.0.1` on that port alongside the current `gateway.publicOrigin`.
 Trusted-proxy authentication retains its configured origin policy and does not

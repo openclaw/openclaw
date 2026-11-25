@@ -187,20 +187,19 @@ fi
 upsert_env_var "$ENV_FILE" "OPENCLAW_PODMAN_CONTAINER" "$OPENCLAW_CONTAINER_NAME"
 upsert_env_var "$ENV_FILE" "OPENCLAW_PODMAN_IMAGE" "$OPENCLAW_IMAGE"
 
-CONFIG_JSON="$OPENCLAW_CONFIG_DIR/openclaw.json"
-if [[ ! -f "$CONFIG_JSON" ]]; then
-  (
-    umask 077
-    write_file_atomically "$CONFIG_JSON" 600 <<'JSON'
-{ "gateway": { "mode": "local" } }
-JSON
-  )
-  echo "Wrote minimal config to $CONFIG_JSON"
-fi
 PUBLISHED_ORIGIN_PORT="$HOST_GATEWAY_PORT"
 if [[ "$INSTALL_QUADLET" == true ]]; then PUBLISHED_ORIGIN_PORT=18789; fi
 LEGACY_ORIGIN_PORT=""
 if [[ "$GATEWAY_COMMAND_MODE" == "legacy" ]]; then LEGACY_ORIGIN_PORT="$PUBLISHED_ORIGIN_PORT"; fi
+
+CONFIG_JSON="$OPENCLAW_CONFIG_DIR/openclaw.json"
+if [[ ! -f "$CONFIG_JSON" ]]; then
+  (
+    umask 077
+    write_initial_gateway_config "$CONFIG_JSON" "$LEGACY_ORIGIN_PORT"
+  )
+  echo "Wrote minimal config to $CONFIG_JSON"
+fi
 ensure_local_gateway_mode "$CONFIG_JSON" "$LEGACY_ORIGIN_PORT" "$PUBLISHED_ORIGIN_PORT"
 
 if [[ "$INSTALL_QUADLET" == true ]]; then

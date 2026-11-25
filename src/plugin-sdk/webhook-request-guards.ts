@@ -29,7 +29,8 @@ export function resolveAcceptedBrowserOrigin(
 ): string | undefined {
   return resolveAcceptedBrowserOriginForGateway({
     ...params,
-    publishedPort: getPluginRuntimeGatewayRequestScope()?.publishedPort,
+    publishedPort:
+      params.cfg === undefined ? undefined : getPluginRuntimeGatewayRequestScope()?.publishedPort,
   });
 }
 export {

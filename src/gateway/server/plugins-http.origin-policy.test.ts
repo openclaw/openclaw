@@ -30,6 +30,7 @@ describe("plugin HTTP origin policy", () => {
   it("carries mapped origins through dispatch without leaking them to other requests", async () => {
     const cfg: OpenClawConfig = { gateway: { publicOrigin: "https://old.example.test" } };
     let accepted: string | undefined;
+    let omitConfig = false;
     const route: PluginHttpRouteRegistration = {
       pluginId: "origin-proof",
       source: "origin-proof",
@@ -38,7 +39,7 @@ describe("plugin HTTP origin policy", () => {
       match: "exact",
       handler: async (req) => {
         await Promise.resolve();
-        accepted = resolveAcceptedBrowserOrigin({ req, cfg });
+        accepted = resolveAcceptedBrowserOrigin({ req, cfg: omitConfig ? undefined : cfg });
         return true;
       },
     };
@@ -72,6 +73,8 @@ describe("plugin HTTP origin policy", () => {
     expect(await request("https://new.example.test", 25432)).toBe("https://new.example.test");
     expect(await request(mappedOrigin, 25432)).toBe(mappedOrigin);
     cfg.gateway!.controlUi = { allowedOrigins: [] };
+    expect(await request(mappedOrigin, 25432)).toBeUndefined();
+    omitConfig = true;
     expect(await request(mappedOrigin, 25432)).toBeUndefined();
   });
 });

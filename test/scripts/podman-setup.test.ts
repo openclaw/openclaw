@@ -1,6 +1,6 @@
 // Exercise deployment-owned launch arguments without starting a container.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -140,6 +140,22 @@ esac`,
       expect(args).toContain("--port");
       expect(args).not.toContain("--published-port");
     });
+
+    it.each(["scripts/podman/setup.sh", "scripts/run-openclaw-podman.sh"])(
+      "seeds fresh legacy custom-port setup without usable Python (%s)",
+      (script) => {
+        const sandbox = fixture();
+        unlinkSync(sandbox.file);
+        writeFileSync(join(sandbox.home, "dist", "index.js"), 'console.log("--port <port>");');
+        writeFileSync(join(sandbox.home, "bin", "python3"), "#!/bin/bash\nexit 127\n", {
+          mode: 0o755,
+        });
+        sandbox.run(script, script.includes("setup.sh") ? ["--container"] : ["launch"]);
+        expect(
+          JSON.parse(readFileSync(sandbox.file, "utf8")).gateway.controlUi.allowedOrigins,
+        ).toEqual(["http://localhost:19123", "http://127.0.0.1:19123"]);
+      },
+    );
 
     it.each([{ origins: undefined }, { origins: [] }, { origins: ["https://authored.example"] }])(
       "retains legacy custom-port setup and repeat policy (%j)",

@@ -1,11 +1,14 @@
 // Source-aware gateway run option resolution shared by pre-action and runtime startup.
 import type { Command } from "commander";
+import { resolveContainerPublishedGatewayPort } from "../../infra/container-environment.js";
 import { inheritOptionFromParent } from "../command-options.js";
 
 export type GatewayRunOpts = Partial<
   Record<(typeof GATEWAY_RUN_VALUE_KEYS)[number], unknown> &
     Record<Exclude<(typeof GATEWAY_RUN_BOOLEAN_KEYS)[number], "claudeCliLogs">, boolean>
 > & {
+  /** Initial launcher fact, captured before config environment is applied; null means absent. */
+  containerPublishedPort?: number | null;
   /** @deprecated Use cliBackendLogs. */
   claudeCliLogs?: boolean;
 };
@@ -56,5 +59,7 @@ export function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command
     resolved[key] = Boolean(resolved[key] || inherited);
   }
 
+  resolved.containerPublishedPort =
+    resolved.publishedPort === undefined ? (resolveContainerPublishedGatewayPort() ?? null) : null;
   return resolved;
 }

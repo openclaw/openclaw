@@ -162,6 +162,21 @@ upsert_env_var() {
 }
 
 # Keep local deployment mode initialization separate from operator-owned origins.
+# Fresh files have no authored origin policy. Stable images need this initial seed
+# even on hosts without Python; subsequent setup never infers list provenance.
+write_initial_gateway_config() {
+  local file="$1" legacy_port="${2:-}"
+  if [[ -n "$legacy_port" ]]; then
+    write_file_atomically "$file" 600 <<JSON
+{ "gateway": { "mode": "local", "controlUi": { "allowedOrigins": ["http://localhost:$legacy_port", "http://127.0.0.1:$legacy_port"] } } }
+JSON
+  else
+    write_file_atomically "$file" 600 <<'JSON'
+{ "gateway": { "mode": "local" } }
+JSON
+  fi
+}
+
 ensure_local_gateway_mode() {
   local file="$1"
   local legacy_port="${2:-}"

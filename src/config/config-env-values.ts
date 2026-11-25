@@ -22,6 +22,7 @@ export function isConfigRuntimeEnvVarAllowed(key: string, value: string): boolea
     upperKey !== "OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS" &&
     upperKey !== "OPENCLAW_DISABLE_CRON_HOST_EXECUTION" &&
     upperKey !== "OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS" &&
+    upperKey !== "OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT" &&
     !isDangerousHostEnvVarName(key) &&
     !isDangerousHostEnvOverrideVarName(key) &&
     !containsEnvVarReference(value)

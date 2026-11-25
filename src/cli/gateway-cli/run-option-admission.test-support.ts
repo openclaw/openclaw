@@ -13,7 +13,7 @@ export function registerGatewayOptionAdmissionTests({
   runGatewayCli: (args: string[]) => Promise<unknown>;
   startGatewayServer: Mock;
   runtimeErrors: string[];
-  configState: { snapshot: Record<string, unknown> };
+  configState: { cfg?: Record<string, unknown>; snapshot: Record<string, unknown> };
   prepareGatewayReset: () => Promise<unknown>;
   ensureDevGatewayConfig: Mock;
 }) {
@@ -42,7 +42,7 @@ export function registerGatewayOptionAdmissionTests({
       configState.snapshot = { config, sourceConfig: config, exists: true, valid: true };
       await prepareGatewayReset();
       await withEnvAsync(
-        { OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: inherited ? "0" : undefined },
+        { OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: inherited ? "invalid" : undefined },
         async () => {
           await expect(
             runGatewayCli([
@@ -75,6 +75,10 @@ export function registerGatewayOptionAdmissionTests({
 
   it.each([
     { input: "19123", args: [], expected: 19123 },
+    { input: "0", args: [], expected: null },
+    { input: "127.0.0.1:0", args: [], expected: null },
+    { input: "127.0.0.1:19123", args: [], expected: 19123 },
+    { input: "192.0.2.10:19123", args: [], expected: null },
     { input: "invalid", args: ["--published-port", "29123"], expected: 29123 },
   ])(
     "uses container port metadata unless explicitly overridden (%j)",
@@ -83,11 +87,26 @@ export function registerGatewayOptionAdmissionTests({
         await runGatewayCli(["gateway", ...args, "--allow-unconfigured"]);
         expect(startGatewayServer).toHaveBeenCalledWith(
           18789,
-          expect.objectContaining({ publishedPort: expected }),
+          expected === null
+            ? expect.not.objectContaining({ publishedPort: expect.anything() })
+            : expect.objectContaining({ publishedPort: expected }),
         );
       });
     },
   );
+
+  it("does not accept saved config environment as container launch metadata", async () => {
+    const config = {
+      gateway: { mode: "local" },
+      env: { vars: { OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: "25432" } },
+    };
+    configState.cfg = config;
+    configState.snapshot = { config, sourceConfig: config, exists: true, valid: true };
+    await withEnvAsync({ OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: undefined }, async () => {
+      await runGatewayCli(["gateway", "--allow-unconfigured"]);
+      expect(startGatewayServer.mock.calls[0]?.[1]).not.toHaveProperty("publishedPort");
+    });
+  });
 
   it.each(["0", "65536", "19123junk"])(
     "rejects invalid published port %s before startup",
