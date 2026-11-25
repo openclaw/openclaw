@@ -306,7 +306,6 @@ suite.define(() => {
             0,
           );
         }
-        await gateway.resolveDeferred("sessions.messages.subscribe");
         await gateway.resolveDeferred("chat.startup");
         await expectTranscriptReady(page);
         await expectTranscript(
