@@ -594,16 +594,6 @@ scheduler summaries and sanitized survivor reports. Failed reports include
 bounded, redacted baseline and candidate agent-turn output; private scenario
 state and raw logs remain outside the upload.
 
-For PRs selecting `release-update-survivor`, the fixture matrix builds the
-current and synthetic successor tarballs in parallel, with a third row that
-builds the pinned previous reader only for selected schema/migration changes.
-The build rows restore the standard dependency and build caches and use the
-normal typed packer and tarball checker. The Docker seed job verifies and
-consumes artifacts from the same run. The trial still requires the normal npm
-update, a committed trial, a distinct serving build, schema advancement, and
-migrated sentinel rows. Fixture preparation is timed in the matrix job steps.
-The container proof records install, readiness, update, assertions, and teardown.
-
 Full upstream `main` pushes run the operator config and prior-release state
 startup corpora once through the Node `runtime-config` owner. Upstream pull
 requests also omit the duplicate **Check startup corpus** step when preflight

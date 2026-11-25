@@ -463,7 +463,6 @@ function renderCiGateEnvironment(
         .map((key) => [key, "true"]),
     ),
     run_check_plan: "false",
-    run_docker_survivor_fixtures: "false",
     reuse_browser_extension_build: "false",
     reuse_control_ui_i18n_setup: "false",
     shared_sdk_declarations: "false",
@@ -4432,13 +4431,17 @@ describe("ci workflow guards", () => {
         scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: headRepository },
       });
       expect(manifest.status, manifest.output).toBe(0);
-      expect(manifest.outputs.run_docker_survivor_fixtures).toBe("true");
       const rows = emittedHostedRows(
         { ...manifest.outputs, hybrid_hosted_offload: "false" },
         { eventName: "pull_request", headRepository },
       );
       expect(rows.filter((job) => job === "docker-survivor-fixtures")).toHaveLength(3);
       expect(rows.filter((job) => job === "docker-seed-e2e")).toHaveLength(1);
+      const mcpOnly = emittedHostedRows(
+        { ...manifest.outputs, hybrid_hosted_offload: "false", docker_seed_lanes: "mcp-channels" },
+        { eventName: "pull_request", headRepository },
+      );
+      expect(mcpOnly).not.toContain("docker-survivor-fixtures");
       // Fork preflight runs before hybrid admission and is outside this downstream budget.
       const admittedRows = rows.filter((job) => job !== "preflight");
       expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(admittedRows.length);
@@ -15683,7 +15686,6 @@ describe("ci workflow guards", () => {
                 .filter((key) => key.startsWith("run_"))
                 .map((key) => [key, String(selected)]),
             ),
-            run_docker_survivor_fixtures: "false",
             shared_sdk_declarations: String(selected),
             reuse_browser_extension_build: String(selected),
             validation_tier: "full",

@@ -1978,8 +1978,6 @@ const manifest = {
   run_node: runNode,
   run_docker_seed_e2e: dockerSeedLanes.length > 0,
   docker_seed_lanes: dockerSeedLanes.join(" "),
-  run_docker_survivor_fixtures:
-    workflowEventName === "pull_request" && dockerSeedLanes.includes("release-update-survivor"),
   run_published_driver_update: publishedDriverUpdate,
   run_macos: runMacos,
   run_android: runAndroid,
@@ -2326,7 +2324,7 @@ if (hybridHostedEligible) {
         process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY,
       // The fixture rows inherit this job's runner placement; count the optional reader row
       // even when its selection step skips the build.
-      manifest.run_docker_survivor_fixtures ? 4 : 1,
+      dockerSeedLanes.includes("release-update-survivor") ? 4 : 1,
     ),
   }).reduce((total, rows) => total + rows, 0);
   hybridHostedOffloadRows =

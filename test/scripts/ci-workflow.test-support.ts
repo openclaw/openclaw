@@ -282,7 +282,10 @@ export function evaluateWorkflowExpression(
       "docker-survivor-fixtures": {
         result:
           context.jobResults?.["docker-survivor-fixtures"] ??
-          (context.preflightOutputs?.run_docker_survivor_fixtures === "true"
+          (context.eventName === "pull_request" &&
+          context.preflightOutputs?.docker_seed_lanes
+            ?.split(" ")
+            .includes("release-update-survivor")
             ? "success"
             : "skipped"),
       },

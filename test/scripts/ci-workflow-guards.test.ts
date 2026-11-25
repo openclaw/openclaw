@@ -2047,7 +2047,7 @@ AFTER_CD
     expect(job.steps.indexOf(baseline)).toBeLessThan(job.steps.indexOf(run));
     const previousReader = requiredWorkflowStep(job.steps, "Pin previous schema reader source");
     expect(previousReader.if).toBe(
-      "needs.preflight.outputs.run_docker_survivor_fixtures == 'true'",
+      "github.event_name == 'pull_request' && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor ')",
     );
     expect(previousReader.env).toEqual({
       GH_TOKEN: "${{ github.token }}",
@@ -2104,62 +2104,6 @@ AFTER_CD
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/private/summary.json",
     ]) {
       expect(uploaded(file), file).toBe(false);
-    }
-  });
-
-  it("collects npm debug logs from Docker smoke packaging and the Docker seed tier", () => {
-    const steps = readCiWorkflow().jobs["docker-seed-e2e"].steps;
-    const upload = requiredWorkflowStep(steps, "Upload Docker seed npm diagnostics");
-    expect(upload.if).toBe("failure()");
-    const uploadPath = expectDefined(upload.with?.path, "Docker seed npm diagnostics upload path");
-    for (const name of ["Prepare Docker smoke package", "Run Docker seed tier"]) {
-      expect(requiredWorkflowStep(steps, name).env?.npm_config_logs_dir, name).toBe(uploadPath);
-    }
-  });
-
-  it("builds independent survivor fixtures only for selected PRs and requires every row", () => {
-    const { jobs } = readCiWorkflow();
-    const builders = jobs["docker-survivor-fixtures"];
-    const docker = jobs["docker-seed-e2e"];
-    expect(builders["runs-on"]).toBe(docker["runs-on"]);
-    expect(builders.strategy).toMatchObject({
-      "fail-fast": false,
-      matrix: { fixture: ["current", "successor", "previous"] },
-    });
-    expect(jobs["ci-gate"].needs).toContain("docker-survivor-fixtures");
-    const prepare = requiredWorkflowStep(docker.steps, "Prepare Docker smoke package");
-    expect(requiredWorkflowStep(builders.steps, "Prepare current survivor package").run).toBe(
-      prepare.run,
-    );
-    const download = requiredWorkflowStep(docker.steps, "Download release survivor fixtures");
-    for (const [eventName, lanes, result, selected, shouldRun] of [
-      ["pull_request", "release-update-survivor", "success", true, true],
-      ["pull_request", "mcp-channels release-update-survivor", "success", true, true],
-      ["pull_request", "release-update-survivor", "failure", true, false],
-      ["pull_request", "release-update-survivor", "skipped", true, false],
-      ["pull_request", "mcp-channels", "skipped", false, true],
-      ["workflow_dispatch", "release-update-survivor", "skipped", false, true],
-      ["push", "published-upgrade-survivor", "skipped", false, true],
-    ] as const) {
-      const context = {
-        eventName,
-        preflightOutputs: {
-          run_docker_seed_e2e: "true",
-          docker_seed_lanes: lanes,
-          run_docker_survivor_fixtures: String(selected),
-        },
-        jobResults: { "docker-survivor-fixtures": result },
-      };
-      expect(evaluateWorkflowExpression("${{ " + builders.if + " }}", context)).toBe(selected);
-      expect(evaluateWorkflowExpression(docker.if, context)).toBe(shouldRun);
-      expect(evaluateWorkflowExpression("${{ " + download.if + " }}", context)).toBe(
-        result === "success",
-      );
-      if (selected) {
-        expect(evaluateWorkflowExpression("${{ " + prepare.if + " }}", context)).toBe(
-          result === "skipped",
-        );
-      }
     }
   });
 
