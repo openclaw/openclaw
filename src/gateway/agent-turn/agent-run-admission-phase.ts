@@ -102,7 +102,7 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
 
-  const admission = resolveAgentRunAdmissionModel(params);
+  const admission = await resolveAgentRunAdmissionModel(params);
   if (!admission) {
     return undefined;
   }
