@@ -22,7 +22,7 @@ type GlobalOnlyModelCommandName =
   | "aliases add"
   | "aliases remove"
   | "refresh"
-  | `${"fallbacks" | "image-fallbacks"} ${"add" | "remove" | "clear"}`;
+  | `${"fallbacks" | "image-fallbacks"} ${"add" | "remove" | "clear" | "list"}`;
 
 export function rejectAgentScopedModelCommand(
   command: Command,
