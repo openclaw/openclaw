@@ -4,9 +4,10 @@ import { en } from "./en.ts";
 const enChatToolOperations = {
   chat: {
     toolCards: {
+      noResultRecorded: "No result recorded",
       operationUnknown: "{action} · outcome unknown",
-      operationNoResult: "{action} · no result recorded",
-      operationBlocked: "{action} · blocked",
+      operationPendingPublication: "{action} · pending publication",
+      operationNotApplied: "{action} · not applied",
       namedOperation: "{action} · {name}",
       listingChats: "Listing chats",
       listedChats: "Listed chats",
@@ -17,6 +18,14 @@ const enChatToolOperations = {
       searchingTools: "Searching tools",
       searchedTools: "Searched tools",
       searchTools: "Search tools",
+      conversationDelivery: {
+        sent: "Sent to conversation",
+        queued: "Message queued",
+        suppressed: "Message not sent",
+        unknown: "Delivery unconfirmed",
+        replied: "Sent · reply received",
+        timeout: "Sent · reply timed out",
+      },
       operationLabels: {
         automations: {
           status: {
@@ -780,6 +789,9 @@ const enChatToolOperations = {
             action: "Search memory",
             running: "Searching memory",
             done: "Searched memory",
+            actionWithQuery: "Search memory for “{query}”",
+            runningWithQuery: "Searching memory for “{query}”",
+            doneWithQuery: "Searched memory for “{query}”",
           },
         },
         memory_get: {
@@ -806,9 +818,14 @@ const enChatToolOperations = {
         },
         knowledge_attach: {
           default: {
-            action: "Attach knowledge source file",
-            running: "Attaching knowledge source file",
-            done: "Attached knowledge source file",
+            action: "Upload knowledge source data",
+            running: "Uploading knowledge source data",
+            done: "Uploaded knowledge source data",
+          },
+          final: {
+            action: "Finish uploading knowledge source file",
+            running: "Finishing knowledge source file upload",
+            done: "Finished uploading knowledge source file",
           },
         },
         knowledge_attach_file: {
@@ -964,6 +981,11 @@ const enChatToolOperations = {
             running: "Reconciling knowledge evidence",
             done: "Reconciled knowledge evidence",
           },
+          preview: {
+            action: "Preview knowledge evidence changes",
+            running: "Previewing knowledge evidence changes",
+            done: "Previewed knowledge evidence changes",
+          },
         },
         knowledge_record: {
           default: {
@@ -983,7 +1005,13 @@ const enChatToolOperations = {
           default: {
             action: "Relink remembered claims",
             running: "Relinking remembered claims",
-            done: "Relinked remembered claims",
+            done: "Checked remembered claims for missing links",
+            linked: "Relinked remembered claims",
+          },
+          preview: {
+            action: "Preview links for remembered claims",
+            running: "Previewing links for remembered claims",
+            done: "Previewed links for remembered claims",
           },
         },
         knowledge_remember: {
@@ -1034,6 +1062,11 @@ const enChatToolOperations = {
             running: "Superseding claims",
             done: "Superseded claims",
           },
+          restore: {
+            action: "Restore superseded claims",
+            running: "Restoring superseded claims",
+            done: "Restored superseded claims",
+          },
         },
         knowledge_timeline: {
           default: {
@@ -1053,7 +1086,8 @@ const enChatToolOperations = {
           default: {
             action: "Verify knowledge publication",
             running: "Verifying knowledge publication",
-            done: "Verifyed knowledge publication",
+            done: "Verified knowledge publication",
+            checked: "Checked knowledge publication",
           },
         },
         knowledge_withdraw: {
@@ -1105,6 +1139,9 @@ const enChatToolOperations = {
             action: "Read wiki page",
             running: "Reading wiki page",
             done: "Read wiki page",
+            actionWithQuery: "Read wiki page “{query}”",
+            runningWithQuery: "Reading wiki page “{query}”",
+            doneWithQuery: "Read wiki page “{query}”",
           },
         },
         wiki_lint: {
@@ -1125,6 +1162,7 @@ const enChatToolOperations = {
             action: "Generate image",
             running: "Generating image",
             done: "Generated image",
+            requested: "Requested image generation",
           },
           list: {
             action: "List image models",
@@ -1157,6 +1195,7 @@ const enChatToolOperations = {
             action: "Generate music",
             running: "Generating music",
             done: "Generated music",
+            requested: "Requested music generation",
           },
           list: {
             action: "List music models",
@@ -1174,6 +1213,7 @@ const enChatToolOperations = {
             action: "Generate video",
             running: "Generating video",
             done: "Generated video",
+            requested: "Requested video generation",
           },
           list: {
             action: "List video models",
@@ -1248,6 +1288,19 @@ const enChatToolOperations = {
             action: "React to message",
             running: "Reacting to message",
             done: "Reacted to message",
+            unchanged: "Reaction already present",
+          },
+          remove_reaction: {
+            action: "Remove reaction",
+            running: "Removing reaction",
+            done: "Removed reaction",
+            unchanged: "No reaction removed",
+          },
+          clear_reactions: {
+            action: "Clear reactions",
+            running: "Clearing reactions",
+            done: "Cleared reactions",
+            unchanged: "No reactions cleared",
           },
           reactions: {
             action: "Read reactions",
@@ -1264,7 +1317,7 @@ const enChatToolOperations = {
           reply: {
             action: "Reply to message",
             running: "Replying to message",
-            done: "Reply to message",
+            done: "Replied to message",
           },
           sendWithEffect: {
             action: "Send message with effect",
@@ -1327,7 +1380,7 @@ const enChatToolOperations = {
           "thread-reply": {
             action: "Reply to thread",
             running: "Replying to thread",
-            done: "Replyed to thread",
+            done: "Replied to thread",
           },
           search: {
             action: "Search messages",
@@ -1709,7 +1762,7 @@ const enChatToolOperations = {
           reply_comment: {
             action: "Reply to file comment",
             running: "Replying to file comment",
-            done: "Replyed to file comment",
+            done: "Replied to file comment",
           },
         },
         feishu_perm: {
@@ -2066,6 +2119,9 @@ const enChatToolOperations = {
             action: "Search the web",
             running: "Searching the web",
             done: "Searched the web",
+            actionWithQuery: "Search the web for “{query}”",
+            runningWithQuery: "Searching the web for “{query}”",
+            doneWithQuery: "Searched the web for “{query}”",
           },
         },
         web_fetch: {
@@ -2777,11 +2833,15 @@ const enChatToolOperations = {
             running: "Pasting into process",
             done: "Pasted into process",
           },
-          kill: { action: "Stop process", running: "Stopping process", done: "Stopped process" },
+          kill: {
+            action: "Request process stop",
+            running: "Requesting process stop",
+            done: "Requested process stop",
+          },
           clear: {
-            action: "Clear process output",
-            running: "Clearing process output",
-            done: "Cleared process output",
+            action: "Remove finished process record",
+            running: "Removing finished process record",
+            done: "Removed finished process record",
           },
           remove: {
             action: "Remove process record",
@@ -2941,14 +3001,12 @@ const enChatToolOperations = {
           default: {
             action: "Send to conversation",
             running: "Sending to conversation",
-            done: "Sent to conversation",
           },
         },
         conversations_turn: {
           default: {
-            action: "Read conversation turn",
-            running: "Reading conversation turn",
-            done: "Read conversation turn",
+            action: "Send and wait for a reply",
+            running: "Sending and waiting for a reply",
           },
         },
         github_identity_status: {

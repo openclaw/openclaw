@@ -19,6 +19,7 @@ import {
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
+import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
@@ -175,6 +176,20 @@ export function ApplicationShell(props: {
       />
       <div
         ref={(element) => (props.host.shellElement = element)}
+        onClick={(event) => {
+          if (!shouldHandleNavigationClick(event)) {
+            return;
+          }
+          const anchor = anchorFromNavigationEvent(event);
+          if (
+            anchor?.hasAttribute("data-app-route") &&
+            !anchor.target &&
+            !anchor.hasAttribute("download") &&
+            props.host.runtime?.navigateAppLink(new URL(anchor.href))
+          ) {
+            event.preventDefault();
+          }
+        }}
         onMouseDown={beginNativeWindowDragFromTitlebar}
         class={[
           "shell",

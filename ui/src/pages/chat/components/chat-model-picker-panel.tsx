@@ -9,7 +9,7 @@ import {
   ChatModelAccountOptions,
   ChatModelAccountSectionView,
 } from "./chat-model-account-control.tsx";
-import { ChatModelAuthState, modelAuthState } from "./chat-model-auth-state.tsx";
+import { ChatModelAuthState, activeModelAuthState } from "./chat-model-auth-state.tsx";
 import { ChatModelCatalogState, isModelCatalogLoading } from "./chat-model-catalog-state.tsx";
 import { createChatModelFavoriteReorder } from "./chat-model-favorite-reorder.ts";
 import {
@@ -235,14 +235,9 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       ? panel.params.accountSection?.prefetch
       : undefined;
   };
-  const activeAuth = createMemo(() => {
-    const group = state().orderedProviderGroups.find(([provider]) =>
-      searchView?.providerOpen(provider),
-    );
-    return group && group[0] !== FAVORITES_GROUP && !searchView?.filtering()
-      ? modelAuthState([...group[1].lead, ...group[1].more])
-      : undefined;
-  });
+  const activeAuth = createMemo(() =>
+    activeModelAuthState(state().orderedProviderGroups, searchView),
+  );
   const layout = createMemo<string[]>(() => {
     if (searchView?.filtering()) {
       return [
@@ -676,7 +671,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                       runtime={providerRuntime}
                       onRuntimeSelect={(provider, runtime, entry) => {
                         if (entry?.disabled) {
-                          onModelSetup()?.();
+                          onModelSetup()?.(provider);
                           return;
                         }
                         if (

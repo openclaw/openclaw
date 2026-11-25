@@ -55,6 +55,7 @@ import {
   createChatSessionRoutingAssertion,
   respondChatSendAdmissionError,
   respondChatSessionRoutingChanged,
+  SESSION_INCARNATION_CHANGED,
 } from "./chat-send-admission-errors.js";
 import {
   isLocalChatInputAdmission,
@@ -116,7 +117,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     timeoutMs,
     expectedLeafEntryId,
   } = session;
-  const assertSessionTargetCurrent = createChatSessionRoutingAssertion(session, context);
+  const assertSessionTargetCurrent = createChatSessionRoutingAssertion(
+    session.sessionRoutingChanged,
+    context,
+  );
   const cachedMeta = { cached: true, runId: clientRunId };
   const { chatSendTraceAttributes, originatingRoute } = prepareChatSendAdmissionContext(params);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -316,6 +320,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }
         const latestEntry = latestSession.entry;
         const latestSessionId = latestEntry?.sessionId;
+        // A reset between preparation and write admission must leave the replacement untouched.
+        if (request.targetPrecondition?.matches(latestEntry) === false) {
+          throw new Error(SESSION_INCARNATION_CHANGED);
+        }
         admittedSessionEntry = latestEntry;
         const requestConflict = resolveChatSendRequestConflict(
           { ...params, session: { ...session, entry: latestEntry } },

@@ -58,7 +58,7 @@ import {
   selectLiveRestartResumeSessions,
   type SessionIdentity,
 } from "./session-restart-resume-selection.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 
 /** Snapshot only live owners after admission closes, before shutdown aborts them. */
 export async function persistRunningSessionsForRestart(params: {

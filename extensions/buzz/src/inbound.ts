@@ -17,6 +17,7 @@ import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { BuzzBus } from "./buzz-bus.js";
 import type { BuzzConfigInput } from "./config-schema.js";
+import { buzzIngressIdentity } from "./ingress-identity.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
   formatBuzzMessageForAgent,
@@ -86,7 +87,7 @@ export async function handleBuzzInbound(params: {
   const access = await runtime.channel.inbound.ingress.resolveStable({
     channelId: "buzz",
     accountId: account.accountId,
-    identity: { key: "buzz-pubkey", entryIdPrefix: "buzz-entry" },
+    identity: buzzIngressIdentity,
     subject: { stableId: message.senderPubkey },
     conversation: {
       kind: "group",

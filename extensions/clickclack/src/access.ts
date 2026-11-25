@@ -4,7 +4,6 @@ import {
   formatNormalizedAllowFromEntries,
   resolveAllowlistMatchByCandidates,
 } from "openclaw/plugin-sdk/allow-from";
-import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   buildMentionRegexes,
   normalizeMentionText,
@@ -22,30 +21,13 @@ import { isClickClackAccountCurrent, resolveClickClackAccountConfig } from "./ac
 import { resolveClickClackDiscussionRoute } from "./discussions/routing.js";
 import { resolveClickClackGroupPolicy } from "./group-policy.js";
 import { createClickClackClient } from "./http-client.js";
+import { clickClackIngressIdentity, normalizeClickClackUserId } from "./ingress-identity.js";
 import { getClickClackRuntime } from "./runtime.js";
 import { buildClickClackTarget } from "./target.js";
 import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const CHANNEL_ID = "clickclack" as const;
 const CLICKCLACK_MENTION_PATTERN = /(?:^|[^a-z0-9_@-])@([a-z0-9][a-z0-9_-]{1,31})(?![a-z0-9_-])/giu;
-
-function normalizeClickClackUserId(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const withoutProvider = trimmed.replace(/^(clickclack|cc):/i, "").trim();
-  const directTarget = withoutProvider.match(/^dm:(.+)$/i);
-  return directTarget?.[1]?.trim() || withoutProvider || null;
-}
-
-const clickClackIngressIdentity = {
-  key: "user-id",
-  normalizeEntry: normalizeClickClackUserId,
-  normalizeSubject: normalizeClickClackUserId,
-  isWildcardEntry: (entry) => normalizeClickClackUserId(entry) === "*",
-  entryIdPrefix: "clickclack-user",
-} satisfies StableChannelIngressIdentityParams;
 
 async function isClickClackBotOwnedThread(params: {
   account: ResolvedClickClackAccount;

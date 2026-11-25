@@ -41,6 +41,21 @@ describe("web inbound helpers", () => {
       name: "Ada Lovelace",
     },
     {
+      label: "folded names and telephone numbers",
+      displayName: undefined,
+      card: [
+        "BEGIN:VCARD",
+        "VERSION:4.0",
+        "FN:Ada",
+        "  Lovelace",
+        "TEL;VALUE=uri:tel:+",
+        "\t15555550123",
+        "END:VCARD",
+        "",
+      ].join("\r\n"),
+      name: "Ada Lovelace",
+    },
+    {
       label: "escaped vCard names and telephone prefixes",
       displayName: undefined,
       card: vcard("Ada\\nLovelace\\, Countess\\; Byron", ["TeL: +15555550123 "]),

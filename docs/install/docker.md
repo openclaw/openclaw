@@ -71,7 +71,7 @@ Hosting mutually untrusted users? Run a separate Gateway for each trust boundary
     - creates the legacy auth-profile secret key directory
     - starts the Gateway via Docker Compose
 
-    Pre-start onboarding and config writes run through `openclaw-gateway` directly (with `--no-deps --entrypoint node`), since `openclaw-cli` shares the Gateway's network namespace and only works once the Gateway container exists.
+    Pre-start onboarding and config writes run through `openclaw-gateway` directly (with `--no-deps --entrypoint node`), since `openclaw-cli` shares the Gateway's network and PID namespaces and only works once the Gateway container exists.
 
   </Step>
 

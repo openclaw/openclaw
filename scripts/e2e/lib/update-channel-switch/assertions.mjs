@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { createFrozenTargetSource } from "../../../lib/frozen-target-source.mjs";
+import {
+  assertCompletedUpdate,
+  assertTerminalUpdateReceipt,
+} from "../../../lib/update-receipt.mjs";
 import { readJson } from "../fixtures/common.mjs";
 
 const [command, ...args] = process.argv.slice(2);
@@ -9,7 +14,7 @@ const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-main-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
+    "usage: assertions.mjs <read-source-pnpm-pin|prepare-git-fixture|write-control-ui|assert-update|assert-main-refusal|assert-owner-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update|assert-detached-switch> [...]",
   );
   process.exit(2);
 }
@@ -100,9 +105,25 @@ function writeControlUi(root) {
   fs.writeFileSync(file, controlUiHtml);
 }
 
-function prepareGitFixture(root) {
+function readSourcePnpmPin(root, sha) {
+  const manifest = sha
+    ? JSON.parse(createFrozenTargetSource(root, sha).readText("package.json"))
+    : readJson(path.join(root, "package.json"));
+  const pin = manifest?.packageManager;
+  assert(
+    typeof pin === "string" && /^pnpm@\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/u.test(pin),
+    "Detached Git fixture requires the selected source's exact pnpm pin",
+  );
+  process.stdout.write(pin);
+}
+
+function prepareGitFixture(root, pnpmPin) {
   const packageJsonPath = path.join(root, "package.json");
   const packageJson = readJson(packageJsonPath);
+  // Published manifests omit the source-only package manager pin. This fixture is a checkout.
+  if (pnpmPin) {
+    packageJson.packageManager = pnpmPin;
+  }
   const pnpmWorkspacePath = path.join(root, "pnpm-workspace.yaml");
   const workspaceConfig = fs.existsSync(pnpmWorkspacePath)
     ? readWorkspacePatchedDependencies(pnpmWorkspacePath)
@@ -163,11 +184,20 @@ function prepareGitFixture(root) {
   writeControlUi(root);
 }
 
-function assertUpdate(channel) {
+function assertUpdate(channel, expectedVersion) {
   const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
-  if (payload.status !== "ok") {
-    throw new Error(`expected ${channel} update status ok, got ${payload.status}`);
+  if (channel === "beta" && Object.hasOwn(payload, "phase")) {
+    // The fixture already runs the candidate, so switching to beta changes only the channel.
+    assertTerminalUpdateReceipt(payload, "skipped");
+    assert.equal(payload.reason, "already-current");
+    assert.equal(payload.target?.version, expectedVersion);
+    assert(
+      payload.steps.every((step) => step.status !== "failed"),
+      "beta channel switch failed",
+    );
+    return;
   }
+  assertCompletedUpdate(payload);
   if (channel === "dev" && payload.mode !== "git") {
     throw new Error(`expected dev update mode git, got ${payload.mode}`);
   }
@@ -204,6 +234,18 @@ function assertMainRefusal() {
   assert.equal(payload.reason, "unsupported-package-target");
 }
 
+function assertOwnerRefusal(status, route) {
+  assert.notEqual(Number(status), 0, "resident-owned installer switch must fail");
+  const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
+  assert.equal(payload.ok, false);
+  assert.match(
+    payload.error?.message ?? "",
+    new RegExp(
+      `^The resident launcher owns this installation\\. ${route} requires the in-place installer`,
+    ),
+  );
+}
+
 function assertDirtyUpdate(root, expectedHead) {
   const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
   assert.equal(payload.reason, "dirty", "ordinary untracked input must block admission");
@@ -225,6 +267,34 @@ function assertConfigChannel(channel) {
   }
   throw new Error(
     `expected persisted update.channel ${channel}, got ${JSON.stringify(config.update?.channel)}`,
+  );
+}
+
+function assertDetachedSwitch(source, slot, expectedHead) {
+  const git = (root, ...gitArgs) =>
+    execFileSync("git", ["-C", root, ...gitArgs], { encoding: "utf8" }).trim();
+  const edits = ["--", "operator-update-tracked.txt", "operator-update-notes.tmp"];
+  // The switch must leave the operator's checkout alone and install only committed content.
+  assert.equal(git(source, "rev-parse", "HEAD"), expectedHead, "source checkout HEAD changed");
+  for (const [name, content] of [
+    ["operator-update-tracked.txt", "retain tracked edit\n"],
+    ["operator-update-notes.tmp", "retain user notes\n"],
+  ]) {
+    assert.equal(
+      fs.readFileSync(path.join(source, name), "utf8"),
+      content,
+      `source ${name} changed`,
+    );
+  }
+  assert.equal(
+    git(slot, "rev-parse", "HEAD"),
+    expectedHead,
+    "release did not select the fixture commit",
+  );
+  assert.equal(
+    git(slot, "status", "--porcelain", ...edits),
+    "",
+    "local input leaked into the release",
   );
 }
 
@@ -265,13 +335,16 @@ function assertDirtyExit(statusRaw) {
 }
 
 const commands = {
-  "prepare-git-fixture": (root = "/tmp/openclaw-git") => prepareGitFixture(root),
+  "read-source-pnpm-pin": readSourcePnpmPin,
+  "prepare-git-fixture": prepareGitFixture,
   "write-control-ui": (root = "/tmp/openclaw-git") => writeControlUi(root),
   "assert-update": assertUpdate,
   "assert-main-refusal": assertMainRefusal,
+  "assert-owner-refusal": assertOwnerRefusal,
   "assert-runtime-staging-clean": assertRuntimeStagingClean,
   "assert-dirty-update": assertDirtyUpdate,
   "assert-dirty-exit": assertDirtyExit,
+  "assert-detached-switch": assertDetachedSwitch,
   "assert-config-channel": assertConfigChannel,
   "assert-dry-run": assertDryRun,
   "assert-status-kind": assertStatusKind,

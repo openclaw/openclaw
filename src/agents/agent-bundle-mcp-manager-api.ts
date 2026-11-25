@@ -18,6 +18,7 @@ import type {
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
 import { resetMcpStartupBackoff } from "./mcp-startup-backoff.js";
+export { captureSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-cleanup.js";
 
 function getSessionMcpRuntimeManager() {
   const manager = peekSessionMcpRuntimeManager();
@@ -94,14 +95,6 @@ export function peekSessionMcpRuntime(params: {
     ...(sessionId ? { sessionId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
   });
-}
-
-/** Captures only currently registered MCP runtimes; invoking it never selects a successor. */
-export function captureSessionMcpRuntimeRetirement(params: {
-  sessionId?: string;
-  sessionKey?: string;
-}): ReturnType<SessionMcpRuntimeManager["captureSessionRetirement"]> {
-  return peekSessionMcpRuntimeManager()?.captureSessionRetirement(params);
 }
 
 export async function retireSessionMcpRuntime(params: {

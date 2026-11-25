@@ -398,7 +398,7 @@ export async function runCase(
           scenario === "profile-deleted",
       );
       await runLiveAdmissionCase(row.credential, scenario, fixture);
-      return;
+      return c;
     }
     let operator: Pick<GatewayClient, "request"> | GatewayIngressPrincipalBindingV1 | undefined;
     let nativeSend: (() => Promise<unknown>) | undefined;
@@ -460,7 +460,7 @@ export async function runCase(
       });
       expect(c.queuedCalls).toBe(1);
       expect(fixture.providerErrors).toEqual([]);
-      return;
+      return c;
     }
     const admin = await fixture.admin(signal);
     const first = await admin.request<{ runId: string }>("chat.send", {
@@ -570,6 +570,8 @@ export async function runCase(
         "owner-disabled",
         "plugin-resume-mismatch",
         "plugin-authorize-denied",
+        // A configured owner's queued work re-admits against the current owner list.
+        "owner-revoked-before-start",
       ].includes(scenario)
     ) {
       if (!restartSentinel) {
@@ -637,11 +639,12 @@ export async function runCase(
         }
       }
       await fixture.finishQueuedRun(() => revokeAdmissionSource(fixture, c));
-      if (scenario === "mixed-owner-group" || scenario === "owner-revoked-before-start") {
+      if (scenario === "mixed-owner-group") {
         expect(c.ownerToolChecks).toBeGreaterThan(0);
       }
     }
     expect(fixture.providerErrors).toEqual([]);
+    return c;
   } finally {
     fallbackEnv.restore();
     c.releaseFirst.resolve();

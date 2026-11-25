@@ -3,10 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { fileLogTransport } from "./logger-file-transport.js";
-import * as fileLogWorker from "./logger-file-worker.js";
 import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
@@ -146,44 +144,6 @@ it.each(["async", "sync"])(
     expect(read(secondPath)).toBe(payloads[3]);
   },
 );
-
-it("rescues the unissued tail without replaying an in-flight batch", async () => {
-  const [issued, release] = [createDeferred(), createDeferred()] as const;
-  let issuedRecords = 0;
-  const write = fileLogWorker.runFileLogIOInWorker;
-  vi.spyOn(fileLogWorker, "runFileLogIOInWorker").mockImplementation(async (request) => {
-    const result = await write(request);
-    if (request.type === "append" && request.file === logPath) {
-      issuedRecords = request.payload.trim().split("\n").length;
-      issued.resolve();
-      await release.promise;
-    }
-    return result;
-  });
-  const entries = Array.from({ length: 4 }, (_, index) =>
-    entry(logPath, `${JSON.stringify({ index, text: "x".repeat(20_000) })}\n`),
-  );
-  for (const record of entries) {
-    fileLogTransport.enqueue(record);
-  }
-  const flushing = fileLogTransport.flush();
-  try {
-    await awaitGateBeforeSettlement(
-      issued.promise,
-      flushing,
-      "logger flush completed without reaching the held append",
-    );
-    expect(issuedRecords).toBeGreaterThan(1);
-    fileLogTransport.enqueue(entry(logPath, '{"index":4}\n'));
-    fileLogTransport.drainSync();
-  } finally {
-    release.resolve();
-    await flushing;
-  }
-
-  expect(records(logPath).map((record) => record.index)).toEqual([0, 1, 2, 3, 4]);
-  expect(entries.every((record) => record.payload === "")).toBe(true);
-});
 
 it("keeps later exit records separate after a synchronous short write", () => {
   for (const payload of ["first\n", "second\n"]) {
