@@ -75,6 +75,63 @@ it("prints calendar event previews", async () => {
   cli.expectText(output(), "meet events: 1", "* Project sync", MEET_URL);
 });
 
+function calendarListUrl(timeMin: Date, timeMax: Date, pageToken?: string) {
+  const query = new URLSearchParams({
+    maxResults: "50",
+    orderBy: "startTime",
+    showDeleted: "false",
+    singleEvents: "true",
+    timeMin: timeMin.toISOString(),
+    timeMax: timeMax.toISOString(),
+  });
+  if (pageToken) {
+    query.set("pageToken", pageToken);
+  }
+  return `https://www.googleapis.com/calendar/v3/calendars/primary/events?${query}`;
+}
+
+it.each([
+  // Local day has begun in Kiritimati and is still in progress in Los Angeles.
+  ["Pacific/Kiritimati", "2024-02-28T10:00:15Z", "2024-02-29", "2024-03-01"],
+  ["America/Los_Angeles", "2024-03-01T04:00:15Z", "2024-02-29", "2024-03-01"],
+  // Equal future starts, including Havana's first occurrence of midnight.
+  ["Pacific/Kiritimati", "2024-02-28T09:59:00Z", "2024-02-29", "2024-03-01"],
+  ["America/Havana", "2024-11-03T03:59:00Z", "2024-11-03", "2024-11-04"],
+  // Sep 7 ends when Santiago jumps directly to 01:00 on Sep 8.
+  ["America/Santiago", "2024-09-08T03:58:00Z", "2024-09-07", "2024-09-08"],
+  ["UTC", "2024-02-29T00:00:15Z", "2024-02-29", "2024-03-01"],
+])("selects the all-day Meet in calendar zone %s at %s", async (timeZone, clock, start, end) => {
+  const now = new Date(clock);
+  const week = new Date(now);
+  week.setDate(week.getDate() + 7);
+  const allDay = {
+    start: { date: start },
+    end: { date: end },
+    hangoutLink: MEET_URL,
+  };
+  const timed = {
+    start: { dateTime: new Date(now.getTime() + 60_000).toISOString() },
+    end: { dateTime: new Date(now.getTime() + 90_000).toISOString() },
+    hangoutLink: "https://meet.google.com/bbb-bbbb-bbb",
+  };
+  cli.stubJsonRoutes({
+    [calendarListUrl(now, week)]: { timeZone, items: [allDay], nextPageToken: "next" },
+    [calendarListUrl(now, week, "next")]: { items: [timed] },
+  });
+  vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(now);
+  try {
+    await runApiCommand("calendar-events", ["--json"]);
+    expect(json()).toMatchObject({
+      events: [
+        { event: allDay, meetingUri: MEET_URL, selected: true },
+        { meetingUri: timed.hangoutLink, selected: false },
+      ],
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("ends an active conference for a Meet space", async () => {
   const endUrl = "https://meet.googleapis.com/v2/spaces/space-resource-123:endActiveConference";
   const fetchMock = cli.stubJsonRoutes({
