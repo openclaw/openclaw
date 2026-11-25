@@ -537,7 +537,10 @@ struct ChatMessageBubble: View, @MainActor Equatable {
                 .contentShape(.accessibility, Rectangle())
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("chat-user-message-body")
+                #if !os(iOS)
+                // iPhone caps only the bubble and file cards; photos may use the column, as on the web.
                 .frame(maxWidth: self.column.userBubbleMaxWidth, alignment: .trailing)
+                #endif
                 .frame(maxWidth: .infinity, alignment: .trailing)
         } else {
             // Replies span the reading column; only the avatar gutter (wide panes) narrows them.
@@ -624,6 +627,7 @@ extension ChatMessageBubble {
                         }
                         if hasBubble {
                             self.userBubble(text: bubbleText, textColor: textColor)
+                                .frame(maxWidth: self.column.userBubbleMaxWidth, alignment: .trailing)
                                 .opacity(send?.isPending == true ? ChatUIConstants.pendingOpacity : 1)
                         }
                         self.footer
