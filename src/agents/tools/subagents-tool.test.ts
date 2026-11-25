@@ -19,6 +19,8 @@ import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { createToolSurfacePresentationForTest } from "../tool-surface-plan.test-support.js";
 import { createSubagentsTool } from "./subagents-tool.js";
+
+type GatewayClient = Parameters<typeof createWorkerGatewayToolProxies>[1];
 const owner = vi.hoisted(() => ({
   runs: [] as SubagentRunRecord[],
   listeners: new Set<() => void>(),
@@ -208,10 +210,12 @@ describe("subagents native run contract", () => {
   it("gives a worker's Gateway call enough time to outlive every wait it accepts", async () => {
     const location = getAgentToolExecutionLocation(tool);
     expect(location.kind).toBe("gateway");
-    const invokeGatewayTool = vi.fn(
-      async (_params: unknown, _options?: { timeoutMs?: number }) =>
-        ({ type: "res", id: "response-1", ok: true, payload: { content: [] } }) as const,
-    );
+    const invokeGatewayTool = vi.fn<GatewayClient["invokeGatewayTool"]>(async () => ({
+      type: "res",
+      id: "response-1",
+      ok: true,
+      payload: { content: [] },
+    }));
     const [proxy] = createWorkerGatewayToolProxies(
       {
         generation: "generation-1",
@@ -233,7 +237,7 @@ describe("subagents native run contract", () => {
           },
         ],
       },
-      { invokeGatewayTool, cancelGatewayTool: vi.fn() },
+      { invokeGatewayTool, cancelGatewayTool: vi.fn<GatewayClient["cancelGatewayTool"]>() },
     );
     for (const timeoutSeconds of [undefined, 55, 60]) {
       await proxy!.execute("wait", { action: "wait", runIds: ["run-1"], timeoutSeconds });
