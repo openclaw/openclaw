@@ -22,7 +22,7 @@ const enCron = {
     runNotStarted: {
       alreadyRunning: "This automation is already running.",
       recoveryPending: "The scheduler is recovering. Try again shortly.",
-      invalidSpec: "Couldn’t start this automation. Check its schedule and instructions.",
+      invalidSpec: "OpenClaw couldn’t start this automation with its saved settings.",
       stopped: "The scheduler is stopped.",
       unknown: "Couldn’t start this automation. Try again.",
     },
