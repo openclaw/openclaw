@@ -117,7 +117,7 @@ extensions/codex/src/app-server/runtime-artifact.ts	1
 extensions/codex/src/app-server/sandbox-exec-server/http.ts	2
 extensions/codex/src/app-server/sandbox-exec-server/json-rpc.ts	3
 extensions/codex/src/app-server/scheduled-app-authority.ts	5
-extensions/codex/src/app-server/shared-client.ts	2
+extensions/codex/src/app-server/shared-client.ts	1
 extensions/codex/src/app-server/side-question.ts	1
 extensions/codex/src/app-server/startup-binding.ts	1
 extensions/codex/src/app-server/thread-lifecycle-run.ts	1
