@@ -26,7 +26,9 @@ describe("Doctor per-store output", () => {
     );
     const before = files.map((file) => fs.readFileSync(file));
     const stores = await inspect(root);
-    expect(await diagnosticOutput(root, diagnosticConfig(), descriptors, stores)).toMatchSnapshot();
+    expect(
+      await diagnosticOutput(root, diagnosticConfig(), descriptors, stores, ["sqlite"]),
+    ).toMatchSnapshot();
     expect(files.map((file) => fs.readFileSync(file))).toEqual(before);
   });
 
@@ -47,7 +49,9 @@ describe("Doctor per-store output", () => {
     const config = diagnosticConfig();
     config.database = { engine: "postgres" };
     const matrix = (await inspect(root, config)).find((store) => store.path === file)!;
-    expect(await diagnosticOutput(root, config, descriptors, matrix)).toMatchSnapshot();
+    expect(
+      await diagnosticOutput(root, config, descriptors, matrix, ["postgres"]),
+    ).toMatchSnapshot();
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(

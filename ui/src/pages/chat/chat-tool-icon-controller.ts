@@ -123,6 +123,7 @@ export function createChatToolIcons(readSource: () => ToolIconSource): PluginToo
               plugin.id,
               {
                 branding: plugin.hasToolBrandIcon,
+                installedIcon: plugin.installed && plugin.origin !== "bundled" && plugin.hasIcon,
                 default: plugin.hasActivityIcon,
                 tools: new Set(plugin.activityIconTools),
               },
@@ -134,12 +135,21 @@ export function createChatToolIcons(readSource: () => ToolIconSource): PluginToo
           for (const group of tools.groups) {
             for (const tool of group.tools) {
               const pluginId = tool.pluginId;
-              const available = pluginId ? availableIcons.get(pluginId) : undefined;
+              const mcp = tool.source === "mcp";
+              const available =
+                pluginId && !(mcp && pluginId === "bundle-mcp")
+                  ? availableIcons.get(pluginId)
+                  : undefined;
               const override = available?.tools.has(tool.id) ? tool.id : undefined;
               const candidates: string[] = [];
               // Shared capabilities keep their semantic glyph, independent of provider artwork.
               if (pluginId && tool.source !== "core") {
-                if (available?.branding && !isKnownCoreToolId(tool.id)) {
+                // An installed MCP wrapper can represent an external service even when it is
+                // published by OpenClaw. Keep its activity artwork when provided.
+                const brand =
+                  available?.branding ||
+                  (mcp && available?.installedIcon && !override && !available.default);
+                if (brand && !isKnownCoreToolId(tool.id)) {
                   const key = JSON.stringify([pluginId, "brand"]);
                   artwork.set(key, { pluginId, branding: true });
                   candidates.push(key);

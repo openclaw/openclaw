@@ -1,11 +1,13 @@
 import type { lookup as dnsLookupCb } from "node:dns";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
 import { cdpNetworkLogs, createCdpNetworkLog } from "./cdp-network-log.js";
-import { isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
+import { isLoopbackHost, isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
@@ -124,7 +126,11 @@ export async function connectOverCdpTransport(
 ): Promise<Browser> {
   const networkLog = createCdpNetworkLog();
   const normalizer = resolveBrowserEngine(opts.engine).createCdpNormalizer?.();
+  const translateLocalDownloads =
+    !opts.preparedTransport && isWSL2Sync() && isLoopbackHost(new URL(connectionUrl).hostname);
   const wire = opts.preparedTransport ?? (await openCdpTransportSocket(connectionUrl, opts));
+  let versionCommandId: number | undefined;
+  let windowsBrowser = false;
   const pageTargetIdsBySession = new Map<string, string>();
   const pendingTargetCommands = new Map<number, string>();
   let trackInitializationCommands = true;
@@ -218,6 +224,33 @@ export async function connectOverCdpTransport(
         if (trackInitializationCommands && typeof id === "number" && id > 0 && sessionId) {
           pendingTargetCommands.set(id, sessionId);
         }
+        const method = readStringField(command, "method");
+        if (translateLocalDownloads && method === "Browser.getVersion" && typeof id === "number") {
+          versionCommandId = id;
+        }
+        if (windowsBrowser && method === "Browser.setDownloadBehavior") {
+          const params = asOptionalRecord(command?.params);
+          const downloadPath = readStringField(params, "downloadPath");
+          if (downloadPath) {
+            // Windows Chrome cannot write to a WSL path; Playwright keeps reading and
+            // cleaning up the original directory. Without wslpath, send it unchanged.
+            void runExec("wslpath", ["-w", downloadPath], 1000)
+              .then(
+                ({ stdout }) => ({
+                  ...command,
+                  params: { ...params, downloadPath: stdout.trim() },
+                }),
+                () => message,
+              )
+              .then((next) => {
+                if (!closingReason && !transportClosed) {
+                  wire.send(normalizer?.send(next) ?? next);
+                }
+              })
+              .catch((error: unknown) => closeTransportSocket(formatErrorMessage(error)));
+            return;
+          }
+        }
         try {
           wire.send(normalizer?.send(message) ?? message);
         } catch (error) {
@@ -276,6 +309,11 @@ export async function connectOverCdpTransport(
                 sendInternalCommand("Target.detachFromTarget", { sessionId: targetSessionId });
               }
               continue;
+            }
+            if (versionCommandId !== undefined && id === versionCommandId) {
+              versionCommandId = undefined;
+              const userAgent = readStringField(asOptionalRecord(parsed.result), "userAgent");
+              windowsBrowser = userAgent?.includes("Windows NT") ?? false;
             }
             if (typeof id === "number") {
               pendingTargetCommands.delete(id);

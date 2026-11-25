@@ -128,12 +128,10 @@ export async function executeFollowupTurn(params: {
       resolveVerboseProgressVisibility: () => progressAllowed() && shouldEmitVerboseToolResult(),
       resolveVerboseProgressVisibilityAsync: async () => {
         turn.operation.abortSignal.throwIfAborted();
-        turn.queued.operatorAuthority?.assertCurrent();
         return progressAllowed() && shouldEmitVerboseToolResult();
       },
     });
   turn.operation.abortSignal.throwIfAborted();
-  turn.queued.operatorAuthority?.assertCurrent();
   let progressChain: Promise<void> = Promise.resolve();
   let visibleReplyDelivered = false;
   const pendingTaskFailures: { progress?: unknown; tool?: unknown } = {};
@@ -474,7 +472,6 @@ export async function executeFollowupTurn(params: {
     if (!accepted || (turn.operation.abortSignal.aborted && !ingressTimedOut)) {
       throw error;
     }
-    turn.queued.operatorAuthority?.assertCurrent();
     if (
       turn.queued.controllerInput?.retirementRequested === true &&
       (turn.queued.controllerClaim?.custody ?? turn.queued.controllerInput.custody).failure ===

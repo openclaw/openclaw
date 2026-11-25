@@ -36,6 +36,7 @@ export function requestModelsList(params: {
   publishedCatalog?: ModelCatalogEntry[];
   catalogComplete?: boolean;
   preparedAuthModes?: PreparedModelRuntimeAuth["authModes"];
+  pluginRegistry?: PreparedGatewayModelCatalogSnapshot["pluginRegistry"];
 }) {
   const respond = vi.fn();
   const runtimeConfig = params.runtimeConfig ?? {};
@@ -56,6 +57,7 @@ export function requestModelsList(params: {
         getPreparedRuntimeAuthProfileStoreSnapshot(agentDir) ??
         loadAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false }),
       metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
+      ...(params.pluginRegistry ? { pluginRegistry: params.pluginRegistry } : {}),
     };
   };
   const loadSnapshot = async (loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0]) => {

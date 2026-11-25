@@ -14,7 +14,7 @@ import {
   getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
-  standaloneRuntimeProcessBuildEntries,
+  standaloneRuntimeProcessBuildGroups,
 } from "./runtime-process-core-build-entries.mts";
 import { createSqliteSchemaAssetsPlugin } from "./sqlite-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
@@ -404,14 +404,11 @@ async function compileVitestWorkerArtifacts(
     if (preset === "tooling") {
       return;
     }
-    for (const [name, source] of Object.entries(entry)) {
-      if (!Object.hasOwn(standaloneRuntimeProcessBuildEntries, name)) {
-        continue;
-      }
+    for (const group of standaloneRuntimeProcessBuildGroups(entry)) {
       await build({
         ...config,
-        entry: { [name]: source },
-        outputOptions: getStandaloneRuntimeProcessOutputOptions(name),
+        entry: group,
+        outputOptions: getStandaloneRuntimeProcessOutputOptions(Object.keys(group)[0]!),
       });
     }
     reportPhase("standalone workers compiled");

@@ -18,10 +18,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Bind the caller and sharing facts once; each consumer applies its own operation policy. */
 export async function prepareSessionSharingAccess(
-  params: Pick<
-    GatewayRequestHandlerOptions,
-    "client" | "context" | "respond" | "signal" | "hasCurrentClientAuthority"
-  > & {
+  params: Pick<GatewayRequestHandlerOptions, "client" | "context" | "respond" | "signal"> & {
     sessionKey: string;
     agentId?: string;
     prepareMembership?: boolean;
@@ -41,14 +38,7 @@ export async function prepareSessionSharingAccess(
   const runAuthority = client?.internal?.operatorRunAuthority;
   const assertCaller = () => {
     params.signal?.throwIfAborted();
-    if (
-      params.hasCurrentClientAuthority?.() === false ||
-      client?.invalidated ||
-      client?.connectionSignal?.aborted ||
-      gatewayClientSessionCreator(client)?.id !== actorId ||
-      getSessionRowProjection(context) !== projection ||
-      client?.internal?.operatorRunAuthority !== runAuthority
-    ) {
+    if (client?.connectionSignal?.aborted || getSessionRowProjection(context) !== projection) {
       callerChanged();
     }
   };
@@ -72,6 +62,7 @@ export async function prepareSessionSharingAccess(
         cfg: policyConfig,
         client,
         isMember: (_target, identityId) => current.membership.has(identityId),
+        memberAccess: (_target, identityId) => current.memberAccess?.[identityId],
       });
       // Synthetic profile and role preparation may invoke authority callbacks.
       const preparedProfile = client?.preparedSessionProfile;
@@ -111,12 +102,7 @@ export async function prepareSessionSharingAccess(
 export async function prepareManagedSessionAccess(
   params: Pick<
     GatewayRequestHandlerOptions,
-    | "client"
-    | "context"
-    | "respond"
-    | "signal"
-    | "hasCurrentClientAuthority"
-    | "sessionMutationAuthorization"
+    "client" | "context" | "respond" | "signal" | "sessionMutationAuthorization"
   > & {
     sessionKey: string;
     agentId?: string;
@@ -126,7 +112,7 @@ export async function prepareManagedSessionAccess(
   const { respond } = params;
   const operation = params.operation ?? "mutation";
   const access = await prepareSessionSharingAccess(params, () => {
-    throw new Error(`session ownership changed before sharing ${operation}`);
+    throw new Error(`The session sharing ${operation} ended. Start a new request to retry.`);
   });
   if (!access) {
     return null;

@@ -150,7 +150,9 @@ export function createGatewayChatUserTurnController(params: {
     ...(request.p.replyToId ? { replyToId: request.p.replyToId } : {}),
     ...(sender ? { sender } : {}),
     ...(sourceClients.length ? { transport: { clients: sourceClients } } : {}),
-    ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
+    ...(admission.operatorAuthority?.grant.owner
+      ? { senderIsOwner: admission.operatorAuthority.grant.owner }
+      : {}),
     provenance:
       request.systemInputProvenance ??
       (params.client?.internal?.syntheticClient ? undefined : { kind: "external_user" }),
@@ -288,10 +290,7 @@ export function createGatewayChatUserTurnController(params: {
       ? { sessionLifecyclePatch: { lastInteractionAt: params.startedAt } }
       : {}),
     errorContext: "gateway chat user turn transcript",
-    assertOriginalInputCommit: composeSessionSourceAssertion([
-      params.assertOriginalInputCommit,
-      admission.operatorAuthority?.assertCurrent,
-    ]),
+    assertOriginalInputCommit: params.assertOriginalInputCommit,
     beforeMessageWrite: (event) => {
       if (recoveredInput) {
         return event.message;
@@ -332,7 +331,7 @@ export function createGatewayChatUserTurnController(params: {
                 }
               : {}),
             ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
-            ...(request.suppressCommandInterpretation
+            ...(request.suppressCommandInterpretation || request.participating
               ? { suppressCommandInterpretation: true }
               : {}),
             ...(request.p.deliver !== undefined || request.explicitOrigin
@@ -391,6 +390,7 @@ export function createGatewayChatUserTurnController(params: {
                     },
                     retained.map((mention) => ({
                       profileId: mention.profileId,
+                      access: mention.access,
                       token: text.slice(mention.start, mention.end),
                     })),
                   );

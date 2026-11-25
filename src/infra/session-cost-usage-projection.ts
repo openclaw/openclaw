@@ -223,6 +223,7 @@ export async function projectCostUsageSummary(
     cachedFiles += 1;
     addRollupToCostUsageSummary({
       rollup: entry.rollup,
+      civilDays: params.dayBucket?.civilDays,
       startMs: params.startMs,
       endMs: params.endMs,
       formatDay,
@@ -341,6 +342,7 @@ export async function projectSessionCostSummaries(
       summaries[index] = {
         ...buildSessionCostSummaryFromRollup({
           rollup: entry.rollup,
+          civilDays: params.dayBucket?.civilDays,
           sessionId: session.sessionId,
           sessionFile: session.sessionFile,
           startMs,

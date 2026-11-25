@@ -277,6 +277,10 @@ export type DiagnosticChildProcessSpawnFields = {
   family: string;
   /** Bounded Git owner or SQLite session/transport; unknown for unattributed Git. */
   operation?: string;
+  transport?:
+    | "broker"
+    | `native.${"no-broker" | "ipc" | "independent" | "descriptor" | "inherit" | "stdio"}`;
+  thread?: "main" | "worker";
   count: number;
   intervalMs: number;
 };

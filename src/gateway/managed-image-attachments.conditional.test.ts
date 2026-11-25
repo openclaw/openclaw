@@ -193,9 +193,11 @@ describe("managed thumbnail conditional HTTP", () => {
     const first = await request(fixture.url);
     expect(first.headers.etag).toBeTypeOf("string");
     for (let index = 0; index < 129; index++) {
-      await resolveManagedImageThumbnail(`conditional-eviction-${index}`, async () =>
-        Buffer.alloc(1),
-      );
+      await resolveManagedImageThumbnail(`conditional-eviction-${index}`, async () => ({
+        data: Buffer.alloc(1),
+        extension: ".webp",
+        mimeType: "image/webp",
+      }));
     }
     const regenerated = await request(fixture.url);
     expect(regenerated.body).toEqual(first.body);

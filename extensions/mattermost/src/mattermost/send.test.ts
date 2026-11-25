@@ -95,6 +95,35 @@ beforeEach(() => {
 });
 
 describe("sendMessageMattermost", () => {
+  it("keeps a named link whole when splitting a file caption at the default limit", async () => {
+    const prose = "The finance team reviewed the April totals and approved the revised figures. "
+      .repeat(54)
+      .slice(0, 3980);
+    const prefix = prose.slice(0, prose.lastIndexOf(" "));
+    const link = "[the final quarterly budget workbook](https://reports.example.test/budget/april)";
+    mockState.createMattermostPost
+      .mockResolvedValueOnce({ id: "caption-first" })
+      .mockResolvedValueOnce({ id: "caption-rest" });
+
+    const result = await sendMessageMattermost(
+      "channel:town-square",
+      `${prefix} ${link} before signing.`,
+      {
+        cfg: TEST_CFG,
+        mediaUrl: "https://example.com/report.pdf",
+        replyToId: "root-post",
+      },
+    );
+
+    const posts = mockState.createMattermostPost.mock.calls.map(([, post]) => post);
+    expect(posts.map((post) => post.message)).toEqual([prefix, `${link} before signing.`]);
+    expect(posts.every((post) => post.message.length <= 4000)).toBe(true);
+    expect(posts.map((post) => post.fileIds)).toEqual([["file-1"], undefined]);
+    expect(posts.map((post) => post.rootId)).toEqual(["root-post", "root-post"]);
+    expect(mockState.uploadMattermostFile).toHaveBeenCalledTimes(1);
+    expect(result.receipt.platformMessageIds).toEqual(["caption-first", "caption-rest"]);
+  });
+
   it.each<[number, string, string]>([
     [404, "Not Found", "missing channel"],
     [503, "Service Unavailable", "upstream returned 404"],

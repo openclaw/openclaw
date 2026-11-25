@@ -63,6 +63,25 @@ describe("sidebar attention projection", () => {
     expect(overdue?.label).toBe("stalled-id");
   });
 
+  it("acknowledges an auto-disable until another run fails", () => {
+    const autoDisabled = {
+      reason: "consecutive-failures" as const,
+      atMs: 150,
+      consecutiveErrors: 1,
+    };
+    const alerts = (lastRunStatus: "ok" | "error", lastRunAtMs: number) =>
+      cronItems([
+        { ...cronJob("archive", { lastRunStatus, lastRunAtMs, autoDisabled }), enabled: false },
+      ]);
+
+    const [failed] = alerts("error", 100);
+    const [recovered] = alerts("ok", 200);
+    const [failedAgain] = alerts("error", 300);
+
+    expect([failed, recovered].map((alert) => alert?.dismissal?.failedAtMs)).toEqual([150, 150]);
+    expect(failedAgain?.dismissal?.failedAtMs).toBe(300);
+  });
+
   it("labels and links automation alerts, ordered by failure then recency", () => {
     const items = cronItems(
       [

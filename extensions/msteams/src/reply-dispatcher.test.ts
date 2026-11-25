@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -17,7 +20,8 @@ const sendMessagesMock = vi.hoisted(() =>
   vi.fn<(typeof import("./messenger.js"))["sendMSTeamsMessages"]>(async () => []),
 );
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("../runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime-api.js")>()),
   createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
   logTypingFailure: vi.fn(),
   resolveChannelMediaMaxBytes: vi.fn(() => 8 * 1024 * 1024),
@@ -75,6 +79,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   function createDispatcher(
@@ -661,6 +666,55 @@ describe("createMSTeamsReplyDispatcher", () => {
       expect.any(Object),
     );
     expect(sendMessagesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads reply media only from agent-scoped local roots", async () => {
+    const { sendMSTeamsMessages } =
+      await vi.importActual<typeof import("./messenger.js")>("./messenger.js");
+    sendMessagesMock.mockImplementation(sendMSTeamsMessages);
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "msteams-reply-media-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const siblingSandboxFile = path.join(stateDir, "sandboxes", "other-session", "secret.png");
+    const agentMediaFile = path.join(stateDir, "media", "reply.png");
+    try {
+      for (const file of [siblingSandboxFile, agentMediaFile]) {
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, png);
+      }
+      renderMessagesMock.mockReturnValue([
+        { mediaUrl: siblingSandboxFile },
+        { mediaUrl: agentMediaFile },
+      ]);
+      const dispatcher = createDispatcher("groupchat", {
+        streaming: { block: { enabled: false } },
+      });
+
+      const result = await dispatcher.send({ mediaUrls: [siblingSandboxFile, agentMediaFile] });
+      const finalization = expect(result?.finalization).rejects.toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        deliveryResult: { visibleReplySent: true, messageIds: ["activity-1"] },
+      });
+      await dispatcher.dispatcherOptions.onSettled?.();
+      await finalization;
+
+      expect(dispatcher.sendActivity).toHaveBeenCalledTimes(1);
+      expect(dispatcher.sendActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachments: [
+            expect.objectContaining({
+              name: "reply.png",
+              contentUrl: `data:image/png;base64,${png.toString("base64")}`,
+            }),
+          ],
+        }),
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("preserves a never-dispatched queued failure for core event suppression", async () => {

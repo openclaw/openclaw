@@ -8,10 +8,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { getActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
+import { prepareProviderModelPolicySurfaces } from "../plugins/provider-model-routes.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
@@ -44,6 +46,8 @@ export type BuildPreparedModelCatalogParams = {
 
 type ManifestModelCatalogCacheEntry = {
   snapshot: PluginMetadataSnapshot;
+  /** The hosted catalog these rows were planned with; a newer publication replans them. */
+  remoteCatalog: ReturnType<typeof getActiveRemoteModelCatalog>;
   rows: ModelCatalogEntry[];
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
@@ -224,8 +228,9 @@ function loadManifestModelCatalogRows(
   if (config.models?.mode === "replace") {
     return [];
   }
+  const remoteCatalog = getActiveRemoteModelCatalog(config);
   const cached = manifestModelCatalogCache.get(config);
-  if (cached?.snapshot === snapshot) {
+  if (cached?.snapshot === snapshot && cached.remoteCatalog === remoteCatalog) {
     return cached.rows;
   }
   const plugins = resolveEligibleManifestCatalogPlugins(snapshot, config);
@@ -256,7 +261,7 @@ function loadManifestModelCatalogRows(
     }
     return entry;
   });
-  manifestModelCatalogCache.set(config, { snapshot, rows });
+  manifestModelCatalogCache.set(config, { snapshot, remoteCatalog, rows });
   return rows;
 }
 
@@ -295,6 +300,7 @@ export async function buildPreparedModelCatalogSnapshot(
     params.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),
   );
   const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
+  await prepareProviderModelPolicySurfaces();
   logStage("catalog-deps-ready");
   const entries = params.models;
   const manifestPlan = planEffectiveModelCatalogRows({

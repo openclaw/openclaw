@@ -428,7 +428,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       sessionId: "source-session",
       updatedAt: 1,
       permissionMode: "read-only",
-      sessionRoot: "/tmp/recall/workspace",
+      sessionRoot: "/tmp/recall/source-root",
     });
     const sessionManager = SessionManager.inMemory("/tmp/recall/workspace");
     await runDispatch({
@@ -454,7 +454,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     });
     expect(grant).toMatchObject({
       runtimePolicySessionKey: "agent:main:source",
-      sessionPermissionPolicy: { mode: "read-only", root: "/tmp/recall/workspace" },
+      sessionPermissionPolicy: { mode: "read-only", root: "/tmp/recall/source-root" },
       senderIsOwner: false,
       inputProvenance: { kind: "internal_system", sourceTool: "session_fork" },
     });

@@ -392,8 +392,8 @@ contract.
 
 Gemini CLI remains available as an explicitly configured runtime for normal
 agents, but Gemini CLI and Antigravity are not inference-gate setup routes.
-Use AI Studio API-key or Vertex AI for the inference gate. The optional Gemini
-CLI runtime specifically requires an AI Studio API-key profile.
+Use a Gemini API key or Vertex AI for the inference gate. The optional Gemini
+CLI runtime specifically requires a Gemini API key profile.
 
 ## Switching to an agent
 

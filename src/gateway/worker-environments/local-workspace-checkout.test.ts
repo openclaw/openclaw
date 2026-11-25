@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as checkoutConfig from "../../agents/worktrees/checkout-git-config.js";
 import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
 import * as worktreeGit from "../../agents/worktrees/git.js";
+import * as commandStdinFile from "../../process/command-stdin-file.js";
 import * as execution from "../../process/exec.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
@@ -313,13 +314,13 @@ it.for(["mkdir", "index-pack"] as const)(
       }
       return pack;
     });
-    const open = fs.open;
-    vi.spyOn(fs, "open").mockImplementation(async (filename, flags, mode) => {
-      const handle = await open(filename, flags, mode);
+    const open = commandStdinFile.openCommandStdinFile;
+    vi.spyOn(commandStdinFile, "openCommandStdinFile").mockImplementation(async (filename) => {
+      const input = await open(filename);
       if (phase === "index-pack" && filename === pack) {
         await retarget();
       }
-      return handle;
+      return input;
     });
     await expect(
       prepareLocalWorkspaceCheckout({

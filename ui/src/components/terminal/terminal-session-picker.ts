@@ -26,7 +26,7 @@ export function createTerminalSessionPicker(deps: {
   const sessions = createMemo<TerminalSessionInfo[]>(() => request().value);
   const loading = () => isPending(sessions);
   let generation = 0;
-  let discoveredTabCount: number | undefined;
+  let discoveredSessionCount: number | undefined;
   let inlineTrigger: HTMLButtonElement | undefined;
   let hostedTrigger: HTMLButtonElement | undefined;
   const trigger = () => (deps.hosted() ? hostedTrigger : inlineTrigger);
@@ -141,9 +141,10 @@ export function createTerminalSessionPicker(deps: {
       return hiddenFor(acceptedSessions);
     },
     syncPresentation() {
-      const count = deps.presented() && deps.standalone() ? deps.tabCount() : 0;
-      const changed = count !== discoveredTabCount;
-      discoveredTabCount = count;
+      const count =
+        deps.presented() && (deps.standalone() || open()) ? deps.currentSessionIds().size : 0;
+      const changed = count !== discoveredSessionCount;
+      discoveredSessionCount = count;
       if (changed && count > 0) {
         void load({ preserveError: true });
       }
@@ -201,7 +202,7 @@ export function createTerminalSessionPicker(deps: {
     },
     reset() {
       generation += 1;
-      discoveredTabCount = undefined;
+      discoveredSessionCount = undefined;
       setOpen(false);
       acceptedSessions = [];
       setRequest({ key: generation, value: acceptedSessions });

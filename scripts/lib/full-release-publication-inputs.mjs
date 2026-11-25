@@ -166,10 +166,28 @@ export function publicationIntentInputs(intent) {
   };
 }
 
+export function validatePublicationArtifactSelection(value) {
+  object(value, ["runId", "runAttempt"], "publication artifact source");
+  if (
+    !/^[1-9][0-9]*$/u.test(value.runId ?? "") ||
+    typeof value.runId !== "string" ||
+    !Number.isSafeInteger(value.runAttempt) ||
+    value.runAttempt < 1
+  ) {
+    throw new Error("Publication artifact source requires an exact parent run and attempt");
+  }
+  return { runId: value.runId, runAttempt: value.runAttempt };
+}
+
 export function normalizePublicationLaneInputs(value) {
   object(
     value,
-    ["extension_test_exclude_patterns_json", "qualification_baselines_json"],
+    [
+      "extension_test_exclude_patterns_json",
+      "qualification_baselines_json",
+      "publication_artifact_source_json",
+      "preflight_first",
+    ],
     "source-admission lane inputs",
   );
   return Object.fromEntries(
@@ -177,7 +195,16 @@ export function normalizePublicationLaneInputs(value) {
       if (typeof raw !== "string" || raw.length > 4096) {
         throw new Error(`invalid ${key}`);
       }
+      if (key === "preflight_first") {
+        if (raw !== "true") {
+          throw new Error("preflight_first must be true when present");
+        }
+        return [key, raw];
+      }
       const entries = JSON.parse(raw);
+      if (key === "publication_artifact_source_json") {
+        return [key, JSON.stringify(validatePublicationArtifactSelection(entries))];
+      }
       if (key === "qualification_baselines_json") {
         return [key, JSON.stringify(validateQualificationBaselines(entries))];
       }
@@ -268,16 +295,36 @@ export function publicationDispatchEnvelope(
   );
 }
 
+export const INITIAL_NPM_PREPARATION_JOB = "Prepare initial release npm artifacts";
+
+export function npmPreparationJobName(inputs) {
+  // Historical plans can predate the envelope. Their single npm producer keeps
+  // its original name; only a recorded scheduling opt-in selects the other slot.
+  const envelope = inputs?.trusted_workflow_json && JSON.parse(inputs.trusted_workflow_json);
+  return envelope?.laneInputs?.preflight_first === "true"
+    ? INITIAL_NPM_PREPARATION_JOB
+    : "Prepare release npm artifacts";
+}
+
 export function dispatchEnvelopeFromInputs(inputs) {
   if (
     Object.hasOwn(inputs, "validation_purpose") ||
     Object.hasOwn(inputs, "publication_selection_json") ||
     Object.hasOwn(inputs, "extension_test_exclude_patterns_json") ||
-    Object.hasOwn(inputs, "qualification_baselines_json")
+    Object.hasOwn(inputs, "qualification_baselines_json") ||
+    Object.hasOwn(inputs, "publication_artifact_source_json") ||
+    Object.hasOwn(inputs, "preflight_first")
   ) {
     throw new Error("source intent must use only the trusted_workflow_json envelope");
   }
-  return decodePublicationDispatchEnvelope(inputs.trusted_workflow_json);
+  const envelope = decodePublicationDispatchEnvelope(inputs.trusted_workflow_json);
+  if (
+    envelope.laneInputs?.preflight_first === "true" &&
+    (envelope.validationPurpose !== "publish" || inputs.rerun_group !== "all")
+  ) {
+    throw new Error("preflight_first requires validation_purpose=publish and rerun_group=all");
+  }
+  return envelope;
 }
 
 export {

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Context, Model, Tool } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
+import { writerState } from "../provider-state.test-support.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
@@ -60,6 +61,7 @@ describeLive("native HTTP Responses continuation with current tools", () => {
         const options = {
           apiKey,
           sessionId,
+          ...writerState(sessionId),
           transport: "sse",
           reasoningEffort: "low",
           onPayload: (payload) => ({

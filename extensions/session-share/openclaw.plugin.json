@@ -12,11 +12,11 @@
     },
     "share.involvingProfileId": {
       "label": "Involving Person",
-      "help": "Optional exact source-local profile ID (including merge aliases). Narrows the required shared groups to canonical owners or profile participants. Mentions alone, names, and logins do not match."
+      "help": "Exact source-local profile ID (including merge aliases), optional for node sharing and required for Gateway publication. Narrows the shared groups to canonical owners or profile participants. Mentions alone, names, and logins do not match."
     },
     "share.gateway": {
       "label": "Serve Gateway Session Reads",
-      "help": "Allow explicitly granted paired devices to read selected groups AND the canonical person with the closed publication-read scope."
+      "help": "Allow explicitly granted paired devices to read selected groups AND the configured canonical person with the closed publication-read scope. Request relationship filters can only narrow that selection."
     },
     "gateways": {
       "label": "Outbound Gateway Sources",

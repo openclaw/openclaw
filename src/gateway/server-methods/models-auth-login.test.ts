@@ -502,28 +502,21 @@ describe("models.authLogin ownership", () => {
     expectReply(await h.start(), { sessionId: "login", status: "running" });
   });
 
-  it.each(["owner", "method"])(
-    "rejects the pre-write callback after %s authority changes",
-    async (changed) => {
-      const h = harness();
-      const release = gate();
-      let wrote = false;
-      void mockLogin(async (options) => {
-        await release.promise;
-        await options.beforePersistentEffect?.();
-        wrote = true;
-      }, false);
-      const session = await h.begin();
-      if (changed === "owner") {
-        h.client.invalidated = true;
-      } else {
-        hooks.choice.mockReturnValue({ ...choice, methodId: "other-method" });
-      }
-      release.resolve();
-      await whenAdmittedWizardSessionSettled(session);
-      expect(session.getStatus()).toBe("error");
-      expect(session.getError()).toMatch(/no longer/);
-      expect(wrote).toBe(false);
-    },
-  );
+  it("rejects the pre-write callback after the login method changes", async () => {
+    const h = harness();
+    const release = gate();
+    let wrote = false;
+    void mockLogin(async (options) => {
+      await release.promise;
+      await options.beforePersistentEffect?.();
+      wrote = true;
+    }, false);
+    const session = await h.begin();
+    hooks.choice.mockReturnValue({ ...choice, methodId: "other-method" });
+    release.resolve();
+    await whenAdmittedWizardSessionSettled(session);
+    expect(session.getStatus()).toBe("error");
+    expect(session.getError()).toMatch(/no longer/);
+    expect(wrote).toBe(false);
+  });
 });

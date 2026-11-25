@@ -260,7 +260,7 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
           "modelOverride",
           "providerOverride",
         ],
-        errorMessage: "Session workspace authority changed during sandbox preparation.",
+        errorMessage: "Session workspace preparation ended. Retry the action.",
       });
       try {
         const sessionEntry = prepared.entry;

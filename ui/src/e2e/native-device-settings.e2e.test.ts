@@ -95,8 +95,8 @@ suite.define(() => {
             const style = getComputedStyle(anchor);
             const ringStart =
               anchor.getBoundingClientRect().left -
-              parseFloat(style.outlineWidth) -
-              parseFloat(style.outlineOffset);
+              Number.parseFloat(style.outlineWidth) -
+              Number.parseFloat(style.outlineOffset);
             return (
               anchor.matches(":focus-visible") &&
               (getComputedStyle(header).overflowX === "visible" ||

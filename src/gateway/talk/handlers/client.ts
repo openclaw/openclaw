@@ -381,10 +381,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)) };
         }
         const normalizedTalk = request.context.getRuntimeConfig().talk;
-        const authority = resolveTalkAgentConsultAuthority(
-          request.client?.connect?.scopes,
-          request.client,
-        );
+        const authority = resolveTalkAgentConsultAuthority(request.client);
         // Only an explicitly requested voice ID scopes replay. An implicit record
         // may be regenerated after close/reconnect; chat still owns that call's replay.
         const idempotencyKey =
@@ -470,9 +467,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             transferGatewayOperatorSourceIdentity(request.client, chatSendOptions.client);
           }
           // Speech owns normal history; detached transports leave the accepted answer to Chat.
+          // Hide the generated prompt from chat, but retain it in model history after dispatch
+          // so later requests preserve the session prefix (as native consults already do).
           const chatSendResult = handleTrustedInternalChatSend(chatSendOptions, undefined, {
             toolsAllow: authority.toolsAllow,
-            transcript: { display: false, excludeFromContext: true },
+            transcript: { display: false },
             prepareAssistantTranscriptMessage: (assistantMessage, sourceText) =>
               (relayRegistration?.prepareTranscript ?? prepareTalkAgentConsultTranscript)(
                 assistantMessage,
@@ -682,7 +681,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
               sessionTarget: target,
               source: runTarget.toolAuthoritySource,
               authority: {
-                ...resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+                ...resolveTalkAgentConsultAuthority(client),
                 operatorAuthority: captured?.authority,
               },
             }),

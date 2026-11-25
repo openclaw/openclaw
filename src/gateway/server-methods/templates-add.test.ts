@@ -365,29 +365,6 @@ it.each(["matching", "stale"] as const)(
   },
 );
 
-it("guards live authority while leaving post-admission Templates availability policy to the Add service", async () => {
-  let authorized = true;
-  const revoked = await applyThrough(
-    (input) => {
-      authorized = false;
-      input.assertCurrent();
-    },
-    { hasCurrentClientAuthority: () => authorized },
-  );
-  expect(revoked[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
-
-  let templatesEnabled = true;
-  applyAdd.mockImplementation(async (input) => {
-    templatesEnabled = false;
-    input.assertCurrent();
-    return complete;
-  });
-  const switchedOff = await callAdd("apply", () =>
-    templatesEnabled ? enabled : { gateway: { controlUi: { experimental: { templates: false } } } },
-  );
-  expect(switchedOff).toEqual([[true, complete]]);
-});
-
 it("blocks Add when persisted Templates availability is off despite a stale Gateway cache", async () => {
   readPolicy.mockResolvedValue({ gateway: { controlUi: { experimental: { templates: false } } } });
 
@@ -495,43 +472,6 @@ it("rolls back only the unchanged new agent and its scheduled work", async () =>
   );
   expect(request[0]?.[0]).toBe(true);
 });
-
-it.each(["scratch", "enable"] as const)(
-  "rechecks live Add authority at the %s commit",
-  async (operation) => {
-    let authorized = true;
-    const persisted = vi.fn();
-    const cron = makeCron({
-      writeScratch: vi.fn(async (_id, options) => {
-        authorized = false;
-        options.commitGuard();
-        persisted();
-        return { ok: true };
-      }),
-      updateWithPrecondition: vi.fn(async (_id, _patch, _precondition, options) => {
-        authorized = false;
-        options.commitGuard();
-        persisted();
-      }),
-    });
-    const request = await applyThrough(
-      async (input) => {
-        if (operation === "scratch") {
-          await input.cronGateway!.writeScratch!("job-1", "Checklist", () => {});
-        } else {
-          await input.cronGateway!.enable!("job-1", "reviewed-revision", () => {});
-        }
-      },
-      {
-        cron,
-        hasCurrentClientAuthority: () => authorized,
-      },
-    );
-
-    expect(persisted).not.toHaveBeenCalled();
-    expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
-  },
-);
 
 it("keeps the new agent when another automation appears before rollback", async () => {
   const cron = makeCron({

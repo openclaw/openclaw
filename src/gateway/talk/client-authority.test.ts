@@ -38,11 +38,10 @@ afterEach(() => {
 
 function clientAuthority(client: ReturnType<typeof sharingPolicyClient>) {
   return {
-    ...resolveTalkAgentConsultAuthority(client.connect.scopes, client),
+    ...resolveTalkAgentConsultAuthority(client),
     operatorAuthority: createTestOperatorAuthority({
       profileId: "talk-requester",
       scopes: client.connect.scopes ?? [],
-      assertCurrent: () => {},
     }),
   };
 }

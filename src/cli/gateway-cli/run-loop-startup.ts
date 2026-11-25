@@ -1,4 +1,5 @@
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayServerOptions, GatewayStartupOperation } from "../../gateway/server-public.js";
 import type { startGatewayServer } from "../../gateway/server.js";
@@ -101,6 +102,7 @@ export type GatewayRunLoopParams = {
   lockPort?: number;
   lifecycleLockDeadlineMs?: number;
   healthHost?: string;
+  healthConfig?: OpenClawConfig;
   beginBoot?: (
     startedAtMs: number,
     previousOwner?: { pid: number; heartbeatAt?: number },

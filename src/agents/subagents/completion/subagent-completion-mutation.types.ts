@@ -2,16 +2,6 @@ import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announ
 import type { RequesterSettleWakeBatchState } from "../announce/subagent-announce.requester-settle-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
-export type BlockSubagentCompletionRequest = {
-  subagent: SubagentRunRecord;
-  reason: string;
-  operatorAuthorityUnavailable?: true;
-  enqueuedAt?: number;
-  suspendedReason?: "expiry" | "permanent_failure";
-  lastDropReason?: NonNullable<SubagentRunRecord["delivery"]>["lastDropReason"];
-  disposition?: NonNullable<SubagentRunRecord["delivery"]>["disposition"];
-};
-
 export type RequesterWakeMutation =
   | {
       kind: "requesterDelivery";
@@ -31,7 +21,7 @@ export type RequesterWakeCommittedWrite = {
 
 export type SubagentCompletionMutation =
   | { kind: "settle"; queueId: string; expected: SubagentRunRecord; subagent: SubagentRunRecord }
-  | { kind: "block"; params: BlockSubagentCompletionRequest; now: number }
+  | { kind: "settleInHistory"; subagent: SubagentRunRecord; now: number }
   | { kind: "reconcileCancelled"; expected: SubagentRunRecord; now: number }
   | {
       kind: "requesterWake";

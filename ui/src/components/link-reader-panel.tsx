@@ -35,8 +35,6 @@ import { Menu } from "./solid/menu.tsx";
 import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
 import { PanelIconButton } from "./solid/panel-icon-button.tsx";
 
-const panelStyles = `@scope (openclaw-link-reader-panel) { ${linkReaderViewStyles.map((style) => style.replace(/:host\(([^)]+)\)/gu, ":scope$1").replaceAll(":host", ":scope")).join("\n")} }`;
-
 function NewReaderTabAction(props: { view: () => LinkReaderPanelOwner; internal?: boolean }) {
   const label = () => t("linkReader.newTab");
   return (
@@ -179,14 +177,6 @@ function PanelView(
     hostedTabs: { configurable: true, get: () => owner.hostedTabs() },
     activeHostedTabId: { configurable: true, get: () => owner.state.activeId },
   });
-  const bridgePrototype = Object.getPrototypeOf(host);
-  Object.defineProperty(host, "updateComplete", {
-    configurable: true,
-    get: () =>
-      Promise.resolve(Reflect.get(bridgePrototype, "updateComplete", host)).then(() =>
-        host.isConnected ? owner.updateComplete : false,
-      ),
-  });
   onSettled(() => {
     let disposed = false;
     const connect = () => {
@@ -314,7 +304,7 @@ function PanelView(
   );
   return (
     <>
-      <style>{panelStyles}</style>
+      <style>{linkReaderViewStyles}</style>
       {tab() && !props.suppressed && (props.embedded || view().dockLayout.open) ? (
         <section
           class={["bp", props.embedded ? "bp--embedded" : "bp--right", "link-reader-panel"]}
@@ -579,6 +569,7 @@ export const LinkReaderPanel = defineSolidBridge<LinkReaderPanelProps, Methods>(
   PanelView,
   {
     propertyChanged: (host) => owners.get(host)?.inputsChanged(),
+    updateComplete: (host) => (host.isConnected ? owners.get(host)?.updateComplete : false),
     properties: {
       client: { default: null, attribute: false },
       available: { default: false },

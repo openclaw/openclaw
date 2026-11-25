@@ -259,7 +259,7 @@ describe("plugin background completions", () => {
         authenticatedUserProfile: { ...operatorProfile, profileId: profile.id },
       });
       await expect(completeScoped(client)).rejects.toThrow(
-        'Your operator role cannot create sessions for agent "research"',
+        'I did not start a session with agent "research"',
       );
       expect(isolated).not.toHaveBeenCalled();
       await expect(completeScoped(client, { agentId: "main" })).resolves.toEqual({
@@ -320,7 +320,6 @@ describe("plugin background completions", () => {
             await expect(result).rejects.toThrow("operator role cannot use this model");
             expect(isolated).not.toHaveBeenCalled();
           }
-          expect(source.authority.assertCurrent).not.toThrow();
         } finally {
           source.release();
         }

@@ -355,6 +355,7 @@ export function markdownToWhatsAppChunks(
       return [ir];
     }
     const chunkTexts = chunkMarkdownTextWithMode(ir.text, limit, chunkMode);
+    const codeBlocks = ir.styles.filter((span) => span.style === "code_block");
     const chunks: MarkdownIR[] = [];
     let cursor = 0;
     for (const chunkText of chunkTexts) {
@@ -363,7 +364,11 @@ export function markdownToWhatsAppChunks(
         return [ir];
       }
       const end = start + chunkText.length;
-      chunks.push(sliceMarkdownIR(ir, start, end));
+      // Prose chunking consumes break whitespace. Inside a code block the gap
+      // belongs to the source, including cell content and table padding.
+      const keepSeparator =
+        start > cursor && codeBlocks.some((span) => span.start <= cursor && start <= span.end);
+      chunks.push(sliceMarkdownIR(ir, keepSeparator ? cursor : start, end));
       cursor = end;
     }
     return chunks;

@@ -376,7 +376,7 @@ describe("shared publication to a prepared original PR", () => {
           requester: f.guest,
           assertCurrent: () => f.guest.assertCurrent(),
         }),
-      ).rejects.toThrow("Link a verified");
+      ).rejects.toThrow("Your Gateway profile has no linked GitHub account");
       f.expectPublished(await f.publish("maintainer-assistance"));
       expect(
         await f.coordinator.latestPublishedShared(f.publicationSession, undefined),

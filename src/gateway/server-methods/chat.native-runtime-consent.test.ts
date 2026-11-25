@@ -237,3 +237,33 @@ it.each(["authority", "mandatory policy", "competing entry"] as const)(
       });
     }),
 );
+
+it("binds first-send consent for a thread that inherits its parent's native model", () =>
+  withNative(async (config, client) => {
+    const parentKey = "agent:main:dashboard:native-parent";
+    const sessionKey = `${parentKey}:thread:first-send`;
+    config.agents!.defaults!.models!["acp-opencode/inherited"] = {
+      agentRuntime: { id: "acp-opencode" },
+    };
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey: parentKey,
+      entry: {
+        sessionId: "native-parent-session",
+        updatedAt: Date.now(),
+        providerOverride: "acp-opencode",
+        modelOverride: "inherited",
+        modelOverrideSource: "user",
+      },
+    });
+    const { respond, send } = sendNative(config, client, sessionKey, false);
+    await send();
+    restricted(respond, "tool-policy");
+    const persisted = expectDefined(
+      entries().find((row) => row.sessionKey === sessionKey)?.entry,
+      "real consent-bound session",
+    );
+    expect(respond.mock.calls[0]?.[2]?.details).toMatchObject({
+      recovery: { sessionId: persisted.sessionId },
+    });
+  }));
