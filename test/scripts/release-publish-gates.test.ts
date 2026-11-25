@@ -103,6 +103,21 @@ const policyCases: PolicyRow[] = [
     },
     "selected-lanes",
   ],
+  ...(["publisher", "stable-closeout"] as const).map((consumer): PolicyRow => [
+    "published failed selected job/" + consumer,
+    {
+      childEvidence: {
+        normalCi: {
+          runId: "42",
+          jobs: [{ name: "checks-node-shard-1", status: "completed", conclusion: "failure" }],
+        },
+      },
+      advisoryJobs: [],
+    },
+    // Closeout trusts the successful publisher's Q policy verdict instead of re-judging it.
+    consumer === "publisher" ? "selected-lanes" : [],
+    { consumer },
+  ]),
 ];
 function checkPolicy(changes: Evidence, expected: Outcome, input?: Partial<GateInput>) {
   const gates = evaluate(changes, input);

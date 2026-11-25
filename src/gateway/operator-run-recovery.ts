@@ -9,6 +9,7 @@ import {
 } from "../shared/operator-scope-compat.js";
 import {
   decideOperatorAdmission,
+  decideTurnGrant,
   prepareOperatorAdmission,
   type OperatorAdmissionContext,
 } from "./operator-admission.js";
@@ -140,11 +141,16 @@ export async function captureGatewayOperatorContinuation(
     context,
     assertCurrent: () => {},
   });
+  const scopes = intersectOperatorScopes(
+    restored.authority.scopes,
+    input.client?.connect.scopes ?? [],
+  );
   const authority = createAdmittedRunOperatorAuthority({
     ...restored.authority,
     // One origin keeps one comparable source identity, as completion batches require.
     source: inherited.source,
-    scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
+    scopes,
+    grant: decideTurnGrant(scopes),
   });
   return { authority, release: restored.release };
 }

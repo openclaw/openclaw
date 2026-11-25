@@ -31,6 +31,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [input],
   })),
   {
+    // A Node-only suite must execute, not silently skip, when its runtime policy changes.
+    testFile: "src/infra/git-release.test.ts",
+    watchGlobs: ["scripts/lib/ci-test-runtime.mts"],
+  },
+  {
     // Scenario coverage and taxonomy are filesystem inventories, not imports.
     testFile: "extensions/qa-lab/src/coverage-report.test.ts",
     watchGlobs: ["qa/scenarios/**", "taxonomy.yaml"],
