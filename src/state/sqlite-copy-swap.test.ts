@@ -71,6 +71,10 @@ function droppedUserColumns(source: string, report: { droppedColumns: string[] }
 
 describe.each(releases)("generic rebuild of %s", (release) => {
   const stateDir = path.join(corpusDir, release, "state");
+  const manifest: {
+    verification: Record<string, Array<{ value: string; found_in?: string[] }>>;
+  } = JSON.parse(fs.readFileSync(path.join(corpusDir, release, "manifest.json"), "utf8"));
+  const verification = Object.values(manifest.verification).flat();
   const databases = [
     { file: path.join(stateDir, "state", "openclaw.sqlite"), agentId: undefined },
     ...fs
@@ -83,7 +87,7 @@ describe.each(releases)("generic rebuild of %s", (release) => {
   ];
 
   it.each(databases.map((entry) => [path.relative(stateDir, entry.file), entry] as const))(
-    "%s keeps every row and leaves the source unchanged",
+    "%s keeps the corpus records and leaves the source unchanged",
     (_name, { file, agentId }) => {
       // The source is opened read-only; a writable copy keeps its WAL out of the fixture.
       const source = path.join(tempDir(), "source.sqlite");
@@ -111,6 +115,35 @@ describe.each(releases)("generic rebuild of %s", (release) => {
       ).toEqual([]);
       const built = new DatabaseSync(out, { readOnly: true });
       try {
+        const prefix = `${path.relative(stateDir, file).split(path.sep).join("/")}:`;
+        const field = !agentId
+          ? "cron_jobs.job_id"
+          : verification.some((entry) =>
+                entry.found_in?.includes(`${prefix}session_nodes.session_key`),
+              )
+            ? "session_nodes.session_key"
+            : "auth_profile_store.store_json";
+        const expected = [
+          ...new Set(
+            verification
+              .filter((entry) => entry.found_in?.includes(`${prefix}${field}`))
+              .map((entry) => entry.value),
+          ),
+        ];
+        expect(expected, `${release}/${prefix}${field}`).not.toHaveLength(0);
+        const [table, column] = field.split(".");
+        const actual = built
+          .prepare(`SELECT "${column}" AS value FROM "${table}" ORDER BY "${column}"`)
+          .all()
+          .map((row) => row.value);
+        if (field === "auth_profile_store.store_json") {
+          expect(actual).toHaveLength(1);
+          for (const value of expected) {
+            expect(actual[0]).toContain(value);
+          }
+        } else {
+          expect(actual).toEqual(expected.toSorted());
+        }
         expect(built.prepare("PRAGMA user_version").get()).toEqual({
           user_version: agentId ? OPENCLAW_AGENT_SCHEMA_VERSION : OPENCLAW_STATE_SCHEMA_VERSION,
         });

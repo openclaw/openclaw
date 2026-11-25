@@ -581,7 +581,12 @@ export async function createVerifiedSqliteSnapshot(
           options.onProgress,
         );
       }),
-    );
+    ).catch((error: unknown) => {
+      throw new Error(
+        `SQLite database cannot be snapshotted safely: ${options.sourcePath}. ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
+    });
     return withPreparedSqliteSnapshot(prepared, async (privateSourcePath) => {
       if (options.onStage) {
         options.onStage("online-copy", "done", (await fs.stat(privateSourcePath)).size);
