@@ -104,6 +104,12 @@ function visit(dir, packageDirectory = false) {
             fs.rmSync(path.join(dir, "bin", command + suffix), { force: true });
           }
         }
+        // npm's bundled documentation HTML is only installation source. macOS
+        // QuickLook thumbnails every .html it finds while Sparkle stages a new
+        // bundle, spawning one WebContent.EnhancedSecurity process per file and
+        // driving 8-core load averages past 200 during auto-update (#205153).
+        // Nothing in the sealed runtime reads it.
+        fs.rmSync(path.join(dir, "docs"), { recursive: true, force: true });
       }
     }
   }
