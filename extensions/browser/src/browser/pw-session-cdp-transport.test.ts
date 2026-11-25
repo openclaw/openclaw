@@ -1,11 +1,22 @@
-import { chromium } from "playwright-core";
+import { EventEmitter } from "node:events";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
+import { chromium, type ConnectOverCDPTransport } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { openCdpWebSocket } from "./cdp.helpers.js";
 import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
+
+vi.mock("openclaw/plugin-sdk/process-runtime", { spy: true });
+vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
+vi.mock("./cdp.helpers.js", { spy: true });
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 
 afterEach(() => {
   connectOverCdpSpy.mockReset();
+  vi.mocked(openCdpWebSocket).mockReset();
+  vi.mocked(runExec).mockReset();
+  vi.mocked(isWSL2Sync).mockReset();
 });
 
 function mockPageInitializationFailure(
@@ -92,4 +103,38 @@ describe("Playwright CDP initialization diagnostics", () => {
       }),
     ).rejects.toThrow("Timeout 1000ms exceeded");
   });
+});
+
+it("gives Windows Chrome a Windows download path from WSL2", async () => {
+  const localPath = "/tmp/playwright-artifacts-test";
+  const windowsPath = String.raw`\\wsl.localhost\Ubuntu\tmp\playwright-artifacts-test`;
+  vi.mocked(isWSL2Sync).mockReturnValue(true);
+  vi.mocked(runExec).mockResolvedValue({ stdout: `${windowsPath}\n`, stderr: "" });
+  const socket = new EventEmitter();
+  const send = vi.fn((raw: string) => {
+    const { id, method } = JSON.parse(raw);
+    const result = method === "Browser.getVersion" ? { userAgent: "(Windows NT 10.0)" } : {};
+    socket.emit("message", JSON.stringify({ id, result }));
+  });
+  vi.mocked(openCdpWebSocket).mockImplementationOnce(() => {
+    queueMicrotask(() => socket.emit("open"));
+    return Object.assign(socket, { send, close: vi.fn() }) as never;
+  });
+  const params = { behavior: "allowAndName", downloadPath: localPath, eventsEnabled: true };
+  connectOverCdpSpy.mockImplementationOnce((async (transport: ConnectOverCDPTransport) => {
+    for (const [id, method] of [
+      [1, "Browser.getVersion"],
+      [2, "Browser.setDownloadBehavior"],
+    ] as const) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      Object.assign(transport, { onmessage: () => resolve() });
+      transport.send({ id, method, params });
+      await promise;
+    }
+    return {};
+  }) as never);
+
+  await connectOverCdpTransport("ws://127.0.0.1:18799", { timeout: 1000, headers: {} });
+  expect(JSON.parse(send.mock.lastCall![0]).params.downloadPath).toBe(windowsPath);
+  expect(params.downloadPath).toBe(localPath);
 });
