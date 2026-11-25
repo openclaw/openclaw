@@ -1250,6 +1250,16 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     async ({ name, switchOptions, expectedOverride }) => {
       if (name === "runtime") {
         setupBareStoredSession({ agentRuntimeOverride: "openclaw" });
+      } else if (name === "auth") {
+        setupBareStoredSession({
+          authProfileOverride: "anthropic:delegated",
+          authProfileOverrideSource: "user",
+          authProfileOverrideRequired: true,
+        });
+        state.authProfileStoreMock.profiles["anthropic:delegated"] = createApiKeyCredential(
+          "anthropic",
+          "synthetic-delegated",
+        );
       }
       setupModelSwitchRetry(switchOptions);
       state.runAgentAttemptMock.mockResolvedValue(
@@ -1276,6 +1286,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         });
       }
       expectAttempt({ deferTerminalLifecycle: true });
+      if (name === "auth") {
+        const lastAttempt = state.runAgentAttemptMock.mock.calls.at(-1)?.[0] as
+          | AgentAttemptParams
+          | undefined;
+        expect(lastAttempt?.sessionEntry?.authProfileOverride).toBe("profile-99");
+        expect(lastAttempt?.sessionEntry?.authProfileOverrideRequired).toBeUndefined();
+      }
       const calls = state.emitAgentEventMock.mock.calls;
       const phase = (call: unknown[]) => {
         const event = call[0] as { stream?: string; data?: { phase?: string } };

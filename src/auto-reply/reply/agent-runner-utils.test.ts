@@ -213,6 +213,26 @@ describe("agent-runner-utils", () => {
     expect(resolved.conversationToolPolicy).toEqual({ deny: ["exec"] });
   });
 
+  it.each(["openai", "anthropic"])(
+    "keeps a required reply credential scoped on %s",
+    async (provider) => {
+      const run = makeRun({
+        authProfileId: "profile-openai",
+        authProfileIdSource: "user",
+        authProfileRequired: true,
+      });
+      const attempt = buildExecution({ run, provider, model: "gpt-4.1-mini" });
+      if (provider === "openai") {
+        await expect(attempt).resolves.toMatchObject({
+          authProfileId: "profile-openai",
+          allowAuthProfileFallback: false,
+        });
+      } else {
+        await expect(attempt).rejects.toMatchObject({ code: "selected_auth_profile_unavailable" });
+      }
+    },
+  );
+
   it("builds embedded contexts and scopes auth profile by provider", async () => {
     const run = makeRun({
       authProfileId: "profile-openai",

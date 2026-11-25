@@ -57,6 +57,8 @@ export type QueuedAgentRunParams = {
   toolOverrides?: SessionToolOverrides;
   skillsSnapshot?: SkillSnapshot;
   authProfileId?: string;
+  /** Exact profile inherited from an explicitly delegated native child model. */
+  authProfileRequired?: true;
   thinkLevel?: ThinkLevel;
   /** Run-scoped selection intent for declared chat-template effort. */
   thinkingExplicit?: boolean;

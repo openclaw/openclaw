@@ -158,8 +158,12 @@ describe("executeAgentTurn: session state", () => {
       .mockResolvedValueOnce(success("finally ok", "gpt-5.4"));
 
     const followupRun = createFollowupRun();
+    followupRun.run.authProfileId = "profile-a";
+    followupRun.run.authProfileIdSource = "user";
+    followupRun.run.authProfileRequired = true;
     const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
 
+    expect(followupRun.run.authProfileRequired).toBeUndefined();
     expect(result.kind).toBe("success");
     expect(followupRun.run).toMatchObject({
       provider: "openai",

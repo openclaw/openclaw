@@ -166,6 +166,16 @@ export function projectSessionCreateSpawnModelSelection(params: {
 }): Partial<SessionEntry> {
   // Match the requested model before using the patch owner's canonical selection.
   const selection = params.creation?.spawnModelAutoSelection;
+  const requestedProfile = splitTrailingAuthProfile(params.requestedModel ?? "").profile;
+  if (
+    params.createdNewEntry &&
+    params.creation?.via === "spawn" &&
+    !selection &&
+    requestedProfile &&
+    requestedProfile === params.entry.authProfileOverride
+  ) {
+    return { authProfileOverrideRequired: true };
+  }
   if (!params.createdNewEntry || !selection || selection.model !== params.requestedModel) {
     return {};
   }

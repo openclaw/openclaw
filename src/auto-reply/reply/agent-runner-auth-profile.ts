@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { createSelectedAuthProfileUnavailableError } from "../../agents/auth-profiles/selection-error.js";
 import {
   resolveProviderIdForAuth,
   type ProviderAuthAliasLookupParams,
@@ -10,7 +11,11 @@ export function resolveRunAuthProfile(
   run: FollowupRun["run"],
   provider: string,
   params?: { config?: ProviderAuthAliasLookupParams["config"] },
-): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
+): {
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  allowAuthProfileFallback?: false;
+} {
   const {
     provider: primaryProvider,
     authProfileId: requestedAuthProfileId,
@@ -23,10 +28,18 @@ export function resolveRunAuthProfile(
     (providerId !== "" && providerId === primaryProviderId) ||
     resolveProviderIdForAuth(provider, aliasParams) ===
       resolveProviderIdForAuth(primaryProvider, aliasParams);
+  if (run.authProfileRequired && requestedAuthProfileId && !sharesAuthScope) {
+    throw createSelectedAuthProfileUnavailableError({
+      profileId: requestedAuthProfileId,
+      provider,
+      modelId: run.model,
+    });
+  }
   const authProfileId = sharesAuthScope ? requestedAuthProfileId : undefined;
   return {
     authProfileId,
     authProfileIdSource: authProfileId ? authProfileIdSource : undefined,
+    ...(run.authProfileRequired ? { allowAuthProfileFallback: false as const } : {}),
   };
 }
 
@@ -40,6 +53,7 @@ export function resolveFallbackCandidateRun(
   const isPrimaryProbeCandidate = probe && provider === probe.provider && model === probe.model;
   if (
     !probe ||
+    run.authProfileRequired ||
     provider !== probe.fallbackProvider ||
     isPrimaryProbeCandidate ||
     !probe.fallbackAuthProfileId

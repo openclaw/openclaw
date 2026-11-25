@@ -135,6 +135,7 @@ async function executeAgentTurnInternalLoop(
     run.model = err.model;
     run.authProfileId = err.authProfileId;
     run.authProfileIdSource = err.authProfileId ? err.authProfileIdSource : undefined;
+    run.authProfileRequired = undefined;
     run.autoFallbackPrimaryProbe = undefined;
     // Keep runtime paired with the error's model/auth winner even if the
     // active in-memory session snapshot lags the persisted directive write.
