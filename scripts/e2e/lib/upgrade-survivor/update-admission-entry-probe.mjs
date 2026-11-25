@@ -20,9 +20,13 @@ let packageRoot = selectedRoot;
 if (route === "resident") {
   const prefix = path.join(stateDir, "git-install");
   assert.equal(selectedRoot, path.join(prefix, "openclaw"));
-  const target = fs.readlinkSync(selectedRoot);
-  assert.match(target, /^releases\/[a-z0-9-]+\/openclaw$/u, "Unexpected resident release target");
-  packageRoot = path.join(prefix, target);
+  packageRoot = path.resolve(prefix, fs.readlinkSync(selectedRoot));
+  const relativeTarget = path.relative(prefix, packageRoot);
+  assert.match(
+    relativeTarget,
+    /^releases\/[a-z0-9-]+\/openclaw$/u,
+    "Unexpected resident release target",
+  );
 } else {
   assert.equal(route, "legacy");
   assert.equal(selectedRoot, path.join(runtimeRoot, "npm-prefix/lib/node_modules/openclaw"));
