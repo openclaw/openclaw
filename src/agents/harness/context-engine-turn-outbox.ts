@@ -6,7 +6,24 @@ import type {
 } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../context-engine/types.js";
+import type {
+  ContextEngine,
+  ContextEnginePromptCacheInfo,
+  ContextEngineSessionTarget,
+} from "../../context-engine/types.js";
+import type { QueuedOperatorRecoverySource } from "../../gateway/operator-run-recovery-source.codec.js";
+
+export type ContextEngineTurnAttemptFacts = {
+  boundary: TranscriptTurnBoundary;
+  sessionIdUsed: string;
+  sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
+  promptError: boolean;
+  aborted: boolean;
+  yieldAborted: boolean;
+  runtimeContext?: ContextEngineTurnRuntimeContext;
+  operatorSource?: QueuedOperatorRecoverySource;
+};
 
 type PendingContextEngineTurn = Readonly<{
   advancement_key: string;
@@ -33,6 +50,8 @@ export type AcceptedContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
   state: "accepted";
   runtimeContext?: ContextEngineTurnRuntimeContext;
+  /** Host-only original source; never included in plugin hook arguments. */
+  operatorSource?: QueuedOperatorRecoverySource;
 }>;
 
 export type ReadyContextEngineTurnOutboxPayload = Readonly<{
@@ -40,6 +59,8 @@ export type ReadyContextEngineTurnOutboxPayload = Readonly<{
   messages: AgentMessage[];
   state: "ready";
   runtimeContext?: ContextEngineTurnRuntimeContext;
+  /** Host-only original source; never included in plugin hook arguments. */
+  operatorSource?: QueuedOperatorRecoverySource;
 }>;
 
 export type ContextEngineTurnReadFailureKind = Exclude<
@@ -113,7 +134,10 @@ export async function drainContextEngineTurnOutbox(params: {
   sessionId?: string;
   limit?: number;
   /** Observe acknowledged turns without changing durable advancement on observer failure. */
-  onCommitted?: (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]) => void;
+  onCommitted?: (
+    turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0],
+    operatorSource?: QueuedOperatorRecoverySource,
+  ) => void;
   warn: (message: string) => void;
 }): Promise<{ pending: boolean }> {
   return params.store.retain
@@ -160,7 +184,10 @@ async function drainRetainedContextEngineTurnOutbox(
 
 async function commitPendingContextEngineTurn(params: {
   engine: ContextEngine;
-  onCommitted?: (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]) => void;
+  onCommitted?: (
+    turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0],
+    operatorSource?: QueuedOperatorRecoverySource,
+  ) => void;
   row: PendingContextEngineTurn;
   store: ContextEngineTurnOutboxStore;
   warn: (message: string) => void;
@@ -206,7 +233,7 @@ async function commitPendingContextEngineTurn(params: {
     // Notification is best effort after acknowledgment; its failure must never requeue a commit.
     try {
       params.store.assertReadable?.();
-      params.onCommitted?.(commonParams);
+      params.onCommitted?.(commonParams, payload.operatorSource);
     } catch (error) {
       params.warn(
         `[context-engine] committed turn notification failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -255,6 +282,8 @@ export type ContextEngineTurnOutboxWorkerOperations = {
     input: ContextEngineTurnOutboxFilter & {
       boundary: TranscriptTurnBoundary;
       runtimeContext?: ContextEngineTurnRuntimeContext;
+      /** Host-only original source; never included in plugin hook arguments. */
+      operatorSource?: QueuedOperatorRecoverySource;
     };
     output: undefined;
   };
@@ -264,6 +293,8 @@ export type ContextEngineTurnOutboxWorkerOperations = {
       maxBytes: number;
       maxEvents: number;
       runtimeContext?: ContextEngineTurnRuntimeContext;
+      /** Host-only original source; never included in plugin hook arguments. */
+      operatorSource?: QueuedOperatorRecoverySource;
     };
     output: ClosedTranscriptTurnReadResult["kind"];
   };

@@ -18,7 +18,7 @@ import {
   type OperatorRunRecoverySnapshot,
   type QueuedOperatorRecoverySource,
 } from "./operator-run-recovery-source.codec.js";
-import { resolveGatewayUiAdminSource } from "./operator-scopes.js";
+import { isGatewayUiAdmin } from "./operator-scopes.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 
 /** Durable evidence when serializable; same-process starts also pass their original live facts. */
@@ -30,8 +30,15 @@ export function captureQueuedOperatorRecoverySource(
   }
   assertAdmittedRunOperatorAuthority(authority);
   let captured: QueuedOperatorRecoverySource;
-  if (authority.recoverySnapshot) {
-    const snapshot = authority.recoverySnapshot;
+  const snapshot = authority.recoverySnapshot;
+  if (authority.participationCeiling && !snapshot) {
+    return { kind: "unavailable", reason: "decode-failed" };
+  }
+  if (authority.channelOwner) {
+    // Only the sender is saved: each start admits it again from `commands.ownerAllowFrom`.
+    const { channelId, accountId, senderId } = authority.channelOwner;
+    captured = { kind: "channel-owner", sender: { channelId, accountId, senderId } };
+  } else if (snapshot) {
     captured = {
       kind: "gateway",
       snapshot: { ...snapshot, scopes: intersectOperatorScopes(snapshot.scopes, authority.scopes) },
@@ -70,7 +77,7 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   client: GatewayClient;
   authority: Pick<
     AdmittedRunOperatorAuthority,
-    "profileId" | "scopes" | "gatewayAccessGrant" | "assertCurrent" | "openclawIdPrincipal"
+    "profileId" | "scopes" | "gatewayAccessGrant" | "openclawIdPrincipal"
   >;
   modelPolicy: PreparedOperatorModelPolicy | undefined;
   identity: Awaited<ReturnType<typeof prepareUserProfileIdentity>>;
@@ -175,9 +182,6 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   if (sourceDevice && tokenDevice === undefined && !tokenlessIdentity) {
     return { device, authPolicy, sharedGeneration, unavailableReason: "device-no-token" };
   }
-  if (sourceDevice && tokenlessIdentity && !device) {
-    return { authPolicy, sharedGeneration, unavailableReason: "device-no-token" };
-  }
   if (client.usesSharedGatewayAuth && sharedGeneration === undefined) {
     return { device, authPolicy, sharedGeneration, unavailableReason: "shared-auth-no-generation" };
   }
@@ -203,7 +207,7 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
       generation: "",
       fallbackCredentialGeneration: authPolicy.fallbackCredentialGeneration,
     },
-    automationAdmin: resolveGatewayUiAdminSource(client) !== undefined,
+    automationAdmin: isGatewayUiAdmin(client),
     controlUiAdmin: client.internal?.controlUiAdmin === true,
     localOperator: client.internal?.isLocalClient === true,
     sourceIngress: isBrowserOperatorUiClient(client.connect.client) ? "control-ui" : "internal",

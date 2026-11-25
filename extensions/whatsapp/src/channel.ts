@@ -243,7 +243,15 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             actions.push("poll");
           }
           actions.push("upload-file");
-          return { actions };
+          return {
+            actions,
+            // All-configured keeps the flag for WhatsApp sends from bound or scheduled turns.
+            schema: {
+              actions: ["send", "upload-file"],
+              visibility: "all-configured",
+              properties: { gifPlayback: { type: "boolean" } },
+            },
+          };
         },
         supportsAction: ({ action }) => action === "react" || action === "upload-file",
         resolveExecutionMode: ({ action }) =>

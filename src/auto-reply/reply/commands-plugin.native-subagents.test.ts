@@ -540,93 +540,77 @@ describe("command-scoped native subagent boundary", () => {
     });
   });
 
-  it.each(["owner", "registry"] as const)(
-    "revokes %s authority while a real admitted command awaits",
-    async (change) => {
-      await withCommandPlugin(async (fixture) => {
-        const entered = createDeferredCore();
-        const resume = createDeferredCore();
-        fixture.handler.mockImplementation(async (ctx) => {
-          const native = expectDefined(ctx.runtimeContext?.subagents, "native capability");
-          entered.resolve();
-          await resume.promise;
-          try {
-            await native.spawn(spawnRequest);
-            return { text: "unexpected child", continueAgent: true };
-          } catch (error) {
-            return { text: String(error) };
-          }
-        });
-        const acceptedBefore = [...subagentRuns.keys()];
-        const pending = commandInvocation(fixture).run();
+  it("revokes registry authority while a real admitted command awaits", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      fixture.handler.mockImplementation(async (ctx) => {
+        const native = expectDefined(ctx.runtimeContext?.subagents, "native capability");
+        entered.resolve();
+        await resume.promise;
         try {
-          expect(
-            await Promise.race([
-              entered.promise.then(() => "entered"),
-              pending.then(() => "finished"),
-            ]),
-          ).toBe("entered");
-          if (change === "owner") {
-            fixture.revokeOwner();
-          } else {
-            setActivePluginRegistry(createEmptyPluginRegistry());
-          }
-          resume.resolve();
-          const result = await pending;
-          expect(result?.reply?.text).toMatch(
-            change === "owner"
-              ? /authority.*changed|authority.*revoked/i
-              : /^Error: Plugin command runtime is no longer active\.$/,
-          );
-          expect(result?.shouldContinue).toBe(false);
-          expect([...subagentRuns.keys()]).toEqual(acceptedBefore);
-        } finally {
-          resume.resolve();
-          await pending;
+          await native.spawn(spawnRequest);
+          return { text: "unexpected child", continueAgent: true };
+        } catch (error) {
+          return { text: String(error) };
         }
       });
-    },
-  );
+      const acceptedBefore = [...subagentRuns.keys()];
+      const pending = commandInvocation(fixture).run();
+      try {
+        expect(
+          await Promise.race([
+            entered.promise.then(() => "entered"),
+            pending.then(() => "finished"),
+          ]),
+        ).toBe("entered");
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        resume.resolve();
+        const result = await pending;
+        expect(result?.reply?.text).toMatch(
+          /^Error: Plugin command runtime is no longer active\.$/,
+        );
+        expect(result?.shouldContinue).toBe(false);
+        expect([...subagentRuns.keys()]).toEqual(acceptedBefore);
+      } finally {
+        resume.resolve();
+        await pending;
+      }
+    });
+  });
 
-  it.each(["owner", "registry"] as const)(
-    "rejects %s changes during real command preparation before entering the handler",
-    async (change) => {
-      await withCommandPlugin(async (fixture) => {
-        const prepared = createDeferredCore();
-        const release = createDeferredCore();
-        const invocation = commandInvocation(fixture);
-        invocation.state.assertCurrentBindingRoute = async () => {
-          prepared.resolve();
-          await release.promise;
-        };
-        const pending = invocation.run();
-        try {
-          expect(
-            await Promise.race([
-              prepared.promise.then(() => "prepared"),
-              pending.then(() => "finished"),
-            ]),
-          ).toBe("prepared");
-          if (change === "owner") {
-            fixture.revokeOwner();
-          } else {
-            setActivePluginRegistry(createEmptyPluginRegistry());
-          }
-          release.resolve();
-          expect(await pending).toEqual({
-            shouldContinue: false,
-            reply: { text: "⚠️ Command failed. Please try again later." },
-          });
-          expect(fixture.handler).not.toHaveBeenCalled();
-          expect(invocation.recorder.getAdmissionReceipt()).toBeUndefined();
-          expect(await fixture.userInputs()).toEqual([]);
-        } finally {
-          release.resolve();
-          await pending;
-        }
-      });
-    },
-  );
+  it("rejects registry changes during real command preparation before entering the handler", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const prepared = createDeferredCore();
+      const release = createDeferredCore();
+      const invocation = commandInvocation(fixture);
+      invocation.state.assertCurrentBindingRoute = async () => {
+        prepared.resolve();
+        await release.promise;
+      };
+      const pending = invocation.run();
+      try {
+        expect(
+          await Promise.race([
+            prepared.promise.then(() => "prepared"),
+            pending.then(() => "finished"),
+          ]),
+        ).toBe("prepared");
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        release.resolve();
+        expect(await pending).toEqual({
+          shouldContinue: false,
+          reply: { text: "⚠️ Command failed. Please try again later." },
+        });
+        expect(fixture.handler).not.toHaveBeenCalled();
+        expect(invocation.recorder.getAdmissionReceipt()).toBeUndefined();
+        expect(await fixture.userInputs()).toEqual([]);
+      } finally {
+        release.resolve();
+        await pending;
+      }
+    });
+  });
 
   it("rejects a selected command after its registry is replaced", async () => {
     await withCommandPlugin(async (fixture) => {

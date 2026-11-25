@@ -98,6 +98,7 @@ function resolveMediaRelativePath(id: string, subdir: string, caller: string): s
 
 function openMediaStore(maxBytes = MEDIA_MAX_BYTES, rootDir = getMediaDir()) {
   return fileStore({
+    allowDrvfsRenameRecovery: true,
     rootDir,
     dirMode: 0o700,
     maxBytes,

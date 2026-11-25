@@ -341,7 +341,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
                 runId: params.runId,
-                requester: { senderIsOwner: true },
               }),
               toolSignal,
             ),

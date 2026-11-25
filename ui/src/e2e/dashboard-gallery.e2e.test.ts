@@ -90,6 +90,71 @@ async function searchDashboards(gallery: Locator, query: string) {
   await field.fill(query);
 }
 suite.define(() => {
+  it("keeps enlarged read failures legible inside a dashboard grid preview", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+      async ({ page }) => {
+        await seedChatSettings(page, suite.server.baseUrl, { textScale: 140 });
+        const sessions = [{ ...dashboardRows[0]!, hasBoard: true }];
+        await installMockGateway(page, {
+          sessions,
+          featureMethods: ["board.get"],
+          methodResponses: {
+            "sessions.list": {
+              cases: [
+                responseCase(
+                  { hasBoard: true },
+                  {
+                    ts: now,
+                    path: "",
+                    count: 1,
+                    defaults: { contextTokens: null, model: null, modelProvider: null },
+                    sessions,
+                  },
+                ),
+              ],
+            },
+            "board.get": {
+              __mockError: {
+                code: "UNAVAILABLE",
+                message: "Dashboard storage is temporarily unavailable",
+              },
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "dashboards");
+        const card = page.locator("[data-dashboard-session]").first(),
+          notice = card.locator(".board-document__state--error");
+        await notice.waitFor();
+        expect(await notice.textContent()).toBe("Dashboard storage is temporarily unavailable");
+        const inside = await notice.evaluate((el) => {
+          const preview = el.closest(".dashboard-preview")!.getBoundingClientRect(),
+            sheet = el.closest(".dashboard-preview__sheet")!.getBoundingClientRect(),
+            range = document.createRange();
+          range.selectNodeContents(el);
+          const rects = [...range.getClientRects()];
+          return (
+            rects.length > 0 &&
+            rects.every(
+              (r) =>
+                r.left >= sheet.left &&
+                r.right <= sheet.right &&
+                r.top >= sheet.top &&
+                r.bottom <= Math.min(sheet.bottom, preview.bottom),
+            )
+          );
+        });
+        expect(inside).toBe(true);
+        await card.getByRole("link", { name: "Release health" }).focus();
+        expect(
+          await card
+            .getByRole("link", { name: "Release health" })
+            .evaluate((el) => el === document.activeElement),
+        ).toBe(true);
+      },
+    );
+  });
+
   it.each(["dark", "light"] as const)("fits empty dashboard previews in %s mode", async (mode) => {
     const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
     const emptyKey = "agent:main:dashboard:empty";
@@ -321,6 +386,47 @@ suite.define(() => {
       );
     },
   );
+
+  it("keeps the remove button reachable for a long dashboard author on a phone", async () => {
+    const author = "NorthernBookConservationAndLetterpressStudioInternationalEditionReviewDesk";
+    const rows = dashboardRows.slice(0, 2).map((row, index) =>
+      Object.assign({}, row, {
+        hasBoard: true,
+        createdActor: index === 0 ? { ...row.createdActor, label: author } : row.createdActor,
+      }),
+    );
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true },
+      async ({ page }) => {
+        await installMockGateway(page, { sessions: rows });
+        await page.goto(suite.server.baseUrl + "dashboards");
+        const gallery = page.locator("openclaw-dashboards-page");
+        const cards = gallery.locator("[data-dashboard-session]");
+        await expect.poll(() => cards.count()).toBe(2);
+        await gallery.getByRole("button", { name: "Filter by author", exact: true }).tap();
+        await page
+          .locator("#dashboards-author-filter")
+          .getByRole("checkbox", { name: new RegExp(author) })
+          .check();
+        await page.keyboard.press("Escape");
+        await expect.poll(() => cards.count()).toBe(1);
+        const remove = gallery.getByRole("button", { name: "Remove author filter" });
+        expect(
+          await remove.evaluate((button) => {
+            const box = button.getBoundingClientRect();
+            return (
+              box.right <= innerWidth &&
+              button.contains(
+                document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+              )
+            );
+          }),
+        ).toBe(true);
+        await remove.tap();
+        await expect.poll(() => cards.count()).toBe(2);
+      },
+    );
+  });
 
   it("bounds mounted dashboards across list and small author groups", async () => {
     const rows = Array.from({ length: 1_000 }, (_, index) => ({
@@ -595,6 +701,24 @@ suite.define(() => {
         await expect.poll(() => gallery.locator(".dashboard-row").count()).toBe(12);
         await expect.poll(() => gallery.locator(".dashboards-group__heading").count()).toBe(2);
         await page.keyboard.press("Escape");
+        // Closing the menu returns the phone keyboard outline to the trailing action.
+        expect(
+          await display.evaluate((button) => {
+            const header = button.closest<HTMLElement>(".dashboards-header")!;
+            const rightEdge =
+              getComputedStyle(header).overflowX === "visible"
+                ? document.documentElement.clientWidth
+                : header.getBoundingClientRect().right;
+            const style = getComputedStyle(button);
+            const ring =
+              Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset);
+            return (
+              button.matches(":focus-visible") &&
+              ring > 0 &&
+              button.getBoundingClientRect().right + ring <= rightEdge
+            );
+          }),
+        ).toBe(true);
         await page.reload();
         await expect.poll(() => gallery.locator(".dashboard-row").count()).toBe(12);
         await expect.poll(() => gallery.locator(".dashboards-group__heading").count()).toBe(2);

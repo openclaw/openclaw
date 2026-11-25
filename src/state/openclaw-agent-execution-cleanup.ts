@@ -52,7 +52,7 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   params.assertOwned();
   // Uncertified retirement cannot lend proof while shared-state cleanup admission waits.
   if (!refusedBeforeAgentOpen) {
-    invalidateOpenClawAgentDatabaseValidation(params.lease.path);
+    invalidateOpenClawAgentDatabaseValidation(params.lease.path, "execution cleanup");
   }
   const context = {
     environment: params.context.environment,
@@ -94,7 +94,7 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
         admission: createSqliteWorkerOperationAdmission((request, grant) => {
           params.assertOwned();
           if (request.stage === "prepare" && request.facts === "agent-integrity-invalidated") {
-            invalidateOpenClawAgentDatabaseValidation(params.lease.path);
+            invalidateOpenClawAgentDatabaseValidation(params.lease.path, "execution cleanup");
           }
           grant();
         }),
@@ -240,7 +240,7 @@ async function finishAgentDatabaseRetirementAfterOwnershipLoss(
   errors: unknown[],
 ): Promise<void> {
   await stopped;
-  invalidateOpenClawAgentDatabaseValidation(pathname);
+  invalidateOpenClawAgentDatabaseValidation(pathname, "execution cleanup");
   const lockPath = resolveGatewayStateOwnerPath(stateDatabasePath);
   const replacement = await readFile(lockPath, "utf8").then(
     (raw) => {

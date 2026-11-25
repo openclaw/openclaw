@@ -64,7 +64,6 @@ describe("release readiness consumes receipt-backed recovery", () => {
           publish_openclaw_npm: "true",
           publish_docker_only: "false",
           release_evidence_mode: "full-release-validation",
-          wait_for_clawhub: "true",
         },
         plugins: {
           npm: f.manifest.publicationArtifacts.pluginNpm,

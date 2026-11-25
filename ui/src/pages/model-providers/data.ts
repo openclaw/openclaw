@@ -96,6 +96,8 @@ export type ModelProviderCard = ProviderPresentation & {
   /** Configuration owner that pins priority for each auth owner. */
   profileOrderLocks: Record<string, NonNullable<ModelAuthStatusProvider["profileOrderLocked"]>>;
   apiKey?: ModelAuthStatusProvider["apiKey"];
+  /** The saved sign-in doesn't cover voice; an API key would. */
+  voiceApiKeyRequired?: true;
   configApiKeys: Array<{ key: string; reference: boolean }>;
   modelCount: number;
   availableModelCount: number;
@@ -337,6 +339,9 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         .map((profile) => profile.profileId),
     );
     draft.card.apiKey ??= provider.apiKey;
+    if (provider.voiceApiKeyRequired) {
+      draft.card.voiceApiKeyRequired = true;
+    }
     // Generic auth discovery also includes tool-only API keys; those alone do not make a model card.
     draft.hasModelAuth ||= isMonitoredAuthProvider(provider) || apiKeyCapabilities.has(id);
     const usage = provider.usage;
@@ -434,6 +439,8 @@ export type DefaultModelSelection = {
   utilityModel: AgentModelConfig | null;
   /** Unset or null disables decisions globally. */
   decisionModel?: string | null;
+  /** agents.defaults.subagents.model. Unset: the spawn resolver picks the parent's or target agent's model. */
+  subagentModel?: AgentModelConfig | null;
 };
 
 export type ModelPickerEntry = ModelCatalogEntry & { selectionRef?: string };
@@ -462,6 +469,7 @@ export function resolveDefaultModelPresentation(
         fallbacks: [],
         utilityModel: null,
         decisionModel: null,
+        subagentModel: undefined,
       },
       configuredModels: catalog.models.filter((model) => model.manualSelectionAllowed !== false),
     };
@@ -474,6 +482,7 @@ export function resolveDefaultModelPresentation(
       ...defaults.fallbacks,
       modelSettingPrimary(defaults.utilityModel),
       ...modelSettingFallbacks(defaults.utilityModel),
+      modelSettingPrimary(defaults.subagentModel ?? null),
     ].filter((value): value is string => typeof value === "string" && value.length > 0),
   );
   const source = models ?? [];
@@ -567,6 +576,7 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
   const agents = asRecord(config?.agents);
   const defaults = asRecord(agents?.defaults);
   const model = readModelSetting(defaults?.model);
+  const subagentModel = readModelSetting(asRecord(defaults?.subagents)?.model);
   const runtimes: NonNullable<DefaultModelSelection["runtimes"]> = {};
   for (const [key, value] of Object.entries(asRecord(defaults?.models) ?? {})) {
     const entry = asRecord(value);
@@ -606,6 +616,7 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
       ...(typeof defaults?.decisionModel === "string"
         ? { decisionModel: defaults.decisionModel }
         : {}),
+      ...(subagentModel !== null ? { subagentModel } : {}),
     },
   };
 }

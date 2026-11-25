@@ -293,6 +293,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
         includeToolFailureInstruction: false,
         messages: undefined,
+        unsettledTail: true,
       });
       expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
       expectNoProfileFailure(fixture);
@@ -340,6 +341,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
         includeToolFailureInstruction: false,
         messages: undefined,
+        unsettledTail: true,
       });
       expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
       expectNoProfileFailure(fixture);
@@ -736,7 +738,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
       includeToolFailureInstruction: false,
       messages: scenario.pluginHarnessOwnsTransport ? fixture.attempt.messagesSnapshot : undefined,
-      ...(replays ? { replayCurrentUserTurn: true } : {}),
+      unsettledTail: !replays,
     });
   });
 
@@ -799,6 +801,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
       includeToolFailureInstruction: Boolean(scenario.lastToolError),
       messages: undefined,
+      unsettledTail: true,
     });
     expectNoProfileFailure(fixture);
     expect(fixture.onAgentEvent).toHaveBeenCalledWith(

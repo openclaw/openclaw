@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import CLIENT_TOOL_DISPLAY from "../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
-import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
+import { TOOL_DISPLAY_CONFIG } from "./tool-display-detail-config.js";
 import {
   hasShellCompoundCommand,
   scanTopLevelChars,

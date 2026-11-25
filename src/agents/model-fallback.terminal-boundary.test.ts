@@ -14,8 +14,7 @@ import { SqliteTranscriptMutationConflictError } from "../config/sessions/sessio
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { WorkerNodeLostError } from "../worker/worker-node-loss.js";
@@ -128,7 +127,9 @@ it.each([
         policy.assertCurrent({ tools: { deny: ["exec"] } }, []);
       } catch (cause) {
         return new Error("Session target preparation outlived its attempt", {
-          cause: new Error("admitted run authority is no longer active", { cause }),
+          cause: new Error("This agent run is no longer active. Start a new turn to retry.", {
+            cause,
+          }),
         });
       }
       throw new Error("Expected policy refusal");
@@ -141,7 +142,7 @@ it.each([
         Failure.name,
         () =>
           new Error("Session target preparation outlived its attempt", {
-            cause: new Error("admitted run authority is no longer active", {
+            cause: new Error("This agent run is no longer active. Start a new turn to retry.", {
               cause: new Failure(),
             }),
           }),
@@ -419,7 +420,7 @@ describe("terminal fallback diagnostics", () => {
       await run(capture, warn);
     } finally {
       await capture.flush();
-      await loggerTestApi.flushFileLogQueueForTests();
+      await flushLogger();
       capture.cleanup();
       loggingState.rawConsole = previous;
       setLoggerOverride(null);

@@ -119,6 +119,6 @@ export function memberSourceCase(name: (typeof memberSourceCases)[number]) {
       name,
     )
       ? "Restart recovery operator source policy changed."
-      : "OpenClaw ID membership authority changed",
+      : "I did not start this request. The sign-in it was started with is no longer valid. Reconnect to the Gateway, then send your message again.",
   };
 }

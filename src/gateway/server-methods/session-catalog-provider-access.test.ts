@@ -44,7 +44,7 @@ const inRegistry = <T>(
 
 describe("session catalog provider admission", () => {
   it.each([false, true])(
-    "retains the catalog caller for delayed node discovery without admitting revoked access (%s)",
+    "retains the catalog caller for delayed node discovery started before revocation (%s)",
     async (revoked) => {
       const context = {};
       const connection = new AbortController();
@@ -87,14 +87,13 @@ describe("session catalog provider admission", () => {
       }
       discovery.resolve();
       try {
-        if (revoked) {
-          await expect(result).rejects.toThrow("Gateway caller authority is no longer active.");
-        } else {
-          await expect(result).resolves.toEqual(hosts);
-        }
+        // Revocation applies to the next request; a started discovery finishes.
+        await expect(result).resolves.toEqual(hosts);
         expect(connection.signal.aborted).toBe(false);
         expect(sourceReleased).toHaveBeenCalledOnce();
-        expect(() => retainGatewayDeviceRevocation(caller.isCurrent)).toThrow("no longer active");
+        expect(() => retainGatewayDeviceRevocation(caller.isCurrent)).toThrow(
+          "Gateway request ended",
+        );
       } finally {
         discovery.resolve();
         await Promise.allSettled([result]);

@@ -1,4 +1,3 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -86,12 +85,6 @@ export function createChatPaneRunRecoveryActions(
     | "chatRunId"
     | "chatSending"
     | "handleSendChat"
-    | "chatMessages"
-    | "chatMessage"
-    | "chatAttachments"
-    | "chatMentions"
-    | "chatReplyTarget"
-    | "chatGoalDraftMode"
     | "chatRunError"
     | "chatDismissedRunErrorId"
   >,
@@ -99,13 +92,9 @@ export function createChatPaneRunRecoveryActions(
     canSend: boolean;
     isCurrent: () => boolean;
     latestFailedRunId: () => string | undefined;
-    onRewindMessage?: ChatProps["onRewindMessage"];
     onStartNewSession?: (summary: string) => Promise<boolean>;
   },
-): Pick<
-  ChatProps,
-  "onRetryRun" | "onStartNewSession" | "failedMessageEditSource" | "onDismissRunError"
-> {
+): Pick<ChatProps, "onRetryRun" | "onStartNewSession" | "onDismissRunError"> {
   const sessionKey = state.sessionKey;
   const ownsFailure = (runId: string) =>
     options.isCurrent() &&
@@ -114,19 +103,7 @@ export function createChatPaneRunRecoveryActions(
     !state.chatRunId &&
     !state.chatSending &&
     options.latestFailedRunId() === runId;
-  const failedRunId = options.latestFailedRunId();
-  const rewind = options.onRewindMessage;
   return {
-    failedMessageEditSource:
-      rewind && failedRunId
-        ? {
-            state,
-            runId: failedRunId,
-            isCurrent: () => ownsFailure(failedRunId),
-            readIdentity: readSessionMessageIdentity,
-            rewind,
-          }
-        : undefined,
     onRetryRun: options.canSend
       ? (runId) => {
           if (ownsFailure(runId)) {
@@ -218,18 +195,22 @@ export class SessionParticipationTracker {
     catalog: boolean;
     listLoading: boolean;
     sessionKey: string;
-    session: Pick<GatewaySessionRow, "sharingRole" | "visibility"> | undefined;
+    session: Pick<GatewaySessionRow, "sharingRole" | "visibility" | "invitedAccess"> | undefined;
   }): boolean {
     if (params.catalog) {
       return false;
     }
     if (params.session) {
       const blocked =
-        params.session.visibility === "draft"
-          ? params.session.sharingRole !== "admin" && params.session.sharingRole !== "owner"
-          : params.session.visibility !== undefined &&
-            params.session.visibility !== "shared" &&
-            params.session.sharingRole === "viewer";
+        params.session.invitedAccess !== undefined &&
+        params.session.sharingRole !== "owner" &&
+        params.session.sharingRole !== "admin"
+          ? params.session.invitedAccess !== "send"
+          : params.session.visibility === "draft"
+            ? params.session.sharingRole !== "admin" && params.session.sharingRole !== "owner"
+            : params.session.visibility !== undefined &&
+              params.session.visibility !== "shared" &&
+              params.session.sharingRole === "viewer";
       this.lastBlocked.delete(params.sessionKey);
       this.lastBlocked.set(params.sessionKey, blocked);
       if (this.lastBlocked.size > MAX_TRACKED_SESSION_ROWS) {

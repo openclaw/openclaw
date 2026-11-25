@@ -109,7 +109,6 @@ export function preparePluginToolExecutionCapabilities(params: {
               const assertCallerCurrent = () => {
                 callerSignal.throwIfAborted();
                 assertInvocationCurrent();
-                authority.assertCurrent();
               };
               assertCallerCurrent();
               const [

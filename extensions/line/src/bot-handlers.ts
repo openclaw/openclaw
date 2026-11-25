@@ -42,7 +42,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeLineAllowEntry } from "./bot-access.js";
+import { lineIngressIdentity } from "./bot-access.js";
 import {
   buildLineMessageContext,
   buildLinePostbackContext,
@@ -239,12 +239,7 @@ async function resolveLineEventAdmission(
     await getLineRuntime().channel.inbound.ingress.resolveStable({
       channelId: "line",
       accountId: account.accountId,
-      identity: {
-        key: "line-user-id",
-        normalize: (value: string) => normalizeLineAllowEntry(value) || null,
-        sensitivity: "pii",
-        entryIdPrefix: "line-entry",
-      },
+      identity: lineIngressIdentity,
       cfg,
       readStoreAllowFrom: () => readChannelAllowFromStore("line", undefined, account.accountId),
       subject: event.type === "join" ? {} : { stableId: senderId },

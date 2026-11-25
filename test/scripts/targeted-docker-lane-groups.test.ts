@@ -1,9 +1,4 @@
 import { expect, it } from "vitest";
-import {
-  installedRecoveryLaneNames,
-  serviceRecoveryCuts,
-} from "../../scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
-import { parseLaneSelection } from "../../scripts/lib/docker-e2e-plan.mts";
 import { planTargetedDockerLaneGroups } from "../../scripts/plan-targeted-docker-lane-groups.mjs";
 
 type Group = ReturnType<typeof planTargetedDockerLaneGroups>[number];
@@ -25,15 +20,6 @@ const cells = (groups: Group[]) =>
     group.published_upgrade_survivor_baselines,
     group.published_upgrade_survivor_scenarios,
   ]);
-
-it.each(serviceRecoveryCuts)(
-  "runs packaged %s recovery once without historical baseline fan-out",
-  (cut) => {
-    const lane = `package-installed-recovery-${cut}`;
-    const groups = planGroups(lane, "2026.9.3 2026.9.4", "base legacy-operator-state");
-    expect(groups).toEqual([{ docker_lanes: lane, label: lane }]);
-  },
-);
 
 it("retains the reported 9.4 sibling-import cell when current-version baselines are omitted", () => {
   const groups = planGroups(
@@ -75,14 +61,6 @@ it("does not schedule a first-hop member twice beside its family", () => {
   expect(planGroups(`${family[0]!.docker_lanes} update-first-hop-compat`)).toEqual(family);
 });
 
-it("plans all seven installed recovery cells once as separate unchanged-budget jobs", () => {
-  const mixed = `package-installed-recovery ${installedRecoveryLaneNames[0]}`;
-  expect(planGroups(mixed)).toEqual(
-    installedRecoveryLaneNames.map((lane) => ({ docker_lanes: lane, label: lane })),
-  );
-  expect(parseLaneSelection(mixed)).toEqual(installedRecoveryLaneNames);
-});
-
 it("shards published upgrade survivor by baseline while preserving surrounding lanes", () => {
   const groups = planGroups(
     "doctor-switch update-channel-switch published-upgrade-survivor plugins-offline plugin-update",
@@ -102,55 +80,67 @@ it("shards published upgrade survivor by baseline while preserving surrounding l
   ]);
 });
 
-it("prioritizes long families and preserves every CLI row and the remaining order", async () => {
-  const { execFileSync } = await import("node:child_process");
-  const groups: Group[] = JSON.parse(
-    execFileSync(process.execPath, ["scripts/plan-targeted-docker-lane-groups.mjs"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        LANES:
-          "doctor-switch published-upgrade-survivor update-first-hop-compat-2026.9.2 update-first-hop-compat-2026.9.1 root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update",
-        GROUP_SIZE: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: "all-scenarios",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "2026.9.3 2026.9.4",
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS:
-          "base legacy-operator-state package-publication-recovery package-verification-recovery",
-      },
-    }),
-  );
-  const lane = (name: string) => ({ docker_lanes: name, label: name });
-  const scenario = (version: string, name: string, index: number) => ({
-    docker_lanes: "published-upgrade-survivor",
-    label: `published-upgrade-survivor-${version}-scenarios-${index}`,
-    published_upgrade_survivor_baselines: `openclaw@${version}`,
-    published_upgrade_survivor_scenarios: name,
-    timeout_minutes: 90,
-  });
-  const recovery = (version: string, name: string) => ({
-    ...lane(`published-upgrade-survivor-${version}-${name}`),
-    published_upgrade_survivor_baselines: `openclaw@${version}`,
-    published_upgrade_survivor_scenarios: name,
-    timeout_minutes: 90,
-  });
-  expect(groups).toEqual([
-    recovery("2026.9.8", "package-verification-recovery"),
-    recovery("2026.9.9", "package-verification-recovery"),
-    recovery("2026.9.8", "package-publication-recovery"),
-    recovery("2026.9.9", "package-publication-recovery"),
-    lane("update-first-hop-compat-2026.9.2"),
-    lane("update-first-hop-compat-2026.9.1"),
-    { ...lane("update-restart-auth"), timeout_minutes: 75 },
-    lane("plugin-update"),
-    scenario("2026.9.4", "legacy-operator-state", 2),
-    scenario("2026.9.3", "legacy-operator-state", 2),
-    lane("root-managed-vps-upgrade"),
-    lane("doctor-switch"),
-    scenario("2026.9.4", "base", 1),
-    scenario("2026.9.3", "base", 1),
-    lane("plugins-offline"),
-  ]);
-});
+it.each([32, 48, 64])(
+  "preserves complete CLI rows and scopes tool-bridge priority at cap %i",
+  async (maxParallel) => {
+    const { execFileSync } = await import("node:child_process");
+    const groups: Group[] = JSON.parse(
+      execFileSync(process.execPath, ["scripts/plan-targeted-docker-lane-groups.mjs"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          LANES:
+            "doctor-switch published-upgrade-survivor update-first-hop-compat-2026.9.2 update-first-hop-compat-2026.9.1 root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update",
+          GROUP_SIZE: "1",
+          MAX_PARALLEL: String(maxParallel),
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: "all-scenarios",
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "2026.9.3 2026.9.4",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS:
+            "base legacy-operator-state package-publication-recovery package-verification-recovery acpx-openclaw-tools-bridge",
+        },
+      }),
+    );
+    const lane = (name: string) => ({ docker_lanes: name, label: name });
+    const scenario = (version: string, name: string, index: number) => ({
+      docker_lanes: "published-upgrade-survivor",
+      label: `published-upgrade-survivor-${version}-scenarios-${index}`,
+      published_upgrade_survivor_baselines: `openclaw@${version}`,
+      published_upgrade_survivor_scenarios: name,
+      timeout_minutes: 90,
+    });
+    const recovery = (version: string, name: string) => ({
+      ...lane(`published-upgrade-survivor-${version}-${name}`),
+      published_upgrade_survivor_baselines: `openclaw@${version}`,
+      published_upgrade_survivor_scenarios: name,
+      timeout_minutes: 90,
+    });
+    expect(groups).toEqual([
+      recovery("2026.9.8", "package-verification-recovery"),
+      recovery("2026.9.9", "package-verification-recovery"),
+      recovery("2026.9.8", "package-publication-recovery"),
+      recovery("2026.9.9", "package-publication-recovery"),
+      lane("update-first-hop-compat-2026.9.2"),
+      lane("update-first-hop-compat-2026.9.1"),
+      { ...lane("update-restart-auth"), timeout_minutes: 75 },
+      lane("plugin-update"),
+      ...(maxParallel === 64
+        ? [
+            scenario("2026.9.4", "acpx-openclaw-tools-bridge", 3),
+            scenario("2026.9.3", "acpx-openclaw-tools-bridge", 3),
+          ]
+        : []),
+      scenario("2026.9.4", "legacy-operator-state", 2),
+      scenario("2026.9.3", "legacy-operator-state", 2),
+      lane("root-managed-vps-upgrade"),
+      lane("doctor-switch"),
+      scenario("2026.9.4", "base", 1),
+      ...(maxParallel !== 64 ? [scenario("2026.9.4", "acpx-openclaw-tools-bridge", 3)] : []),
+      scenario("2026.9.3", "base", 1),
+      ...(maxParallel !== 64 ? [scenario("2026.9.3", "acpx-openclaw-tools-bridge", 3)] : []),
+      lane("plugins-offline"),
+    ]);
+  },
+);
 
 it("isolates the weekly mobile and watch scenarios by baseline", () => {
   const baselines = "2026.7.1 2026.8.1";

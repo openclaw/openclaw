@@ -155,15 +155,12 @@ it.each([
         ingressState: "present",
         invoker: { state: "present", kind: "person" },
       });
-      // Present only when the host bound this sender as the configured owner, which is
-      // what an owner turn needs before it can manage automations of other sessions.
       const owner = await resolveCommandAuthorizationAsync({
         cfg,
         ctx: context,
         commandAuthorized: false,
       });
-      expect(owner.assertOwnerCurrent).toBeTypeOf("function");
-      expect(() => owner.assertOwnerCurrent?.()).not.toThrow();
+      expect(owner.senderIsOwner).toBe(true);
     },
   ),
 );

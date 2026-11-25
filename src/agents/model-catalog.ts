@@ -12,6 +12,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
+import { prepareProviderModelPolicySurfaces } from "../plugins/provider-model-routes.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
@@ -295,6 +296,7 @@ export async function buildPreparedModelCatalogSnapshot(
     params.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),
   );
   const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
+  await prepareProviderModelPolicySurfaces();
   logStage("catalog-deps-ready");
   const entries = params.models;
   const manifestPlan = planEffectiveModelCatalogRows({

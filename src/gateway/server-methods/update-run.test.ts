@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -7,13 +9,18 @@ import {
   createGatewayUpdateLifecycle,
   type UpdateCheckLifecycle,
 } from "../../infra/update-check-lifecycle.js";
-import { getUpdateRunAsync } from "../../infra/update-run-reader.js";
+import { getUpdateRunAsync, listUpdateRunsAsync } from "../../infra/update-run-reader.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import { resolvePrefix } from "../../update/store.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 const prepareUpdate = vi.hoisted(() => vi.fn(async () => ({ status: "failed" })));
-const install = vi.hoisted(() => ({ kind: "git" }));
+const install = vi.hoisted((): { root: string; kind: "git" | "package" | "unknown" } => ({
+  root: "/tmp/openclaw-checkout",
+  kind: "git",
+}));
 vi.mock("../../update/run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../update/run.js")>()),
   prepareUpdate,
@@ -26,22 +33,21 @@ vi.mock("../../infra/restart.js", async (importOriginal) => ({
 vi.mock("../../infra/update-install-status.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-install-status.js")>()),
   resolveStartupInstallStatus: async () => ({
-    root: "/tmp/openclaw-checkout",
-    status: { root: "/tmp/openclaw-checkout", installKind: install.kind, packageManager: "pnpm" },
+    root: install.root,
+    status: { root: install.root, installKind: install.kind, packageManager: "pnpm" },
     installReceipt: null,
   }),
 }));
-// mock-isolation: admission reads the real install owner and process root; this test starts after it.
-vi.mock("./update-admission.js", () => ({
-  admitGatewayUpdateRequest: async (request: { params: unknown }) => request.params,
-}));
+// mock-isolation: no OCM manager owns this host's updates; admission otherwise runs for real.
+vi.mock("../../infra/ocm-update-client.js", () => ({ resolveOcmUpdateManager: async () => null }));
 
 let lifecycle: UpdateCheckLifecycle;
 let home: TempHomeEnv;
 beforeEach(async () => {
-  install.kind = "git";
   home = await createTempHomeEnv("openclaw-update-run-git-");
   lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
+  install.root = "/tmp/openclaw-checkout";
+  install.kind = "git";
 });
 afterEach(async () => {
   await lifecycle.stop();
@@ -91,39 +97,42 @@ it("shows a Control UI update in the app instead of the conversation", async () 
   );
 });
 
-it.each(["git", "package"])("applies the %s target a scheduled campaign pinned", async (kind) => {
-  install.kind = kind;
-  const sha = "c".repeat(40);
-  const version = "2026.11.6";
-  const target =
-    kind === "git"
-      ? { kind: "git", upstreamRef: "origin/main", upstreamSha: sha, commitsBehind: 1 }
-      : { kind: "package", version };
-  const bindRun = vi.fn();
-  lifecycle.campaign = {
-    adopt: () => ({
-      status: "adopted",
-      campaignId: "campaign-1",
-      target,
-    }),
-    bindRun,
-    clear: vi.fn(),
-  } as unknown as NonNullable<UpdateCheckLifecycle["campaign"]>;
-  const { payload } = await invoke({});
-  expect(payload).toMatchObject({ ok: true });
-  const run = await getUpdateRunAsync(payload.runId);
-  expect(run).toMatchObject({
-    trigger: "campaign",
-    origin: { campaignId: "campaign-1" },
-    target: kind === "git" ? { sha } : { version },
-  });
-  expect(bindRun).toHaveBeenCalledWith("campaign-1", payload.runId);
-  await vi.waitFor(() =>
-    expect(prepareUpdate).toHaveBeenCalledWith(
-      expect.objectContaining(kind === "git" ? { sha } : { tag: version }),
-    ),
-  );
-});
+it.each(["git", "package"] as const)(
+  "applies the %s target a scheduled campaign pinned",
+  async (kind) => {
+    install.kind = kind;
+    const sha = "c".repeat(40);
+    const version = "2026.11.6";
+    const target =
+      kind === "git"
+        ? { kind: "git", upstreamRef: "origin/main", upstreamSha: sha, commitsBehind: 1 }
+        : { kind: "package", version };
+    const bindRun = vi.fn();
+    lifecycle.campaign = {
+      adopt: () => ({
+        status: "adopted",
+        campaignId: "campaign-1",
+        target,
+      }),
+      bindRun,
+      clear: vi.fn(),
+    } as unknown as NonNullable<UpdateCheckLifecycle["campaign"]>;
+    const { payload } = await invoke({});
+    expect(payload).toMatchObject({ ok: true });
+    const run = await getUpdateRunAsync(payload.runId);
+    expect(run).toMatchObject({
+      trigger: "campaign",
+      origin: { campaignId: "campaign-1" },
+      target: kind === "git" ? { sha } : { version },
+    });
+    expect(bindRun).toHaveBeenCalledWith("campaign-1", payload.runId);
+    await vi.waitFor(() =>
+      expect(prepareUpdate).toHaveBeenCalledWith(
+        expect.objectContaining(kind === "git" ? { sha } : { tag: version }),
+      ),
+    );
+  },
+);
 
 it("restarts into the prepared release after the requested delay", async () => {
   prepareUpdate.mockResolvedValueOnce({
@@ -140,6 +149,102 @@ it("restarts into the prepared release after the requested delay", async () => {
   );
 });
 
+it.each(["git", "package"] as const)(
+  "refuses a different checkout on a %s Gateway before recording any run",
+  async (kind) => {
+    install.root = path.join(home.home, "installation-a");
+    install.kind = kind;
+    await fs.mkdir(install.root);
+    if (kind === "git") {
+      await runCommandWithTimeout(["git", "init", install.root], { timeoutMs: 10_000 });
+    }
+    const { payload } = await invoke({
+      checkout: { gitCommonDir: path.join(home.home, "installation-b", ".git") },
+      acceptCapabilities: true,
+    });
+    expect(payload).toMatchObject({ runId: null, ok: false, code: "installation-mismatch" });
+    expect(payload.message).toContain(install.root);
+    expect(payload.message).toContain("Nothing changed.");
+    expect(payload.message).toContain(`${install.root}/openclaw.mjs update`);
+    expect(await listUpdateRunsAsync()).toEqual([]);
+    expect(prepareUpdate).not.toHaveBeenCalled();
+  },
+);
+
+it("accepts the same Git common directory and passes capability consent to preparation", async () => {
+  install.root = path.join(home.home, "installation-a");
+  await fs.mkdir(install.root);
+  await runCommandWithTimeout(["git", "init", install.root], { timeoutMs: 10_000 });
+  await runCommandWithTimeout(
+    [
+      "git",
+      "-C",
+      install.root,
+      "-c",
+      "user.name=Identity Fixture",
+      "-c",
+      "user.email=identity@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "fixture",
+    ],
+    { timeoutMs: 10_000 },
+  );
+  const commonDir = await fs.realpath(path.join(install.root, ".git"));
+  const release = path.join(home.home, "release-worktree");
+  await runCommandWithTimeout(["git", "-C", install.root, "worktree", "add", "--detach", release], {
+    timeoutMs: 10_000,
+  });
+  install.root = release;
+  const { payload } = await invoke({
+    checkout: { gitCommonDir: commonDir },
+    acceptCapabilities: true,
+  });
+  expect(payload).toMatchObject({ ok: true });
+  await vi.waitFor(() =>
+    expect(prepareUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ acceptCapabilities: true }),
+    ),
+  );
+});
+
+it("retains package identity across release roots and forwards consent", async () => {
+  install.kind = "package";
+  install.root = path.join(resolvePrefix(), "releases", "installed", "openclaw");
+  await fs.mkdir(install.root, { recursive: true });
+  const { payload } = await invoke({
+    checkout: { packageRoot: path.join(await fs.realpath(resolvePrefix()), "openclaw") },
+    acceptCapabilities: true,
+  });
+  expect(payload).toMatchObject({ ok: true });
+  await vi.waitFor(() =>
+    expect(prepareUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ runningRoot: install.root, acceptCapabilities: true }),
+    ),
+  );
+});
+
+it("matches a forwarding installation whose launcher marker names a symlinked state path", async () => {
+  const prefix = await fs.realpath(
+    await fs.mkdir(resolvePrefix(), { recursive: true }).then(() => resolvePrefix()),
+  );
+  await fs.writeFile(path.join(prefix, "openclaw-launcher.mjs"), "");
+  const alias = path.join(home.home, "state-alias");
+  await fs.symlink(path.dirname(prefix), alias);
+  install.kind = "package";
+  install.root = path.join(home.home, "global", "openclaw");
+  await fs.mkdir(install.root, { recursive: true });
+  await fs.writeFile(
+    path.join(install.root, ".openclaw-launcher"),
+    path.join(alias, path.basename(prefix), "openclaw-launcher.mjs"),
+  );
+  const { payload } = await invoke({
+    checkout: { packageRoot: path.join(prefix, "openclaw") },
+    acceptCapabilities: true,
+  });
+  expect(payload).toMatchObject({ ok: true });
+});
 it("prepares package installs through the release path on the stable channel", async () => {
   install.kind = "package";
   const { payload } = await invoke({});

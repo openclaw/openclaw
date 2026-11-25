@@ -157,7 +157,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     let occluded = false;
     const unsubscribe = subscribeNativeOverlayOcclusion(
       (value) => {
-        occluded = value;
+        occluded = value !== "live";
       },
       () => null,
     );

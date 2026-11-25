@@ -416,10 +416,14 @@ export function writeReply(
 export function buildFakeProvider(
   api: FakeTransport,
   origin: string,
-  { reasoning = false, continuation = false }: { reasoning?: boolean; continuation?: boolean } = {},
+  {
+    reasoning = false,
+    continuation = false,
+    hostedSearch = false,
+  }: { reasoning?: boolean; continuation?: boolean; hostedSearch?: boolean } = {},
 ) {
   const id = MODEL_IDS[api];
-  const providerId = `fake-${api}`;
+  const providerId = hostedSearch ? "clawrouter" : `fake-${api}`;
   const model = (modelId: string, contextWindow: number): ModelDefinitionConfig => ({
     id: modelId,
     name: `Fake ${modelId}`,
@@ -431,6 +435,9 @@ export function buildFakeProvider(
     maxTokens: 4096,
     ...(api === "openai-responses" && continuation
       ? { compat: { supportsResponsesContinuation: true } }
+      : {}),
+    ...(hostedSearch
+      ? { params: { clawrouterRoute: { api, baseUrl, hostedWebSearch: true } } }
       : {}),
   });
   const baseUrl =

@@ -83,7 +83,7 @@ it("retains the name draft and loaded profile through a same-client blip, but re
     name: "Ada",
   });
   harness.emitHello(gatewayHelloForMethods([], ["operator.write"]));
-  const page = mountProfilePage(harness.context);
+  const page = mountProfilePage(harness.context, "settings-profile-identity");
   const input = () => page.querySelector<HTMLInputElement>(".identity-name-control input");
   const save = () => page.querySelector<HTMLButtonElement>(".identity-name-control button");
   await waitForSolid(() => expect(input()).toMatchObject({ value: "Ada", disabled: false }));

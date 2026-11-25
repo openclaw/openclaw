@@ -419,7 +419,12 @@ export function createFollowupRunner(
         );
       }
     } catch (error) {
-      const authorityLost = queued.operatorAuthority?.signal?.aborted === true;
+      // A retired cron delivery is terminal like Stop: withhold, record, never replay.
+      const authorityLost =
+        queued.operatorAuthority?.signal?.aborted === true ||
+        collectErrorGraphCandidates(error, readErrorCauses).some(
+          (cause) => cause instanceof CronDeliveryAuthorityError,
+        );
       if (
         !authorityLost &&
         ((queued.run.internalEventExecution &&

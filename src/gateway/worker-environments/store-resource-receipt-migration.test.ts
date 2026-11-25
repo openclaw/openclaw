@@ -66,6 +66,7 @@ it.each(["runtime", "doctor"] as const)(
         [
           "worker_environments",
           "operator_approvals",
+          "worker_session_placements",
           "session_repository_workspaces",
           "worker_workspace_pending_results",
           "schema_meta",

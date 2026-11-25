@@ -88,7 +88,7 @@ export function createAgentDatabaseHandleCloser(cache: {
       }
     } catch (error) {
       if (lease) {
-        invalidateOpenClawAgentDatabaseValidation(database.path);
+        invalidateOpenClawAgentDatabaseValidation(database.path, "a failed close");
         revokeSqliteDatabaseAdmissionsForPath(database.path);
       }
       throw error;

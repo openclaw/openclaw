@@ -491,7 +491,13 @@ describe("openclaw-tooltip", () => {
     vi.advanceTimersByTime(1);
     await expectOpenCount(1);
 
+    // The card's padding keeps it open, not only its slotted content.
+    const surface = currentTooltipSurface(tooltip)!;
     dispatchMousePointer(trigger, "pointerleave");
+    dispatchMousePointer(surface, "pointerenter");
+    vi.advanceTimersByTime(300);
+    await expectOpenCount(1);
+    dispatchMousePointer(surface, "pointerleave");
     vi.advanceTimersByTime(299);
     await expectOpenCount(1);
     vi.advanceTimersByTime(1);

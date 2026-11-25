@@ -3,7 +3,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import * as sessionEvents from "../../../auto-reply/reply/session-event-handoff.js";
-import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import {
   appendSessionTranscriptReport,
   loadExactSessionEntryReadOnly,
@@ -55,7 +54,7 @@ export function registerRequesterRestartDeliveryTests<Response>({
   | "getLifecycleHandler"
 > & { callGatewayMock: Mock<(request: GatewayRequest) => Promise<Response>> }): void {
   it.each([false, true])(
-    "retains an ended child's restart-aborted delivery without replay (consumed=%s)",
+    "settles an ended child's restart-aborted delivery without replay (consumed=%s)",
     async (consumed) => {
       const context = createGatewayContext();
       await registry.initSubagentRegistry();
@@ -78,13 +77,16 @@ export function registerRequesterRestartDeliveryTests<Response>({
           return dispatch(request);
         }
         attempts++;
-        if (consumed || attempts > 1) {
+        if (consumed) {
           const committed = await appendSessionTranscriptReport(requester, {
             kind: "custom",
             customTypes: ["synthetic-child-input"],
             selectReport: () => ({
               customType: "synthetic-child-input",
-              content: String(request.params?.message),
+              content: [
+                String(request.params?.message),
+                JSON.stringify(request.params?.internalEvents ?? []),
+              ].join("\n"),
               display: false,
             }),
           });
@@ -95,9 +97,6 @@ export function registerRequesterRestartDeliveryTests<Response>({
             .find((entry) => entry.protocolRunId === runId);
           await expectDefined(input?.onTranscriptCommitted, "input commit callback")(String(runId));
           deliveries++;
-        }
-        if (attempts > 1) {
-          return dispatch(request);
         }
         entered.resolve();
         await aborted.promise;
@@ -140,9 +139,7 @@ export function registerRequesterRestartDeliveryTests<Response>({
       markGatewayRestartDraining();
       aborted.resolve();
       await flushOwnedWork();
-      expect(loadSubagentRegistryFromSqlite().get(child.runId)?.delivery?.status).toBe(
-        consumed ? "delivered" : "pending",
-      );
+      expect(loadSubagentRegistryFromSqlite().get(child.runId)?.delivery?.status).toBe("delivered");
       await registry.resetSubagentRegistryForTests({ persist: false });
       resetGatewayWorkAdmission();
       const restarted = createGatewayContext();
@@ -159,16 +156,33 @@ export function registerRequesterRestartDeliveryTests<Response>({
       expect(loadSubagentRegistryFromSqlite().get(child.runId)?.delivery?.status).toBe("delivered");
       await registry.testing.sweepOnceForTests();
       await flushOwnedWork();
-      expect(deliveries).toBe(1);
-      expect(attempts).toBe(consumed ? 1 : 2);
+      expect(deliveries).toBe(consumed ? 1 : 0);
+      expect(attempts).toBe(1);
       const events = await loadTranscriptEvents(requester);
       expect(
         events.filter((event) => isRecord(event) && event.customType === "synthetic-child-input"),
-      ).toHaveLength(1);
+      ).toHaveLength(consumed ? 1 : 0);
+      const statuses = events.filter(
+        (event) => isRecord(event) && event.customType === "subagent-completion",
+      );
+      expect(statuses).toEqual(
+        consumed
+          ? []
+          : [
+              expect.objectContaining({
+                display: false,
+                content: expect.stringContaining("SAVED_COMPLETED_CHILD_RESULT"),
+                details: expect.objectContaining({ childRunIds: [child.runId] }),
+              }),
+            ],
+      );
+      if (!consumed) {
+        expect(statuses[0]).not.toHaveProperty("excludeFromContext");
+      }
     },
   );
 
-  it("shows every consumed result when a frozen batch settles in separate owner partitions", async () => {
+  it("settles consumed results across separate owner partitions without replay", async () => {
     const contexts = [createGatewayContext(), createGatewayContext()];
     await registry.initSubagentRegistry();
     await registry.activateSubagentRegistry(() => contexts[0]!);
@@ -217,26 +231,13 @@ export function registerRequesterRestartDeliveryTests<Response>({
       sessionId: getFixture().sessionStore[requesterSessionKey]!.sessionId,
     });
     const reports = events.filter(
-      (event) => isRecord(event) && event.customType === "subagent-completion" && event.display,
+      (event) => isRecord(event) && event.customType === "subagent-completion",
     );
-    expect(reports).toHaveLength(2);
-    for (const runId of batchRunIds) {
-      expect(
-        reports.some(
-          (event) =>
-            isRecord(event) && String(event.content).includes(`Saved answer from ${runId}`),
-        ),
-      ).toBe(true);
-    }
+    expect(reports).toEqual([]);
   });
 
-  it.each([
-    "yielded settle",
-    "aborted announce",
-    "aborted consumed announce",
-    "fallback write failure",
-  ] as const)(
-    "preserves a visible child outcome through spawn, drain, restart and %s",
+  it.each(["yielded settle", "aborted announce", "aborted consumed announce"] as const)(
+    "preserves a child outcome in model-visible history through spawn, drain, restart and %s",
     async (shape) => {
       const child = visibleChild(`drain-${shape.replaceAll(" ", "-")}`);
       const yielded = !shape.startsWith("aborted");
@@ -297,15 +298,19 @@ export function registerRequesterRestartDeliveryTests<Response>({
           .flatMap((mailbox) => mailbox.entries)
           .find((entry) => entry.protocolRunId === runId);
         if (yielded || shape === "aborted consumed announce") {
-          expect(request.params?.inputProvenance?.sourceTool).toBe(
-            yielded ? "subagent_settle" : "subagent_announce",
-          );
+          expect(request.params?.inputProvenance).toMatchObject({
+            sourceTool: yielded ? "subagent_settle" : "subagent_announce",
+            sourceSessionKey: child.childSessionKey,
+          });
           const committed = await appendSessionTranscriptReport(requester, {
             kind: "custom",
             customTypes: ["synthetic-child-input"],
             selectReport: () => ({
               customType: "synthetic-child-input",
-              content: String(request.params?.message),
+              content: [
+                String(request.params?.message),
+                JSON.stringify(request.params?.internalEvents ?? []),
+              ].join("\n"),
               display: false,
             }),
           });
@@ -323,21 +328,6 @@ export function registerRequesterRestartDeliveryTests<Response>({
           },
         } as Response;
       });
-      const appendReport = sessionAccessor.appendSessionTranscriptReport;
-      let failFallback = shape === "fallback write failure";
-      const append = vi
-        .spyOn(sessionAccessor, "appendSessionTranscriptReport")
-        .mockImplementation(async (...args) => {
-          if (
-            failFallback &&
-            args[1].kind === "custom" &&
-            args[1].customTypes.includes("subagent-completion")
-          ) {
-            throw new Error("synthetic fallback write failure");
-          }
-          return appendReport(...args);
-        });
-      onTestFinished(() => append.mockRestore());
       const restarted = createGatewayContext();
       await registry.initSubagentRegistry();
       await registry.activateSubagentRegistry(() => restarted);
@@ -349,33 +339,25 @@ export function registerRequesterRestartDeliveryTests<Response>({
       await registry.testing.sweepOnceForTests();
       await flushOwnedWork();
       expect(dispatchCount).toBeGreaterThan(0);
-      if (failFallback) {
-        const retained = loadSubagentRegistryFromSqlite().get(child.runId);
-        expect(retained?.delivery?.status).not.toBe("delivered");
-        expect(retained?.requesterSettleWake).toBeDefined();
-        failFallback = false;
-        await registry.resetSubagentRegistryForTests({ persist: false });
-        await registry.initSubagentRegistry();
-        const retried = createGatewayContext();
-        await registry.activateSubagentRegistry(() => retried);
-        await resumeMarkedSessions({
-          context: retried,
-          signal: new AbortController().signal,
-          log: { warn: vi.fn() },
-        });
-        await registry.testing.sweepOnceForTests();
-        await flushOwnedWork();
-      }
       const events = await loadTranscriptEvents(requester);
-      const visible = events.filter(
-        (event) => isRecord(event) && event.type === "custom_message" && event.display === true,
+      const statuses = events.filter(
+        (event) => isRecord(event) && event.customType === "subagent-completion",
       );
-      const visibleContent = visible
-        .map((event) => (isRecord(event) ? event.content : ""))
-        .join("\n");
-      expect(visibleContent).toContain(child.childSessionKey);
-      expect(visibleContent).toContain(child.runId);
-      expect(visibleContent).toMatch(/Gateway stopped|Gateway restart/);
+      const inputs = events.filter(
+        (event) => isRecord(event) && event.customType === "synthetic-child-input",
+      );
+      const consumed = yielded || shape === "aborted consumed announce";
+      expect(statuses).toHaveLength(consumed ? 0 : 1);
+      expect(inputs).toHaveLength(consumed ? 1 : 0);
+      const history = consumed ? inputs : statuses;
+      expect(history[0]).toMatchObject({ type: "custom_message", display: false });
+      expect(history[0]).not.toHaveProperty("excludeFromContext");
+      const content = history.map((event) => (isRecord(event) ? event.content : "")).join("\n");
+      if (!consumed) {
+        expect(content).toContain(child.childSessionKey);
+      }
+      expect(content).toContain(child.runId);
+      expect(content).toMatch(/Gateway stopped|Gateway restart/);
     },
   );
 

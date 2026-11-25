@@ -38,6 +38,7 @@ export function buildBaseOptions(
     apiKey: apiKey || options?.apiKey,
     transport: options?.transport,
     cacheRetention: options?.cacheRetention,
+    ...(options?.cachePrewarm ? { cachePrewarm: true as const } : {}),
     promptCacheTtl: options?.promptCacheTtl,
     sessionId: options?.sessionId,
     promptCacheKey: options?.promptCacheKey,
