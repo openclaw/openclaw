@@ -91,16 +91,57 @@ describe("notification updates of one key", () => {
     ]);
   });
 
-  it("keep a pending removal when a newer update of the key arrives", async () => {
+  it("keep only the newest state of a notification across posts and removals", async () => {
     const { notify } = phone("phone-a");
     await notify({ text: "Received 13 KB" });
     await notify({ change: "removed" });
-    await notify({ text: "Received 26 KB" });
-
     expect(peekSystemEvents(sessionKey)).toEqual([
       "Notification removed (node=phone-a key=ongoing)",
+    ]);
+
+    // Posted again with the text it had before the removal: the notification is back.
+    await notify({ text: "Received 13 KB" });
+    expect(peekSystemEvents(sessionKey)).toEqual([
+      "Notification posted (node=phone-a key=ongoing): Received 13 KB",
+    ]);
+
+    await notify({ change: "removed" });
+    expect(peekSystemEvents(sessionKey)).toEqual([
+      "Notification removed (node=phone-a key=ongoing)",
+    ]);
+  });
+
+  it("keep the queue order of states as they were reached", async () => {
+    const { notify } = phone("phone-a");
+    await notify({ key: "vpn", text: "Received 13 KB" });
+    await notify({ key: "nav", text: "Turn left" });
+    await notify({ key: "vpn", change: "removed" });
+
+    expect(peekSystemEvents(sessionKey)).toEqual([
+      "Notification posted (node=phone-a key=nav): Turn left",
+      "Notification removed (node=phone-a key=vpn)",
+    ]);
+  });
+
+  it("settle quietly when a newer change replaces an update before acceptance", async () => {
+    const firstAccepted = createDeferred<{ ok: false; error: string }>();
+    handoff.mockImplementationOnce(() => ({
+      id: "receipt-1",
+      cancel: () => true,
+      accepted: firstAccepted.promise,
+      settled: new Promise(() => {}),
+    }));
+    const { notify, warn } = phone("phone-a");
+    const first = notify({ text: "Received 13 KB" });
+    await vi.waitFor(() => expect(handoff).toHaveBeenCalledTimes(1));
+    await notify({ text: "Received 26 KB" });
+    firstAccepted.resolve({ ok: false, error: "Session event was cancelled before acceptance" });
+
+    await expect(first).resolves.toBeUndefined();
+    expect(peekSystemEvents(sessionKey)).toEqual([
       "Notification posted (node=phone-a key=ongoing): Received 26 KB",
     ]);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("do not report a superseded update as undelivered", async () => {

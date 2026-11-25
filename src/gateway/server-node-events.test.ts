@@ -182,6 +182,8 @@ const relayRegistration = {
   tokenDebugSuffix: "abcd1234",
 };
 
+const hex = (value: string) => Buffer.from(value, "utf8").toString("hex");
+
 describe("node exec events", () => {
   beforeEach(() => {
     registerApns.mockClear();
@@ -623,7 +625,8 @@ describe("notifications changed events", () => {
 
       const routing = {
         sessionKey,
-        contextKey: `${change === "removed" ? "notification-removed" : "notification"}:6e6f6465:6e6f746966`,
+        // Node id and key are hex-encoded so the queue's lowercasing keeps them distinct.
+        contextKey: `notification:${hex("node")}:${hex("notif")}`,
       };
       expect(enqueue).toHaveBeenCalledWith(
         `Notification ${change} (node=node key=notif${packageName ? ` package=${packageName}` : ""})`,

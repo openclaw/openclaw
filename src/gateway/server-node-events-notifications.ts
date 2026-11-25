@@ -31,18 +31,17 @@ import type {
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
-// Newest accepted occurrence per session and notification key. A posted update replaces the
-// pending occurrence of its key, so an older occurrence that settles as cancelled was superseded.
+// Newest accepted occurrence per session, route and notification. Each change replaces the
+// pending occurrence of its notification, so an older occurrence that settles as cancelled was
+// superseded.
 const latestNotificationOccurrences = new Map<string, string | undefined>();
 
 // Android notification keys are unique per device only, so the node is part of the identity:
-// one phone's update never replaces another phone's pending event. Removals keep their own
-// context, so a newer posted update never drops a removal the agent has not seen yet. The queue
-// lowercases context keys, and Android keys are case-sensitive, so both parts are hex-encoded.
-function notificationContextKey(nodeId: string, key: string, change: "posted" | "removed") {
-  const scope = change === "removed" ? "notification-removed" : "notification";
+// one phone's change never replaces another phone's pending event. The queue lowercases context
+// keys, and Android keys are case-sensitive, so both parts are hex-encoded.
+function notificationContextKey(nodeId: string, key: string) {
   const hex = (value: string) => Buffer.from(value, "utf8").toString("hex");
-  return `${scope}:${hex(nodeId)}:${hex(key)}`;
+  return `notification:${hex(nodeId)}:${hex(key)}`;
 }
 
 export async function handleNodeNotificationEvent(
@@ -130,16 +129,22 @@ export async function handleNodeNotificationEvent(
   const eventOptions = withSystemEventOwner(
     {
       sessionKey,
-      contextKey: notificationContextKey(nodeId, key, change),
+      contextKey: notificationContextKey(nodeId, key),
       deliveryContext: expectedTarget.deliveryContext,
-      // A newer posted state of one notification supersedes its still-pending earlier state.
-      ...(change === "posted" ? { replace: true } : {}),
+      // The newest change of one notification (posted or removed) supersedes its still-pending
+      // earlier change, so the queue holds each notification's current state once, in the order
+      // the states were reached.
+      replace: true,
     },
     agentId,
   );
   const occurrence = enqueueSystemEventEntry(summary, eventOptions);
   if (occurrence) {
-    const latestKey = `${eventOptions.sessionKey}\u0000${eventOptions.contextKey}`;
+    const latestKey = [
+      eventOptions.sessionKey,
+      eventOptions.contextKey,
+      JSON.stringify(eventOptions.deliveryContext ?? null),
+    ].join("\u0000");
     latestNotificationOccurrences.set(latestKey, occurrence.id);
     const settleLatest = () => {
       const superseded = latestNotificationOccurrences.get(latestKey) !== occurrence.id;
@@ -173,8 +178,12 @@ export async function handleNodeNotificationEvent(
         }
       });
     } catch (error) {
-      settleLatest();
+      const superseded = settleLatest();
       consumeSelectedSystemEventEntries(eventOptions.sessionKey, [occurrence]);
+      if (superseded) {
+        // A newer change of this notification replaced it before acceptance; that one carries on.
+        return undefined;
+      }
       throw error;
     }
   }
