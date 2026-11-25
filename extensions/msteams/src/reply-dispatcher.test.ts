@@ -170,16 +170,17 @@ describe("createMSTeamsReplyDispatcher", () => {
     });
   }
 
+  const areaChartBlock = {
+    type: "chart",
+    chartType: "area",
+    title: "Targets over time",
+    categories: ["May"],
+    series: [{ name: "Ready", values: [3] }],
+  } satisfies NonNullable<ReplyPayload["presentation"]>["blocks"][number];
   const fallbackBlocks: NonNullable<ReplyPayload["presentation"]>["blocks"] = [
     { type: "buttons", buttons: [{ label: "Deploy", value: "deploy" }] },
     { type: "table", caption: "Targets", headers: ["State"], rows: [["Ready"]] },
-    {
-      type: "chart",
-      chartType: "area",
-      title: "Targets over time",
-      categories: ["May"],
-      series: [{ name: "Ready", values: [3] }],
-    },
+    areaChartBlock,
   ];
   it.each(fallbackBlocks)("resolves authored fallback for $type replies", async (block) => {
     const messenger = await vi.importActual<typeof import("./messenger.js")>("./messenger.js");
@@ -224,6 +225,24 @@ describe("createMSTeamsReplyDispatcher", () => {
     if (block.type === "buttons") {
       expect(dispatcher.stream().emit).not.toHaveBeenCalled();
     }
+  });
+
+  it("delivers area chart values when the authored fallback is blank", async () => {
+    const messenger = await vi.importActual<typeof import("./messenger.js")>("./messenger.js");
+    renderMessagesMock.mockImplementation(messenger.renderReplyPayloadsToMessages);
+    sendMessagesMock.mockResolvedValue(["reply-id"]);
+    const dispatcher = createDispatcher("channel", { streaming: { mode: "progress" } });
+
+    await dispatcher.send({
+      text: "",
+      presentation: { blocks: [areaChartBlock] },
+      presentationTextMode: "fallback",
+    });
+    await dispatcher.dispatcherOptions.onSettled?.();
+
+    expect(sendMessagesMock.mock.calls.map(([send]) => send.messages)).toEqual([
+      [{ text: "Targets over time (area chart)\n\n• Ready: May: 3" }],
+    ]);
   });
 
   it("sends an informative status update once work expands in personal chats", async () => {

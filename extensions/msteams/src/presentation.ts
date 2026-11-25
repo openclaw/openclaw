@@ -98,10 +98,16 @@ export function buildMSTeamsPresentationCard(params: {
       const axes = { xAxisTitle: block.xLabel, yAxisTitle: block.yLabel };
       const [series] = block.series;
       if (series && block.series.length === 1) {
+        const needsSeriesHeading = Boolean(block.yLabel && block.yLabel !== series.name);
+        const title = needsSeriesHeading ? `${block.title} (${series.name})` : block.title;
+        // Teams web exposes the chart title to assistive technology but hides it visually.
+        if (needsSeriesHeading) {
+          body.push({ type: "TextBlock", text: title, weight: "Bolder", wrap: true });
+        }
         body.push({
           type: "Chart.VerticalBar",
-          title: block.title,
-          showTitle: true,
+          title,
+          showTitle: !needsSeriesHeading,
           ...axes,
           yAxisTitle: block.yLabel ?? series.name,
           data: block.categories.map((x, index) => ({ x, y: series.values[index] })),

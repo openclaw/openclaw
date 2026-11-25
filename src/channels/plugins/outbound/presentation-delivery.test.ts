@@ -83,6 +83,20 @@ describe("renderPresentationForDelivery", () => {
     expect(handler.renderPresentation).not.toHaveBeenCalled();
   });
 
+  it.each(["", " \t"])(
+    "generates fallback text when native rendering declines a blank authored fallback (%j)",
+    async (text) => {
+      const handler = {
+        presentationCapabilities: { tables: true },
+        renderPresentation: () => null,
+      };
+
+      expect(await renderPresentationForDelivery(handler, { ...fallbackPayload, text })).toEqual({
+        text: "Status\n\nSession status (table)\n- Item: Model; Value: anthropic/claude-haiku-4-5",
+      });
+    },
+  );
+
   it.each([true, false])("renders natively with table support: %s", async (tables) => {
     const handler = createHandler({ tables, buttons: true });
     handler.renderPresentation.mockImplementation(async (payload) => ({

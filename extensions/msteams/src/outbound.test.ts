@@ -165,8 +165,13 @@ describe("msteamsOutbound cfg threading", () => {
               ],
             }),
             expect.objectContaining({
+              type: "TextBlock",
+              text: "Deployments (Successful)",
+            }),
+            expect.objectContaining({
               type: "Chart.VerticalBar",
-              title: "Deployments",
+              title: "Deployments (Successful)",
+              showTitle: false,
               xAxisTitle: "Month",
               yAxisTitle: "Count",
               data: [
