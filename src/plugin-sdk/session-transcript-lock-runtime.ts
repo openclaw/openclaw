@@ -11,7 +11,10 @@ import {
 import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { assertLegacyTranscriptPreparation } from "../config/sessions/session-transcript-preparation.js";
-import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withSessionTranscriptWriteAssertion,
+} from "../config/sessions/transcript-write-context.js";
 import { warnSessionTranscriptPreparationDeprecation } from "../plugins/compat/session-transcript-preparation-deprecation.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { projectSessionTranscriptAppendOptions } from "./session-transcript-append-options.js";
@@ -75,6 +78,14 @@ export async function withProjectedSessionTranscriptWriteLock<
     );
   }
   const storageTarget = await resolveSessionTranscriptRuntimeTarget(scope, scope.config);
+  // Resolving an omitted owner must not redirect a guard to a different admitted session.
+  if (
+    assertCurrent &&
+    (scope.sessionKey.trim() !== storageTarget.sessionKey.trim() ||
+      scope.sessionId.trim() !== storageTarget.sessionId.trim())
+  ) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
   const agentId = normalizeAgentId(storageTarget.agentId);
   const target: InternalSessionTranscriptTarget = {
     agentId,
