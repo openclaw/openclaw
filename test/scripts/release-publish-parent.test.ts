@@ -816,7 +816,9 @@ verify_published_release() {
     expect(registryReads).toHaveLength(transientRegistry ? 4 : 1);
     expect(registryReads[0]?.args).toContain("Cache-Control: no-cache");
     if (sync === "timeout") {
-      expect(result.stderr).toContain(`parent's own sync run is still in progress (${ledgerRunUrl})`);
+      expect(result.stderr).toContain(
+        `parent's own sync run is still in progress (${ledgerRunUrl})`,
+      );
       expect(result.summary).toContain("verification was not judged against it");
       expect(result.summary).not.toContain("VERIFIED");
     } else if (isVisible) {
