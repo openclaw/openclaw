@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #203099: worker protocol carries provider-issued tool-call IDs longer than the identifier budget (stream frame, transcript toolCall content, toolResult reference, gateway tool invoke/cancel/update, live tool events, and exec-approval requests, with payload-budget and whitespace rejections).
+120
