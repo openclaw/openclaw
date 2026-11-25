@@ -73,15 +73,13 @@ patch(
   'import type { DatabaseSync } from "node:sqlite";',
   'import type { DatabaseSync } from "node:sqlite";\nimport { fixtureUpdateMigration } from "./openclaw-state-db-schema-fixture.js";',
 );
-patch(
-  maintenance,
-  "  stateApprovalProfileMigration,\n] as const;",
-  "  stateApprovalProfileMigration,\n  fixtureUpdateMigration,\n] as const;",
+patch(maintenance, /^export const versionedStateMigrations = \[[\s\S]*?^\] as const;$/mu, (list) =>
+  list.replace(/\n\] as const;$/u, "\n  fixtureUpdateMigration,\n] as const;"),
 );
 patch(
   maintenance,
-  "    stateApprovalProfileMigration,\n  ];",
-  "    stateApprovalProfileMigration,\n    fixtureUpdateMigration,\n  ];",
+  "  ];\n  const pending = migrations.filter",
+  "    fixtureUpdateMigration,\n  ];\n  const pending = migrations.filter",
 );
 patch(
   "src/state/openclaw-state-schema-runtime.ts",
@@ -105,8 +103,31 @@ patch(
 );
 patch(
   "src/infra/database-engine/state-port-descriptor.ts",
-  "38, 39, 40].includes(sourceVersion)",
-  `38, 39, 40, ${previous.schema}].includes(sourceVersion)`,
+  `, ${previous.schema - 1}].includes(`,
+  `, ${previous.schema - 1}, ${previous.schema}].includes(`,
+);
+// This boot point is after the private migration has been swapped into live state.
+patch(
+  "src/gateway/server-start.ts",
+  "    const transport = await createGatewayHttpTransport({",
+  `
+    {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
+      const database = resolveOpenClawStateSqlitePath();
+      const marker = path.join(path.dirname(database), "crash-after-migration.json");
+      if (fs.existsSync(marker)) {
+        const { DatabaseSync } = await import("node:sqlite");
+        const db = new DatabaseSync(database, { readOnly: true });
+        const schema = db.prepare("PRAGMA user_version").get();
+        const rows = db.prepare("SELECT * FROM fixture_update_migration").all();
+        db.close();
+        fs.writeFileSync(marker, JSON.stringify({ schema, rows, pid: process.pid }));
+        process.exit(1);
+      }
+    }
+    const transport = await createGatewayHttpTransport({`,
 );
 const env = {
   ...process.env,

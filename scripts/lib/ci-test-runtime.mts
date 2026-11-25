@@ -98,6 +98,10 @@ const nodeRequiredFiles = new Set([
   "src/infra/directory-watch-host.test.ts",
   // Git release launchers and service units are Node contracts; the suite skips on Bun.
   "src/infra/git-release.test.ts",
+  // Migration authorization and process-boundary proofs require Node's native SQLite APIs.
+  "test/scripts/upgrade-survivor-sqlite-observer.test.ts",
+  "test/scripts/upgrade-survivor-bulk-access.test.ts",
+  "test/scripts/upgrade-survivor-migration-chain.test.ts",
   // Node's trace-exit, diagnostic reports, and native process/SQLite lifecycle.
   "src/cli/cli-process-diagnostics.test.ts",
   "test/scripts/bench-session-history.test.ts",
