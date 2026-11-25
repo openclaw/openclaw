@@ -228,4 +228,16 @@ struct ChatToolFailureTests {
         #expect(launch.failureReason == "Requester provenance requires trusted in-process Gateway dispatch.")
         #expect(Self.send("a1", to: "k").failureReason == "No")
     }
+
+    @Test func `a failed launch says it failed once; repeats keep their count`() {
+        let launch = Self.failed("s1", "sessions_spawn", ["label": AnyCodable("Reply images")])
+        #expect(launch.sessionLaunch?.phase == .failed)
+        #if os(iOS)
+        #expect(launch.trailingStatus(attempts: 1) == nil, "The verb already says it failed")
+        #else
+        #expect(launch.trailingStatus(attempts: 1) == "Failed")
+        #endif
+        #expect(launch.trailingStatus(attempts: 2) == "2 failed")
+        #expect(Self.send("a1", to: "k").trailingStatus(attempts: 1) == "Failed")
+    }
 }

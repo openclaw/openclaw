@@ -26,7 +26,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(toasts.value as? String, "2 failed")
         for launch in ["tool_call:tf-call-3:sessions_spawn:3", "tool_call:tf-call-4:sessions_spawn:4"] {
             XCTAssertTrue(row(launch).exists, "Each launch is its own target and keeps its row")
-            XCTAssertTrue((row(launch).value as? String)?.hasPrefix("Failed") == true)
+            XCTAssertFalse((row(launch).value as? String)?.contains("Failed") == true, "The title already says it")
         }
         // Repeats live in their first row; envelopes never get one.
         for absent in [
@@ -38,7 +38,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(
             app.buttons.matching(NSPredicate(
                 format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "chat-tool-activity-",
-                "Couldn't launch")).count,
+                "Couldn’t launch")).count,
             2)
         XCTAssertFalse(app.staticTexts["agent:main:subagent:fixture-composer"].exists, "The key is never a name")
         self.attachScreenshot(named: "tool-failures-collapsed")

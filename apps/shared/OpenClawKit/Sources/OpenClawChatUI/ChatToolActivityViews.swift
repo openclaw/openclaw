@@ -141,12 +141,12 @@ struct ChatSessionLaunch: Equatable {
         switch (self.kind, self.phase) {
         case (.subagent, .running): String(localized: "Launching")
         case (.subagent, .succeeded): String(localized: "Launched")
-        case (.subagent, .failed): String(localized: "Couldn't launch subagent")
+        case (.subagent, .failed): String(localized: "Couldn’t launch subagent")
         case (.subagent, .interrupted): String(localized: "Subagent launch interrupted")
         case (.subagent, .unknown): String(localized: "Subagent launch outcome unknown")
         case (.chat, .running): String(localized: "Opening child chat")
         case (.chat, .succeeded): String(localized: "Opened child chat")
-        case (.chat, .failed): String(localized: "Couldn't open child chat")
+        case (.chat, .failed): String(localized: "Couldn’t open child chat")
         case (.chat, .interrupted): String(localized: "Child chat creation interrupted")
         case (.chat, .unknown): String(localized: "Child chat creation outcome unknown")
         }
@@ -221,6 +221,16 @@ extension ChatToolActivityItem {
         self.recordedExitCode ?? OpenClawChatMessageContent.exitCode(in: self.receiptDetails) ??
             OpenClawChatMessageContent
             .exitCode(in: ChatToolActivity.jsonObject(self.receiptText).map { AnyCodable($0) })
+    }
+
+    /// The row's trailing outcome. A failed launch's verb already says it failed, so a single one shows
+    /// none; repeats keep their count, which is new information (web chat-message-activity-operation.tsx:290-298).
+    func trailingStatus(attempts: Int) -> String? {
+        if attempts > 1 { return String(format: String(localized: "%lld failed"), Int64(attempts)) }
+        #if os(iOS)
+        if self.sessionLaunch?.phase == .failed { return nil }
+        #endif
+        return String(localized: self.statusTitle)
     }
 
     /// The collapsed row's title (web chat-tool-row-presentation.ts:65-99).
@@ -678,10 +688,8 @@ private struct ChatToolActivityRowContent: View {
         #endif
     }
 
-    private var statusText: String {
-        self.isRepeated
-            ? String(format: String(localized: "%lld failed"), Int64(self.attempts.count))
-            : String(localized: self.item.statusTitle)
+    private var statusText: String? {
+        self.item.trailingStatus(attempts: self.isRepeated ? self.attempts.count : 1)
     }
 
     private var detailLine: String? {
@@ -726,7 +734,7 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var accessibilityValue: String {
-        self.detailLine.map { "\(self.statusText), \($0)" } ?? self.statusText
+        [self.statusText, self.detailLine].compactMap(\.self).joined(separator: ", ")
     }
 
     private var expandedLineCount: Int {
@@ -781,7 +789,7 @@ private struct ChatToolActivityRowContent: View {
                 .accessibilityAddTraits(.isButton)
                 .accessibilityLabel(self.title)
                 .accessibilityValue(self.accessibilityValue)
-                .accessibilityHint("Opens the subagent's session")
+                .accessibilityHint("Opens the subagent’s chat")
                 .accessibilityIdentifier("chat-tool-activity-\(self.item.id)")
             } else if self.expandable {
                 Button {
@@ -960,12 +968,14 @@ private struct ChatToolActivityRowContent: View {
 
             // Preserve the native collapsed cues when a local title replaces the Gateway warning;
             // a failure always says how it ended (web chat-tool-outcome-summary.solid.tsx:19-25).
-            if self.isDesktopLayout || self.item.displayState == .unavailable || self.item.isError {
+            if self.isDesktopLayout || self.item.displayState == .unavailable || self.item.isError,
+               let statusText = self.statusText
+            {
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     #if os(iOS)
                     if self.item.isError { self.failureMark }
                     #endif
-                    Text(verbatim: self.statusText)
+                    Text(verbatim: statusText)
                         .font(OpenClawChatTypography.caption)
                         .foregroundStyle(self.item.isError ? self.failureTint : .secondary)
                 }
@@ -1226,7 +1236,7 @@ private struct ChatSessionLaunchGroupRow: View {
                                 Text(launch.label ?? String(format: String(localized: "Agent %@"), String(index + 1)))
                             }
                             .buttonStyle(.plain)
-                            .accessibilityHint("Opens the subagent's session")
+                            .accessibilityHint("Opens the subagent’s chat")
                         }
                     }
                 }
