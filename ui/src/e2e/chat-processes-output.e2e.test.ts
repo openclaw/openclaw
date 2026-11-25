@@ -85,7 +85,7 @@ suite.define(() => {
               ending: fits(value.lastIndexOf("/") + 1, value.length),
               prefix: fits(0, 10),
               height: box.height,
-              line: parseFloat(getComputedStyle(el).lineHeight),
+              line: Number.parseFloat(getComputedStyle(el).lineHeight),
             };
           });
         const initial = await inspect();
@@ -104,13 +104,13 @@ suite.define(() => {
           }
           await expect
             .poll(() =>
-              output.evaluate((e, line) => {
+              output.evaluate((e, expected) => {
                 const pre = e.querySelector("pre")!;
                 const node = pre.firstChild!;
-                const start = node.textContent!.indexOf(line);
+                const start = node.textContent!.indexOf(expected);
                 const range = document.createRange();
                 range.setStart(node, start);
-                range.setEnd(node, start + line.length);
+                range.setEnd(node, start + expected.length);
                 const rect = range.getBoundingClientRect();
                 return pre.contains(
                   document.elementFromPoint(rect.left + 2, rect.top + rect.height / 2),
