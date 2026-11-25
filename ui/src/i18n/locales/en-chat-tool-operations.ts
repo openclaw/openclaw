@@ -26,6 +26,152 @@ const enChatToolOperations = {
         timeout: "Sent · reply timed out",
       },
       operationLabels: {
+        ls: {
+          default: { action: "List files", running: "Listing files", done: "Listed files" },
+        },
+        process: {
+          list: {
+            action: "List processes",
+            running: "Listing processes",
+            done: "Listed processes",
+          },
+          poll: { action: "Check process", running: "Checking process", done: "Checked process" },
+          log: {
+            action: "Read process log",
+            running: "Reading process log",
+            done: "Read process log",
+          },
+          write: {
+            action: "Write to process",
+            running: "Writing to process",
+            done: "Wrote to process",
+          },
+          "send-keys": {
+            action: "Send keys to process",
+            running: "Sending keys to process",
+            done: "Sent keys to process",
+          },
+          submit: {
+            action: "Submit process input",
+            running: "Submitting process input",
+            done: "Submitted process input",
+          },
+          paste: {
+            action: "Paste into process",
+            running: "Pasting into process",
+            done: "Pasted into process",
+          },
+          kill: {
+            action: "Request process stop",
+            running: "Requesting process stop",
+            done: "Requested process stop",
+          },
+          clear: {
+            action: "Remove finished process record",
+            running: "Removing finished process record",
+            done: "Removed finished process record",
+          },
+          remove: {
+            action: "Remove process record",
+            running: "Removing process record",
+            done: "Removed process record",
+          },
+        },
+        code_execution: {
+          default: { action: "Run code", running: "Running code", done: "Ran code" },
+        },
+        secrets: {
+          request: {
+            action: "Request secret",
+            running: "Requesting secret",
+            done: "Requested secret",
+          },
+          list: {
+            action: "List secret names",
+            running: "Listing secret names",
+            done: "Listed secret names",
+          },
+          delete: { action: "Delete secret", running: "Deleting secret", done: "Deleted secret" },
+        },
+        search: {
+          default: { action: "Search files", running: "Searching files", done: "Searched files" },
+        },
+        find: {
+          default: { action: "Find files", running: "Finding files", done: "Found files" },
+        },
+        grep: {
+          default: {
+            action: "Search file contents",
+            running: "Searching file contents",
+            done: "Searched file contents",
+          },
+        },
+        glob: {
+          default: { action: "Find files", running: "Finding files", done: "Found files" },
+        },
+        crabbox: {
+          profiles: {
+            action: "List Crabbox profiles",
+            running: "Listing Crabbox profiles",
+            done: "Listed Crabbox profiles",
+          },
+          create: {
+            action: "Create Crabbox",
+            running: "Creating Crabbox",
+            done: "Created Crabbox",
+          },
+          status: { action: "Check Crabbox", running: "Checking Crabbox", done: "Checked Crabbox" },
+          exec: {
+            action: "Run command in Crabbox",
+            running: "Running command in Crabbox",
+            done: "Ran command in Crabbox",
+          },
+          process_status: {
+            action: "Check Crabbox process",
+            running: "Checking Crabbox process",
+            done: "Checked Crabbox process",
+          },
+          process_stop: {
+            action: "Stop Crabbox process",
+            running: "Stopping Crabbox process",
+            done: "Stopped Crabbox process",
+          },
+          stop: { action: "Stop Crabbox", running: "Stopping Crabbox", done: "Stopped Crabbox" },
+        },
+        diffs: {
+          default: {
+            action: "Show file differences",
+            running: "Showing file differences",
+            done: "Showed file differences",
+          },
+        },
+        file_fetch: {
+          default: { action: "Fetch file", running: "Fetching file", done: "Fetched file" },
+        },
+        dir_list: {
+          default: {
+            action: "List directory",
+            running: "Listing directory",
+            done: "Listed directory",
+          },
+        },
+        dir_fetch: {
+          default: {
+            action: "Fetch directory",
+            running: "Fetching directory",
+            done: "Fetched directory",
+          },
+        },
+        file_write: {
+          default: { action: "Write file", running: "Writing file", done: "Wrote file" },
+        },
+        qa_restart_wait: {
+          default: {
+            action: "Wait through restart",
+            running: "Waiting through restart",
+            done: "Waited through restart",
+          },
+        },
         decision_evaluate: {
           default: {
             action: "Evaluate criteria",
