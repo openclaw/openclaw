@@ -582,7 +582,7 @@ it.each(["model fallback", "auth profile", "exhausted profiles"] as const)(
         if (exhausted) {
           const error = expectError(outcome);
           expect(error).toMatchObject({ reason: "rate_limit" });
-          expect(error.message).toContain("openai/mock-1 is rate-limited.");
+          expect(error.message).toContain("OpenAI (mock-1) is rate-limited.");
           expect(error.message).toContain("retry in 3 hours");
           expect(error.message).toContain("model picker");
         } else {
