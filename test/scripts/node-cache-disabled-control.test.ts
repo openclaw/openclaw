@@ -5,11 +5,14 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
+  lstatSync,
   realpathSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import { NODE_CACHE_DISABLED_INPUTS } from "../../scripts/lib/node-cache-disabled-control.mts";
 import {
   hashPreparedPnpmExecutable,
@@ -95,7 +98,20 @@ describe("disabled control admission", () => {
   });
 });
 
-function fixture(mode: "success" | "mutation" | "wrong-oracle" | "cache-activity" | "exit") {
+type FixtureMode =
+  | "success"
+  | "mutation"
+  | "wrong-oracle"
+  | "cache-activity"
+  | "exit"
+  | "controls-success"
+  | "controls-empty-failure"
+  | "controls-report-directory"
+  | "controls-seed-tamper"
+  | "controls-seeded-rejection"
+  | "controls-deadline";
+
+function fixture(mode: FixtureMode) {
   const corepack = process.env.COREPACK_HOME;
   if (!corepack || !path.isAbsolute(corepack))
     throw new Error(
@@ -117,17 +133,38 @@ function fixture(mode: "success" | "mutation" | "wrong-oracle" | "cache-activity
   }
   const raw = definition();
   const script = [
-    'import assert from "node:assert/strict"; import {mkdirSync,writeFileSync} from "node:fs"; import path from "node:path";',
+    'import assert from "node:assert/strict"; import {chmodSync,lstatSync,mkdirSync,readdirSync,readFileSync,writeFileSync} from "node:fs"; import {flushCompileCache} from "node:module"; import path from "node:path";',
     'assert.ok(process.argv.includes("--no-cache")); assert.ok(process.argv.includes("--no-fsModuleCache"));',
-    'for(const [k,v] of Object.entries({OPENCLAW_VITEST_RUNTIME:"node",OPENCLAW_VITEST_FS_MODULE_CACHE:"0",OPENCLAW_VITEST_WORKER_CACHE:"0",NODE_DISABLE_COMPILE_CACHE:"1",COREPACK_ENABLE_NETWORK:"0",npm_config_offline:"true",pnpm_config_manage_package_manager_versions:"false",pnpm_config_pm_on_fail:"error"})) assert.equal(process.env[k],v);',
-    'assert.equal(process.env.NODE_OPTIONS,undefined); console.log("control reached");',
+    'for(const [k,v] of Object.entries({OPENCLAW_VITEST_RUNTIME:"node",OPENCLAW_VITEST_FS_MODULE_CACHE:"0",OPENCLAW_VITEST_WORKER_CACHE:"0",COREPACK_ENABLE_NETWORK:"0",npm_config_offline:"true",pnpm_config_manage_package_manager_versions:"false",pnpm_config_pm_on_fail:"error"})) assert.equal(process.env[k],v);',
+    'const control=path.basename(path.dirname(process.env.NODE_COMPILE_CACHE)); assert.equal(process.env.NODE_DISABLE_COMPILE_CACHE,control==="disabled"?"1":undefined);',
+    'assert.equal(process.env.NODE_OPTIONS,undefined); console.log("control pid="+process.pid);',
+    ...(mode === "controls-deadline"
+      ? ['if(control==="empty") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);']
+      : []),
     ...(mode === "exit" ? ["process.exit(7);"] : []),
     `const expected=${JSON.stringify(raw.expected)};`,
     ...(mode === "wrong-oracle" || mode === "mutation" ? ["expected[1]={...expected[0]};"] : []),
+    ...(mode === "controls-empty-failure"
+      ? ['if(control==="empty") expected[1]={...expected[0]};']
+      : []),
     "const assertionResults=expected.map(({fullName,line,column,status})=>({fullName,status,location:{line,column}}));",
-    'writeFileSync(process.argv[process.argv.indexOf("--outputFile")+1],JSON.stringify({success:true,numTotalTests:20,numPassedTests:20,numFailedTests:0,numPendingTests:0,numTodoTests:0,numTotalTestSuites:1,numPassedTestSuites:1,numFailedTestSuites:0,numPendingTestSuites:0,testResults:[{name:path.resolve("case.test.ts"),status:"passed",assertionResults}]}));',
+    'const reportFile=process.argv[process.argv.indexOf("--outputFile")+1];',
+    ...(mode === "controls-report-directory"
+      ? ['if(control==="empty") mkdirSync(reportFile); else']
+      : []),
+    'writeFileSync(reportFile,JSON.stringify({success:true,numTotalTests:20,numPassedTests:20,numFailedTests:0,numPendingTests:0,numTodoTests:0,numTotalTestSuites:1,numPassedTestSuites:1,numFailedTestSuites:0,numPendingTestSuites:0,testResults:[{name:path.resolve("case.test.ts"),status:"passed",assertionResults}]}));',
     ...(mode === "mutation"
       ? ['mkdirSync(".ignored");writeFileSync(".ignored/generated","changed");']
+      : []),
+    ...(mode === "controls-seed-tamper"
+      ? [
+          'if(control==="seeded") chmodSync(path.join(path.dirname(process.argv[process.argv.indexOf("--outputFile")+1]),"seed"),0o700);',
+        ]
+      : []),
+    ...(mode === "controls-seeded-rejection"
+      ? [
+          'if(control==="empty") { flushCompileCache(); const root=process.env.NODE_COMPILE_CACHE; const files=readdirSync(root,{recursive:true}).map(file=>path.join(root,file)).filter(file=>lstatSync(file).isFile()); assert.equal(files.length,1); const bytes=readFileSync(files[0]); bytes[0]^=0xff; writeFileSync(files[0],bytes); }',
+        ]
       : []),
     ...(mode === "cache-activity"
       ? ['writeFileSync(path.join(process.env.NODE_COMPILE_CACHE,"unexpected"),"cache");']
@@ -191,6 +228,39 @@ function fixture(mode: "success" | "mutation" | "wrong-oracle" | "cache-activity
   };
 }
 
+async function runFixture(mode: FixtureMode, full = false, timeoutMs = 30_000) {
+  const f = fixture(mode);
+  const output = path.join(f.root, "output");
+  const scratch = path.join(f.root, "scratch");
+  uncertainRoots.add(f.root);
+  const result = await runOwnedCommand({
+    bin: process.execPath,
+    args: [
+      path.join(f.harness, "scripts/vitest-pair-benchmark.mts"),
+      ...Object.entries({
+        mode: full ? "node-cache-workload-qualification" : "node-cache-disabled-control",
+        workload: f.workload,
+        definition: f.definitionPath,
+        output,
+        scratch,
+        "pnpm-bin": f.pnpm,
+        "harness-sha": f.harnessSha,
+        "timeout-ms": String(timeoutMs),
+        "run-attempt": "1",
+      }).flatMap(([name, value]) => [`--${name}`, value]),
+    ],
+    cwd: f.root,
+    env: { PATH: process.env.PATH, HOME: f.root },
+    logPath: path.join(f.root, "cli.log"),
+    timeoutMs: timeoutMs + 10_000,
+  });
+  const record = JSON.parse(
+    readFileSync(path.join(output, full ? "qualification.json" : "disabled.json"), "utf8"),
+  );
+  if (record.processTreeSettled) uncertainRoots.delete(f.root);
+  return { f, output, scratch, result, record };
+}
+
 // Synthetic reports qualify the real CLI/ownership boundary, not full-W behavior.
 it
   .runIf(
@@ -208,33 +278,7 @@ it
   ] as const)(
   "retains %s disabled-control evidence",
   async (mode, expectedError) => {
-    const f = fixture(mode);
-    const output = path.join(f.root, "output");
-    const scratch = path.join(f.root, "scratch");
-    uncertainRoots.add(f.root);
-    const result = await runOwnedCommand({
-      bin: process.execPath,
-      args: [
-        path.join(f.harness, "scripts/vitest-pair-benchmark.mts"),
-        ...Object.entries({
-          mode: "node-cache-disabled-control",
-          workload: f.workload,
-          definition: f.definitionPath,
-          output,
-          scratch,
-          "pnpm-bin": f.pnpm,
-          "harness-sha": f.harnessSha,
-          "timeout-ms": "30000",
-          "run-attempt": "1",
-        }).flatMap(([name, value]) => [`--${name}`, value]),
-      ],
-      cwd: f.root,
-      env: { PATH: process.env.PATH, HOME: f.root },
-      logPath: path.join(f.root, "cli.log"),
-      timeoutMs: 40_000,
-    });
-    const record = JSON.parse(readFileSync(path.join(output, "disabled.json"), "utf8"));
-    if (record.processTreeSettled) uncertainRoots.delete(f.root);
+    const { f, output, scratch, result, record } = await runFixture(mode);
     expect(record).toMatchObject({
       scope: "disabled-only",
       timingAdmission: false,
@@ -279,6 +323,125 @@ it
       });
     }
     expect(existsSync(path.join(output, "analysis.json"))).toBe(false);
+  },
+  50_000,
+);
+
+// These run real native ESM cache reads/writes while retaining the fixed synthetic
+// twenty-case oracle. They do not qualify the full prepared workload.
+it
+  .runIf(
+    process.platform === "linux" &&
+      process.arch === "x64" &&
+      process.version === "v24.22.1" &&
+      !process.versions.bun,
+  )
+  .each([
+    ["controls-success", null, "seeded"],
+    ["controls-empty-failure", "expected passed inventory", "empty"],
+    ["controls-report-directory", "EISDIR", "empty"],
+    ["controls-seed-tamper", "Sealed seed directory mode changed", "seeded"],
+    ["controls-seeded-rejection", "lacks required launcher cache evidence", "seeded"],
+    ["controls-deadline", "deadline", "empty"],
+  ] as const)(
+  "retains ordered %s workload-control evidence",
+  async (mode, error, last) => {
+    const { f, output, scratch, result, record } = await runFixture(
+      mode,
+      true,
+      mode === "controls-deadline" ? 5_000 : 30_000,
+    );
+    const read = (name: string) =>
+      JSON.parse(readFileSync(path.join(output, `${name}.json`), "utf8"));
+    const deadline = mode === "controls-deadline";
+    if (deadline) {
+      // The owner conservatively retains scratch on abort. This single-process
+      // fixture can independently prove its known group dead before test cleanup.
+      const pid = Number(
+        /control pid=(\d+)/u.exec(readFileSync(path.join(output, "empty.log"), "utf8"))?.[1],
+      );
+      expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+      expect(
+        inspectManagedProcessGroup(
+          { pid, exitCode: null, signalCode: null },
+          { errorPolicy: "indeterminate" },
+        ),
+      ).toBe("dead");
+      uncertainRoots.delete(f.root);
+    }
+    try {
+      expect(record).toMatchObject({
+        scope: "disabled-empty-seeded",
+        timingAdmission: false,
+        processTreeSettled: !deadline,
+      });
+      expect(record.controls.map(({ kind }: { kind: string }) => kind)).toEqual(
+        last === "empty" ? ["disabled", "empty"] : ["disabled", "empty", "seeded"],
+      );
+      expect(read("disabled").status).toBe("success");
+      expect(existsSync(path.join(output, "seeded.json"))).toBe(last === "seeded");
+      expect(existsSync(scratch)).toBe(deadline);
+      expect(existsSync(path.join(output, "analysis.json"))).toBe(false);
+      const final = read(last);
+      expect(final.logSha256).toBe(sha256(readFileSync(path.join(output, `${last}.log`))));
+      expect(final.processTreeSettled).toBe(!deadline);
+      expect(read("terminal-manifest").status).toBe(record.status);
+      if (error) {
+        expect(result.exitCode).not.toBe(0);
+        expect(record.status).toBe("failure");
+        expect(record.error.toLowerCase()).toContain(error.toLowerCase());
+        expect(final.status).toBe("failure");
+        if (mode === "controls-deadline") {
+          expect(final.checks.oracle.status).toBe("unavailable");
+          expect(final.checks.inventory.status).toBe("unavailable");
+        } else if (mode === "controls-report-directory") {
+          expect(final.checks.oracle.status).toBe("failed");
+          expect(final.reportSha256).toBeNull();
+          expect(final.reportHashError).toBe("report artifact is not a regular file");
+          expect(final.error).toBe(record.error);
+        } else if (mode === "controls-seed-tamper") {
+          expect(final.checks.oracle.status).toBe("passed");
+          expect(final.checks.diagnostic.status).toBe("passed");
+          expect(final.checks.inventory.status).toBe("failed");
+        } else if (mode === "controls-seeded-rejection") {
+          expect(final.checks.oracle.status).toBe("passed");
+          expect(final.checks.diagnostic.status).toBe("failed");
+        }
+      } else {
+        expect(result.exitCode, readFileSync(path.join(f.root, "cli.log"), "utf8")).toBe(0);
+        expect(record.status).toBe("success");
+        expect(read("empty").diagnostic).toMatchObject({
+          read: "missing",
+          state: "not initialized",
+        });
+        expect(final.diagnostic).toMatchObject({ read: "hit", state: "accepted" });
+        expect(record.seed.files).toContainEqual(
+          expect.objectContaining({ path: final.diagnostic.cacheFile }),
+        );
+        expect(lstatSync(path.join(output, "seed")).mode & 0o777).toBe(0o500);
+        for (const kind of ["disabled", "empty", "seeded"]) {
+          const control = read(kind);
+          expect(control.execution.assertionCount).toBe(20);
+          expect(Object.values(control.checks)).toEqual([
+            { status: "passed" },
+            { status: "passed" },
+            { status: "passed" },
+          ]);
+        }
+      }
+    } finally {
+      // Retained sealed proof is intentional; make only this fixture writable for cleanup.
+      const seed = path.join(output, "seed");
+      const writable = (dir: string) => {
+        chmodSync(dir, 0o700);
+        for (const name of readdirSync(dir)) {
+          const file = path.join(dir, name);
+          if (lstatSync(file).isDirectory()) writable(file);
+          else chmodSync(file, 0o600);
+        }
+      };
+      if (record.processTreeSettled && existsSync(seed)) writable(seed);
+    }
   },
   50_000,
 );
