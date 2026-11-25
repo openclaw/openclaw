@@ -420,15 +420,6 @@ struct OpenClawChatComposer: View {
                 })
         }
 
-        #if os(iOS)
-        // A picked item shows its own spinner on its tile while it is prepared.
-        if self.viewModel.isSendingAttachmentDraft {
-            ChatAttachmentActivityRow(title: "Sending attachments…")
-        } else if self.viewModel.isSubmittingDraft, !self.viewModel.attachments.isEmpty {
-            ChatAttachmentActivityRow(title: "Preparing message…")
-        }
-        #endif
-
         if self.composerChrome == .clean {
             composerCapabilityNoticeRow
         }

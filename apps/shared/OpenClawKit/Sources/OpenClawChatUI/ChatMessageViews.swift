@@ -211,6 +211,8 @@ private enum ChatUIConstants {
     /// at most 128 pt: `--chat-user-image-grid-size` in ui/src/styles/chat/message-layout.css:563-603.
     static let userImageTileMax: CGFloat = 128
     static let userImageTileGap: CGFloat = 4
+    /// A user message (bubble and attachments) that has not been confirmed yet.
+    static let pendingOpacity: Double = 0.5
     #else
     /// Web `--radius-md` (ui/src/styles/base.css:366) on the user bubble.
     static let bubbleCorner: CGFloat = 10
@@ -219,10 +221,146 @@ private enum ChatUIConstants {
 }
 
 #if os(iOS)
-/// What the transcript attaches to a user bubble: its long-press menu and its reactions pill.
+/// What the transcript attaches to a user bubble: its long-press menu, its reactions pill, and
+/// where it is on its way to the Gateway.
 struct ChatUserBubbleAccessories {
     let menu: () -> AnyView
     let reactions: () -> AnyView
+    var send: ChatUserSendPresentation?
+}
+
+/// A user message that is not confirmed yet. It has one place: the timestamp's, which stays
+/// reserved, so nothing moves when the time takes over.
+struct ChatUserSendPresentation {
+    enum Phase: Equatable {
+        /// Leaving the device (saved, sending, or waiting for history to confirm it): dimmed, no time.
+        case sending
+        /// Saved but held behind a running reply or a closed connection: dimmed, "Queued".
+        case queued
+        /// Uploading its attachments right now.
+        case uploading
+        case notSent
+        case deliveryUnknown
+    }
+
+    let phase: Phase
+    let retry: () -> Void
+    /// Withdraws a message that has not left the device.
+    let cancel: () -> Void
+
+    init(phase: Phase, retry: @escaping () -> Void = {}, cancel: @escaping () -> Void = {}) {
+        self.phase = phase
+        self.retry = retry
+        self.cancel = cancel
+    }
+
+    /// Nil once the outbox has confirmed the message (or never held it).
+    @MainActor
+    init?(message: OpenClawChatMessage, viewModel: OpenClawChatViewModel) {
+        guard let state = viewModel.outboxState(for: message.id) else { return nil }
+        switch state {
+        case .queued:
+            // A row about to flush reads as sending; one held behind a reply or offline says so.
+            self.phase = viewModel.hasBlockingRunActivity || !viewModel.healthOK ? .queued : .sending
+        case .sending:
+            self.phase = message.content.contains(where: \.isInlineAttachment) ? .uploading : .sending
+        case .confirming:
+            self.phase = .sending
+        case let .failed(reason):
+            self.phase = reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError
+                ? .deliveryUnknown : .notSent
+        }
+        let id = message.id
+        self.retry = { [weak viewModel] in viewModel?.retryOutboxMessage(id) }
+        self.cancel = { [weak viewModel] in viewModel?.deleteOutboxMessage(id) }
+    }
+
+    var isPending: Bool {
+        self.phase == .sending || self.phase == .queued || self.phase == .uploading
+    }
+}
+
+/// The user message's line under the bubble: the time once the message is confirmed, a quiet word
+/// while it waits, or "Not sent" with tap to retry. The time keeps its space while hidden.
+private struct ChatUserMessageStatus: View {
+    let timestamp: Double?
+    let send: ChatUserSendPresentation?
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            ChatMessageRelativeTimestamp(timestamp: self.timestamp)
+                .opacity(self.send == nil ? 1 : 0)
+                .accessibilityHidden(self.send != nil)
+            // Keeps one caption line reserved when the message has no time yet.
+            Text(verbatim: " ")
+                .font(OpenClawChatTypography.caption2)
+                .accessibilityHidden(true)
+            if let send = self.send {
+                switch send.phase {
+                case .sending, .uploading:
+                    EmptyView()
+                case .queued:
+                    Text("Queued")
+                        .font(OpenClawChatTypography.caption2)
+                        .foregroundStyle(.secondary)
+                case .notSent, .deliveryUnknown:
+                    Button(action: send.retry) {
+                        Text(send.phase == .notSent ? "Not sent" : "Delivery unknown")
+                            .font(OpenClawChatTypography.caption2)
+                            .foregroundStyle(.primary)
+                            // A 44 pt target without growing the line.
+                            .padding(.vertical, 15)
+                            .contentShape(Rectangle())
+                            .padding(.vertical, -15)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(Text("Tap to try again"))
+                }
+            }
+        }
+    }
+}
+
+/// An attachment of a user message on its way out: an indeterminate ring while it uploads (the
+/// send is one Gateway frame, so there is no real progress to show), and a cancel button while
+/// the message still waits on the device.
+private struct ChatAttachmentSendOverlay: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let send: ChatUserSendPresentation
+    @State private var spins = false
+
+    var body: some View {
+        switch self.send.phase {
+        case .uploading:
+            Circle()
+                .trim(from: 0, to: 0.28)
+                .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .frame(width: 18, height: 18)
+                .rotationEffect(.degrees(self.spins ? 360 : 0))
+                .padding(7)
+                .background(Circle().fill(Color.black.opacity(0.45)))
+                .onAppear {
+                    guard !self.reduceMotion else { return }
+                    withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { self.spins = true }
+                }
+                .accessibilityElement()
+                .accessibilityLabel(Text("Uploading"))
+        case .queued:
+            Button(action: self.send.cancel) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.white)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.black.opacity(0.45)))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Cancel"))
+        case .sending, .notSent, .deliveryUnknown:
+            EmptyView()
+        }
+    }
 }
 
 /// The user bubble's long-press menu and reactions pill. The pill hangs on the bubble's lower-left
@@ -484,7 +622,8 @@ struct ChatMessageBubble: View, @MainActor Equatable {
     let inlineWidgetScope: ChatInlineWidgetScope
     let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
     #if os(iOS)
-    /// Not compared: only user bubbles carry it, and the iOS render gate never holds those.
+    /// Compared by send phase only: SwiftUI diffs this Equatable view with `==` even without the
+    /// render gate, so a phase left out of it would keep a confirmed message dimmed.
     var userBubbleAccessories: ChatUserBubbleAccessories?
     #endif
 
@@ -501,6 +640,9 @@ struct ChatMessageBubble: View, @MainActor Equatable {
         // The iOS gate excludes media rows, so `mediaPlaybackAllowed` cannot affect its subtree.
         // Comparing closure identity would defeat the gate because ChatView rebuilds them each pass.
         guard self.styleValue(lhs.style) == self.styleValue(rhs.style) else { return false }
+        #if os(iOS)
+        guard lhs.userBubbleAccessories?.send?.phase == rhs.userBubbleAccessories?.send?.phase else { return false }
+        #endif
         return lhs.message == rhs.message &&
             lhs.liveToolCalls == rhs.liveToolCalls &&
             lhs.metadata == rhs.metadata &&
@@ -608,6 +750,7 @@ extension ChatMessageBubble {
                     #if os(iOS)
                     let bubbleText = self.userBubbleText(text)
                     let hasBubble = !bubbleText.isEmpty || self.linkPreviewURL != nil
+                    let send = self.userBubbleAccessories?.send
                     VStack(alignment: .trailing, spacing: ChatUIConstants.userFooterSpacing) {
                         if !self.visibleInlineAttachments.isEmpty {
                             self.userAttachments(hasBubble: hasBubble)
@@ -615,6 +758,7 @@ extension ChatMessageBubble {
                         }
                         if hasBubble {
                             self.userBubble(text: bubbleText, textColor: textColor)
+                                .opacity(send?.isPending == true ? ChatUIConstants.pendingOpacity : 1)
                         }
                         self.footer
                             .padding(.trailing, self.style == .onboarding ? 8 : 0)
@@ -783,7 +927,7 @@ extension ChatMessageBubble {
     private var footer: some View {
         #if os(iOS)
         if self.isUser {
-            ChatMessageRelativeTimestamp(timestamp: self.metadata?.timestamp)
+            ChatUserMessageStatus(timestamp: self.metadata?.timestamp, send: self.userBubbleAccessories?.send)
         }
         #else
         let usage = self.usagePresentation
@@ -959,13 +1103,22 @@ extension ChatMessageBubble {
     }
 
     private func userAttachmentRow(_ att: OpenClawChatMessageContent, tileSide: CGFloat? = nil) -> some View {
-        AttachmentRow(
+        let send = self.userBubbleAccessories?.send
+        let isImage = AttachmentRow.rendersImage(att)
+        return AttachmentRow(
             att: att,
             imageGallery: ChatImageViewerItem.gallery(in: self.visibleInlineAttachments),
             isUser: true,
             textColor: self.textColor,
             playbackAllowed: self.mediaPlaybackAllowed,
             imageTileSide: tileSide)
+            .opacity(send?.isPending == true ? ChatUIConstants.pendingOpacity : 1)
+            .overlay(alignment: isImage ? .center : .trailing) {
+                if let send {
+                    ChatAttachmentSendOverlay(send: send)
+                        .padding(.trailing, isImage ? 0 : 4)
+                }
+            }
     }
 }
 #endif
@@ -1193,6 +1346,13 @@ struct ChatSpeechStatusChip: View {
 /// Status footer for a user bubble awaiting durable delivery or confirmation.
 @MainActor
 struct ChatOutboxStatusLabel: View {
+    // iOS shows the send state in the user message's own timestamp line instead.
+    #if os(iOS)
+    static let isShownUnderMessages = false
+    #else
+    static let isShownUnderMessages = true
+    #endif
+
     let state: OpenClawChatOutboxMessageState
     var queueMode: OpenClawChatQueueMode?
 
