@@ -2,6 +2,7 @@ import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readLoggingConfig } from "./config.js";
+import type { ProtectedDiagnosticPaths } from "./diagnostic-file-scope.js";
 import type { LogTailPayload, readConfiguredLogTail } from "./log-tail.js";
 import { getResolvedLoggerFileTarget } from "./logger.js";
 import { captureSecretRedactionRegistrySnapshot } from "./secret-redaction-registry.js";
@@ -10,6 +11,7 @@ export type LogTailRequest = {
   type: "tail";
   target: Awaited<ReturnType<typeof getResolvedLoggerFileTarget>>;
   params: Parameters<typeof readConfiguredLogTail>[0];
+  protectedPaths?: ProtectedDiagnosticPaths;
   redactPatterns: string[] | undefined;
   secrets: ReturnType<typeof captureSecretRedactionRegistrySnapshot>;
 };
@@ -17,6 +19,7 @@ export type LogTailRequest = {
 /** Keep file scanning and scalar redaction off the Gateway's shared event loop. */
 export async function readConfiguredLogTailInWorker(
   params?: LogTailRequest["params"],
+  protectedPaths?: ProtectedDiagnosticPaths,
 ): Promise<LogTailPayload> {
   const target = await getResolvedLoggerFileTarget();
   const state = resolveGlobalSingleton<{ pool?: WorkerTaskPool<LogTailRequest, LogTailPayload> }>(
@@ -37,6 +40,7 @@ export async function readConfiguredLogTailInWorker(
     type: "tail",
     target,
     params,
+    protectedPaths,
     redactPatterns: readLoggingConfig()?.redactPatterns,
     secrets: captureSecretRedactionRegistrySnapshot(),
   };

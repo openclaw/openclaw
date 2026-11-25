@@ -65,25 +65,19 @@ function boundedReadRuntime(
   runtime: RuntimeEnv,
   maxChars = CONFIG_GET_OUTPUT_MAX_CHARS,
 ): RuntimeEnv {
-  const marker = "… (output limit reached; narrow the request)";
-  // Reserve space for the marker and charge for the text actually emitted.
-  let remaining = maxChars - marker.length - 1;
+  let remaining = maxChars;
   const write = (sink: RuntimeEnv["log"], args: unknown[]) => {
-    if (remaining < 0) {
+    if (remaining <= 0) {
       return;
     }
     const plain = stripAnsi(args.join(" ")).replace(/[\p{Cc}\p{Bidi_Control}]/gu, (control) =>
       control === "\n" || control === "\t" ? control : "",
     );
     const text = redactToolPayloadText(plain);
-    if (text.length < remaining) {
-      sink(text);
-      remaining -= text.length + 1;
-      return;
-    }
-    const prefix = truncateUtf16Safe(text, Math.max(0, remaining - 1));
-    sink(prefix ? prefix + "\n" + marker : marker);
-    remaining = -1;
+    const notice = "\n… (output limit reached; narrow the request)";
+    const suffix = text.length > remaining && remaining >= notice.length ? notice : "";
+    sink(truncateUtf16Safe(text, remaining - suffix.length) + suffix);
+    remaining -= text.length + 1;
   };
   return {
     log: (...args) => write(runtime.log, args),
@@ -188,16 +182,19 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "logs": {
-      const [{ readConfiguredLogTail }, { openSystemAgentDiagnosticLog }] = await Promise.all([
-        import("../logging/log-tail.js"),
-        import("./read-install-file.js"),
-      ]);
-      const tail = await readConfiguredLogTail(
-        { limit: LOG_TAIL_MAX_LINES, maxBytes: LOG_TAIL_MAX_BYTES },
-        undefined,
-        openSystemAgentDiagnosticLog,
-      );
-      const source = opts.deps?.setupSurface === "gateway" ? "Gateway" : "Local CLI profile";
+      const { createDiagnosticLogOpener, resolveProtectedDiagnosticPaths } =
+        await import("../logging/diagnostic-file-scope.js");
+      const protectedPaths = resolveProtectedDiagnosticPaths();
+      const params = { limit: LOG_TAIL_MAX_LINES, maxBytes: LOG_TAIL_MAX_BYTES };
+      const hosted = opts.deps?.setupSurface === "gateway";
+      const tail = hosted
+        ? await (
+            await import("../logging/log-tail-worker.js")
+          ).readConfiguredLogTailInWorker(params, protectedPaths)
+        : await (
+            await import("../logging/log-tail.js")
+          ).readConfiguredLogTail(params, undefined, createDiagnosticLogOpener(protectedPaths));
+      const source = hosted ? "Gateway" : "Local CLI profile";
       const sourceNote = source === "Gateway" ? "" : ` ${CLI_SERVICE_LOG_GUIDANCE}`;
       runtime.log(
         tail.lines.length === 0
