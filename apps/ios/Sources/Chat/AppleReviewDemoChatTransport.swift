@@ -723,22 +723,22 @@ private actor LocalFixtureChatStore {
     /// history holds the envelope call, a nested row with the inner call and its result, and the
     /// envelope's own result. Five sends to two chats and two launches fail around one success.
     private static func toolFailuresTurn() throws -> [AnyCodable] {
-        var rows = [#"{"role":"user","timestamp":1,"__openclaw":{"id":"tf-user","runId":"tf-run"},"#
+        var rows = [#"{"role":"user","timestamp":1795640000000,"__openclaw":{"id":"tf-user","runId":"tf-run"},"#
             + #""content":[{"type":"text","text":"Hand the fixes to their chats."}]}"#]
         func dispatched(_ index: Int, _ tool: String, _ args: String, failed: Bool, result: String) {
             let id = "tf-call-\(index)"
             let nested = "tool_call:\(id):\(tool):\(index)"
-            rows.append(#"{"role":"assistant","stopReason":"toolUse","timestamp":\#(10 + index * 3),"#
+            rows.append(#"{"role":"assistant","stopReason":"toolUse","timestamp":\#(1_795_640_010_000 + index * 3000),"#
                 + #""__openclaw":{"id":"\#(id)-call","runId":"tf-run"},"content":[{"type":"toolCall","id":"\#(id)","#
                 + #""name":"dispatch_action","arguments":{"id":"\#(tool)","args":\#(args)}}]}"#)
             rows.append(#"{"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"#
-                + #""excludeFromContext":true,"timestamp":\#(11 + index * 3),"#
+                + #""excludeFromContext":true,"timestamp":\#(1_795_640_011_000 + index * 3000),"#
                 + #""__openclaw":{"id":"\#(id)-nested","runId":"tf-run"},"content":["#
                 + #"{"type":"toolCall","id":"\#(nested)","name":"\#(tool)","arguments":\#(args),"#
                 + #""parentToolCallId":"\#(id)"},{"type":"toolResult","toolCallId":"\#(nested)","#
                 + #""toolName":"\#(tool)","parentToolCallId":"\#(id)","isError":\#(failed),"#
                 + #""content":[{"type":"text","text":"\#(result)"}]}]}"#)
-            rows.append(#"{"role":"toolResult","timestamp":\#(12 + index * 3),"#
+            rows.append(#"{"role":"toolResult","timestamp":\#(1_795_640_012_000 + index * 3000),"#
                 + #""__openclaw":{"id":"\#(id)-result","runId":"tf-run"},"toolCallId":"\#(id)","#
                 + #""toolName":"dispatch_action","isError":\#(failed),"#
                 + #""content":[{"type":"text","text":"\#(result)"}]}"#)
