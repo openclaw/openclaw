@@ -3243,12 +3243,6 @@ extension NodeAppModel {
         rawValue.flatMap(OpenClawCameraFacing.init(rawValue:)) ?? .front
     }
 
-    func setPreferredCameraFacing(_ facing: OpenClawCameraFacing) {
-        guard self.preferredCameraFacing != facing else { return }
-        self.preferredCameraFacing = facing
-        UserDefaults.standard.set(facing.rawValue, forKey: Self.preferredCameraFacingKey)
-    }
-
     private func showCameraHUD(
         ownerID: String,
         text: String,
