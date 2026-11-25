@@ -172,7 +172,7 @@ it("refuses a missing database with unresolved journal data instead of bootstrap
   expect(fs.readFileSync(`${file}-journal`, "utf8")).toBe("retained journal bytes");
 });
 
-it.each(["missing", "zero-byte", "uninitialized"] as const)(
+it.each(["missing", "zero-byte", "uninitialized", "current-state"] as const)(
   "omits %s fresh catalogs from a schema-only upgrade inventory",
   async (layout) => {
     const root = dirs.make("state-boundary-fresh-");
@@ -189,7 +189,11 @@ it.each(["missing", "zero-byte", "uninitialized"] as const)(
         fs.writeFileSync(shared, "");
       } else {
         using database = new DatabaseSync(shared);
-        database.exec("CREATE TABLE unrelated (value TEXT)");
+        database.exec(
+          layout === "current-state"
+            ? `${OPENCLAW_STATE_SCHEMA_SQL}; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`
+            : "CREATE TABLE unrelated (value TEXT)",
+        );
       }
     }
     const { targets } = await discoverDatabases(
@@ -198,6 +202,9 @@ it.each(["missing", "zero-byte", "uninitialized"] as const)(
       { OPENCLAW_STATE_DIR: root },
     );
     expect(targets).toEqual([
+      ...(layout === "current-state"
+        ? [expect.objectContaining({ path: shared, version: OPENCLAW_STATE_SCHEMA_VERSION })]
+        : []),
       expect.objectContaining({
         path: agent,
         version: OPENCLAW_AGENT_SCHEMA_VERSION - 1,

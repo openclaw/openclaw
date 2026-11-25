@@ -139,13 +139,12 @@ export async function upgradeStateDirectory(params: {
     let restore: StateUpgradeRestore | undefined;
     try {
       restore = await beginStateUpgradeRestore(env);
-      if (outdated.length === 0 && !configRepair && !includeRepair) {
-        // A current store's admission owns additive schema repair. Deciding
-        // whether imports are needed must not open it through the full detector.
-        if (!(await hasLegacyStateSources(stateDir, config, env, inventory.targets))) {
-          await publishStateUpgradeRestore(restore, { targets: [], config });
-          return { status: "current" };
-        }
+      const legacySources = await hasLegacyStateSources(stateDir, config, env, inventory.targets);
+      // Additive-only schema work has no historical content repair to run.
+      // Reader-floor upgrades retain the full Doctor detector after convergence.
+      if (outdated.length === 0 && !configRepair && !includeRepair && !legacySources) {
+        await publishStateUpgradeRestore(restore, { targets: [], config });
+        return { status: "current" };
       }
       if (process.platform === "linux" && (configRepair || includeRepair)) {
         const rootTarget = fs.realpathSync(snapshot.path);
@@ -287,45 +286,47 @@ export async function upgradeStateDirectory(params: {
                 },
               );
             }
-            const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config, env });
-            const legacyState = await detectLegacyStateMigrations({
-              cfg: config,
-              env,
-              doctorOnlyStateMigrations: true,
-              legacySessionSurfaces,
-            });
-            const legacyWork = hasRealLegacyWork(legacyState, env, inventory.targets);
-            if (outdated.length === 0 && !configRepair && !includeRepair && !legacyWork) {
-              return { status: "current" };
-            }
-            // File imports retain their existing Doctor owner, not a subprocess or copy.
-            if (legacyWork) {
-              const legacy = await autoMigrateLegacyState({
+            if (protectedTargets.length > 0 || configRepair || includeRepair || legacySources) {
+              const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config, env });
+              const legacyState = await detectLegacyStateMigrations({
                 cfg: config,
                 env,
                 doctorOnlyStateMigrations: true,
-                configIncludedPaths: snapshot.includedPaths,
                 legacySessionSurfaces,
               });
-              logStateMigrationResult(legacy, log);
-              throwIfDoctorStateMigrationRefused(legacy.stepReceipts);
-              const { noteSessionTranscriptHealth } =
-                await import("../commands/doctor-session-transcripts.js");
-              await noteSessionTranscriptHealth({
-                cfg: config,
-                env,
-                shouldRepair: true,
-                ...(legacy.postSessionPluginMigration
-                  ? { postSessionPluginMigration: legacy.postSessionPluginMigration }
-                  : {}),
-                postSessionPluginMigrationPlanBound: true,
-                onStepReceipt: (receipt) => throwIfDoctorStateMigrationRefused([receipt]),
-                onWarnings: (warnings) => {
-                  for (const warning of warnings) {
-                    log.warn(warning);
-                  }
-                },
-              });
+              const legacyWork = hasRealLegacyWork(legacyState, env, inventory.targets);
+              if (outdated.length === 0 && !configRepair && !includeRepair && !legacyWork) {
+                return { status: "current" };
+              }
+              // File imports retain their existing Doctor owner, not a subprocess or copy.
+              if (legacyWork) {
+                const legacy = await autoMigrateLegacyState({
+                  cfg: config,
+                  env,
+                  doctorOnlyStateMigrations: true,
+                  configIncludedPaths: snapshot.includedPaths,
+                  legacySessionSurfaces,
+                });
+                logStateMigrationResult(legacy, log);
+                throwIfDoctorStateMigrationRefused(legacy.stepReceipts);
+                const { noteSessionTranscriptHealth } =
+                  await import("../commands/doctor-session-transcripts.js");
+                await noteSessionTranscriptHealth({
+                  cfg: config,
+                  env,
+                  shouldRepair: true,
+                  ...(legacy.postSessionPluginMigration
+                    ? { postSessionPluginMigration: legacy.postSessionPluginMigration }
+                    : {}),
+                  postSessionPluginMigrationPlanBound: true,
+                  onStepReceipt: (receipt) => throwIfDoctorStateMigrationRefused([receipt]),
+                  onWarnings: (warnings) => {
+                    for (const warning of warnings) {
+                      log.warn(warning);
+                    }
+                  },
+                });
+              }
             }
             if (configRepair) {
               await commitAutomaticConfigRepair(
