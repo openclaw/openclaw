@@ -34,6 +34,7 @@ import type { CronStoredJob } from "../../../cron/types.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../../../gateway/operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../../gateway/operator-role-policy.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { operatorScopeSatisfied } from "../../../shared/operator-scope-compat.js";
 import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
 import {
   classifyScheduledJob,
@@ -118,12 +119,22 @@ function checkRequesterOwnerReadOnly(
       if (profile === "unreadable") {
         return { owner: false, check: "unverified" };
       }
-      // Admission's rule: a current profile on an untiered install, or the Gateway owner profile.
+      // Admission's rule: a current profile on an untiered install, the Gateway owner
+      // profile, or a profile whose named role grants operator.admin.
       return {
         owner:
           typeof profile === "object" &&
           (!isNamedOperatorRoleEnforcementEnabled(cfg) ||
-            requester.profileId === GATEWAY_OWNER_PROFILE_ID),
+            requester.profileId === GATEWAY_OWNER_PROFILE_ID ||
+            operatorScopeSatisfied(
+              "operator.admin",
+              resolveOperatorRolePolicyForAssignment(
+                requester.profileId,
+                profile.assignedRole,
+                cfg,
+                profile.githubLogin,
+              )?.scopes ?? [],
+            )),
         check: "checked",
       };
     case "channel": {

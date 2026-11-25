@@ -27,7 +27,6 @@ export const TURN_FLAG_FILES = new Set([
   "src/auto-reply/reply/session-event-target.ts",
   "src/auto-reply/reply/session.ts",
   "src/commands/doctor/cron/execution-context-check.ts",
-  "src/cron/execution-context-admission.ts",
   "src/gateway/agent-turn/agent-run-user-turn.ts",
   "src/gateway/approval-channel-custody.ts",
   "src/gateway/operator-admission.ts",
@@ -63,12 +62,8 @@ export const OWNER_PRODUCER_FILES = new Set([
   "src/agents/openclaw-plugin-tools.ts",
   "src/agents/openclaw-tools.ts",
   "src/agents/scheduled-message-invocation.ts",
-  "src/auto-reply/reply/session-event-context.ts",
-  "src/auto-reply/reply/session-event-target.ts",
   "src/channels/plugins/message-action-dispatch.ts", // scheduled write: the job's operator
-  "src/cron/execution-context-admission.ts",
   "src/cron/execution-context-registry.ts",
-  "src/gateway/cron-job-turn-target.ts",
   "src/plugins/tool-factory-context.ts",
   // Recorded data read back, never decided: protocol field, transcript and lineage receipts.
   "packages/gateway-protocol/src/schema/agent.ts",

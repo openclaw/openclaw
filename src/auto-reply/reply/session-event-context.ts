@@ -37,7 +37,7 @@ import {
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
   readSessionEventTargetOwnerContinuation,
-  readSessionEventTargetRequesterOwner,
+  readSessionEventTargetScheduledRequester,
   resolveSessionEventKey,
 } from "./session-event-target.js";
 import { setChannelSourceTurnId } from "./source-turn-id.js";
@@ -306,13 +306,13 @@ export function buildSessionEventContext(params: {
         options.source === "cron_failure_repair"
       ? readSessionEventTargetOperatorAuthority(target)
       : undefined;
-  const requesterOwner = readSessionEventTargetRequesterOwner(target);
+  const scheduled = readSessionEventTargetScheduledRequester(target);
   const requesterPrincipal =
-    requesterOwner?.requester.kind === "channel"
+    scheduled?.requester.kind === "channel"
       ? {
-          channelId: requesterOwner.requester.requester.channel,
-          accountId: normalizeAccountId(requesterOwner.requester.requester.accountId),
-          senderId: requesterOwner.requester.requester.senderId,
+          channelId: scheduled.requester.requester.channel,
+          accountId: normalizeAccountId(scheduled.requester.requester.accountId),
+          senderId: scheduled.requester.requester.senderId,
         }
       : undefined;
   if (
@@ -334,17 +334,16 @@ export function buildSessionEventContext(params: {
         isCurrent: () => true,
       },
     });
-  } else if (requesterOwner?.owner) {
+  } else if (scheduled?.grant?.owner) {
+    // A successor re-admits the native sender, as any channel owner's queued work does.
     bindCommandOwnerAuthority(ctx, {
       channelPrincipal: requesterPrincipal,
-      recoveryReference: requesterOwner.recoveryReference,
       isCurrent: () => {
         params.assertCurrent();
         return true;
       },
       successor: {
         channelPrincipal: requesterPrincipal,
-        recoveryReference: requesterOwner.recoveryReference,
         isCurrent: () => {
           params.assertCurrent();
           return true;

@@ -57,7 +57,11 @@ import type {
 import { resolveGatewayAuthPolicyGrant } from "./auth-policy.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { gatewayPersonPrincipalAuthError, type ResolvedGatewayAuth } from "./auth.js";
-import { prepareChannelOperatorAuthority } from "./channel-operator-authority.js";
+import {
+  prepareChannelOperatorAdmin,
+  prepareChannelOperatorAuthority,
+} from "./channel-operator-authority.js";
+import type { CronAuthenticatedChannelRequester } from "./cron-creator-authority-grant.types.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   readOpenClawIdTunnelPrincipal,
@@ -68,7 +72,7 @@ import {
   GatewayOperatorAccessDeniedError,
   resolvePreparedGatewayOperatorAccessAuthority,
 } from "./operator-access-policy.js";
-import { operatorRoleSubject } from "./operator-role-enforcement.js";
+import { isOperatorRoleEnforcedFor, operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
@@ -646,5 +650,44 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     return admissionError(error, facts);
   } finally {
     ingress?.release();
+  }
+}
+
+/**
+ * The grant of a scheduled job saved without an operator source: a configured channel owner,
+ * else the sender's linked admin profile; or a profile requester as a session person. The run
+ * takes only this grant, never operator scopes. Undefined when admission refuses the requester.
+ */
+export async function admitScheduledRequesterGrant(
+  config: OpenClawConfig,
+  requester:
+    | { kind: "channel"; requester: CronAuthenticatedChannelRequester }
+    | { kind: "profile"; profileId: string },
+): Promise<TurnGrant | undefined> {
+  try {
+    if (requester.kind === "channel") {
+      const { channel, accountId, senderId } = requester.requester;
+      const sender = { channelId: channel, accountId, senderId };
+      const scopes =
+        decideChannelOwnerPrincipal(config, sender)?.scopes ??
+        (await prepareChannelOperatorAdmin(config, sender))?.operatorProfile.scopes;
+      return scopes && decideTurnGrant(scopes);
+    }
+    const subject = operatorRoleSubject(
+      captureResidentUserProfileAccess(requester.profileId).readCurrentFacts(),
+    );
+    // Accepted edge: without named roles, a profile requester has always been the owner.
+    if (!isOperatorRoleEnforcedFor(config, subject)) {
+      return decideTurnGrant(["operator.admin"]);
+    }
+    const facts = { kind: "person", snapshot: { profileId: requester.profileId } } as const;
+    const admitted = decideOperatorAdmission(
+      facts,
+      await prepareOperatorAdmission(facts, { getRuntimeConfig: () => config }),
+    );
+    admitted.release();
+    return admitted.authority.grant;
+  } catch {
+    return undefined;
   }
 }
