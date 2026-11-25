@@ -522,7 +522,7 @@ function runDocs(signal: AbortSignal, step: string, options: GitOptions = {}) {
     objects: { [sourceObject]: { text: JSON.stringify({ sha: candidate }) } },
     poisonPython: true,
     ...options,
-    revisions: { "refs/remotes/origin/main": base, ...options.revisions },
+    revisions: { main: base, "refs/remotes/origin/main": base, ...options.revisions },
     commandResults: {
       ["rev-list --parents -n 1 " + candidate]: { code: 0, output: `${candidate} ${base}\n` },
       ["diff --no-renames --name-only -z " + base + " " + candidate]: {
