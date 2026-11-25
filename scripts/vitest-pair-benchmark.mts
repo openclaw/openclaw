@@ -170,5 +170,5 @@ if (
     });
   });
 } else {
-  throw new Error(`Unhandled benchmark mode: ${options.mode}`);
+  throw new Error("Unhandled benchmark mode");
 }

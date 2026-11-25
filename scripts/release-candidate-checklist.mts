@@ -33,7 +33,11 @@ import {
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
-import { gitIsAncestor, validateCandidateChangelog } from "./lib/release-candidate-changelog.mts";
+import {
+  gitIsAncestor,
+  inspectCandidateChangelogRange,
+  validateCandidateChangelog,
+} from "./lib/release-candidate-changelog.mts";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
 import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
 import { evaluateReleasePublishGates } from "./lib/release-publish-gates.mts";
@@ -2127,7 +2131,7 @@ async function main() {
   if (androidVersionCheck) {
     console.log(androidVersionCheck.message);
   }
-  const { releaseNotesCheck, releaseNotesProvenance, releaseNotesText } =
+  const { releaseNotesCheck, releaseNotesProvenance, releaseNotesText, changelogPaths } =
     validateCandidateChangelog({
       rootDir: targetRoot,
       repository: options.repo,
@@ -2511,6 +2515,13 @@ async function main() {
   if (prepareCommand) {
     publishPreflight.command = prepareCommand;
   }
+  const candidateRange = inspectCandidateChangelogRange({
+    rootDir: targetRoot,
+    repository: options.repo,
+    recordedTarget: releaseNotesProvenance.target,
+    targetSha,
+    changelogPaths,
+  });
   const evidence = {
     version: 1,
     tag: options.tag,
@@ -2539,7 +2550,7 @@ async function main() {
       fullReleaseValidation: fullArtifactName,
     },
     releaseNotesCheck,
-    releaseNotesProvenance,
+    releaseNotesProvenance: { ...releaseNotesProvenance, candidateRange },
     androidVersionCheck,
     localGeneratedCheck,
     tarball: {
@@ -2583,7 +2594,7 @@ async function main() {
       }`,
       `- full release artifact: ${fullArtifactName}`,
       `- GitHub release notes: ${releaseNotesCheck.status} (${releaseNotesCheck.mode}, ${releaseNotesCheck.characters} characters, ${releaseNotesCheck.bytes} bytes)`,
-      `- changelog provenance: passed (${releaseNotesProvenance.base}..${releaseNotesProvenance.target})`,
+      `- changelog provenance: passed (${releaseNotesProvenance.base}..${releaseNotesProvenance.target}). ${candidateRange.summary}`,
       `- ${
         formatShippedBaselineExclusions(releaseNotesProvenance.shippedBaselines) ||
         "Shipped baseline exclusions: none"
@@ -2624,6 +2635,7 @@ async function main() {
   );
   console.log(`release candidate evidence: ${evidencePath}`);
   console.log(`release candidate summary: ${evidenceMarkdownPath}`);
+  console.log(candidateRange.summary);
   console.log(publishPreflightTable);
   if (publishPreflight.failed) {
     throw new Error("Publish preflight failed; resolve the reported gates before publication.");

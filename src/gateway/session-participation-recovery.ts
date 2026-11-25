@@ -29,7 +29,6 @@ export async function prepareRecoveredParticipation(params: {
     restored: {
       authority,
       release: authority.retain?.() ?? (() => {}),
-      controlUiAdmin: false,
       automationAdmin: false,
     },
     assertCurrent: () => authority.signal?.throwIfAborted(),

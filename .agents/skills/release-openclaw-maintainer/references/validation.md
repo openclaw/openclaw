@@ -246,6 +246,8 @@ For declaration build errors, use the package producer's
 `OPENCLAW_CONTROL_UI_RELEASE_BUILD=1 pnpm build`.
 Label local results as local. If you skipped the stage or used different settings
 or a different Git comparison base, mark it unverified and name its hosted job.
+For hosted proof, follow the [npm source and package build readback](../../../../docs/reference/full-release-validation/dispatch.md#check-the-hosted-npm-source-and-package-build)
+on the active FRV producer or an optional standalone diagnostic.
 
 For PR preparation/landing or observed hosted-runner stalls, use
 `$openclaw-pr-maintainer` / `$openclaw-ci-limits`; never synthesize prepare

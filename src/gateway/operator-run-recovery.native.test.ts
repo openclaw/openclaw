@@ -22,7 +22,6 @@ describe("native UI operator recovery", () => {
         async (fixture) => {
           using restored = await restoreFixture(fixture);
           expect(restored.automationAdmin).toBe(true);
-          expect(restored.controlUiAdmin).toBe(id === "openclaw-control-ui");
           expectCurrent(restored.authority);
           expect(
             (await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" })).ok,

@@ -469,6 +469,15 @@ Two secret-free provider-owned facts describe the selected route:
   transport, proxy, TLS, local-service, private-network behavior, or request
   parameters exist. The fact does not expose those values.
 
+Harnesses with declarative transport rules can publish `routeSupport` during
+registration. Include executable or connection availability for the current
+activation. Read-only projections can then match routes without entering the
+plugin. Recompute these facts when the plugin owner activates a replacement.
+`resolveAgentHarnessRouteRejection` from
+`openclaw/plugin-sdk/agent-harness-registration` applies the same route rules
+inside `supports(ctx)`. Execution still calls that scoped callback to check
+prepared authentication and other execution requirements.
+
 Return `{ supported: false, reason }` when the harness cannot reproduce the
 prepared transport. Do not infer support by reading raw config after selection.
 Add `fallbackRuntime: "openclaw"` only when the built-in runtime can reproduce

@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
 // Shell inline-command parsing recognizes POSIX, cmd, and PowerShell command
 // flags so approval surfaces can distinguish wrapper argv from executed text.
@@ -88,20 +89,14 @@ const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
   ...expandPowerShellSwitchForms(["ea", "ep", "if", "of", "pscf", "wd"]),
 ]);
 
-const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
-  "--init-file",
-  "--rcfile",
-  "-O",
-  "-o",
-  "+O",
-  "+o",
-]);
+const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set(["--init-file", "--rcfile"]);
 
-function countSeparateValueOptionChars(token: string): number {
+function countSeparateValueOptionChars(token: string, shell: string): number {
   let count = 0;
   for (let index = 1; index < token.length; index += 1) {
     const char = token[index];
-    if (char === "o" || char === "O") {
+    // zsh -O/+O toggle CORRECT_ALL and take no value; bash -O/+O read a shopt name.
+    if (char === "o" || (char === "O" && shell !== "zsh")) {
       count += 1;
     }
   }
@@ -110,6 +105,7 @@ function countSeparateValueOptionChars(token: string): number {
 
 function parseCombinedCommandFlag(
   token: string,
+  shell: string,
 ): { attachedCommand: string | null; separateValueCount: number } | null {
   if (token.length < 2 || token[0] !== "-" || token[1] === "-") {
     return null;
@@ -125,11 +121,11 @@ function parseCombinedCommandFlag(
   }
   return {
     attachedCommand: null,
-    separateValueCount: countSeparateValueOptionChars(token),
+    separateValueCount: countSeparateValueOptionChars(token, shell),
   };
 }
 
-function combinedSeparateValueOptionCount(token: string): number {
+function combinedSeparateValueOptionCount(token: string, shell: string): number {
   if (
     token.length < 2 ||
     (token[0] !== "-" && token[0] !== "+") ||
@@ -138,7 +134,7 @@ function combinedSeparateValueOptionCount(token: string): number {
   ) {
     return 0;
   }
-  return countSeparateValueOptionChars(token);
+  return countSeparateValueOptionChars(token, shell);
 }
 
 function isPosixShortOption(token: string, option: string): boolean {
@@ -146,8 +142,8 @@ function isPosixShortOption(token: string, option: string): boolean {
 }
 
 /** Return how many argv tokens a POSIX shell option consumes while scanning. */
-export function advancePosixInlineOptionScan(token: string): number {
-  const combinedValueCount = combinedSeparateValueOptionCount(token);
+export function advancePosixInlineOptionScan(token: string, shell: string): number {
+  const combinedValueCount = combinedSeparateValueOptionCount(token, shell);
   if (combinedValueCount > 0) {
     return 1 + combinedValueCount;
   }
@@ -173,6 +169,7 @@ export function resolveInlineCommandMatch(
     valueOptions?: ReadonlySet<string>;
   } = {},
 ): { command: string | null; valueTokenIndex: number | null } {
+  const shell = normalizeExecutableToken(argv[0] ?? "");
   for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
@@ -185,7 +182,8 @@ export function resolveInlineCommandMatch(
     }
     const comparableToken = options.allowCombinedC ? token : lower;
     const exact = flags.has(comparableToken);
-    const combined = !exact && options.allowCombinedC ? parseCombinedCommandFlag(token) : null;
+    const combined =
+      !exact && options.allowCombinedC ? parseCombinedCommandFlag(token, shell) : null;
     if (exact || combined) {
       if (combined && combined.attachedCommand !== null) {
         return { command: combined.attachedCommand.trim() || null, valueTokenIndex: i };
@@ -214,7 +212,7 @@ export function resolveInlineCommandMatch(
     if (options.allowCombinedC && !token.startsWith("-") && !token.startsWith("+")) {
       break;
     }
-    i += options.allowCombinedC ? advancePosixInlineOptionScan(token) : 1;
+    i += options.allowCombinedC ? advancePosixInlineOptionScan(token, shell) : 1;
   }
   return { command: null, valueTokenIndex: null };
 }
@@ -313,6 +311,7 @@ function hasPosixStartupModeBeforeInlineCommand(
   longOption: string,
   shortOption: string,
 ): boolean {
+  const shell = normalizeExecutableToken(argv[0] ?? "");
   let sawStartupMode = false;
   for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
@@ -326,13 +325,13 @@ function hasPosixStartupModeBeforeInlineCommand(
     if (token === longOption || isPosixShortOption(token, shortOption)) {
       sawStartupMode = true;
     }
-    if (flags.has(token) || parseCombinedCommandFlag(token) !== null) {
+    if (flags.has(token) || parseCombinedCommandFlag(token, shell) !== null) {
       return sawStartupMode;
     }
     if (!token.startsWith("-") && !token.startsWith("+")) {
       return false;
     }
-    i += advancePosixInlineOptionScan(token);
+    i += advancePosixInlineOptionScan(token, shell);
   }
   return false;
 }
