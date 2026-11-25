@@ -581,6 +581,8 @@ export async function maybeRepairGatewayServiceConfig(
   let cfgForServiceInstall = cfg;
   if (needsConfigWrite && gatewayTokenForRepair) {
     try {
+      // Revalidate update admission before the secret-store write; native reads skip it.
+      await options.serviceMaintenance?.beforeMutation?.();
       const { ref, reused, backupPath } = await preserveGatewayAuthTokenForService({
         cfg,
         env: serviceInstallEnv,

@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
+import { createGatewayMetadataObserver } from "./gateway-observers.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
@@ -29,6 +30,8 @@ export function createGatewayHarness(
   });
   const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<(event: GatewayEventFrame) => void>();
+  const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
+  metadataObserver.synchronize(snapshot, snapshot);
   const connect = vi.fn();
   const gateway = {
     get snapshot() {
@@ -57,13 +60,20 @@ export function createGatewayHarness(
     },
   } satisfies ApplicationGateway;
   const emitEvent = (event: string, payload: unknown) => {
-    const frame: GatewayEventFrame = { event, payload, type: "event" };
+    const frame = metadataObserver.receive({ event, payload, type: "event" }, snapshot);
+    if (!frame) {
+      return;
+    }
     for (const listener of eventListeners) {
       listener(frame);
     }
   };
   const update = (next: Partial<ApplicationGatewaySnapshot>) => {
+    const previous = snapshot;
     snapshot = { ...snapshot, ...next };
+    if (!metadataObserver.synchronize(previous, snapshot)) {
+      return;
+    }
     for (const listener of snapshotListeners) {
       listener(snapshot);
     }

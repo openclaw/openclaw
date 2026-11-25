@@ -167,6 +167,7 @@ export function restoreSnapshotSession(
   selected: string,
 ): SidebarRecentSession {
   const state = row.state;
+  const children = row.children.map((child) => restoreSnapshotSession(child, selected));
   return {
     ...row,
     ...state,
@@ -195,9 +196,11 @@ export function restoreSnapshotSession(
     },
     childSessionKeys: row.children.map((child) => child.key),
     childLoadParentKeys: row.childLoadParentKeys ?? [],
-    children: row.children.map((child) => restoreSnapshotSession(child, selected)),
+    children,
     loadingChildren: false,
-    containsActiveDescendant: false,
+    containsActiveDescendant: children.some(
+      (child) => child.visuallyActive || child.containsActiveDescendant,
+    ),
     runningChildCount: state?.runningChildCount ?? 0,
   };
 }

@@ -58,6 +58,8 @@ export type StoreSchema = {
   /** Consecutive destinations carry generated DDL for both sides of the migration. */
   postgresMigrations?: readonly {
     version: number;
+    /** Explicit lower floor for a step safe for every reader at or above it; absent is strict. */
+    minReader?: number;
     sql: string;
     fromSchema: PostgresSchemaDefinition;
     schema: PostgresSchemaDefinition;

@@ -23,6 +23,7 @@ import { parseReleaseVersion } from "./lib/release-version.mjs";
 import { resolveFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
 import {
   QUALIFIED_NPM_PREFLIGHT_SCHEMA,
+  SEALED_NPM_PREFLIGHT_SCHEMA,
   sameJobExecution,
   validatePreparedNpmBundleDescriptor,
   verifyNpmBundleProducer,
@@ -84,7 +85,7 @@ function artifactRequest(env) {
     "Invalid artifact release tag.",
   );
   requireValue(
-    ["all", "prepare"].includes(env.PREFLIGHT_PHASE),
+    ["all", "prepare", "build-only"].includes(env.PREFLIGHT_PHASE),
     "Invalid artifact npm preparation phase.",
   );
   requireValue(
@@ -206,10 +207,13 @@ function validateArtifactReceipt(receipt, request, runId, runAttempt) {
       raw.producer.runId === String(runId) && BigInt(raw.producer.runAttempt) <= BigInt(runAttempt),
       "Raw npm bundle came from another artifact producer.",
     );
-    if (request.preflightPhase === "all") {
+    if (["all", "build-only"].includes(request.preflightPhase)) {
       const qualified = JSON.parse(outputs.qualified_preflight_bundle_json);
       requireValue(
-        qualified.schema === QUALIFIED_NPM_PREFLIGHT_SCHEMA &&
+        qualified.schema ===
+          (request.preflightPhase === "build-only"
+            ? SEALED_NPM_PREFLIGHT_SCHEMA
+            : QUALIFIED_NPM_PREFLIGHT_SCHEMA) &&
           qualified.source.sha === request.sourceSha &&
           qualified.producer.runId === String(runId) &&
           DECIMAL.test(qualified.producer.runAttempt) &&
@@ -1218,7 +1222,7 @@ async function waitForArtifact(request, env) {
             requireCompletedParent: true,
           });
         }
-        if (request.stage === "npm" && request.preflightPhase === "all") {
+        if (request.stage === "npm" && ["all", "build-only"].includes(request.preflightPhase)) {
           const qualified = JSON.parse(values.qualified_preflight_bundle_json);
           verifyNpmBundleProducer({
             producer: qualified.producer,

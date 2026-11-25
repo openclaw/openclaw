@@ -18,6 +18,7 @@ import {
   publishStateSchemaVersionAdmission,
 } from "./openclaw-state-db-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { markCurrentStateSchemaVersion } from "./openclaw-state-db-maintenance.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
@@ -27,6 +28,7 @@ import {
 } from "./openclaw-state-db-schema-version.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { reconcileOpenClawStateSchemaPublicationAsync } from "./openclaw-state-schema-publication.async.js";
+import { resolveStateSchemaVersionToPublish } from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const databases: DatabaseSync[] = [];
@@ -200,7 +202,7 @@ describe("shared-state content version facts", () => {
         );
         expect(
           observation.queries.filter((sql) => /from "config_machine_state"/iu.test(sql)),
-        ).toEqual([]);
+        ).toHaveLength(1);
       } finally {
         observation.restore();
       }
@@ -366,5 +368,85 @@ describe("shared state schema publication worker", () => {
     } finally {
       sql.restore();
     }
+  });
+});
+
+it("publishes and clears an explicit state floor in the version writer's transaction", () => {
+  using database = openNodeSqliteDatabase(":memory:");
+  database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
+  runSqliteImmediateTransactionSync(database, () =>
+    resolveStateSchemaVersionToPublish(database, 1),
+  );
+  admitSqliteSchema(database);
+  expect(read(database)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+  expect(getStateSchemaVersionAdmission(database)?.minReader).toBe(1);
+  const floor = database.prepare("SELECT min_reader FROM config_machine_state WHERE state_key=?");
+  expect(() =>
+    runSqliteImmediateTransactionSync(database, () => {
+      resolveStateSchemaVersionToPublish(database);
+      throw new Error("rollback strict publication");
+    }),
+  ).toThrow("rollback strict publication");
+  expect(floor.get(CONTENT_VERSION_KEY)).toEqual({ min_reader: 1 });
+  runSqliteImmediateTransactionSync(database, () => resolveStateSchemaVersionToPublish(database));
+  expect(floor.get(CONTENT_VERSION_KEY)).toEqual({ min_reader: null });
+  expect(getStateSchemaVersionAdmission(database)?.minReader).toBeUndefined();
+});
+
+describe("shared-state reader floor", () => {
+  it.each([
+    { minReader: OPENCLAW_STATE_SCHEMA_VERSION, admitted: true },
+    { minReader: OPENCLAW_STATE_SCHEMA_VERSION + 1, admitted: false },
+    { minReader: null, admitted: false },
+  ])("opens only when reader T satisfies floor $minReader", async ({ minReader, admitted }) => {
+    const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("state-reader-floor-") } };
+    const current = openOpenClawStateDatabase(options);
+    const pathname = current.path;
+    await closeOpenClawStateDatabaseAsync();
+    const futureVersion = OPENCLAW_STATE_SCHEMA_VERSION + 1;
+    {
+      using writer = openNodeSqliteDatabase(pathname);
+      writer.exec("BEGIN IMMEDIATE");
+      writer.exec(`
+        ALTER TABLE config_machine_state ADD COLUMN min_reader INTEGER;
+        CREATE TABLE future_state_notes (note TEXT) STRICT;
+        ALTER TABLE audit_events ADD COLUMN future_note TEXT;
+        PRAGMA user_version = ${futureVersion};
+        UPDATE schema_meta SET schema_version = ${futureVersion}, app_version = '2099.1.1'
+          WHERE meta_key = 'primary';
+      `);
+      writer
+        .prepare(
+          `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms, min_reader)
+         VALUES (?, ?, 1, ?) ON CONFLICT(state_key) DO UPDATE
+           SET value_json=excluded.value_json, min_reader=excluded.min_reader`,
+        )
+        .run(CONTENT_VERSION_KEY, String(futureVersion), minReader);
+      writer.exec("COMMIT");
+    }
+    using reader = new DatabaseSync(pathname, { readOnly: true });
+    if (!admitted) {
+      expect(() => assertExistingOpenClawStateRuntimeSchema(reader, pathname)).toThrow(
+        /newer schema version.*Minimum reader schema version/isu,
+      );
+      expect(() => openOpenClawStateDatabase(options)).toThrow(/newer schema version/iu);
+      return;
+    }
+    const before = reader.prepare("SELECT * FROM schema_meta").all();
+    expect(() => assertExistingOpenClawStateRuntimeSchema(reader, pathname)).not.toThrow();
+    const reopened = openOpenClawStateDatabase(options);
+    expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: futureVersion,
+    });
+    expect(reopened.db.prepare("SELECT * FROM schema_meta").all()).toEqual(before);
+    expect(
+      reopened.db
+        .prepare("SELECT value_json, min_reader FROM config_machine_state WHERE state_key=?")
+        .get(CONTENT_VERSION_KEY),
+    ).toEqual({
+      value_json: String(futureVersion),
+      min_reader: minReader,
+    });
+    await closeOpenClawStateDatabaseAsync();
   });
 });

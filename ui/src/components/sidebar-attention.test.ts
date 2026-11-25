@@ -98,22 +98,12 @@ function eventGateway(
   snapshot: object,
   connection: Partial<ApplicationGateway["connection"]> = { gatewayUrl: "ws://gateway.test" },
 ) {
-  const listeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
+  const harness = createGatewayHarness(null);
+  harness.update(snapshot);
+  Object.assign(harness.gateway.connection, connection);
   return {
-    gateway: {
-      snapshot,
-      connection,
-      subscribe: () => () => undefined,
-      subscribeEvents: (listener: Parameters<ApplicationGateway["subscribeEvents"]>[0]) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    } as unknown as ApplicationGateway,
-    emit: (event: string) => {
-      for (const listener of listeners) {
-        listener({ type: "event", event, payload: {} });
-      }
-    },
+    gateway: harness.gateway,
+    emit: (event: string) => harness.emitEvent(event, {}),
   };
 }
 
@@ -822,7 +812,7 @@ describe("sidebar attention refresh ownership", () => {
       await waitForFast(() => expect(attention(element, "modelAuthExpired")).not.toBeNull());
 
       now = 200_000;
-      emit("cron");
+      emit("cron.inventory.changed");
       const healthReads = () =>
         request.mock.calls.filter(([method]) =>
           ["cron.list", "cron.status", "models.authStatus"].includes(method),
@@ -847,7 +837,7 @@ describe("sidebar attention refresh ownership", () => {
           request.mock.calls.filter(([method]) => method === "models.authStatus"),
         ).toHaveLength(3),
       );
-      emit("cron");
+      emit("cron.inventory.changed");
       expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
       switchedAuth.resolve(authStatus(2));
       await waitForFast(() => expect(authText(element)).toContain("writer"));
@@ -943,7 +933,7 @@ describe("sidebar attention refresh ownership", () => {
     }
     await openPanel(element, trigger);
 
-    emit("cron");
+    emit("cron.inventory.changed");
     await waitForFast(() => expect(attention(element, "cronFailed")).toBeNull());
   });
 });

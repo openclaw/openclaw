@@ -27,7 +27,12 @@ import {
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type WithdrawalScope = SessionAccessScope & { agentId: string; sessionId: string };
-type WithdrawalSelection = { runId: string } | { inputIds: readonly string[] };
+type WithdrawalSelection =
+  | { runId: string }
+  | {
+      inputIds: readonly string[];
+      audience?: import("./session-pending-input-audience.js").PendingInputAudience;
+    };
 
 class PendingInputOwnedError extends Error {
   constructor(readonly inputIds: string[]) {
@@ -186,8 +191,9 @@ export async function dismissRetiredSessionPendingInputs(
   scope: WithdrawalScope,
   inputIds: readonly string[],
   assertCurrent: () => void,
+  audience?: import("./session-pending-input-audience.js").PendingInputAudience,
 ): Promise<RetiredPendingInputDismissalOutcome> {
-  const result = await withdrawSessionPendingInputs(scope, { inputIds }, assertCurrent);
+  const result = await withdrawSessionPendingInputs(scope, { inputIds, audience }, assertCurrent);
   if (typeof result === "boolean") {
     throw new Error("Retired input withdrawal returned a queued-input result");
   }

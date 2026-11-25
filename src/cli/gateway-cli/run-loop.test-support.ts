@@ -231,31 +231,25 @@ export function createUpdateRespawnChild(pid = 7777) {
 
 export function registerUpdateRespawnProgressTests(f: UpdateRespawnFixtures) {
   it.each([
-    { waitOutcome: "healthy", elapsedMs: 20_000, closeMs: 0, sentinelStatus: "ok" },
-    { waitOutcome: "still-starting", elapsedMs: 300_000, closeMs: 40_000, sentinelStatus: "ok" },
-    { waitOutcome: "still-starting", elapsedMs: 300_000, closeMs: 0, sentinelStatus: "error" },
+    { ready: true, elapsedMs: 20_000, closeMs: 0 },
+    { ready: false, elapsedMs: 45_000, closeMs: 40_000 },
   ] as const)(
-    "leaves a $waitOutcome replacement running after $elapsedMs ms",
-    async ({ waitOutcome, elapsedMs, closeMs, sentinelStatus }) => {
+    "leaves a live launcher running after its HTTP observation (ready=$ready)",
+    async ({ ready, elapsedMs, closeMs }) => {
       vi.clearAllMocks();
       f.peekGatewayRestartReason.mockReturnValue("update.run");
       f.consumeGatewayRestartIntent.mockReturnValueOnce({ reason: "update.run", force: true });
       const child = createUpdateRespawnChild(process.pid);
-      f.readRestartSentinelReadOnly.mockResolvedValueOnce({
-        version: 1,
-        revision: 1,
-        payload: { kind: "update", status: sentinelStatus, ts: 1, stats: {} },
-      });
       f.respawnGatewayProcessForUpdate.mockReturnValueOnce({
         mode: "spawned",
         pid: process.pid,
         child,
       });
-      f.waitForGatewayHealthyRestart.mockImplementationOnce(async () => {
+      f.waitForGatewayHttpReadiness.mockImplementationOnce(async () => {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, elapsedMs);
         });
-        return f.respawnHealth({ healthy: waitOutcome === "healthy", waitOutcome, elapsedMs });
+        return { healthz: 200, readyz: ready ? 200 : 503 };
       });
 
       await withIsolatedSignals(async ({ captureSignal }) => {
@@ -279,19 +273,6 @@ export function registerUpdateRespawnProgressTests(f: UpdateRespawnFixtures) {
         await expect(exited).resolves.toBe(0);
         expectCallCount(0, child.kill, f.markUpdateRestartSentinelFailure);
         expectCallCount(1, f.respawnGatewayProcessForUpdate, start);
-        if (waitOutcome === "still-starting" && sentinelStatus !== "error") {
-          expect(f.writeRestartSentinelIfUnchanged).toHaveBeenCalledWith(
-            expect.objectContaining({
-              expectedRevision: 1,
-              payload: expect.objectContaining({
-                status: "skipped",
-                stats: { reason: "still-starting" },
-              }),
-            }),
-          );
-        } else {
-          expect(f.writeRestartSentinelIfUnchanged).not.toHaveBeenCalled();
-        }
         expect(f.writeGatewayRestartHandoff).not.toHaveBeenCalled();
       });
     },

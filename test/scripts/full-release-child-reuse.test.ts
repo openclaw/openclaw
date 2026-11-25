@@ -259,6 +259,28 @@ async function fixture(
 }
 
 describe("independent release child reuse", () => {
+  it("does not reuse a successful stable client workflow without its required gate", async () => {
+    const data = await fixture("stableClientCompatibility", { target_sha: TARGET });
+    expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
+    data.jobs[1]!.name = "Verify stable client compatibility";
+    data.receipt.jobs.find((job) => job.name === "resolve target")!.name =
+      "Verify stable client compatibility";
+    data.receipt.jobs.sort(compareReleaseJobsByName);
+    data.receipt.compositeJobsSha256 = jsonDigest({
+      effectiveRunAttempt: data.receipt.effectiveRunAttempt,
+      plannedRunAttempt: data.receipt.plannedRunAttempt,
+      jobs: data.receipt.jobs,
+    });
+    await data.seal();
+    expect(await discoverReusableReleaseChild(data.request, data.deps)).toMatchObject({
+      role: "stableClientCompatibility",
+      inputs: { target_sha: TARGET },
+    });
+    await expect(
+      discoverReusableReleaseChild({ ...data.request, inputs: { target_ref: TARGET } }, data.deps),
+    ).rejects.toThrow(/target_sha/);
+  });
+
   it("reuses authenticated child evidence across changes to the child workflow and test harness", async () => {
     const data = await fixture();
     const request = {
@@ -315,11 +337,8 @@ describe("independent release child reuse", () => {
       data.run.conclusion = conclusion;
       data.artifact.expires_at = "2099-01-01T00:00:00Z";
       data.jobs[0]!.name = "a synthetic failing test";
-      data.jobs[1]!.name = "b synthetic aggregate";
-      data.jobs[1]!.steps = [{ name: "Check synthetic results", status: "completed", conclusion }];
-      for (const job of data.jobs.slice(0, 2)) {
-        job.conclusion = conclusion;
-      }
+      data.jobs[0]!.conclusion = conclusion;
+      data.jobs[0]!.steps = [{ name: "Run workload", status: "completed", conclusion }];
       data.receipt.workloadConclusion = conclusion;
       data.receipt.jobs = data.receipt.jobs.map((job, index) => ({
         ...job,
@@ -369,7 +388,6 @@ describe("independent release child reuse", () => {
           responses[endpoint] = response;
           return response;
         },
-        getJobLog: async () => "##[error]synthetic test failed",
       };
       const initial = await discoverReusableReleaseChild(
         { ...data.request, policyTargetVersion: version },
@@ -383,15 +401,8 @@ describe("independent release child reuse", () => {
         targetSha: TARGET,
         childRole: "normalCi",
         jobName: "a synthetic failing test",
+        ...(conclusion === "failure" ? { step: "Run workload" } : {}),
         reason: "Synthetic operator approval",
-        aggregates: [
-          {
-            jobName: "b synthetic aggregate",
-            stepName: "Check synthetic results",
-            causes: ["synthetic test failed"],
-            exactCauses: true,
-          },
-        ],
       });
       const request = { ...data.request, workflowSha: nextQ, policyTargetVersion: version };
       const selected = await discoverReusableReleaseChild(request, deps);
@@ -422,7 +433,6 @@ describe("independent release child reuse", () => {
 const fs = require("node:fs");
 const endpoint = process.argv[3].replace("repos/openclaw/openclaw/", "");
 if (endpoint === "actions/artifacts/301/zip") process.stdout.write(fs.readFileSync(__dirname + "/receipt.zip"));
-else if (endpoint === "actions/jobs/2/logs") process.stdout.write("##[error]synthetic test failed");
 else {
  const responses = JSON.parse(fs.readFileSync(__dirname + "/responses.json", "utf8"));
  if (!(endpoint in responses)) { console.error("Unexpected fixture endpoint: " + endpoint); process.exit(2); }
@@ -463,12 +473,6 @@ else {
         expect(cli.status, cli.stderr).toBe(0);
         expect(cli.stdout).toContain("Reused ci.yml:");
         expect(readFileSync(outputPath, "utf8")).toContain("run_id=101\nrun_attempt=1");
-        await expect(
-          validateReusableReleaseChild(selected, request, {
-            ...deps,
-            getJobLog: async () => "##[error]artifact integrity failed",
-          }),
-        ).rejects.toThrow("unwaived failure");
         policy.waivers = [];
         expect(await discoverReusableReleaseChild(request, deps)).toBeNull();
       }
@@ -500,147 +504,6 @@ else {
     ).rejects.toThrow("selection identity");
   });
 
-  it("reuses a Q-policy-waived receipt through the default log reader", async () => {
-    const version = "2099.1.1";
-    const targetSha = TARGET;
-    const jobName = "a synthetic failing test";
-    const data = await fixture();
-    data.request.targetSha = data.receipt.targetSha = targetSha;
-    data.request.inputs.target_ref = data.receipt.inputs.target_ref = targetSha;
-    data.artifact.name = data.artifact.name.replace(TARGET, targetSha);
-    await data.seal();
-    const original = await discoverReusableReleaseChild(data.request, data.deps);
-    if (!original) {
-      throw new Error("expected original reusable receipt");
-    }
-    data.run.conclusion = "failure";
-    data.jobs[0]!.name = jobName;
-    data.jobs[1]!.name = "openclaw/ci-gate";
-    for (const job of data.jobs.slice(0, 2)) {
-      job.conclusion = "failure";
-    }
-    data.jobs[1]!.steps = [
-      {
-        name: "Verify selected CI lanes",
-        status: "completed",
-        conclusion: "failure",
-      },
-    ];
-    data.receipt.workloadConclusion = "failure";
-    data.receipt.jobs = data.receipt.jobs.map((job, index) => ({
-      ...job,
-      name: data.jobs[index]!.name,
-      conclusion: "failure",
-    }));
-    data.receipt.compositeJobsSha256 = jsonDigest({
-      effectiveRunAttempt: data.receipt.effectiveRunAttempt,
-      plannedRunAttempt: data.receipt.plannedRunAttempt,
-      jobs: data.receipt.jobs,
-    });
-    await data.seal();
-    const selection = {
-      ...original,
-      receiptSha256: data.receipt.sha256,
-      artifact: {
-        ...original.artifact,
-        digest: data.artifact.digest,
-        sizeInBytes: data.artifact.size_in_bytes,
-      },
-    };
-    const root = tempDirs.make("frv-waiver-log-");
-    writeFileSync(join(root, "package.json"), '{"type":"commonjs"}\n');
-    const gh = join(root, "gh");
-    writeFileSync(
-      gh,
-      `#!${testNodeExecPath}
-if (process.argv.slice(2).join(" ") !== "api repos/openclaw/openclaw/actions/jobs/2/logs --allow-escape-sequences") process.exit(2);
-process.stdout.write("##[error]checks-node-core-test-nondist-shard finished with failure (selected=true)");
-`,
-    );
-    chmodSync(gh, 0o755);
-    vi.stubEnv("PATH", `${root}${delimiter}${process.env.PATH ?? ""}`);
-    const github = data.deps.github;
-    const deps = {
-      ...data.deps,
-      github: async (endpoint: string) => {
-        if (!endpoint.startsWith("contents/scripts/lib/release-validation-waivers.json?ref=")) {
-          return github(endpoint);
-        }
-        const bytes = Buffer.from(
-          JSON.stringify({
-            schema: "openclaw.release-validation-waivers/v1",
-            waivers: [
-              {
-                targetVersion: version,
-                targetSha,
-                childRole: "normalCi",
-                jobName,
-                reason: "Synthetic operator approval",
-                aggregates: [
-                  {
-                    jobName: "openclaw/ci-gate",
-                    stepName: "Verify selected CI lanes",
-                    causes: [
-                      "checks-node-core-test-nondist-shard finished with failure (selected=true)",
-                    ],
-                    exactCauses: true,
-                  },
-                ],
-              },
-            ],
-          }),
-        );
-        return {
-          type: "file",
-          path: "scripts/lib/release-validation-waivers.json",
-          encoding: "base64",
-          size: bytes.length,
-          content: bytes.toString("base64"),
-          sha: createHash("sha1")
-            .update("blob " + bytes.length + "\0")
-            .update(bytes)
-            .digest("hex"),
-        };
-      },
-    };
-    await expect(validateReusableReleaseChild(selection, data.request, deps)).rejects.toThrow(
-      "current successful attempt",
-    );
-    const recovered = await validateReusableReleaseChild(
-      selection,
-      {
-        ...data.request,
-        policyTargetVersion: version,
-      },
-      deps,
-    );
-    expect(recovered.run.conclusion).toBe("failure");
-    expect(recovered.receipt.workloadConclusion).toBe("failure");
-    expect(await discoverReusableReleaseChild(data.request, deps)).toBeNull();
-    expect(
-      await discoverReusableReleaseChild({ ...data.request, policyTargetVersion: version }, deps),
-    ).toMatchObject({ runId: String(data.run.id), receiptSha256: data.receipt.sha256 });
-    await expect(
-      validateReusableReleaseChild(
-        selection,
-        {
-          ...data.request,
-          policyTargetVersion: version,
-        },
-        { ...deps, getJobLog: async () => "##[error]artifact integrity failed" },
-      ),
-    ).rejects.toThrow("unwaived failure");
-    await expect(
-      validateReusableReleaseChild(
-        selection,
-        {
-          ...data.request,
-          policyTargetVersion: "2099.1.2",
-        },
-        deps,
-      ),
-    ).rejects.toThrow();
-  });
   it("reads twelve complete inventories four at a time within the shared deadline", async () => {
     const data = await fixture("normalCi", undefined, TOOLING, 261, 12);
     const selection = await discoverReusableReleaseChild(data.request, data.deps);

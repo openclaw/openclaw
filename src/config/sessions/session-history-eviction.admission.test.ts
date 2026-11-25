@@ -183,7 +183,7 @@ it.each([
           using schemaRepair = realOpen(database.path);
           schemaRepair.exec("DROP INDEX idx_agent_transcript_message_idempotency");
         }
-        invalidateOpenClawAgentDatabaseValidation(database.path);
+        invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
         revokeSqliteDatabaseAdmissionsForPath(database.path);
       }
       observingAdmission = true;

@@ -104,6 +104,7 @@ export function modelSelectionPoliciesMatch(
 type HistoricalModelFields = {
   model?: unknown;
   modelProvider?: unknown;
+  modelDisplayName?: unknown;
   activeModel?: unknown;
   activeModelProvider?: unknown;
   contextBudgetStatus?: unknown;
@@ -323,7 +324,7 @@ export function prepareOperatorModelPolicyPresentation(params: {
     }
     const projected = { ...row };
     // Nulls clear merge-event state; omit identifiers without replacing those clearing facts.
-    for (const field of ["modelProvider", "model"] as const) {
+    for (const field of ["modelProvider", "model", "modelDisplayName"] as const) {
       if (hideModel && projected[field] != null) {
         delete projected[field];
       }

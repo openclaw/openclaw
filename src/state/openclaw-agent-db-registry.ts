@@ -152,7 +152,10 @@ export function registerOpenClawAgentDatabase(
       setOpenClawAgentDatabaseValidation(database);
     }
   } else {
-    invalidateOpenClawAgentDatabaseValidation(params.path);
+    invalidateOpenClawAgentDatabaseValidation(
+      params.path,
+      "registration without an admitted connection",
+    );
   }
 }
 
@@ -178,7 +181,7 @@ export function unregisterOpenClawAgentDatabase(params: {
     },
     { env: params.env, initializationAgentPaths: [params.path] },
   );
-  invalidateOpenClawAgentDatabaseValidation(params.path);
+  invalidateOpenClawAgentDatabaseValidation(params.path, "agent database unregistration");
 }
 
 /** Remove every durable database registration owned by a deleted agent. */

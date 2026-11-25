@@ -30,14 +30,6 @@ function ownerFor(host: Host) {
   for (const key of ["hostedTabs", "activeHostedTabId"] as const) {
     Object.defineProperty(host, key, { configurable: true, get: () => owner[key] });
   }
-  const bridgePrototype = Object.getPrototypeOf(host);
-  Object.defineProperty(host, "updateComplete", {
-    configurable: true,
-    get: () =>
-      Promise.resolve(Reflect.get(bridgePrototype, "updateComplete", host)).then(() =>
-        host.isConnected ? owner.updateComplete : false,
-      ),
-  });
   return owner;
 }
 
@@ -73,6 +65,7 @@ export const BrowserPanelHost = defineSolidBridge<BrowserPanelInputs, BrowserPan
       dashboardTarget: { default: undefined, attribute: false },
     },
     propertyChanged: (host, key) => owners.get(host)?.inputsChanged(key),
+    updateComplete: (host) => (host.isConnected ? owners.get(host)?.updateComplete : false),
     methods: {
       browserPanelIsOpen: (host) => ownerFor(host).browserPanelIsOpen(),
       toggle: (host) => ownerFor(host).toggle(),
