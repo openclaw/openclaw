@@ -970,6 +970,10 @@ assert_legacy_runtime_deps_symlink_repaired() {
 }
 
 read_installed_version() {
+  if [ "${1:-}" = "resident" ]; then
+    openclaw --version | sed -nE 's/^OpenClaw ([^ ]+).*/\1/p'
+    return "$?"
+  fi
   node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1] + "/package.json", "utf8")).version' "$(package_root)"
 }
 
@@ -1625,6 +1629,7 @@ ensure_candidate_selector_registry() {
 }
 
 update_candidate() {
+  last_update_restart_route=""
   local after_repair="${1:-0}"
   local expected_version="${3:-$candidate_version}"
   local update_json="$UPDATE_JSON" update_err="$UPDATE_ERR"
@@ -1792,13 +1797,11 @@ update_candidate() {
       # The launcher stays resident; the authenticated serving proof below
       # still exercises the new Gateway, not the npm frontend it replaced.
       systemctl --user is-active --quiet openclaw-gateway.service || return 1
-      installed_version="$(openclaw --version | sed -nE 's/^OpenClaw ([^ ]+).*/\1/p')" || return $?
+      installed_version="$(read_installed_version "$restart_route")" || return "$?"
     else
       assert_update_restart_service_replaced "$previous_service_pid" "$previous_systemctl_lines" || return 1
     fi
-    if [ "$after_repair" = "1" ]; then
-      last_update_restart_route="$restart_route"
-    fi
+    last_update_restart_route="$restart_route"
     update_restart_source="candidate-update"
     if [ "$SCENARIO" = "legacy-operator-state" ]; then
       update_restart_source="baseline-update"
@@ -2140,11 +2143,10 @@ repair_update_restart_auth() {
     phase prepared-gateway-auth check_gateway_status
     local auth_status=$?
     [ "$auth_status" -eq 0 ] || return "$auth_status"
-    local last_update_restart_route=""
     phase recovery-update-restart update_candidate 1 "file:$restart_fixture_package" "$restart_fixture_version"
     local recovery_status=$?
     [ "$recovery_status" -eq 0 ] || return "$recovery_status"
-    if [ "$membership_mode" = absent ] && [ "$last_update_restart_route" != resident ]; then
+    if [ "$membership_mode" = absent ] && [ "${last_update_restart_route:-}" != resident ]; then
       phase recovery-membership-warning assert_managed_membership_warning || return "$?"
     fi
     if [ "$SCENARIO" != "watchos-direct-node" ] && [ "$SCENARIO" != "mobile-pairing-reconnect" ]; then
@@ -2242,7 +2244,7 @@ assert_survival() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config || return "$?"
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE="$survival_assert_stage" \
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state || return "$?"
-  installed_version="$(read_installed_version)" || return "$?"
+  installed_version="$(read_installed_version "${last_update_restart_route:-}")" || return "$?"
   if [ "$baseline_version" = "2026.9.2" ] && [ "$candidate_version" = "2026.9.3" ]; then
     local expected_state_schema
     if [ "$CANDIDATE_KIND" = "tarball" ]; then
