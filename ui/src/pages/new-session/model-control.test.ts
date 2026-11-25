@@ -86,6 +86,8 @@ it("reuses runtime resolution until model inputs change, including mutable defau
 });
 
 it("does not borrow a provider for an ambiguous draft target", async () => {
+  // The model view test covers the first open of the lazy panel.
+  await import("../chat/components/chat-model-picker-panel.tsx");
   const { control, context, changed } = setup([
     testModel("openai", "model", {
       reasoning: true,
