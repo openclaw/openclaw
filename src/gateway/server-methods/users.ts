@@ -82,6 +82,7 @@ import {
 } from "./gateway-client-identity.js";
 import { preparePersonalProfileAction } from "./personal-profile-authorization.js";
 import { respondError } from "./response.js";
+import { recordProfileDisplayNameChange } from "./system-changes.js";
 import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
@@ -622,15 +623,31 @@ export const usersHandlers: GatewayRequestHandlers = {
     validateUsersSetDisplayNameParams,
     async (options) => {
       const { context, params, respond } = options;
-      const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
-      if (!assertCurrent) {
+      const access = await prepareProfileMutationAccess(options, params.profileId);
+      if (!access) {
         return;
       }
+      const { assertCurrent, requesterProfileId } = access;
+      const audit = context.getRuntimeConfig().logging?.audit;
+      let recorded: Promise<void> | undefined;
       const { profile } = await setCanonicalUserProfileDisplayName(
         params.profileId,
         params.displayName,
-        { assertCurrent },
-      );
+        {
+          assertCurrent,
+          ...(audit?.enabled !== false && audit?.profileChanges === true
+            ? {
+                onDisplayNameChanged: (profileId: string) => {
+                  recorded = recordProfileDisplayNameChange(
+                    profileId,
+                    requesterProfileId,
+                    context.logGateway,
+                  );
+                },
+              }
+            : {}),
+        },
+      ).finally(() => recorded);
       assertCurrent();
       refreshConnectedProfile(context, profile.id);
       respond(true, { profile });
@@ -655,10 +672,11 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     const bytes = Buffer.from(avatarBase64, "base64");
     try {
-      const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
-      if (!assertCurrent) {
+      const access = await prepareProfileMutationAccess(options, params.profileId);
+      if (!access) {
         return;
       }
+      const { assertCurrent } = access;
       const result = await setCanonicalUserProfileAvatar(params.profileId, bytes, params.mime, {
         assertCurrent,
       });

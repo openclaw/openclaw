@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { createSqliteAuditRecordReader } from "../../infra/sqlite-audit-record-store.async.js";
 import * as writerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -15,6 +16,7 @@ import {
 } from "../../state/user-profile-writes.js";
 import { setUserProfileRole, syncGitHubIdentity } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { SYSTEM_AGENT_AUDIT_SCOPE } from "../../system-agent/audit.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -23,6 +25,7 @@ import {
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
 import type { RespondFn } from "./response-types.js";
+import { PROFILE_CHANGE_AUDIT_SCOPE, systemChangesHandlers } from "./system-changes.js";
 import { usersHandlers } from "./users.js";
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
@@ -51,7 +54,7 @@ function dispatchClient(
     context,
     client,
     isWebchatConnect: () => false,
-    extraHandlers: usersHandlers,
+    extraHandlers: { ...usersHandlers, ...systemChangesHandlers },
   });
   return { respond, request };
 }
@@ -71,6 +74,76 @@ const profileEdits = [
   ["users.setDisplayName", { displayName: "Current name" }, { displayName: "Current name" }],
   ["users.setAvatar", { mime: "image/png", avatarBase64: "AQI=" }, { hasAvatar: true }],
 ] as const;
+
+it("records only opted-in, committed display-name changes in admin history without names", async () => {
+  const editor = ensureProfileForEmail("profile-editor@example.test");
+  const admin = ensureProfileForEmail("history-admin@example.test");
+  catalog = await prepareUserProfileCatalog();
+  const editOwnName = (displayName: string) =>
+    rpc("users.setDisplayName", editor.id, ["operator.read"], {
+      profileId: editor.id,
+      displayName,
+    });
+  const readHistory = () =>
+    rpc("openclaw.changes.list", admin.id, ["operator.admin"], { limit: 10 });
+
+  expect(await editOwnName("Default off name")).toHaveBeenCalledWith(true, expect.anything());
+  context.getRuntimeConfig = () => ({
+    logging: { audit: { enabled: false, profileChanges: true } },
+  });
+  expect(await editOwnName("Audit disabled name")).toHaveBeenCalledWith(true, expect.anything());
+  expect(await readHistory()).toHaveBeenCalledWith(true, { entries: [] });
+
+  context.getRuntimeConfig = () => ({ logging: { audit: { profileChanges: true } } });
+  const displayName = "Synthetic profile name";
+  expect(await editOwnName(displayName)).toHaveBeenCalledWith(true, {
+    profile: expect.objectContaining({ id: editor.id, displayName }),
+  });
+  expect(getUserProfileListItem(editor.id)?.displayName).toBe(displayName);
+  expect(await editOwnName(displayName)).toHaveBeenCalledWith(true, expect.anything());
+  expect(
+    await rpc("users.setDisplayName", editor.id, ["operator.read"], {
+      profileId: admin.id,
+      displayName: "Refused name",
+    }),
+  ).toHaveBeenCalledWith(...forbidden);
+  expect(
+    await rpc("users.setDisplayName", admin.id, ["operator.admin"], {
+      profileId: editor.id,
+      displayName: null,
+    }),
+  ).toHaveBeenCalledWith(true, {
+    profile: expect.objectContaining({ id: editor.id, displayName: null }),
+  });
+  expect(await rpc("openclaw.changes.list", editor.id)).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.anything(),
+  );
+
+  expect(await readHistory()).toHaveBeenCalledWith(true, {
+    entries: [admin.id, editor.id].map((actor) =>
+      expect.objectContaining({
+        kind: "operation",
+        source: "config-rpc",
+        summary: `Display name for profile ${editor.id} changed by profile ${actor}`,
+      }),
+    ),
+  });
+  const records = await createSqliteAuditRecordReader({
+    scope: PROFILE_CHANGE_AUDIT_SCOPE,
+  }).latest({ limit: 10 });
+  expect(records.map(({ value }) => value)).toEqual(
+    [admin.id, editor.id].map((actor) => ({
+      operation: "users.setDisplayName",
+      profileId: editor.id,
+      actorProfileId: actor,
+    })),
+  );
+  expect(
+    await createSqliteAuditRecordReader({ scope: SYSTEM_AGENT_AUDIT_SCOPE }).latest({ limit: 10 }),
+  ).toEqual([]);
+});
 
 it("returns only the authenticated person's private emails from the shared users.self catalog", async () => {
   const people = ["alpha-private@example.test", "bravo-private@example.test"].map((email) => ({

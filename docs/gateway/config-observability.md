@@ -20,6 +20,7 @@ For the full key index and the other top-level config domains, see [Configuratio
       enabled: true,
       executionIdentity: false,
       messages: "off", // off | direct | all
+      profileChanges: false,
     },
   },
 }
@@ -54,13 +55,17 @@ and coverage limits.
   identifiers with installation-local keyed pseudonyms where correlation is
   available. These are correlation aids rather than anonymization; the state
   database stores the derivation key, but RPC and CLI exports do not.
+- `profileChanges`: record committed Gateway display-name changes in
+  [admin-only change history](/cli/openclaw#change-history) (default: `false`).
+  Requires `enabled: true`. Records contain the affected profile ID and the
+  authenticated requester profile ID when known, never the old or new name.
 
 A root-level `audit` block is retired; the current path is `logging.audit`.
 The root config object is strict, so an old top-level `audit` block is rejected.
 Run [`openclaw doctor --fix`](/cli/doctor) to move it to `logging.audit`.
 
-All three settings apply live. Accepted writes still drain through the same
-writer, and retained identity contexts remain unchanged. Enabling collection
+These settings apply to subsequent activity. Accepted writes still drain,
+and retained records remain readable within their existing bounds. Enabling collection
 does not backfill activity or add identity to already admitted runs. Message coverage includes
 accepted inbound messages that reach core dispatch and one terminal row per
 original logical outbound reply payload that reaches shared durable delivery.
