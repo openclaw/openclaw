@@ -393,8 +393,8 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     await result.dispose();
   });
 
-  it.each([false, true])(
-    "reports actual heartbeat omissions, not warnings (deny: %s)",
+  it.each(["none", "config", "session"] as const)(
+    "reports only unexpected heartbeat omissions (deny: %s)",
     async (deny) => {
       makeStaticRuntime("scheduled-group");
       const warnings: string[] = [];
@@ -405,16 +405,17 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
           ...heartbeatPolicy,
           config: {
             ...heartbeatPolicy.config,
-            ...(deny ? { tools: { deny: ["user-mail__inbox"] } } : {}),
+            ...(deny === "config" ? { tools: { deny: ["user-mail__inbox"] } } : {}),
           },
+          ...(deny === "session" ? { conversationToolPolicy: { deny: ["user-mail__inbox"] } } : {}),
         },
         warn: (message) => warnings.push(message),
       });
-      expect(toolNames(result.tools)).toEqual(deny ? [] : ["user-mail__inbox"]);
+      expect(toolNames(result.tools)).toEqual(deny === "none" ? ["user-mail__inbox"] : []);
       expect(warnings).toContain(
         "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
       );
-      if (deny) {
+      if (deny === "session") {
         expect(result.diagnosticNotice).toContain(
           "Configured MCP is incomplete for this scheduled run",
         );
