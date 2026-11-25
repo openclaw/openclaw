@@ -14,8 +14,15 @@ const PROCESS_METHODS = new Set([
 ]);
 const GLOBAL_OBJECTS = new Set(["globalThis", "global", "window"]);
 const CODE_FUNCTIONS = new Set(["eval", "Function"]);
-type ObjectValue = Map<string, Value | undefined>;
-type Value = "process-module" | "global-object" | "process-call" | "code-call" | ObjectValue;
+type ObjectValue = { properties: Map<string, Value | undefined>; unknownProperties: boolean };
+// `undefined` is an unmodeled value; this tag is provably JavaScript undefined.
+type Value =
+  | "process-module"
+  | "global-object"
+  | "process-call"
+  | "code-call"
+  | "undefined-value"
+  | ObjectValue;
 type State = {
   bindings: Map<Binding | string, Value | undefined>;
   properties: Map<ObjectValue, Map<string, Value | undefined>>;
@@ -54,6 +61,10 @@ function propertyName(
 
 function isProcessModule(name: string | undefined): boolean {
   return name === "child_process" || name === "node:child_process";
+}
+
+function missingPropertyValue(name: string): Value | undefined {
+  return Object.hasOwn(Object.prototype, name) ? undefined : "undefined-value";
 }
 
 /**
@@ -117,6 +128,11 @@ export function collectCapabilityCalls(source: string, filePath: string): CallMa
         if (GLOBAL_OBJECTS.has(key)) {
           return "global-object";
         }
+        if (key === "undefined") {
+          return "undefined-value";
+        }
+      } else if (key.kind === "var") {
+        return "undefined-value";
       }
       return undefined;
     }
@@ -128,9 +144,9 @@ export function collectCapabilityCalls(source: string, filePath: string): CallMa
         return PROCESS_METHODS.has(name) ? "process-call" : undefined;
       }
       if (object === "global-object") {
-        return CODE_FUNCTIONS.has(name) ? readBinding(name) : undefined;
+        return CODE_FUNCTIONS.has(name) || name === "undefined" ? readBinding(name) : undefined;
       }
-      if (!(object instanceof Map)) {
+      if (typeof object !== "object") {
         return undefined;
       }
       for (let current: State | undefined = state; current; current = current.parent) {
@@ -139,7 +155,11 @@ export function collectCapabilityCalls(source: string, filePath: string): CallMa
           return properties.get(name);
         }
       }
-      return object.get(name);
+      if (object.properties.has(name)) {
+        return object.properties.get(name);
+      }
+      // Inherited or unmodeled properties are not proven absent.
+      return object.unknownProperties ? undefined : missingPropertyValue(name);
     }
     function value(node: t.Node | null | undefined, scope: Scope, depth = 0): Value | undefined {
       if (!node || depth > 32) {
@@ -148,6 +168,8 @@ export function collectCapabilityCalls(source: string, filePath: string): CallMa
       switch (node.type) {
         case "Identifier":
           return readBinding(scope.getBinding(node.name) ?? node.name);
+        case "UnaryExpression":
+          return node.operator === "void" ? "undefined-value" : undefined;
         case "AwaitExpression":
           if (node.argument.type === "ImportExpression") {
             return isProcessModule(staticString(node.argument.source))
@@ -188,11 +210,11 @@ export function collectCapabilityCalls(source: string, filePath: string): CallMa
           }
         }
       } else if (node.type === "AssignmentPattern") {
-        assign(node.left, next ?? value(node.right, scope), scope);
+        assign(node.left, next === "undefined-value" ? value(node.right, scope) : next, scope);
       } else if (node.type === "MemberExpression" || node.type === "OptionalMemberExpression") {
         const object = value(node.object, scope);
         const name = propertyName(node);
-        if (object instanceof Map && name !== undefined) {
+        if (typeof object === "object" && name !== undefined) {
           let properties = state.properties.get(object);
           if (!properties) {
             state.properties.set(object, (properties = new Map()));
@@ -245,23 +267,27 @@ export function collectCapabilityCalls(source: string, filePath: string): CallMa
       },
       ObjectExpression: {
         exit(path) {
-          const object: ObjectValue = new Map();
+          const object: ObjectValue = { properties: new Map(), unknownProperties: false };
           for (const entry of path.node.properties) {
             if (entry.type === "SpreadElement") {
               const spread = value(entry.argument, path.scope);
-              if (spread instanceof Map) {
-                const keys = new Set(spread.keys());
+              if (typeof spread === "object") {
+                if (spread.unknownProperties) {
+                  object.properties.clear();
+                  object.unknownProperties = true;
+                }
+                const keys = new Set(spread.properties.keys());
                 for (let current: State | undefined = state; current; current = current.parent) {
                   for (const key of current.properties.get(spread)?.keys() ?? []) {
                     keys.add(key);
                   }
                 }
                 for (const key of keys) {
-                  object.set(key, readProperty(spread, key));
+                  object.properties.set(key, readProperty(spread, key));
                 }
               } else if (spread === "process-module") {
                 for (const key of PROCESS_METHODS) {
-                  object.set(key, "process-call");
+                  object.properties.set(key, "process-call");
                 }
               } else if (
                 !["NullLiteral", "NumericLiteral", "BooleanLiteral", "StringLiteral"].includes(
@@ -269,14 +295,15 @@ export function collectCapabilityCalls(source: string, filePath: string): CallMa
                 )
               ) {
                 // An unknown spread can overwrite any earlier property; its provenance is unknown.
-                object.clear();
+                object.properties.clear();
+                object.unknownProperties = true;
               }
               continue;
             }
             if (entry.type === "ObjectProperty" || entry.type === "ObjectMethod") {
               const name = propertyName(entry);
               if (name !== undefined) {
-                object.set(
+                object.properties.set(
                   name,
                   entry.type === "ObjectProperty" ? value(entry.value, path.scope) : undefined,
                 );
@@ -291,7 +318,27 @@ export function collectCapabilityCalls(source: string, filePath: string): CallMa
           if (!path.node.init && path.parentPath.isVariableDeclaration({ kind: "var" })) {
             return;
           }
-          assign(path.node.id, value(path.node.init, path.scope), path.scope);
+          assign(
+            path.node.id,
+            path.node.init ? value(path.node.init, path.scope) : "undefined-value",
+            path.scope,
+          );
+        },
+      },
+      UnaryExpression: {
+        exit(path) {
+          if (
+            path.node.operator === "delete" &&
+            (path.node.argument.type === "MemberExpression" ||
+              path.node.argument.type === "OptionalMemberExpression")
+          ) {
+            const name = propertyName(path.node.argument);
+            assign(
+              path.node.argument,
+              name === undefined ? undefined : missingPropertyValue(name),
+              path.scope,
+            );
+          }
         },
       },
       AssignmentExpression: {

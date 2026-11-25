@@ -116,7 +116,7 @@ it("refuses aliased child_process and eval calls but saves benign aliases", asyn
   await expect(fs.readdir(skillsRoot)).rejects.toMatchObject({ code: "ENOENT" });
 
   const benign = fenced(
-    'const box = { run: eval };\nconst safe = { run: (x) => x };\nfunction local(eval) { const evaluate = eval; return evaluate("ok"); }\nsafe.run("ok");',
+    'const box = { run: eval };\nconst safe = { run: (x) => x };\nfunction local(eval) { const evaluate = eval; return evaluate("ok"); }\nsafe.run("ok");\nconst { run: callback = eval } = { run: x => x };\ncallback("ok");',
   );
   await expect(write("deploy", benign)).resolves.toEqual({ description: "Deploy staging builds" });
   await expect(readSkillDirFile(path.join(skillsRoot, "deploy"), "SKILL.md")).resolves.toBe(
