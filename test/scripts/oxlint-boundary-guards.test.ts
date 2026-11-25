@@ -35,13 +35,14 @@ const cases = [
   ["no-widen-then-assert", "widen-then-assert-violation.test.ts", 3, [3, 7, 13]],
   ["no-operator-permission-read", "operator-permission-recheck-violation.ts", 4, [1, 4, 6, 8]],
   // Planted divergence: a resumed turn reads its start kind; owner status comes from
-  // destructuring defaults (source and aliased destination), from scopes and from defaults to
-  // owner. Pass-throughs (lines 9-10) and narrowing forms (lines 23-30) are not reported.
+  // destructuring defaults (source and aliased destination), from scopes, from defaults to
+  // owner and from function values. Pass-throughs (lines 9-10) and narrowing forms (lines
+  // 23-30) are not reported.
   [
     "no-turn-authority-derivation",
     "turn-authority-derivation-violation.ts",
-    7,
-    [11, 12, 13, 13, 18, 32, 33],
+    9,
+    [11, 12, 13, 13, 18, 32, 33, 36, 41],
   ],
   ["no-chained-type-assertions", "chained-type-assertions-violation.ts", 3],
 ] satisfies [string, string, number, number[]?][];

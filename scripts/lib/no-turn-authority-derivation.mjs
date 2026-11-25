@@ -161,14 +161,6 @@ function passesOwnerAlong(value, field) {
       return value.operator === "&&"
         ? passesOwnerAlong(value.left, field) || passesOwnerAlong(value.right, field)
         : passesOwnerAlong(value.left, field) && passesOwnerAlong(value.right, field);
-    case "FunctionExpression": {
-      const [statement, ...rest] = value.body?.body ?? [];
-      return (
-        rest.length === 0 &&
-        statement?.type === "ReturnStatement" &&
-        passesOwnerAlong(statement.argument, field)
-      );
-    }
     default:
       return false;
   }
@@ -235,12 +227,22 @@ export default {
       Property(node) {
         const field = node.computed ? undefined : propertyName(node.key);
         if (
-          checkOwner &&
-          field &&
-          OWNER_FIELDS.has(field) &&
-          node.parent?.type === "ObjectExpression" &&
-          !passesOwnerAlong(node.value, field)
+          !checkOwner ||
+          !field ||
+          !OWNER_FIELDS.has(field) ||
+          node.parent?.type !== "ObjectExpression"
         ) {
+          return;
+        }
+        // A getter is read as its value: one `return` of a pass-through passes along.
+        const [statement, ...rest] = node.kind === "get" ? node.value.body.body : [];
+        const value =
+          node.kind !== "get"
+            ? node.value
+            : rest.length === 0 && statement?.type === "ReturnStatement"
+              ? statement.argument
+              : node.value;
+        if (!passesOwnerAlong(value, field)) {
           reportOwner(node, field);
         }
       },

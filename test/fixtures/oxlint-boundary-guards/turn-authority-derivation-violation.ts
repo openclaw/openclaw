@@ -31,5 +31,16 @@ export function narrowOwner(input: { senderIsOwner?: boolean }, scoped: boolean)
     },
     { senderIsOwner: input.senderIsOwner ?? true },
     { senderIsOwner: input.senderIsOwner !== false },
+    // A function value is truthy whatever it returns; only a getter is read as its value.
+    {
+      senderIsOwner() {
+        return false;
+      },
+    },
+    {
+      senderIsOwner: function () {
+        return false;
+      },
+    },
   ];
 }
