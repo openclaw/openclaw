@@ -6,7 +6,7 @@ import {
 } from "../plugins/install-config.js";
 
 /** Commander resolves arguments and options before invoking pre-action hooks. */
-export function resolvePluginInstallPreactionRequest(
+function resolvePluginInstallPreactionRequest(
   actionCommand: Command,
 ): PluginInstallRequestContext | null {
   const opts = actionCommand.opts<Record<string, unknown>>();

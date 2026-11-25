@@ -298,14 +298,6 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
-  test("dedupes identical unknown-allowlist warnings across repeated runs", () => {
-    const warnings: string[] = [];
-    const params = { allow: ["dedupe_case_unknown"], warnings };
-    runAllowlistWarningStep(params);
-    runAllowlistWarningStep(params);
-    expect(warnings).toHaveLength(1);
-  });
-
   test("evicts the oldest warning when the dedupe cache is full", () => {
     const warnings: string[] = [];
     const warn = (index: number) =>

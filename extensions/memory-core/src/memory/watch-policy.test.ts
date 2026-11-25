@@ -97,3 +97,19 @@ it("selects configured patterns and multimodal files while pruning unrelated des
   expect(owner.exclude(group, { path: relative("..notes"), kind: "directory" })).toBe(false);
   expect(owner.exclude(group, { path: relative("nested-link"), kind: "symlink" })).toBe(true);
 });
+
+it("bounds an extra path's watched tree by its pattern depth", async () => {
+  const owner = policy([
+    { path: p("shallow"), pattern: "*/MASTER.md" },
+    { path: p("deep"), pattern: "notes/**/*.md" },
+  ]);
+  const depths = new Map(
+    (await observe(owner)).flatMap((group) =>
+      owner
+        .scopes(group)
+        .map((scope) => [path.resolve(group.root.rootDir, scope.path), scope.depth] as const),
+    ),
+  );
+  expect(depths.get(p("shallow"))).toBe(2);
+  expect(depths.get(p("deep"))).toBe(128);
+});

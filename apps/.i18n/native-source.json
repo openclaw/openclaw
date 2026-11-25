@@ -5080,6 +5080,7 @@
     {"path":"apps/macos/Sources/OpenClaw/LaunchAgentManager.swift","kind":"ui-localized-call-multiline","surface":"apple","id":"native.apple.92737fc835b9938d","source":"Could not enable Launch at Login. Check OpenClaw in System Settings → General → Login Items and try again."},
     {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.addaba7d7374d016","source":"Cancel"},
     {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.175bcc20002fdff3","source":"Complete sign-in in your browser…"},
+    {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.9fde0847d7bf35e5","source":"Connecting…"},
     {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.b8ccd3cffcea09cb","source":"Connection Settings…"},
     {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.c109419e4662ddfa","source":"Open browser"},
     {"path":"apps/macos/Sources/OpenClaw/DashboardFailurePage.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4b8aa5dbbf85ac82","source":"Reload"},

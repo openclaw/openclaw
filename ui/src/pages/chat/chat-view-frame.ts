@@ -116,6 +116,9 @@ export type ChatProps = Omit<
     errorDetail?: unknown;
     diskSpace?: SessionPlacementDiskSpace;
     workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
+    participantApproval?:
+      | import("./session-approval-projection.ts").ParticipantApprovalNotice
+      | null;
     inlineApproval?: ExecApprovalRequest | null;
     approvalBusy?: boolean;
     approvalCanGrant: boolean;
@@ -144,9 +147,11 @@ export type ChatProps = Omit<
       defaultId?: string;
     } | null;
     sessionSuggestions?: readonly SessionSuggestion[];
+    sessionSuggestionLiveResolutions?: ReadonlyMap<string, boolean>;
     sessionSuggestionRole?: SessionSharingRole;
     sessionSuggestionBusyIds?: ReadonlySet<string>;
     sessionSuggestionsArchived?: boolean;
+    onCloseSessionSuggestion?: (id: string) => void;
     canResolveSessionSuggestions?: boolean;
     onResolveSessionSuggestion?: (
       suggestion: SessionSuggestion,
@@ -368,7 +373,15 @@ export function createChatViewFrame(
     displayedPendingInputs ?? [],
   );
   const displayQueue = [
-    ...buildPendingInputQueueItems(inputDisplay.queuedInputs, pendingInputs?.cancelling),
+    ...buildPendingInputQueueItems(
+      [
+        ...inputDisplay.queuedInputs,
+        ...(displayedPendingInputs?.filter(
+          (input) => input.state === "cancelled" && input.endCause === "revoked",
+        ) ?? []),
+      ],
+      pendingInputs?.cancelling,
+    ),
     ...inputDisplay.queue,
   ];
   const historyLoadState = props.historyState

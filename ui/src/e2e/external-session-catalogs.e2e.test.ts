@@ -153,11 +153,26 @@ suite.define(() => {
         },
       });
       await page.goto(new URL("beam/owned-synthetic-beam-aaaaaaaaaaaa", suite.server.baseUrl).href);
-      const imageLink = page.getByRole("link", { name: "diagram.png" });
-      await imageLink.waitFor();
-      expect(await imageLink.getAttribute("download")).toBe("diagram.png");
+      const thread = page.locator(visiblePane).locator(".chat-thread");
+      const transcriptReply = exactText(thread, "My owned Beam is readable without operator.read.");
+      await transcriptReply.waitFor();
+      const attachment = thread.getByRole("figure", { name: "diagram.png" });
+      const openImage = attachment.getByRole("button", { name: "Open image diagram.png" });
+      await openImage.waitFor();
+      expect(await attachment.evaluate((figure) => figure.closest(".chat-group") === null)).toBe(
+        true,
+      );
       expect(
-        await imageLink.locator("img").evaluate(async (img) => {
+        await transcriptReply.evaluate(
+          (reply, figure) =>
+            Boolean(
+              figure && reply.compareDocumentPosition(figure) & Node.DOCUMENT_POSITION_FOLLOWING,
+            ),
+          await attachment.elementHandle(),
+        ),
+      ).toBe(true);
+      expect(
+        await openImage.locator("img").evaluate(async (img) => {
           if (!(img instanceof HTMLImageElement)) {
             throw new Error("Expected a screenshot image");
           }
@@ -165,7 +180,16 @@ suite.define(() => {
           return img.naturalWidth;
         }),
       ).toBe(4);
-      await exactText(page, "My owned Beam is readable without operator.read.").waitFor();
+      await openImage.click();
+      const viewer = page.getByRole("dialog", { name: "Image preview: diagram.png" });
+      await viewer.waitFor();
+      const [download] = await Promise.all([
+        page.waitForEvent("download"),
+        viewer.getByRole("button", { name: "Download image" }).click(),
+      ]);
+      expect(download.suggestedFilename()).toBe("diagram.png");
+      await page.keyboard.press("Escape");
+      await viewer.waitFor({ state: "hidden" });
       await exactText(page, handoffReason).waitFor();
       expect(await page.locator(`${visiblePane} textarea`).isDisabled()).toBe(true);
       await page.screenshot({ path: ".openclaw/tmp/beam-talk-proof/before.png" });
@@ -181,8 +205,12 @@ suite.define(() => {
           ),
         ],
       });
-      await page.reload();
+      await openImage.click();
+      await viewer.waitFor();
+      await gateway.emitGatewayEvent("sessions.catalog.routes.changed", { generation: 2 });
+      await viewer.waitFor({ state: "hidden" });
       await exactText(page, "My owned Beam is readable without operator.read.").waitFor();
+      expect(await attachment.count()).toBe(0);
       expect(await page.locator(`${visiblePane} textarea`).isDisabled()).toBe(false);
       expect((await gateway.getRequests("beam.owned.list")).length).toBeGreaterThan(0);
       expect((await gateway.getRequests("beam.owned.read")).at(-1)?.params).toMatchObject({

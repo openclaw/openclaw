@@ -1,6 +1,7 @@
 import type { PortalSummary } from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
 import {
+  controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -81,6 +82,46 @@ suite.define(() => {
       },
     );
   });
+  it("centers the device-ready status inside the embedded portal sheet", async () => {
+    await suite.withPage(
+      {
+        ...createControlUiE2eContextOptions(),
+        viewport: { width: 820, height: 1180 },
+        hasTouch: true,
+      },
+      async ({ page }) => {
+        const sessionKey = "agent:main:portal-layout";
+        const environmentId = "review-device";
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          featureMethods: [...defaultControlUiFeatureMethods, "environments.status"],
+          methodResponses: {
+            "environments.status": { id: environmentId, type: "worker", status: "available" },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await gateway.emitGatewayEvent("ui.command", {
+          command: { kind: "panel", panel: "portal", open: true, environmentId },
+          sessionKey,
+        });
+        const pane = page.locator("openclaw-portals-page[embedded]");
+        const title = pane.getByText("Device ready. Waiting for your app…", { exact: true });
+        await title.waitFor();
+        const [host, message] = await Promise.all([pane.boundingBox(), title.boundingBox()]);
+        if (!host || !message) {
+          throw new Error("Missing portal status bounds");
+        }
+        expect(
+          Math.abs(message.x + message.width / 2 - host.x - host.width / 2),
+        ).toBeLessThanOrEqual(1);
+        expect(
+          Math.abs(message.y + message.height / 2 - host.y - host.height / 2),
+        ).toBeLessThanOrEqual(1);
+      },
+    );
+  });
+
   it.each([
     ["tall", 1440, 1000],
     ["short", 1280, 520],

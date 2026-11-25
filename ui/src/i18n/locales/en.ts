@@ -915,6 +915,7 @@ const startupEnglish = {
   skillsPage: {},
   skillStatus: {},
   nav: {
+    automationFailure: "An automation has failed",
     gateway: {
       sectionLabel: "Gateway",
       primaryTag: "primary",
@@ -1028,6 +1029,7 @@ const startupEnglish = {
     approvals: "Approvals",
     workboard: "Workboard",
     worktrees: "Worktrees",
+    projects: "Projects",
     channels: "Channels",
     connection: "Gateway",
     sessions: "Sessions",

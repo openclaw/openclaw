@@ -12,6 +12,8 @@ import { isIncognitoSessionKey, scopeLegacySessionKeyToAgent } from "../../routi
 import { prepareChatHistoryResponsePage } from "../chat-history-response-page.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { registerDeflatedSegment } from "../server/ws-compression.js";
+import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
+import { presentSessionPin, usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
@@ -30,6 +32,7 @@ import {
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { readChatHistoryPage, type ChatHistoryMessageProjector } from "./chat-history-pages.js";
 import {
   respondChatHistoryReadError,
@@ -37,6 +40,21 @@ import {
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+/** Unsaved sessions bypass the resident presenter but use the same recipient wire contract. */
+export function buildUnsavedHistoryRow({
+  client,
+  ...params
+}: Parameters<typeof buildGatewaySessionRow>[0] & Pick<GatewayRequestHandlerOptions, "client">) {
+  const row = buildGatewaySessionRow(params);
+  if (!usesLegacySessionPins(client)) {
+    presentSessionPin(row, null);
+  }
+  const present = prepareSessionFastModePresentation(client);
+  row.fastMode = present(row.fastMode);
+  row.effectiveFastMode = present(row.effectiveFastMode);
+  return row;
+}
 
 /** Prepare the admitted RPC page, keeping worker-encoded messages opaque for publication. */
 export async function readChatHistoryRequestPage(
