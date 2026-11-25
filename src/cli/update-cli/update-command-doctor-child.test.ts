@@ -1,5 +1,4 @@
 import { fork } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
@@ -97,7 +96,7 @@ it("keeps live progress observation from refusing the Doctor's exclusive state c
   }
 });
 
-// The Gateway restart is the other point where another process may replace shared state.
+// Gateway restart also hands exclusive shared-state custody to another process.
 const successorUrl = resolveRuntimeWorkerUrl(
   createTestEntrypoint(
     import.meta.url,
@@ -119,8 +118,8 @@ async function startUpdate() {
   };
 }
 
-/** Another process replaces the file the way a successor's boot upgrade does. */
-async function swapInSuccessor(live: string): Promise<void> {
+/** Another process applies a compatible schema step under exclusive custody. */
+async function migrateInSuccessor(live: string): Promise<void> {
   const child = fork(successorUrl, [live], {
     // fork() supplies the entry path itself; keep only the loader arguments.
     execArgv: resolveRuntimeWorkerArgv(successorUrl).slice(0, -1),
@@ -134,7 +133,6 @@ async function swapInSuccessor(live: string): Promise<void> {
     child.once("exit", resolve);
   });
   expect(code, output).toBe(0);
-  expect(fs.existsSync(`${live}.pre-successor`)).toBe(true);
 }
 
 function readRun(file: string, runId: string) {
@@ -152,37 +150,12 @@ function readRun(file: string, runId: string) {
   }
 }
 
-function causeMessages(error: unknown): string[] {
-  const messages: string[] = [];
-  for (let cause = error; cause instanceof Error; cause = cause.cause) {
-    messages.push(cause.message);
-  }
-  return messages;
-}
-
-it("keeps refusing an owner that still pins a replaced state database", async () => {
-  const { runId, options, live } = await startUpdate();
-  await swapInSuccessor(live);
-
-  const refusal = await recordUpdateRunStepAsync(
-    runId,
-    { step: "post-update verification", status: "in_progress" },
-    options,
-  ).then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-  expect(causeMessages(refusal)).toContain("Existing-state database generation changed.");
-  expect(readRun(live, runId)?.steps).not.toContain("post-update verification");
-});
-
-it("records the remaining update steps in the successor's state database", async () => {
+it("releases readers for in-place boot migration and records the remaining update steps", async () => {
   const { runId, env, options, live } = await startUpdate();
+  await recordUpdateRunPhaseAsync(runId, "verifying", {}, options);
   await withUpdateStateReleasedAcrossRestart({ runId, env }, async () => {
-    // The restart records progress while the new build still boots.
-    await recordUpdateRunPhaseAsync(runId, "verifying", {}, options);
-    await swapInSuccessor(live);
-    // Readiness receipts use one-shot ledger writes, which follow the current file.
+    await migrateInSuccessor(live);
+    // Readiness receipts use one-shot ledger writes after migration releases custody.
     recordUpdateRunStep(runId, { step: "gateway verification", status: "completed" }, options);
   });
 
@@ -193,7 +166,7 @@ it("records the remaining update steps in the successor's state database", async
   );
   await finishUpdateRunAsync(runId, { status: "succeeded" }, options);
 
-  // History written before the swap was carried into the successor's file.
+  // Migration preserves history written before the restart.
   expect(readRun(live, runId)).toMatchObject({
     status: "succeeded",
     phase: "finished",
@@ -204,25 +177,21 @@ it("records the remaining update steps in the successor's state database", async
       "post-update verification",
     ]),
   });
-  // The previous generation never receives the steps recorded after the successor serves.
-  const previous = readRun(`${live}.pre-successor`, runId);
-  expect(previous).toMatchObject({ status: "running" });
-  expect(previous?.steps).not.toContain("post-update verification");
 });
 
-it("reopens the current file when the restart fails", async () => {
+it("readmits state after an in-place migration when the restart fails", async () => {
   const { runId, env, options, live } = await startUpdate();
   const failure = new Error("Gateway readiness timed out");
+  await recordUpdateRunPhaseAsync(runId, "verifying", {}, options);
 
   await expect(
     withUpdateStateReleasedAcrossRestart({ runId, env }, async () => {
-      await recordUpdateRunPhaseAsync(runId, "verifying", {}, options);
-      await swapInSuccessor(live);
+      await migrateInSuccessor(live);
       throw failure;
     }),
   ).rejects.toBe(failure);
 
-  // Failure recovery still records its outcome in the successor's file.
+  // Failure recovery can still record its outcome after migration.
   await finishUpdateRunAsync(runId, { status: "failed", reason: "restart-unhealthy" }, options);
   expect(readRun(live, runId)).toMatchObject({ status: "failed", phase: "finished" });
 });

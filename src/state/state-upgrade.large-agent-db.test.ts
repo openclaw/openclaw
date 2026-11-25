@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -21,8 +20,8 @@ afterEach(async () => {
   }
 });
 
-describe("startup copy ownership", () => {
-  it("copies large current registered agent databases into the Doctor shadow", async () => {
+describe("startup canonical ownership", () => {
+  it("leaves large current registered agent databases in place while migrating shared state", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-registry-"));
     dirs.push(stateDir);
     const agentPath = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
@@ -64,6 +63,8 @@ describe("startup copy ownership", () => {
         .all();
     };
     const registrations = readRegistry();
+    const agentIdentity = fs.statSync(agentPath);
+    const stateIdentity = fs.statSync(statePath);
     const log = { info: vi.fn(), warn: vi.fn() };
     const result = await upgradeStateDirectory({
       env: {
@@ -71,43 +72,25 @@ describe("startup copy ownership", () => {
         OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       },
       log,
-      runChain: async ({ stateDir: shadow }) => {
-        expect(fs.existsSync(path.join(shadow, "agents/main/agent/openclaw-agent.sqlite"))).toBe(
-          true,
-        );
-        {
-          using state = new DatabaseSync(path.join(shadow, "state/openclaw.sqlite"));
-          state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-          state
-            .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
-            .run(OPENCLAW_STATE_SCHEMA_VERSION);
-        }
-        const migration = await migrateLegacyMediaPersistence({
-          env: { OPENCLAW_STATE_DIR: shadow },
-        });
-        // The real Doctor subprocess releases its handles before the shadow is checkpointed.
-        await closeOpenClawStateDatabaseAsync();
-        expect(migration.warnings, JSON.stringify(migration)).not.toContain(
-          `Skipped missing registered agent database ${path.join(shadow, "agents/main/agent/openclaw-agent.sqlite")}.`,
-        );
-        return migration;
-      },
     });
     expect(readRegistry()).toEqual(registrations);
-    expect(result, JSON.stringify({ result, warnings: log.warn.mock.calls })).toMatchObject({
+    expect(result, JSON.stringify({ result, warnings: log.warn.mock.calls })).toEqual({
       status: "upgraded",
-      mode: "chain",
-      conservationMismatches: [],
-      pinned: false,
     });
-    expect(fs.statSync(agentPath).size).toBe(64 * 1024 * 1024 + 1);
+    expect(fs.statSync(agentPath)).toMatchObject({
+      dev: agentIdentity.dev,
+      ino: agentIdentity.ino,
+      size: 64 * 1024 * 1024 + 1,
+    });
+    expect(fs.statSync(statePath)).toMatchObject({
+      dev: stateIdentity.dev,
+      ino: stateIdentity.ino,
+    });
+    expect(fs.readdirSync(stateDir).some((name) => name.startsWith(".upgrade-"))).toBe(false);
+    expect(fs.readdirSync(path.dirname(agentPath))).toEqual(["openclaw-agent.sqlite"]);
     using state = new DatabaseSync(statePath, { readOnly: true });
-    const report = state
-      .prepare("SELECT payload_json FROM diagnostic_events WHERE scope = 'upgrade.report'")
-      .get();
-    expect(JSON.parse(String(report?.payload_json))).toMatchObject({
-      conservationMismatches: [],
-      pinned: false,
+    expect(state.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
   });
 });

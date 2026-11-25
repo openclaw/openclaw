@@ -16,19 +16,6 @@ import {
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { upgradeStateOnGatewayStart } from "./state-upgrade-startup.js";
 
-vi.mock("./state-upgrade-doctor.js", async (original) => ({
-  ...(await original<typeof import("./state-upgrade-doctor.js")>()),
-  // The fixture already has current tables; only the schema stamp needs upgrading.
-  // Keep config admission, native readers, publication, and cleanup real.
-  createDoctorChain:
-    () =>
-    async ({ stateDir }: { stateDir: string }) => {
-      using db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
-      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-      return { warnings: [] };
-    },
-}));
-
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
