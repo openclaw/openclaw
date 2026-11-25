@@ -26,7 +26,7 @@ prepare_diagnostics_capture() {
       "$ARTIFACT_DIR"/legacy-operator-{post-update,candidate}-transcript-{0,1}{,-earlier}.{out,err} \
       "$ARTIFACT_DIR/missing-load-path/baseline-gateway.log" \
       "$ARTIFACT_DIR/missing-load-path/baseline-gateway-convergence-refusal.log" \
-      "$ARTIFACT_DIR/sibling-registrations.jsonl" "$ARTIFACT_DIR/sibling-source.json" "$ARTIFACT_DIR/sibling-canary.json" \
+      "$ARTIFACT_DIR/sibling-registrations.jsonl" "$ARTIFACT_DIR/sibling-source.json" "$ARTIFACT_DIR/sibling-update-imports.json" \
       "$ARTIFACT_DIR/sibling-refusal.armed" "$ARTIFACT_DIR/sibling-refusal-preload.mjs" \
       "$ARTIFACT_DIR"/sibling-refusal-{update,status}.{json,err} \
       "$ARTIFACT_DIR"/sibling-refusal-{baseline,worker,child,cleanup}.json \
