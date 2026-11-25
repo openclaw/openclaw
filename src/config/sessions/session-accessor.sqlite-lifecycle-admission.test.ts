@@ -152,7 +152,7 @@ function fixture() {
     env: { OPENCLAW_STATE_DIR: root },
   };
   closeOpenClawAgentDatabaseByPath(database.path);
-  invalidateOpenClawAgentDatabaseValidation(database.path);
+  invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
   revokeSqliteDatabaseAdmissionsForPath(database.path);
   const target = { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] };
   const deleteEntry = (options: Partial<Parameters<typeof deleteSessionEntryLifecycle>[0]> = {}) =>
@@ -424,7 +424,7 @@ it("keeps historical preparation asynchronous after materialization evicts its p
   archiveHook.afterMaterialize = () => {
     archiveHook.afterMaterialize = undefined;
     closeCachedOpenClawAgentDatabase(openOpenClawAgentDatabase(f.databaseOptions));
-    invalidateOpenClawAgentDatabaseValidation(f.databaseOptions.path);
+    invalidateOpenClawAgentDatabaseValidation(f.databaseOptions.path, "a maintenance write");
     revokeSqliteDatabaseAdmissionsForPath(f.databaseOptions.path);
     admission.armHistoricalCheck();
   };

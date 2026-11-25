@@ -769,6 +769,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         ...workflowOperator,
         packageName: "@maker/workflow-operator",
         channel: "community",
+        iconUrl: "/apple-touch-icon.png",
       };
       const { page, gateway } = await fixture({ width, height: 900 }, community, {
         ownerHandle: "maker",
@@ -849,6 +850,12 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await page.waitForURL(/\/chat\/workflow-operator(?:\?|$)/u);
       const pending = page.locator("openclaw-pending-session-create");
       await pending.getByText("Creating new agent", { exact: true }).waitFor();
+      if (width >= 1200) {
+        // The agent being created wears its Template's catalog image, not a generated face.
+        const avatar = page.locator(".sidebar-agent-card__avatar img").first();
+        await avatar.waitFor();
+        expect(await avatar.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
+      }
       expect(await pending.locator("textarea").isEnabled()).toBe(true);
       await pending.locator("textarea").fill("Keep my draft while setup finishes");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);

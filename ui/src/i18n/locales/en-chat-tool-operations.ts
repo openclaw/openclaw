@@ -15,6 +15,14 @@ const enChatToolOperations = {
       searchingTools: "Searching tools",
       searchedTools: "Searched tools",
       searchTools: "Search tools",
+      conversationDelivery: {
+        sent: "Sent to conversation",
+        queued: "Message queued",
+        suppressed: "Message not sent",
+        unknown: "Delivery unconfirmed",
+        replied: "Sent · reply received",
+        timeout: "Sent · reply timed out",
+      },
       operationLabels: {
         web_search: {
           default: {
@@ -735,11 +743,15 @@ const enChatToolOperations = {
             running: "Pasting into process",
             done: "Pasted into process",
           },
-          kill: { action: "Stop process", running: "Stopping process", done: "Stopped process" },
+          kill: {
+            action: "Request process stop",
+            running: "Requesting process stop",
+            done: "Requested process stop",
+          },
           clear: {
-            action: "Clear process output",
-            running: "Clearing process output",
-            done: "Cleared process output",
+            action: "Remove finished process record",
+            running: "Removing finished process record",
+            done: "Removed finished process record",
           },
           remove: {
             action: "Remove process record",
@@ -899,14 +911,12 @@ const enChatToolOperations = {
           default: {
             action: "Send to conversation",
             running: "Sending to conversation",
-            done: "Sent to conversation",
           },
         },
         conversations_turn: {
           default: {
-            action: "Read conversation turn",
-            running: "Reading conversation turn",
-            done: "Read conversation turn",
+            action: "Send and wait for a reply",
+            running: "Sending and waiting for a reply",
           },
         },
         github_identity_status: {

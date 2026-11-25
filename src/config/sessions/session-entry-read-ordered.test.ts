@@ -239,9 +239,9 @@ test("refreshes cached sharing, lifecycle and runtime targets on replacement", a
   const warm = await read("sharing");
   expect(warm.entries[0]?.entry.sessionId).toBe("original");
   expect(warm.entries[0]?.entry).not.toHaveProperty("skillsSnapshot");
+  expect(warm.sharing?.members).toEqual([{ sessionKey, identityIds: ["reader"] }]);
   expect(warm.sharing).toMatchObject({
     databaseIdentity: expect.stringMatching(/^file:/u),
-    members: [{ sessionKey, identityIds: ["reader"] }],
     placeholders: [],
   });
 

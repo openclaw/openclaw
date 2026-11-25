@@ -638,6 +638,8 @@ export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<vo
               timePath,
               process.execPath,
               ...runVitestArgs(context.manifest.lane, reportPath),
+              "--no-cache",
+              "--no-fsModuleCache",
             ];
             const phases: Record<string, number | null> = {
               prepareMs: null,

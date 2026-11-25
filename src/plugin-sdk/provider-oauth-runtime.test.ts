@@ -56,6 +56,7 @@ describe("provider OAuth runtime", () => {
   it.each([
     ["http://localhost/cb?code=c&state=other", "paste_wrong_attempt"],
     ["?error=access_denied", "consent_denied"],
+    ["error=access_denied", "consent_denied"],
     ["http://localhost/cb?error=admin_policy_enforced&state=oauth-state", "admin_blocked"],
     ["https://auth.example/authorize?client_id=x&state=oauth-state", "paste_sign_in_page"],
     ["http://localhost/cb?state=oauth-state", "paste_no_code"],

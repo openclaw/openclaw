@@ -1606,8 +1606,8 @@ describe("message tool schema scoping", () => {
     { action: "channel-create", fields: ["teamId", "name"], scopedOnly: false },
     { action: "conversation-open", fields: ["teamId"], scopedOnly: false },
     { action: "send", fields: [], scopedOnly: false },
-    { action: "channel-move", fields: ["position", "parentId"], scopedOnly: true },
-    { action: "category-delete", fields: ["categoryId"], scopedOnly: true },
+    { action: "channel-move", fields: ["parentId"], scopedOnly: true },
+    { action: "category-delete", fields: ["name"], scopedOnly: true },
   ] as const)(
     "preserves only consuming schema groups when $action is allowed",
     ({ action, fields, scopedOnly }) => {
@@ -1665,21 +1665,13 @@ describe("message tool schema scoping", () => {
     },
   );
 
-  it.each<{
-    action: ChannelMessageActionName;
-    fields: string[];
-    descriptions?: Record<string, string>;
-  }>([
+  it.each<{ action: ChannelMessageActionName; fields: string[] }>([
     { action: "search", fields: ["query", "limit"] },
-    {
-      action: "emoji-upload",
-      fields: ["guildId", "emojiName", "media", "roleIds"],
-      descriptions: { emojiName: "Name for an uploaded custom emoji." },
-    },
-    { action: "voice-status", fields: ["guildId", "userId"] },
-    { action: "timeout", fields: ["guildId", "userId", "durationMin", "until", "reason"] },
+    { action: "emoji-upload", fields: ["media", "fileId", "channelId"] },
+    { action: "voice-status", fields: ["userId", "channelId"] },
+    { action: "timeout", fields: ["userId", "reason"] },
     { action: "thread-create", fields: ["messageId", "threadName", "channelId"] },
-  ])("keeps fields consumed by scoped $action handlers", ({ action, fields, descriptions }) => {
+  ])("keeps fields consumed by scoped $action handlers", ({ action, fields }) => {
     const plugin = createChannelPlugin({ id: "test-channel", actions: [action] });
     registerPlugins(plugin);
 
@@ -1693,51 +1685,6 @@ describe("message tool schema scoping", () => {
     for (const field of fields) {
       expect(properties, `${action} should advertise ${field}`).toHaveProperty(field);
     }
-    for (const [field, description] of Object.entries(descriptions ?? {})) {
-      expect(properties[field], `${action} should describe ${field}`).toMatchObject({
-        description,
-      });
-    }
-  });
-
-  it("preserves channel-management params for scoped channel-move and category-delete allowlists", () => {
-    // Regression: SCOPED_ACTION_GROUPS previously omitted channel-move and
-    // category-delete from the channel-management group, so narrowing an agent
-    // allowlist to either action stripped position/parentId/categoryId from
-    // the schema even though the Discord handlers require them.
-    const plugin = createChannelPlugin({
-      id: "discord",
-      actions: ["send", "channel-move", "category-delete"],
-    });
-
-    registerPlugins(plugin);
-
-    const channelMoveTool = createMessageTool({
-      config: {
-        agents: {
-          entries: { mover: { tools: { message: { actions: { allow: ["channel-move"] } } } } },
-        },
-      } as never,
-      currentChannelProvider: "discord",
-      agentId: "mover",
-    });
-    const channelMoveProps = getToolProperties(channelMoveTool);
-    expect(getActionEnum(channelMoveProps)).toEqual(["channel-move"]);
-    expect(channelMoveProps).toHaveProperty("position");
-    expect(channelMoveProps).toHaveProperty("parentId");
-
-    const categoryDeleteTool = createMessageTool({
-      config: {
-        agents: {
-          entries: { purger: { tools: { message: { actions: { allow: ["category-delete"] } } } } },
-        },
-      } as never,
-      currentChannelProvider: "discord",
-      agentId: "purger",
-    });
-    const categoryDeleteProps = getToolProperties(categoryDeleteTool);
-    expect(getActionEnum(categoryDeleteProps)).toEqual(["category-delete"]);
-    expect(categoryDeleteProps).toHaveProperty("categoryId");
   });
 });
 

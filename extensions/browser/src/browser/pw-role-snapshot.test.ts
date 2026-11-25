@@ -62,6 +62,23 @@ describe("pw-role-snapshot", () => {
     expect(res.snapshot).toBe('- region "Main" [ref=f1e1]\n  - group');
   });
 
+  it("does not count unnamed generic wrappers toward maxDepth", () => {
+    const wrappers = Array.from(
+      { length: 8 },
+      (_, level) => `${"  ".repeat(level)}- generic [ref=f1e${level + 10}]:`,
+    );
+    const snapshot = [
+      ...wrappers,
+      `${"  ".repeat(8)}- button "Deep" [ref=f1e1]`,
+      '- generic "Named" [ref=f1e2]:',
+      '  - group "Toolbar":',
+      '    - button "Below named" [ref=f1e3]',
+    ].join("\n");
+    const res = build(snapshot, { interactive: true, compact: true, maxDepth: 1 });
+    expect(res.snapshot).toBe('- button "Deep" [ref=f1e1]');
+    expect(res.refs).toEqual({ f1e1: { role: "button", name: "Deep" } });
+  });
+
   it("keeps named branches with refs and drops empty branches when compact", () => {
     const res = build(
       '- list "Menu":\n  - button "Save" [ref=f1e7]\n- list "Empty [ref=e99]":\n  - generic',

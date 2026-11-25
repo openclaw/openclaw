@@ -6,6 +6,38 @@ import { createHarness, sessionRow } from "./session-organizer-batch-mutations.t
 import { runSessionAction } from "./session-organizer-menu.runtime.ts";
 import { SessionOrganizer } from "./session-organizer.ts";
 
+it("names the blocked session actions for a read-only connection", () => {
+  const h = createHarness({ scopes: ["operator.read"] });
+  const row = sessionRow(1);
+  expect(sessionMenuReasons({ snapshot: h.scope.gateway.snapshot, session: row })).toMatchObject({
+    rename: "You don’t have permission to rename this session.",
+    "set-icon": "You don’t have permission to change this session’s icon.",
+    "toggle-archived": "You don’t have permission to archive this session.",
+    delete: "You don’t have permission to delete this session.",
+  });
+  expect(
+    sessionMenuReasons({ snapshot: h.scope.gateway.snapshot, session: { ...row, archived: true } })[
+      "toggle-archived"
+    ],
+  ).toBe("You don’t have permission to restore this session.");
+});
+
+it("names the blocked paired-device stop action without calling it a cloud device", () => {
+  const h = createHarness({ methods: ["sessions.reclaim"], scopes: ["operator.read"] });
+  expect(
+    sessionMenuReasons({
+      snapshot: h.scope.gateway.snapshot,
+      session: sessionRow(1),
+      cloudWorkerStopAction: {
+        method: "sessions.reclaim",
+        requiredScope: "operator.write",
+        blocksActiveRun: true,
+        copyKey: "sessionsView.stopWorker",
+      },
+    })["stop-cloud-worker"],
+  ).toBe("You don’t have permission to stop this session on its device.");
+});
+
 const actions = [
   { kind: "set-icon", icon: "book" },
   { kind: "set-color", color: "blue" },

@@ -9,7 +9,7 @@ import type { CompactHooksQueuedCompaction } from "./compact.hooks.metadata.test
 type CompactionConfig = (mode: "await" | "off" | "async") => OpenClawConfig;
 
 export function registerDirectProviderRefreshTests(params: {
-  compactTesting: () => typeof import("./compact.hooks.owner-test-support.js");
+  compactTesting: () => typeof import("./compaction-hooks.js");
   compactionConfig: CompactionConfig;
   sessionKey: string;
   sessionFile: () => string;
