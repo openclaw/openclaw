@@ -200,7 +200,8 @@ struct ChatMediaImageAttachment: View {
                     .buttonStyle(.plain)
                     .transition(.opacity)
                     .accessibilityLabel(self.label)
-                    .accessibilityHint(String(localized: "Opens image preview"))
+                    .accessibilityAddTraits(.isImage)
+                    .accessibilityHint(String(localized: "Opens the image full screen."))
                 case .unavailable:
                     VStack(spacing: 6) {
                         Image(systemName: "photo.badge.exclamationmark")
@@ -226,7 +227,14 @@ struct ChatMediaImageAttachment: View {
             .overlay(shape.strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(self.label)
+        // The loaded image's button carries the name itself; the placeholder and the failed box
+        // keep it on the box.
+        .accessibilityLabel(self.isLoaded ? Text(verbatim: "") : Text(self.label))
+    }
+
+    private var isLoaded: Bool {
+        if case .loaded = self.state { return true }
+        return false
     }
     #else
     private var legacyBody: some View {

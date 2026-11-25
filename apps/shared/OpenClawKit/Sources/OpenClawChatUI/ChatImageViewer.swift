@@ -316,6 +316,7 @@ final class ChatImageViewerController: UIViewController,
         super.init(nibName: nil, bundle: nil)
         self.pages[index] = ChatImageViewerPageController(
             item: items[index],
+            position: ChatImageViewerItem.positionText(index: index, count: items.count),
             thumbnail: thumbnail,
             load: load,
             host: self)
@@ -511,7 +512,8 @@ final class ChatImageViewerController: UIViewController,
         self.chrome.shareImage = self.currentPage?.image
         self.chrome.shareName = item.title ?? item.label
         self.updateBarSurface()
-        // VoiceOver announces the new page's image and position.
+        // VoiceOver moves to the new page's image, which reads its name and, for a message with
+        // several images, its position as the value.
         if let page = self.currentPage, self.isViewLoaded {
             UIAccessibility.post(notification: .layoutChanged, argument: page.view)
         }
@@ -525,6 +527,7 @@ final class ChatImageViewerController: UIViewController,
         let item = self.items[index]
         let page = ChatImageViewerPageController(
             item: item,
+            position: ChatImageViewerItem.positionText(index: index, count: self.items.count),
             // The transcript's memory holds every image it decoded, on screen or not.
             thumbnail: ChatMediaImageMemory.image(for: item.artifactId)
                 ?? ChatImageViewerSources.view(for: item.artifactId)?.image,
@@ -578,6 +581,8 @@ final class ChatImageViewerController: UIViewController,
 @MainActor
 final class ChatImageViewerPageController: UIViewController {
     private let item: ChatImageViewerItem
+    /// "2 of 3" for a message with several images; the image's accessibility value.
+    private let position: String?
     private let load: ChatImageViewerController.Load
     private weak var host: ChatImageViewerController?
     private(set) var image: UIImage?
@@ -590,11 +595,13 @@ final class ChatImageViewerPageController: UIViewController {
 
     init(
         item: ChatImageViewerItem,
+        position: String?,
         thumbnail: UIImage?,
         load: @escaping ChatImageViewerController.Load,
         host: ChatImageViewerController)
     {
         self.item = item
+        self.position = position
         self.load = load
         self.host = host
         self.image = thumbnail
@@ -652,6 +659,8 @@ final class ChatImageViewerPageController: UIViewController {
         scrollView.imageView.isAccessibilityElement = true
         scrollView.imageView.accessibilityLabel = self.item.label
         scrollView.imageView.accessibilityTraits = .image
+        // The bar's "2 of 3" hides with the bar; VoiceOver reads the position from the image.
+        scrollView.imageView.accessibilityValue = self.position
         scrollView.onZoomedChange = { [weak self] zoomed in
             guard let self else { return }
             self.host?.page(self, didChangeZoomed: zoomed)
@@ -719,7 +728,7 @@ final class ChatImageViewerPageController: UIViewController {
 
     private func showUnavailable() {
         let label = UILabel()
-        label.text = String(localized: "Image unavailable")
+        label.text = String(localized: "Couldn’t load image.")
         label.font = OpenClawChatTypography.bodyUIFont
         label.adjustsFontForContentSizeCategory = true
         label.textColor = .secondaryLabel
