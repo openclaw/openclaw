@@ -62,3 +62,28 @@ export function promptContextHookValue(
     start = end;
   }
 }
+
+type PromptContext = CliBackendExecuteContext["promptContext"];
+
+/** The private context of the input a prompt hook runs for: the turn's own or an injected one. */
+export function resolvePromptContext(
+  turn: {
+    context: { promptContext?: PromptContext };
+    inputUuid: string;
+    promptInputUuid: string;
+    injectedInputs: Map<string, { text: string; promptContext?: PromptContext }>;
+  },
+  prompt: unknown,
+): PromptContext {
+  if (turn.promptInputUuid !== turn.inputUuid) {
+    return turn.injectedInputs.get(turn.promptInputUuid)?.promptContext;
+  }
+  // Some native versions submit hooks before the started receipt. Match only the
+  // first pass; subsequent passes belong to that UUID even when text is rewritten.
+  const injected = [...turn.injectedInputs].find(([, input]) => input.text === prompt);
+  if (!injected) {
+    return turn.context.promptContext;
+  }
+  turn.promptInputUuid = injected[0];
+  return injected[1].promptContext;
+}

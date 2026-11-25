@@ -18,6 +18,7 @@ import type {
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import type { PluginHookBeforeAgentFinalizeEvent } from "../../plugins/hook-types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
 import { isHostGeneratedInputProvenance } from "../../sessions/input-provenance.js";
 import type { ReplyBackendTurnStatus } from "../../sessions/session-controller.turn-status.types.js";
@@ -30,6 +31,7 @@ import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { buildHarnessHostRequester } from "../harness/host-requester.js";
+import { runAgentHarnessBeforeAgentFinalizeHook } from "../harness/lifecycle-hook-helpers.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
 import {
@@ -488,6 +490,39 @@ export async function executePluginOwnedProcess(params: {
       abortSignal: signal,
       ...(prepareCredentialUse
         ? { prepareCredentialUse: AsyncLocalStorage.bind(prepareCredentialUse) }
+        : {}),
+      // Host-internal, not in the plugin SDK type, like prepareCredentialUse: when a plugin
+      // registers before_agent_finalize, the bundled Claude runtime relays native Stop here.
+      ...(hasGlobalHooks("before_agent_finalize")
+        ? {
+            runBeforeAgentFinalize: AsyncLocalStorage.bind(
+              (
+                stop: Pick<
+                  PluginHookBeforeAgentFinalizeEvent,
+                  "stopHookActive" | "lastAssistantMessage" | "transcriptPath" | "cwd"
+                >,
+              ) =>
+                runAgentHarnessBeforeAgentFinalizeHook({
+                  event: {
+                    ...stop,
+                    runId: run.runId,
+                    sessionId: run.sessionId,
+                    sessionKey: run.sessionKey,
+                    provider: run.provider,
+                    model: params.context.modelId,
+                  },
+                  ctx: {
+                    agentId: run.agentId,
+                    sessionId: run.sessionId,
+                    sessionKey: run.sessionKey,
+                    runId: run.runId,
+                    channelId: run.currentChannelId,
+                    workspaceDir: params.context.workspaceDir,
+                    modelId: params.context.modelId,
+                  },
+                }),
+            ),
+          }
         : {}),
       timeoutMs: run.timeoutMs,
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
