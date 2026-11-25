@@ -14,7 +14,10 @@ import { reverifyReloadedPluginPayloads } from "./server-plugin-reload-quarantin
 
 it("rechecks the missing peer and clears only the repaired reload target", async () => {
   using dir = fs.mkdtempDisposableSync(path.join(os.tmpdir(), "reload-peer-"));
-  const plugins = ["target", "bystander"].map((id) => ({ id, rootDir: path.join(dir.path, id) }));
+  const plugin = (id: string) => ({ id, rootDir: path.join(dir.path, id) });
+  const target = plugin("target");
+  const bystander = plugin("bystander");
+  const plugins = [target, bystander];
   const metadata = createPluginMetadataSnapshotFixture({ plugins });
   const installRecords = Object.fromEntries(
     plugins.map(({ id, rootDir }) => [id, { source: "git" as const, installPath: rootDir }]),
@@ -31,7 +34,6 @@ it("rechecks the missing peer and clears only the repaired reload target", async
       })),
     ),
   );
-  const [target, bystander] = plugins;
   writeJsonFile(path.join(target.rootDir, "package.json"), { peerDependencies: { openclaw: "*" } });
   writeJsonFile(path.join(bystander.rootDir, "package.json"), {});
   const reload = () =>
