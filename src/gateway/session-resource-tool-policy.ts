@@ -9,15 +9,14 @@ import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { readGatewayRequestAdmission } from "./operator-admission.js";
+import { operatorRefusalText } from "./operator-refusal.js";
 import { resolveChatSendCallerContext } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 
-function denied(
-  message = "The session's current tool policy does not allow this operation.",
-): never {
+function denied(message = operatorRefusalText("tool-policy-denies", "run this operation")): never {
   throw new SessionMutationAuthorizationChangedError(
     errorShape(ErrorCodes.FORBIDDEN, message, {
       details: { code: "SESSION_RESOURCE_TOOL_POLICY" },

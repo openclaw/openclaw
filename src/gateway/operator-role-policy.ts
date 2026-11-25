@@ -24,6 +24,7 @@ import {
   openclawIdTunnelRolePolicy,
   openclawIdSubjectRolePolicy,
 } from "./openclaw-id/tunnel-principal.js";
+import { operatorRefusalText } from "./operator-refusal.js";
 import {
   isNamedOperatorRoleEnforcementEnabled,
   isOperatorRoleEnforcedFor,
@@ -468,7 +469,7 @@ export function authorizeGatewaySessionCreation(
   }
   return errorShape(
     ErrorCodes.FORBIDDEN,
-    `Your operator role cannot create sessions for agent "${params.agentId}"; choose an allowed agent or ask a gateway administrator to update your role.`,
+    operatorRefusalText("agent-not-in-role", `start a session with agent "${params.agentId}"`),
   );
 }
 

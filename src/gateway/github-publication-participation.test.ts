@@ -533,7 +533,7 @@ it.each(["local", "repository"] as const)(
     expect(result).toMatchObject({
       status: "failed",
       code: "github_rejected",
-      nextAction: expect.stringMatching(/OpenClaw.*not a GitHub token scope/),
+      nextAction: expect.stringMatching(/does not allow it.*not a GitHub token scope/),
     });
     expect(f.local?.effects ?? f.repository!.runtime.effects).toEqual([]);
   },
