@@ -266,6 +266,9 @@ describe("sessions_send dispatch admission", () => {
         validateAgentParams(request.params),
         formatValidationErrors(validateAgentParams.errors),
       ).toBe(true);
+      if (!isRecord(request.params)) {
+        throw new Error("Expected Gateway agent parameters");
+      }
       expect(request.params.inputProvenance).toMatchObject({
         kind: "inter_session",
         sourceSessionKey: requesterSessionKey,
