@@ -82,7 +82,11 @@ async function openRoles(
   page: Page,
   scopes?: string[],
   search = "",
-  options: { config?: ReturnType<typeof rolesConfig>; selfProfileId?: string } = {},
+  options: {
+    config?: ReturnType<typeof rolesConfig>;
+    selfProfileId?: string;
+    usersList?: unknown;
+  } = {},
 ) {
   const config = options.config ?? rolesConfig();
   const gateway = await installMockGateway(page, {
@@ -97,7 +101,7 @@ async function openRoles(
         appliedConfigHash: HASH,
         sourceConfig: config,
       },
-      "users.list": { profiles: PROFILES },
+      "users.list": options.usersList ?? { profiles: PROFILES },
       "config.patch": { ok: true, config, hash: "roles-hash-2" },
     },
   });
@@ -372,6 +376,50 @@ suite.define(() => {
       await expect.poll(async () => (await gateway.getRequests("users.setRole")).length).toBe(1);
       const [moved] = await gateway.getRequests("users.setRole");
       expect(moved?.params).toEqual({ profileId: "p-sam", role: expect.any(String) });
+    });
+  });
+
+  it("shows a refused default-role change", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const gateway = await openRoles(page);
+      await gateway.setMethodResponse("config.patch", {
+        __mockError: { code: "INVALID_REQUEST", message: "default role refused" },
+      });
+      await page.getByLabel("Role for people without one").selectOption("collaborator");
+      await page.getByRole("alert").filter({ hasText: "default role refused" }).waitFor();
+    });
+  });
+
+  it("shows a failed people read with a retry instead of an empty roster", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const gateway = await openRoles(page, undefined, "", {
+        usersList: { __mockError: { code: "UNAVAILABLE", message: "directory down" } },
+      });
+      await page.getByText("Couldn’t load who has each role.", { exact: false }).waitFor();
+      const before = (await gateway.getRequests("users.list")).length;
+      await gateway.setMethodResponse("users.list", { profiles: PROFILES });
+      await page.getByRole("button", { name: "Retry" }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("users.list")).length)
+        .toBeGreaterThan(before);
+      const collaborator = page.locator(".settings-row--nav").filter({ hasText: "collaborator" });
+      await expect.poll(() => collaborator.textContent()).toContain("1 person");
+    });
+  });
+
+  it("deletes your own role only toward a role that keeps administrator access", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const gateway = await openRoles(page, undefined, "?role=administrator", {
+        selfProfileId: "p-ada",
+      });
+      await page.getByText("What this role allows").waitFor();
+      await page.getByRole("button", { name: "Delete", exact: true }).click();
+      const dialog = page.locator(".roles-dialog");
+      await dialog.getByText("You have this role.", { exact: false }).waitFor();
+      expect(
+        await dialog.getByRole("button", { name: "Move people and delete" }).isDisabled(),
+      ).toBe(true);
+      expect(await gateway.getRequests("users.setRole")).toEqual([]);
     });
   });
 

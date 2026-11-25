@@ -10,6 +10,7 @@ import {
   buildDefaultRole,
   buildRoleCreate,
   buildRoleDelete,
+  isAdminRole,
   isValidRoleName,
   planAdminRole,
   presetDefinition,
@@ -375,24 +376,49 @@ function DeleteRoleDialog(props: DialogProps) {
       .filter((profile) => profile.effectiveRole === props.role || profile.role === props.role);
   const mappings = () =>
     Object.values(catalog().githubMappings).filter((value) => value === props.role).length;
+  const self = () => props.roles.selfProfileId();
+  const selfAssigned = () =>
+    people().some((profile) => profile.role === props.role && profile.id === self());
+  const replacementIsAdmin = () => {
+    const entry = catalog().roles.find((role) => role.name === replacement());
+    return entry ? isAdminRole(entry.definition) : false;
+  };
+  // Moving yourself to a role without administrator access would end your right to finish.
+  const blockedBySelf = () => selfAssigned() && !replacementIsAdmin();
   const remove = async () => {
     const role = props.role;
     const target = replacement();
+    const finish = async () => {
+      if (
+        await props.roles.patch(
+          (base) => buildRoleDelete(base, role, target),
+          "Delete role " + role,
+          t("rolesPage.saved"),
+        )
+      ) {
+        props.onClose();
+        props.onOpen("");
+      }
+    };
     // Mapped people follow their repointed GitHub mapping; only explicit assignments move here.
     const assigned = people().filter((profile) => profile.role === role);
-    if (assigned.length && !(await props.roles.assign(assigned, target))) {
+    const movers = assigned.filter((profile) => profile.id !== self());
+    const mine = assigned.filter((profile) => profile.id === self());
+    if (movers.length && !(await props.roles.assign(movers, target))) {
       return;
     }
-    if (
-      await props.roles.patch(
-        (base) => buildRoleDelete(base, role, target),
-        "Delete role " + role,
-        t("rolesPage.saved"),
-      )
-    ) {
-      props.onClose();
-      props.onOpen("");
+    // Your own move closes this connection, so it goes last and deletion resumes on reconnect.
+    if (mine.length) {
+      props.roles.resumeAfterReconnect(() => void finish());
+      if (!(await props.roles.assign(mine, target))) {
+        if (props.roles.state().error) {
+          props.roles.cancelResume();
+        }
+        return;
+      }
+      props.roles.cancelResume();
     }
+    await finish();
   };
   return (
     <Frame
@@ -407,7 +433,7 @@ function DeleteRoleDialog(props: DialogProps) {
       onClose={props.onClose}
       submitLabel={people().length ? t("rolesPage.deleteConfirm") : t("rolesPage.delete")}
       // Reassignment needs the current roster; an unloaded one would look like nobody has the role.
-      submitDisabled={!replacement() || !props.roles.peopleLoaded()}
+      submitDisabled={!replacement() || !props.roles.peopleLoaded() || blockedBySelf()}
       onSubmit={() => void remove()}
     >
       <label class="field roles-field">
@@ -418,6 +444,11 @@ function DeleteRoleDialog(props: DialogProps) {
           onChange={(event) => setReplacement(event.currentTarget.value)}
         />
       </label>
+      <Show when={blockedBySelf()}>
+        <InlineAlert tone="warning" compact role="note">
+          {t("rolesPage.deleteSelfNeedsAdmin")}
+        </InlineAlert>
+      </Show>
       <Show when={mappings()}>
         <InlineAlert tone="warning" compact role="note">
           {t("rolesPage.deleteMappings", { count: String(mappings()) })}

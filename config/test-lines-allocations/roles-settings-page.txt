@@ -2,5 +2,6 @@
 # e2e proves list, edit with base-hash conflicts, assignment, presets, turning roles on (including
 # self-assignment reconnect) and delete reassignment; the catalog unit test proves config.patch
 # shapes against the Gateway's own merge-patch and role schema; the gateway test covers the
-# self-lockout refusal on users.setRole and config.patch.
-262
+# self-lockout refusal on users.setRole and config.patch. The e2e also proves refused default
+# changes, failed people reads with retry, and deleting a role you hold.
+310

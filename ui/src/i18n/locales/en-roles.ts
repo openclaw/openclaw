@@ -9,6 +9,9 @@ const enRoles = {
       "Only administrators can manage roles. Ask an administrator to give you a role with Gateway admin access. If nobody can, run openclaw config unset gateway.roles.default on the Gateway host to stop applying roles to everyone.",
     loading: "Loading roles…",
     loadFailed: "Couldn’t load roles.",
+    peopleLoadFailed: "Couldn’t load who has each role.",
+    deleteSelfNeedsAdmin:
+      "You have this role. Move people to a role with administrator access, or you would lose access before the role is deleted.",
     empty:
       "No roles yet. Without roles, everyone who signs in has the access their connection grants.",
     newPeople: "New people",

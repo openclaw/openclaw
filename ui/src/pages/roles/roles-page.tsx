@@ -87,6 +87,19 @@ export function RolesPage() {
             <Show when={roles.state().notice}>
               {(notice) => <InlineAlert tone="success">{notice()}</InlineAlert>}
             </Show>
+            <Show when={!dialog() && roles.state().error}>
+              {(error) => <InlineAlert tone="danger">{error()}</InlineAlert>}
+            </Show>
+            <Show when={roles.peopleError()}>
+              {(error) => (
+                <InlineAlert
+                  tone="danger"
+                  action={<RetryAction onRetry={() => void roles.reloadPeople()} />}
+                >
+                  {t("rolesPage.peopleLoadFailed")} {error()}
+                </InlineAlert>
+              )}
+            </Show>
             <Show when={selected()}>
               <InlineAlert tone="warning">{t("rolesPage.errors.missing")}</InlineAlert>
             </Show>

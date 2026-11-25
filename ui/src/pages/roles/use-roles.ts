@@ -4,6 +4,7 @@ import {
   type UserProfile,
 } from "../../../../packages/gateway-protocol/src/schema/users.js";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
@@ -132,6 +133,12 @@ export function useRoles() {
     profiles,
     people,
     peopleLoaded: () => Boolean(directory.read().result),
+    /** A failed people read; without it the page would show everyone as having no role. */
+    peopleError: () => {
+      const { result, error } = directory.read();
+      return !result && error ? formatUiError(error) : null;
+    },
+    reloadPeople: () => directorySource.load(true),
     /** The signed-in person's canonical profile; a session may be bound to a merged alias. */
     selfProfileId: () => {
       const id = gateway.snapshot?.selfUser?.id;
