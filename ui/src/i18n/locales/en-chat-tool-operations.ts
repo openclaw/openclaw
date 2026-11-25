@@ -24,6 +24,124 @@ const enChatToolOperations = {
         timeout: "Sent · reply timed out",
       },
       operationLabels: {
+        image_generate: {
+          generate: {
+            action: "Generate image",
+            running: "Generating image",
+            done: "Generated image",
+            requested: "Requested image generation",
+          },
+          list: {
+            action: "List image models",
+            running: "Listing image models",
+            done: "Listed image models",
+          },
+          status: {
+            action: "Check image generation",
+            running: "Checking image generation",
+            done: "Checked image generation",
+          },
+          review: {
+            action: "Review generated images",
+            running: "Reviewing generated images",
+            done: "Reviewed generated images",
+          },
+          deliver: {
+            action: "Approve image delivery",
+            running: "Approving image delivery",
+            done: "Approved image delivery",
+          },
+          supersede: {
+            action: "Suppress image delivery",
+            running: "Suppressing image delivery",
+            done: "Suppressed image delivery",
+          },
+        },
+        music_generate: {
+          generate: {
+            action: "Generate music",
+            running: "Generating music",
+            done: "Generated music",
+            requested: "Requested music generation",
+          },
+          list: {
+            action: "List music models",
+            running: "Listing music models",
+            done: "Listed music models",
+          },
+          status: {
+            action: "Check music generation",
+            running: "Checking music generation",
+            done: "Checked music generation",
+          },
+        },
+        video_generate: {
+          generate: {
+            action: "Generate video",
+            running: "Generating video",
+            done: "Generated video",
+            requested: "Requested video generation",
+          },
+          list: {
+            action: "List video models",
+            running: "Listing video models",
+            done: "Listed video models",
+          },
+          status: {
+            action: "Check video generation",
+            running: "Checking video generation",
+            done: "Checked video generation",
+          },
+        },
+        transcripts: {
+          start: {
+            action: "Start transcription",
+            running: "Starting transcription",
+            done: "Started transcription",
+          },
+          stop: {
+            action: "Stop transcription",
+            running: "Stopping transcription",
+            done: "Stopped transcription",
+          },
+          status: {
+            action: "Check transcription",
+            running: "Checking transcription",
+            done: "Checked transcription",
+          },
+          import: {
+            action: "Import transcript",
+            running: "Importing transcript",
+            done: "Imported transcript",
+          },
+          summarize: {
+            action: "Summarize transcript",
+            running: "Summarizing transcript",
+            done: "Summarized transcript",
+          },
+        },
+        tts: {
+          default: {
+            action: "Generate speech",
+            running: "Generating speech",
+            done: "Generated speech",
+          },
+        },
+        pdf: {
+          default: { action: "Read PDF", running: "Reading PDF", done: "Read PDF" },
+        },
+        local_image: {
+          default: {
+            action: "Inspect image locally",
+            running: "Inspecting image locally",
+            done: "Inspected image locally",
+          },
+          task_ocr: {
+            action: "Read text in image",
+            running: "Reading text in image",
+            done: "Read text in image",
+          },
+        },
         message: {
           send: { action: "Send message", running: "Sending message", done: "Send message" },
           broadcast: {
