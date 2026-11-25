@@ -284,6 +284,11 @@ not update the record, so the next tracked write after it compares against a
 stale hash and records `untrusted`. Once a file is `untrusted`, later tracked
 writes keep it `untrusted` and only refresh the time, session, and hash.
 
+Host sessions rooted in a project or worktree still record tracked writes to the
+agent workspace's memory under that agent workspace. Memory files local to the
+session root keep their own records. Sandboxed writes remain scoped to the
+sandbox filesystem; this tracking does not grant access to host memory.
+
 Automatic context excludes an `untrusted` root `MEMORY.md` or `USER.md`. To
 detect this:
 

@@ -21,8 +21,9 @@ import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { readSessionForkSource } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
-import { resolveSessionAgentId } from "./agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import {
   bindAssembledAgentToolActionDescriptor,
   copyAgentToolMetadata,
@@ -197,6 +198,12 @@ export function* assembleOpenClawCodingTools(
   const memoryWriteProvenance = createMemoryWriteProvenanceObserver({
     mutationRoot: sandboxRoot ?? workspaceRoot,
     workspaceDir: sandboxRoot ?? workspaceRoot,
+    // Host-rooted sessions can edit the agent's memory outside their execution
+    // root. A sandbox observer must only classify paths on its own filesystem.
+    agentWorkspaceDir:
+      !sandbox && options?.config && executionAgentId
+        ? resolveUserPath(resolveAgentWorkspaceDir(options.config, executionAgentId))
+        : undefined,
     resolvePath: sandboxFsBridge
       ? (filePath) =>
           resolveSandboxFileIdentity({

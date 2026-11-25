@@ -91,6 +91,8 @@ function resolveMemoryRelativePath(root: string, absolutePath: string): string |
 export function createMemoryWriteProvenanceObserver(params: {
   mutationRoot: string;
   workspaceDir: string;
+  /** Canonical agent workspace, only for host filesystem observers. */
+  agentWorkspaceDir?: string;
   resolvePath?: (filePath: string) => Promise<string>;
   resolveOriginClass: () => "agent" | "untrusted";
   sessionId?: string;
@@ -99,26 +101,35 @@ export function createMemoryWriteProvenanceObserver(params: {
 }): MemoryWriteProvenanceObserver {
   const now = params.now ?? Date.now;
   const resolvePath = params.resolvePath ?? canonicalPathFromExistingAncestor;
-  const resolveRelativePath = async (absolutePath: string) => {
+  const resolveArtifact = async (absolutePath: string) => {
     // Both paths must be canonicalized by the same filesystem owner: container
     // paths are not host paths, and aliases must retain memory quarantine.
-    const [root, target] = await Promise.all([
+    const [root, target, agentRoot] = await Promise.all([
       resolvePath(params.mutationRoot),
       resolvePath(absolutePath),
+      params.agentWorkspaceDir && params.agentWorkspaceDir !== params.mutationRoot
+        ? resolvePath(params.agentWorkspaceDir)
+        : undefined,
     ]);
-    return resolveMemoryRelativePath(root, target);
+    if (params.agentWorkspaceDir && agentRoot) {
+      const relativePath = resolveMemoryRelativePath(agentRoot, target);
+      if (relativePath) {
+        return { workspaceDir: params.agentWorkspaceDir, relativePath };
+      }
+    }
+    const relativePath = resolveMemoryRelativePath(root, target);
+    return relativePath ? { workspaceDir: params.workspaceDir, relativePath } : undefined;
   };
   return {
-    classifies: async (absolutePath) => (await resolveRelativePath(absolutePath)) !== undefined,
+    classifies: async (absolutePath) => (await resolveArtifact(absolutePath)) !== undefined,
     write: async ({ absolutePath, contentBefore, contentAfter, commit }) => {
-      const relativePath = await resolveRelativePath(absolutePath);
-      if (!relativePath) {
+      const artifact = await resolveArtifact(absolutePath);
+      if (!artifact) {
         await commit();
         return;
       }
       const rollback = await recordMemoryArtifactWriteProvenance({
-        workspaceDir: params.workspaceDir,
-        relativePath,
+        ...artifact,
         contentBefore,
         contentAfter,
         originClass: params.resolveOriginClass(),
@@ -141,20 +152,19 @@ export function createMemoryWriteProvenanceObserver(params: {
       }
     },
     clearAfterDelete: async (absolutePath, contentBefore) => {
-      const relativePath = await resolveRelativePath(absolutePath);
-      if (!relativePath) {
+      const artifact = await resolveArtifact(absolutePath);
+      if (!artifact) {
         return;
       }
       try {
         await clearMemoryArtifactProvenance({
-          workspaceDir: params.workspaceDir,
-          relativePath,
+          ...artifact,
           contentBefore,
         });
       } catch (error) {
         // The file is already gone. Retaining stale quarantine is safer than
         // reporting the filesystem mutation as failed after it committed.
-        logWarn(`memory provenance cleanup failed for ${relativePath}: ${String(error)}`);
+        logWarn(`memory provenance cleanup failed for ${artifact.relativePath}: ${String(error)}`);
       }
     },
   };
