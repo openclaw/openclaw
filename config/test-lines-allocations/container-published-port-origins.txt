@@ -1,4 +1,4 @@
 # Distinct container shell/activation, CLI/Doctor/onboarding, and real HTTP/WS reload boundaries.
 # Removed duplicate provider transport and generic policy-revocation fixtures first.
-# Includes reproduced managed-ingress protected-byte, pre-reset validation, flag-only activation, and saved-policy recovery, JSON5 legacy, and effective-auth startup, launcher-only metadata, omitted-config SDK, and Python-free stable setup defects. Replaced mocked dispatch with real HTTP serving-policy proof; includes persisted dotenv loader admission, Node-only image and configured probe-timeout delivery, and origin-audit parity.
-647
+# Includes reproduced managed-ingress protected-byte, pre-reset validation, flag-only activation, and saved-policy recovery, JSON5 legacy, and effective-auth startup, launcher-only metadata, omitted-config SDK, and Python-free stable setup defects. Replaced mocked dispatch with real HTTP serving-policy proof; includes persisted dotenv loader admission, Node-only image and configured probe-timeout delivery, and origin-audit parity, exact-request SDK binding, and malformed-metadata audit recovery.
+672

@@ -101,6 +101,20 @@ describe("security audit gateway exposure findings", () => {
     ).toBe(missing);
   });
 
+  it("reports malformed launch metadata without losing other findings", () => {
+    const cfg: OpenClawConfig = { gateway: { bind: "lan", auth: { mode: "none" } } };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: "not-a-port",
+    });
+    expect(findings.map((finding) => finding.checkId)).toEqual(
+      expect.arrayContaining([
+        "gateway.container_published_port_invalid",
+        "gateway.bind_no_auth",
+        "gateway.control_ui.allowed_origins_required",
+      ]),
+    );
+  });
+
   it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", () => {
     const cfg: OpenClawConfig = {
       gateway: {

@@ -31,8 +31,9 @@ export function resolveAcceptedBrowserOrigin(
   // New launch defaults require the serving policy as well as the caller's policy.
   // Existing explicit caller-config behavior remains unchanged without this grant.
   const publishedPort =
+    scope?.browserOriginRequest === params.req &&
     params.cfg !== undefined &&
-    scope?.browserOriginConfig !== undefined &&
+    scope.browserOriginConfig !== undefined &&
     resolveAcceptedBrowserOriginForGateway({
       req: params.req,
       cfg: scope.browserOriginConfig,

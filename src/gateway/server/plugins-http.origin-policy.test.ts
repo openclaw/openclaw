@@ -1,4 +1,4 @@
-import { request as httpRequest } from "node:http";
+import { request as httpRequest, type IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -14,6 +14,8 @@ describe("plugin HTTP origin policy", () => {
   it("bounds mapped HTTP origins by serving policy and caller config", async () => {
     const cfg: OpenClawConfig = { gateway: { publicOrigin: "https://old.example.test" } };
     let pluginConfig: OpenClawConfig | undefined = cfg;
+    let retainedRequest: IncomingMessage | undefined;
+    let useRetainedRequest = false;
     const route: PluginHttpRouteRegistration = {
       pluginId: "origin-proof",
       source: "origin-proof",
@@ -22,7 +24,13 @@ describe("plugin HTTP origin policy", () => {
       match: "exact",
       handler: async (req, res) => {
         await Promise.resolve();
-        res.end(resolveAcceptedBrowserOrigin({ req, cfg: pluginConfig }) ?? "denied");
+        retainedRequest ??= req;
+        res.end(
+          resolveAcceptedBrowserOrigin({
+            req: useRetainedRequest ? retainedRequest : req,
+            cfg: pluginConfig,
+          }) ?? "denied",
+        );
         return true;
       },
     };
@@ -74,6 +82,9 @@ describe("plugin HTTP origin policy", () => {
     try {
       const mappedOrigin = "http://localhost:25432";
       expect(await request(mappedOrigin)).toBe(mappedOrigin);
+      useRetainedRequest = true;
+      expect(await request(mappedOrigin)).toBe("denied");
+      useRetainedRequest = false;
       cfg.gateway!.publicOrigin = "https://new.example.test";
       expect(await request("https://old.example.test")).toBe("denied");
       expect(await request("https://new.example.test")).toBe("https://new.example.test");

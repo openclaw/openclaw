@@ -1,3 +1,4 @@
+import type { IncomingMessage } from "node:http";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   GatewayContextResolver,
@@ -28,6 +29,7 @@ export type PluginRuntimeGatewayRequestScope = {
   publishedPort?: number;
   /** Serving request policy paired with that launch fact, never plugin-provided config. */
   browserOriginConfig?: OpenClawConfig;
+  browserOriginRequest?: IncomingMessage;
   readRequestAuthority?: (
     client: PluginRuntimeGatewayRequestScope["client"],
   ) => GatewayRequestAuthorityV1 | undefined;

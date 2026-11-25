@@ -46,8 +46,21 @@ export function collectGatewayConfigFindings(
     ...cfg,
     gateway: { ...cfg.gateway, auth: { ...cfg.gateway?.auth, mode: auth.mode } },
   };
+  let publishedPort: number | undefined;
+  try {
+    publishedPort = resolveContainerPublishedGatewayPort(env);
+  } catch {
+    findings.push({
+      checkId: "gateway.container_published_port_invalid",
+      severity: "warn",
+      title: "Container published-port launch metadata is invalid",
+      detail:
+        "Gateway startup rejects the malformed port; no browser origins were derived from it.",
+      remediation: "Check the Docker/Podman published port or explicit --published-port (1–65535).",
+    });
+  }
   const controlUiAllowedOrigins = normalizeStringEntries(
-    resolveControlUiAllowedOrigins(policyConfig, resolveContainerPublishedGatewayPort(env)),
+    resolveControlUiAllowedOrigins(policyConfig, publishedPort),
   );
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;

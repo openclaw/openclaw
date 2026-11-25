@@ -223,7 +223,11 @@ function createPluginRouteRuntimeScope(params: {
   return {
     pluginRegistry: params.registry,
     ...(params.publishedPort !== undefined
-      ? { publishedPort: params.publishedPort, browserOriginConfig: params.browserOriginConfig }
+      ? {
+          publishedPort: params.publishedPort,
+          browserOriginConfig: params.browserOriginConfig,
+          browserOriginRequest: params.req,
+        }
       : {}),
     ...(ingress ? { revalidate: async () => assertRemoteControlUiIngressCurrent(ingress) } : {}),
     ...(requestAuth || operatorAccessAuthority || ingress ? { hasCurrentClientAuthority } : {}),
