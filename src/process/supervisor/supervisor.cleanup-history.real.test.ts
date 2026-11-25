@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { expect, it } from "vitest";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import { runWithProcessCleanupBudget } from "./cleanup-budget.js";
 import { createProcessSupervisor } from "./supervisor.js";
 
@@ -36,7 +37,7 @@ it.skipIf(process.platform !== "linux").each(["", "setsid ", "nohup "])(
 );
 
 it.skipIf(process.platform !== "linux")(
-  "does not block shutdown after a deadline failure and native descendant retirement",
+  "kills a stopped native owner before the shutdown deadline and does not block shutdown",
   async () => {
     const supervisor = createProcessSupervisor();
     const closeScope = supervisor.acquireScopeCleanup("deadline", { processTree: "required-all" });
@@ -52,18 +53,18 @@ it.skipIf(process.platform !== "linux")(
     expect(anchor).toBeGreaterThan(0);
     expect(descendant).toBeGreaterThan(0);
     try {
-      // Output is complete, but this background child still holds lineage. Stall
-      // only our native owner so its cancellation cannot beat the host deadline.
+      // Output is complete, but this background child still holds lineage. Stop
+      // our native owner so it can read neither cancellation nor its escalation.
       process.kill(anchor!, "SIGSTOP");
-      const cleanup = runWithProcessCleanupBudget(
-        { deadline: performance.now() + 100, warn() {} },
-        closeScope,
-      );
-      await expect(cleanup).rejects.toThrow('"stdoutEnd":false,"stderrEnd":false');
-      process.kill(anchor!, "SIGCONT");
-      await expect.poll(() => existsSync(`/proc/${descendant}`)).toBe(false);
+      const deadline = performance.now() + 4_000;
+      const cleanup = runWithProcessCleanupBudget({ deadline, warn() {} }, closeScope);
+      await expect(cleanup).rejects.toThrow("did not answer forced cancellation");
+      expect(performance.now()).toBeLessThan(deadline);
+      // No SIGCONT: the host itself must retire the owner's group. Its orphaned
+      // descendant is reaped by whatever init the host has, so a zombie counts as gone.
+      await expect.poll(() => isPidAlive(descendant!)).toBe(false);
       await expect.poll(() => existsSync(`/proc/${anchor}`)).toBe(false);
-      await expect(run.waitForExtinction!()).rejects.toThrow("hard deadline");
+      await expect(run.waitForExtinction!()).rejects.toThrow("did not answer");
       // The failed run retains its diagnostic; it is no longer live ownership.
       await expect(supervisor.shutdown()).resolves.toBeUndefined();
     } finally {

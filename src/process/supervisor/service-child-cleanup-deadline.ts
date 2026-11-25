@@ -6,7 +6,8 @@ import { getProcessCleanupBudget, type ProcessCleanupBudget } from "./cleanup-bu
 export function createServiceChildCleanupDeadline(params: {
   enabled: () => boolean;
   expire: () => void;
-  force: () => void;
+  /** Escalates cancellation; `hard` follows once that request goes unanswered. */
+  force: (hard: boolean) => void;
 }) {
   let deadline: number | undefined;
   let startedAt: number | undefined;
@@ -36,10 +37,19 @@ export function createServiceChildCleanupDeadline(params: {
     const remainingMs = budget ? Math.max(0, deadline - now) : GRACEFUL_CANCEL_TIMEOUT_MS;
     if (budget) {
       // Leave time to observe native exit after escalation on a short stop budget.
-      escalationTimer = setTimeout(
-        params.force,
-        Math.min(GRACEFUL_CANCEL_TIMEOUT_MS, remainingMs / 2),
-      );
+      const end = deadline;
+      const escalationMs = Math.min(GRACEFUL_CANCEL_TIMEOUT_MS, remainingMs / 2);
+      escalationTimer = setTimeout(() => {
+        // An owner that no longer reads its control channel cannot act on this request.
+        // Like expiry, let one I/O poll deliver a queued receipt before the hard step.
+        escalationTimer = setTimeout(
+          () => {
+            expiryPoll = setImmediate(params.force, true);
+          },
+          Math.min(GRACEFUL_CANCEL_TIMEOUT_MS, Math.max(0, end - performance.now()) / 2),
+        );
+        params.force(false);
+      }, escalationMs);
     }
     // A busy host can have native completion queued behind this timer.
     // Timers truncate fractional delays; round up so expiry cannot run early.

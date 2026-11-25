@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
@@ -9,6 +9,7 @@ import {
   parseLinuxProcessStat,
 } from "../../shared/pid-alive.js";
 import { readDarwinProcessCensus } from "../darwin-process-inspection.js";
+import { BrokerChild } from "../spawn-broker/child.js";
 import type { ReleasedProcess } from "./types.js";
 
 export type ProcessCommand =
@@ -64,6 +65,38 @@ function readLinuxProcessUid(pid: number): number | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Retires the anchor this host spawned when forced cancellation goes unanswered. Until it is
+ * reaped, its PID still names its own process group, which holds the command.
+ */
+export function retireAnchor(
+  owner: ChildProcess,
+  anchorPid: number | undefined,
+  state: string,
+  loseIdentity: (message: string) => void,
+): void {
+  if (
+    (state !== "starting" && state !== "active") ||
+    owner.pid === undefined ||
+    owner.pid !== anchorPid ||
+    owner.exitCode !== null ||
+    owner.signalCode !== null
+  ) {
+    return;
+  }
+  loseIdentity("anchor did not answer forced cancellation");
+  if (!(owner instanceof BrokerChild)) {
+    try {
+      process.kill(-owner.pid, "SIGKILL");
+      return;
+    } catch {
+      // A host that denies group signals still lets us end our direct child.
+    }
+  }
+  // The broker is a brokered anchor's parent, so its kill cannot reach a reused PID.
+  owner.kill("SIGKILL");
 }
 
 /**
