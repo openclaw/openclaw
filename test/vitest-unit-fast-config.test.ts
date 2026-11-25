@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveConfig } from "vitest/node";
+import { withEnvAsync } from "../src/test-utils/env.js";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
@@ -505,7 +506,9 @@ describe("unit-fast vitest lane", () => {
     }
 
     const timerConfig = (
-      await resolveConfig({ config: false }, createUnitFastFakeTimersVitestConfig({}))
+      await withEnvAsync({ VITEST_MAX_WORKERS: undefined }, () =>
+        resolveConfig({ config: false }, createUnitFastFakeTimersVitestConfig({})),
+      )
     ).test;
     expect(timerConfig).toMatchObject({
       include: unitFastTimerTestFiles,

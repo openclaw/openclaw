@@ -7,6 +7,7 @@ import { globSync } from "tinyglobby";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ViteUserConfig } from "vitest/config";
 import { resolveConfig } from "vitest/node";
+import { withEnvAsync } from "../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
 import { createAgentsCoreIsolatedVitestConfig } from "./vitest/vitest.agents-core-isolated.config.ts";
@@ -255,7 +256,10 @@ describe("scoped vitest configs", () => {
     try {
       sharedVitestConfig.test = { ...original, maxWorkers, fileParallelism: maxWorkers > 1 };
       for (const createConfig of [createAgentsVitestConfig, createAgentsCoreVitestConfig]) {
-        expect(await requireTestConfig(createConfig({}))).toMatchObject({
+        const testConfig = await withEnvAsync({ VITEST_MAX_WORKERS: undefined }, () =>
+          requireTestConfig(createConfig({})),
+        );
+        expect(testConfig).toMatchObject({
           maxWorkers,
           fileParallelism: maxWorkers > 1,
         });
@@ -374,7 +378,7 @@ describe("scoped vitest configs", () => {
           diagnosticForksPool.name,
         ]);
         expect(projects[0]?.setupFiles).toEqual(owner.test?.setupFiles);
-        expect(projects[0]?.maxWorkers).toBe(owner.test?.maxWorkers);
+        expect(projects[0]?.maxWorkers).toBe(resolvedOwner.test.maxWorkers);
         const workerConfig = await resolveConfig(
           { config: false },
           createWorker({ ...env, OPENCLAW_VITEST_INCLUDE_FILE: undefined }),
