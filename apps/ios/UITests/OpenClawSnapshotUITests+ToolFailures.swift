@@ -19,10 +19,10 @@ extension OpenClawSnapshotUITests {
         for _ in 0..<4 where !composer.isHittable {
             transcript.swipeDown()
         }
-        XCTAssertEqual(composer.label, "Send to Composer fixes")
+        XCTAssertEqual(composer.label, "Send message to Composer fixes")
         XCTAssertEqual(composer.value as? String, "3 failed")
         let toasts = row("tool_call:tf-call-1:sessions_send:1")
-        XCTAssertEqual(toasts.label, "Send to Toasts board")
+        XCTAssertEqual(toasts.label, "Send message to Toasts board")
         XCTAssertEqual(toasts.value as? String, "2 failed")
         for launch in ["tool_call:tf-call-3:sessions_spawn:3", "tool_call:tf-call-4:sessions_spawn:4"] {
             XCTAssertTrue(row(launch).exists, "Each launch is its own target and keeps its row")

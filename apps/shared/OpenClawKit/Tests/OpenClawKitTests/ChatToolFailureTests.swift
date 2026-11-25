@@ -215,8 +215,8 @@ struct ChatToolFailureTests {
         let item = Self.send("a1", to: named.key)
         #expect(item.addressedSessionKey == named.key)
         #if os(iOS)
-        #expect(item.rowTitle(chatName: "Toasts board") == "Send to Toasts board")
-        #expect(item.rowTitle(chatName: nil) == "Send to a chat")
+        #expect(item.rowTitle(chatName: "Toasts board") == "Send message to Toasts board")
+        #expect(item.rowTitle(chatName: nil) == "Send message")
         #endif
     }
 

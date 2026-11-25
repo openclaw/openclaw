@@ -235,18 +235,19 @@ extension ChatToolActivityItem {
     }
 
     /// The collapsed row's title once the chat a call addresses has a name. On iPhone a message to
-    /// another chat names that chat, never its key (web chat-tool-row-presentation.ts:171-182).
+    /// another chat names that chat, never its key, in the web's words (en-chat-tool-labels.ts
+    /// `sessionSend`, main after #204399).
     func rowTitle(chatName: String?) -> String {
         #if os(iOS)
         if self.namesChatInTitle {
             let name = chatName ?? self.callLabel
             return switch self.displayState {
-            case .running: name.map { String(format: String(localized: "Sending to %@"), $0) } ??
-                String(localized: "Sending to a chat")
-            case .finished: name.map { String(format: String(localized: "Sent to %@"), $0) } ??
-                String(localized: "Sent to a chat")
-            default: name.map { String(format: String(localized: "Send to %@"), $0) } ??
-                String(localized: "Send to a chat")
+            case .running: name.map { String(format: String(localized: "Sending message to %@"), $0) } ??
+                String(localized: "Sending message")
+            case .finished: name.map { String(format: String(localized: "Sent message to %@"), $0) } ??
+                String(localized: "Sent message")
+            default: name.map { String(format: String(localized: "Send message to %@"), $0) } ??
+                String(localized: "Send message")
             }
         }
         #endif
