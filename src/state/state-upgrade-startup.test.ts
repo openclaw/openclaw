@@ -13,6 +13,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "./openclaw-state-db-cache.js";
+import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { upgradeStateOnGatewayStart } from "./state-upgrade-startup.js";
 
@@ -65,8 +66,11 @@ it.each([
     {
       using db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
       db.exec("PRAGMA journal_mode = WAL");
-      db.exec(OPENCLAW_STATE_SCHEMA_SQL);
-      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
+      db.exec(getOpenClawStatePredecessorSchema(41));
+      db.exec(`PRAGMA user_version = 41;
+        INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
+          VALUES ('primary', 'global', 41, 1, 1);
+        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);`);
       db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
         "auth.sharedStore",
         JSON.stringify({ location: "state-db" }),
@@ -99,7 +103,7 @@ it.each([
         });
         using original = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
         expect(original.prepare("PRAGMA user_version").get()).toEqual({
-          user_version: OPENCLAW_STATE_SCHEMA_VERSION - 1,
+          user_version: 41,
         });
         expect(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8")).toBe(authored);
         return;
@@ -119,9 +123,7 @@ it.each([
             entry.live === path.join(stateDir, "state", "openclaw.sqlite"),
         ).preimage;
         using original = new DatabaseSync(previous, { readOnly: true });
-        expect(original.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_STATE_SCHEMA_VERSION - 1,
-        );
+        expect(original.prepare("PRAGMA user_version").get()?.user_version).toBe(41);
         await upgradeStateOnGatewayStart(env, () => true);
         expect(fs.readFileSync(manifestFile, "utf8")).toBe(encoded);
       } else {
@@ -150,7 +152,10 @@ it.each([true, false])(
     {
       using db = new DatabaseSync(file);
       db.exec(OPENCLAW_STATE_SCHEMA_SQL);
-      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
+        INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
+          VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, 1, 1);
+        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION}', 1);`);
     }
     const original = fs.readFileSync(file);
     const target = path.join("releases", "empty-release", "openclaw");

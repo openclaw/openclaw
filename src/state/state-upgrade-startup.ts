@@ -1,14 +1,10 @@
 // Admit schema maintenance before the starting Gateway opens ordinary store readers.
 import fs from "node:fs";
-import { createConfigIO } from "../config/io.factory.js";
 import { parseConfigJson5 } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ExitError } from "../runtime.js";
-import { withArtifactPreservingStateReads } from "./artifact-preserving-state-reads.js";
-import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
-import { isStateUpgradePending } from "./state-upgrade-databases.js";
 import { explainMachineFailure, upgradeStateDirectory } from "./state-upgrade.js";
 
 const log = createSubsystemLogger("state/upgrade");
@@ -36,10 +32,6 @@ export async function upgradeStateOnGatewayStart(
   }
   let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
   try {
-    // Current-schema launcher trials publish the same explicit empty restore receipt.
-    if (!(await isStateUpgradePending(env)) && env.OPENCLAW_LAUNCHER_IPC !== "1") {
-      return;
-    }
     // Existing offline custody checks the stopped owner read-only, then admits
     // schema work through lock.run; config-only custody cannot write databases.
     lock = await acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true });
@@ -47,32 +39,7 @@ export async function upgradeStateOnGatewayStart(
     throw explainMachineFailure(error, resolveStateDir(env));
   }
   try {
-    const result = await lock?.run(async () => {
-      if (fs.existsSync(configPath)) {
-        try {
-          const { configDiagnostics } = await withArtifactPreservingStateReads(() =>
-            createConfigIO({
-              env,
-              configPath,
-              observe: false,
-              pluginValidation: "skip",
-            }).readBestEffortConfigSnapshot(),
-          );
-          if (configDiagnostics !== null) {
-            return {
-              status: "refused",
-              reason: `The config is invalid (${configDiagnostics.issues
-                .slice(0, 3)
-                .map((issue) => `${issue.path}: ${issue.message}`)
-                .join("; ")}). Run openclaw config validate before retrying the update.`,
-            } as const;
-          }
-        } finally {
-          await closeOpenClawStateDatabaseAsync();
-        }
-      }
-      return upgradeStateDirectory({ env, log });
-    });
+    const result = await lock?.run(() => upgradeStateDirectory({ env, log }));
     if (result?.status === "refused") {
       console.error(result.reason);
       throw new ExitError(78, result.reason);

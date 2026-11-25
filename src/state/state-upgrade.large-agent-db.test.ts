@@ -9,7 +9,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-schema-versions.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
@@ -39,12 +39,12 @@ describe("startup canonical ownership", () => {
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
     {
       using state = new DatabaseSync(statePath);
-      state.exec(OPENCLAW_STATE_SCHEMA_SQL);
-      // Only the shared version stamp is behind; the agent database is already current.
-      state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
-      state
-        .prepare("INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, 'test', 1, 1)")
-        .run(OPENCLAW_STATE_SCHEMA_VERSION - 1);
+      state.exec(getOpenClawStatePredecessorSchema(41));
+      // The shared catalog is v41; the registered agent database is already current.
+      state.exec(`PRAGMA user_version = 41;
+        INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
+          VALUES ('primary', 'global', 41, 1, 1);
+        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);`);
       state
         .prepare("INSERT INTO agent_databases VALUES ('main', ?, ?, 1, ?)")
         .run(

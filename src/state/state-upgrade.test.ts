@@ -17,7 +17,6 @@ import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
-import { isStateUpgradePending } from "./state-upgrade-databases.js";
 import { upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
@@ -53,11 +52,14 @@ describe("startup retained deletion", () => {
       }
       {
         using state = new DatabaseSync(statePath);
-        state.exec(OPENCLAW_STATE_SCHEMA_SQL);
-        // Exercise both current and outdated shared-state catalogs.
+        const version = OPENCLAW_STATE_SCHEMA_VERSION - Number(upgradeShared);
         state.exec(
-          `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - Number(upgradeShared)}`,
+          upgradeShared ? getOpenClawStatePredecessorSchema(41) : OPENCLAW_STATE_SCHEMA_SQL,
         );
+        state.exec(`PRAGMA user_version = ${version};
+          INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
+            VALUES ('primary', 'global', ${version}, 1, 1);
+          INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${version}', 1);`);
         state
           .prepare(`INSERT INTO agent_deletion_journal
         (agent_id, operation_id, phase, agent_dir, workspace_dir, sessions_dir,
@@ -74,7 +76,9 @@ describe("startup retained deletion", () => {
       {
         using active = new DatabaseSync(activePath);
         active.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-        active.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+        active.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+            VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', 1, 1);`);
       }
       {
         using retained = new DatabaseSync(retainedPath, { allowExtension: true });
@@ -103,10 +107,8 @@ describe("startup retained deletion", () => {
         await expect(upgrade).resolves.toMatchObject(
           upgradeShared ? { status: "upgraded" } : { status: "current" },
         );
-        expect(await isStateUpgradePending(env)).toBe(false);
       } else {
         await expect(upgrade).rejects.toThrow("no such module: vec0");
-        expect(await isStateUpgradePending(env)).toBe(true);
       }
       expect(fs.readFileSync(retainedPath)).toEqual(bytes);
       expect(fs.readdirSync(retainedDir)).toEqual(["openclaw-agent.sqlite"]);
@@ -159,14 +161,33 @@ describe("canonical in-place migration", () => {
         );
         await writeTrial({ ...pending, phase: "trial" }, prefix);
       }
-      const lock = await acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
-      try {
-        await expect(
-          upgradeStateDirectory({ env, log: { info() {}, warn() {} } }),
-        ).resolves.toEqual({ status: "upgraded" });
-      } finally {
-        await lock?.release();
-      }
+      const rename = fs.renameSync;
+      const publication = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+        if (String(destination) === manifestPath) {
+          // The durable restore intent must precede the first canonical mutation.
+          using live = new DatabaseSync(statePath, { readOnly: true });
+          expect(live.prepare("PRAGMA user_version").get()).toEqual({ user_version: 41 });
+          using agent = new DatabaseSync(agentPath, { readOnly: true });
+          expect(agent.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+        }
+        rename(source, destination);
+      });
+      const upgrade = async () => {
+        const lock = await acquireGatewayLock({
+          env,
+          role: "sqlite-maintenance",
+          allowInTests: true,
+        });
+        try {
+          return await lock?.run(() =>
+            upgradeStateDirectory({ env, log: { info() {}, warn() {} } }),
+          );
+        } finally {
+          await lock?.release();
+        }
+      };
+      await expect(upgrade()).resolves.toEqual({ status: "upgraded" });
+      publication.mockRestore();
       for (const [file, identity] of [
         [statePath, stateIdentity],
         [agentPath, agentIdentity],
@@ -255,7 +276,6 @@ describe("upgradeStateDirectory version zero", () => {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json"),
     };
-    expect(await isStateUpgradePending(env)).toBe(false);
     const result = await upgradeStateDirectory({
       env,
       log: { info: () => {}, warn: () => {} },

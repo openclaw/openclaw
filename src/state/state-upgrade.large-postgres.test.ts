@@ -11,7 +11,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-schema-versions.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -36,8 +36,11 @@ it.each([
     fs.writeFileSync(configPath, "{}");
     {
       using state = new DatabaseSync(statePath);
-      state.exec(OPENCLAW_STATE_SCHEMA_SQL);
-      state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
+      state.exec(getOpenClawStatePredecessorSchema(41));
+      state.exec(`PRAGMA user_version = 41;
+        INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
+          VALUES ('primary', 'global', 41, 1, 1);
+        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);`);
       using agent = new DatabaseSync(agentPath);
       agent.exec(
         "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
@@ -55,6 +58,7 @@ it.each([
       namespace: "original_agent",
       family: "agent",
       version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      minReader: OPENCLAW_AGENT_SCHEMA_VERSION,
       physicalBytes: gib * 1024 ** 3,
       retainedAgentIds: [],
       registeredAgentDatabases: [],

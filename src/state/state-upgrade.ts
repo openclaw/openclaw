@@ -1,15 +1,30 @@
 // Gateway startup owns admission; each store's existing migration owner writes in place.
 import fs from "node:fs";
 import path from "node:path";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import {
+  commitAutomaticConfigRepair,
+  planAutomaticConfigRepair,
+} from "../commands/doctor/shared/automatic-config-repair.js";
+import { readConfigSnapshotBeforeEngineSelection } from "../config/io.factory.js";
+import { resolveStateDir } from "../config/paths.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteIntegrityOperationSync } from "../infra/sqlite-integrity.js";
+import {
+  autoMigrateLegacyState,
+  detectLegacyStateMigrations,
+} from "../infra/state-migrations.doctor.js";
+import {
+  logStateMigrationResult,
+  throwIfDoctorStateMigrationRefused,
+} from "../infra/state-migrations.messages.js";
+import { prepareLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.js";
 import { preflightPostgresUpgrade } from "../snapshot/database-backup.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
+import { withArtifactPreservingStateReads } from "./artifact-preserving-state-reads.js";
 import { openAgentEngineStore } from "./openclaw-agent-db-engine.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "./openclaw-agent-db-schema.js";
@@ -18,7 +33,6 @@ import {
   openOpenClawStateDatabaseForDoctor,
   prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
-import { readUpgradeConfig } from "./state-upgrade-config.js";
 import {
   discoverDatabases,
   floorRaisingDatabases,
@@ -46,39 +60,78 @@ export async function upgradeStateDirectory(params: {
   if (!fs.existsSync(stateDir)) {
     return { status: "current" };
   }
-  const { config } = readUpgradeConfig(resolveConfigPath(env, stateDir));
-  const inventory = await discoverDatabases(stateDir, config, env);
-  const outdated = outdatedDatabases(inventory.targets);
-  const protectedTargets = floorRaisingDatabases(inventory.targets);
-  let restore: StateUpgradeRestore | undefined;
-  try {
-    restore = await beginStateUpgradeRestore(env);
-    if (restore) {
-      const refusal = stateUpgradeRefusal(inventory, stateDir);
-      if (refusal) {
-        return { status: "refused", reason: refusal };
-      }
-    }
-    await closeOpenClawStateDatabaseAsync();
-    if (restore) {
-      const postgres = protectedTargets.filter((target) => target.engine === "postgres");
-      if (postgres.length > 0) {
-        await preflightPostgresUpgrade(
-          postgres.map((target) => target.path),
-          config,
-        );
-      }
-    }
-    await publishStateUpgradeRestore(restore, { targets: protectedTargets, config });
-  } catch (error) {
-    return { status: "refused", reason: formatErrorMessage(error) };
+  const snapshot = await readConfigSnapshotBeforeEngineSelection(env);
+  const configRepair = await withArtifactPreservingStateReads(() =>
+    planAutomaticConfigRepair(snapshot),
+  );
+  if (snapshot.exists && !snapshot.valid && !configRepair) {
+    return {
+      status: "refused",
+      reason: `The config is invalid (${snapshot.issues
+        .slice(0, 3)
+        .map((issue) => `${issue.path}: ${issue.message}`)
+        .join("; ")}). Run openclaw config validate before retrying the update.`,
+    };
   }
-  if (outdated.length === 0) {
-    return { status: "current" };
-  }
+  const config = configRepair?.config ?? snapshot.config;
   const selection = await resolveDatabaseEngineSelection(config, env);
-  try {
-    await withDatabaseEngineSelection(selection, async () => {
+  return withDatabaseEngineSelection(selection, async (): Promise<StateUpgradeResult> => {
+    const inventory = await discoverDatabases(stateDir, config, env);
+    const outdated = outdatedDatabases(inventory.targets);
+    const protectedTargets = floorRaisingDatabases(inventory.targets);
+    let restore: StateUpgradeRestore | undefined;
+    try {
+      restore = await beginStateUpgradeRestore(env);
+      if (restore) {
+        const refusal = stateUpgradeRefusal(inventory, stateDir);
+        if (refusal) {
+          return { status: "refused", reason: refusal };
+        }
+      }
+      await closeOpenClawStateDatabaseAsync();
+      if (restore) {
+        const postgres = protectedTargets.filter((target) => target.engine === "postgres");
+        if (postgres.length > 0) {
+          await preflightPostgresUpgrade(
+            postgres.map((target) => target.path),
+            config,
+          );
+        }
+      }
+      await publishStateUpgradeRestore(restore, { targets: protectedTargets, config });
+    } catch (error) {
+      return { status: "refused", reason: formatErrorMessage(error) };
+    }
+    const legacySessionSurfaces = await withArtifactPreservingStateReads(() =>
+      prepareLegacySessionSurfaces({ config, env }),
+    );
+    const legacyState = await detectLegacyStateMigrations({
+      cfg: config,
+      env,
+      doctorOnlyStateMigrations: true,
+      artifactPreservingReadOnly: true,
+      legacySessionSurfaces,
+    });
+    if (outdated.length === 0 && !configRepair && legacyState.preview.length === 0) {
+      return { status: "current" };
+    }
+    try {
+      // Released file formats still belong to Doctor's existing import owner.
+      // It runs on live paths, after database images and before schema admission.
+      if (legacyState.preview.length > 0) {
+        const legacy = await autoMigrateLegacyState({
+          cfg: config,
+          env,
+          doctorOnlyStateMigrations: true,
+          configIncludedPaths: snapshot.includedPaths,
+          legacySessionSurfaces,
+        });
+        logStateMigrationResult(legacy, log);
+        throwIfDoctorStateMigrationRefused(legacy.stepReceipts);
+      }
+      if (configRepair) {
+        await commitAutomaticConfigRepair(configRepair, snapshot);
+      }
       for (const target of outdated.filter((entry) => entry.kind === "state")) {
         if (target.engine === "postgres") {
           await withEngineStoreAdmission(() =>
@@ -124,20 +177,20 @@ export async function upgradeStateDirectory(params: {
           },
         );
       }
-    });
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
-  }
-  if (restore) {
-    await pruneGenerations(
-      stateDir,
-      restore.generation,
-      readPinnedVersions(path.join(stateDir, "state", "openclaw.sqlite")),
-      new Set(protectedTargets.map((target) => target.path)),
-      { config, activeAnchors: inventory.targets.map((target) => target.path), warn: log.warn },
-    );
-  }
-  return { status: "upgraded" };
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
+    if (restore) {
+      await pruneGenerations(
+        stateDir,
+        restore.generation,
+        readPinnedVersions(path.join(stateDir, "state", "openclaw.sqlite")),
+        new Set(protectedTargets.map((target) => target.path)),
+        { config, activeAnchors: inventory.targets.map((target) => target.path), warn: log.warn },
+      );
+    }
+    return { status: "upgraded" };
+  });
 }
 
 /** Pins written by released generic rebuilds remain an operator recovery contract. */

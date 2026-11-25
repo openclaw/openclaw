@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
@@ -32,7 +32,6 @@ import {
   readStateSchemaMinReader,
 } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
-import { readUpgradeConfig } from "./state-upgrade-config.js";
 
 export type DatabaseTarget = {
   kind: "state" | "agent";
@@ -208,16 +207,6 @@ export const expectedVersion = (target: Pick<DatabaseTarget, "kind">) =>
 /** Version zero is a fresh catalog; normal bootstrap owns it. */
 export function outdatedDatabases(targets: readonly DatabaseTarget[]): DatabaseTarget[] {
   return targets.filter((target) => target.version > 0 && target.version < expectedVersion(target));
-}
-
-/** Whether startup must acquire schema maintenance before admitting ordinary readers. */
-export async function isStateUpgradePending(env: NodeJS.ProcessEnv): Promise<boolean> {
-  const stateDir = path.resolve(resolveStateDir(env));
-  if (!fs.existsSync(stateDir)) {
-    return false;
-  }
-  const { config } = readUpgradeConfig(resolveConfigPath(env, stateDir));
-  return outdatedDatabases((await discoverDatabases(stateDir, config, env)).targets).length > 0;
 }
 
 /** Only a raised reader floor needs a rollback image. Keep classification with inventory. */
