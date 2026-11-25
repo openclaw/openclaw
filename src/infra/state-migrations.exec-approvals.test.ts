@@ -587,3 +587,34 @@ it.each(["missing", "invalid"])(
     expect(receipt()).toBeUndefined();
   },
 );
+
+it("previews policy without credential custody and accepts the owner's interrupted link pair", async () => {
+  writeExecApprovalsConfigRow({ db: database(), file: denyPolicy });
+  await writeLegacy({ version: 1, defaults: { security: "full" }, agents: {} });
+  await fsp.link(sourcePath, `${sourcePath}.doctor-importing`);
+  closeOpenClawStateDatabaseForTest();
+  await fsp.rm(path.join(stateDir, "client", "credentials.sqlite"));
+  await expect(inspectLegacyExecApprovals({ env, stateDir })).resolves.toMatchObject({
+    pending: true,
+    policyMatches: false,
+    legacy: { valid: true, defaults: { security: "full" } },
+    current: { valid: true, defaults: { security: "deny" } },
+    socketMatches: null,
+    socketComparisonUnavailable: true,
+  });
+  expect((await fsp.stat(sourcePath)).nlink).toBe(2);
+});
+
+it("does not hide disagreement between retained legacy names", async () => {
+  writeExecApprovalsConfigRow({ db: database(), file: denyPolicy });
+  await writeLegacy(denyPolicy);
+  await writeLegacy(
+    { version: 1, defaults: { security: "full" } },
+    `${sourcePath}.doctor-importing`,
+  );
+  await expect(inspectLegacyExecApprovals({ env, stateDir })).rejects.toThrow(
+    "source and interrupted claim disagree",
+  );
+  expect(fs.existsSync(sourcePath)).toBe(true);
+  expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(true);
+});

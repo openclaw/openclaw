@@ -257,6 +257,73 @@ function retainLegacyExecApprovals(
   return diagnostic;
 }
 
+/** Read both retained names using the migration owner’s interrupted-move contract. */
+export async function readRetainedLegacyExecApprovals(params: {
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+}) {
+  const sourcePath = resolveExecApprovalsPath(params.env);
+  const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
+  const stateRoot = await root(params.stateDir, {
+    hardlinks: "reject",
+    maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
+    symlinks: "reject",
+  });
+  const sourceRelative = path.relative(params.stateDir, sourcePath);
+  const claimRelative = path.relative(params.stateDir, claimPath);
+  const linked = await inspectLegacyMigrationLinkedMove(stateRoot, sourceRelative, claimRelative);
+  const snapshots: LegacySourceSnapshot[] = [];
+  if (linked) {
+    const opened = await stateRoot.read(sourceRelative, {
+      hardlinks: "allow",
+      maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
+      symlinks: "reject",
+    });
+    const current = await inspectLegacyMigrationLinkedMove(
+      stateRoot,
+      sourceRelative,
+      claimRelative,
+    );
+    if (
+      !current ||
+      current.dev !== linked.dev ||
+      current.ino !== linked.ino ||
+      opened.exactIdentity.dev !== linked.dev ||
+      opened.exactIdentity.ino !== linked.ino
+    ) {
+      throw new Error("Legacy exec approvals source/claim link pair changed.");
+    }
+    snapshots.push(
+      decodeLegacySourceSnapshot({
+        buffer: opened.buffer,
+        dev: opened.exactIdentity.dev,
+        ino: opened.exactIdentity.ino,
+        mtimeMs: opened.stat.mtimeMs,
+        raw: opened.buffer.toString("utf8"),
+        sha256: createHash("sha256").update(opened.buffer).digest("hex"),
+        size: opened.buffer.byteLength,
+        sourcePath,
+      }),
+    );
+  } else {
+    for (const candidate of [sourcePath, claimPath]) {
+      if (await stateRoot.exists(path.relative(params.stateDir, candidate))) {
+        snapshots.push(
+          await readLegacyExecApprovalsSourceSnapshot(stateRoot, params.stateDir, candidate),
+        );
+      }
+    }
+  }
+  const snapshot = snapshots[0];
+  if (!snapshot) {
+    return undefined;
+  }
+  if (snapshots.some((other) => other.sha256 !== snapshot.sha256)) {
+    throw new Error("Legacy exec approvals source and interrupted claim disagree.");
+  }
+  return snapshot;
+}
+
 /** Inspect both interrupted names; retained legacy input cannot veto canonical startup. */
 export async function prepareLegacyExecApprovals(params: {
   stateDir: string;
@@ -269,62 +336,9 @@ export async function prepareLegacyExecApprovals(params: {
     return undefined;
   }
   try {
-    const stateRoot = await root(params.stateDir, {
-      hardlinks: "reject",
-      maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
-      symlinks: "reject",
-    });
-    const sourceRelative = path.relative(params.stateDir, sourcePath);
-    const claimRelative = path.relative(params.stateDir, claimPath);
-    const linked = await inspectLegacyMigrationLinkedMove(stateRoot, sourceRelative, claimRelative);
-    const snapshots: LegacySourceSnapshot[] = [];
-    if (linked) {
-      const opened = await stateRoot.read(sourceRelative, {
-        hardlinks: "allow",
-        maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
-        symlinks: "reject",
-      });
-      const current = await inspectLegacyMigrationLinkedMove(
-        stateRoot,
-        sourceRelative,
-        claimRelative,
-      );
-      if (
-        !current ||
-        current.dev !== linked.dev ||
-        current.ino !== linked.ino ||
-        opened.exactIdentity.dev !== linked.dev ||
-        opened.exactIdentity.ino !== linked.ino
-      ) {
-        throw new Error("Legacy exec approvals source/claim link pair changed.");
-      }
-      snapshots.push(
-        decodeLegacySourceSnapshot({
-          buffer: opened.buffer,
-          dev: opened.exactIdentity.dev,
-          ino: opened.exactIdentity.ino,
-          mtimeMs: opened.stat.mtimeMs,
-          raw: opened.buffer.toString("utf8"),
-          sha256: createHash("sha256").update(opened.buffer).digest("hex"),
-          size: opened.buffer.byteLength,
-          sourcePath,
-        }),
-      );
-    } else {
-      for (const candidate of [sourcePath, claimPath]) {
-        if (await stateRoot.exists(path.relative(params.stateDir, candidate))) {
-          snapshots.push(
-            await readLegacyExecApprovalsSourceSnapshot(stateRoot, params.stateDir, candidate),
-          );
-        }
-      }
-    }
-    const snapshot = snapshots[0];
+    const snapshot = await readRetainedLegacyExecApprovals(params);
     if (!snapshot) {
       return undefined;
-    }
-    if (snapshots.some((other) => other.sha256 !== snapshot.sha256)) {
-      throw new Error("Legacy exec approvals source and interrupted claim disagree.");
     }
     const decision = decideLegacyExecApprovals({
       ...(params.facts ?? { canonical: undefined, receipt: null }),
@@ -554,7 +568,7 @@ async function migrateWithExclusiveStateOwnership(params: {
       await params.stateRoot.create(
         `${source.sourceRelativePath}${archiveSuffix}`,
         snapshot.buffer,
-        { mode: 0o600 },
+        { mode: 0o600, private: true },
       );
       preservedArchivePath = archivePath;
       const archived = await readLegacyExecApprovalsSourceSnapshot(
