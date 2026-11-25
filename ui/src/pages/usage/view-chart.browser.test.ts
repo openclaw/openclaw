@@ -68,7 +68,7 @@ it.each([
     const providerSeries = buildProviderSeries([
       { date, provider: "openai", model: "example", tokens: 999, cost: 999 / 64, count: 1 },
     ]);
-    const { getByRole } = mountView(() =>
+    const view = mountView(() =>
       DailyChartCompact({
         dailyEntries: [dailyEntry(date, 1_000, 1_000 / 64)],
         dailyChartMode: "by-provider",
@@ -80,9 +80,9 @@ it.each([
       }),
     );
 
-    getByRole("button", { name: /1\.0K tokens, \$15\.63/ }).focus();
+    view.getByRole("button", { name: /1\.0K tokens, \$15\.63/ }).focus();
     flush();
-    expect(getByRole("status").textContent).toContain(` · ${expected}`);
+    expect(view.getByRole("status").textContent).toContain(` · ${expected}`);
   },
 );
 
