@@ -2,10 +2,10 @@ import Foundation
 import OpenClawKit
 import OpenClawProtocol
 
-public enum OpenClawPersonalPinError: LocalizedError {
+enum OpenClawPersonalPinError: LocalizedError {
     case unsupportedGateway, placementChanged
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .unsupportedGateway: String(localized: "Update the Gateway to change personal session pins.")
         case .placementChanged: String(localized: "Pin placement changed. Refresh the list and retry.")
