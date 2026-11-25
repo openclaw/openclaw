@@ -45,7 +45,9 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
   write("dist/entry.js", runtimeEntry);
   json("dist/build-info.json", { commit: packageCommit, version: "2026.8.1" });
   execFileSync(testNodeExecPath, ["scripts/e2e/lib/package-git-fixture.mjs", "prepare", root]);
-  execFileSync(testNodeExecPath, [assertionScript, "prepare-git-fixture", root]);
+  const pnpmPin = "pnpm@12.15.0+sha512.fixture";
+  execFileSync(testNodeExecPath, [assertionScript, "prepare-git-fixture", root, pnpmPin]);
+  expect(JSON.parse(readFileSync(file("package.json"), "utf8")).packageManager).toBe(pnpmPin);
   mkdirSync(file("scripts/lib"), { recursive: true });
   for (const name of [
     "node-version.mjs",
