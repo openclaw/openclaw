@@ -4187,6 +4187,7 @@
     {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-call","surface":"apple","id":"native.apple.5801afb4f51df077","source":"Use an invite instead"},
     {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-call","surface":"apple","id":"native.apple.7eca19e778dfcaa0","source":"Use your recovery kit"},
     {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-call","surface":"apple","id":"native.apple.ee731b6838746b9c","source":"Use your recovery kit instead"},
+    {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-call","surface":"apple","id":"native.apple.77b1c8551a472194","source":"Waiting for OpenClaw ID…"},
     {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-call","surface":"apple","id":"native.apple.3b9b7cbcd20e12ef","source":"Waiting for approval"},
     {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-call","surface":"apple","id":"native.apple.eadca1099981b710","source":"Waiting for approval…"},
     {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-call","surface":"apple","id":"native.apple.8a05f03684fe137f","source":"You can close the app"},

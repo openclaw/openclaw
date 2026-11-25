@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 
 /// OpenClaw ID setup shared by the Mac and iOS apps. Native enrollment owns credentials and
 /// approval checks; views receive display data only.
@@ -138,6 +139,7 @@ public struct UnavailableOpenClawIDSetupService: OpenClawIDSetupService {
 @MainActor
 @Observable
 public final class OpenClawIDSetupModel {
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "openclaw-id")
     public private(set) var step: OpenClawIDSetupStep = .signIn
     public private(set) var busy = false
     public private(set) var error: String?
@@ -209,6 +211,7 @@ public final class OpenClawIDSetupModel {
             } catch {
                 guard !Task.isCancelled else { return }
                 // Service errors can carry sensitive response bodies; do not render them verbatim.
+                Self.logger.error("OpenClaw ID setup failed: \(String(reflecting: error), privacy: .public)")
                 self.error = "Setup did not finish. Try again or continue without OpenClaw ID."
             }
             self.busy = false
@@ -239,6 +242,7 @@ public final class OpenClawIDSetupModel {
             } catch {
                 guard !Task.isCancelled else { return }
                 self.wait = nil
+                Self.logger.error("OpenClaw ID setup failed: \(String(reflecting: error), privacy: .public)")
                 self.error = "Setup did not finish. Try again or continue without OpenClaw ID."
             }
         }

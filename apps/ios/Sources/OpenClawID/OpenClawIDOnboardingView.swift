@@ -21,6 +21,17 @@ struct OpenClawIDOnboardingView: View {
                     action: { self.model.perform($0) })
                     .disabled(self.model.busy)
 
+                if self.model.busy, self.model.step != .signIn {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Waiting for OpenClaw ID…")
+                            .font(OpenClawType.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 14)
+                }
+
                 if let error = self.model.error {
                     Text(verbatim: error)
                         .font(OpenClawType.footnote)
