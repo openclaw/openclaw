@@ -110,11 +110,18 @@ Verification checks the build commit, both build stamps, runtime entry, Control 
 OpenClaw builds and validates a separate release without replacing the checkout's runtime.
 The running Gateway keeps its release. The next start uses the release selected by the launcher.
 With `--no-restart`, the new release stays pending until the next service start.
-If the managed service still starts the checkout, OpenClaw stages its release-launcher
-definition without starting or restarting the Gateway. Linux reloads systemd's unit
-metadata without restarting the unit; macOS reloads the staged plist on the next
-OpenClaw restart or login; Windows runs the updated task script on its next start.
-If staging fails, update history records the service-definition refresh as owed.
+The update does not rewrite a managed service that still starts the checkout's
+`dist/index.js` or `openclaw.mjs`. It leaves a forwarding marker in the checkout
+(`.git/openclaw-launcher`, or `.openclaw-launcher` in a linked worktree), so that
+entry starts the release launcher. `openclaw gateway status`, `openclaw doctor --fix`
+and `openclaw update repair` treat that service as this installation's, serving the
+release the launcher selects, and leave its definition unchanged.
+A package install's managed service that still starts the old package is staged
+onto the release launcher without starting or restarting the Gateway. Linux reloads
+systemd's unit metadata without restarting the unit; macOS reloads the staged plist
+on the next OpenClaw restart or login; Windows runs the updated task script on its
+next start. If staging fails, update history records the service-definition refresh
+as owed.
 
 Stopping another Gateway that shares this installation protects its running
 code; it does not migrate that Gateway's separate state. If its older state
@@ -167,13 +174,18 @@ the owned service PID. Listener ownership, the lock, and native service identity
 are rechecked before stopping. Missing listener attribution or an unrelated
 connection error keeps the normal drain path.
 
-When the service's Node fails the Gateway's runtime check, OpenClaw reruns the
-Gateway under a compatible Node it finds, such as its private runtime in
-`~/.openclaw/tools/cli-node`. The service's main process is then that
-launcher, and its direct child serves the Gateway. Maintenance drain accepts the
-child as the service's Gateway only when every listener on the Gateway port is
-that process and its parent is the service's main process; stopping the service
-stops both.
+Two layouts run the Gateway as the direct child of a launcher that is the
+service's main process: a release install, whose service runs
+`~/.openclaw/git-install/openclaw-launcher.mjs`, and a service whose Node fails
+the Gateway's runtime check, which OpenClaw reruns under a compatible Node it
+finds, such as its private runtime in `~/.openclaw/tools/cli-node`. Maintenance
+drain, which Doctor and `openclaw update repair` also use, accepts the child as
+the service's Gateway only when every listener on the Gateway port is that
+process and its parent is the service's main process. When no listener names
+its process, for example on a Linux host without `lsof` or `ss` or when `ss`
+cannot see the owner, the drain instead requires the kernel parent of the
+process the Gateway reports to be the service's main process. Stopping the
+service stops both.
 
 With `--no-restart`, the package is replaced under a running Gateway, and that
 Gateway restarts itself when its installation check sees the new files. On a

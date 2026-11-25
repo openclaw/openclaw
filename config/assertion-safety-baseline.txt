@@ -117,7 +117,7 @@ extensions/codex/src/app-server/runtime-artifact.ts	1
 extensions/codex/src/app-server/sandbox-exec-server/http.ts	2
 extensions/codex/src/app-server/sandbox-exec-server/json-rpc.ts	3
 extensions/codex/src/app-server/scheduled-app-authority.ts	5
-extensions/codex/src/app-server/shared-client.ts	2
+extensions/codex/src/app-server/shared-client.ts	1
 extensions/codex/src/app-server/side-question.ts	1
 extensions/codex/src/app-server/startup-binding.ts	1
 extensions/codex/src/app-server/thread-lifecycle-run.ts	1
@@ -249,7 +249,7 @@ extensions/feishu/src/bitable.ts	1
 extensions/feishu/src/bot.ts	6
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
-extensions/feishu/src/channel.ts	4
+extensions/feishu/src/channel.ts	3
 extensions/feishu/src/client.ts	1
 extensions/feishu/src/comment-handler.ts	2
 extensions/feishu/src/comment-target.ts	2
@@ -798,7 +798,7 @@ extensions/tlon/src/monitor/authorization.ts	1
 extensions/tlon/src/monitor/discovery.ts	1
 extensions/tlon/src/monitor/history.ts	2
 extensions/tlon/src/monitor/index.ts	5
-extensions/tlon/src/settings.ts	7
+extensions/tlon/src/settings.ts	5
 extensions/tlon/src/setup-core.ts	3
 extensions/tlon/src/tlon-api.ts	2
 extensions/tlon/src/types.ts	1
@@ -973,7 +973,6 @@ packages/memory-host-sdk/src/host/sqlite.ts	1
 packages/model-catalog-core/src/model-catalog-normalize.ts	5
 packages/model-catalog-core/src/model-catalog-types.ts	1
 packages/model-catalog-core/src/remote-catalog-bundle.ts	2
-packages/net-policy/src/ip.ts	1
 packages/normalization-core/src/error-coercion.ts	1
 packages/normalization-core/src/json-schema.ts	1
 packages/normalization-core/src/promise-like.ts	1
@@ -1021,7 +1020,7 @@ src/agents/agent-tools.before-tool-call.wrapper.ts	3
 src/agents/agent-tools.execution-preparer.ts	2
 src/agents/agent-tools.params.ts	5
 src/agents/agent-tools.policy.ts	1
-src/agents/agent-tools.read.ts	2
+src/agents/agent-tools.read.ts	1
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/ai-transport-runtime-host.ts	9
 src/agents/apply-patch-file-ops.ts	2
@@ -1102,7 +1101,6 @@ src/agents/embedded-agent-runner/run/attempt-session-prepare.ts	1
 src/agents/embedded-agent-runner/run/attempt-sessions-yield.ts	1
 src/agents/embedded-agent-runner/run/attempt-setup.ts	1
 src/agents/embedded-agent-runner/run/attempt-stop-reason-recovery.ts	1
-src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts	1
 src/agents/embedded-agent-runner/run/attempt-stream.ts	3
 src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	1
 src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	2
@@ -1427,7 +1425,7 @@ src/cli/exec-approvals-cli.ts	9
 src/cli/exec-policy-cli.ts	1
 src/cli/gateway-cli/dev.ts	1
 src/cli/gateway-cli/register.ts	4
-src/cli/gateway-cli/run.ts	4
+src/cli/gateway-cli/run.ts	3
 src/cli/gateway-cli/suspend-cli.ts	2
 src/cli/logs-cli.ts	1
 src/cli/models-cli.ts	1
@@ -2330,12 +2328,10 @@ ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	1
 ui/src/pages/chat/components/widget-export.ts	1
 ui/src/pages/chat/connect-error.ts	1
-ui/src/pages/chat/export.ts	1
 ui/src/pages/chat/input-history.ts	1
 ui/src/pages/chat/run-lifecycle.ts	1
 ui/src/pages/chat/scroll.ts	1
 ui/src/pages/chat/session-cache.ts	2
-ui/src/pages/chat/stream-reconciliation.ts	1
 ui/src/pages/chat/talk/gateway-relay.ts	1
 ui/src/pages/chat/talk/google-live.ts	1
 ui/src/pages/chat/talk/shared.ts	1

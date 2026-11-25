@@ -53,6 +53,12 @@ function expectCatalog(result: unknown, kind: string, catalog: Record<string, un
   expect(result).toMatchObject({ ok: true, response: { [kind]: catalog } });
 }
 
+// Readiness timing is under test; the saved sign-ins it names are read from an empty store.
+vi.mock("../../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../agents/auth-profiles/store-runtime.js")>()),
+  loadAuthProfileStoreForRuntimeAsync: async () => ({ version: 1, profiles: {} }),
+}));
+
 vi.mock("../../../tts/provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../tts/provider-registry.js")>()),
   listSpeechProviders: registry.listSpeechProviders,

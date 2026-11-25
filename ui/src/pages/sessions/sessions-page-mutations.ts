@@ -7,7 +7,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
   confirmWithBoundAutomations,
   withBoundAutomationNotice,
-} from "../../components/session-automation-confirm.ts";
+} from "../../components/session-automation-confirm.tsx";
 import {
   formatBatchSessionRemovalError,
   withSessionWorkspaceRecovery,

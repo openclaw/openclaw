@@ -27,6 +27,25 @@ import {
 import { readSessionTranscriptBoundedMessageTailPageAsync } from "./session-transcript-readers.js";
 import { resolveGatewaySessionDisplayName } from "./session-utils-display.js";
 
+export function firstReferenced(
+  ref: string,
+  rows: ReadonlyMap<string, Row>,
+  byKey: ReadonlyMap<string, ReadonlySet<string>>,
+  storePaths: Iterable<string>,
+) {
+  const ids = byKey.get(ref);
+  if (ids?.size === 1) {
+    return rows.get(ids.values().next().value!);
+  }
+  return (
+    ids &&
+    first(
+      [...ids].flatMap((id) => rows.get(id) ?? []),
+      storePaths,
+    )
+  );
+}
+
 type Contribution = { key: string; storePath: string; actor: SessionSharingIdentity };
 const isSentinel = (key: string) => key === "global" || key === "unknown";
 

@@ -44,7 +44,6 @@ export function readSessionPermissionAuthority(
   return {
     profileId,
     scopes,
-    assertCurrent: authority?.assertCurrent,
     sessionCap:
       scopes === undefined || scopes.includes(ADMIN_SCOPE)
         ? undefined

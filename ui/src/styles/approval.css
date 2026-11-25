@@ -127,6 +127,10 @@
   margin: 16px 0 18px;
 }
 
+.approval-page__heading h1 {
+  width: fit-content;
+}
+
 .approval-page__heading h1,
 .approval-page__state h1 {
   margin: 0;

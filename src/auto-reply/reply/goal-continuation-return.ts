@@ -211,7 +211,6 @@ export function promoteGoalContinuationYield(params: {
   ) {
     return;
   }
-  base.operatorAuthority?.assertCurrent();
   if (!owner.cohort) {
     const source = base.queuedFollowupReplyDisposition;
     if (source?.kind === "drop") {
@@ -319,7 +318,6 @@ export function readGoalContinuationContext(params: {
   if (!context) {
     return undefined;
   }
-  settlement.owner.params.base.operatorAuthority?.assertCurrent();
   settlement.admitted = true;
   return context;
 }

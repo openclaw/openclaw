@@ -5,6 +5,7 @@ import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
   GATEWAY_EVENT_ID_PEOPLE_CHANGED,
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+  GATEWAY_EVENT_CATALOG_ROUTES_CHANGED,
   GATEWAY_EVENT_UPDATE_RUN_CHANGED,
 } from "./events.js";
 import {
@@ -71,6 +72,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "mentions.failed": [SESSION_READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "plugins.changed": [READ_SCOPE],
+  [GATEWAY_EVENT_CATALOG_ROUTES_CHANGED]: [SESSION_READ_SCOPE],
   "plugins.install.progress": [ADMIN_SCOPE],
   "templates.add.progress": [ADMIN_SCOPE],
   "voicewake.changed": [READ_SCOPE],
@@ -211,18 +213,35 @@ export function isSessionReadInvalidation(
   );
 }
 
-export function modelMetadataInvalidationFragment(payload: unknown): string | undefined {
-  if (!isPlainEventPayload(payload)) {
+/** Undefined means an ordinary event; null withholds an invalid metadata envelope from scoped readers. */
+export function metadataInvalidationFragment(
+  event: string,
+  payload: unknown,
+): string | null | undefined {
+  if (event !== "chat.metadata.changed" && event !== GATEWAY_EVENT_CATALOG_ROUTES_CHANGED) {
     return undefined;
+  }
+  if (!isPlainEventPayload(payload)) {
+    return null;
   }
   const keys = Reflect.ownKeys(payload);
   if (keys.length === 0) {
     return ',"payload":{}';
   }
+  if (event === GATEWAY_EVENT_CATALOG_ROUTES_CHANGED) {
+    const field = Object.getOwnPropertyDescriptor(payload, "generation");
+    return keys.length === 1 &&
+      field?.enumerable &&
+      "value" in field &&
+      Number.isSafeInteger(field.value) &&
+      field.value >= 0
+      ? `,"payload":{"generation":${field.value}}`
+      : null;
+  }
   const fields: Record<string, boolean> = {};
   for (const key of keys) {
     if (key !== "modelSelectionChanged" && key !== "modelCatalogChanged" && key !== "authChanged") {
-      return undefined;
+      return null;
     }
     const field = Object.getOwnPropertyDescriptor(payload, key);
     if (
@@ -231,7 +250,7 @@ export function modelMetadataInvalidationFragment(payload: unknown): string | un
       typeof field.value !== "boolean" ||
       (key === "modelSelectionChanged" && !field.value)
     ) {
-      return undefined;
+      return null;
     }
     fields[key] = field.value;
   }
@@ -242,9 +261,13 @@ export function hasEventScope(
   client: GatewayWsClient,
   event: string,
   explicitPluginScope?: GatewayPluginEventScope,
-  ownRunQuestion = false,
-  hasSessionReadContext?: () => boolean,
+  context: {
+    ownRunQuestion?: boolean;
+    hasSessionReadContext?: () => boolean;
+    participationApprovalRecipient?: (client: GatewayWsClient) => boolean;
+  } = {},
 ): boolean {
+  const { ownRunQuestion, hasSessionReadContext, participationApprovalRecipient } = context;
   if (
     client.internal?.publicationTransport ||
     client.connect.scopes?.some(isPublicationTransportScope)
@@ -265,6 +288,20 @@ export function hasEventScope(
   if (!required) {
     return false;
   }
+  const participationApproval =
+    participationApprovalRecipient !== undefined &&
+    (event === "exec.approval.requested" ||
+      event === "exec.approval.resolved" ||
+      event === "session.approval");
+  if (participationApproval) {
+    try {
+      if (!participationApprovalRecipient(client)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
   return (
     required.length === 0 ||
     (role === "operator" &&
@@ -277,7 +314,8 @@ export function hasEventScope(
             operatorScopeSatisfied(READ_SCOPE, scopes) ||
             hasSessionReadContext?.() === true),
       ) ||
-        (ownRunQuestion && operatorScopeSatisfied("operator.sessions.write", scopes))))
+        (ownRunQuestion && operatorScopeSatisfied("operator.sessions.write", scopes)) ||
+        participationApproval))
   );
 }
 

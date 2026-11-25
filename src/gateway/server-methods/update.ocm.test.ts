@@ -352,7 +352,7 @@ it.each([true, false])(
   },
 );
 
-it.each(["authority", "stop", "scope", "git-target"])(
+it.each(["authority", "stop", "scope", "git-target", "consent"])(
   "refuses an invalid %s before submitting to OCM",
   async (refusal) => {
     await withManager(async ({ capability, job }) => {
@@ -377,7 +377,9 @@ it.each(["authority", "stop", "scope", "git-target"])(
         invokeUpdateRun(
           refusal === "git-target"
             ? { target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "a".repeat(40) } }
-            : {},
+            : refusal === "consent"
+              ? { acceptCapabilities: true }
+              : {},
           respond,
           undefined,
           {},
@@ -391,14 +393,17 @@ it.each(["authority", "stop", "scope", "git-target"])(
                 : undefined,
           },
         );
-      if (refusal === "git-target") {
+      if (refusal === "git-target" || refusal === "consent") {
         await start();
         expect(respond).toHaveBeenCalledWith(
           false,
           undefined,
           expect.objectContaining({
             code: "INVALID_REQUEST",
-            message: "This OCM version does not support an explicit Git update target.",
+            message:
+              refusal === "consent"
+                ? "OCM owns this update and cannot apply capability consent. Run the update without --accept-capabilities."
+                : "This OCM version does not support an explicit Git update target.",
           }),
         );
       } else {

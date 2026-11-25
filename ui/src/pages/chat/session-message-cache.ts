@@ -25,7 +25,11 @@ import type {
   ChatHeaderViewersSnapshot,
 } from "./chat-header-viewers-snapshot.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
-import { trimmedChatHistoryPagination } from "./chat-history-pagination.ts";
+import {
+  chatHistoryTrimOrder,
+  sameChatHistoryPagination,
+  trimmedChatHistoryPagination,
+} from "./chat-history-pagination.ts";
 import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
@@ -563,7 +567,7 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.details === snapshot.details &&
     existing.snapshot.rowDisplay === snapshot.rowDisplay &&
     existing.snapshot.avatarSources === snapshot.avatarSources &&
-    samePagination(existing.snapshot.pagination, snapshot.pagination)
+    sameChatHistoryPagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;
   }
@@ -599,8 +603,9 @@ export function readChatSessionSnapshot(
   return getSessionCacheValue(cache, resolveChatSnapshotKey(host, target))?.snapshot ?? null;
 }
 
-function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
-  const messageWeights: number[] = [];
+function boundChatSessionSnapshot(incoming: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
+  let snapshot = incoming;
+  let messageWeights: number[] = [];
   for (const message of snapshot.messages) {
     const weight = serializedArrayItemWeight(message);
     if (weight === null) {
@@ -609,13 +614,12 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     messageWeights.push(weight);
   }
   let retainedMessageWeight = messageWeights.reduce((sum, weight) => sum + weight, 0);
-  let start = 0;
   // Every trim before the row display window shares one envelope; measure it once,
   // not once per dropped message group.
   const trimmedPagination = trimmedChatHistoryPagination(snapshot.pagination);
   const lastSharedTrim = snapshot.messages.length - CHAT_ROW_DISPLAY_WINDOW;
   let sharedEnvelope: ReturnType<typeof measureChatSnapshotEnvelope> | undefined;
-  while (true) {
+  for (let start = 0; ;) {
     if (start > 0 && start === snapshot.messages.length) {
       return null;
     }
@@ -648,6 +652,13 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     }
     if (start >= snapshot.messages.length) {
       return null;
+    }
+    if (start === 0) {
+      const order = chatHistoryTrimOrder(snapshot.messages);
+      if (order) {
+        snapshot = { ...incoming, messages: Array.from(order, (i) => incoming.messages[i]) };
+        messageWeights = Array.from(order, (index) => messageWeights[index]!);
+      }
     }
     const boundarySeq = readSessionMessageSequence(snapshot.messages[start]);
     do {
@@ -694,20 +705,6 @@ function serializedArrayItemWeight(value: unknown): number | null {
   } catch {
     return null;
   }
-}
-
-function samePagination(left: ChatHistoryPagination, right: ChatHistoryPagination): boolean {
-  if (left.hasMore !== right.hasMore || left.totalMessages !== right.totalMessages) {
-    return false;
-  }
-  if (left.hasMore && right.hasMore) {
-    return (
-      left.nextOffset === right.nextOffset &&
-      left.olderCursor === right.olderCursor &&
-      left.needsBoundary === right.needsBoundary
-    );
-  }
-  return !left.hasMore && !right.hasMore && left.completeSnapshot === right.completeSnapshot;
 }
 
 function trimChatSessionSnapshotCache(cache: ChatMessageCache, updatedKey: string): void {

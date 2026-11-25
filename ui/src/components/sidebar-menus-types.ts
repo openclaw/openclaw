@@ -1,3 +1,4 @@
+import type { SessionCatalogProfileRelation } from "../../../packages/gateway-protocol/src/index.ts";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type {
   NavigationRouteId,
@@ -33,6 +34,11 @@ export interface SidebarRouteView {
 }
 
 export interface SidebarMenusOwner extends SidebarRouteView {
+  prepareSessionNavigation(
+    sessionKey: string,
+    pathname: string,
+    profileRelation?: SessionCatalogProfileRelation,
+  ): void;
   sessionsGrouping: SidebarSessionsGrouping;
   sessionsShowCron: boolean;
   sessionsShowPreview: boolean;

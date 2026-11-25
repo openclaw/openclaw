@@ -57,8 +57,10 @@ it("publishes the prepared tree by rename and admits no overlapping trial", asyn
   const dir = await prefix();
   const stage = await allocateStaging({ kind: "package", id: "candidate" }, dir);
   await fs.mkdir(stage.releaseRoot, { recursive: true });
+  expect(stage.releaseRoot).toBe(path.join(dir, "releases", ".staging-candidate", "openclaw"));
   await fs.writeFile(path.join(stage.releaseRoot, "package.json"), '{"version":"2.0.0"}');
   const releaseRoot = await publishStaging(stage);
+  expect(releaseRoot).toBe(path.join(dir, "releases", "candidate", "openclaw"));
   expect(await fs.readFile(path.join(releaseRoot, "package.json"), "utf8")).toContain('"2.0.0"');
   await expect(fs.stat(stage.path)).rejects.toMatchObject({ code: "ENOENT" });
   const input = {

@@ -17,6 +17,7 @@ import type { createUpdateProgress } from "./progress.js";
 import { confirmUpdateDowngrade, type UpdateCommandOptions } from "./shared.js";
 import {
   reportPreMutationUpdateResult,
+  tryRunReleaseUpdateCommand,
   withUpdateAdmissionReporting,
 } from "./update-command-admission-report.js";
 import { runAdmittedUpdate } from "./update-command-admitted.js";
@@ -96,25 +97,6 @@ async function updateCommandWithRuntime(
       ),
     );
   }
-  // Git installs that stay on Git update through prepared releases; every refusal above still
-  // applies. A requested non-dev channel switches the checkout to a package (the package flow).
-  const staysGit = prepared.requestedChannel === null || prepared.requestedChannel === "dev";
-  if (prepared.installKind === "git" && staysGit && !inputOpts.dryRun) {
-    const [{ runReleaseUpdateCli }, { readUpdateChannelConfig }] = await Promise.all([
-      import("../../update/cli.js"),
-      import("./update-command-config.js"),
-    ]);
-    return await runReleaseUpdateCli({
-      json: Boolean(inputOpts.json),
-      restart: prepared.shouldRestart,
-      runningRoot: prepared.discoveredRoot,
-      channel: prepared.requestedChannel ?? undefined,
-      storedChannel: (await readUpdateChannelConfig(false)).storedChannel ?? undefined,
-      sha: inputOpts.sha,
-      timeoutMs: prepared.timeoutMs,
-      acceptCapabilities: Boolean(inputOpts.acceptCapabilities),
-    });
-  }
   const reportHints: NonNullable<Parameters<typeof withUpdateAdmissionReporting>[3]> = {};
   return await withUpdateAdmissionReporting(
     inputOpts,
@@ -135,6 +117,9 @@ async function updateCommandWithRuntime(
         async (configReadable, malformedConfig) => {
           // Late admission refusals retain the captured malformed-source report decision.
           reportHints.writeArtifacts = !malformedConfig;
+          if (await tryRunReleaseUpdateCommand(inputOpts, prepared, env)) {
+            return;
+          }
           if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
             defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
           }

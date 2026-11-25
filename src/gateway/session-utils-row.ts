@@ -317,7 +317,11 @@ export function refreshSessionRowProfiles(materialized: ReturnType<typeof materi
 
 export function materializeSessionRow(
   input: ReturnType<typeof readSessionRowInputs>["inputs"],
-  previous?: { publicationIdentity: object; row: Readonly<GatewaySessionRow> },
+  previous?: {
+    publicationIdentity: object;
+    row: Readonly<GatewaySessionRow>;
+    source: { childLinks?: Readonly<ReturnType<typeof projectSessionRowChildLinks>> };
+  },
 ) {
   const { cfg, key, entry } = input;
   const observerDigest =
@@ -498,6 +502,7 @@ export function materializeSessionRow(
     }).mode,
     ...definedSessionRowField("modelProvider", input.rowModelIdentity.provider),
     ...definedSessionRowField("model", input.rowModelIdentity.model),
+    ...definedSessionRowField("modelDisplayName", input.thinkingProjection.catalogEntry?.name),
     ...definedSessionRowField(
       "modelOverrideSource",
       input.selectedModel?.storedOverrideSource === "parent"
@@ -558,11 +563,11 @@ export function materializeSessionRow(
       freshSessionTotalTokens: input.freshSessionTotalTokens,
       estimatedCostUsd: input.estimatedCostUsd,
       subagentRunInputs: input.subagentRunInputs,
-      lastMessagePreview: input.lastMessagePreview,
-      lastAssistantMessage: input.lastAssistantMessage,
-      childLinks: freezeTrustedJsonSnapshot<
-        Readonly<ReturnType<typeof projectSessionRowChildLinks>>
-      >(projectSessionRowChildLinks(input.childLinks)),
+      // The relation reader returns the previous frozen list when its child facts match.
+      childLinks:
+        input.childLinks === previous?.source.childLinks
+          ? previous?.source.childLinks
+          : freezeTrustedJsonSnapshot(projectSessionRowChildLinks(input.childLinks)),
     }),
   });
 }
@@ -573,12 +578,15 @@ export function replaceSessionRowFacts(
   row?: Partial<GatewaySessionRow>,
   source?: Partial<ReturnType<typeof materializeSessionRow>["source"]>,
 ): ReturnType<typeof materializeSessionRow> {
-  const nextSource = source ? { ...materialized.source, ...source } : materialized.source;
+  const nextRow = row ? freezeSessionRowPatch(materialized.row, row) : materialized.row;
+  if (!source && nextRow === materialized.row) {
+    return materialized;
+  }
   freezeTrustedJsonSnapshot(source?.childLinks);
   return Object.freeze({
     publicationIdentity: materialized.publicationIdentity,
-    row: row ? freezeSessionRowPatch(materialized.row, row) : materialized.row,
-    source: Object.freeze(nextSource),
+    row: nextRow,
+    source: source ? Object.freeze({ ...materialized.source, ...source }) : materialized.source,
   });
 }
 

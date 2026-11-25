@@ -192,6 +192,15 @@ suite.define(() => {
         "Actions",
       ]);
       expect(await table.locator(".session-data-row .session-kind").count()).toBe(0);
+      const selectAllLeft = await table
+        .getByRole("checkbox", { name: "Select all on page", exact: true })
+        .evaluate((box) => box.getBoundingClientRect().left);
+      expect(
+        await table
+          .getByRole("checkbox", { name: /^Select session:/ })
+          .first()
+          .evaluate((box) => box.getBoundingClientRect().left),
+      ).toBe(selectAllLeft);
 
       const filters = page.getByRole("button", { name: "Filters", exact: true });
       const popover = page.locator(".sessions-filter-popover");

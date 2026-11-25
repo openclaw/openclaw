@@ -221,15 +221,13 @@ describe("managed attachment playback", () => {
     const entered = createDeferred();
     const release = createDeferred();
     let started = 0;
-    const probe = vi
-      .spyOn(mediaProbe, "probePlaybackMediaFileDescriptor")
-      .mockImplementation(async () => {
-        if (++started === 2) {
-          entered.resolve();
-        }
-        await release.promise;
-        return { durationMs: 1000, audioCodec: "mp3", audioStreamIndex: 0 };
-      });
+    const probe = vi.spyOn(mediaProbe, "probePlaybackMediaFile").mockImplementation(async () => {
+      if (++started === 2) {
+        entered.resolve();
+      }
+      await release.promise;
+      return { durationMs: 1000, audioCodec: "mp3", audioStreamIndex: 0 };
+    });
     const abort = new AbortController();
     const pending: Promise<unknown>[] = [];
     onTestFinished(async () => {

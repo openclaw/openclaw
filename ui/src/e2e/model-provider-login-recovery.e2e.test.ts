@@ -32,13 +32,13 @@ const pasteStep = {
 
 async function startSignIn(
   page: Page,
-  replies: { next?: () => unknown; config?: () => unknown } = {},
+  replies: { next?: () => unknown; config?: () => unknown; pluginEntry?: boolean } = {},
 ) {
   // The sign-in tab is the provider's; this proof stays on the Control UI page.
   await page.addInitScript(() => {
     window.open = () => null;
   });
-  const config = { agents: { defaults: { model: "example/existing" } } };
+  const config = replies.pluginEntry ? {} : { agents: { defaults: { model: "example/existing" } } };
   const configSnapshot = {
     config,
     sourceConfig: config,
@@ -67,6 +67,9 @@ async function startSignIn(
                   label: "Example browser sign-in",
                   kind: "oauth",
                   featured: true,
+                  ...(replies.pluginEntry
+                    ? { pluginId: "example", groupLabel: "Example", requiresSetup: true }
+                    : {}),
                 },
               ],
             },
@@ -83,16 +86,19 @@ async function startSignIn(
       },
     },
   );
-  // First-run setup lands here on the provider catalog; a reload reopens the same address.
-  // The provider's only way in is the browser sign-in, so Connect starts it directly.
-  await page.goto(`${suite.server.baseUrl}settings/model-providers?connect=1`);
-  await page.locator('[data-models-catalog-provider="example"] button').click();
+  const pluginQuery = replies.pluginEntry ? "&plugin=example" : "";
+  await page.goto(`${suite.server.baseUrl}settings/model-providers?connect=1${pluginQuery}`);
+  if (replies.pluginEntry) {
+    await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
+  } else {
+    await page.locator('[data-models-catalog-provider="example"] button').click();
+  }
   const login = await gateway.waitForRequest("models.authLogin");
   const params = login.params;
   assert(params && typeof params === "object" && "sessionId" in params);
   const paste = page.locator('openclaw-modal-dialog input[name="wizard-text"]');
   await paste.fill("http://127.0.0.1:1455/callback?code=typed");
-  return { gateway, paste, sessionId: params.sessionId };
+  return { gateway, paste, sessionId: params.sessionId, params };
 }
 
 suite.define(() => {
@@ -125,6 +131,22 @@ suite.define(() => {
         .waitFor();
       expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
       expect((await gateway.getRequests("wizard.next"))[0]?.params).toEqual({ sessionId });
+    });
+  });
+
+  it("keeps a plugin sign-in from activating a default model after reload", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      let finished = false;
+      const { gateway, paste, params } = await startSignIn(page, {
+        pluginEntry: true,
+        next: () => (finished ? { done: true, status: "done" } : pasteStep),
+      });
+      expect(params).not.toHaveProperty("selectModel");
+      await page.reload();
+      await paste.fill("http://127.0.0.1:1455/callback?code=typed");
+      finished = true;
+      await page.getByText("Example is ready", { exact: true }).waitFor({ timeout: 5000 });
+      expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
     });
   });
 

@@ -288,6 +288,8 @@ Supply the message body in the required `message` argument. Hidden aliases such 
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
+A supervised child's `sessions_send` to the parent that receives its final result never starts a parent turn and returns no reply. If the parent is running, the message joins that run; otherwise it is recorded in the parent's history, hidden from the chat, and the parent reads it on its next turn. The child's final result still wakes the parent when the child finishes. `mode: "notify"` keeps its own behavior, and sessions made with `sessions_create` are not supervised, so their sends to their creator start a turn as before.
+
 Waiting and delayed inter-session replies recover the accepted run's full answer
 instead of returning its 4,096-character lifecycle preview. If the full answer is
 unavailable under the requester's current access, inline results include

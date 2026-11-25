@@ -25,7 +25,6 @@ export type Entry<Row> = {
 };
 export type Inventory = {
   hello: GatewayHelloOk | null;
-  supported: boolean;
   version: number;
   compact: Map<string, Entry<CronCompactJob>>;
   full: Map<string, Entry<CronJob>>;
@@ -34,18 +33,7 @@ export type Inventory = {
   debounce?: { promise: Promise<void>; resolve: () => void; timer: ReturnType<typeof setTimeout> };
 };
 
-export function hasCronInventoryEvents(snapshot: { hello?: GatewayHelloOk | null }): boolean {
-  return snapshot.hello?.features?.events?.includes(INVENTORY_CHANGED) === true;
-}
-
-export function usesCronInventoryEvents(client: GatewayBrowserClient): boolean {
-  return inventories.get(client)?.supported === true;
-}
-
-export function isCronInventoryInvalidation(
-  event: GatewayEventFrame,
-  snapshot: { hello?: GatewayHelloOk | null },
-): boolean {
+export function isCronInventoryInvalidation(event: GatewayEventFrame): boolean {
   return (
     event.event === INVENTORY_CHANGED ||
     event.event === "config.changed" ||
@@ -53,8 +41,7 @@ export function isCronInventoryInvalidation(
       isRecord(event.payload) &&
       ["sharing", "profile-identity", "delete", "reset", "archive"].includes(
         String(event.payload.reason),
-      )) ||
-    (event.event === "cron" && !hasCronInventoryEvents(snapshot))
+      ))
   );
 }
 
@@ -66,7 +53,6 @@ export function bindCronInventory(client: GatewayBrowserClient, hello: GatewayHe
   clearCronInventory(client);
   inventories.set(client, {
     hello,
-    supported: hasCronInventoryEvents({ hello }),
     version: 0,
     compact: new Map(),
     full: new Map(),
@@ -94,7 +80,7 @@ function invalidateCronInventory(client: GatewayBrowserClient): void {
   }
   owner.version += 1;
   owner.runtime.clear();
-  if (owner.supported && !owner.debounce) {
+  if (!owner.debounce) {
     const { promise, resolve } = Promise.withResolvers<void>();
     const timer = setTimeout(() => {
       owner.debounce = undefined;
@@ -105,7 +91,7 @@ function invalidateCronInventory(client: GatewayBrowserClient): void {
 }
 
 /** Only the authenticated cron publisher supplies runtime state; it cannot change membership. */
-export function readCronRuntimeEvent(payload: unknown): Omit<Runtime, "revision"> | undefined {
+function readCronRuntimeEvent(payload: unknown): Omit<Runtime, "revision"> | undefined {
   if (
     !isRecord(payload) ||
     !["started", "finished", "scheduled"].includes(String(payload.action)) ||
@@ -132,9 +118,9 @@ export function receiveCronInventoryEvent(client: GatewayBrowserClient, event: G
   if (!owner) {
     return;
   }
-  if (isCronInventoryInvalidation(event, { hello: owner.hello })) {
+  if (isCronInventoryInvalidation(event)) {
     invalidateCronInventory(client);
-  } else if (owner.supported && event.event === "cron") {
+  } else if (event.event === "cron") {
     const parsed = readCronRuntimeEvent(event.payload);
     if (!parsed) {
       return;

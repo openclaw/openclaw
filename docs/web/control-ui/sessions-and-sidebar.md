@@ -588,7 +588,9 @@ After token or device-token authentication, the sidebar can show its cached sess
 
 Switching agents refreshes the session list even while other conversations are active. A session action finishing for another agent keeps the selected agent’s filtered sidebar and pagination active. Confirmed permission changes remain visible if their follow-up list refresh fails. Read acknowledgments for known sessions update unread and attention state from their committed receipt without reloading the roster. Older responses cannot undo confirmed read state; newer activity or a later manual unread mark still takes effect.
 
-Reading a parent acknowledges its hidden subagent runs in sequential batches of up to 100. Each run keeps its conditional unread guard, so a manual reminder added during acknowledgement survives. Pending reads clear optimistically and settle from acknowledgement outcomes and admitted Gateway row events. Failed implicit hidden-run reads stay silent; an explicit **Mark as read** action reports its hidden-run failures together.
+A session becomes unread when something you can see is added to it: a run ends with a new visible reply, a channel message arrives, or a background or scheduled result is delivered into it. A run that adds no visible reply does not mark it unread, for example one that ends in `NO_REPLY`, a quiet heartbeat, an internal wake, or a parent answering its child's `sessions_send` message.
+
+Reading a parent acknowledges its hidden subagent runs in sequential batches of up to 100. Failed and timed-out hidden runs keep their failure on the child card and do not count toward the parent's unread state. Each run keeps its conditional unread guard, so a manual reminder added during acknowledgement survives. Pending reads clear optimistically and settle from acknowledgement outcomes and admitted Gateway row events. Failed implicit hidden-run reads stay silent; an explicit **Mark as read** action reports its hidden-run failures together.
 
 **Load more sessions** stays disabled while the sidebar list is refreshing or loading another page. It becomes available again when the read finishes and more sessions remain.
 
@@ -674,14 +676,15 @@ Select the agent to open its session and workspace context: rename the session,
 open its parent conversation, or use the workspace actions. **Details** also
 keeps workspace information available. The regular session view and external
 CLI catalog headers keep their workspace/session breadcrumbs.
+An ordinary **New Session** chat starts without a parent. When you explicitly
+create a child session or fork a conversation, the header links to its parent.
 
 ### Session menu
 
 Root sessions and ordinary Home-linked dashboard sessions can be pinned. Spawned and nested-child sessions reject pin requests, including when they appear as top-level threads. Subagent runs also reject pin requests and remain outside sidebar navigation.
 
-An ordinary conversation's **Actions** menu also offers **Move to group**, even
-when its header links back to Home. That breadcrumb does not make the
-conversation a nested child.
+An ordinary conversation's **Actions** menu also offers **Move to group**.
+Existing ordinary chats that still link to Home remain top-level sessions.
 
 A pinned parent is a single rail shortcut. Its indented child tree and expand/collapse controls remain in the Sessions list, subject to the current filters.
 
@@ -793,6 +796,10 @@ single-line and shortened to 50 characters or fewer, or cleared. Between 51 and
 59 characters, the palette keeps its current mode to avoid flickering while you
 edit. Counts exclude leading and trailing whitespace. Session-creation errors and
 recovery actions remain visible in either mode.
+
+The palette leaves your text as typed: it turns off automatic corrections,
+capitalization, and writing suggestions. Compose still marks possible spelling
+mistakes when the browser supports it; Search does not.
 
 Pasted images appear as small, removable thumbnails below the text. Pasting or
 removing them leaves the input, **New session** action, and settings control in
@@ -961,7 +968,7 @@ permissions, including the admin requirement for an explicit **Full access** cho
 
 <a id="register-an-existing-repository" />
 
-**Projects.** The Place picker lists configured agent workspaces and repositories recorded with `projects.register`. Read-only connections receive project names and IDs; checkout paths and origin URLs are included only at `operator.write`. An admin can browse to a Git checkout and choose **Register as project**; write-only operators see a hint directing them to that flow. Choosing a project sends its ID through `sessions.create`, so it can run directly or supply the source for optional Worktree isolation without submitting a raw path. If an agent workspace was moved or removed, update that agent's configured workspace path. If a recorded checkout was moved or removed, re-register it before starting another session there.
+**Projects.** The Place picker lists configured agent workspaces and repositories recorded with `projects.register`. Read-only connections receive project names and IDs; checkout paths and origin URLs are included only at `operator.write`. An admin can browse to a Git checkout and choose **Register as project**; write-only operators see a hint directing them to that flow. Choosing a project sends its ID through `sessions.create`, so it can run directly or supply the source for optional Worktree isolation without submitting a raw path. Connections without `operator.write` see public GitHub projects plus projects their role grants; a project reached only through a [role grant](/gateway/operator-scopes#project-grants) always opens in a new Worktree. If an agent workspace was moved or removed, update that agent's configured workspace path. If a recorded checkout was moved or removed, re-register it before starting another session there.
 
 You can also register an existing checkout through the
 [Gateway CLI](/cli/gateway/query#gateway-call-%3Cmethod%3E). Registration requires
@@ -980,7 +987,13 @@ existing checkout without cloning it. `name` is optional and defaults to the
 checkout directory's name.
 
 Registering the same resolved repository root again returns its existing project ID and
-display name. Passing a different `name` does not rename an existing project.
+display name. Passing a different `name` does not rename an existing project; an
+administrator can rename it with `projects.rename`, which keeps its project ID:
+
+```bash
+openclaw gateway call projects.rename \
+  --params '{"projectId":"example","name":"Example"}' --json
+```
 
 `projects.list` reads committed registry rows through a read-only worker without
 checking Git or joining unrelated state writes. Registration initializes the

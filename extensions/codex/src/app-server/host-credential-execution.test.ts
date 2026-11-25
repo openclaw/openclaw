@@ -32,9 +32,7 @@ afterEach(async () => {
   await cleanupDynamicToolBuildFixture(root, closers);
 });
 
-async function fixture(
-  options: { mode?: "full" | "deny"; assertCurrent?: () => void; mutateSelection?: boolean } = {},
-) {
+async function fixture(options: { mode?: "full" | "deny"; mutateSelection?: boolean } = {}) {
   const params = createParams(path.join(root, "session.jsonl"), root);
   params.agentId = "main";
   params.disableTools = false;
@@ -48,15 +46,6 @@ async function fixture(
   const host = await createAgentHarnessHostCapabilitiesForTest({
     attempt,
     pluginId: "codex",
-    ...(options.assertCurrent
-      ? {
-          operatorSource: {
-            profileId: "original",
-            scopes: ["operator.admin"],
-            assertCurrent: options.assertCurrent,
-          },
-        }
-      : {}),
   });
   params.hostCapabilities = host.capabilities;
   closers.push(host.close);
@@ -131,84 +120,55 @@ describe.skipIf(process.platform === "win32")("Codex host-owned credential execu
     expect(await fs.readFile(effect, "utf8")).toBe("selected");
   });
 
-  it.each(["denied", "closed", "revoked", "reassigned"] as const)(
-    "starts no child for a %s caller",
-    async (state) => {
-      let caller = "original";
-      const f = await fixture({
-        mode: state === "denied" ? "deny" : "full",
-        assertCurrent: () => {
-          if (caller !== "original") {
-            throw new Error("source no longer current");
-          }
-        },
-      });
-      expect(f.native).toBe(false);
-      const effect = path.join(root, "forbidden-effect");
-      const script = path.join(root, "forbidden.cjs");
-      await fs.writeFile(script, 'require("node:fs").writeFileSync(process.argv[2], "unexpected")');
-      if (state === "closed") {
-        f.host.close();
-      }
-      if (state === "revoked") {
-        caller = "revoked";
-      }
-      if (state === "reassigned") {
-        caller = "replacement";
-      }
-      const result = await f.execute(
-        [process.execPath, script, effect].map((value) => JSON.stringify(value)).join(" "),
-      );
-      expect(result.success).toBe(false);
-      expect(JSON.stringify(result.contentItems)).toContain(
-        state === "denied" ? "denied" : "no longer active",
-      );
-      expect(await fs.stat(effect).catch(() => undefined)).toBeUndefined();
-    },
-  );
+  it.each(["denied", "closed"] as const)("starts no child for a %s caller", async (state) => {
+    const f = await fixture({
+      mode: state === "denied" ? "deny" : "full",
+    });
+    expect(f.native).toBe(false);
+    const effect = path.join(root, "forbidden-effect");
+    const script = path.join(root, "forbidden.cjs");
+    await fs.writeFile(script, 'require("node:fs").writeFileSync(process.argv[2], "unexpected")');
+    if (state === "closed") {
+      f.host.close();
+    }
+    const result = await f.execute(
+      [process.execPath, script, effect].map((value) => JSON.stringify(value)).join(" "),
+    );
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result.contentItems)).toContain(
+      state === "denied" ? "denied" : "no longer active",
+    );
+    expect(await fs.stat(effect).catch(() => undefined)).toBeUndefined();
+  });
 
-  it.each(["closed", "revoked"] as const)(
-    "rechecks a %s caller after an awaited hook before launch",
-    async (state) => {
-      let current = true;
-      const f = await fixture({
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("source no longer current");
-          }
-        },
-      });
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([
-          {
-            hookName: "before_tool_call",
-            handler: async () => {
-              entered.resolve();
-              await release.promise;
-              return {};
-            },
+  it("rechecks a closed caller after an awaited hook before launch", async () => {
+    const f = await fixture();
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          handler: async () => {
+            entered.resolve();
+            await release.promise;
+            return {};
           },
-        ]),
-      );
-      const effect = path.join(root, "after-hook-effect");
-      const script = path.join(root, "after-hook.cjs");
-      await fs.writeFile(script, 'require("node:fs").writeFileSync(process.argv[2], "unexpected")');
-      const pending = f.execute(
-        [process.execPath, script, effect].map((value) => JSON.stringify(value)).join(" "),
-      );
-      await entered.promise;
-      if (state === "closed") {
-        f.host.close();
-      } else {
-        current = false;
-      }
-      release.resolve();
-      expect((await pending).success).toBe(false);
-      expect(await fs.stat(effect).catch(() => undefined)).toBeUndefined();
-    },
-  );
+        },
+      ]),
+    );
+    const effect = path.join(root, "after-hook-effect");
+    const script = path.join(root, "after-hook.cjs");
+    await fs.writeFile(script, 'require("node:fs").writeFileSync(process.argv[2], "unexpected")');
+    const pending = f.execute(
+      [process.execPath, script, effect].map((value) => JSON.stringify(value)).join(" "),
+    );
+    await entered.promise;
+    f.host.close();
+    release.resolve();
+    expect((await pending).success).toBe(false);
+    expect(await fs.stat(effect).catch(() => undefined)).toBeUndefined();
+  });
 
   it("retains the native surface by default and disables inherited shell features for host-owned execution", async () => {
     const params = createParams(path.join(root, "default.jsonl"), root);

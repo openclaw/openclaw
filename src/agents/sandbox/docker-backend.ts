@@ -62,10 +62,7 @@ async function createContainerSandboxBackend(
   stateGuard?: WorkspaceStateGuard,
 ): Promise<SandboxBackendHandle> {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.target");
-  const assertCurrent = () => {
-    operatorAuthority?.assertCurrent();
-    params.assertRuntimeCurrent?.();
-  };
+  const assertCurrent = () => params.assertRuntimeCurrent?.();
   assertCurrent();
   if (engine.id === "podman" && params.cfg.browser.enabled) {
     throw new Error(

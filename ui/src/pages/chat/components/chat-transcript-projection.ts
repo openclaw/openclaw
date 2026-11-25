@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { merge } from "solid-js";
 import { currentThemeBranding } from "../../../app/theme-branding.ts";
 import { i18n } from "../../../i18n/index.ts";
@@ -499,6 +498,40 @@ export function projectChatTranscript(
     props.queuedMessageAction?.onDiscard,
     props.replyMessageAccess?.navigationId ?? "",
   ]);
+  transcript.entryAnimations.project(chatItems);
+  transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
+  const contentRows: PlacedContentRow[] = [];
+  const appendContent = (key: string, content: NativeTranscriptView, after?: string | null) =>
+    contentRows.push({
+      kind: "content",
+      key,
+      content: new GuardedTranscriptItem([content], content),
+      after,
+    });
+  for (const { afterMessageId, content } of realtimeConversation.blocks()) {
+    appendContent(
+      afterMessageId === undefined ? "realtime-talk" : `realtime-talk:${afterMessageId ?? ""}`,
+      content,
+      afterMessageId ? messageRowKeysById.get(afterMessageId) : afterMessageId,
+    );
+  }
+  if (subagents.wait && !subagents.placedWait && !searchFiltering) {
+    appendContent("waiting-subagents", {
+      kind: "wait",
+      sessionKey: props.sessionKey,
+      wait: subagents.wait,
+      options: streamGroupOptions,
+    });
+  }
+  if (props.typingActors?.length) {
+    appendContent("presence:typing", {
+      kind: "typing",
+      actors: props.typingActors,
+      avatarPlacement,
+      overflow: props.typingOverflow,
+    });
+  }
+  const transcriptRows = projectTranscriptRows(rows, contentRows, !searchFiltering);
   const renderDependencies = createTranscriptRenderDependencies(
     state.transcriptRenderDependencies,
     (item) => {
@@ -596,40 +629,6 @@ export function projectChatTranscript(
     }
     return undefined;
   });
-  transcript.entryAnimations.project(chatItems);
-  transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
-  const contentRows: PlacedContentRow[] = [];
-  const appendContent = (key: string, content: NativeTranscriptView, after?: string | null) =>
-    contentRows.push({
-      kind: "content",
-      key,
-      content: new GuardedTranscriptItem([content], content),
-      after,
-    });
-  for (const { afterMessageId, content } of realtimeConversation.blocks()) {
-    appendContent(
-      afterMessageId === undefined ? "realtime-talk" : `realtime-talk:${afterMessageId ?? ""}`,
-      content,
-      afterMessageId ? messageRowKeysById.get(afterMessageId) : afterMessageId,
-    );
-  }
-  if (subagents.wait && !subagents.placedWait && !searchFiltering) {
-    appendContent("waiting-subagents", {
-      kind: "wait",
-      sessionKey: props.sessionKey,
-      wait: subagents.wait,
-      options: streamGroupOptions,
-    });
-  }
-  if (props.typingActors?.length) {
-    appendContent("presence:typing", {
-      kind: "typing",
-      actors: props.typingActors,
-      avatarPlacement,
-      overflow: props.typingOverflow,
-    });
-  }
-  const transcriptRows = projectTranscriptRows(rows, contentRows);
   state.transcriptRenderContext.threadMediaMessages = snapshot.threadMediaMessages;
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
@@ -693,14 +692,13 @@ export function projectChatTranscript(
     isLoading,
     showLoadingSkeleton,
     searchOpen: search.open,
-    renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) => {
+    renderRows: (header: TranscriptHeader | null = null) => {
       transcript.layout.ready = !props.loading;
       return transcript.render(
         transcriptRows,
         renderRow,
         latestTranscriptAnnouncement(collapsedItems, liveItem),
         props.announceTranscript !== false && !search.open && !props.loading,
-        overlay,
         header,
         props.transcriptVisible ?? true,
         props.applicationContext,

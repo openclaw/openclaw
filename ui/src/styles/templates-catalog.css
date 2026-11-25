@@ -410,8 +410,7 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
 .template-preview header h2,
 .template-preview .settings-row__desc,
 .template-plugin-name,
-.template-creator--detail h2,
-.agents-home__template-identity h3 {
+.template-creator--detail h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -522,6 +521,34 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
 .agents-home__template-card-link:disabled {
   cursor: default;
 }
+/* Keep the publisher visible beside Add. Move it below the name when the two don't fit. */
+.agents-home__explore.plugin-catalog-results--rows .agents-home__template-identity {
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  line-height: calc(20px * var(--control-ui-text-scale));
+
+  .agents-home__template-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+  }
+
+  h3,
+  .plugin-card-author {
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .plugin-card-author {
+    flex: none;
+    max-width: 100%;
+    margin-left: 0;
+    font-size: calc(12.5px * var(--control-ui-text-scale));
+  }
+}
+
 .agents-home__template-art {
   --glyph-size: 22px;
 }

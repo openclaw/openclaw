@@ -2,7 +2,9 @@
 
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_RESTART_UNAVAILABLE_REASON } from "../../../packages/gateway-protocol/src/restart-unavailable.ts";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { CronStatus, ModelAuthStatusResult } from "../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -26,7 +28,6 @@ import {
 import {
   createStore,
   cronPage,
-  eventJob,
   inventoryRequest,
   startAuthenticatedStore,
   type CompactCronPage,
@@ -114,13 +115,6 @@ describe("sidebar attention source publication", () => {
       },
     };
   }
-  function emitFinished(harness: ReturnType<typeof createGatewayHarness>) {
-    harness.emitEvent("cron", {
-      action: "finished",
-      jobId: "current",
-      job: eventJob({ id: "current" }),
-    });
-  }
   function repeatEvent(emit: () => void) {
     for (let index = 0; index < 20; index++) {
       emit();
@@ -162,6 +156,7 @@ describe("sidebar attention source publication", () => {
     );
     store = harness.attention;
     await vi.advanceTimersByTimeAsync(0);
+    await vi.dynamicImportSettled();
     expect(store.entries).toMatchObject([{ label: "retained" }]);
     const { hello, selfUser } = harness.gateway.snapshot;
     harness.update({ phase: "reconnecting", hello: null, selfUser: undefined });
@@ -248,11 +243,12 @@ describe("sidebar attention source publication", () => {
       const harness = startAuthenticatedStore(request);
       store = harness.attention;
       await vi.advanceTimersByTimeAsync(0);
+      await vi.dynamicImportSettled();
       expectLabels("incident");
 
       failed = true;
-      harness.emitEvent("cron", {});
-      await vi.advanceTimersByTimeAsync(0);
+      harness.emitEvent("cron.inventory.changed", {});
+      await vi.advanceTimersByTimeAsync(50);
       request.mockClear();
       harness.update(unavailable);
       harness.emitEvent("cron", {});
@@ -263,7 +259,7 @@ describe("sidebar attention source publication", () => {
 
       failed = false;
       harness.update({ restartPending: false, suspensionPhase: "accepting" });
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
       expectCalls(request, 1);
       expectLabels("incident");
     },
@@ -290,27 +286,32 @@ describe("sidebar attention source publication", () => {
       store = activate(harness);
       await vi.advanceTimersByTimeAsync(0);
       const cronCalls = () => request.mock.calls.filter(([name]) => name === "cron.list").length;
+      const recoveredListCalls = failedMethod === "cron.list" ? 3 : 1;
       await vi.advanceTimersByTimeAsync(59_999);
       expect(cronCalls()).toBe(1);
       await vi.advanceTimersByTimeAsync(1);
-      expect(cronCalls()).toBe(2);
+      expectCalls(request, 2, [failedMethod]);
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(cronCalls()).toBe(3);
+      expect(cronCalls()).toBe(recoveredListCalls);
+      expectCalls(request, 3, ["cron.status"]);
       expectLabels("incident");
       await vi.advanceTimersByTimeAsync(30 * 60_000);
       setVisibility("hidden");
       await vi.advanceTimersByTimeAsync(60_001);
       setVisibility("visible");
       await vi.advanceTimersByTimeAsync(0);
-      expectCalls(request, 3);
+      expect(cronCalls()).toBe(recoveredListCalls);
+      expectCalls(request, 3, ["cron.status"]);
       expect(modelAuthRequests(request)).toHaveLength(1);
       harness.emitEvent("config.changed", {});
-      await vi.advanceTimersByTimeAsync(0);
-      expectCalls(request, 4);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(cronCalls()).toBe(recoveredListCalls + 1);
+      expectCalls(request, 4, ["cron.status"]);
       harness.update({ phase: "reconnecting" });
       harness.update({ phase: "connected" });
       await vi.advanceTimersByTimeAsync(0);
-      expectCalls(request, 5);
+      expect(cronCalls()).toBe(recoveredListCalls + 2);
+      expectCalls(request, 5, ["cron.status"]);
     },
   );
 
@@ -319,10 +320,24 @@ describe("sidebar attention source publication", () => {
     async (boundary) => {
       vi.stubGlobal("localStorage", createStorageMock());
       const jobs = [...cronPage("dismissed-incident").jobs, ...cronPage("visible-incident").jobs];
-      const request = inventoryRequest(
+      let account = "alice";
+      const acknowledgements = new Map<string, Record<string, number>>();
+      const inventory = inventoryRequest(
         () => ({ ...cronPage(), jobs, total: jobs.length }),
         jobs.length,
       );
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        const receipts = acknowledgements.get(account) ?? {};
+        if (method === "users.prefs.get") {
+          return { status: "ok", entries: { "ui.inbox.cronFailed": receipts } };
+        }
+        if (method === "cron.acknowledgeFailure") {
+          const { id } = params as { id: string };
+          acknowledgements.set(account, { ...receipts, [id]: 0 });
+          return { acknowledgedAtMs: 0 };
+        }
+        return inventory(method, params);
+      });
       const harness = gateway(request);
       const profile = (id: string) => ({
         id,
@@ -330,6 +345,7 @@ describe("sidebar attention source publication", () => {
         name: id,
       });
       const connect = (id: string) => {
+        account = id;
         if (boundary === "tenant") {
           harness.update({ phase: "reconnecting", selfUser: null });
           harness.gateway.connection.gatewayUrl = `wss://gateway.test/path?tenant=${id}`;
@@ -371,6 +387,69 @@ describe("sidebar attention source publication", () => {
       await waitLabels(...(boundary === "reconnect" ? [] : ["visible-incident"]));
     },
   );
+
+  it("keeps a legacy failure outside the selected inventory until its import is confirmed", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const imported = pending({ acknowledgedAtMs: 17 });
+    const inventory = inventoryRequest(() => cronPage("current"));
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.acknowledgeFailure") {
+        return imported.promise;
+      }
+      if (method === "users.prefs.get") {
+        return { status: "ok", entries: {} };
+      }
+      return inventory(method, params);
+    });
+    const harness = gateway(request, true);
+    const key = resolveSidebarAttentionKey(harness.gateway)!;
+    localStorage.setItem(
+      key,
+      JSON.stringify({ cronFailed: ["paused"], openClawIdRecoveryUse: ["existing"] }),
+    );
+    store = activate(harness);
+    await waitLabels("current");
+    expect(request).toHaveBeenCalledWith("cron.acknowledgeFailure", { id: "paused", adopt: true });
+    expect(loadDismissals(key).cronFailed).toEqual(["paused"]);
+    imported.resolve({ acknowledgedAtMs: 17 });
+    await waitForFast(() =>
+      expect(loadDismissals(key)).toEqual({ openClawIdRecoveryUse: ["existing"] }),
+    );
+  });
+
+  it("keeps a dismissal refused during Gateway restart and submits it after reload", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const acknowledgement = deferred<{ acknowledgedAtMs: number }>();
+    const acknowledge = vi
+      .fn(async () => ({ acknowledgedAtMs: 0 }))
+      .mockImplementationOnce(() => acknowledgement.promise);
+    const request = respond({
+      "cron.list": () => cronPage("archive"),
+      "cron.status": () => ({ enabled: true, triggersEnabled: true, jobs: 1 }),
+      "models.authStatus": () => emptyAuth(1),
+      "users.prefs.get": () => ({ status: "ok", entries: {} }),
+      "cron.acknowledgeFailure": acknowledge,
+    });
+    const harness = gateway(request, true);
+    store = activate(harness);
+    await waitLabels("archive");
+    store.dismiss({ kind: "cronFailed", signature: "archive" });
+    acknowledgement.reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Gateway is restarting",
+        retryable: true,
+        details: { method: "cron.acknowledgeFailure", reason: GATEWAY_RESTART_UNAVAILABLE_REASON },
+      }),
+    );
+    await settleRefresh();
+    expectLabels();
+
+    store.dispose();
+    store = activate(harness);
+    await waitForFast(() => expect(acknowledge).toHaveBeenCalledTimes(2));
+    expectLabels();
+  });
 
   it("retires old-account health before the eager facade publishes a storage refresh", async () => {
     let profile = "alice";
@@ -539,7 +618,7 @@ describe("sidebar attention source publication", () => {
           ? { ...cronPage("previous"), total: 2, hasMore: true, nextOffset: 1 }
           : cronPage("current");
       }, 2);
-      const { attention } = startAuthenticatedStore(request);
+      const { attention, emitEvent } = startAuthenticatedStore(request);
       store = attention;
       await waitForFast(() => expect(offsets).toEqual([0, 1]));
 
@@ -548,6 +627,7 @@ describe("sidebar attention source publication", () => {
       } else {
         attention.dispose();
       }
+      emitEvent("cron.inventory.changed", {});
       pendingAppend.resolve({ ...cronPage("changed"), total: 2, offset: 1 });
       await settleRefresh();
       expect(offsets).toEqual([0, 1]);
@@ -557,35 +637,6 @@ describe("sidebar attention source publication", () => {
         await waitLabels("current");
         expect(offsets).toEqual([0, 1, 0]);
       }
-    },
-  );
-
-  it.each(["list", "status"] as const)(
-    "coalesces cron bursts until the whole inventory pair settles (%s first)",
-    async (first) => {
-      const gate = inventoryGate("latest");
-      const { request, cronStatus } = gate;
-      const harness = gateway(request, true);
-      store = activate(harness);
-
-      repeatEvent(() => emitFinished(harness));
-      expectCalls(request, 1);
-      expectCalls(request, 1, ["models.authStatus"]);
-
-      if (first === "list") {
-        gate.list.resolve(cronPage("stale"));
-        await gate.list.promise;
-      } else {
-        gate.status.resolve(cronStatus);
-        await gate.status.promise;
-      }
-      await Promise.resolve();
-      expectCalls(request, 1);
-
-      gate.list.resolve(cronPage("stale"));
-      gate.status.resolve(cronStatus);
-      await waitLabels("latest");
-      expectCalls(request, 2);
     },
   );
 
@@ -616,9 +667,10 @@ describe("sidebar attention source publication", () => {
         dismissSidebarAttention(key, { kind: "cronFailed", signature: "current" });
       }
       setVisibility("hidden");
-      repeatEvent(() => emitFinished(harness));
+      repeatEvent(() => harness.emitEvent("cron.inventory.changed", {}));
       pendingList.resolve(cronPage("previous"));
-      await waitLabels("previous");
+      await settleRefresh();
+      expectLabels(...(initial === "settled" ? ["previous"] : []));
       expectCalls(request, 1, ["cron.list", "cron.status", "models.authStatus"]);
       if (initial === "pending with dismissal") {
         expect(loadDismissals(key)).toEqual({ cronFailed: ["current"] });
@@ -626,6 +678,7 @@ describe("sidebar attention source publication", () => {
       setVisibility("visible");
       document.dispatchEvent(new Event("visibilitychange"));
       await waitForFast(() => {
+        expectCalls(request, 2);
         if (initial === "pending with dismissal") {
           expect(store?.entries).toEqual([]);
         } else {
@@ -640,7 +693,7 @@ describe("sidebar attention source publication", () => {
     },
   );
 
-  it("publishes progress but retires dismissals only after a fresh complete inventory", async () => {
+  it("retains attention and dismissals until a fresh complete inventory settles", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     const pages = Array.from({ length: 5 }, () => pending(cronPage()));
     let listCalls = 0;
@@ -649,22 +702,24 @@ describe("sidebar attention source publication", () => {
     store = activate(harness);
     pages[0]!.resolve(cronPage("dismissed"));
     await waitForFast(() => expect(store?.entries).toHaveLength(1));
-    store.dismiss({ kind: "cronFailed", signature: "dismissed" });
+    const legacyKey = resolveSidebarAttentionKey(harness.gateway);
+    dismissSidebarAttention(legacyKey, { kind: "cronOverdue", signature: "dismissed@1" });
 
-    harness.emitEvent("cron", {});
+    harness.emitEvent("cron.inventory.changed", {});
     for (const index of [1, 2]) {
       await waitForFast(() => expect(listCalls).toBe(index + 1));
-      harness.emitEvent("cron", {});
+      repeatEvent(() => harness.emitEvent("cron.inventory.changed", {}));
       pages[index]!.resolve(cronPage(`current-${index}`));
-      await waitLabels(`current-${index}`);
-      expect(dismissalState(harness)).toEqual({ cronFailed: ["dismissed"] });
+      await waitForFast(() => expect(listCalls).toBe(index + 2));
+      expectLabels("dismissed");
+      expect(dismissalState(harness)).toEqual({ cronOverdue: ["dismissed@1"] });
     }
-    pages[3]!.resolve({ ...cronPage("partial"), hasMore: true, total: 2, nextOffset: 1 });
+    pages[3]!.resolve({ ...cronPage("fresh-a"), hasMore: true, total: 2, nextOffset: 1 });
     await waitForFast(() => expect(listCalls).toBe(5));
-    expectLabels("current-2");
-    expect(dismissalState(harness)).toEqual({ cronFailed: ["dismissed"] });
-    pages[4]!.resolve({ ...cronPage("fresh"), snapshotRevision: "partial", total: 2, offset: 1 });
-    await waitLabels("partial", "fresh");
+    expectLabels("dismissed");
+    expect(dismissalState(harness)).toEqual({ cronOverdue: ["dismissed@1"] });
+    pages[4]!.resolve({ ...cronPage("fresh-b"), snapshotRevision: "fresh-a", total: 2, offset: 1 });
+    await waitLabels("fresh-a", "fresh-b");
     expect(dismissalState(harness)).toEqual({});
   });
 
@@ -754,19 +809,19 @@ describe("sidebar attention source publication", () => {
     await settleRefresh();
     expectLabels(...(disabled ? [] : ["overdue"]));
     failing = true;
-    harness.emitEvent("cron", {});
-    await settleRefresh();
+    harness.emitEvent("cron.inventory.changed", {});
+    await waitForFast(() => expectCalls(request, 2));
     expectLabels(...(disabled ? [] : ["overdue"]));
     if (disabled) {
       return;
     }
     harness.attention.dismiss({ kind: "cronOverdue", signature: "overdue@1" });
-    harness.emitEvent("cron", {});
-    await settleRefresh();
+    harness.emitEvent("cron.inventory.changed", {});
+    await waitForFast(() => expectCalls(request, 3));
     expect(dismissalState(harness)).toEqual({ cronOverdue: ["overdue@1"] });
     failing = false;
-    harness.emitEvent("cron", {});
-    await settleRefresh();
+    harness.emitEvent("cron.inventory.changed", {});
+    await waitForFast(() => expectCalls(request, 4));
     expect(store?.entries).toEqual([]);
   });
 
@@ -781,7 +836,7 @@ describe("sidebar attention source publication", () => {
       const publish = vi.fn();
       store.subscribe(publish);
       store.activate(SidebarAttentionStoreOwner);
-      harness.emitEvent("cron", {});
+      harness.emitEvent("cron.inventory.changed", {});
       document.dispatchEvent(new Event("visibilitychange"));
 
       if (boundary === "disconnect") {

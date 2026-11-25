@@ -102,7 +102,7 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
 
-  const admission = resolveAgentRunAdmissionModel(params);
+  const admission = await resolveAgentRunAdmissionModel(params);
   if (!admission) {
     return undefined;
   }
@@ -439,7 +439,6 @@ export async function prepareAgentRunDispatch(
   const assertInputOwnerCurrent = (terminal = false) => {
     assertInputAdmissionCurrent?.();
     assertRequesterCurrent?.();
-    userTurn?.assertRequesterCurrent?.();
     followupCompletion?.assertCurrent();
     if (!resumedTaskAdopted) {
       followupSuccessor?.assertCurrent();
@@ -472,12 +471,41 @@ export async function prepareAgentRunDispatch(
   };
   try {
     assertInputAdmissionCurrent?.();
-    if (params.privateCompletion) {
-      // Admit before input persistence yields; retain this same decision below.
-      capturedOperator = await retainAgentTurnOperatorRun(operatorRun);
-    }
+    const context = params.context.resolveGatewayContext?.();
+    // Only host System input may resolve a session owner; public provenance never grants it.
+    const systemTurn =
+      context &&
+      params.canUseInternalRuntimeHandoff &&
+      params.client?.internal?.syntheticClient === true &&
+      params.client.internal.operatorRoleActor?.kind === "system" &&
+      !params.client.internal.operatorRunAuthority &&
+      !params.client.authenticatedUserProfile &&
+      params.resolvedSessionKey &&
+      !isCronSessionKey(params.resolvedSessionKey) &&
+      params.inputProvenance?.kind === "internal_system" &&
+      !isCronExecutionInputProvenance(params.inputProvenance)
+        ? {
+            context,
+            agentId: params.activeSessionAgentId,
+            sessionKey: params.resolvedSessionKey,
+            sessionId: params.getAdmittedSessionId(),
+            storePath: lifecycleStorePath,
+            assertCurrent: () => {
+              assertInputOwnerCurrent();
+              activeRunAbort.controller.signal.throwIfAborted();
+            },
+          }
+        : undefined;
+    // Admit before input persistence yields: the recorded turn carries the grant's owner bit.
+    capturedOperator = await retainAgentTurnOperatorRun({ ...operatorRun, systemTurn });
+  } catch (error) {
+    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, error));
+  }
+  try {
+    assertInputAdmissionCurrent?.();
     userTurn = await prepareAgentRunUserTurn({
       ...params,
+      senderIsOwner: capturedOperator.authority?.grant.owner === true,
       assertCurrent: () => {
         assertInputOwnerCurrent();
         activeRunAbort.controller.signal.throwIfAborted();
@@ -490,7 +518,6 @@ export async function prepareAgentRunDispatch(
       freshChildStorePath: params.freshChild ? lifecycleStorePath : undefined,
       resolvedThreadId,
     });
-    userTurn.assertRequesterCurrent?.();
     if (userTurn.recorder) {
       // Accepted input owns these media references before it enters the transcript.
       // Later admission rejection must preserve the files retained by that custody.
@@ -540,47 +567,6 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
   try {
-    const context = params.context.resolveGatewayContext?.();
-    // Only host System input may resolve a session owner; public provenance never grants it.
-    const systemTurn =
-      context &&
-      params.canUseInternalRuntimeHandoff &&
-      params.client?.internal?.syntheticClient === true &&
-      params.client.internal.operatorRoleActor?.kind === "system" &&
-      !params.client.internal.operatorRunAuthority &&
-      !params.client.authenticatedUserProfile &&
-      params.resolvedSessionKey &&
-      !isCronSessionKey(params.resolvedSessionKey) &&
-      userTurn.inputProvenance?.kind === "internal_system" &&
-      !isCronExecutionInputProvenance(userTurn.inputProvenance)
-        ? {
-            context,
-            agentId: params.activeSessionAgentId,
-            sessionKey: params.resolvedSessionKey,
-            sessionId: params.getAdmittedSessionId(),
-            storePath: lifecycleStorePath,
-            assertCurrent: () => {
-              assertInputOwnerCurrent();
-              activeRunAbort.controller.signal.throwIfAborted();
-            },
-          }
-        : undefined;
-    capturedOperator ??= await retainAgentTurnOperatorRun({ ...operatorRun, systemTurn });
-    const operatorAdmission = revalidateAdmission(userTurn);
-    if (operatorAdmission !== true) {
-      return await operatorAdmission;
-    }
-    assertInputOwnerCurrent();
-    capturedOperator.authority?.assertCurrent();
-  } catch (error) {
-    const failure = await releasePreparedAgentRunUserTurnAfterFailure(
-      userTurn,
-      error,
-      activeRunAbort.controller.signal,
-    );
-    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, failure));
-  }
-  try {
     if (subagentAdmission.registerPluginSubagent) {
       await subagentAdmission.registerPluginSubagent();
       const registrationAdmission = revalidateAdmission(userTurn);
@@ -588,7 +574,6 @@ export async function prepareAgentRunDispatch(
         return await registrationAdmission;
       }
       assertInputOwnerCurrent();
-      capturedOperator.authority?.assertCurrent();
     }
   } catch (error) {
     const failure = await releasePreparedAgentRunUserTurnAfterFailure(
@@ -623,7 +608,6 @@ export async function prepareAgentRunDispatch(
         assertInputOwnerCurrent();
         params.assertGatewayWorkAdmissionAllowed();
         activeRunAbort.controller.signal.throwIfAborted();
-        capturedOperator.authority?.assertCurrent();
       } catch (err) {
         const failure = await releasePreparedAgentRunUserTurnAfterFailure(
           userTurn,
@@ -638,8 +622,8 @@ export async function prepareAgentRunDispatch(
         ...params,
         sessionId: params.getAdmittedSessionId(),
         spawnedBy: params.sessionEntry?.spawnedBy,
-        isCurrent: params.hasCurrentClientAuthority,
         inputProvenance: userTurn.inputProvenance,
+        grant: capturedOperator.authority?.grant,
       },
       activeRunAbort.controller.signal,
     );

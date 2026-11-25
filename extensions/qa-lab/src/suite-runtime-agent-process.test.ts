@@ -36,8 +36,6 @@ import { runQaCli } from "./qa-cli-process.js";
 import {
   forceMemoryIndex,
   findManagedDreamingCronJob,
-  listCronJobs,
-  readDoctorMemoryStatus,
   runAgentPrompt,
   startAgentRun,
   waitForAgentHistoryReply,
@@ -435,18 +433,5 @@ describe("qa suite runtime agent process helpers", () => {
 
     await expect(historyReply(gatewayCall, false)).rejects.toBe(gatewayError);
     expect(gatewayCall).toHaveBeenCalledOnce();
-  });
-
-  it("lists cron jobs and doctor memory status through the gateway", async () => {
-    const gatewayCall = gatewayResults(
-      { jobs: [{ id: "job-1", name: "dreaming" }] },
-      { dreaming: { enabled: true, shortTermCount: 3 } },
-    );
-    const env = { gateway: { call: gatewayCall } } as never;
-
-    await expect(listCronJobs(env)).resolves.toEqual([{ id: "job-1", name: "dreaming" }]);
-    await expect(readDoctorMemoryStatus(env)).resolves.toEqual({
-      dreaming: { enabled: true, shortTermCount: 3 },
-    });
   });
 });

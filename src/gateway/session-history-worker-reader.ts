@@ -74,7 +74,7 @@ export async function readSessionHistoryRequest(
       kind: "artifacts",
       result:
         query.kind === "list" && query.includeDownloadData === false && !query.downloadArtifactIds
-          ? { kind: "list", artifacts: await options.readers.readArtifactSummaries(query) }
+          ? await options.readers.readArtifactSummaries(query)
           : await selectSessionArtifacts(request.params.target, query, options.readers),
     };
   }

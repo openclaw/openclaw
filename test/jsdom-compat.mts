@@ -23,10 +23,14 @@ function installNode24ByteViewAdapter(Bytes: typeof Uint8Array): void {
     if (typeof nativeEncode !== "function") {
       continue;
     }
-    // Node 24's experimental encoders ignore byteOffset. Keep native options
-    // and receiver checks, copying only offset views until that host is retired.
+    // Node 24's experimental encoders ignore byteOffset, and its toHex writes
+    // bytes >= 0x80 as "O0".."Vf" from 8 bytes on. Keep native options and
+    // receiver checks; encode hex through Buffer until that host is retired.
     Object.defineProperty(prototype, method, {
       value(this: unknown, ...args: unknown[]) {
+        if (method === "toHex" && types.isUint8Array(this)) {
+          return Buffer.from(this.buffer, this.byteOffset, this.byteLength).toString("hex");
+        }
         const bytes = types.isUint8Array(this) && this.byteOffset !== 0 ? new Bytes(this) : this;
         return Reflect.apply(nativeEncode, bytes, args);
       },

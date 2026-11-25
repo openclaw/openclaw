@@ -1,6 +1,6 @@
-import { spawn, spawnSync } from "node:child_process";
-import { once } from "node:events";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -327,22 +327,19 @@ it("stops at a failed help probe before mutation", () => {
 });
 
 it("uses its own mock listener when the former fixed port is occupied", async () => {
-  const blocker = spawn(
-    testNodeExecPath,
-    [
-      "--input-type=module",
-      "-e",
-      'import http from "node:http"; http.createServer((_req, res) => res.end("unrelated listener")).listen(44080, "127.0.0.1", () => console.log("listening"));',
-    ],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
+  const blocker = createServer((_request, response) => response.end("unrelated listener"));
   try {
-    await Promise.race([
-      once(blocker.stdout, "data"),
-      once(blocker, "exit").then(() => {
-        throw new Error("Could not occupy port 44080");
-      }),
-    ]);
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", (error: NodeJS.ErrnoException) => {
+        // Another listener already establishes the occupied-port precondition.
+        if (error.code === "EADDRINUSE") {
+          resolve();
+        } else {
+          reject(error);
+        }
+      });
+      blocker.listen(44080, "127.0.0.1", resolve);
+    });
     const { result, events, detail } = runScenario({ realMock: true });
     expect(result.status, detail).toBe(0);
     const configuredPort = events.find((args) => args[1] === "configure-mock-model")?.[2];
@@ -350,10 +347,10 @@ it("uses its own mock listener when the former fixed port is occupied", async ()
     expect(configuredPort).not.toBe("44080");
     expect(events.find((args) => args[1] === "assert-mock-model-config")?.[2]).toBe(configuredPort);
   } finally {
-    if (blocker.exitCode === null) {
-      const exited = once(blocker, "exit");
-      blocker.kill();
-      await exited;
+    if (blocker.listening) {
+      await new Promise<void>((resolve, reject) => {
+        blocker.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   }
 });

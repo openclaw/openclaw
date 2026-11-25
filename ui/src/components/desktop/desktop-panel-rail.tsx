@@ -513,6 +513,10 @@ export function DesktopSizing(
 ) {
   const id = createUniqueId();
   const sizingMenu = createDesktopSizingMenu(() => props);
+  const selectModes = () =>
+    props.canResize || props.mode === "match"
+      ? (["fit", "actual", "match"] as const)
+      : (["fit", "actual"] as const);
   // Retain Match during reconnect so Fit can cancel it before authentication completes.
   return (
     <Show
@@ -520,6 +524,9 @@ export function DesktopSizing(
       fallback={
         <select
           class="settings-select desktop-sizing"
+          data-sizing-labels={selectModes()
+            .map((mode) => t(`desktop.${mode}`))
+            .join("\n")}
           aria-label={t("desktop.sizing")}
           title={t("desktop.matchRequirement")}
           onChange={(event) => {
@@ -529,17 +536,17 @@ export function DesktopSizing(
             }
           }}
         >
-          <option value="fit" selected={props.mode === "fit"}>
-            {t("desktop.fit")}
-          </option>
-          <option value="actual" selected={props.mode === "actual"}>
-            {t("desktop.actual")}
-          </option>
-          {(props.canResize || props.mode === "match") && (
-            <option value="match" selected={props.mode === "match"} disabled={!props.canResize}>
-              {t("desktop.match")}
-            </option>
-          )}
+          <For each={selectModes()} keyed={(mode) => mode}>
+            {(mode) => (
+              <option
+                value={mode()}
+                selected={props.mode === mode()}
+                disabled={mode() === "match" && !props.canResize}
+              >
+                {t(`desktop.${mode()}`)}
+              </option>
+            )}
+          </For>
         </select>
       }
     >

@@ -225,3 +225,24 @@ export function isSessionArchiveMutation(method: string, requestParams: unknown)
         : undefined;
   return isRecord(patch) && typeof patch.archived === "boolean";
 }
+
+/** Target admission is separate: this list never grants a scope or management authority. */
+export function isParticipantPublicationMethod(method: string, params: unknown): boolean {
+  const request = isRecord(params) ? params : undefined;
+  if (!request || request.publishingSessionKey !== undefined) {
+    return false;
+  }
+  return (
+    method === "sessions.github.publish" ||
+    (method === "sessions.github.action" &&
+      [
+        "edit",
+        "ready",
+        "request_review",
+        "inspect_pr",
+        "prepare_pr",
+        "refresh_base",
+        "upload_evidence",
+      ].includes(String(request.action)))
+  );
+}

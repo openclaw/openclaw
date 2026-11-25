@@ -10,7 +10,7 @@ description: Refactor an existing OpenClaw docs page with source-audited preserv
 Use this skill when the user gives a target OpenClaw docs page and asks to
 rewrite, refactor, reorganize, split, shorten, or improve it.
 
-This skill builds on `technical-documentation`: use that skill for style, page types,
+This skill builds on `openclaw-writing`: use that skill for style, page types,
 structure, examples, discoverability, and verification. This skill adds the
 rewrite workflow needed to avoid losing accurate behavior during a major docs
 refactor.
@@ -53,7 +53,7 @@ Prefer this split:
 
 ### 1. Load the doc standard
 
-Read `../technical-documentation/SKILL.md` first. Apply its page-type, style,
+Read `../openclaw-writing/SKILL.md` first. Apply its page-type, style,
 examples, navigation, and verification guidance throughout the refactor.
 
 Run `pnpm docs:list` when available, then read only the target page and the
@@ -61,7 +61,7 @@ likely entry points, references, or related pages needed for the refactor.
 
 ### 2. Classify the page
 
-Before editing, decide the intended page type from `technical-documentation`.
+Before editing, choose the page type from `../openclaw-writing/references/docs-pages.md`.
 
 If the current page mixes page types, choose the main page type and plan where
 the other material belongs:

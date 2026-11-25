@@ -232,7 +232,6 @@ function createLoopbackRuntime() {
   return {
     port: 31783,
     ownerToken: "loopback-owner-token",
-    nonOwnerToken: "loopback-non-owner-token",
   };
 }
 
@@ -708,7 +707,7 @@ describe("prepareCliRunContext", () => {
         trigger: "user",
         sessionKey: sessionTarget.sessionKey,
       }),
-    ).rejects.toThrow("authority");
+    ).rejects.toThrow("This agent run is no longer active");
   });
 
   it("honors an explicit auth agent directory independently of session identity", async () => {
@@ -2869,7 +2868,6 @@ describe("prepareCliRunContext", () => {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
         ownerToken: "synthetic-loopback-owner",
-        nonOwnerToken: "synthetic-loopback-non-owner",
       }));
       setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
       setRawCliBackendForPrepareTest({

@@ -325,6 +325,10 @@ it("reuses descendants after parent progress while keeping inherited models curr
           }).row!;
       const siblingSnapshot = snapshot(siblingKey);
       const parentSnapshot = snapshot(parentKey);
+      const childLinks = () =>
+        projection.describe({ agentId: "main", key: parentKey })?.materialized.source.childLinks;
+      const originalLinks = childLinks();
+      expect(originalLinks?.map((link) => link.key)).toEqual(children);
       expect(() => {
         siblingSnapshot.label = "Reader mutation";
       }).toThrow(TypeError);
@@ -343,6 +347,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
           expect(snapshot(parentKey)).not.toBe(parentSnapshot);
           expect(snapshot(parentKey).label).toBe("Updated parent");
           expect(parentSnapshot.label).toBeUndefined();
+          expect(childLinks()).toBe(originalLinks);
         }
       }
       const cases: Array<[Partial<SessionEntry>, string, string]> = [
@@ -707,3 +712,62 @@ it.each(["source rewrite", "resolved snapshot"] as const)(
     });
   },
 );
+
+it("refreshes a child without revisiting parents whose child facts stayed the same", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const agentId = "main";
+    const key = (name: string) => `agent:main:${name}`;
+    const firstParent = key("first-parent");
+    const secondParent = key("second-parent");
+    const child = key("subagent:changing-child");
+    const unrelated = key("unrelated");
+    const write = (sessionKey: string, entry: SessionEntry) =>
+      replaceSessionEntrySync({ agentId, sessionKey }, entry);
+    for (const sessionKey of [firstParent, secondParent, unrelated]) {
+      write(sessionKey, { sessionId: sessionKey, updatedAt: 1 });
+    }
+    const entry = {
+      sessionId: "changing-child",
+      parentSessionKey: firstParent,
+      spawnedBy: firstParent,
+      updatedAt: 1,
+      label: "Original",
+    };
+    write(child, entry);
+
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    const describe = (sessionKey: string) => projection.describe({ agentId, key: sessionKey })!;
+    const first = describe(firstParent).materialized;
+    const second = describe(secondParent).materialized;
+    const other = describe(unrelated).materialized;
+    const original = describe(child).materialized;
+    const count = projection.materializedCount;
+    expect(first.source.childLinks?.map((link) => link.key)).toEqual([child]);
+
+    write(child, { ...entry, label: "Renamed" });
+    await projection.ensureMaterialized();
+    expect(projection.present(describe(child)).label).toBe("Renamed");
+    expect(describe(child).materialized).not.toBe(original);
+    expect(describe(firstParent).materialized).toBe(first);
+    expect(describe(secondParent).materialized).toBe(second);
+    expect(describe(unrelated).materialized).toBe(other);
+    expect(projection.materializedCount - count).toBe(1);
+
+    write(child, { ...entry, updatedAt: 2 });
+    await projection.ensureMaterialized();
+    expect(describe(firstParent).materialized.source.childLinks?.[0]?.entry.updatedAt).toBe(2);
+
+    write(child, { ...entry, parentSessionKey: secondParent, spawnedBy: secondParent });
+    await projection.ensureMaterialized();
+    expect(projection.present(describe(child)).parentSessionKey).toBe(secondParent);
+    expect(describe(firstParent).materialized.source.childLinks).toEqual([]);
+    expect(describe(secondParent).materialized.source.childLinks?.map((link) => link.key)).toEqual([
+      child,
+    ]);
+    expect(describe(unrelated).materialized).toBe(other);
+  });
+});

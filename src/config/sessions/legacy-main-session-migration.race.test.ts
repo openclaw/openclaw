@@ -225,9 +225,9 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
           admission.close();
           resume.resolve();
         }
-        expect
-          .soft(await migration)
-          .toMatchObject({ error: new Error("admitted run authority is no longer active") });
+        expect.soft(await migration).toMatchObject({
+          error: new Error("This agent run is no longer active. Start a new turn to retry."),
+        });
         expect.soft(readLedger()).toEqual(ledgerBefore);
         const copied = boundary === "cleanup queue" || boundary === "ledger";
         const source = readClaim(sourceAgentId, sourcePath, "agent:main:chat", state.env);

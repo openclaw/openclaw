@@ -11,7 +11,6 @@ import {
   assertSessionGoalOperationTime,
   prepareSessionTurnGoalMessage,
 } from "./goals-operation-policy.js";
-import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { captureSessionPendingInputWorkerCustody } from "./session-accessor.sqlite-pending-inputs.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
@@ -25,10 +24,7 @@ import type {
   SessionTranscriptTurnMessageAppend,
   SessionTranscriptTurnWriteContext,
 } from "./session-accessor.types.js";
-import type {
-  SessionActorAuthority,
-  SessionActorAuthorityFacts,
-} from "./session-actor-contract.js";
+import type { SessionActorAuthority } from "./session-actor-contract.js";
 import type { SessionActorMemoryTurnReads } from "./session-actor-memory-turn-contract.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { getSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
@@ -481,7 +477,6 @@ export async function appendSessionTurnInWorker(
     const run = () => {
       if (actor && inputActor) {
         let authorityFailure: unknown;
-        let previousEntry: SessionActorAuthorityFacts["entry"];
         const checkAuthority = (check: () => void) => {
           try {
             check();
@@ -500,9 +495,6 @@ export async function appendSessionTurnInWorker(
           assertCurrent: () => checkAuthority(assertCurrent),
           authorize(stage, state, publication) {
             checkAuthority(() => {
-              if (stage === "transaction" && publication === undefined) {
-                previousEntry = state.entry;
-              }
               inputActor.storageAuthority?.authorize(stage, state, publication);
               operation.onTransactionFacts(publication);
               if (isRecord(publication) && publication.kind === "session-turn") {
@@ -553,18 +545,7 @@ export async function appendSessionTurnInWorker(
                 throw new Error("Input actor omitted its committed turn");
               }
               candidate = turn;
-              try {
-                operation.onAcknowledged(turn);
-              } finally {
-                if (!memory && turn.result.sessionEntry && inputActor.target.readSource) {
-                  publishCommittedSessionIdentity(
-                    scope.agentId,
-                    inputActor.target.readSource.databaseIdentity,
-                    new Map(previousEntry ? [[scope.sessionKey, previousEntry]] : []),
-                    new Map([[scope.sessionKey, turn.result.sessionEntry]]),
-                  );
-                }
-              }
+              operation.onAcknowledged(turn);
             };
             const phase = options.initialSessionEntry ? "acceptInput" : inputActor.phase;
             const command = {

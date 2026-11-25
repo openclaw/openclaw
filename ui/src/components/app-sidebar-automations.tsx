@@ -53,7 +53,7 @@ export function SidebarAutomations(props: {
   const [revision, setRevision] = createSignal(0);
   onSettled(() =>
     app.gateway.subscribeEvents((event) => {
-      if (event.event === "cron" || isCronInventoryInvalidation(event, app.gateway.snapshot)) {
+      if (event.event === "cron" || isCronInventoryInvalidation(event)) {
         setRevision((value) => value + 1);
       }
     }),

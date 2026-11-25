@@ -86,7 +86,7 @@ function holdDelivery() {
     await execute.promise;
     const allowed = params.isSourceSessionEffectsAllowed;
     if (typeof allowed === "function" && !allowed()) {
-      return { delivered: false, path: "none", disposition: "intentional_non_delivery" };
+      return { delivered: false, path: "none", reason: "source_owner_changed" };
     }
     startedTurns.push(REQUESTER);
     return { delivered: true, path: "direct" };

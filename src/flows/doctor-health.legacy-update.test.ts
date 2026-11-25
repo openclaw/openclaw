@@ -27,6 +27,10 @@ import {
   readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
 } from "../cron/store/run-history.kernel.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  prepareCronRunReceiptClaim,
+} from "../cron/store/run-receipt-store.test-support.js";
 import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { getCronStoreKysely } from "../cron/store/schema.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
@@ -213,8 +217,8 @@ it.each([
       const runningAtMs = Date.now() - 1_000;
       const disabledDuringConversion =
         ownership === "notification-disabled" || ownership === "notification-resume-disabled";
-      const startupNotification = ownership === "notification" || disabledDuringConversion;
-      const offline = ownership === "stopped" || startupNotification;
+      const replayFinishedRun = ownership === "notification" || disabledDuringConversion;
+      const offline = ownership === "stopped" || replayFinishedRun;
       const storeKey = runOpenClawStateWriteTransaction(
         ({ db }) => {
           const key = resolveCronStoreKeyInDatabase(db, storePath, state.env);
@@ -233,10 +237,21 @@ it.each([
               sessionTarget: "main",
               wakeMode: "next-heartbeat",
               payload: { kind: "systemEvent", text: "legacy placeholder" },
-              state: { runningAtMs, ...(startupNotification ? { consecutiveErrors: 9 } : {}) },
+              state: { runningAtMs, ...(replayFinishedRun ? { consecutiveErrors: 9 } : {}) },
             },
             0,
           );
+          const receipt = replayFinishedRun
+            ? claimCronRunReceiptInDatabaseForTest({
+                database: db,
+                prepared: prepareCronRunReceiptClaim({
+                  storePath,
+                  job,
+                  agentId: "main",
+                  startedAtMs: runningAtMs,
+                }),
+              })
+            : undefined;
           replaceCronRuntimeAuthorityRows({ db, storeKey: key, jobs: [job] });
           const row = loadCronRows(db, key)[0]!;
           // Reproduce the discriminator written by the published heartbeat owner.
@@ -250,14 +265,18 @@ it.each([
                   ...JSON.parse(row.job_json),
                   payload: { kind: "heartbeat" },
                 }),
+                state_json: JSON.stringify({
+                  ...JSON.parse(row.state_json),
+                  ...(receipt ? { runningReceiptId: receipt.receiptId } : {}),
+                }),
               })
               .where("store_key", "=", key),
           );
-          if (startupNotification) {
+          if (replayFinishedRun) {
             recordCronRunInDatabase(db, {
               storeKey: key,
               jobId: job.id,
-              runId: `cron:${job.id}:${runningAtMs}`,
+              runId: `cron:${job.id}:${runningAtMs}:${receipt!.receiptId}`,
               agentId: "main",
               startedAt: runningAtMs,
               endedAt: runningAtMs + 500,
@@ -331,19 +350,31 @@ it.each([
         await expect(runDoctor(runtime)).resolves.toBeUndefined();
         expect(runtime.exit).not.toHaveBeenCalledWith(1);
         const after = read();
-        if (startupNotification) {
+        if (replayFinishedRun) {
           expectResult(resultPath, { status: "ok" });
-          expect(loadedCronStoreFromRows(after.rows).store.jobs[0]).toMatchObject({
+          const recovered = loadedCronStoreFromRows(after.rows).store.jobs[0]!;
+          expect(recovered).toMatchObject({
             payload: { kind: "agentTurn" },
             enabled: !disabledDuringConversion,
-            state: { runningAtMs, consecutiveErrors: 9 },
+            state: {
+              consecutiveErrors: 10,
+              lastRunAtMs: runningAtMs,
+              lastRunStatus: "error",
+              lastError: "synthetic provider failure",
+            },
           });
+          expect(recovered.state.runningAtMs).toBeUndefined();
+          expect(recovered.state.runningReceiptId).toBeUndefined();
           expect(after.history).toEqual(before.history);
-          const notified = Promise.withResolvers<void>();
-          const enqueueSessionEvent = vi.fn(async () => {
-            notified.resolve();
-            return { ok: true as const };
-          });
+          expect(recovered.state.lastDurationMs).toBe(500);
+          expect(after.history).toHaveLength(1);
+          expect(
+            withExistingOpenClawStateDatabaseReadOnly(
+              ({ db }) => readCronQuarantinedJobsInDatabase(db, storeKey),
+              { env: state.env },
+            ),
+          ).toEqual([]);
+          const enqueueSessionEvent = vi.fn(async () => ({ ok: true as const }));
           const cron = new CronService({
             scheduler: createTestGatewayScheduler(),
             storePath,
@@ -362,42 +393,19 @@ it.each([
           });
           try {
             await gateway!.run(() => cron.start());
-            if (!disabledDuringConversion) {
-              await notified.promise;
-              expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-                expect.stringContaining("10 consecutive run failures"),
-                expect.objectContaining({ agentId: "main", jobId: "interrupted-monitor" }),
-              );
-            } else {
-              // An operator-disabled job needs result settlement, not a new
-              // auto-disable transition or its notification.
-              expect(enqueueSessionEvent).not.toHaveBeenCalled();
-            }
+            expect(enqueueSessionEvent).not.toHaveBeenCalled();
             const settled = read();
-            const recovered = loadedCronStoreFromRows(settled.rows).store.jobs[0]!;
-            expect(recovered).toMatchObject({
-              payload: { kind: "agentTurn" },
-              enabled: false,
+            const settledJob = loadedCronStoreFromRows(settled.rows).store.jobs[0]!;
+            expect(settledJob).toMatchObject({
               state: {
                 consecutiveErrors: 10,
                 lastRunAtMs: runningAtMs,
                 lastRunStatus: "error",
                 lastError: "synthetic provider failure",
-                lastDurationMs: 500,
               },
             });
-            if (!disabledDuringConversion) {
-              expect(recovered.state.autoDisabled?.reason).toBe("consecutive-failures");
-            }
-            expect(recovered.state.runningAtMs).toBeUndefined();
+            expect(settledJob.state.runningAtMs).toBeUndefined();
             expect(settled.history).toEqual(after.history);
-            expect(settled.history).toHaveLength(1);
-            expect(
-              withExistingOpenClawStateDatabaseReadOnly(
-                ({ db }) => readCronQuarantinedJobsInDatabase(db, storeKey),
-                { env: state.env },
-              ),
-            ).toEqual([]);
           } finally {
             cron.stop();
             await cron.waitForIdle();

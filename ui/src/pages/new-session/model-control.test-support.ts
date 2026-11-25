@@ -1,5 +1,6 @@
 import { expect, onTestFinished, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
@@ -59,8 +60,18 @@ export function contextWith(
       source: "defaults",
     },
   };
+  const settingsAgentSelection = createAgentSelectionCapability(
+    {
+      connection: { gatewayUrl: "ws://fixture" },
+      snapshot: { assistantAgentId: "main" },
+      subscribe: () => () => {},
+    },
+    { state: { agentsList: null }, subscribe: () => () => {} },
+  );
+  onTestFinished(() => settingsAgentSelection.dispose());
   const context = {
     navigate,
+    settingsAgentSelection,
     agents: { subscribe: subscribe(ownerListeners.agents) },
     config: { subscribe: subscribe(ownerListeners.config), current: {} },
     gateway: {

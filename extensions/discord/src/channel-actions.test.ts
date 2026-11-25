@@ -157,6 +157,47 @@ describe("discordMessageActions", () => {
     });
   });
 
+  it("owns Discord-only message fields for the actions it advertises", () => {
+    const fieldsOf = (discovery: DiscordDiscovery) => {
+      const schema = discovery?.schema;
+      return (Array.isArray(schema) ? schema : schema ? [schema] : []).flatMap((entry) => {
+        expect(entry.actions?.some((action) => discovery?.actions?.includes(action))).toBe(true);
+        return Object.keys(entry.properties);
+      });
+    };
+    const defaults = discordMessageActions.describeMessageTool?.({
+      cfg: discordCfg({ token: "Bot token-main" }),
+    });
+    expect(fieldsOf(defaults)).toEqual(
+      expect.arrayContaining(["guildId", "authorIds", "emojiName", "stickerName", "position"]),
+    );
+    // Role and moderation actions default off, so their fields stay out too.
+    for (const field of ["roleId", "deleteDays", "durationMin", "until"]) {
+      expect(fieldsOf(defaults)).not.toContain(field);
+    }
+    const layout = [defaults?.schema ?? []]
+      .flat()
+      .find((entry) => Object.hasOwn(entry.properties, "categoryId"));
+    expect(layout).toMatchObject({
+      actions: expect.arrayContaining(["channel-move", "category-delete"]),
+      visibility: "all-configured",
+      properties: { categoryId: { type: "string" }, clearParent: { type: "boolean" } },
+    });
+
+    const admin = discordMessageActions.describeMessageTool?.({
+      cfg: discordCfg({ token: "Bot token-main", actions: { roles: true, moderation: true } }),
+    });
+    expect(fieldsOf(admin)).toEqual(
+      expect.arrayContaining(["roleId", "deleteDays", "durationMin", "until"]),
+    );
+    expect(
+      [admin?.schema ?? []].flat().find((entry) => Object.hasOwn(entry.properties, "deleteDays")),
+    ).toMatchObject({
+      actions: ["timeout", "kick", "ban"],
+      properties: { deleteDays: { minimum: 0, maximum: 7 } },
+    });
+  });
+
   it("keeps sticker-upload on local execution mode", () => {
     expect(discordMessageActions.resolveExecutionMode?.({ action: "sticker-upload" })).toBe(
       "local",

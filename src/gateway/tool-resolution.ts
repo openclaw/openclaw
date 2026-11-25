@@ -418,6 +418,7 @@ export async function resolveGatewayScopedTools(
         }
       : {}),
     execSession: params.execSession,
+    sessionProjectMoveEligible: params.sessionProjectMoveEligible,
     execOverrides: { ...params.execOverrides, ...delegatedExecPolicy },
     // Exported MCP tools do not certify the client's effective execution policy.
     // Explicit OpenClaw Full Access and standing delegation grants remain independent.
