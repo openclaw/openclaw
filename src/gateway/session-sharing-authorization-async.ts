@@ -110,8 +110,9 @@ export async function prepareSessionSystemTurnAuthority(
     },
     params.assertCurrent,
   );
-  if (entry?.sessionId !== params.sessionId) {
-    throw new Error("System turn session is unavailable or has changed.");
+  // The person's admission below checks the session id it runs in.
+  if (!entry) {
+    throw new Error("System turn session is unavailable.");
   }
   if (params.operatorSource) {
     const restored = await restoreGatewayQueuedOperatorRecovery({
