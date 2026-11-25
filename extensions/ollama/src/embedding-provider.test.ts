@@ -156,7 +156,7 @@ function expectEmbeddingFetch(
     url,
     "POST",
     { "Content-Type": "application/json", ...headers },
-    JSON.stringify({ model, input }),
+    JSON.stringify({ model, input, truncate: false }),
   ]);
 }
 
