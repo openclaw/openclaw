@@ -211,6 +211,10 @@ export function createBeamOwnedViewHandler(
       assertCurrent();
       respond(true, result);
     } catch (error) {
+      // Temporary CI diagnostic for the synthetic Beam adoption fixture.
+      if (process.env.CI && params.threadId === "8".repeat(32)) {
+        console.error("beam-owned-adoption-diagnostic", error);
+      }
       let failure = forbidden;
       try {
         assertCurrent();
