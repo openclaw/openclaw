@@ -19,6 +19,7 @@ export async function rewriteAssistantTranscriptMessageById(params: {
   runId: string;
   content: AssistantDisplayContentBlock[];
   mediaBySource?: AssistantDisplayMediaBySource;
+  responseUsageLine?: string;
   mediaUrls: readonly string[];
   expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
   scope: ResolvedAssistantTranscriptScope;
@@ -46,6 +47,7 @@ export async function rewriteAssistantTranscriptMessageById(params: {
         message,
         displayContent: params.content,
         mediaBySource: params.mediaBySource,
+        responseUsageLine: params.responseUsageLine,
         managedMediaUrls: params.mediaUrls,
         retainOriginalText: true,
       });

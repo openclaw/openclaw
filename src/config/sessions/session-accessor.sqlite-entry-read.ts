@@ -38,6 +38,7 @@ import {
   type SessionEntryProjection,
 } from "./session-entry-snapshot-values.js";
 import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
+import { sessionMemberAccessFacts } from "./session-member-access-facts.js";
 import {
   collectSessionEntryLookupKeys,
   resolveDeliveryProvenCanonicalSessionKey,
@@ -352,6 +353,7 @@ export function readExactSessionEntryRow(
                 member_ids_json: JSON.stringify(
                   actor.hot.members.map((member) => member.identityId),
                 ),
+                member_access_json: JSON.stringify(sessionMemberAccessFacts(actor.hot.members)),
                 board_present: actor.hasBoard ? 1 : 0,
                 transcriptWatermark: {
                   sessionId: selected.entry.sessionId,
@@ -422,6 +424,9 @@ export function prepareExactSessionEntryRowReads(
           selected.row.board_present = actor.hasBoard ? 1 : 0;
         }
         if (options?.includeMembership) {
+          selected.row.member_access_json = JSON.stringify(
+            sessionMemberAccessFacts(actor.hot.members),
+          );
           selected.row.member_ids_json = JSON.stringify(
             actor.hot.members.map((member) => member.identityId),
           );

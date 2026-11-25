@@ -62,8 +62,9 @@ const DONE = "BOB-TARGET-COMPLETED-7d2e";
 const WAKE =
   "Continue the original task in this conversation. Do not repeat a completed operation.";
 const UNDELIVERED = "could not continue this conversation automatically";
-// Observed refusal: the replay's start re-admits Bob's origin, which revocation ended.
-const CONTINUATION_REVOKED = "Operator access was revoked; start a new user turn.";
+// The next agent request re-admits Bob's saved source after device revocation.
+const CONTINUATION_REVOKED =
+  "I did not start this request. The sign-in it was started with is no longer valid. Reconnect to the Gateway, then send your message again.";
 const ORIGIN = "https://control.revocation.example.test";
 const ADMIN = "admin@revocation.example.test";
 const ALICE = "alice@revocation.example.test";

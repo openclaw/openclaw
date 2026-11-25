@@ -526,5 +526,40 @@ describe("EmbeddedBlockChunker", () => {
       }
       expect(chunks).toEqual([tableAtCap]);
     });
+
+    // Opener before minChars, closer past maxChars, sentences mid-island and a
+    // literal closer in double-backtick code.
+    const prose = (count: number) => "Revenue grew in every region this quarter. ".repeat(count);
+    const island = (count: number) =>
+      `<details><summary>By site</summary>\n\n${prose(3)}Close with \`\`</details>\`\`.\n\n${prose(count)}\n</details>`;
+    const reply = `${prose(17)}\n\n${island(7)}\n\n${prose(10)}`;
+
+    it.each([
+      [1, {}],
+      [37, {}],
+      [Infinity, {}],
+      [7, { minChars: 5, flushOnParagraph: true }],
+    ] as const)("keeps a fitting HTML island whole (delta %s, %o)", (delta, options) => {
+      const chunker = new EmbeddedBlockChunker({ ...chunking, ...options });
+      const { chunks, metadata } = streamChunks(chunker, reply, delta);
+      expect(chunks.filter((chunk) => chunk.includes("<details>"))).toEqual([
+        expect.stringContaining(island(7)),
+      ]);
+      expectChunksWithinLength(chunks, chunking.maxChars);
+      expectSourceCoverage(metadata, reply);
+    });
+
+    it("splits oversized islands and code-only tags like plain text", () => {
+      const fenced = `${prose(17)}\n\n\`\`\`html\n<details>\n\`\`\`\n\n${prose(20)}`;
+      for (const [text, delta] of [
+        [`${prose(17)}\n\n${island(30)}`, Infinity],
+        [fenced, 37],
+      ] as const) {
+        const plain = text.replaceAll("details>", "section>");
+        expect(tableChunks(text, delta)).toEqual(
+          tableChunks(plain, delta).map((chunk) => chunk.replaceAll("section>", "details>")),
+        );
+      }
+    });
   });
 });

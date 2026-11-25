@@ -55,7 +55,7 @@ async function resolveSkillCommands(params: HandleCommandsParams, requireFullLis
 }
 
 export const handleHelpCommand: CommandHandler = defineAuthorizedTextCommand(
-  { label: "/help", match: (body) => (body === "/help" ? true : null), silentUnauthorized: true },
+  { label: "/help", match: (body) => (body === "/help" ? true : null) },
   (params) => commandReply(buildHelpMessage(params.cfg)),
 );
 
@@ -63,7 +63,6 @@ export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCom
   {
     label: "/commands",
     match: (body) => (body === "/commands" ? true : null),
-    silentUnauthorized: true,
   },
   async (params) => {
     const skillCommands = await resolveSkillCommands(params);
@@ -90,7 +89,6 @@ export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextComma
   {
     label: "/skill",
     match: (body) => matchCommandPrefix(body, "/skill"),
-    silentUnauthorized: true,
   },
   async (params) => {
     const normalized = params.command.commandBodyNormalized;
@@ -242,7 +240,6 @@ export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
         ? normalized
         : null;
     },
-    silentUnauthorized: true,
   },
   async (params, normalizedStatusCommand) => {
     if (normalizedStatusCommand === "/status plugins") {

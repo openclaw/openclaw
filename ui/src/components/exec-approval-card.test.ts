@@ -89,8 +89,9 @@ function renderSurface(
   variant: "inline" | "modal" | "sidebar" = "modal",
   onDecision: ExecApprovalCardProps["onDecision"] = vi.fn(),
   presentation?: "mobile",
+  canGrant = true,
 ) {
-  const props = { ...ready, approval: request };
+  const props = { ...ready, approval: request, canGrant };
   const view = mountSolid(
     () =>
       variant === "sidebar"
@@ -126,6 +127,37 @@ describe("exec approval card", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
+
+  it.each(["inline", "modal", "sidebar"] as const)(
+    "uses exact eligibility, not turn attribution, for the %s creator controls",
+    (variant) => {
+      const onDecision = vi.fn();
+      const request = approval({
+        kind: "exec",
+        canDecide: true,
+        request: {
+          command: "pwd",
+          turnActor: { id: "participant", label: "Pat <script>" },
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        expiresAtMs: Date.now() + 60_000,
+      });
+      const view = renderSurface(request, variant, onDecision, undefined, false);
+      expect(container.textContent).toContain("For Pat <script>’s turn");
+      expect(container.querySelector("script")).toBeNull();
+      expect(buttons()).toHaveLength(2);
+      const allow = buttons().find((button) => button.textContent?.includes("Allow"));
+      expect(allow?.disabled).toBe(false);
+      allow?.click();
+      expect(onDecision).toHaveBeenCalledWith(request.id, "allow-once");
+      view.unmount();
+      onDecision.mockClear();
+      renderSurface({ ...request, canDecide: undefined }, variant, onDecision, undefined, false);
+      expect(buttons().every((button) => button.disabled)).toBe(true);
+      buttons().forEach((button) => button.click());
+      expect(onDecision).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["Win32", "Linux x86_64", "MacIntel"])(
     "uses compact non-Mac approval hints on %s",

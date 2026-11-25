@@ -11,6 +11,8 @@ import {
 } from "../agents/github-host.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { decodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
+import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import {
   currentGitHubPublicationConfig,
   matchesCurrentGitHubPublicationIdentity,
@@ -28,6 +30,7 @@ import {
 } from "./github-publication-requester.js";
 import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type Inspection = SessionGitHubPullRequestInspectResult;
@@ -154,7 +157,7 @@ export async function inspectOwnGitHubPullRequest(params: {
   assertRequester();
   const actor = params.requester.snapshot.actor;
   if (!authority.operatorWrite && actor.kind !== "operator") {
-    throw new Error("Inspecting your PR requires your verified linked GitHub account.");
+    throw new OperatorRefusalError("channel-unverified", { action: "inspect this PR" });
   }
   // Updating an imported PR must not create guest author eligibility.
   const published = await readSharedGitHubPublication(params.session, {
@@ -183,6 +186,38 @@ export async function inspectOwnGitHubPullRequest(params: {
       authority.operatorWrite ? authority.assertOperatorWrite : undefined,
     ),
     assertCurrent: assertRequester,
+    requireAuthorship: Boolean(params.requester.snapshot.participation),
+    verifyPublication: params.requester.snapshot.participation
+      ? async (body, url) => {
+          // The creation marker identifies the original receipt; later updates cannot lend ownership.
+          for (const match of body.matchAll(/<!-- openclaw-publication:([a-f0-9-]{36}) -->/gu)) {
+            const created = await readSharedGitHubPublication(params.session, {
+              requestId: match[1]!,
+            });
+            assertRequester();
+            if (created?.status !== "published" || created.pull_request_url !== url) {
+              continue;
+            }
+            const original = decodeGitHubPublicationRequester(
+              "requester_authority_json" in created
+                ? created.requester_authority_json
+                : (
+                    await readGitHubPublicationSessionLifecycleInWorker({
+                      publicationKind: "shared",
+                      requestId: created.request_id,
+                    })
+                  )?.requester_authority_json,
+            );
+            assertRequester();
+            return (
+              original?.actor.kind === "operator" &&
+              actor.kind === "operator" &&
+              original.actor.profileId === actor.profileId
+            );
+          }
+          return false;
+        }
+      : undefined,
   });
   return {
     result: inspected.result,
@@ -196,12 +231,30 @@ export async function inspectOwnGitHubPullRequest(params: {
   };
 }
 
+/** Execution authorizes reuse before observing another request's PR as this request's result. */
+export async function assertParticipantPullRequestReuse(
+  requester: GitHubPublicationRequesterPolicyV2 | undefined,
+  pullRequestUrl: string,
+  assertCurrent: () => void,
+) {
+  if (requester?.snapshot.participation) {
+    await inspectOwnGitHubPullRequest({
+      pullRequestUrl,
+      session: requester.snapshot.participation.target,
+      requester,
+      assertCurrent,
+    });
+  }
+}
+
 /** Read-only consumers retain linked ownership unless the action owner supplies full-write authority. */
 export async function readOwnGitHubPullRequest(params: {
   pullRequestUrl: string;
   agentId: string;
   reader: ReturnType<typeof captureOwnGitHubPullRequestReader>;
   assertCurrent: () => void;
+  requireAuthorship?: boolean;
+  verifyPublication?: (body: string, url: string) => Promise<boolean>;
 }) {
   const { host, accountIds: admittedIds, publication, operatorWrite } = params.reader;
   const target = parsePullRequestUrl(params.pullRequestUrl, host);
@@ -290,7 +343,9 @@ export async function readOwnGitHubPullRequest(params: {
     isRecord(pr) &&
     isRecord(pr.user) &&
     publication.url === pr.html_url &&
-    publication.publisher.identity_account_id === pr.user.id;
+    publication.publisher.identity_account_id === pr.user.id &&
+    (!params.verifyPublication ||
+      (typeof pr.body === "string" && (await params.verifyPublication(pr.body, publication.url))));
   if (
     !isRecord(pr) ||
     !isRecord(pr.user) ||
@@ -307,6 +362,11 @@ export async function readOwnGitHubPullRequest(params: {
     throw unavailable();
   }
   const needsContribution = !operatorWrite && !admittedIds.includes(pr.user.id) && !ownPublication;
+  if (needsContribution && params.requireAuthorship) {
+    throw new Error(
+      "This PR is not authored by a GitHub account linked to you or your original shared publication.",
+    );
+  }
   const contributorAccountId =
     needsContribution &&
     pr.user.id === identity.account.accountId &&

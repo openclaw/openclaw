@@ -6,10 +6,16 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { convertPcmToMulaw8k } from "../talk/audio-codec.js";
+import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import { createBrowserMeetingRealtimeAudioTransport } from "./realtime-browser-audio-transport.js";
 
-async function setup(received = vi.fn(), fatal = vi.fn()) {
+async function setup(
+  audioFormat: MeetingRealtimeAudioFormat = "pcm16-24khz",
+  received = vi.fn<(audio: Buffer) => void>(),
+  fatal = vi.fn(),
+) {
   const startInput = vi.fn<MeetingRealtimeAudioTransport["startInput"]>();
   const nativeTransport = {
     onFatal: vi.fn(),
@@ -41,7 +47,7 @@ async function setup(received = vi.fn(), fatal = vi.fn()) {
     meetingSessionId: "session-1",
     meetingUrl: "https://meet.google.com/abc-defg-hij",
     targetId: "tab-1",
-    audioFormat: "pcm16-24khz",
+    audioFormat,
     logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
   });
   transport.onFatal(fatal);
@@ -75,6 +81,33 @@ it("feeds remote playback to the provider while native microphone injection stay
   await transport.stop();
 });
 
+it("preserves G.711 audio across browser pulls including the final filter samples", async () => {
+  const { transport, received, resolvePull } = await setup("g711-ulaw-8khz");
+  const frame = Buffer.alloc(512 * 2);
+  for (let i = 0; i < 512; i++) {
+    frame.writeInt16LE(((i % 29) - 14) * 700, i * 2);
+  }
+  const pull = { isolated: true, base64: frame.toString("base64") };
+  try {
+    resolvePull(pull);
+    await setImmediate();
+    await vi.advanceTimersByTimeAsync(50);
+    resolvePull(pull);
+    await setImmediate();
+    const chunks = received.mock.calls.map(([audio]) => audio);
+    const tail = transport.drainInput?.();
+    if (tail?.length) {
+      chunks.push(tail);
+    }
+    expect(Buffer.concat(chunks)).toEqual(
+      convertPcmToMulaw8k(Buffer.concat([frame, frame]), 24_000),
+    );
+    expect(transport.drainInput?.()?.length ?? 0).toBe(0);
+  } finally {
+    await transport.stop();
+  }
+});
+
 it("discards a pull after stop and rejects an expired browser capture", async () => {
   const { transport, received, fatal, resolvePull } = await setup();
   // Retire host input before the serialized page read finishes.
@@ -84,7 +117,7 @@ it("discards a pull after stop and rejects an expired browser capture", async ()
   expect(received).not.toHaveBeenCalled();
   expect(fatal).not.toHaveBeenCalled();
 
-  const next = await setup(received, fatal);
+  const next = await setup("pcm16-24khz", received, fatal);
   next.resolvePull({ closed: true });
   await setImmediate();
   expect(fatal).toHaveBeenCalledOnce();

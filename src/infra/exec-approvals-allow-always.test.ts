@@ -496,6 +496,35 @@ it("does not bind mksh option values as shell script allowlist targets", async (
 });
 
 it.each([
+  ["zsh -O {payload} {script}", false],
+  ["zsh +O {payload} {script}", false],
+  ["zsh -fO {payload} {script}", false],
+  ["fish -fO {payload} {script}", false],
+  ["fish +x {script}", false],
+  ["bash -O extglob {script}", true],
+] as const)("matches only the script the shell runs for %s", async (command, allowed) => {
+  const f = fixture();
+  const script = f.write("run.sh", "#!/bin/sh\necho ok\n", true);
+  const payload = f.write("payload.txt", "id\n");
+  const argv = command
+    .split(" ")
+    .map((token) => token.replace("{payload}", payload).replace("{script}", script));
+  f.exe(argv[0] ?? "");
+  expect(await f.allowed(await f.analyze(argv), [{ pattern: script }])).toBe(allowed);
+});
+
+it("persists the zsh script that runs after a value-free -O option", async () => {
+  const f = fixture();
+  f.exe("zsh");
+  const script = f.write("run.sh", "#!/bin/sh\necho ok\n", true);
+  const payload = f.write("payload.txt", "id\n");
+  const analysis = await f.analyze(["zsh", "-O", payload, script]);
+  expect(await f.patterns(analysis)).toEqual([
+    { pattern: payload, argPattern: f.hash([payload, script]) },
+  ]);
+});
+
+it.each([
   ["/usr/bin/caffeinate -d -w 42"],
   [
     "/usr/bin/sandbox-exec -p '(deny default) (allow process*)'",

@@ -47,6 +47,7 @@ function projectionInput(
     knownGroups: [],
     collapsedSections: new Set(),
     emptyGroupsMode: "filtering",
+    showEmptyOther: false,
     ownerFilter: null,
     visibleSessionLimits: new Map(),
     sortMode: "created",
@@ -150,6 +151,29 @@ it("hides empty filtered native groups and preserves other section owners", () =
   expect(sectionIds(rows, { ...input, emptyGroupsMode: "never" })).toContain("category:Empty");
 });
 
+it("continues native Other on scroll only with grouping set to none", () => {
+  const rows = Array.from({ length: 20 }, (_, index) => sessionRow(`row-${index}`));
+  const alpha = rows.map((row) => ({ ...row, category: "Alpha" }));
+  const continues = (sessions: SidebarRecentSession[], overrides: Partial<ProjectionInput>) =>
+    project(sessions, overrides).sections.map(({ id, continuesOnScroll }) => [
+      id,
+      continuesOnScroll,
+    ]);
+  expect(continues(rows, { grouping: "none" })).toEqual([["ungrouped", true]]);
+  expect(continues(rows, {})).toEqual([["ungrouped", false]]);
+  expect(continues(alpha, { knownGroups: ["Alpha"] })).toEqual([["category:Alpha", false]]);
+  expect(continues(rows, { grouping: "none", catalogIds: ["external"] })).toEqual([
+    ["ungrouped", true],
+    ["catalog:external", false],
+  ]);
+  expect(
+    continues(alpha, { knownGroups: ["Alpha"], showEmptyOther: true, statusFilter: "all" }),
+  ).toEqual([
+    ["category:Alpha", false],
+    ["ungrouped", false],
+  ]);
+});
+
 it("retains unloaded group destinations until the session list establishes their contents", () => {
   const input = { knownGroups: ["Awaiting sessions"], statusFilter: "active" as const };
   expect(sectionIds([], { ...input, listLoaded: false })).toContain("category:Awaiting sessions");
@@ -213,28 +237,30 @@ it("preserves Show more as background children change", () => {
   expect(projection.children.isFullyShown(parent.key)).toBe(true);
 });
 
-it("preserves restored expansion through the live handoff but clears it on a later connection", () => {
+it("keeps explicit disclosure through the live handoff without restoring ambiguous old opens", () => {
   const rows = [
     sessionRow("expanded"),
     sessionRow("fully-shown"),
     sessionRow("collapsed", { containsActiveDescendant: true }),
-    sessionRow("untouched", { containsActiveDescendant: true }),
+    sessionRow("old-open", { containsActiveDescendant: true }),
   ];
   project([]);
+  projection.children.toggle("expanded");
   projection.children.restore([
-    { key: "expanded", childrenDisplayMode: "expanded" },
+    { key: "expanded", childrenDisplayMode: projection.children.capture("expanded") },
     { key: "fully-shown", childrenDisplayMode: "expanded-fully" },
     { key: "collapsed", childrenDisplayMode: "collapsed-by-user" },
-    { key: "untouched", childrenDisplayMode: projection.children.capture("untouched") },
+    { key: "old-open", childrenDisplayMode: "expanded" },
   ]);
   expect(projection.children.isExpanded("expanded")).toBe(true);
   expect(projection.children.isFullyShown("fully-shown")).toBe(true);
+  expect(projection.children.isExpanded("old-open")).toBe(false);
   const liveConnection = {};
   project(rows, { connectionIdentity: liveConnection, listSource: {} });
   expect(projection.children.isExpanded("expanded")).toBe(true);
   expect(projection.children.isFullyShown("fully-shown")).toBe(true);
   expect(projection.children.capture("collapsed")).toBe("collapsed-by-user");
-  expect(projection.children.isExpanded("untouched")).toBe(false);
+  expect(projection.children.isExpanded("old-open")).toBe(false);
   project(rows, { connectionIdentity: {} });
   expect(projection.children.isExpanded("expanded")).toBe(false);
   expect(projection.children.isFullyShown("fully-shown")).toBe(false);

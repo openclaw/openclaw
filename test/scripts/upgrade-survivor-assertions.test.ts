@@ -308,6 +308,63 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
 }
 
 describe("upgrade recovery result assertions", () => {
+  // Scoped projection of the recovery receipt from Actions artifact 14890042643.
+  const lifecycle = {
+    runId: "00000000-0000-4000-8000-000000000000",
+    phase: "finished",
+    status: "succeeded",
+    after: { version: "2026.11.16-first-hop.0" },
+    steps: [
+      { step: "activating", status: "completed" },
+      { step: "notice:activating", status: "skipped" },
+    ],
+  };
+  it.each([
+    { name: "terminal success", patch: {}, status: 0 },
+    { name: "prepared activation", patch: { phase: "activating", status: "running" }, status: 1 },
+    {
+      name: "failed step",
+      patch: { steps: [{ step: "activating", status: "failed" }] },
+      status: 1,
+    },
+  ])("classifies lifecycle receipts: $name", ({ patch, status }) => {
+    const result = runJsonAssertion(
+      "assert-successful-update-json",
+      { ...lifecycle, ...patch },
+      lifecycle.after.version,
+    );
+    expect(result.status, result.stderr).toBe(status);
+  });
+
+  it.each([true, false])(
+    "requires serving Gateway verification for resident restart: %s",
+    (ready) => {
+      const version = lifecycle.after.version;
+      const buildId = "fixture-build";
+      const result = runJsonAssertion(
+        "assert-successful-update-json",
+        {
+          ...lifecycle,
+          target: { version },
+          after: { version, buildId },
+          verification: {
+            runningVersion: version,
+            runningBuildId: buildId,
+            booted: true,
+            coreReady: ready,
+            serviceRunning: true,
+            versionMatch: true,
+          },
+        },
+        version,
+        "",
+        "1",
+      );
+      expect(result.status, result.stderr).toBe(ready ? 0 : 1);
+      expect(result.stdout).toBe(ready ? "resident" : "");
+    },
+  );
+
   it.each([
     { name: "skipped startup", patch: {}, succeeds: true },
     { name: "failed startup", patch: { exitCode: 1 }, succeeds: false },
@@ -883,6 +940,7 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
 function assertConfig(params: {
   acceptedIntents: string[];
   baselineVersion?: string;
+  baselineSkillLibraryToolSplit?: boolean;
   config: unknown;
   scenario: string;
   stage?: "baseline" | "survival";
@@ -896,6 +954,7 @@ function assertConfig(params: {
     writeJson(coveragePath, {
       acceptedIntents: params.acceptedIntents,
       baselineVersion: params.baselineVersion,
+      baselineSkillLibraryToolSplit: params.baselineSkillLibraryToolSplit,
     });
 
     execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-config"], {
@@ -1068,6 +1127,7 @@ function assertCompanionPluginRecords(
       for (const file of [
         "release-version.mjs",
         "sqlite-transcript-payload.mjs",
+        "update-receipt.mjs",
         "upgrade-survivor-policy.mjs",
         "upgrade-survivor-scenarios.json",
       ]) {
@@ -1496,6 +1556,26 @@ process.stdout.write(sessionDir + "\\n");
     expect(() => run({ tools: { allow: ["read", "skill_workshop", "skill_library"] } })).toThrow(
       /marker/,
     );
+  });
+
+  it("preserves an already stamped Skill Library policy without granting the new tool", () => {
+    const run = (config: unknown, stage: "baseline" | "survival" = "survival") =>
+      assertConfig({
+        acceptedIntents: ["skill-library-split"],
+        baselineVersion: "2026.11.10",
+        baselineSkillLibraryToolSplit: true,
+        config,
+        scenario: "base",
+        stage,
+      });
+    const meta = { migrations: { skillLibraryToolSplit: true } };
+    const tools = { allow: ["read", "skill_workshop"] };
+    expect(() => run({ meta, tools }, "baseline")).not.toThrow();
+    expect(() => run({ meta, tools })).not.toThrow();
+    expect(() => run({ tools })).toThrow(/marker/);
+    expect(() =>
+      run({ meta, tools: { allow: ["read", "skill_workshop", "skill_library"] } }),
+    ).toThrow(/exactly once/);
   });
 
   it("allows token rotation and requires each reconnect to use the newest stored token", () => {

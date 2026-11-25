@@ -60,6 +60,8 @@ export function resolveEffectiveAgentRuntime(
     modelBaseUrl?: unknown;
     /** Existing placement owns runtime selection only when policy is implicit. */
     placementRuntime?: string;
+    /** Auto selection already resolved for the same provider and model without route hints. */
+    preparedAutoRuntime?: string;
     sessionEntry?: Pick<
       SessionEntry,
       "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
@@ -92,14 +94,17 @@ export function resolveEffectiveAgentRuntime(
     // Reuse the loaded harness registry without triggering plugin discovery.
     // This keeps thinking policy aligned with the harness that would own the turn.
     return (
+      params.preparedAutoRuntime ??
       resolveAutoAgentHarnessId({
         provider: params.provider,
         modelId: params.modelId,
         config: params.cfg,
+        mode: params.mode,
         ...(params.agentScope
           ? { agentScope: params.agentScope, sessionKey: params.sessionKey }
           : {}),
-      }) ?? "openclaw"
+      }) ??
+      "openclaw"
     );
   }
   return concretizeAgentRuntime(runtime);

@@ -527,8 +527,12 @@ describe("chat pane composer controls", () => {
     const heading = menu.querySelector<HTMLElement>(".oc-menu-heading__label");
     expect(heading?.textContent?.trim()).toBe("Permissions");
     expect(heading?.closest('[role="menuitem"]')).toBeNull();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector("a.chat-controls__permission-learn-more")?.textContent?.trim(),
+      ).toBe("Learn more"),
+    );
     const docsLink = container.querySelector<HTMLElement>("a.chat-controls__permission-learn-more");
-    expect(docsLink?.textContent?.trim()).toBe("Learn more");
     expect(docsLink?.getAttribute("href")).toBe(
       "https://docs.openclaw.ai/gateway/permission-modes",
     );
@@ -894,3 +898,35 @@ describe("chat pane model controls", () => {
     expect(state.chatRunId).toBeNull();
   });
 });
+
+it.each(["read-only", "guarded", "workspace", "full"] as const)(
+  "shows the admitted participant permission %s instead of the owner's mode",
+  (invitedPermission) => {
+    const key = "agent:main:participant-permission";
+    const selectedSession: GatewaySessionRow = {
+      key,
+      kind: "direct" as const,
+      permissionMode: "full" as const,
+      invitedAccess: "send" as const,
+      invitedPermission,
+      sharingRole: "member" as const,
+    };
+    const state = makeChatHost({
+      sessionKey: key,
+      chatModelSwitchPromises: {},
+      sessionsResult: {
+        ...createSessionsListResult({ defaultsModel: null, defaultsProvider: null }),
+        sessions: [selectedSession],
+      },
+    }) as unknown as ChatPageHost;
+    expect(renderControls(state).permissionPicker).toMatchObject({
+      mode: invitedPermission,
+      participant: true,
+    });
+    selectedSession.sharingRole = "owner";
+    expect(renderControls(state).permissionPicker).toMatchObject({
+      mode: "full",
+      participant: false,
+    });
+  },
+);

@@ -248,7 +248,6 @@ describe("queued turn steering", () => {
       gatewayAccessGrant: null,
       source: {},
       signal: new AbortController().signal,
-      assertCurrent: () => {},
     });
     turn.queued.operatorAuthority = operatorAuthority;
     const queueMessage = vi.fn(async () => {});

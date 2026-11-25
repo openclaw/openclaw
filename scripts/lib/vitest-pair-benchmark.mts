@@ -16,7 +16,13 @@ import {
 } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { inspectManagedProcessGroup, runManagedCommand } from "./managed-child-process.mts";
+import {
+  inventoryPreparedWorkload,
+  preparedInventoryDelta,
+  type PreparedEntry,
+} from "./prepared-workload-inventory.mts";
 import {
   analyzeBenchmark,
   analyzeNodeCacheBenchmark,
@@ -240,6 +246,9 @@ export function buildBenchmarkCommandEnv(
     NODE_COMPILE_CACHE: treatment?.nodeCache ?? path.join(cacheRoot, "node-compile"),
     ...(treatment
       ? {
+          COREPACK_ENABLE_NETWORK: "0",
+          npm_config_offline: "true",
+          pnpm_config_manage_package_manager_versions: "false",
           OPENCLAW_VITEST_RUNTIME: "node",
           OPENCLAW_VITEST_FS_MODULE_CACHE: "0",
           OPENCLAW_VITEST_WORKER_CACHE: "0",
@@ -250,7 +259,11 @@ export function buildBenchmarkCommandEnv(
     OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(cacheRoot, "vitest-fs"),
     OPENCLAW_VITEST_MAX_WORKERS: "1",
     OPENCLAW_TEST_PROJECTS_PARALLEL: "1",
-    PATH: ambientEnv.PATH,
+    PATH: treatment
+      ? [path.dirname(packageManager.executable), path.dirname(process.execPath), ambientEnv.PATH]
+          .filter(Boolean)
+          .join(path.delimiter)
+      : ambientEnv.PATH,
     TMPDIR: path.join(cacheRoot, "tmp"),
     npm_config_cache: npmCache,
     // Both source cuts must use the benchmark's selected pnpm, even when their
@@ -273,6 +286,10 @@ function runVitestArgs(lane: BenchmarkLane, reportFile: string): string[] {
     reportFile,
     ...(lane.config ? lane.files : []),
   ];
+}
+
+export function buildNodeCacheVitestArgs(lane: BenchmarkLane, reportFile: string): string[] {
+  return [...runVitestArgs(lane, reportFile), "--no-cache", "--no-fsModuleCache"];
 }
 
 async function runBenchmarkCommand(
@@ -384,8 +401,12 @@ async function runSetupCommand(
 
 function gitOutput(cwd: string, args: string[], deadline?: VitestPairDeadline): string {
   deadline?.throwIfExpired();
-  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
-  if (result.status !== 0) {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    ...(deadline ? { timeout: Math.max(1, deadline.deadlineAt - Date.now()) } : {}),
+  });
+  if (result.error || result.signal || result.status !== 0) {
     throw new Error(`git ${args.join(" ")} failed in ${cwd}`);
   }
   deadline?.throwIfExpired();
@@ -440,6 +461,91 @@ type NodeCacheContext = {
   pnpmBin: string;
   manifest: NodeCacheManifest;
 };
+
+type NodeCacheQualification = {
+  manifest: NodeCacheManifest;
+  preparedSha256: string;
+  provenance: unknown;
+  revalidate: () => void;
+};
+
+type QualifiedExecution = {
+  deadline: VitestPairDeadline;
+  checkOutput: () => void;
+  qualification: NodeCacheQualification;
+};
+
+export async function runQualifiedNodeCacheBenchmark(input: {
+  workloadDir: string;
+  qualificationDir: string;
+  outputDir: string;
+  scratchDir: string;
+  pnpmBin: string;
+  timeoutMs: number;
+  admit: (deadline: VitestPairDeadline) => NodeCacheQualification;
+}): Promise<void> {
+  if (
+    !Number.isSafeInteger(input.timeoutMs) ||
+    input.timeoutMs <= 0 ||
+    input.timeoutMs > 150 * 60_000
+  ) {
+    throw new Error("Qualified measurement requires a deadline of at most 150 minutes");
+  }
+  const output = path.resolve(input.outputDir);
+  const scratch = path.resolve(input.scratchDir);
+  const harness = realpathSync(fileURLToPath(new URL("../../", import.meta.url)));
+  const workload = realpathSync(input.workloadDir);
+  const qualification = realpathSync(input.qualificationDir);
+  const roots = [output, scratch, harness, workload, qualification];
+  if (
+    roots.some((root, i) =>
+      roots.some((other, j) => i !== j && (root === other || root.startsWith(other + path.sep))),
+    )
+  ) {
+    throw new Error("Qualified measurement paths must be outside both checkouts and disjoint");
+  }
+  for (const directory of [output, scratch]) {
+    if (
+      existsSync(directory) ||
+      realpathSync(path.dirname(directory)) !== path.dirname(directory)
+    ) {
+      throw new Error("Qualified measurement requires absent directories with physical parents");
+    }
+  }
+  const checkOutput = ownedDirectory(output);
+  await withTerminalManifest(
+    output,
+    async () => {
+      await withVitestPairDeadline(async (deadline) => {
+        const admitted = input.admit(deadline);
+        deadline.throwIfExpired();
+        writeJsonAtomic(path.join(output, "qualification.json"), admitted.provenance);
+        writeJsonAtomic(path.join(output, "manifest.json"), admitted.manifest);
+        const probe = spawnSync("/usr/bin/time", ["--version"], {
+          encoding: "utf8",
+          timeout: Math.max(1, Math.min(10_000, deadline.deadlineAt - Date.now())),
+          env: { PATH: process.env.PATH, LANG: "C", LC_ALL: "C" },
+        });
+        if (probe.error || probe.status !== 0 || !/GNU [Tt]ime/u.test(probe.stdout)) {
+          throw new Error("Qualified measurement requires GNU /usr/bin/time");
+        }
+        deadline.throwIfExpired();
+        await runNodeCacheBenchmark(
+          {
+            workloadDir: workload,
+            seedDir: path.join(qualification, "seed"),
+            outputDir: output,
+            scratchDir: scratch,
+            pnpmBin: input.pnpmBin,
+            manifest: admitted.manifest,
+          },
+          { deadline, checkOutput, qualification: admitted },
+        );
+      }, input.timeoutMs);
+    },
+    checkOutput,
+  );
+}
 
 export function readNodeCacheSeed(root: string): NodeCacheManifest["seed"]["files"] {
   const files: NodeCacheManifest["seed"]["files"] = [];
@@ -522,7 +628,7 @@ function assertPreparedInputs(context: NodeCacheContext) {
   }
 }
 
-function ownedDirectory(dir: string) {
+export function ownedDirectory(dir: string) {
   mkdirSync(dir, { mode: 0o700 });
   const identity = lstatSync(dir);
   return () => {
@@ -538,7 +644,10 @@ function ownedDirectory(dir: string) {
   };
 }
 
-export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<void> {
+export async function runNodeCacheBenchmark(
+  input: NodeCacheContext,
+  qualified?: QualifiedExecution,
+): Promise<void> {
   const workload = realpathSync(input.workloadDir);
   const seed = path.resolve(input.seedDir);
   const output = path.resolve(input.outputDir);
@@ -577,18 +686,30 @@ export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<vo
     ) {
       throw new Error("Prepared benchmark runtime identity differs");
     }
-    if (gitOutput(workload, ["rev-parse", "HEAD"]) !== context.manifest.workloadSha) {
+    if (
+      gitOutput(workload, ["rev-parse", "HEAD"], qualified?.deadline) !==
+      context.manifest.workloadSha
+    ) {
       throw new Error("Prepared workload SHA differs");
     }
     assertPreparedInputs(context);
     assertSeed(context);
-    if (gitOutput(workload, ["status", "--porcelain=v1", "--untracked-files=all"])) {
+    if (
+      gitOutput(
+        workload,
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+        qualified?.deadline,
+      )
+    ) {
       throw new Error("Prepared workload must have clean tracked and untracked state");
     }
   };
   assertInputs();
-  const checkOutput = ownedDirectory(output);
-  await withTerminalManifest(
+  const checkOutput = qualified?.checkOutput ?? ownedDirectory(output);
+  const terminal = qualified
+    ? async (_output: string, task: () => Promise<void>) => task()
+    : withTerminalManifest;
+  await terminal(
     output,
     async () => {
       const checkScratch = ownedDirectory(scratch);
@@ -613,9 +734,9 @@ export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<vo
         workerCachePolicy:
           "Retained compiled-worker reuse is disabled; fresh compiled-worker generations may still be created.",
         limitations:
-          "Workload/dependency completeness, seed preparation and effective prepared-config policies require separate external qualification; this controller only checks declared identities. launchEnv records initial launcher inputs, including a one-worker request, not enforced descendant settings. No native cache-acceptance claim.",
+          "Workload/dependency correctness, seed preparation and effective prepared-config policies require separate external qualification. Full prepared bytes, modes and internal links are compared before and after the schedule; this is not continuous mutation detection. launchEnv records initial launcher inputs, including a one-worker request, not enforced descendant settings. No native cache-acceptance claim.",
         timingBoundary:
-          "Active preparation, child exit/cache persistence and tree join, oracle and owned cleanup included; final record serialization excluded.",
+          "Active preparation, child exit/cache persistence and tree join, oracle and owned cleanup included; final record serialization excluded. Full prepared-inventory scans are outside per-pair timing and inside the aggregate deadline.",
         resourceScope:
           "GNU time child CPU only; parent restore/admission/cleanup CPU and RSS unavailable",
       });
@@ -623,120 +744,188 @@ export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<vo
       let failure: Error | undefined;
       const records: NodeCacheMeasurement[] = [];
       try {
-        await withVitestPairDeadline(async (deadline) => {
-          for (const plan of schedule) {
-            const id = "pair-" + plan.pair + "-" + plan.treatment;
-            const active = path.join(scratch, "active");
-            const runRoot = path.join(output, id);
-            const nodeCache = path.join(active, "node-compile");
-            const reportPath = path.join(runRoot, "vitest-report.json");
-            const timePath = path.join(runRoot, "gnu-time.txt");
-            const command = [
-              "/usr/bin/time",
-              "-v",
-              "-o",
-              timePath,
-              process.execPath,
-              ...runVitestArgs(context.manifest.lane, reportPath),
-            ];
-            const phases: Record<string, number | null> = {
-              prepareMs: null,
-              executePersistAndJoinMs: null,
-              validateMs: null,
-              cleanupMs: null,
-            };
-            let checkActive: (() => void) | undefined;
-            let env: NodeJS.ProcessEnv | null = null;
-            let settled = true;
-            let cleaned = false;
-            let caseFailure: Error | undefined;
-            let result: RunCommandResult | undefined;
-            let execution: BenchmarkExecutionSummary | null = null;
-            let cpu: ReturnType<typeof parseGnuTime> | null = null;
-            const started = process.hrtime.bigint();
-            const elapsed = () => Number(process.hrtime.bigint() - started) / 1_000_000;
-            try {
-              deadline.throwIfExpired();
-              checkOutput();
-              checkScratch();
-              checkActive = ownedDirectory(active);
-              mkdirSync(runRoot);
-              if (plan.treatment === "seeded") {
-                restoreNodeCacheSeed(seed, nodeCache);
-              } else {
-                mkdirSync(nodeCache);
-              }
-              env = buildBenchmarkCommandEnv(
-                path.join(active, "home"),
-                path.join(active, "state"),
-                packageManager,
-                process.env,
-                { kind: plan.treatment, nodeCache },
-              );
-              phases.prepareMs = elapsed();
-              settled = false;
-              result = await runOwnedCommand({
-                bin: command[0]!,
-                args: command.slice(1),
-                cwd: workload,
-                env,
-                logPath: path.join(runRoot, "command.log"),
-                deadline,
-              });
-              settled = true;
-              phases.executePersistAndJoinMs = elapsed() - phases.prepareMs;
-              if (result.exitCode !== 0) {
-                throw new Error(id + " exited with status " + result.exitCode);
-              }
-              cpu = parseGnuTime(timePath);
-              execution = parseVitestExecutionReport(
-                reportPath,
-                workload,
-                context.manifest.lane,
-                context.manifest.expected,
-              );
-              phases.validateMs = elapsed() - phases.prepareMs - phases.executePersistAndJoinMs;
-            } catch (error) {
-              caseFailure = normalizeError(error);
-            } finally {
-              allSettled &&= settled;
-              if (checkActive && settled) {
-                const cleanupStart = elapsed();
-                try {
-                  checkScratch();
-                  checkActive();
-                  rmSync(active, { recursive: true });
-                  cleaned = true;
-                  phases.cleanupMs = elapsed() - cleanupStart;
-                } catch (error) {
-                  caseFailure ??= normalizeError(error);
+        const runWithDeadline = qualified
+          ? async (task: (deadline: VitestPairDeadline) => Promise<void>) =>
+              task(qualified.deadline)
+          : withVitestPairDeadline;
+        await runWithDeadline(async (deadline) => {
+          let prepared: PreparedEntry[] | undefined;
+          const integrityFile = path.join(output, "prepared-integrity.json");
+          const scope =
+            "All regular bytes, file modes and internal symlink targets; only root Git metadata excluded. Pre/post comparison only, not continuous mutation detection.";
+          try {
+            prepared = await inventoryPreparedWorkload(workload, deadline);
+            if (
+              qualified &&
+              sha256(JSON.stringify(prepared)) !== qualified.qualification.preparedSha256
+            ) {
+              throw new Error("Prepared workload differs from successful controls");
+            }
+            checkOutput();
+            writeJsonAtomic(path.join(output, "prepared-inventory.json"), prepared);
+            writeJsonAtomic(integrityFile, {
+              version: 1,
+              status: "pending",
+              scope,
+              beforeSha256: sha256(JSON.stringify(prepared)),
+            });
+            for (const plan of schedule) {
+              const id = "pair-" + plan.pair + "-" + plan.treatment;
+              const active = path.join(scratch, "active");
+              const runRoot = path.join(output, id);
+              const nodeCache = path.join(active, "node-compile");
+              const reportPath = path.join(runRoot, "vitest-report.json");
+              const timePath = path.join(runRoot, "gnu-time.txt");
+              const command = [
+                "/usr/bin/time",
+                "-v",
+                "-o",
+                timePath,
+                process.execPath,
+                ...buildNodeCacheVitestArgs(context.manifest.lane, reportPath),
+              ];
+              const phases: Record<string, number | null> = {
+                prepareMs: null,
+                executePersistAndJoinMs: null,
+                validateMs: null,
+                cleanupMs: null,
+              };
+              let checkActive: (() => void) | undefined;
+              let env: NodeJS.ProcessEnv | null = null;
+              let settled = true;
+              let cleaned = false;
+              let caseFailure: Error | undefined;
+              let result: RunCommandResult | undefined;
+              let execution: BenchmarkExecutionSummary | null = null;
+              let cpu: ReturnType<typeof parseGnuTime> | null = null;
+              const started = process.hrtime.bigint();
+              const elapsed = () => Number(process.hrtime.bigint() - started) / 1_000_000;
+              try {
+                deadline.throwIfExpired();
+                checkOutput();
+                checkScratch();
+                checkActive = ownedDirectory(active);
+                mkdirSync(runRoot);
+                if (plan.treatment === "seeded") {
+                  restoreNodeCacheSeed(seed, nodeCache);
+                } else {
+                  mkdirSync(nodeCache);
+                }
+                env = buildBenchmarkCommandEnv(
+                  path.join(active, "home"),
+                  path.join(active, "state"),
+                  packageManager,
+                  process.env,
+                  { kind: plan.treatment, nodeCache },
+                );
+                phases.prepareMs = elapsed();
+                settled = false;
+                result = await runOwnedCommand({
+                  bin: command[0]!,
+                  args: command.slice(1),
+                  cwd: workload,
+                  env,
+                  logPath: path.join(runRoot, "command.log"),
+                  deadline,
+                });
+                settled = true;
+                phases.executePersistAndJoinMs = elapsed() - phases.prepareMs;
+                if (result.exitCode !== 0) {
+                  throw new Error(id + " exited with status " + result.exitCode);
+                }
+                cpu = parseGnuTime(timePath);
+                execution = parseVitestExecutionReport(
+                  reportPath,
+                  workload,
+                  context.manifest.lane,
+                  context.manifest.expected,
+                );
+                phases.validateMs = elapsed() - phases.prepareMs - phases.executePersistAndJoinMs;
+              } catch (error) {
+                caseFailure = normalizeError(error);
+              } finally {
+                allSettled &&= settled;
+                if (checkActive && settled) {
+                  const cleanupStart = elapsed();
+                  try {
+                    checkScratch();
+                    checkActive();
+                    rmSync(active, { recursive: true });
+                    cleaned = true;
+                    phases.cleanupMs = elapsed() - cleanupStart;
+                  } catch (error) {
+                    caseFailure ??= normalizeError(error);
+                  }
                 }
               }
+              const record = {
+                ...plan,
+                id,
+                status: caseFailure ? ("failure" as const) : ("success" as const),
+                inclusiveMs: cleaned ? elapsed() : null,
+                phases,
+                command,
+                launchEnv: env,
+                execution,
+                exitCode: result?.exitCode ?? null,
+                userCpuMs: cpu?.userCpuMs ?? null,
+                systemCpuMs: cpu?.systemCpuMs ?? null,
+                processTreeSettled: settled,
+                cleanup: cleaned ? "removed-owned-active" : "retained-or-not-created",
+                ...(caseFailure ? { error: caseFailure.message } : {}),
+              };
+              // The summary cannot time its own serialization. A failed write aborts
+              // the experiment rather than admitting an unrecorded pair.
+              checkOutput();
+              writeJsonAtomic(path.join(output, id + ".json"), record);
+              if (caseFailure) {
+                throw caseFailure;
+              }
+              records.push(record);
             }
-            const record = {
-              ...plan,
-              id,
-              status: caseFailure ? ("failure" as const) : ("success" as const),
-              inclusiveMs: cleaned ? elapsed() : null,
-              phases,
-              command,
-              launchEnv: env,
-              execution,
-              exitCode: result?.exitCode ?? null,
-              userCpuMs: cpu?.userCpuMs ?? null,
-              systemCpuMs: cpu?.systemCpuMs ?? null,
-              processTreeSettled: settled,
-              cleanup: cleaned ? "removed-owned-active" : "retained-or-not-created",
-              ...(caseFailure ? { error: caseFailure.message } : {}),
-            };
-            // The summary cannot time its own serialization. A failed write aborts
-            // the experiment rather than admitting an unrecorded pair.
-            checkOutput();
-            writeJsonAtomic(path.join(output, id + ".json"), record);
-            if (caseFailure) {
-              throw caseFailure;
+          } catch (error) {
+            failure ??= normalizeError(error);
+          } finally {
+            if (prepared && allSettled) {
+              try {
+                const after = await inventoryPreparedWorkload(workload, deadline);
+                const delta = preparedInventoryDelta(prepared, after);
+                const unchanged = delta.beforeSha256 === delta.afterSha256;
+                checkOutput();
+                writeJsonAtomic(integrityFile, {
+                  version: 1,
+                  scope,
+                  status: unchanged ? "unchanged" : "changed",
+                  ...delta,
+                });
+                if (!unchanged) {
+                  failure ??= new Error("Prepared workload changed during the schedule");
+                }
+              } catch (error) {
+                checkOutput();
+                writeJsonAtomic(integrityFile, {
+                  version: 1,
+                  scope,
+                  status: "unverified",
+                  error: normalizeError(error).message,
+                  beforeSha256: sha256(JSON.stringify(prepared)),
+                });
+                failure ??= normalizeError(error);
+              }
+            } else {
+              checkOutput();
+              writeJsonAtomic(integrityFile, {
+                version: 1,
+                scope,
+                status: "unverified",
+                error: allSettled
+                  ? "Initial inventory unavailable"
+                  : "Child settlement uncertain; workload not inspected",
+              });
             }
-            records.push(record);
+          }
+          if (failure) {
+            throw failure;
           }
         });
       } catch (error) {
@@ -745,7 +934,13 @@ export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<vo
         // Do not inspect or remove a workload while an uncertain child may own it.
         if (allSettled) {
           try {
+            qualified?.deadline.throwIfExpired();
             assertInputs();
+            if (qualified) {
+              qualified.deadline.throwIfExpired();
+              qualified.qualification.revalidate();
+              qualified.deadline.throwIfExpired();
+            }
           } catch (error) {
             failure ??= normalizeError(error);
           }

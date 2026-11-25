@@ -420,21 +420,16 @@ describe("runLocalAgentCommand resource lifetime", () => {
 });
 
 describe("runLocalAgentCommand operator authority", () => {
-  it("admits only local operator owners and revokes their authority at settlement", async () => {
-    for (const testCase of [
-      { operatorAuthority: true, senderIsOwner: true },
-      { operatorAuthority: true, senderIsOwner: false },
-      { operatorAuthority: false, senderIsOwner: true },
-    ]) {
-      const admitted = testCase.operatorAuthority && testCase.senderIsOwner;
+  it("admits local operator runs as the local-host owner and revokes them at settlement", async () => {
+    for (const operatorAuthority of [true, false]) {
       let retained: ReturnType<typeof bindActiveOperatorTurnAuthority>;
       let capability: CronCreatorAuthorityCapability | undefined;
-      mocks.prepare.mockResolvedValueOnce(createPrepared(testCase.senderIsOwner));
+      mocks.prepare.mockResolvedValueOnce(createPrepared(true));
       await runCommand(
         async (prepared) => {
           capability = prepared.opts.cronCreatorAuthorityCapability;
           retained = bindActiveOperatorTurnAuthority(prepared.runId);
-          if (admitted) {
+          if (operatorAuthority) {
             expect(capability?.callerOrigin).toEqual({ kind: "local" });
             expect(retained?.source).toBe("local");
           } else {
@@ -442,9 +437,11 @@ describe("runLocalAgentCommand operator authority", () => {
             expect(retained).toBeUndefined();
           }
         },
-        { operatorAuthority: testCase.operatorAuthority },
+        { operatorAuthority },
       );
-      if (admitted) {
+      // The local-host grant names the sender owner; no caller option narrows it.
+      expect(mocks.prepare.mock.calls.at(-1)?.[0]).toMatchObject({ senderIsOwner: true });
+      if (operatorAuthority) {
         expect(() => retained?.assertActive()).toThrow();
         expect(capability?.active).toBe(false);
       }

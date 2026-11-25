@@ -26,7 +26,7 @@ validate_release_suite_filters() {
   case "$dispatch_scope" in
     controller)
       case "$rerun_group" in
-        all|ci|plugin-prerelease|install-smoke|cross-os|windows-node|live-e2e|package|qualified-package|qa-parity|qa-live|npm-telegram|performance) ;;
+        all|build-only|ci|plugin-prerelease|install-smoke|cross-os|windows-node|live-e2e|package|qualified-package|qa-parity|qa-live|npm-telegram|performance) ;;
         *)
           echo "controller rerun_group is invalid: ${rerun_group}." >&2
           return 1

@@ -268,27 +268,6 @@
   color: var(--muted);
 }
 
-.model-providers__label-with-help {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: fit-content;
-}
-
-.model-providers__help-button {
-  border-radius: 0;
-}
-
-.model-providers__help-button:hover,
-.model-providers__help-button:focus-visible {
-  color: var(--text);
-}
-
-.model-providers__help-button:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
 .settings-section > .settings-group:has(> .model-providers__provider-list) {
   overflow: visible;
   border: 0;
@@ -304,71 +283,6 @@
   margin-bottom: var(--space-3);
 }
 
-.model-providers__defaults {
-  .settings-row__control:where(:not(.settings-row--nav > *)) {
-    flex: 0 1 auto;
-    width: 340px;
-  }
-
-  .model-picker,
-  .settings-segmented {
-    width: 100%;
-  }
-
-  .model-picker .picker-select__label {
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-
-  .picker-select__split-label {
-    display: flex;
-    min-width: 0;
-  }
-
-  .picker-select__split-label > :first-child {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .picker-select__split-label > :last-child {
-    flex: none;
-    white-space: pre;
-  }
-
-  .model-picker .picker-select__option .picker-select__copy {
-    display: grid;
-    flex: 1;
-    min-width: 0;
-    gap: 2px;
-  }
-
-  .model-picker .picker-select__description {
-    color: var(--muted);
-    overflow-wrap: anywhere;
-  }
-
-  .settings-segmented > .settings-segmented__btn {
-    flex: 1 1 auto;
-    white-space: normal;
-  }
-
-  @media (max-width: 640px) {
-    .settings-row:not(.settings-row--nav) {
-      flex-direction: column;
-      align-items: stretch;
-      gap: var(--space-2);
-    }
-
-    .settings-row__control:where(:not(.settings-row--nav > *)) {
-      width: 100%;
-      max-width: none;
-    }
-  }
-}
-
 /* One equal-width slot per subscription. The fill is the allowance left on that login. */
 .model-providers__usage-bars {
   display: grid;
@@ -378,9 +292,9 @@
   margin-inline-start: calc(-1 * var(--provider-detail-indent));
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
-}
-.model-providers__usage-bars > * {
-  grid-column: 1 / -1;
+  > * {
+    grid-column: 1 / -1;
+  }
 }
 .model-providers__usage-window {
   display: grid;
@@ -394,22 +308,40 @@
   display: grid;
   grid: auto / auto-flow minmax(0, 1fr);
   gap: var(--space-1);
+  > [data-movable] {
+    cursor: grab;
+    touch-action: pan-y;
+  }
+  > [data-grabbed] {
+    position: relative;
+    z-index: 1;
+    cursor: grabbing;
+    border-radius: var(--radius-sm);
+    background: var(--card);
+    box-shadow: var(--shadow-md);
+  }
 }
-[data-account-segment] {
+.model-providers__usage-segment {
+  min-height: max(36px, var(--settings-control-height));
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
   position: relative;
   z-index: 0;
   overflow: hidden;
   display: grid;
   place-items: center;
   padding: var(--space-1) var(--space-2);
-  min-height: 36px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-}
-.model-providers__usage-track > [data-movable] {
-  cursor: grab;
-  touch-action: pan-y;
+  &[data-known="false"] {
+    border-style: dashed;
+  }
+  &[data-tone="warning"] {
+    --segment-tone: var(--warn);
+  }
+  &[data-tone="error"] {
+    --segment-tone: var(--danger);
+    color: var(--segment-tone);
+  }
 }
 /* Row and column reordering use the same motion; the lifted item follows the pointer. */
 .model-providers__profiles--sorting [role="listitem"]:not(.model-providers__profile--dragging),
@@ -417,31 +349,20 @@
   /* base.css disables transition durations for reduced motion. */
   transition: translate 100ms ease-out;
 }
-.model-providers__usage-track > [data-grabbed] {
-  position: relative;
-  z-index: 1;
-  cursor: grabbing;
-  border-radius: var(--radius-sm);
-  background-color: var(--card);
-  box-shadow: var(--shadow-md);
-}
-[data-account-segment][data-known="false"] {
-  border-style: dashed;
-}
 .model-providers__segment-fill {
   position: absolute;
   inset: 0 auto 0 0;
   z-index: -1;
   background: color-mix(in srgb, var(--segment-tone, var(--ok)) 32%, transparent);
 }
-[data-account-segment][data-tone="warning"] {
-  --segment-tone: var(--warn);
-}
-[data-account-segment][data-tone="error"] {
-  --segment-tone: var(--danger);
-  color: var(--segment-tone);
-}
 .model-providers__credit {
+  > :empty {
+    display: inline-block;
+    width: 3ch;
+    height: 0.65em;
+    background: var(--bg-hover);
+    border-radius: var(--radius-sm);
+  }
   text-align: center;
   font-size: var(--control-ui-text-sm);
 }

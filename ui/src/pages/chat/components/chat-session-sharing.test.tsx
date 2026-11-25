@@ -281,6 +281,7 @@ describe("chat session sharing menu", () => {
     expect(part(inherited, "sharing-permission")?.textContent).toBe("Can send");
     const editable = item(root, "permission:channel:chn_design")!;
     expect(editable.textContent).toBe("Can read");
+    expect(editable.querySelector(".picker-select__chevron svg")).not.toBeNull();
     expect(
       root.querySelector('[data-value="member:channel:chn_design"] openclaw-session-owner-chip'),
     ).not.toBeNull();
@@ -315,6 +316,71 @@ describe("chat session sharing menu", () => {
     render({ ...props, session: sharingSession({ visibility: "shared" }) }, root);
     readOption.click();
     expect(onMemberChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("edits invited access across visibility and legacy membership states", async () => {
+    const onMemberAccessChange = vi.fn();
+    const props = renderSharing({
+      session: sharingSession({ visibility: "shared" }),
+      onMemberAccessChange,
+      state: sharingState({
+        identities: [human("alice", "Alice"), human("other", "Other")],
+        members: [{ identityId: "alice", addedBy: "owner", addedAt: 1, access: "send" }],
+        permissions: [
+          {
+            identityId: "alice",
+            level: "send",
+            options: ["read", "suggest", "send"],
+            invitation: "member",
+          },
+          { identityId: "other", level: "read", options: ["read", "send"] },
+        ],
+      }),
+    });
+    const root = await mount(props);
+    expect(item(root, "permission:other")).toBeNull();
+    item(root, "permission:alice")!.click();
+    await waitForSolid(() => expect(item(root, "permission:suggest:alice")).not.toBeNull());
+    expect(root.textContent).not.toContain("queued messages");
+    item(root, "permission:suggest:alice")!.click();
+    expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("alice", "suggest");
+    expect(props.onMemberChange).not.toHaveBeenCalled();
+    render({ ...props, session: sharingSession({ visibility: "draft" }) }, root);
+    expect(item(root, "permission:alice")).not.toBeNull();
+    render({ ...props, onMemberAccessChange: undefined }, root);
+    await waitForSolid(() => expect(item(root, "permission:alice")).toBeNull());
+    expect(root.textContent).toContain("Can send");
+    const legacy = renderSharing({
+      session: sharingSession({ visibility: "read-only" }),
+      onMemberAccessChange,
+      onMemberChange: props.onMemberChange,
+      state: sharingState({
+        identities: [human("legacy", "Legacy"), human("uninvited", "Uninvited")],
+        members: [{ identityId: "legacy", addedBy: "owner", addedAt: 1 }],
+        permissions: [
+          {
+            identityId: "legacy",
+            level: "read",
+            options: ["read", "suggest", "send"],
+            invitation: "member",
+          },
+          {
+            identityId: "uninvited",
+            level: "read",
+            options: ["read", "suggest", "send"],
+            invitation: "available",
+          },
+        ],
+      }),
+    });
+    render(legacy, root);
+    onMemberAccessChange.mockClear();
+    expect(item(root, "permission:uninvited")).toBeNull();
+    item(root, "permission:legacy")!.click();
+    await waitForSolid(() => expect(item(root, "permission:suggest:legacy")).not.toBeNull());
+    item(root, "permission:suggest:legacy")!.click();
+    expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("legacy", "suggest");
+    expect(props.onMemberChange).not.toHaveBeenCalled();
   });
 
   it("keeps a world-readable draft session visibly public after its menu closes", async () => {
@@ -364,7 +430,7 @@ describe("chat session sharing menu", () => {
       onCopyPublicLink,
     });
     expect(root.textContent).toContain("Link sharing");
-    expect(root.textContent).toContain("The public link stays readable in draft.");
+    expect(root.textContent).toContain("Anyone can read without signing in.");
     await select(root, "public:disable");
     expect(onPublicShareChange).toHaveBeenCalledWith(false);
     expect(onVisibilityChange).not.toHaveBeenCalled();

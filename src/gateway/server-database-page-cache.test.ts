@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
@@ -32,6 +33,11 @@ const complete: PageCacheProgress = {
   payloadBytes: 0,
   payloadMessages: 0,
 };
+
+beforeEach(() => {
+  vi.spyOn(os, "freemem").mockReturnValue(1024 ** 3);
+  vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

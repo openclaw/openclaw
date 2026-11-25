@@ -17,6 +17,7 @@ import {
   type AgentExecutionAuthBinding,
   type OpaqueRuntimeOwnerKind,
 } from "../agents/execution-auth-binding.js";
+import { resolveAvailableAgentHarnessPolicy } from "../agents/harness/availability.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import type {
   AgentHarnessRuntimeArtifactBinding,
@@ -290,16 +291,23 @@ function resolveRouteHarnessOwnerPluginIds(
   config: OpenClawConfig,
   route: SystemAgentConfiguredRoute,
 ): string[] {
-  if (
-    route.runner !== "embedded" ||
-    !route.agentHarnessRuntimeOverride ||
-    route.agentHarnessRuntimeOverride === "openclaw"
-  ) {
+  if (route.runner !== "embedded") {
+    return [];
+  }
+  const runtime =
+    route.agentHarnessRuntimeOverride ??
+    resolveAvailableAgentHarnessPolicy({
+      config,
+      provider: route.provider,
+      modelId: route.model,
+      agentId: route.agentId,
+    }).runtime;
+  if (runtime === "openclaw") {
     return [];
   }
   const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId, process.env);
   return resolveAgentHarnessOwnerPluginIds({
-    runtime: route.agentHarnessRuntimeOverride,
+    runtime,
     provider: route.provider,
     config,
     workspaceDir,

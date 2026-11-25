@@ -20,6 +20,7 @@ import {
 } from "./cli-output-events.js";
 import * as cliOutputLifecycle from "./cli-output-lifecycle.js";
 import {
+  claudeSnapshotEndsAtTool,
   decodeCliRecords,
   isClaudeStopHookFeedbackRecord,
   isClaudeStreamJsonDialect,
@@ -594,18 +595,29 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       params.onToolInputDelta ||
       params.onToolResult
     ) {
-      const onToolUseStart =
-        claudeStreamJson && parsed.type === "assistant"
-          ? (tool: Parameters<NonNullable<typeof params.onToolUseStart>>[0]) => {
-              sawToolUseSinceText = true;
-              finalItemText = undefined;
-              currentMessageHadToolUse = true;
-              if (classifyClaudeCommentary) {
-                flushPendingClaudeText("commentary");
-              }
-              params.onToolUseStart?.(tool);
-            }
-          : params.onToolUseStart;
+      const onToolUseStart = (tool: Parameters<NonNullable<typeof params.onToolUseStart>>[0]) => {
+        const snapshot =
+          claudeStreamJson && parsed.type === "assistant" && isRecord(parsed.message)
+            ? parsed.message
+            : undefined;
+        if (snapshot) {
+          sawToolUseSinceText = true;
+          finalItemText = undefined;
+          currentMessageHadToolUse = true;
+          if (classifyClaudeCommentary) {
+            flushPendingClaudeText("commentary");
+          }
+        }
+        // A snapshot can introduce a call and later text together. In that case the
+        // current wire offset is not the call's boundary; don't claim it.
+        const followsText =
+          claudeStreamJson &&
+          !classifyClaudeCommentary &&
+          !pendingMessageSeparator &&
+          currentClaudeMessageText &&
+          (!snapshot || claudeSnapshotEndsAtTool(snapshot.content, tool.toolCallId));
+        params.onToolUseStart?.(followsText ? { ...tool, followsAssistantText: true } : tool);
+      };
       dispatchClaudeCliStreamingToolEvent({
         backend: params.backend,
         providerId: params.providerId,

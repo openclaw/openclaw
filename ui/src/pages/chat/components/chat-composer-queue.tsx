@@ -24,6 +24,7 @@ import {
 } from "../chat-send-presentation.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { handleQueueEditKeydown } from "./chat-composer-keydown.ts";
+import { ChatQueueCopyAction } from "./chat-composer-queue-copy.tsx";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {
@@ -41,6 +42,7 @@ type ChatQueueProps = {
   onQueueClear?: () => void;
   queuedEdit?: ChatComposerProps["queuedEdit"];
   onQueueRemove: (id: string) => void;
+  onQueueCopy?: (id: string) => void;
 };
 
 /** Queue-level reorder facts: what the column shows, and what may move where. */
@@ -312,6 +314,9 @@ function ChatQueueItem(rowProps: {
     (rowProps.controls.offline === true ||
       isChatSendReconnecting(item().sendState, rowProps.controls.connected));
   const stateLabel = (): string | null => {
+    if (item().cancelled) {
+      return t("chat.queue.notSent");
+    }
     if (item().serverQueued) {
       return t("chat.queue.states.followup");
     }
@@ -601,6 +606,9 @@ function ChatQueueItem(rowProps: {
         </span>
       )}
       <span class="chat-queue__actions">
+        {item().cancelled ? (
+          <ChatQueueCopyAction onCopy={() => rowProps.controls.onQueueCopy?.(item().id)} />
+        ) : null}
         {failed() && !editing() && rowProps.controls.onQueueRetry
           ? renderDeliveryAction("retry")
           : null}
@@ -629,7 +637,11 @@ function ChatQueueItem(rowProps: {
           <button
             class="chat-queue__remove"
             type="button"
-            disabled={item().serverQueued && !rowProps.controls.canRemoveServerQueued}
+            disabled={
+              item().removing ||
+              (item().serverQueued && !item().cancelled && !rowProps.controls.canRemoveServerQueued)
+            }
+            aria-busy={item().removing ? "true" : undefined}
             aria-label={t("chat.queue.removeQueuedMessage")}
             onClick={(event: MouseEvent) => {
               // Chromium retargets click 2 after row removal; detail still owns the gesture.
@@ -639,7 +651,11 @@ function ChatQueueItem(rowProps: {
             }}
             onDblClick={(event: MouseEvent) => event.stopPropagation()}
           >
-            <Icon name="trash" />
+            {item().removing ? (
+              <span class="btn__spinner" aria-hidden="true" />
+            ) : (
+              <Icon name="trash" />
+            )}
           </button>
         )}
         {editing() || !editable() ? null : (

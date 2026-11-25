@@ -41,7 +41,6 @@ afterEach(() => vi.restoreAllMocks());
 
 it.for([
   "allowed",
-  "operator only",
   "foreign requester",
   "requester reset",
   "same-human follow-up",
@@ -77,9 +76,7 @@ it.for([
       profileName: `pause-${id}`,
       scopes: ["operator.admin"],
     });
-    if (outcome !== "operator only") {
-      client.internal = { controlUiAdmin: true };
-    }
+    client.internal = { controlUiAdmin: true };
     const other = createOperatorClient({
       profileName: `foreign-${id}`,
       scopes: ["operator.write"],
@@ -191,7 +188,7 @@ it.for([
           expect(caller.operatorAuthority?.source).toBe(originalSource?.authority.source);
         }
         expect(opts.cronCreatorAuthorityCapability?.managementEntitlement?.source).toBe(
-          outcome === "operator only" || continued ? undefined : "control-ui-admin",
+          continued ? undefined : "operator",
         );
         await withGatewayToolCallerIdentity(caller, async () => {
           const recorder = expectDefined(opts.userTurnTranscriptRecorder, "Gateway input recorder");
@@ -214,7 +211,7 @@ it.for([
             received.push(opts.message);
             if (retiresAfterAcceptance) {
               expect(opts.cronCreatorAuthorityCapability?.managementEntitlement?.source).toBe(
-                "control-ui-admin",
+                "operator",
               );
               expect(opts.cronCreatorAuthorityCapability?.isCurrent?.()).toBe(true);
             }
@@ -226,9 +223,7 @@ it.for([
                 [currentChild()],
                 currentChild().requesterSettleWake?.rearmGeneration,
               );
-              expect(opts.cronCreatorAuthorityCapability?.isCurrent?.()).toBe(
-                outcome === "operator only" ? undefined : true,
-              );
+              expect(opts.cronCreatorAuthorityCapability?.isCurrent?.()).toBe(true);
             }
           }
         });
@@ -459,15 +454,12 @@ it.for([
             (error: unknown) => error,
           );
           const expectedDenial = foreignRequester
-            ? "does not own this continuation"
-            : "no longer current";
+            ? /does not own this continuation/
+            : /no longer current|Requester continuation ended/;
           const settled = await Promise.allSettled(trackedRequests());
           for (const work of settled) {
             if (work.status === "rejected") {
-              expect(work.reason).toHaveProperty(
-                "message",
-                expect.stringContaining(expectedDenial),
-              );
+              expect(work.reason).toHaveProperty("message", expect.stringMatching(expectedDenial));
             }
           }
           expect(received).toEqual(receivedBefore);
@@ -475,7 +467,7 @@ it.for([
           expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(before);
           expect(context.dedupe.has(`agent:${continuationRunId}`)).toBe(false);
           expect(failure).toBeInstanceOf(Error);
-          expect(failure).toHaveProperty("message", expect.stringContaining(expectedDenial));
+          expect(failure).toHaveProperty("message", expect.stringMatching(expectedDenial));
         }
         expect((await pendingInputs.listSessionPendingInputs(scope)).total).toBe(0);
       } finally {

@@ -75,7 +75,9 @@ async function startAdvisor(everyToolCalls = 1, reply = "NO_CHANGE", runTrigger 
     }
   };
   const startRun = async (runId = "run-1", trigger = "user", sessionKey = "agent:main:main") => {
-    const beforeReply = on.mock.calls[0]?.[1] as Hook | undefined;
+    const beforeReply = on.mock.calls.find(([name]) => name === "before_agent_reply")?.[1] as
+      | Hook
+      | undefined;
     await beforeReply?.({}, { sessionKey, runId, trigger });
     await send("lifecycle", "start", {}, undefined, runId);
   };

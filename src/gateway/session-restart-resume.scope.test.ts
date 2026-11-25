@@ -19,7 +19,7 @@ import * as gatewayDispatch from "./server-in-process-dispatch.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { resumeMarkedSessions } from "./session-restart-resume.js";
-import * as systemTurnAuthority from "./session-system-turn-authority.js";
+import * as systemTurnAuthority from "./session-sharing-authorization-async.js";
 
 const cfg = { agents: { entries: { main: {} } } };
 const setScope = (scope: string | undefined) =>
