@@ -259,30 +259,34 @@ it("preserves expanded startup diagnostics and focus", async () => {
   });
 });
 
-it.each([false, true])("updates startup recovery when the error changes (mobile=%s)", (mobile) => {
-  const error = "thread not loaded: synthetic-thread";
-  const { container, publish } = publishedComposer(
-    {
-      connected: true,
-      runError: { summary: error },
-    },
-    mobile,
-  );
-  const copy = container.querySelector(".app-toast__message");
-  expect(container.querySelector(".chat-error")?.textContent).toContain(
-    "OpenClaw couldn't find the saved conversation data needed to continue.",
-  );
-  expect(copy?.textContent).toContain("Start a new conversation and send your request again.");
-  expect(copy?.closest("details")).toBeNull();
-  expect(container.querySelector("details")?.open).toBe(false);
-  expect(container.querySelector(".lazy-view-error__detail")?.textContent).toContain(error);
-  publish({ connected: true, messages: [], runError: { summary: "Ordinary failure" } });
-  flush();
-  expect(container.textContent).not.toContain(
-    "Start a new conversation and send your request again.",
-  );
-  expect(container.textContent).toContain("Ordinary failure");
-});
+it.each([false, true])(
+  "updates startup recovery when the error changes (mobile=%s)",
+  async (mobile) => {
+    const error = "thread not loaded: synthetic-thread";
+    const { container, publish } = publishedComposer(
+      {
+        connected: true,
+        runError: { summary: error },
+      },
+      mobile,
+    );
+    await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
+    const copy = container.querySelector(".app-toast__message");
+    expect(container.querySelector(".chat-error")?.textContent).toContain(
+      "OpenClaw couldn't find the saved conversation data needed to continue.",
+    );
+    expect(copy?.textContent).toContain("Start a new conversation and send your request again.");
+    expect(copy?.closest("details")).toBeNull();
+    expect(container.querySelector("details")?.open).toBe(false);
+    expect(container.querySelector(".lazy-view-error__detail")?.textContent).toContain(error);
+    publish({ connected: true, messages: [], runError: { summary: "Ordinary failure" } });
+    flush();
+    expect(container.textContent).not.toContain(
+      "Start a new conversation and send your request again.",
+    );
+    expect(container.textContent).toContain("Ordinary failure");
+  },
+);
 
 it.each(["chatgpt_business_usage_limit", "chatgpt_consumer_usage_limit"] as const)(
   "keeps %s recovery beside a transcript error and resets dismissal for a new run",

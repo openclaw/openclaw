@@ -146,17 +146,17 @@ async function withTranscript(
 describe("historical page recovery context", () => {
   it.each([
     [
-      "thread not loaded: synthetic-thread | password=synthetic-password",
+      "thread not loaded: synthetic-thread | password=synthetic-password\nCaused by: rollback at /private/operator/workspaces/example",
       "OpenClaw couldn't find the saved conversation data needed to continue.",
-      "thread not loaded: synthetic-thread",
+      "thread not loaded",
     ],
     [
       "managed worktree allocation lease core:managed-worktrees:create/capacity was lost | password=synthetic-password",
       "Couldn't finish preparing the code workspace.",
-      "core:managed-worktrees:create/capacity",
+      "managed worktree allocation lease was lost",
     ],
   ])(
-    "preserves redacted startup diagnostics through persisted chat.history: %s",
+    "projects safe startup categories through persisted chat.history: %s",
     async (error, title, diagnostic) => {
       await withTranscript([["user", user]], async ({ read, fail }) => {
         await fail("startup-run", error);
@@ -174,6 +174,7 @@ describe("historical page recovery context", () => {
         expect(notice?.summary).toContain(title);
         expect(notice?.summary).toContain(diagnostic);
         expect(JSON.stringify(failure)).not.toContain("synthetic-password");
+        expect(JSON.stringify(failure)).not.toContain("/private/operator");
       });
     },
   );

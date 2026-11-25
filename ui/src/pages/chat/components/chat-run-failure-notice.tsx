@@ -63,7 +63,8 @@ export function ChatRunFailureNotice(props: {
   const app = useOptionalApplication();
   const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
   const startNewSession = () =>
-    props.cause?.code === HARNESS_UPDATE_REQUIRED_CODE && props.onStartNewSession;
+    (props.cause?.code === HARNESS_UPDATE_REQUIRED_CODE || startup()?.newConversation) &&
+    props.onStartNewSession;
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
@@ -199,7 +200,7 @@ export function ChatRunFailureNotice(props: {
               {t("chat.recovery.startNewSession")}
             </button>
           </Match>
-          <Match when={props.onRetry}>
+          <Match when={props.onRetry && !startup()?.newConversation}>
             <button
               type="button"
               class="btn primary btn--sm chat-run-failure__retry"

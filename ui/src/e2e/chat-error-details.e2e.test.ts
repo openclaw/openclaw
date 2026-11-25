@@ -66,7 +66,7 @@ suite.define(() => {
       async ({ page }) => {
         const content =
           "OpenClaw couldn't find the saved conversation data needed to continue. Start a new conversation and send your request again.";
-        const diagnostic = "thread not loaded: synthetic-thread";
+        const diagnostic = "thread not loaded";
         await installMockGateway(page, {
           sessionKey,
           historyMessages: [
@@ -102,6 +102,7 @@ suite.define(() => {
           .poll(() => alert.locator(".chat-run-failure__recovery").isVisible())
           .toBe(true);
         expect(await alert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
+        expect(await alert.getByRole("button", { name: "Try again", exact: true }).count()).toBe(0);
         await alert.locator(".chat-run-failure__toggle").click();
         expect(await alert.getByLabel("Error details", { exact: true }).textContent()).toContain(
           diagnostic,
@@ -128,7 +129,7 @@ suite.define(() => {
     ],
   ])(
     "shows recovery before opening details for startup failure: %s",
-    async (diagnostic, title, guidance) => {
+    async (diagnostic, title, _guidance) => {
       await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
         const gateway = await installMockGateway(page, { sessionKey });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));

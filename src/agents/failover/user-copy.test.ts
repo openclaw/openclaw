@@ -62,20 +62,23 @@ describe("failover user copy", () => {
     expect(sanitizedCopy(raw)).toBe(raw);
   });
 
-  it("recognizes workspace lease loss with the current owner's diagnostic suffix", () => {
-    const error = createOpenClawStateLeaseLostError(
-      {
-        scope: "core:managed-worktrees:create",
-        key: "capacity",
-        leaseLabel: "managed worktree allocation lease",
-      },
-      undefined,
-      { reason: "missing" },
-    );
-    expect(sanitizedCopy(error.message, { errorContext: true })).toBe(
-      "Couldn't finish preparing the code workspace. Send your request again to retry workspace setup.",
-    );
-  });
+  it.each([undefined, { reason: "missing" as const }])(
+    "recognizes workspace lease loss with optional details %j",
+    (loss) => {
+      const error = createOpenClawStateLeaseLostError(
+        {
+          scope: "core:managed-worktrees:create",
+          key: "capacity",
+          leaseLabel: "managed worktree allocation lease",
+        },
+        undefined,
+        loss,
+      );
+      expect(sanitizedCopy(error.message, { errorContext: true })).toBe(
+        "Couldn't finish preparing the code workspace. Send your request again to retry workspace setup.",
+      );
+    },
+  );
 
   it("keeps normalized startup diagnostics out of the compact summary", () => {
     const copy =

@@ -6,7 +6,6 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { appendReplyMediaFailures, type ReplyMediaFailure } from "../auto-reply/reply-payload.js";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import {
@@ -18,7 +17,7 @@ import {
   extractAssistantPhaseText,
   isAssistantTextContentBlockType as isAssistantTextContentType,
 } from "../shared/chat-message-content.js";
-import { readRunFailureNotice, type RunFailureNotice } from "../shared/run-failure-notice.js";
+import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import { resolveSessionStartupErrorPresentation } from "../shared/session-startup-error-presentation.js";
 import {
   readSubagentCompletions,
@@ -366,14 +365,14 @@ export function attachProjectedTurnBoundary(
   };
 }
 
-/** Allow only certified failure presentation and its bounded, redacted startup cause. */
+/** Project certified failure presentation and closed, bounded startup categories only. */
 export function projectChatRunFailureDetails(
   entry: Record<string, unknown>,
   maxChars: number,
 ):
   | {
       details: { errorKind?: "state_contention"; diagnostic: string };
-      notice?: RunFailureNotice;
+      noticeSummary?: string;
       truncated: boolean;
     }
   | undefined {
@@ -394,16 +393,11 @@ export function projectChatRunFailureDetails(
   if (!startup || entry.content !== startup.message) {
     return undefined;
   }
-  const diagnostic = truncateChatHistoryText(
-    redactSensitiveText(details.diagnostic, { mode: "tools" }),
-    Math.min(maxChars, 512),
-  );
+  const diagnostic = truncateChatHistoryText(startup.diagnostic, Math.min(maxChars, 512));
   const notice = readRunFailureNotice(entry);
   return {
     details: { diagnostic: diagnostic.text },
-    notice: notice
-      ? { runId: notice.runId, summary: `${startup.message}\n\n${diagnostic.text}` }
-      : undefined,
+    noticeSummary: notice ? `${startup.message}\n\n${diagnostic.text}` : undefined,
     truncated: diagnostic.truncated,
   };
 }

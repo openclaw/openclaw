@@ -511,8 +511,11 @@ export function sanitizeChatHistoryMessage(
         ? projectToolResultDetails(entry.details, maxChars, entry)
         : undefined;
     const runFailure = projectChatRunFailureDetails(entry, maxChars);
-    if (runFailure?.notice) {
-      entry.openclawRunError = runFailure.notice;
+    if (runFailure?.noticeSummary) {
+      entry.openclawRunError = {
+        ...readRecord(entry.openclawRunError),
+        summary: runFailure.noticeSummary,
+      };
     }
     const modelChange =
       entry.role === "custom" && entry.customType === "session-model-change"
