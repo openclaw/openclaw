@@ -6,6 +6,7 @@ import OpenClawProtocol
 /// A local stand-in for the server's provider sign-in, for screenshots and UI tests. Launch with
 /// `--openclaw-model-sign-in-fixture <scenario>`:
 /// - `ordinary`, `read-only`, `empty`: five providers, one in each state, and a login of each step kind.
+/// - `signed-in`: the same five, all signed in.
 /// - `no-accounts`: nothing to sign in to. `old-server`: no native sign-in. `load-failed`: status fails.
 /// - `loading`: status never answers. `connection-changed`: the connection goes away once a login starts.
 /// No credential leaves the app; nothing here talks to a provider.
@@ -21,8 +22,9 @@ final class ModelSignInFixture {
         case openRouterKey = "openrouter-api-key"
     }
 
-    private var signedIn: Set<String> = ["openai", "anthropic"]
-    private var expired: Set<String> = ["google"]
+    private var signedIn: Set<String> = ScreenshotFixtureMode.modelSignInScenario == "signed-in"
+        ? ["openai", "anthropic", "google", "xai", "openrouter"] : ["openai", "anthropic"]
+    private var expired: Set<String> = ScreenshotFixtureMode.modelSignInScenario == "signed-in" ? [] : ["google"]
     private var sessions: [String: (login: Login, stage: Int)] = [:]
     private var current = true
     private let scenario = ScreenshotFixtureMode.modelSignInScenario ?? ""
@@ -114,10 +116,10 @@ final class ModelSignInFixture {
             return try self.encode(WizardNextResult(done: false, step: self.step(session.login, stage)))
         case (.googleBrowser, 1), (.anthropicBrowser, 1):
             // The person finishes in the browser; the server answers when the provider calls back.
-            try await Task.sleep(for: .seconds(ScreenshotFixtureMode.modelSignInWaitSeconds))
+            guard try await self.waitForProvider(id) else { return try self.cancelled() }
             return try self.finish(id, provider: session.login == .googleBrowser ? "google" : "anthropic")
         case (.openRouterDevice, 0):
-            try await Task.sleep(for: .seconds(ScreenshotFixtureMode.modelSignInWaitSeconds))
+            guard try await self.waitForProvider(id) else { return try self.cancelled() }
             self.sessions[id] = (session.login, stage)
             return try self.encode(WizardNextResult(done: false, step: self.step(.openRouterDevice, stage)))
         case (.openRouterDevice, 1):
@@ -128,6 +130,19 @@ final class ModelSignInFixture {
         default:
             return try self.finish(id, provider: "")
         }
+    }
+
+    /// Waits as the server does for the provider, and stops early when the sign-in is cancelled.
+    private func waitForProvider(_ id: String) async throws -> Bool {
+        for _ in 0..<(ScreenshotFixtureMode.modelSignInWaitSeconds * 4) {
+            try await Task.sleep(for: .milliseconds(250))
+            if self.sessions[id] == nil { return false }
+        }
+        return true
+    }
+
+    private func cancelled() throws -> Data {
+        try self.encode(WizardNextResult(done: true, status: AnyCodable("cancelled")))
     }
 
     private func finish(_ id: String, provider: String) throws -> Data {
@@ -272,6 +287,6 @@ final class ModelSignInFixture {
     }
 
     /// Providers signed in again here: Anthropic stops expiring once renewed.
-    private var renewed: Set<String> = []
+    private var renewed: Set<String> = ScreenshotFixtureMode.modelSignInScenario == "signed-in" ? ["anthropic"] : []
     private var signedOut: Set<String> = []
 }
