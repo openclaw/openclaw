@@ -191,7 +191,7 @@ struct IOSOpenClawIDSettingsSection: View {
                 Text("OpenClaw ID")
             } footer: {
                 if let error = self.model.error {
-                    Text(error).font(OpenClawType.footnote).foregroundStyle(.orange)
+                    Text(error).font(OpenClawType.footnote).foregroundStyle(OpenClawBrand.statusWarning)
                 }
             }
             .confirmationDialog(
