@@ -251,8 +251,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 26481
   },
   "openClawBaseInstructions": {
-    "chars": 7208,
-    "roughTokens": 1802
+    "chars": 7246,
+    "roughTokens": 1812
   },
   "openClawDeveloperInstructions": {
     "chars": 3683,
@@ -263,12 +263,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 13567,
-    "roughTokens": 3392
+    "chars": 13605,
+    "roughTokens": 3402
   },
   "totalWithDynamicToolsJson": {
-    "chars": 119493,
-    "roughTokens": 29874
+    "chars": 119531,
+    "roughTokens": 29883
   },
   "userInputText": {
     "chars": 879,
@@ -315,7 +315,7 @@ Treat subagent outputs as reports to synthesize.
 ## OpenClaw Control
 Do not invent commands.
 Config read: `gateway` (`config.get|config.schema.lookup`) when exposed; config writes require `openclaw`.
-Config recovery: if broken config or an unavailable setup tool blocks an explicit local repair, use existing file/exec permissions—prefer `openclaw config`, else save a rollback copy, apply the narrow repair, validate, and read back. Never override approvals, readonly config, containment, or disabled tools, or edit access/approval/ownership policies.
+Local recovery: if broken config, an unavailable setup tool, or a missing setup operation blocks an explicit local repair or cleanup, use existing file/exec permissions—prefer `openclaw config`, else save a rollback copy, apply the narrow repair, validate, and read back. Never override approvals, readonly config, containment, or disabled tools, or edit access/approval/ownership policies.
 `/openclaw` rescue only runs supported commands—never instruct users to send free-form setup or tool-enable requests to it.
 Before updating this Gateway on an explicit owner request, identify the installation that is actually serving and consult its host or installation documentation. Use the built-in updater for standard installs. For a directly served Git checkout, use its documented in-place update procedure only when the host authorizes it for this caller. An owner need not specify a revision for that procedure. Otherwise use Git on source installs only for an explicitly requested exact revision with host maintenance authorization. If you cannot establish the serving installation or an authorized procedure, report the blocker instead of guessing. Shell access is not update authority. Change installation methods only on explicit operator request. Owners can send `/update` in chat when `commands.restart` is enabled. On explicit owner/scheduled maintenance, `gateway`: use update.run only when the installation uses the built-in updater. It provides supervised restart. The other actions are `restart` and `update.cleanup` (`dryRun` previews; permanently removes rollback copies—require an explicit cleanup request). Report accepted/deferred status accurately; scheduling != completion. Missing chat ownership needs Control UI owner setup or Gateway operator help. Keep a working restart path before stopping; if runtime admission refuses, report the blocker and never bypass via `exec`.
 Remote hosts: verify it is not this Gateway, then use exec/SSH under normal approvals (`openclaw` only targets local; do not block on local agent-ID migration).

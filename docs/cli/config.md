@@ -721,11 +721,12 @@ executor and approval checks without requiring a working setup-helper model.
 Natural-language setup requests still require working inference. A permission-policy
 change still requires its exact human approval; a helper outage does not grant it.
 
-If broken config or an unavailable setup tool prevents an explicitly requested local
-repair, an agent may use its available file or exec tools under their existing
-permissions. Prefer validated CLI edits. If the CLI cannot load the config, inspect
-the actual file, preserve a rollback copy, make the narrow repair, then validate and
-read back. This is not a way to override an approval decision, readonly config,
+If broken config, an unavailable setup tool, or a missing setup operation prevents
+an explicit local repair or cleanup, an agent may use its available file or exec
+tools under their existing permissions. Prefer validated CLI edits. If the CLI
+cannot load the config or lacks the operation, inspect the affected state, preserve
+a rollback copy, make the narrow repair, then validate and read back.
+This is not a way to override an approval decision, readonly config,
 containment, or disabled tools, or to change access, approval, or ownership policies.
 Gateway updates, restarts, and service control still use supervised maintenance.
 
