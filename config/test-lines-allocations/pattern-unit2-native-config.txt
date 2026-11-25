@@ -1,4 +1,4 @@
 # Native config, discovery, and reader-lifetime regression coverage.
-# Current stack: 374 parent lines + 590 Unit2 lines; allowance remains 400.
+# Current stack: 374 parent lines + 680 Unit2 lines; allowance remains 400.
 # Recompute this credit when the prepared comparison base changes.
-564
+654

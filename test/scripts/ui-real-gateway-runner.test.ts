@@ -1,20 +1,26 @@
 import { ChildProcess } from "node:child_process";
 import * as fs from "node:fs/promises";
+import { Writable } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { PluginHarness } from "vitest/node";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-descriptor.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { runRealGatewayUiTests } from "../../scripts/test-ui-real-gateway.mts";
 import { withEnvAsync } from "../../src/test-utils/env.js";
-import { createDeferred } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
 
 const fixtures = vi.hoisted(() => ({
   workers: 2,
   serial: true,
   qualified: true,
   resolveConfig: vi.fn<
-    () => Promise<{
+    (
+      options: unknown,
+      config: unknown,
+      harness: PluginHarness,
+    ) => Promise<{
       test: { resolvedProjects: { projectConfig: { name: string; include: string[] } }[] };
     }>
   >(),
@@ -37,7 +43,8 @@ vi.mock("../vitest/vitest.ui-e2e-prebuilt.config.ts", () => ({
   }),
 }));
 // Config resolution is the boundary; complete factory/hook behavior is covered by ownership tests.
-vi.mock("vitest/node", () => ({
+vi.mock("vitest/node", async (original) => ({
+  ...(await original<typeof import("vitest/node")>()),
   resolveConfig: fixtures.resolveConfig,
 }));
 vi.mock("../../scripts/lib/managed-child-process.mts", async (original) => ({
@@ -150,6 +157,7 @@ it.each([
   expect(fixtures.resolveConfig).toHaveBeenCalledExactlyOnceWith(
     { config: false },
     expect.objectContaining({ test: expect.any(Object) }),
+    expect.any(PluginHarness),
   );
   expect(managed.mock.calls.map(([call]) => project(call.args)).filter(Boolean)).toEqual(
     active ? [active] : [],
@@ -160,6 +168,85 @@ it.each([
     ),
   ).toBe(true);
   expect(createWorkers).not.toHaveBeenCalled();
+});
+
+// Exercise the real Logger/streams while keeping native config resolution at its boundary.
+it.each([
+  { rejectConfig: false, rejectOutput: false },
+  { rejectConfig: true, rejectOutput: false },
+  { rejectConfig: false, rejectOutput: true },
+  { rejectConfig: true, rejectOutput: true },
+])("joins config diagnostics before admission (%j)", async ({ rejectConfig, rejectOutput }) => {
+  const configError = new Error("config rejected");
+  const outputError = new Error("output rejected");
+  const outputEnding = createDeferred();
+  const marker = "fixture config diagnostic";
+  const stdoutWrite = process.stdout.write.bind(process.stdout);
+  let flush: ((error?: Error | null) => void) | undefined;
+  let output: Writable | undefined;
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk, encoding, callback) => {
+    if (String(chunk).includes(marker)) {
+      flush = typeof encoding === "function" ? encoding : callback;
+      return true;
+    }
+    return typeof encoding === "function"
+      ? stdoutWrite(chunk, encoding)
+      : stdoutWrite(chunk, encoding, callback);
+  });
+  const resolve = fixtures.resolveConfig.getMockImplementation()!;
+  fixtures.resolveConfig.mockImplementation(async (...args) => {
+    const harness = args[2];
+    expect(harness.logger.outputStream).toBeInstanceOf(Writable);
+    output = harness.logger.outputStream;
+    expect(output).not.toBe(process.stdout);
+    expect(harness.logger.outputStream).not.toHaveProperty("isTTY", true);
+    expect(harness.logger.errorStream).toBe(process.stderr);
+    const end = output.end.bind(output);
+    vi.spyOn(output, "end").mockImplementation(() => {
+      outputEnding.resolve();
+      return end();
+    });
+    harness.logger.log(marker);
+    if (rejectConfig) {
+      throw configError;
+    }
+    return resolve(...args);
+  });
+  const running = runRealGatewayUiTests([], env);
+  const observed = running.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  try {
+    await awaitGateBeforeSettlement(
+      outputEnding.promise,
+      running,
+      "Config resolution ended before output cleanup",
+    );
+    expect(flush).toBeTypeOf("function");
+    expect(managed).not.toHaveBeenCalled();
+    expect(createWorkers).not.toHaveBeenCalled();
+    expect(disposeWorkers).not.toHaveBeenCalled();
+  } finally {
+    flush?.(rejectOutput ? outputError : undefined);
+    await observed;
+  }
+  const result = await observed;
+  if (rejectConfig && rejectOutput) {
+    expect(result).toMatchObject({
+      error: { name: "AggregateError", errors: [configError, outputError] },
+    });
+  } else if (rejectConfig || rejectOutput) {
+    expect("error" in result ? result.error : undefined).toBe(
+      rejectConfig ? configError : outputError,
+    );
+  } else {
+    expect(result).toEqual({ value: 0 });
+  }
+  expect(managed).toHaveBeenCalledTimes(rejectConfig || rejectOutput ? 0 : 3);
+  expect(output?.destroyed).toBe(true);
+  expect(process.stdout.destroyed).toBe(false);
+  expect(process.stderr.destroyed).toBe(false);
 });
 
 it.each(

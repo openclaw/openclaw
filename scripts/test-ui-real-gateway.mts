@@ -1,9 +1,11 @@
 // Spend the existing two UI worker slots on desktop + serial, then qualified fixtures.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { Writable } from "node:stream";
+import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveConfig } from "vitest/node";
+import { Logger, PluginHarness, resolveConfig } from "vitest/node";
 import { withEnvAsync } from "../src/test-utils/env.ts";
 import { createPrebuiltUiE2eVitestConfig } from "../test/vitest/vitest.ui-e2e-prebuilt.config.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -20,6 +22,39 @@ import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker
 
 const configPath = "test/vitest/vitest.ui-e2e-prebuilt.config.ts";
 const desktopFile = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
+
+async function resolveInventoryConfig(
+  config: Parameters<typeof resolveConfig>[1],
+  env: NodeJS.ProcessEnv,
+) {
+  // Config-only resolution never installs Vitest's terminal cleanup. Forward its
+  // diagnostics without claiming the parent terminal, and join forwarded writes.
+  const output = new Writable({
+    write(chunk, encoding, callback) {
+      process.stdout.write(chunk, encoding, callback);
+    },
+  });
+  const drained = finished(output, { cleanup: true });
+  const resolution = withEnvAsync({ NODE_ENV: env.NODE_ENV ?? "test" }, () =>
+    resolveConfig({ config: false }, config, new PluginHarness(new Logger(output, process.stderr))),
+  ).finally(() => {
+    output.end();
+  });
+  const [result, outputResult] = await Promise.allSettled([resolution, drained]);
+  if (result.status === "rejected") {
+    if (outputResult.status === "rejected" && outputResult.reason !== result.reason) {
+      throw new AggregateError(
+        [result.reason, outputResult.reason],
+        "UI config resolution and output cleanup failed",
+      );
+    }
+    throw result.reason;
+  }
+  if (outputResult.status === "rejected") {
+    throw outputResult.reason;
+  }
+  return result.value;
+}
 
 export async function runRealGatewayUiTests(
   reporterArgs: string[] = process.argv.slice(2),
@@ -129,9 +164,7 @@ export async function runRealGatewayUiTests(
     return mergeVitestExitCodes(desktopCode, await vitest());
   }
   // Resolve final leaf patterns with the child CLI's environment, then restore ours.
-  const { test: resolved } = await withEnvAsync({ NODE_ENV: env.NODE_ENV ?? "test" }, () =>
-    resolveConfig({ config: false }, config),
-  );
+  const { test: resolved } = await resolveInventoryConfig(config, env);
   const selected = (names: string[]) =>
     names.filter((name) =>
       resolved.resolvedProjects.some(

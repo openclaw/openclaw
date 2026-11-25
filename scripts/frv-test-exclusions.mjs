@@ -174,8 +174,8 @@ export function applyTestExclusions(config, paths, cwd, defaultExcludes) {
       ...(projects ? { projects } : {}),
     },
   };
-  const appendExclusions = (test) => {
-    test.exclude = [...(test.exclude ?? defaultExcludes), ...exclusions];
+  const appendExclusions = (testConfig) => {
+    testConfig.exclude = [...(testConfig.exclude ?? defaultExcludes), ...exclusions];
   };
   // Plain inline projects use Vitest's captured raw config and share its server.
   // Adding a plugin would change that ownership. Existing plugin owners instead
@@ -190,8 +190,8 @@ export function applyTestExclusions(config, paths, cwd, defaultExcludes) {
         enforce: "post",
         config: {
           order: "post",
-          handler(config) {
-            appendExclusions((config.test ??= {}));
+          handler(resolvedConfig) {
+            appendExclusions((resolvedConfig.test ??= {}));
           },
         },
       },
