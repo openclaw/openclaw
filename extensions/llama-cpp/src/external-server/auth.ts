@@ -1,7 +1,8 @@
-import { isNonSecretApiKeyMarker, type OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveLlamaServerRequestApiKey } from "./auth-policy.js";
 import { LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
 
 export async function resolveLlamaServerProviderHeaders(params: {
@@ -46,13 +47,13 @@ export async function resolveLlamaServerRuntimeApiKey(params: {
   agentDir?: string;
   profileId?: string;
 }): Promise<string | undefined> {
+  const server = params.server ?? LLAMA_CPP_SERVER;
   const auth = await resolveApiKeyForProvider({
-    provider: (params.server ?? LLAMA_CPP_SERVER).id,
+    provider: server.id,
     cfg: params.config,
     agentDir: params.agentDir,
     profileId: params.profileId,
     lockedProfile: params.profileId !== undefined,
   });
-  const apiKey = auth.apiKey?.trim();
-  return apiKey && !isNonSecretApiKeyMarker(apiKey) ? apiKey : undefined;
+  return resolveLlamaServerRequestApiKey(server, auth.apiKey);
 }

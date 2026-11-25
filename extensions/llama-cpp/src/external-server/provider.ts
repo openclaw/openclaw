@@ -4,12 +4,14 @@ import type {
   ProviderPrepareDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import {
   LiveModelCatalogHttpError,
   runLiveProviderCatalog,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { hasLlamaServerAuthorizationHeader } from "./auth-policy.js";
+import {
+  hasLlamaServerAuthorizationHeader,
+  resolveLlamaServerRequestApiKey,
+} from "./auth-policy.js";
 import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
 import { LLAMA_APP_SERVER, LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
 import { discoverLlamaServer } from "./discovery.js";
@@ -28,12 +30,9 @@ export async function discoverLlamaServerProvider(
     env: ctx.env,
     headers: configured?.headers,
   });
-  const authApiKey = auth.discoveryApiKey ?? auth.apiKey;
-  const apiKey =
-    hasLlamaServerAuthorizationHeader(headers) ||
-    (authApiKey && isNonSecretApiKeyMarker(authApiKey))
-      ? undefined
-      : authApiKey;
+  const apiKey = hasLlamaServerAuthorizationHeader(headers)
+    ? undefined
+    : resolveLlamaServerRequestApiKey(server, auth.discoveryApiKey ?? auth.apiKey);
   return await runLiveProviderCatalog({
     providerId: server.id,
     profileId: apiKey ? auth.profileId : undefined,

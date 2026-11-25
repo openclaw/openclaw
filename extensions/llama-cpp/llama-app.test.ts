@@ -69,10 +69,11 @@ it.each([{ providerIds: [] }, { providerIds: ["llama-cpp"] }])(
 it("discovers Llama beside managed llama.cpp without changing its ownership or defaults", async () => {
   const app = appProvider();
   const requests: string[] = [];
+  const authorization: Array<string | undefined> = [];
   await withApp(
     (request) => {
       requests.push(request.method + " " + request.url);
-      expect(request.headers.authorization).toBe("Bearer app-header");
+      authorization.push(request.headers.authorization);
       if (request.url === "/models") {
         return {
           data: [
@@ -127,6 +128,12 @@ it("discovers Llama beside managed llama.cpp without changing its ownership or d
         "GET /models",
         "GET /props?model=ggml-org%2Ffixture%3AQ4_K_M&autoload=false",
       ]);
+      expect(authorization).toEqual(Array(3).fill("Bearer app-header"));
+      const keyless = { models: { providers: { "llama-app": { baseUrl, models: [] } } } };
+      await expect(catalog(app, keyless, "llama-app-local")).resolves.toMatchObject({
+        provider: { models: [{ id: modelId }, { id: "unloaded/model" }] },
+      });
+      expect(authorization.slice(3)).toEqual([undefined, undefined, undefined]);
     },
   );
 });
