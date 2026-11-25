@@ -9,12 +9,6 @@ const CHAT_TOOL_ICONS = new Map<string, IconName>([
   ["tool_describe", "book"],
 ]);
 
-const CHAT_TOOL_ICONS = new Map<string, IconName>([
-  ["tool_search", "search"],
-  ["toolsearch", "search"],
-  ["tool_describe", "book"],
-]);
-
 // Foreign tool previews and generic rows can lack the arguments needed for row-kind icons.
 const TOOL_NAME_ALIASES = new Map([
   ["shell", "exec"],
