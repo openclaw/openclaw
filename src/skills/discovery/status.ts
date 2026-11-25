@@ -19,6 +19,9 @@ import {
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
+import type { Skill } from "../loading/skill-contract.js";
+import { compactPromptSkills } from "../loading/skill-paths.js";
+import { prepareSkillsForPrompt, type SkillsPromptBudget } from "../loading/skill-prompt-limits.js";
 import { resolveSkillSource } from "../loading/source.js";
 import {
   loadWorkspaceSkills,
@@ -33,7 +36,10 @@ import type {
   SkillInstallSpec,
   SkillSnapshot,
 } from "../types.js";
-import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
+import {
+  resolveEffectiveAgentSkillFilter,
+  resolveEffectiveAgentSkillsLimits,
+} from "./agent-filter.js";
 import {
   hasMissingSkillRequirements,
   isSkillPromptVisible,
@@ -216,6 +222,30 @@ export async function prepareWorkspaceSkillStatus(
   };
 }
 
+/**
+ * Resolve how the model-facing catalog fits the prompt budget.
+ *
+ * Discovery visibility and prompt admission are separate gates: a skill can be
+ * eligible and still be dropped from the rendered catalog. Reporting the fit
+ * keeps `openclaw skills check` honest about what the agent actually receives.
+ */
+function resolvePromptBudget(
+  promptSkills: Skill[],
+  opts?: WorkspaceSkillStatusOptions,
+): SkillsPromptBudget | undefined {
+  if (promptSkills.length === 0) {
+    return undefined;
+  }
+  const limits = opts?.config?.skills?.limits;
+  const agentLimits = resolveEffectiveAgentSkillsLimits(opts?.config, opts?.agentId);
+  return prepareSkillsForPrompt({
+    skills: compactPromptSkills(promptSkills),
+    maxSkillsInPrompt: limits?.maxSkillsInPrompt,
+    maxSkillsPromptChars: agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars,
+    minDescriptionChars: agentLimits?.minDescriptionChars ?? limits?.minDescriptionChars,
+  }).budget;
+}
+
 export function buildWorkspaceSkillStatus(
   workspaceDir: string,
   opts?: WorkspaceSkillStatusOptions & {
@@ -241,6 +271,9 @@ export function buildWorkspaceSkillStatus(
     agentSkillFilter,
     skills: [],
   };
+  // The model-facing catalog is budgeted separately from discovery, so the report
+  // has to resolve the same fit to say what the agent actually receives.
+  const promptSkills: Skill[] = [];
   for (const entry of skillEntries) {
     const { required, ...requirements } = buildSkillRequirements(entry, context);
     const skillSource = resolveSkillSource(entry.skill);
@@ -265,6 +298,9 @@ export function buildWorkspaceSkillStatus(
       : undefined;
 
     const modelVisible = availableToAgent && isSkillPromptVisible(entry);
+    if (modelVisible) {
+      promptSkills.push(entry.skill);
+    }
     let installOptions: SkillInstallOption[] = [];
     // Recipes execute where the workspace dependencies live.
     if (isOsRequirementSatisfied(entry.metadata?.os ?? [], [context.platform])) {
@@ -345,6 +381,7 @@ export function buildWorkspaceSkillStatus(
       ...(skillCard ? { skillCard } : {}),
     });
   }
+  report.promptBudget = resolvePromptBudget(promptSkills, opts);
   return report;
 }
 

@@ -414,6 +414,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional per-agent overrides for skills subsystem budgets. Use this when an agent needs a different skills prompt budget without introducing a second generic context-limits path.",
   "agents.entries.*.skillsLimits.maxSkillsPromptChars":
     "Per-agent override for the skills prompt character budget. This extends the existing skills.limits.maxSkillsPromptChars path instead of routing the same budget through contextLimits.",
+  "skills.limits.minDescriptionChars":
+    "Minimum description length each skill keeps in the model-facing skills catalog when the catalog shrinks to fit the prompt budget. 0 keeps every admitted skill name and drops descriptions instead.",
+  "agents.entries.*.skillsLimits.minDescriptionChars":
+    "Per-agent override for the skills description floor. This extends the existing skills.limits.minDescriptionChars path.",
   "agents.entries.*.contextLimits":
     "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
   "agents.entries.*.contextLimits.memoryGetMaxChars":

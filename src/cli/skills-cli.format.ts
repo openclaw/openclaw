@@ -290,6 +290,18 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
         missing: s.missing,
         install: s.install,
       })),
+      ...(report.promptBudget
+        ? {
+            promptBudget: {
+              total: report.promptBudget.total,
+              admitted: report.promptBudget.admitted,
+              omitted: report.promptBudget.omitted,
+              format: report.promptBudget.format,
+              descriptionMaxChars: report.promptBudget.descriptionMaxChars,
+              descriptionsOmitted: report.promptBudget.descriptionsOmitted,
+            },
+          }
+        : {}),
     });
   }
 
@@ -323,6 +335,28 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   }
   lines.push(`${theme.error("✗")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`);
 
+  const promptBudget = report.promptBudget;
+  if (promptBudget) {
+    const omitted = promptBudget.omitted.length;
+    lines.push(
+      `${theme.success("✓")} ${theme.muted("Injected into prompt:")} ${promptBudget.admitted} of ${promptBudget.total}`,
+    );
+    if (omitted > 0) {
+      lines.push(
+        `${theme.warn(decorativePrefix("△", "Omitted by prompt budget:"))} ${theme.muted(String(omitted))}`,
+      );
+    }
+    if (promptBudget.descriptionsOmitted) {
+      lines.push(
+        `${theme.warn(decorativePrefix("△", "Descriptions omitted:"))} ${theme.muted("catalog lists names only")}`,
+      );
+    } else if (promptBudget.format === "compact") {
+      lines.push(
+        `${theme.warn(decorativePrefix("△", "Descriptions shortened to:"))} ${theme.muted(`${promptBudget.descriptionMaxChars} chars`)}`,
+      );
+    }
+  }
+
   if (modelVisible.length > 0 || commandVisible.length > 0 || promptHidden.length > 0) {
     lines.push("");
     lines.push(theme.heading("What this means:"));
@@ -343,6 +377,21 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
       lines.push(
         `  ${theme.muted("Hidden from model prompt:")} installed and ready, but kept out of normal chat.`,
       );
+    }
+    if (promptBudget) {
+      lines.push(
+        `  ${theme.muted("Injected into prompt:")} what the model-facing catalog actually carries after the prompt budget; discovery visibility alone does not guarantee admission.`,
+      );
+      if (promptBudget.omitted.length > 0) {
+        lines.push(
+          `  ${theme.muted("Omitted by prompt budget:")} eligible but not listed in the catalog; raise skills.limits.maxSkillsPromptChars to admit more.`,
+        );
+      }
+      if (promptBudget.descriptionsOmitted) {
+        lines.push(
+          `  ${theme.muted("Descriptions omitted:")} the catalog carries names only, so matching relies on skill_search or skills.limits.minDescriptionChars.`,
+        );
+      }
     }
   }
 

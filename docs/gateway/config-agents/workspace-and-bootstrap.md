@@ -314,6 +314,37 @@ Per-agent override for the skills prompt budget.
 }
 ```
 
+### `skills.limits.minDescriptionChars`
+
+Minimum description length each skill keeps in the model-facing catalog when the
+catalog has to shrink to fit `skills.limits.maxSkillsPromptChars`.
+
+The default `0` keeps every admitted skill name and drops descriptions instead of
+admitting fewer skills. A positive value trades catalog size for trigger text:
+fewer skills are listed, but each one keeps enough description for the model to
+match it without a search. Descriptions stay discoverable through `skills_search`
+either way.
+
+```json5
+{
+  skills: { limits: { minDescriptionChars: 40 } },
+}
+```
+
+### `agents.entries.*.skillsLimits.minDescriptionChars`
+
+Per-agent override for the skills description floor.
+
+```json5
+{
+  agents: {
+    entries: {
+      "tiny-local": { skillsLimits: { minDescriptionChars: 40 } },
+    },
+  },
+}
+```
+
 ## `agents.defaults.imageMaxDimensionPx`
 
 Max pixel size for the longest image side in transcript/tool image blocks before provider calls.
