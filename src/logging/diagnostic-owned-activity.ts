@@ -123,6 +123,7 @@ export function beginDiagnosticBackendActivity(params: {
   let quietAllowanceMs = noOutputTimeoutMs;
   let quietDeadlineAtMs = Date.now() + noOutputTimeoutMs;
   let holdDeadlineAtMs: number | undefined;
+  let holdWait: typeof ownedWait;
   const registration = resolveCurrentDiagnosticOwner(owner, assertCurrent);
   const backendActivity: DiagnosticBackendActivity = {
     deadlineAtMs: quietDeadlineAtMs,
@@ -205,11 +206,25 @@ export function beginDiagnosticBackendActivity(params: {
         return;
       }
       holdDeadlineAtMs = deadlineAtMs;
+      if (deadlineAtMs === undefined) {
+        holdWait?.close();
+        holdWait = undefined;
+      } else if (holdWait) {
+        holdWait.updateDeadline(deadlineAtMs);
+      } else {
+        holdWait = attempt?.beginWait({
+          kind: "runtime_owned",
+          deadlineAtMs,
+          releaseStartsSemanticWindow: true,
+          isCurrent: ownsAttempt,
+        });
+      }
       publishDeadline();
     },
     close: () => {
       closed = true;
       ownedWait?.close();
+      holdWait?.close();
       // Compare-release remains valid after abort and cannot retire a later attempt.
       const current = activeDiagnosticOwners.get(owner.generation);
       if (current?.owner === owner && current.backendActivity === backendActivity) {

@@ -170,6 +170,14 @@ for await (const line of createInterface({ input: process.stdin })) {
           useResume: turns.length > 0,
         }),
       )) {
+        if (
+          record.type === "system" &&
+          record.subtype === "task_notification" &&
+          String(record.task_id).startsWith("inner-") &&
+          turns.length === 0
+        ) {
+          expect(record.openclaw_continuation_wait).toBe(true);
+        }
         if (record.type !== "result") {
           continue;
         }

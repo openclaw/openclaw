@@ -808,6 +808,11 @@ describe("Claude native stdio boundary", () => {
       );
       expect(new Set(tagged.map((record) => record.user_message_uuid)).size).toBe(1);
       expectFinalResults(records, results);
+      if (scenario === "steer-after-result") {
+        expect(records.find((record) => record.openclaw_interim_result === true)).toMatchObject({
+          openclaw_continuation_wait: false,
+        });
+      }
       const detail = resultDetail(records);
       expect(detail).toMatchObject({ user: input, privateContext: PRIVATE });
       if (scenario === "steer-merged") {

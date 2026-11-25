@@ -12,6 +12,7 @@ import {
   startGatewayDiagnosticHeartbeat,
 } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
@@ -26,6 +27,7 @@ const ANSWER = {
   subtype: "success",
   result: "Validation started; I'll report when it finishes.",
   openclaw_interim_result: true,
+  openclaw_continuation_wait: true,
 };
 const execute = wrapPreparedCliRunWithTestAdmission(executePreparedCliRun);
 const owners: ReturnType<typeof createDiagnosticEmbeddedRunOwner>[] = [];
@@ -52,7 +54,16 @@ function contextFor(runId: string, timeoutMs: number) {
     { diagnostics: { enabled: true } },
     { recoverStuckSession },
   );
-  const owner = createDiagnosticEmbeddedRunOwner(context.params);
+  const operation = createReplyOperation({
+    sessionId: runId,
+    sessionKey: `agent:main:${runId}`,
+    resetTriggered: false,
+  });
+  operation.setPhase("running");
+  const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+  const owner = createDiagnosticEmbeddedRunOwner({ ...context.params, watchdogAttempt });
+  context.params.replyOperation = operation;
+  context.params.abortSignal = operation.abortSignal;
   owners.push(owner);
   context.params.diagnosticOwner = owner;
   logSessionStateChange({ ...context.params, state: "processing" });
@@ -114,7 +125,12 @@ it("waits past both watchdogs for a background shell after the answer", async ()
       yield { type: "system", subtype: "task_notification", task_id: "subagent-bash" };
       answered.resolve();
       await shellFinished.promise;
-      yield { type: "system", subtype: "task_notification", task_id: "long-shell" };
+      yield {
+        type: "system",
+        subtype: "task_notification",
+        task_id: "long-shell",
+        openclaw_continuation_wait: false,
+      };
       yield { type: "result", subtype: "success", result: "Validation passed." };
     },
   };
@@ -146,7 +162,19 @@ it.each([
   {
     name: "a started continuation goes silent",
     timeoutMs: 4 * 60 * 60_000,
-    continuation: [{ type: "system", subtype: "task_notification", task_id: "long-shell" }],
+    continuation: [
+      {
+        type: "system",
+        subtype: "task_notification",
+        task_id: "long-shell",
+        openclaw_continuation_wait: false,
+      },
+    ],
+  },
+  {
+    name: "an already-started steered input goes silent",
+    timeoutMs: 4 * 60 * 60_000,
+    continuation: [{ ...ANSWER, result: "", openclaw_continuation_wait: false }],
   },
 ])("returns the committed answer when $name", async (testCase) => {
   const { context } = contextFor("held-answer-deadline", testCase.timeoutMs);
