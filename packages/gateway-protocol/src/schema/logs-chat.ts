@@ -1,4 +1,5 @@
 import {
+  BILLING_ERROR_ACTION_URL_MAX_CHARS,
   BILLING_ERROR_MESSAGE_MAX_CHARS,
   normalizeBillingError,
 } from "@openclaw/normalization-core/billing-error";
@@ -590,6 +591,7 @@ const ChatErrorDetailSchema = closedObject({
   billingError: Type.Optional(
     closedObject({
       message: Type.String({ minLength: 1, maxLength: BILLING_ERROR_MESSAGE_MAX_CHARS }),
+      actionUrl: Type.Optional(Type.String({ maxLength: BILLING_ERROR_ACTION_URL_MAX_CHARS })),
     }),
   ),
   providerRuntimeFailureKind: ChatErrorDetailTextSchema,

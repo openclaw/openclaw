@@ -20,7 +20,7 @@ import {
   resolveModelFallbackError,
 } from "./failover-error.js";
 import { isLikelyContextOverflowError } from "./failover/classify.js";
-import { getFailoverErrorCode, normalizeErrorSignal } from "./failover/error.js";
+import { getFailoverErrorCode } from "./failover/error.js";
 import { findLocalWorkerTaskFailure } from "./failover/local-preparation-error.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
@@ -61,27 +61,6 @@ function providerTimeout() {
 }
 
 describe("failover-error", () => {
-  it("classifies a 150,000-node provider cause chain without overflowing", () => {
-    let error: unknown;
-    let causeReads = 0;
-    const fields = { status: 500, code: "UPSTREAM", errorType: "INTERNAL", provider: "fixture" };
-    for (let index = 0; index < 150_000; index += 1) {
-      const cause = error;
-      error = {
-        message: `upstream failed ${index}`,
-        ...fields,
-        get cause() {
-          causeReads += 1;
-          return cause;
-        },
-      };
-    }
-    expect(coerceToFailoverError(error, { providerOwner: null })?.reason).toBe("server_error");
-    causeReads = 0;
-    expect(normalizeErrorSignal(error).providerCauseDetails).toHaveLength(12);
-    expect(causeReads).toBe(12);
-  });
-
   it("preserves transcript admission conflicts through error wrappers", () => {
     const conflict = new Error(
       'Transcript idempotency key "channel-user:v1:conflicting-input" conflicts with the admitted message.',

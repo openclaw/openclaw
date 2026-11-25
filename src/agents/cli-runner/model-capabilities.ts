@@ -1,6 +1,8 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderThinkingLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
@@ -9,7 +11,36 @@ import { findModelCatalogEntry } from "../model-catalog-lookup.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
+import { normalizeCliModel } from "./helpers.js";
 import type { RunCliAgentParams } from "./types.js";
+
+export function resolveCliModelRoute(params: {
+  run: Pick<RunCliAgentParams, "model" | "modelProvider" | "provider" | "contextWindow">;
+  backend: Pick<ResolvedCliBackend, "config" | "resolveModelId">;
+  runConfig: OpenClawConfig;
+  workspaceDir: string;
+}) {
+  const { run, backend, runConfig, workspaceDir } = params;
+  const modelId = (run.model ?? "default").trim() || "default";
+  const modelProvider =
+    normalizeOptionalString(run.modelProvider) ??
+    normalizeOptionalString(run.provider) ??
+    run.provider;
+  const providerOwner =
+    resolveProviderRuntimePluginHandle({
+      provider: modelProvider,
+      modelId,
+      config: runConfig,
+      workspaceDir,
+    }).plugin ?? null;
+  const normalizedCatalogModel = normalizeCliModel(modelId, backend.config);
+  const normalizedModel =
+    backend.resolveModelId?.({
+      modelId: normalizedCatalogModel,
+      contextWindow: run.contextWindow,
+    }) ?? normalizedCatalogModel;
+  return { modelId, modelProvider, providerOwner, normalizedCatalogModel, normalizedModel };
+}
 
 /** Selects both CLI capabilities from the same logical/native catalog identity. */
 function resolveCliCatalogCapabilities(params: {

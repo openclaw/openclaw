@@ -1,9 +1,5 @@
 // @vitest-environment node
 import { beforeEach, expect, it } from "vitest";
-import {
-  HARNESS_UPDATE_REQUIRED_CODE,
-  type RunFailureCause,
-} from "../../../../src/shared/run-failure-notice.js";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { projectRunFailureStreaks } from "./chat-run-failure-streaks.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
@@ -12,14 +8,13 @@ import { resetChatThreadState } from "./chat-thread.ts";
 
 beforeEach(() => resetChatThreadState());
 
-const summary = "Rate-limit recovery stopped";
 type Notice = Extract<ChatItem, { kind: "notice" }>;
-const failure = (runId: string, text = summary, cause?: RunFailureCause): Notice => ({
+const failure = (runId: string, summary = "Rate-limit recovery stopped"): Notice => ({
   kind: "notice",
   key: `failure:${runId}`,
-  text,
+  text: summary,
   timestamp: 1,
-  runError: { runId, summary: text, cause: structuredClone(cause) },
+  runError: { runId, summary },
 });
 const message = (key: string, value: unknown): ChatItem => ({
   kind: "message",
@@ -28,6 +23,7 @@ const message = (key: string, value: unknown): ChatItem => ({
 });
 const internalUpdate = (kind: string) =>
   message(kind, { role: "user", content: "Update", provenance: { kind } });
+const summary = "Rate-limit recovery stopped";
 const persistedFailure = (runId: string, seq: number) => ({
   role: "custom",
   content: summary,
@@ -35,76 +31,49 @@ const persistedFailure = (runId: string, seq: number) => ({
   openclawRunError: { runId, summary },
 });
 
-const billingError = { message: "A subscription is required." };
-const billingCause = {
-  provider: "google",
-  failoverReason: "billing",
-  billingError,
-} satisfies RunFailureCause;
+it("keeps only the latest identical failure across internal updates and interrupted output", () => {
+  const first = failure("first");
+  const latest = failure("latest");
+  const updates: ChatItem[] = [
+    internalUpdate("inter_session"),
+    internalUpdate("internal_system"),
+    message("tool", {
+      role: "user",
+      content: [{ type: "tool_result", content: "Interrupted" }],
+      stopReason: "aborted",
+    }),
+    message("partial", { role: "assistant", content: "Partial response", stopReason: "aborted" }),
+    { kind: "notice", key: "system", text: "System update", timestamp: 1, startsTurn: true },
+    { kind: "divider", key: "divider", label: "System", timestamp: 1 },
+  ];
+  const items = [first, ...updates.slice(0, 2), failure("middle"), ...updates.slice(2), latest];
+  expect(projectRunFailureStreaks(items)).toEqual([...updates, { ...latest, repeatCount: 3 }]);
+  expect(first).not.toHaveProperty("repeatCount");
+  expect(latest).not.toHaveProperty("repeatCount");
+});
 
-it.each([
-  ["provider", { ...billingCause, provider: "other-provider" }],
-  [
-    "reason",
-    { provider: "google", failoverReason: "auth" },
-    { provider: "google", failoverReason: "rate_limit" },
-  ],
-  [
-    "billing message",
-    { ...billingCause, billingError: { ...billingError, message: "Add credits" } },
-  ],
-  ["missing billing details", { provider: "google", failoverReason: "billing" }],
-  ["harness update action", { ...billingCause, code: HARNESS_UPDATE_REQUIRED_CODE }],
-  ["missing cause", undefined],
-] satisfies Array<[string, RunFailureCause | undefined, RunFailureCause?]>)(
-  "preserves distinct recovery notices in the chat projection: %s",
-  (_reason, cause, firstCause = billingCause) => {
-    const errors = [
-      { runId: "first", summary, cause: firstCause },
-      { runId: "latest", summary, ...(cause ? { cause } : {}) },
-    ];
-    const notices = buildItems({
-      messages: errors.map((openclawRunError, index) => ({
-        ...persistedFailure(openclawRunError.runId, index + 1),
-        openclawRunError,
-      })),
-    }).filter((item) => item.kind === "notice" && item.runError);
-    expect(notices).toMatchObject(errors.map((runError) => ({ runError })));
-    for (const notice of notices) {
-      expect(notice).not.toHaveProperty("repeatCount");
-    }
-  },
-);
-
-it.each([undefined, billingCause])(
-  "keeps the latest identical recovery details across internal updates: %j",
-  (cause) => {
-    const first = { ...failure("first", summary, cause), repeatCount: 2 };
-    const latest = failure("latest", summary, cause);
-    const updates: ChatItem[] = [
-      internalUpdate("inter_session"),
-      internalUpdate("internal_system"),
-      message("tool", {
-        role: "user",
-        content: [{ type: "tool_result", content: "Interrupted" }],
-        stopReason: "aborted",
-      }),
-      message("partial", { role: "assistant", content: "Partial response", stopReason: "aborted" }),
-      { kind: "notice", key: "system", text: "System update", timestamp: 1, startsTurn: true },
-      { kind: "divider", key: "divider", label: "System", timestamp: 1 },
-    ];
-    const items = [
-      first,
-      ...updates.slice(0, 2),
-      failure("middle", summary, cause),
-      ...updates.slice(2),
-      latest,
-    ];
-    expect(projectRunFailureStreaks(items)).toEqual([...updates, { ...latest, repeatCount: 4 }]);
-    expect(first.repeatCount).toBe(2);
-    expect(latest).not.toHaveProperty("repeatCount");
-  },
-);
+it("keeps plan notices with different links separate", () => {
+  const planFailure = (plan: string): Notice => ({
+    kind: "notice",
+    key: `failure:${plan}`,
+    text: "A subscription is required.",
+    timestamp: 1,
+    runError: {
+      runId: plan,
+      summary: "A subscription is required.",
+      cause: {
+        provider: "google",
+        failoverReason: "billing",
+        billingError: {
+          message: "A subscription is required.",
+          actionUrl: `https://example.com/plans/${plan}`,
+        },
+      },
+    },
+  });
+  const notices = [planFailure("standard"), planFailure("ultra")];
+  expect(projectRunFailureStreaks(notices)).toEqual(notices);
+});
 
 it.each([
   ["real user input", message("user", { role: "USER", content: "Try once more" })],

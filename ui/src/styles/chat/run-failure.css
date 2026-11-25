@@ -1,21 +1,22 @@
-/* A compact system event; its details float out of flow. */
+/* A system event between two hairlines; its details float out of flow. */
 .chat-run-failure {
-  align-items: start;
-  margin: var(--space-7) 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
+  margin: var(--space-7) 0;
   color: var(--muted);
   font-family: var(--font-body);
   font-size: calc(12px * var(--control-ui-text-scale));
 }
 
-.chat-run-failure > .stack {
-  flex: 1;
-  gap: 4px;
-}
-
-.chat-run-failure .row {
-  flex-wrap: wrap;
-  gap: 6px;
+.chat-run-failure::before,
+.chat-run-failure::after {
+  content: "";
+  flex: 1 1 0;
+  min-width: 8px;
+  height: 1px;
+  background: var(--border);
 }
 
 .chat-run-failure__toggle {
@@ -26,7 +27,7 @@
   min-width: 0;
   height: 26px;
   padding-block: 0;
-  padding-inline: 4px 6px;
+  padding-inline: 8px 6px;
   border: 0;
   border-radius: calc(13px * var(--openclaw-corner-radius-scale));
   background: transparent;
@@ -101,7 +102,7 @@
   rotate: 90deg;
 }
 
-.chat-run-failure .btn {
+.chat-run-failure .chat-run-failure__retry {
   flex: none;
   gap: 5px;
   height: 26px;
@@ -111,7 +112,7 @@
   font-size: calc(12px * var(--control-ui-text-scale));
 }
 
-.chat-run-failure .btn svg {
+.chat-run-failure .chat-run-failure__retry svg {
   width: 12px;
   height: 12px;
   stroke-width: 2px;
@@ -238,14 +239,25 @@
 
 /* Phone columns give the cause its own line; actions wrap below it. */
 @media (max-width: 560px) {
-  .chat-run-failure__toggle {
-    flex-basis: 100%;
-    justify-content: start;
-    gap: 4px;
-    padding-inline: 4px;
+  .chat-run-failure {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
   }
 
-  .chat-run-failure .btn {
+  .chat-run-failure::before,
+  .chat-run-failure::after {
+    display: none;
+  }
+
+  .chat-run-failure__toggle {
+    flex-basis: 100%;
+    justify-content: center;
+    gap: 4px;
+    padding-inline: 6px 4px;
+  }
+
+  .chat-run-failure .chat-run-failure__retry {
     padding-inline: 6px 8px;
   }
 }

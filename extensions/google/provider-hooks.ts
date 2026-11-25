@@ -55,6 +55,7 @@ export const GOOGLE_GEMINI_PROVIDER_HOOKS = {
     isGoogleUltraPlanRefusal(context)
       ? {
           message: "This request requires an active Google AI Ultra subscription.",
+          actionUrl: "https://one.google.com/about/google-ai-plans/",
         }
       : undefined,
   // Google-family gRPC status codes stay with the shared Gemini provider hook.

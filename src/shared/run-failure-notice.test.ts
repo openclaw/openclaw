@@ -19,7 +19,15 @@ describe("billing display projection", () => {
         message: "  A subscription is required.  ",
         actionUrl: "https://example.com/plans",
       }),
-    ).toEqual({ message: "A subscription is required." });
+    ).toEqual({
+      message: "A subscription is required.",
+      actionUrl: "https://example.com/plans",
+    });
+    expect(billing({ message: "A subscription is required.", actionUrl: "file:///plans" })).toEqual(
+      {
+        message: "A subscription is required.",
+      },
+    );
     expect(billing({ message: "x".repeat(700) })?.message).toHaveLength(600);
     for (const value of [undefined, { message: "  " }]) {
       expect(billing(value)).toBeUndefined();

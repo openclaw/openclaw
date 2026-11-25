@@ -442,7 +442,12 @@ function resolveFailoverErrorFacts(
   if (!isFailoverError(err) && hasRuntimeCoordinationFailure(err)) {
     return null;
   }
-  const signal = normalizeErrorSignal(err, providerHint);
+  const signal = normalizeErrorSignal(
+    err,
+    providerHint,
+    "nested",
+    Boolean(providerOwner?.formatBillingError),
+  );
   return {
     signal,
     classification: resolveFailoverClassificationFromErrorInternal(
@@ -467,10 +472,9 @@ export function resolveFailoverClassificationFromError(
 export function resolveFailoverReasonFromError(
   err: unknown,
   providerHint?: string,
-  providerOwner?: PreparedProviderFailoverOwner | null,
 ): FailoverReason | null {
   return failoverReasonFromClassification(
-    resolveFailoverClassificationFromError(err, providerHint, providerOwner),
+    resolveFailoverClassificationFromError(err, providerHint),
   );
 }
 
@@ -593,9 +597,12 @@ export function coerceToFailoverError(
     const status = normalizeFailoverStatus(err.status, err.code);
     const billingError =
       err.billingError ??
-      (err.reason === "billing"
+      (err.reason === "billing" && context?.providerOwner?.formatBillingError
         ? formatProviderBillingError(
-            { ...normalizeErrorSignal(err), message: err.rawError ?? err.message },
+            {
+              ...normalizeErrorSignal(err, undefined, "nested", true),
+              message: err.rawError ?? err.message,
+            },
             context,
           )
         : undefined);

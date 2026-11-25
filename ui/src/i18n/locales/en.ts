@@ -1547,6 +1547,7 @@ const startupEnglish = {
       failedTitle: "Couldn’t finish this reply",
       credentialsRejected: "{provider} didn’t accept the saved credentials",
       billingProblem: "{provider} reports a billing problem",
+      viewPlans: "View plans",
       openModels: "Open Models",
       failedRepeatCount: "{count} times",
       tryAgain: "Try again",

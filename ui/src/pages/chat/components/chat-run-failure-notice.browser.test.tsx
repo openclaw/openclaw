@@ -3,7 +3,6 @@ import { afterEach, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
 import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { ChatRunFailureNotice } from "./chat-run-failure-notice.tsx";
-import "../../../styles.css";
 import "../../../styles/chat/run-failure.css";
 
 afterEach(() => {
@@ -33,12 +32,7 @@ function mount(height: number, lineTop: number) {
 }
 
 it("opens out of flow without moving the conversation, then closes on Escape and outside click", async () => {
-  const { view, toggle, panel, line } = mount(700, 40);
-  expect(getComputedStyle(line, "::before").content).toBe("none");
-  expect(getComputedStyle(line, "::after").content).toBe("none");
-  const retry = view.getByRole("button", { name: "Try again" });
-  expect(getComputedStyle(retry).backgroundColor).toBe("rgba(0, 0, 0, 0)");
-  expect(getComputedStyle(retry).boxShadow).toBe("none");
+  const { view, toggle, panel } = mount(700, 40);
   const next = view.container.querySelector<HTMLElement>("[data-next]")!;
   const thread = view.container.querySelector<HTMLElement>(".chat-thread")!;
   const measure = () => [next.getBoundingClientRect().top, thread.scrollHeight, thread.scrollTop];

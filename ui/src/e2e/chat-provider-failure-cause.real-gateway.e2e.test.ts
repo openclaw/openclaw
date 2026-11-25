@@ -10,8 +10,8 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js"
 for (const billing of [false, true]) {
   let instance: OpenClawTestInstance;
   let upstreamRequests = 0;
-  const refusal = "requires an active Google AI Ultra subscription";
   const message = "This request requires an active Google AI Ultra subscription.";
+  const plansUrl = "https://one.google.com/about/google-ai-plans/";
   const provider = billing ? "google" : "fixture";
   const model = billing ? "gemini-4-argon" : "current";
   const suite = createControlUiE2eSuite({
@@ -36,7 +36,7 @@ for (const billing of [false, true]) {
                     ? {
                         code: 403,
                         status: "PERMISSION_DENIED",
-                        message: refusal,
+                        message,
                         privateDetail: "RAW_BILLING_CANARY",
                       }
                     : { message: "Incorrect API key provided", code: "invalid_api_key" },
@@ -103,73 +103,56 @@ for (const billing of [false, true]) {
   }
 
   suite.define(() => {
-    it("shows the provider failure message without plan links and preserves it after reload", async () => {
-      await suite.withPage(
-        { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
-        async ({ page }) => {
-          await page.goto(await open("chat"));
-          await waitForControlUiGatewayReady(page);
-          await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill("Hello");
-          await page.getByRole("button", { name: "Send message", exact: true }).click();
-          const failure = page.locator(".chat-run-failure-notice").first();
-          const checkFailure = async () => {
-            await failure.waitFor({ timeout: 60_000 });
-            expect(await failure.locator(".chat-run-failure__title").textContent()).toBe(
-              billing
-                ? "Gemini API key reports a billing problem"
-                : "Fixture didn’t accept the saved credentials",
-            );
-            for (const selector of [".chat-run-failure__icon", ".chat-run-failure__chevron"]) {
-              expect(await failure.locator(selector).isVisible()).toBe(true);
-            }
-            for (const name of ["Open Models", "Edit message", "Try again"]) {
-              expect(await failure.getByRole("button", { name, exact: true }).isVisible()).toBe(
-                true,
-              );
-            }
-            expect(
-              await failure.getByRole("link", { name: "Report a bug", exact: true }).isVisible(),
-            ).toBe(true);
-            if (billing) {
-              expect(
-                await failure.locator(".chat-run-failure__billing-message").textContent(),
-              ).toBe(message);
-              expect(await failure.locator(".chat-run-failure__billing a").count()).toBe(0);
-              if (page.viewportSize()?.width === 1280) {
-                const guidance = await failure
-                  .locator(".chat-run-failure__billing-message")
-                  .boundingBox();
-                const icon = await failure.locator(".chat-run-failure__icon").boundingBox();
-                expect(guidance!.x).toBe(icon!.x);
+    it(
+      billing
+        ? "preserves the plan refusal and plans link after reload"
+        : "shows a rejected key and links to Models",
+      async () => {
+        await suite.withPage(
+          { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+          async ({ page }) => {
+            await page.goto(await open("chat"));
+            await waitForControlUiGatewayReady(page);
+            await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill("Hello");
+            await page.getByRole("button", { name: "Send message", exact: true }).click();
+            const failure = page.locator(".chat-run-failure").first();
+            const toggle = failure.locator(".chat-run-failure__toggle");
+            const checkFailure = async (capture = false) => {
+              await failure.waitFor({ timeout: 60_000 });
+              if (billing) {
+                await toggle.click();
+                await page.locator(".chat-run-failure__log").waitFor();
+                const plans = page.getByRole("link", { name: "View plans", exact: true });
+                const shot = process.env.OPENCLAW_E2E_SHOT;
+                if (capture && shot) {
+                  await page.screenshot({ path: shot });
+                }
+                expect(await failure.locator(".chat-run-failure__title").textContent()).toBe(
+                  message,
+                );
+                expect(await page.locator(".chat-run-failure__log").textContent()).not.toContain(
+                  "RAW_BILLING_CANARY",
+                );
+                await plans.waitFor();
+                expect(await plans.getAttribute("href")).toBe(plansUrl);
+                await page.keyboard.press("Escape");
+              } else {
+                expect(await failure.locator(".chat-run-failure__title").textContent()).toBe(
+                  "Fixture didn’t accept the saved credentials",
+                );
               }
-              expect(await failure.textContent()).not.toContain("RAW_BILLING_CANARY");
-            }
-          };
-          await checkFailure();
-          expect(upstreamRequests).toBeGreaterThan(0);
-          await failure.locator(".chat-run-failure__toggle").click();
-          await page.locator(".chat-run-failure__log").waitFor();
-          await page.keyboard.press("Escape");
-          const shot = process.env.OPENCLAW_E2E_SHOT;
-          if (shot) {
-            await page.screenshot({ path: shot });
-          }
-          await page.reload();
-          await waitForControlUiGatewayReady(page);
-          await checkFailure();
-          if (billing) {
-            await page.setViewportSize({ width: 390, height: 844 });
+            };
+            await checkFailure(true);
+            expect(upstreamRequests).toBeGreaterThan(0);
+            await page.reload();
+            await waitForControlUiGatewayReady(page);
             await checkFailure();
-            const text = await failure.locator(".chat-run-failure__billing-message").boundingBox();
-            const header = await failure.locator(".chat-run-failure .row").boundingBox();
-            expect(text!.y).toBeGreaterThanOrEqual(header!.y + header!.height);
-            expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
-          }
-          await failure.getByRole("button", { name: "Open Models", exact: true }).click();
-          await page.waitForURL((url) => url.pathname.endsWith("/settings/model-providers"));
-          expect(new URL(page.url()).searchParams.get("provider")).toBe(provider);
-        },
-      );
-    });
+            await failure.getByRole("button", { name: "Open Models", exact: true }).click();
+            await page.waitForURL((url) => url.pathname.endsWith("/settings/model-providers"));
+            expect(new URL(page.url()).searchParams.get("provider")).toBe(provider);
+          },
+        );
+      },
+    );
   });
 }

@@ -325,25 +325,25 @@ export function normalizeErrorSignal(
   err: unknown,
   providerHint?: string,
   scope: "direct" | "nested" = "nested",
+  includeProviderCauses = false,
 ): FailoverSignal {
   const read = <T>(reader: (candidate: unknown) => T | undefined) =>
     scope === "direct" ? reader(err) : findErrorProperty(err, reader);
   const message = read(readDirectErrorMessage);
   const code = read(readDirectErrorCode);
   let remainingCauses = MAX_FAILOVER_DETAIL_CANDIDATES;
-  const causes =
-    scope === "nested"
-      ? collectErrorGraphCandidates(err, (candidate) => {
-          if (remainingCauses === 0) {
-            return [];
-          }
-          const next = [candidate.error, candidate.cause]
-            .filter((value) => value != null)
-            .slice(0, remainingCauses);
-          remainingCauses -= next.length;
-          return next;
-        }).slice(1)
-      : [];
+  const causes = includeProviderCauses
+    ? collectErrorGraphCandidates(err, (candidate) => {
+        if (remainingCauses === 0) {
+          return [];
+        }
+        const next = [candidate.error, candidate.cause]
+          .filter((value) => value != null)
+          .slice(0, remainingCauses);
+        remainingCauses -= next.length;
+        return next;
+      }).slice(1)
+    : [];
   return {
     status: normalizeFailoverStatus(read(readDirectStatusCode), code),
     code,
@@ -351,10 +351,12 @@ export function normalizeErrorSignal(
     message: message || undefined,
     provider: read(readDirectProvider) ?? providerHint,
     details: readDirectErrorDetails(err),
-    providerCauseDetails: extractFailoverSignalDetails(
-      ...causes.flatMap((candidate) =>
-        [readDirectErrorMessage(candidate)].concat(readDirectErrorDetails(candidate) ?? []),
-      ),
-    ),
+    providerCauseDetails: causes.length
+      ? extractFailoverSignalDetails(
+          ...causes.flatMap((candidate) =>
+            [readDirectErrorMessage(candidate)].concat(readDirectErrorDetails(candidate) ?? []),
+          ),
+        )
+      : undefined,
   };
 }

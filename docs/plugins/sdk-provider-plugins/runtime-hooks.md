@@ -324,7 +324,7 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `buildAuthDoctorHint`             | Auth repair guidance                                                                        |
 | `matchesContextOverflowError`     | Provider-owned overflow detection                                                           |
 | `classifyFailoverReason`          | Provider-owned rate-limit/overload classification                                           |
-| `formatBillingError`              | Optional provider-authored, text-only billing guidance                                      |
+| `formatBillingError`              | Optional provider-authored billing message and plans link                                   |
 | `isCacheTtlEligible`              | Prompt cache TTL gating                                                                     |
 | `buildMissingAuthMessage`         | Custom missing-auth hint                                                                    |
 | `augmentModelCatalog`             | Synthetic forward-compat rows (deprecated - prefer `registerModelCatalogProvider`)          |
@@ -358,16 +358,12 @@ provider request and releases the request lease.
 
 A provider can opt into specific billing guidance with the synchronous
 `formatBillingError(ctx: ProviderFailoverErrorContext)` hook. Return
-`{ message: string }` or `undefined` to keep the generic copy.
-OpenClaw calls only the selected, prepared provider owner, after the existing
-classification identifies a billing failure. The hook does not change
-classification, retries, account selection, or fallback policy.
-
-Return deliberate user-facing copy, not a raw response body, diagnostic preview,
-credentials, or an authentication-bearing URL. The host trims and bounds the
-message to 600 characters; empty messages retain the generic copy. Billing guidance
-is text only, without provider plan links. Undefined, malformed, or throwing hooks
-retain the generic copy.
+`{ message: string; actionUrl?: string }` or `undefined` to keep the generic copy.
+OpenClaw calls the selected, prepared provider after it classifies a billing
+failure. Use deliberate user-facing copy and a public plans URL. OpenClaw trims
+the message to 600 characters and accepts absolute HTTP(S) URLs up to 2,048
+characters with no username or password. An invalid URL is omitted. Empty
+messages and throwing hooks retain the generic billing copy.
 
 For example, a provider that requires a plan for third-party clients can return
 constant guidance for its recognized billing error:
@@ -381,17 +377,10 @@ formatBillingError: (ctx) =>
     : undefined,
 ```
 
-Assistant failures, thrown exceptions, and typed billing failures use the same
-prepared provider owner. Existing guidance is retained when a typed failure is
-enriched; formatters consume that fact instead of discovering another provider.
-
-The bundled Google adapter recognizes the refusal that requires an active Google
-AI Ultra subscription and preserves that requirement as its billing message. Unknown
-refusals retain the generic copy; raw HTTP error bodies are not promoted into display copy.
-
-The normalized `billingError` fact travels with billing failures through fallback
-attempts, terminal chat events, and saved run-failure notices. Presentation never
-discovers provider hooks or derives this fact from raw error text.
+The Google adapter uses this hook for the Google AI Ultra subscription
+refusal. The Control UI shows the explanation on the failure notice and offers
+the plans link in the existing error details. The same guidance is available
+when the chat is reloaded.
 
 Runtime fallback notes:
 
