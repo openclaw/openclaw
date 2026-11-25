@@ -126,9 +126,9 @@ describe("FaceTime production authority boundary", () => {
     vi.restoreAllMocks();
   });
 
-  async function start(ownerHandles = ["owner@example.com"]) {
+  async function start(allowedCallers = ["owner@example.com"]) {
     const runtime = await createFaceTimeRuntime({
-      config: resolveFaceTimeConfig({ ownerHandles }),
+      config: resolveFaceTimeConfig({ allowedCallers }),
       fullConfig: {},
       logger: log,
       pluginRoot: "/isolated",
