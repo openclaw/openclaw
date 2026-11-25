@@ -13,7 +13,6 @@ import {
   useContext,
 } from "solid-js";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MenuHeading } from "../../components/solid/menu-heading.tsx";
@@ -22,7 +21,6 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
@@ -34,33 +32,7 @@ import { PlaceBrowser } from "./place-browser.tsx";
 import { disambiguate } from "./place-labels.ts";
 import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipProps } from "./project-chip.tsx";
-import { ProjectFolderIcon } from "./project-folder-icon.tsx";
-import { ProjectIcon } from "./project-icon.tsx";
-
-function ProjectRowIcon(props: Parameters<typeof ProjectIcon>[0]) {
-  const [visible, setVisible] = createSignal(typeof IntersectionObserver === "undefined");
-  let glyph!: HTMLSpanElement;
-  createIntersectionObserver(
-    () => (visible() ? [] : [glyph]),
-    (entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        setVisible(true);
-      }
-    },
-  );
-  return (
-    <span
-      class="project-picker-icon"
-      ref={(element) => {
-        glyph = element;
-      }}
-    >
-      <Show when={visible()} fallback={<ProjectFolderIcon />}>
-        <ProjectIcon context={props.context} projectId={props.projectId} />
-      </Show>
-    </span>
-  );
-}
+import { createSavedProjectManagement, SavedProjectRow } from "./project-picker-saved-projects.tsx";
 
 function DevicePathEntry(props: ProjectChipProps) {
   const [path, setPath] = createSignal(() => props.params.place.deviceFolder?.path ?? "");
@@ -113,59 +85,7 @@ function DevicePathEntry(props: ProjectChipProps) {
 export function ProjectPickerContent(props: ProjectChipProps) {
   const navigation = useContext(PickerNavigation);
   const browseRef = pickerOptionRef();
-  const [managing, setManaging] = createSignal(false);
-  const [removing, setRemoving] = createSignal(false);
-  const [removeError, setRemoveError] = createSignal<string | undefined>(undefined);
-  const canManage = () =>
-    canCallGatewayMethod(
-      props.params.context?.gateway.snapshot,
-      "projects.remove",
-      "operator.admin",
-    );
-  const removeSavedProject = async (project: ProjectRecord) => {
-    const gateway = props.params.context?.gateway;
-    const draftGateway = props.params.gateway;
-    const browser = props.params.place.browser;
-    if (!gateway || project.source === "workspace" || !canManage() || removing()) {
-      return;
-    }
-    const client = gateway.snapshot.client;
-    const epoch = draftGateway.connectionEpoch;
-    if (!client) {
-      return;
-    }
-    const isCurrent = () =>
-      props.params.context?.gateway === gateway &&
-      props.params.gateway === draftGateway &&
-      props.params.place.browser === browser &&
-      gateway.snapshot.client === client &&
-      draftGateway.connectionEpoch === epoch;
-    setRemoveError(undefined);
-    try {
-      const confirmed = await showConfirmDialog({
-        title: t("newSession.removeSavedProjectTitle", { name: project.displayName }),
-        message: t("newSession.removeSavedProjectImpact"),
-        confirmLabel: t("common.remove"),
-        danger: true,
-        canConfirm: () => isCurrent() && canManage(),
-      });
-      if (!confirmed || !isCurrent() || !canManage() || removing()) {
-        return;
-      }
-      setRemoving(true);
-      await client.request("projects.remove", { id: project.id, deleteCheckout: false });
-      if (!isCurrent()) {
-        return;
-      }
-      await browser.refreshProjects(true);
-    } catch (error) {
-      if (isCurrent()) {
-        setRemoveError(formatUiError(error));
-      }
-    } finally {
-      setRemoving(false);
-    }
-  };
+  const management = createSavedProjectManagement(props);
   const applyFolder = (folder: string) => {
     if (!props.params.place.browser.browserNodeId) {
       props.params.place.applyFolder(folder);
@@ -331,6 +251,12 @@ export function ProjectPickerContent(props: ProjectChipProps) {
         )
       : accepted;
   });
+  const checkoutSuffixes = createMemo(() =>
+    disambiguate(localProjects(), (p) => JSON.stringify([p.displayName, p.repositoryIdentity]), [
+      (p) => p.repoRoot,
+      (p) => p.id,
+    ]),
+  );
   const projectSearchRead = createMemo(() => props.params.place.browser.projectSearchRead);
   const projectSearchResult = createMemo(() => {
     const read = projectSearchRead();
@@ -417,9 +343,9 @@ export function ProjectPickerContent(props: ProjectChipProps) {
           class="new-session-page__environment-layout new-session-page__picker-navigation"
           data-chat-autotype-exempt
         >
-          <Show when={removeError()}>
+          <Show when={management.removeError()}>
             <div role="alert" class="new-session-page__project-error">
-              {removeError()}
+              {management.removeError()}
             </div>
           </Show>
           <HeaderSearch
@@ -440,7 +366,11 @@ export function ProjectPickerContent(props: ProjectChipProps) {
               props.params.place.browser.changeProjectQuery(query);
             }}
             onInputKeyDown={(event) => {
-              if (navigation?.keydown(event) || event.key !== "Enter" || isComposingKeyboardEvent(event)) {
+              if (
+                navigation?.keydown(event) ||
+                event.key !== "Enter" ||
+                isComposingKeyboardEvent(event)
+              ) {
                 return;
               }
               if (view().cloneInput && view().projectAddAvailable) {
@@ -608,50 +538,17 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                     </Show>
                   }
                 >
-                  {(project) => {
-                    const icon = (
-                      <ProjectRowIcon context={props.params.context} projectId={project().id} />
-                    );
-                    return (
-                      <div class="project-picker__saved-row">
-                        <SessionMenuItem
-                          item={{
-                            value: `project:${project().id}`,
-                            label: project().displayName,
-                            icon,
-                            sub:
-                              project().source === "workspace"
-                                ? t("newSession.protectedWorkspace")
-                                : (project().repositoryIdentity ??
-                                  project().repoRoot ??
-                                  project().id),
-                            checked: props.params.place.browser.projectId === project().id,
-                            title: project().repositoryIdentity ?? project().repoRoot,
-                            onSelect: () => props.params.place.selectProjectId(project().id),
-                          }}
-                          submitting={props.params.submitting || removing()}
-                        />
-                        <Show when={managing() && canManage() && project().source !== "workspace"}>
-                          <button
-                            type="button"
-                            class="btn btn--sm project-picker__remove-button"
-                            aria-label={t("newSession.removeSavedProjectLabel", {
-                              name: project().displayName,
-                            })}
-                            title={t("newSession.removeSavedProjectHint")}
-                            disabled={props.params.submitting || removing()}
-                            onClick={() => void removeSavedProject(project())}
-                          >
-                            {t("common.remove")}
-                          </button>
-                        </Show>
-                      </div>
-                    );
-                  }}
+                  {(project, index) => (
+                    <SavedProjectRow
+                      picker={props}
+                      project={project()}
+                      suffix={checkoutSuffixes()[index()]}
+                      management={management}
+                    />
+                  )}
                 </For>
               </Loading>
             </Show>
-            <MenuHeading class="new-session-page__menu-title" label={t("newSession.openProject")} />
             {view().cloneInput && view().projectAddAvailable ? (
               <SessionMenuItem
                 item={{
@@ -665,25 +562,12 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                 submitting={props.params.submitting}
               />
             ) : undefined}
-            {!view().cloneInput && view().projectSearchAvailable ? (
+            {projectSearchRead() ? (
               <>
-                <div class="new-session-page__menu-note">
-                  {view().query.length >= 2
-                    ? t("newSession.projectSearchGuidance")
-                    : t("newSession.projectSourceGuidance")}
-                </div>
-                <button
-                  type="button"
-                  class="session-menu__item"
-                  disabled={
-                    props.params.submitting ||
-                    props.params.pendingPlacement ||
-                    view().query.length < 2
-                  }
-                  onClick={() => props.params.place.browser.searchRemoteProjects()}
-                >
-                  {t("newSession.searchGithub")}
-                </button>
+                <MenuHeading
+                  class="new-session-page__menu-title"
+                  label={t("newSession.githubProjects")}
+                />
                 <Errored
                   fallback={(error) => (
                     <div class="new-session-page__project-error" role="alert">
@@ -755,21 +639,39 @@ export function ProjectPickerContent(props: ProjectChipProps) {
             ) : (
               browseButton()
             )}
-            <Show when={canManage()}>
-              <button
-                type="button"
-                class="session-menu__item project-picker__manage"
-                aria-pressed={managing() ? "true" : "false"}
-                disabled={props.params.submitting || removing()}
-                onClick={() => {
-                  setManaging(!managing());
-                  setRemoveError(undefined);
+            <Show when={!view().cloneInput && view().projectSearchAvailable}>
+              <SessionMenuItem
+                item={{
+                  value: "search-github",
+                  label: t("newSession.searchGithub"),
+                  icon: <Icon name="github" />,
+                  keepOpen: true,
+                  checked: false,
+                  onSelect: () => props.params.place.browser.searchRemoteProjects(),
                 }}
-              >
-                {managing()
-                  ? t("newSession.doneManagingProjects")
-                  : t("newSession.manageSavedProjects")}
-              </button>
+                submitting={
+                  props.params.submitting ||
+                  props.params.pendingPlacement ||
+                  view().query.length < 2
+                }
+              />
+            </Show>
+            <Show when={!props.nativeTerminal && management.canManage()}>
+              <SessionMenuItem
+                item={{
+                  value: "manage-projects",
+                  label: management.managing()
+                    ? t("newSession.doneManagingProjects")
+                    : t("newSession.manageSavedProjects"),
+                  icon: <Icon name="settings" />,
+                  keepOpen: true,
+                  checked: management.managing(),
+                  onSelect: management.toggle,
+                }}
+                submitting={
+                  props.params.submitting || props.params.pendingPlacement || management.removing()
+                }
+              />
             </Show>
           </div>
         </div>

@@ -317,7 +317,7 @@ suite.define(() => {
     const trigger = page.locator("#new-session-project-trigger");
     const place = page.locator(".oc-popover.new-session-page__project-popover");
     await trigger.click();
-    await button(place, "Recorded OpenClaw", true).click();
+    await button(place, "Recorded OpenClaw /recorded/openclaw", true).click();
     await expectLabel(trigger, "Recorded OpenClaw");
     expect(await trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
     await expect

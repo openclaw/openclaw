@@ -292,9 +292,10 @@ async function removalFixture(scopes = ["operator.admin"]) {
     id: "saved",
     displayName: "lossless-claw",
     repositoryIdentity: "owner-a/lossless-claw",
+    repoRoot: "/checkouts/primary/lossless-claw",
     source: "registered" as const,
   };
-  const other = { ...saved, id: "other", repositoryIdentity: "owner-b/lossless-claw" };
+  const other = { ...saved, id: "other", repoRoot: "/checkouts/release/lossless-claw" };
   const workspace = {
     id: "builtin",
     displayName: "Agent home",
@@ -336,9 +337,7 @@ async function removalFixture(scopes = ["operator.admin"]) {
   const openRemoval = async () => {
     view.getByText("Manage projects").click();
     flush();
-    const opener = view.container.querySelector<HTMLButtonElement>(
-      ".project-picker__remove-button",
-    )!;
+    const opener = view.container.querySelector<HTMLButtonElement>('[data-value="project:saved"]')!;
     opener.focus();
     opener.click();
     flush();
@@ -359,8 +358,7 @@ async function removalFixture(scopes = ["operator.admin"]) {
 it("hides shared catalog management from write-only operators", async () => {
   const { view } = await removalFixture(["operator.write"]);
   expect(view.queryByText("Manage projects")).toBeNull();
-  expect(view.container.querySelector(".project-picker__manage")).toBeNull();
-  expect(view.queryByText("Add or open a project")).toBeNull();
+  expect(view.queryByRole("button", { name: /^Remove / })).toBeNull();
 });
 
 it("uses native confirmation, cancels without RPC, and reconciles the selected project through its owner", async () => {
@@ -368,10 +366,15 @@ it("uses native confirmation, cancels without RPC, and reconciles the selected p
     await removalFixture();
   browser.selectProject({ kind: "local", id: "saved" });
   const opener = await openRemoval();
-  expect(view.container.querySelectorAll(".project-picker__remove-button")).toHaveLength(2);
-  expect(view.getByText("Done").getAttribute("aria-pressed")).toBe("true");
-  expect(view.container.textContent).toContain("owner-a/lossless-claw");
-  expect(view.container.textContent).toContain("owner-b/lossless-claw");
+  expect(view.getAllByRole("button", { name: /^Remove / })).toHaveLength(2);
+  expect(
+    view.container.querySelector<HTMLButtonElement>('[data-value="project:builtin"]')!.disabled,
+  ).toBe(true);
+  expect(view.getByRole("button", { name: "Done" }).getAttribute("aria-pressed")).toBe("true");
+  expect(opener.textContent).toContain("owner-a/lossless-claw · /checkouts/primary/lossless-claw");
+  expect(view.container.querySelector('[data-value="project:other"]')!.textContent).toContain(
+    "/checkouts/release/lossless-claw",
+  );
   expect(view.container.textContent).toContain("Agent workspace");
   const actions = await waitForConfirmDialogActions();
   expect(document.activeElement?.textContent).toBe("Cancel");
@@ -380,6 +383,9 @@ it("uses native confirmation, cancels without RPC, and reconciles the selected p
     "Remove",
   ]);
   expect(document.body.textContent).toContain("Remove lossless-claw?");
+  expect(document.querySelector("dialog")?.textContent).toContain(
+    "/checkouts/primary/lossless-claw",
+  );
   expect(document.body.textContent).toContain(
     "This removes the project from the Gateway catalog for all users and agents. Files, sessions and history are kept.",
   );
@@ -429,9 +435,9 @@ it.each(["connection epoch", "new selection"] as const)(
     changed();
     removal.resolve({ removed: true });
     await waitForSolid(() =>
-      expect(document.querySelector<HTMLButtonElement>(".project-picker__manage")!.disabled).toBe(
-        false,
-      ),
+      expect(
+        document.querySelector<HTMLButtonElement>('[data-value="manage-projects"]')!.disabled,
+      ).toBe(false),
     );
     expect(fallback).not.toHaveBeenCalled();
     if (change === "connection epoch") {

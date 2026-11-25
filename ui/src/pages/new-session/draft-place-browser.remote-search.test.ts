@@ -62,7 +62,7 @@ describe("remote project search", () => {
     await expect(currentRead.completed).resolves.toEqual({ result: project });
   });
 
-  it("records a current failure, recovers on another query, and retires disconnected reads", async () => {
+  it("retries a failed query without editing it and retires disconnected reads", async () => {
     const { browser, request } = remoteSearch();
     const failure = new Error("remote search unavailable");
     request.mockRejectedValueOnce(failure);
@@ -72,7 +72,6 @@ describe("remote project search", () => {
     await expect(browser.projectSearchRead!.completed).resolves.toEqual({ error: failure });
 
     request.mockResolvedValueOnce(project);
-    browser.changeProjectQuery("current");
     browser.searchRemoteProjects();
     await expect(browser.projectSearchRead!.completed).resolves.toEqual({ result: project });
 

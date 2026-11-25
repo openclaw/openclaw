@@ -45,7 +45,7 @@ function mountBrowser() {
     selectedRemoteProject: null,
     projects: browser.projects,
     recents: [],
-    projectQuery: "",
+    projectQuery: browser.projectQuery,
   }));
   browser.synchronize();
   const open = async () => {
@@ -187,9 +187,11 @@ it("keeps saved-project confirmation in the native modal and returns focus on Es
   await browser.refreshProjects();
   await page.getByRole("button", { name: "Manage projects" }).click();
   const opener = view.getByRole<HTMLButtonElement>("button", {
-    name: "Remove Registered workspace",
+    name: "Remove Registered workspace /workspace",
   });
-  await page.getByRole("button", { name: "Remove Registered workspace" }).click();
+  await page
+    .getByRole("button", { name: "Remove Registered workspace /workspace", exact: true })
+    .click();
   await waitForSolid(() =>
     expect(document.querySelector<HTMLDialogElement>("dialog")?.open).toBe(true),
   );
@@ -219,7 +221,7 @@ it("searches GitHub through a native action or Enter, never from typing", async 
   request.mockImplementation(async (method) =>
     method === "projects.searchRemote"
       ? { credential: "configured", projects: [remote] }
-      : { projects: [] },
+      : { projects: [project] },
   );
   await browser.refreshProjects();
   const search = page.getByRole("searchbox", { name: "Search projects or paste a Git URL" });
@@ -234,6 +236,14 @@ it("searches GitHub through a native action or Enter, never from typing", async 
     ).not.toBeNull(),
   );
   await search.fill("another");
+  search
+    .element()
+    .dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
+    );
+  expect(request.mock.calls.filter(([method]) => method === "projects.searchRemote")).toHaveLength(
+    1,
+  );
   await userEvent.keyboard("{Enter}");
   await waitForSolid(() =>
     expect(request).toHaveBeenCalledWith("projects.searchRemote", { query: "another" }),
@@ -243,6 +253,9 @@ it("searches GitHub through a native action or Enter, never from typing", async 
   await waitForSolid(() =>
     expect(browser.remoteProject?.cloneUrl).toBe("https://github.com/synthetic/pasted.git"),
   );
+  await search.fill("Registered");
+  await userEvent.keyboard("{ArrowDown}{Enter}");
+  await waitForSolid(() => expect(browser.projectId).toBe(project.id));
   expect(request.mock.calls.filter(([method]) => method === "projects.searchRemote")).toHaveLength(
     2,
   );

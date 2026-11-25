@@ -172,9 +172,9 @@ Reloading or leaving the app does not preserve this in-memory draft.
 
 Open **Workspace** on New session to choose a saved project, a recent folder, or
 a repository URL. The search/paste field opens immediately, even on short lists.
-The **Open project** group offers **Browse folders** and, when permitted,
-**Search GitHub**. GitHub search is disabled until a name has at least two characters.
-Administrators can choose **Manage projects** after the opening choices. Removing
+The picker offers **Browse folders** and, when permitted, **Search GitHub**.
+GitHub search requires at least two characters. Administrators can choose
+**Manage projects**, then select the saved entry they want to remove. Removing
 a saved project requires confirmation and affects the shared Gateway catalog; it
 keeps the checkout, files, sessions, and history. Built-in workspaces cannot be removed.
 
@@ -189,8 +189,11 @@ Gateway provides it. Search matches both that identity and the project display
 name, so repositories from different organizations are easier to distinguish.
 The **Local projects** section filters the Gateway’s saved project catalog immediately;
 it does not scan the filesystem or send a GitHub request while you type. Choose
-**Search GitHub** or press **Enter** with a plain-text query to search remotely.
-Pasting a Git URL and pressing **Enter** still selects that repository directly.
+**Search GitHub** or press **Enter** with a plain-text query and no highlighted
+row to search remotely. Arrow keys highlight rows; **Enter** selects the highlighted
+row. Pasting a Git URL and pressing **Enter** selects that repository directly.
+When saved entries share a name and repository identity, the picker distinguishes
+them by checkout path if the Gateway supplies it, or by project ID otherwise.
 GitHub search results appear separately, without repeating repositories already
 shown as local matches. If no local project matches,
 the picker says so explicitly. Selecting a repository also shows its identity in
