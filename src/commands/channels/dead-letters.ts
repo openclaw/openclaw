@@ -1,5 +1,6 @@
 import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { normalizeChatChannelId } from "../../channels/ids.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
 import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import { parseLogsPositiveInt } from "../../cli/logs-cli.options.js";
@@ -14,10 +15,14 @@ type ChannelsDeadLettersOptions = {
 };
 
 function resolveScope(options: ChannelsDeadLettersOptions) {
-  const channelId = options.channel?.trim();
-  if (!channelId) {
+  const rawChannelId = options.channel?.trim();
+  if (!rawChannelId) {
     throwExpectedCliError("--channel is required.");
   }
+  // Channel runtimes key their ingress queues by canonical plugin id, so resolve case
+  // and bundled aliases the same way `channels logs --channel` does. Non-channel
+  // plugin ids (mcp-events, voice-call, ...) keep their own queue unchanged.
+  const channelId = normalizeChatChannelId(rawChannelId) ?? rawChannelId;
   // Only omission selects the default queue; an explicit blank selector must not change scope.
   const accountId = options.account?.trim() ?? "default";
   if (!accountId) {

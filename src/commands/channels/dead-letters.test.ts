@@ -68,6 +68,33 @@ describe("channel dead-letter commands", () => {
     });
   });
 
+  it.each([
+    { selector: "Telegram", channelId: "telegram" },
+    { selector: "TELEGRAM", channelId: "telegram" },
+    { selector: " imsg ", channelId: "imessage" },
+    { selector: "mcp-events", channelId: "mcp-events" },
+  ])("lists the queue whose canonical id is $channelId for selector $selector", async (row) => {
+    await withFailedEvent({ channelId: row.channelId }, async () => {
+      await channelsDeadLettersListCommand({ channel: row.selector, json: true });
+      expect(defaultRuntime.writeJson).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          channelId: row.channelId,
+          deadLetters: [expect.objectContaining({ id: "event-1" })],
+        }),
+      );
+    });
+  });
+
+  it("resubmits through a bundled alias against the canonical queue", async () => {
+    await withFailedEvent({ channelId: "imessage" }, async (queue) => {
+      await channelsDeadLettersResubmitCommand("event-1", { channel: "imsg" });
+      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("(imessage/default)"));
+      const replay = await queue.claimNext({ ownerId: "replay-worker" });
+      expect(replay).toMatchObject({ id: "event-1", payload: { text: "recover me" } });
+    });
+  });
+
   it.each(
     [
       { channel: "telegram", account: "" },
