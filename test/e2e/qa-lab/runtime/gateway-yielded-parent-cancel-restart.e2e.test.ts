@@ -11,6 +11,7 @@ import {
   createQaGatewayChild,
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
+import type { SessionsListResult } from "../../../../src/gateway/session-utils.types.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -48,12 +49,7 @@ type ProviderRequest = {
 type SpawnReceipt = {
   status?: string;
   runId?: string;
-};
-
-type TaskRow = {
-  runId?: string;
-  title?: string;
-  status?: string;
+  childSessionKey?: string;
 };
 
 function writeToolCall(
@@ -339,6 +335,7 @@ describe("yielded parent cancellation across Gateway restart", () => {
     await provider.firstChildStarted;
     expect(spawn).toMatchObject({ status: "accepted" });
     expect(spawn.runId).toBeTypeOf("string");
+    expect(spawn.childSessionKey).toBeTypeOf("string");
 
     provider.releaseYieldCall();
     const { runId: parentRunId } = await parentEnded.promise;
@@ -357,12 +354,14 @@ describe("yielded parent cancellation across Gateway restart", () => {
     expect(stop).toMatchObject({ ok: true, status: "aborted", abortedRunId: null });
     await provider.firstChildClosed;
 
-    const beforeRestartTasks = (await gateway.call("tasks.list", {
+    const beforeRestartSessions = (await gateway.call("sessions.list", {
       agentId: "qa",
       limit: 100,
-    })) as { tasks?: TaskRow[] };
-    const cancelledTask = beforeRestartTasks.tasks?.find((task) => task.title === CHILD_LABEL);
-    expect(cancelledTask).toMatchObject({ runId: spawn.runId, status: "cancelled" });
+    })) as SessionsListResult;
+    const cancelledChild = beforeRestartSessions.sessions.find(
+      (session) => session.key === spawn.childSessionKey,
+    );
+    expect(cancelledChild).toMatchObject({ lastRunId: spawn.runId, status: "killed" });
 
     await gateway.restartAfterStateMutation(async () => {});
 
@@ -379,11 +378,13 @@ describe("yielded parent cancellation across Gateway restart", () => {
       timeoutMs: 60_000,
     });
 
-    const afterRestartTasks = (await gateway.call("tasks.list", {
+    const afterRestartSessions = (await gateway.call("sessions.list", {
       agentId: "qa",
       limit: 100,
-    })) as { tasks?: TaskRow[] };
-    const retainedTask = afterRestartTasks.tasks?.find((task) => task.title === CHILD_LABEL);
+    })) as SessionsListResult;
+    const retainedChild = afterRestartSessions.sessions.find(
+      (session) => session.key === spawn.childSessionKey,
+    );
     await gateway.stop();
     const outbound = state
       .getSnapshot()
@@ -393,8 +394,8 @@ describe("yielded parent cancellation across Gateway restart", () => {
         phase: "gateway-yielded-parent-cancel-restart",
         stop,
         yielded,
-        cancelledTask,
-        retainedTask,
+        cancelledChild,
+        retainedChild,
         childRequestCount: provider.childRequestCount,
         freshRequestCount: provider.freshRequestCount,
         unexpectedWakeRequestCount: provider.unexpectedWakeRequestCount,
@@ -406,7 +407,7 @@ describe("yielded parent cancellation across Gateway restart", () => {
     expect(provider.childRequestCount).toBe(1);
     expect(provider.freshRequestCount).toBe(1);
     expect(provider.unexpectedWakeRequestCount).toBe(0);
-    expect(retainedTask).toMatchObject({ runId: spawn.runId, status: "cancelled" });
+    expect(retainedChild).toMatchObject({ lastRunId: spawn.runId, status: "killed" });
     expect(outbound.filter((message) => message.text.includes(FRESH_MARKER))).toHaveLength(1);
     expect(
       outbound.filter(
