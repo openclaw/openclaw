@@ -133,9 +133,7 @@ struct ChatComposerAddSheet: View {
                         .accessibilityIdentifier("chat-composer-add-marked")
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    ChatComposerSheetCloseButton(identifier: "chat-composer-add-close") { self.onClose(nil) }
-                }
+                OpenClawSheetCloseItem(identifier: "chat-composer-add-close") { self.onClose(nil) }
             }
             .navigationDestination(for: Route.self) { route in
                 switch route {
@@ -145,22 +143,19 @@ struct ChatComposerAddSheet: View {
                         caps: caps,
                         onSwitches: { self.path.append(.skillSwitches) },
                         onSearch: { self.detent = .large },
-                        onUsed: { self.onClose(.focusDraft) },
-                        onClose: { self.onClose(nil) })
+                        onUsed: { self.onClose(.focusDraft) })
                 case .skillSwitches:
                     ChatComposerSkillSwitchesPage(
                         viewModel: self.viewModel,
                         caps: caps,
-                        onSearch: { self.detent = .large },
-                        onClose: { self.onClose(nil) })
+                        onSearch: { self.detent = .large })
                 case .connectors:
-                    ChatComposerConnectorsPage(viewModel: self.viewModel, caps: caps, onClose: { self.onClose(nil) })
+                    ChatComposerConnectorsPage(viewModel: self.viewModel, caps: caps)
                 case let .connector(name):
                     ChatComposerConnectorPage(
                         viewModel: self.viewModel,
                         caps: caps,
-                        name: name,
-                        onClose: { self.onClose(nil) })
+                        name: name)
                 case .branches:
                     ChatComposerBranchesPage(viewModel: self.viewModel, onClose: { self.onClose(nil) })
                 }
@@ -522,7 +517,6 @@ private struct ChatComposerSkillsPage: View {
     let onSwitches: () -> Void
     let onSearch: () -> Void
     let onUsed: () -> Void
-    let onClose: () -> Void
 
     @State private var query = ""
     @State private var isSearching = false
@@ -564,11 +558,6 @@ private struct ChatComposerSkillsPage: View {
         .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
         .navigationTitle(Text("Use a skill"))
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                ChatComposerSheetCloseButton(identifier: "chat-composer-add-close", action: self.onClose)
-            }
-        }
         .searchable(text: self.$query, isPresented: self.$isSearching, prompt: Text("Search skills"))
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
@@ -678,7 +667,6 @@ private struct ChatComposerSkillSwitchesPage: View {
     @Bindable var viewModel: OpenClawChatViewModel
     let caps: ChatComposerCapabilityDisplay
     let onSearch: () -> Void
-    let onClose: () -> Void
     @State private var query = ""
     @State private var isSearching = false
     @ScaledMetric(relativeTo: .body) private var searchClearance: CGFloat = 64
@@ -729,11 +717,6 @@ private struct ChatComposerSkillSwitchesPage: View {
         .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
         .navigationTitle(Text("Skills"))
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                ChatComposerSheetCloseButton(identifier: "chat-composer-add-close", action: self.onClose)
-            }
-        }
         .searchable(text: self.$query, isPresented: self.$isSearching, prompt: Text("Search skills"))
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
@@ -748,7 +731,6 @@ private struct ChatComposerSkillSwitchesPage: View {
 private struct ChatComposerConnectorsPage: View {
     @Bindable var viewModel: OpenClawChatViewModel
     let caps: ChatComposerCapabilityDisplay
-    let onClose: () -> Void
 
     var body: some View {
         let catalog = self.caps.facts.catalog
@@ -783,11 +765,6 @@ private struct ChatComposerConnectorsPage: View {
         .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
         .navigationTitle(Text("Connectors"))
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                ChatComposerSheetCloseButton(identifier: "chat-composer-add-close", action: self.onClose)
-            }
-        }
     }
 }
 
@@ -797,7 +774,6 @@ private struct ChatComposerConnectorPage: View {
     @Bindable var viewModel: OpenClawChatViewModel
     let caps: ChatComposerCapabilityDisplay
     let name: String
-    let onClose: () -> Void
 
     var body: some View {
         let catalog = self.caps.facts.catalog
@@ -860,11 +836,6 @@ private struct ChatComposerConnectorPage: View {
         .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
         .navigationTitle(Text(verbatim: self.name))
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                ChatComposerSheetCloseButton(identifier: "chat-composer-add-close", action: self.onClose)
-            }
-        }
     }
 }
 
@@ -908,11 +879,6 @@ private struct ChatComposerBranchesPage: View {
         .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
         .navigationTitle(Text("Branches"))
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                ChatComposerSheetCloseButton(identifier: "chat-composer-add-close", action: self.onClose)
-            }
-        }
         .task { await self.viewModel.refreshSessionBranches() }
     }
 }
@@ -1019,22 +985,4 @@ private struct ChatComposerProminentToolbarButton: ViewModifier {
     }
 }
 
-/// The system close button in a sheet's top bar.
-struct ChatComposerSheetCloseButton: View {
-    let identifier: String
-    let action: () -> Void
-
-    var body: some View {
-        if #available(iOS 26.0, *) {
-            Button(role: .close, action: self.action)
-                .accessibilityIdentifier(self.identifier)
-        } else {
-            Button(action: self.action) {
-                Image(systemName: "xmark")
-            }
-            .accessibilityLabel(Text("Close"))
-            .accessibilityIdentifier(self.identifier)
-        }
-    }
-}
 #endif

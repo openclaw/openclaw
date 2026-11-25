@@ -800,9 +800,7 @@ struct RootSidebarPagesEditor: View {
             NavigationStack {
                 self.pageList
                     .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button(role: .close) { self.dismiss() }
-                        }
+                        OpenClawSheetCloseItem { self.dismiss() }
                     }
             }
             .tint(.primary)

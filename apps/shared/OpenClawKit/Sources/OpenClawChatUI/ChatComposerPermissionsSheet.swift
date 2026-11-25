@@ -114,11 +114,7 @@ private struct ChatComposerPermissionsSheet: View {
             .navigationTitle("Permissions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { self.dismiss() } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("Close")
-                        .accessibilityIdentifier("chat-composer-permissions-close")
-                }
+                OpenClawSheetCloseItem(identifier: "chat-composer-permissions-close") { self.dismiss() }
             }
         }
         .tint(.primary)

@@ -113,10 +113,7 @@ struct SettingsHubScreen: View {
                 OpenClawSidebarToolbarItem(action: headerSidebarAction, placement: .topBarLeading)
             }
             if let onClose {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(role: .close) { onClose() }
-                        .accessibilityIdentifier("SettingsHub.Close")
-                }
+                OpenClawSheetCloseItem(identifier: "SettingsHub.Close", action: onClose)
             }
         }
     }

@@ -47,9 +47,7 @@ struct ChatModelPickerSheet: View {
             .navigationTitle(Text("Model"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    ChatModelPickerCloseButton(action: self.onClose)
-                }
+                OpenClawSheetCloseItem(identifier: "chat-model-picker-close", action: self.onClose)
             }
             .searchable(
                 text: self.$query,
@@ -291,24 +289,6 @@ private struct ChatModelPickerModelRow: View {
         .accessibilityLabel(Text(verbatim: [name, detail].filter { !$0.isEmpty }.joined(separator: ", ")))
         .accessibilityAddTraits(isCurrent ? .isSelected : [])
         .accessibilityIdentifier("chat-model-picker-model-\(self.model.selectionID)")
-    }
-}
-
-/// The system close button in the sheet's top bar.
-private struct ChatModelPickerCloseButton: View {
-    let action: () -> Void
-
-    var body: some View {
-        if #available(iOS 26.0, *) {
-            Button(role: .close, action: self.action)
-                .accessibilityIdentifier("chat-model-picker-close")
-        } else {
-            Button(action: self.action) {
-                Image(systemName: "xmark")
-            }
-            .accessibilityLabel(Text("Close"))
-            .accessibilityIdentifier("chat-model-picker-close")
-        }
     }
 }
 

@@ -13,13 +13,7 @@ struct ChatSelectableTextSheet: View {
                 .navigationTitle("Select Text")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button {
-                            self.dismiss()
-                        } label: {
-                            Text("Close").font(OpenClawChatTypography.body)
-                        }
-                    }
+                    OpenClawSheetCloseItem { self.dismiss() }
                 }
         }
     }

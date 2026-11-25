@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 
@@ -229,12 +230,10 @@ struct SettingsProTab: View {
             .navigationTitle("Pair Gateway")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(role: .close) {
-                        self.scannerResultHandoff.cancel()
-                        self.showQRScanner = false
-                        self.setupCode = ""
-                    }
+                OpenClawSheetCloseItem {
+                    self.scannerResultHandoff.cancel()
+                    self.showQRScanner = false
+                    self.setupCode = ""
                 }
             }
         }

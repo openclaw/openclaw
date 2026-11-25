@@ -73,9 +73,13 @@ struct ChatFullMessageReader: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("Full Message")
             .toolbar {
+                #if os(iOS)
+                OpenClawSheetCloseItem { self.dismiss() }
+                #else
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Close") { self.dismiss() }
                 }
+                #endif
             }
         }
         #if os(macOS)
