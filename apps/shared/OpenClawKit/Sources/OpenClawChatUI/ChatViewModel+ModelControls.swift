@@ -212,10 +212,18 @@ extension OpenClawChatViewModel {
               reason.blocksSend
         else { return nil }
         switch reason {
+        #if os(iOS)
+        // The phone's sign-in row sits next to this line and is the action.
+        case .missingAuth:
+            return String(localized: "This model needs a sign-in.")
+        case .authFailed:
+            return String(localized: "Sign-in failed for this model.")
+        #else
         case .missingAuth:
             return String(localized: "No provider credential is configured for this model. Set it up in Model Setup.")
         case .authFailed:
             return String(localized: "Authentication failed. Review the provider credential or sign-in, then retry.")
+        #endif
         case .cooldown, .unknown:
             return nil
         }

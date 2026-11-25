@@ -37,6 +37,20 @@ struct ChatModelAccountsTests {
         #expect(groups.notSignedIn.first { $0.id == "openrouter" }?.name == "OpenRouter")
     }
 
+    @Test func `an expiry at or before now reads as expired`() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(ChatModelAccount.Notice.expiring(at: now.addingTimeInterval(-5), now: now) == .expired)
+        #expect(ChatModelAccount.Notice.expiring(at: now, now: now) == .expired)
+        #expect(ChatModelAccount.Notice.expiring(at: now.addingTimeInterval(60), now: now)
+            == .expiresSoon(now.addingTimeInterval(60)))
+        #expect(ChatModelAccount.Notice.expiring(at: nil, now: now) == .expiresSoon(nil))
+        // The server still says "expiring" for a sign-in whose time already passed.
+        let groups = try ChatModelAccountGroups(status: self.status(#"""
+        {"providers":[{"provider":"anthropic","displayName":"Anthropic","status":"expiring","expiry":{"at":1000}}]}
+        """#))
+        #expect(groups.signedIn.first?.notice == .expired)
+    }
+
     @Test func `a provider every model reports as failed shows sign-in failed`() throws {
         let groups = try ChatModelAccountGroups(
             status: self.status(#"{"providers":[{"provider":"openai","displayName":"OpenAI","status":"ok"}]}"#),
@@ -105,7 +119,7 @@ struct ChatModelAccountsTests {
 
 @MainActor
 struct ChatModelSignOutTests {
-    @Test func `sign-out removes the saved sign-ins and reads status again`() async throws {
+    @Test func `sign-out removes the saved sign-ins and reads status again`() async {
         var signedIn = true
         var logoutParams: [String: AnyCodable]?
         var catalogRefreshes = 0
@@ -115,7 +129,8 @@ struct ChatModelSignOutTests {
                 switch method {
                 case "models.authStatus":
                     let status = signedIn ? "ok" : "missing"
-                    return Data(#"{"providers":[{"provider":"openai","displayName":"OpenAI","status":"\#(status)"}]}"#.utf8)
+                    return Data(#"{"providers":[{"provider":"openai","displayName":"OpenAI","status":"\#(status)"}]}"#
+                        .utf8)
                 case "models.authLogout":
                     logoutParams = params
                     signedIn = false
@@ -139,7 +154,7 @@ struct ChatModelSignOutTests {
         #expect(catalogRefreshes == 1)
     }
 
-    @Test func `a failed sign-out says so and keeps the account`() async throws {
+    @Test func `a failed sign-out says so and keeps the account`() async {
         let context = OpenClawChatModelSignInContext(
             agentID: "main",
             request: { method, _ in

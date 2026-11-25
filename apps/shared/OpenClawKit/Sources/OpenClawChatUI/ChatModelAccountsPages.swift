@@ -309,7 +309,7 @@ private struct ChatModelAccountSections: View {
             }
         } header: {
             Text(!self.account.isSignedIn ? ChatModelAccountsCopy.signInWith
-                : self.account.notice == nil ? ChatModelAccountsCopy.otherWays : ChatModelAccountsCopy.signInAgain)
+                : self.account.notice == nil ? ChatModelAccountsCopy.signInOptions : ChatModelAccountsCopy.signInAgain)
                 .font(OpenClawChatTypography.settingsSectionHeader)
         } footer: {
             if let problem, let attempt {
@@ -679,8 +679,8 @@ enum ChatModelAccountsCopy {
         String(localized: "Sign in with")
     }
 
-    static var otherWays: String {
-        String(localized: "Other ways to sign in")
+    static var signInOptions: String {
+        String(localized: "Sign-in options")
     }
 
     static func waiting(_ provider: String) -> String {
@@ -696,7 +696,7 @@ enum ChatModelAccountsCopy {
     }
 
     static var noAccounts: String {
-        String(localized: "There’s nothing to sign in to from here. Use Models in the OpenClaw web app.")
+        String(localized: "There’s nothing to sign in to from here. Go to Settings > Models in the OpenClaw web app.")
     }
 
     static var signOutFailed: String {
@@ -705,7 +705,8 @@ enum ChatModelAccountsCopy {
 
     static func noOptions(_ provider: String) -> String {
         String(
-            format: String(localized: "You can’t sign in to %@ from here. Use Models in the OpenClaw web app."),
+            format: String(
+                localized: "You can’t sign in to %@ from here. Go to Settings > Models in the OpenClaw web app."),
             provider)
     }
 
@@ -714,7 +715,7 @@ enum ChatModelAccountsCopy {
     }
 
     static func signOutMessage(_ provider: String) -> String {
-        String(format: String(localized: "%@ models stop working until you sign in again."), provider)
+        String(format: String(localized: "%@ models won’t work until you sign in again."), provider)
     }
 
     static func notice(_ notice: ChatModelAccount.Notice) -> String {
@@ -775,7 +776,7 @@ enum ChatModelAccountsCopy {
             let title = profile.email?.trimmedNonEmpty ?? profile.displayName?.trimmedNonEmpty
                 ?? Self.profileKind(profile.type)
             let notice: ChatModelAccount.Notice? = switch profile.status {
-            case "expiring": .expiresSoon(profile.expiry.map { Date(timeIntervalSince1970: $0.at / 1000) })
+            case "expiring": .expiring(at: profile.expiry.map { Date(timeIntervalSince1970: $0.at / 1000) })
             case "expired": .expired
             default: nil
             }
@@ -784,13 +785,14 @@ enum ChatModelAccountsCopy {
         // The provider's own notice goes on the first row unless a sign-in below already says it.
         let notice = facts.contains { $0.detail != nil } ? nil : account.notice
         if facts.isEmpty {
-            let title = switch account.source {
+            let title: String? = switch account.source {
             case .settingsKey: String(localized: "API key in OpenClaw settings")
             case .environmentKey: String(localized: "API key from the environment")
             case .providerApp: String(localized: "Signed in with the provider’s app")
-            case nil: String(localized: "Signed in")
+            // Nothing to say about an account that works: no row. A plan or a notice needs one to sit on.
+            case nil: account.plan == nil && notice == nil ? nil : String(localized: "Account")
             }
-            facts.append(Fact(title: title, detail: account.plan, isProblem: false))
+            if let title { facts.append(Fact(title: title, detail: account.plan, isProblem: false)) }
         } else if let plan = account.plan {
             facts.append(Fact(title: plan, detail: nil, isProblem: false))
         }

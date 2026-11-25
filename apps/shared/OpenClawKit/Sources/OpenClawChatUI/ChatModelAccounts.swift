@@ -15,6 +15,12 @@ struct ChatModelAccount: Identifiable, Equatable {
         case expired
         case failed
         case unknown
+
+        /// An expiry at or before now reads as expired, never "Sign-in expires 5 seconds ago".
+        static func expiring(at date: Date?, now: Date = Date()) -> Self {
+            if let date, date <= now { return .expired }
+            return .expiresSoon(date)
+        }
     }
 
     let id: String
@@ -59,7 +65,7 @@ struct ChatModelAccountGroups: Equatable {
             let profiles = provider.profiles ?? []
             let notice: ChatModelAccount.Notice? = switch provider.status {
             case "ok", "static": keys.isDisjoint(with: failedProviders.compactMap(Self.key)) ? nil : .failed
-            case "expiring": .expiresSoon(provider.expiry.map { Date(timeIntervalSince1970: $0.at / 1000) })
+            case "expiring": .expiring(at: provider.expiry.map { Date(timeIntervalSince1970: $0.at / 1000) })
             case "expired": .expired
             case "missing": nil
             default: .unknown

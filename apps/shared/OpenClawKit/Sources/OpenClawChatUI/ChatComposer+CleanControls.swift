@@ -419,7 +419,10 @@ extension OpenClawChatComposer {
         Button {
             self.composerPanels?.openAccounts()
         } label: {
-            Text(ChatModelAccountsCopy.title).font(OpenClawChatTypography.caption)
+            Text(self.viewModel.selectedModelUnavailableReason == .authFailed
+                ? String(localized: "Sign in again")
+                : String(localized: "Sign in"))
+                .font(OpenClawChatTypography.caption)
         }
         .accessibilityIdentifier("chat-model-sign-in")
         #else

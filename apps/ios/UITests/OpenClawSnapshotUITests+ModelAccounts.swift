@@ -25,7 +25,7 @@ extension OpenClawSnapshotUITests {
         let app = try self.openProviderAccounts()
         try self.enterXAIKey("fixture-key", in: app)
         // Signed in: the page shows the account with no banner; the options stay reachable.
-        XCTAssertTrue(app.staticTexts["Other ways to sign in"].waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Sign-in options"].waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertFalse(app.descendants(matching: .any)["model-auth-problem"].exists)
         self.attachScreenshot(named: "provider-account-signed-in")
     }

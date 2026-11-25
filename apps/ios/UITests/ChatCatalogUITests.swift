@@ -79,8 +79,8 @@ final class ChatCatalogUITests: XCTestCase {
         XCTAssertTrue(confirm.waitForExistence(timeout: 10))
         confirm.tap()
         app.buttons["Continue"].tap()
-        // Signed in: the options move under "Other ways to sign in", with no banner.
-        XCTAssertTrue(app.staticTexts["Other ways to sign in"].waitForExistence(timeout: 20), app.debugDescription)
+        // Signed in: the options move under "Sign-in options", with no banner.
+        XCTAssertTrue(app.staticTexts["Sign-in options"].waitForExistence(timeout: 20), app.debugDescription)
         self.capture(app, named: "published-auth-state")
         let evidence = XCTAttachment(data: catalogData, uniformTypeIdentifier: "public.json")
         evidence.name = "gateway-published-model"
