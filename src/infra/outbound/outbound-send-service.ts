@@ -4,14 +4,16 @@ import {
   type EmbeddedMessageDeliveryFact,
 } from "../../agents/embedded-agent-message-delivery.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
+import { stampAgentControls } from "../../interactive/agent-control.js";
 import {
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "../../interactive/payload.js";
@@ -86,6 +88,18 @@ type SendActionParams = {
   threadId?: string | number;
 };
 
+function markAgentControls(payload: ReplyPayload): ReplyPayload {
+  if (!payload.presentation && !payload.interactive) {
+    return payload;
+  }
+  const marked = stampAgentControls(payload);
+  return copyReplyPayloadMetadata(payload, {
+    ...payload,
+    presentation: normalizeMessagePresentation(marked.presentation),
+    interactive: normalizeLegacyInteractiveReply(marked.interactive),
+  });
+}
+
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
@@ -142,6 +156,8 @@ export async function executeSendAction(params: SendActionParams): Promise<{
   payload: unknown;
   /** Exact text handed to the direct transport after core normalization and hooks. */
   deliveredText?: string;
+  /** Confirmed visible content after adapter preparation and delivery hooks. */
+  deliveredPayloads?: ReplyPayload[];
   toolResult?: AgentToolResult<unknown>;
   sendResult?: MessageSendResult;
 }> {
@@ -178,12 +194,14 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     : undefined;
   const presentation = normalizeMessagePresentation(defaultPayload.presentation);
   // A hook that declines owns the plugin action path, including presentations.
-  const corePayload = requiresCoreDelivery
+  const unmarkedCorePayload = requiresCoreDelivery
     ? defaultPayload
     : preparedPayload ||
       (!prepareSendPayload && presentation && hasCorePresentationDelivery(channelPlugin.outbound)
         ? defaultPayload
         : null);
+  // Message-action controls leave core for the outbound queue here, before persistence.
+  const corePayload = unmarkedCorePayload && markAgentControls(unmarkedCorePayload);
   if (!corePayload) {
     const pluginMessage = presentation
       ? materializeMessagePresentationFallback({ payload: defaultPayload, text: params.message })
@@ -204,11 +222,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
         onHandled: async (deliveryFact) => {
           try {
             await params.ctx.onSendAccepted?.();
-            if (
-              !deliveryFact ||
-              deliveryFact.partialDelivery ||
-              params.ctx.input.callerRecordsDestinationHistory
-            ) {
+            if (!deliveryFact || deliveryFact.partialDelivery) {
               return;
             }
             if (deliveryFact.createdThreadIds.length > 1) {
@@ -258,7 +272,10 @@ export async function executeSendAction(params: SendActionParams): Promise<{
       throw error;
     }
     if (pluginHandled) {
-      return pluginHandled;
+      return {
+        ...pluginHandled,
+        deliveredPayloads: [{ ...defaultPayload, text: pluginMessage }],
+      };
     }
   }
 
@@ -305,6 +322,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     queuePolicy,
     deps: params.ctx.input.deps,
     gateway: params.ctx.gateway,
+    gatewayClientScopes: params.ctx.input.gatewayClientScopes,
     idempotencyKey: params.ctx.idempotencyKey,
     runId: params.ctx.input.runId,
     executionIdentityToken: params.ctx.input.executionIdentityToken,
@@ -317,7 +335,6 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     deliveryIntentId: params.ctx.input.deliveryIntentId,
     deliveryCompletion: params.ctx.input.deliveryCompletion,
     transcriptRoute: params.ctx.transcriptRoute,
-    skipDestinationHistory: params.ctx.input.callerRecordsDestinationHistory,
     conversationDeliveryTarget: params.ctx.input.conversationDeliveryTarget,
     deliveryRetryOwner: params.ctx.deliveryRetryOwner,
     requireUnknownSendReconciliation: params.ctx.input.requireQueuePersistence ? false : undefined,
@@ -348,6 +365,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     handledBy: "core",
     payload: result,
     ...(deliveredText ? { deliveredText } : {}),
+    deliveredPayloads,
     sendResult: result,
   };
 }

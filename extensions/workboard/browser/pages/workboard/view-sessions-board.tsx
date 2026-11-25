@@ -122,6 +122,7 @@ export function SessionsBoard(props: SessionsBoardProps) {
       writable: host.connection.connected && host.connection.canWrite && !controller.busy,
       hasDock: controller.hasDock,
       hasSnapshot: Boolean(snapshot),
+      sessionsLoaded: controller.sessionsLoaded,
       loading: controller.loading,
       nextCursor: snapshot?.nextCursor,
       canLoad: host.connection.connected && !controller.busy,
@@ -218,7 +219,7 @@ export function SessionsBoard(props: SessionsBoardProps) {
             {state().warning}
           </div>
         ) : null}
-        {!state().hasSnapshot && state().loading ? (
+        {!state().sessionsLoaded && state().loading ? (
           <div role="status">{t("workboard.sessionsBoard.loading")}</div>
         ) : null}
         {state().nextCursor ? (
@@ -253,7 +254,11 @@ export function SessionsBoard(props: SessionsBoardProps) {
                   ]}
                   data-session-column={column().id}
                   style={{ "--workboard-column-accent": column().color }}
-                  aria-label={`${column().label}, ${column().sessions.length}`}
+                  aria-label={
+                    state().sessionsLoaded
+                      ? `${column().label}, ${column().sessions.length}`
+                      : column().label
+                  }
                   onDragOver={(event: DragEvent) => {
                     if (!state().writable || !props.controller.draggedKey) {
                       return;
@@ -278,7 +283,9 @@ export function SessionsBoard(props: SessionsBoardProps) {
                   <header class="workboard-column__header" title={column().description}>
                     <h2>
                       {column().label}
-                      <span class="workboard-column__count">{column().sessions.length}</span>
+                      {state().sessionsLoaded ? (
+                        <span class="workboard-column__count">{column().sessions.length}</span>
+                      ) : null}
                     </h2>
                   </header>
                   <div class="workboard-column__cards">
@@ -349,7 +356,7 @@ export function SessionsBoard(props: SessionsBoardProps) {
                         </div>
                       )}
                     </For>
-                    {column().sessions.length ? null : (
+                    {!state().sessionsLoaded || column().sessions.length ? null : (
                       <span class="workboard-sessions__empty">
                         {t("workboard.sessionsBoard.empty")}
                       </span>

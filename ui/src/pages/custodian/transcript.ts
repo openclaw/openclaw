@@ -87,6 +87,37 @@ export function retireCustodianQuestions(
   return answered;
 }
 
+export async function dismissCustodianQuestion(
+  owner: {
+    messages: readonly CustodianMessage[];
+    dismissedQuestions: Set<string>;
+    exitSetup(): void;
+    send(text: string, display: string, questionReply: boolean): Promise<string>;
+  },
+  message: CustodianMessage,
+  publish: () => void,
+): Promise<void> {
+  const question = message.question;
+  if (!question) {
+    return;
+  }
+  if (question.skipAction === "exit") {
+    owner.exitSetup();
+    return;
+  }
+  const outcome = await owner.send(
+    question.isOther ? t("optionCard.skip") : "cancel",
+    t("optionCard.skip"),
+    true,
+  );
+  if (outcome !== "rejected" && owner.messages.includes(message)) {
+    owner.dismissedQuestions = new Set(owner.dismissedQuestions).add(
+      `${message.id}:${question.id}`,
+    );
+    publish();
+  }
+}
+
 export function custodianErrorMessage(error: unknown): string {
   return formatUiError(error, t("custodian.requestFailed"));
 }

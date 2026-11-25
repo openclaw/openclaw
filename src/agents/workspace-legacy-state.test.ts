@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -66,7 +67,7 @@ describe("legacy workspace reset cleanup", () => {
     const siblingPath = `${workspaceDir}.attested`;
     await writeCandidates([siblingPath], shortMarker);
     let owned = true;
-    const cleanup = removeLegacyWorkspaceStateForReset(prepare(), {
+    const cleanup = removeLegacyWorkspaceStateForReset(await prepare(), {
       assertCurrent: () => {
         if (!owned) {
           throw new Error("cleanup ownership expired");
@@ -100,15 +101,32 @@ describe("legacy workspace reset cleanup", () => {
     ];
     await writeCandidates(candidates);
     await writeCandidates(reserved, "truncated marker\n");
-    const preview = await removeLegacyWorkspaceStateForReset(prepare(), { dryRun: true });
+    const preview = await removeLegacyWorkspaceStateForReset(await prepare(), { dryRun: true });
     expect(preview.warnings).toEqual([]);
     expect(new Set(preview.removedPaths)).toEqual(new Set(candidates));
     for (const candidate of candidates) {
       await expect(fs.lstat(candidate)).resolves.toBeDefined();
     }
-    const result = await removeLegacyWorkspaceStateForReset(prepare());
-    expect(result.warnings).toEqual([]);
-    expect(new Set(result.removedPaths)).toEqual(new Set(candidates));
+    // Preview warms the real owner; preparation and removal must keep filesystem work there.
+    const calls = {
+      lstat: vi.spyOn(fsSync, "lstatSync"),
+      stat: vi.spyOn(fsSync, "statSync"),
+      realpath: vi.spyOn(fsSync.realpathSync, "native"),
+    };
+    try {
+      const result = await removeLegacyWorkspaceStateForReset(await prepare());
+      expect(result.warnings).toEqual([]);
+      expect(new Set(result.removedPaths)).toEqual(new Set(candidates));
+      expect({
+        lstat: calls.lstat.mock.calls.length,
+        stat: calls.stat.mock.calls.length,
+        realpath: calls.realpath.mock.calls.length,
+      }).toEqual({ lstat: 0, stat: 0, realpath: 0 });
+    } finally {
+      for (const spy of Object.values(calls)) {
+        spy.mockRestore();
+      }
+    }
     await expectMissing(candidates);
   });
 
@@ -119,19 +137,19 @@ describe("legacy workspace reset cleanup", () => {
     await writeCandidates([siblingPath], "foreign marker\n");
     await writeCandidates([claimPath], "truncated claim\n");
 
-    const result = await removeLegacyWorkspaceStateForReset(prepare());
+    const result = await removeLegacyWorkspaceStateForReset(await prepare());
     expect(result).toMatchObject({ warnings: [], removedPaths: [] });
     await expect(fs.readFile(siblingPath, "utf8")).resolves.toBe("foreign marker\n");
     await expect(fs.readFile(claimPath, "utf8")).resolves.toBe("truncated claim\n");
-    expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir })).not.toThrow();
+    await expect(assertNoUnmigratedWorkspaceState({ workspaceDir })).resolves.toBeUndefined();
   });
 
   it("checks lexical legacy markers separately for aliases of one workspace", async () => {
     const targetDir = await createAlias();
-    assertNoUnmigratedWorkspaceState({ workspaceDir: targetDir });
+    await assertNoUnmigratedWorkspaceState({ workspaceDir: targetDir });
     await fs.writeFile(`${workspaceDir}.attested`, marker, "utf8");
 
-    expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir })).toThrow(
+    await expect(assertNoUnmigratedWorkspaceState({ workspaceDir })).rejects.toThrow(
       /Run openclaw doctor --fix/u,
     );
   });
@@ -141,7 +159,7 @@ describe("legacy workspace reset cleanup", () => {
     const checkReady = () => assertWorkspaceStateMigrationReady({ workspaceDirs, ...options });
     for (const dir of workspaceDirs) {
       await fs.mkdir(dir, { recursive: true });
-      assertNoUnmigratedWorkspaceState({ workspaceDir: dir });
+      await assertNoUnmigratedWorkspaceState({ workspaceDir: dir });
       await fs.writeFile(path.join(dir, "openclaw-workspace-state.json"), '{"version":1}');
     }
     expect(checkReady).toThrow(
@@ -156,25 +174,69 @@ describe("legacy workspace reset cleanup", () => {
     expect(checkReady).not.toThrow();
   });
 
-  it("removes canonical legacy paths after the configured symlink is removed", async () => {
-    const targetDir = await createAlias();
-    const identity = resolveWorkspaceStateIdentity(targetDir);
-    const setupPath = path.join(targetDir, "openclaw-workspace-state.json");
-    const stateAttestationPath = path.join(
-      stateDir,
-      "workspace-attestations",
-      `${identity.workspaceKey}.attested`,
-    );
-    const siblingPath = `${identity.workspacePath}.attested`;
-    const candidates = [setupPath, stateAttestationPath, siblingPath];
-    await writeCandidates(candidates);
+  it.each(["removed", "retargeted"] as const)(
+    "removes captured canonical legacy paths after the configured symlink is %s",
+    async (change) => {
+      const targetDir = await createAlias();
+      const identity = resolveWorkspaceStateIdentity(targetDir);
+      const setupPath = path.join(targetDir, "openclaw-workspace-state.json");
+      const stateAttestationPath = path.join(
+        stateDir,
+        "workspace-attestations",
+        `${identity.workspaceKey}.attested`,
+      );
+      const siblingPath = `${targetDir}.attested`;
+      const candidates = [setupPath, stateAttestationPath, siblingPath];
+      await writeCandidates(candidates);
+      const replacement = path.join(homeDir, "replacement-workspace");
+      const replacementCandidates = [
+        path.join(replacement, "openclaw-workspace-state.json"),
+        `${replacement}.attested`,
+      ];
+      if (change === "retargeted") {
+        await writeCandidates(replacementCandidates);
+      }
 
-    const plan = prepare();
-    await fs.unlink(workspaceDir);
+      const plan = await prepare();
+      await fs.unlink(workspaceDir);
+      if (change === "retargeted") {
+        await fs.symlink(
+          replacement,
+          workspaceDir,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
+      const result = await removeLegacyWorkspaceStateForReset(plan);
+
+      expect(result.warnings).toEqual([]);
+      await expectMissing(candidates);
+      if (change === "retargeted") {
+        await expect(fs.readFile(replacementCandidates[0]!, "utf8")).resolves.toBe(
+          '{"version":1}\n',
+        );
+        await expect(fs.readFile(replacementCandidates[1]!, "utf8")).resolves.toBe(marker);
+      } else {
+        await expectMissing([workspaceDir]);
+      }
+    },
+  );
+
+  it("retains replacement root contents with a cleanup warning", async () => {
+    const setupPath = path.join(workspaceDir, "openclaw-workspace-state.json");
+    await writeCandidates([setupPath]);
+    const plan = await prepare();
+    const retiredRoot = path.join(homeDir, "retired-workspace");
+    await fs.rename(workspaceDir, retiredRoot);
+    await writeCandidates([setupPath], "replacement workspace state\n");
+
     const result = await removeLegacyWorkspaceStateForReset(plan);
 
-    expect(result.warnings).toEqual([]);
-    await expectMissing(candidates);
+    expect(result.removedPaths).not.toContain(setupPath);
+    expect(result.warnings).toContainEqual(expect.stringContaining(setupPath));
+    await expect(fs.readFile(setupPath, "utf8")).resolves.toBe("replacement workspace state\n");
+    await expect(
+      fs.readFile(path.join(retiredRoot, path.basename(setupPath)), "utf8"),
+    ).resolves.toBe('{"version":1}\n');
   });
 
   it("does not follow a symlinked attestation directory during reset", async () => {
@@ -185,7 +247,7 @@ describe("legacy workspace reset cleanup", () => {
     await writeCandidates([externalMarker]);
     await fs.symlink(externalDir, path.dirname(markerPath));
 
-    const result = await removeLegacyWorkspaceStateForReset(prepare());
+    const result = await removeLegacyWorkspaceStateForReset(await prepare());
 
     expect(result.warnings.length).toBeGreaterThan(0);
     await expect(fs.readFile(externalMarker, "utf8")).resolves.toContain(

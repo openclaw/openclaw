@@ -2,6 +2,7 @@ import { AsyncResource } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { CronCreatorAuthorityCapability } from "../../gateway/cron-creator-authority-grant.types.js";
 import * as agentRuns from "../../infra/agent-run-registry.js";
 import {
   createOpenClawTestState,
@@ -65,7 +66,7 @@ const requester = { requesterSessionKey: SESSION, requesterAgentId: "main" };
 const callerIdentity = { agentId: "main", sessionKey: SESSION };
 const identity = { ...callerIdentity, sessionId: "requester-session" };
 type Batch = SubagentRunRecord[];
-type Scope = cronContext.CronCreatorAuthorityCapability;
+type Scope = CronCreatorAuthorityCapability;
 const runs = new Map<string, SubagentRunRecord>();
 let state: OpenClawTestState;
 beforeAll(async () => {
@@ -101,7 +102,7 @@ function createBatch(requesterTurnRunId: string, count = 1): Batch {
   });
 }
 
-type RunOptions = Pick<Scope, "isCurrent" | "requesterOwner" | "managementEntitlement"> & {
+type RunOptions = Pick<Scope, "isCurrent" | "managementEntitlement"> & {
   bindRunScope?: (scope: Scope) => void;
 };
 
@@ -116,10 +117,9 @@ async function inAdminRun<T>(
   const capability = cronContext.createCronCreatorAuthorityCapability(
     runId,
     { kind: "unknown" },
-    options.managementEntitlement ?? { source: "control-ui-admin" },
+    options.managementEntitlement ?? { source: "operator" },
     options.isCurrent,
     undefined,
-    options.requesterOwner,
   )!;
   try {
     options.bindRunScope?.(capability);
@@ -129,7 +129,11 @@ async function inAdminRun<T>(
           ...callerIdentity,
           operationalRunInstance,
           approvalAuthority: authority,
-          receiptAuthority: () => agentRuns.validateAgentRunDelegatedAuthority(authority),
+          receiptAuthority: () => {
+            if (!agentRuns.validateAgentRunDelegatedAuthority(authority)) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
         },
         () => run(capability),
       ),
@@ -304,7 +308,7 @@ it.each(["completion", "scope ended"] as const)(
       paused!.requesterSettleWake!.pauseNotice = { acknowledgment: "Need a continuation." };
     });
     await inAdmittedScope([batch[0]!], async (admission) => {
-      expect(admission.managementEntitlement.source).toBe("control-ui-admin");
+      expect(admission.managementEntitlement.source).toBe("operator");
       if (outcome === "completion") {
         await finishPause(batch);
       }
@@ -318,7 +322,7 @@ it.each(["completion", "scope ended"] as const)(
     await dispatch(nextBatch, async () => {
       const completionAdmission = consume(nextBatch)!;
       expect(completionAdmission.isCurrent()).toBe(true);
-      expect(completionAdmission.managementEntitlement.source).toBe("control-ui-admin");
+      expect(completionAdmission.managementEntitlement.source).toBe("operator");
       await updateBatch(nextBatch, (drafts) => {
         for (const entry of drafts) {
           entry.requesterSettleWake = undefined;
@@ -330,81 +334,29 @@ it.each(["completion", "scope ended"] as const)(
   },
 );
 
-it.each([
-  ["channel-owner", true],
-  ["channel-owner", false],
-  ["control-ui-admin", false],
-] as const)("retains %s across yields with plugin owner=%s", async (source, hasOwner) => {
-  let current = true;
-  const owner = {
-    isCurrent: () => current,
-    senderId: "original-owner",
-    channel: "discord",
-    accountId: "original-account",
-  };
-  const entitlement =
-    source === "channel-owner" ? { source, isCurrent: owner.isCurrent } : { source };
-  const batch = await capture("owner-source", 1, {
-    managementEntitlement: entitlement,
-    requesterOwner: hasOwner ? owner : undefined,
-  });
-  let retained: ReturnType<typeof cronContext.bindRequesterOwnerIdentity>;
-  let next: Batch = [];
-  await inAdmittedScope(batch, async (admission, scope) => {
-    expect(() => admission.bindRunScope(scope)).toThrow("no longer owns");
-    expect(admission.requesterOwner).toBe(hasOwner ? owner : undefined);
-    const target = { ...identity, runId: "continuation" };
-    expect(
-      cronContext.bindRequesterOwnerIdentity({ ...target, sessionKey: "agent:main:unrelated" }),
-    ).toBeUndefined();
-    retained = cronContext.bindRequesterOwnerIdentity(target);
-    if (hasOwner) {
-      expect(retained).toMatchObject({
-        senderId: "original-owner",
-        channel: "discord",
-        accountId: "original-account",
+it.each(["channel-owner", "operator"] as const)(
+  "retains %s management across yields",
+  async (source) => {
+    const batch = await capture("owner-source", 1, { managementEntitlement: { source } });
+    let next: Batch = [];
+    await inAdmittedScope(batch, async (admission, scope) => {
+      expect(() => admission.bindRunScope(scope)).toThrow("no longer owns");
+      expect(admission).toMatchObject({
+        managementEntitlement: { source },
+        callerOrigin: { kind: "unknown" },
       });
-      expect(retained?.isCurrent()).toBe(true);
-      current = false;
-      expect(() => retained?.assertCurrent()).toThrow("owner identity");
-      current = true;
-      expect(retained?.isCurrent()).toBe(true);
-    } else {
-      expect(retained).toBeUndefined();
-    }
-    expect(admission).toMatchObject({
-      managementEntitlement: { source },
-      callerOrigin: { kind: "unknown" },
+      next = await capture("second-yield", 1, {
+        isCurrent: admission.isCurrent,
+        managementEntitlement: admission.managementEntitlement,
+      });
     });
-    next = await capture("second-yield", 1, {
-      isCurrent: admission.isCurrent,
-      managementEntitlement: admission.managementEntitlement,
-      requesterOwner: admission.requesterOwner,
+    await dispatch(next, async () => {
+      const second = consume(next)!;
+      expect(second.callerOrigin).toEqual({ kind: "unknown" });
+      expect(second.isCurrent()).toBe(true);
     });
-  });
-  if (hasOwner) {
-    expect(retained?.isCurrent()).toBe(false);
-    expect(() => retained?.assertCurrent()).toThrow("owner identity");
-  }
-  await dispatch(next, async () => {
-    const second = consume(next)!;
-    expect(second.callerOrigin).toEqual({ kind: "unknown" });
-    expect(second.isCurrent()).toBe(true);
-    if (source === "channel-owner") {
-      current = false;
-      expect(second.isCurrent()).toBe(false);
-    }
-  });
-});
-
-it("rejects an owner revoked before dispatch", async () => {
-  let current = true;
-  const batch = await capture("owner-original", 1, {
-    managementEntitlement: { source: "channel-owner", isCurrent: () => current },
-  });
-  current = false;
-  await dispatch(batch, async () => expect(consume(batch)).toBeUndefined());
-});
+  },
+);
 
 it.each([false, true])(
   "binds yield across contexts, rejecting replaced runs: %s",
@@ -469,6 +421,26 @@ it.each([
   const batch = await capture("original", 2);
   await dispatch(candidate(batch), async () => expect(consume(batch)).toBeUndefined());
   await dispatch(batch, async () => expect(consume(batch)).toBeDefined());
+});
+
+it("continues the cohort authority on its last partition after an earlier one settles", async () => {
+  const batch = await capture("original", 2);
+  // The earlier partition is an ordinary settle turn: it neither borrows nor consumes the owner.
+  const early = requesterCron.captureRequesterContinuationCaller({
+    ...requester,
+    requesterSessionId: "requester-session",
+    batch: batch.slice(0, 1),
+    rearmGeneration: undefined,
+    runId: "early",
+    isCurrent: () => true,
+  });
+  await early.run(async () => expect(consume(batch, "early")).toBeUndefined());
+  await updateBatch(batch, ([entry]) => {
+    entry!.requesterSettleWake = undefined;
+  });
+  requesterCron.revokeRequesterCronAuthorityBatch(batch.slice(0, 1), 1);
+  const last = batch.slice(1);
+  await dispatch(last, async () => expect(consume(last)?.isCurrent()).toBe(true));
 });
 
 it("admits the owned cohort, not arbitrary messages, with one stopped child", async () => {

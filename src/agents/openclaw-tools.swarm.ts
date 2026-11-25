@@ -9,9 +9,6 @@ import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createStructuredOutputTool } from "./tools/structured-output-tool.js";
 
-/** Requester-facing tools a non-interactive collector turn must never receive. */
-const COLLECTOR_WITHHELD_TOOL_NAMES = new Set(["ask_user", "sessions_send", "sessions_yield"]);
-
 export type SwarmCollectorToolContext = {
   runId: string;
   swarmOutputSchema?: Record<string, unknown>;
@@ -94,29 +91,6 @@ export function createSwarmCollectorWriteAuthority(params: {
       throw new Error("caller no longer owns the admitted collector run");
     }
   };
-}
-
-/**
- * Applies the collector run contract to an already policy-filtered surface.
- * Collector output is run transport rather than an operator-configurable
- * capability, so it survives allowlists that would otherwise drop it.
- */
-export function applySwarmCollectorToolContract<T extends { name: string }>(
-  tools: T[],
-  params: { swarmCollector?: boolean; structuredOutputTool?: T },
-): T[] {
-  if (!params.swarmCollector) {
-    return tools;
-  }
-  const collectorTools = tools.filter((tool) => !COLLECTOR_WITHHELD_TOOL_NAMES.has(tool.name));
-  const { structuredOutputTool } = params;
-  if (
-    structuredOutputTool &&
-    !collectorTools.some((tool) => tool.name === structuredOutputTool.name)
-  ) {
-    collectorTools.push(structuredOutputTool);
-  }
-  return collectorTools;
 }
 
 export function createOpenClawSwarmToolGroups(params: {

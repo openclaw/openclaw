@@ -105,12 +105,11 @@ export async function restoreArchivedSession(params: {
         assertCommitAllowed,
       ]);
       if (currentEntry.worktree) {
-        const { restoreSessionWorktree } = await import("./session-worktree-lifecycle.js");
-        // Keep the target fenced through Git/allocation waits without retaining the agent writer.
-        assertCommitAllowed = await restoreSessionWorktree({
-          entry: currentEntry,
-          scope,
-          commitGuard: composeSessionSourceAssertion([
+        const { resolveSessionWorktree } = await import("../agents/worktrees/session-lifecycle.js");
+        const workspace = await resolveSessionWorktree({
+          binding: currentEntry.worktree,
+          sessionKey,
+          assertCurrent: composeSessionSourceAssertion([
             assertCommitAllowed,
             await prepareSessionWorkerPlacementMutationCheckAsync({
               context: placementContext,
@@ -118,6 +117,10 @@ export async function restoreArchivedSession(params: {
             }),
           ]),
         });
+        assertCommitAllowed = composeSessionSourceAssertion([
+          assertCommitAllowed,
+          workspace?.assertCurrent,
+        ]);
       }
       const updatedEntry = await patchSessionEntryCore(
         scope,

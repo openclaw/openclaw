@@ -298,6 +298,25 @@ Further restrict tools for specific providers or models. Order: base profile →
 }
 ```
 
+### Per-model exec ceiling
+
+`exec.mode` in a `byProvider` entry caps host exec for turns that run on that provider or `provider/model`. The ceiling only restricts: the lower security level applies, allowlist misses stay denied when either side denies them, a human `ask` beats reviewer `auto`, and a configured `ask: "always"` keeps prompting for every command. It caps per-run `/exec` overrides and full-permission sessions too. Global and agent `byProvider` entries both apply.
+
+Use `auto` to put only one model's exec misses behind the [exec reviewer](/tools/permission-modes) while other models keep their normal mode:
+
+```json5
+{
+  tools: {
+    exec: { mode: "full" },
+    byProvider: {
+      "local-llm/small-model": { exec: { mode: "auto" } },
+    },
+  },
+}
+```
+
+The reviewer uses `tools.exec.reviewer.model` when set, otherwise the agent's primary model. Native Codex app-server sessions keep their own Guardian mapping from `tools.exec.mode`.
+
 ## `tools.toolsBySender`
 
 Restricts tools for the current turn's originating requester. This is defense-in-depth on top of channel access control; sender values must come from the channel adapter, not message text. It does not authenticate other content in the model prompt; see [Requester-scoped controls and prompt context](/gateway/security/hardened-baseline#requester-scoped-controls-and-prompt-context).

@@ -53,7 +53,7 @@ describe("gateway tool", () => {
       },
     };
     expect(direct.details).toEqual(expected);
-    expect(direct.content).toEqual([{ type: "text", text: JSON.stringify(expected, null, 2) }]);
+    expect(direct.content).toEqual([{ type: "text", text: JSON.stringify(expected) }]);
     const h = createCodeModeHarness();
     applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, gateway] });
     const bridged = resultDetails(
@@ -81,7 +81,7 @@ describe("gateway tool", () => {
     expect((await readConfig(path)).content).toEqual([
       {
         type: "text",
-        text: JSON.stringify({ ok: true, result: { path, config: "deploy" } }, null, 2),
+        text: JSON.stringify({ ok: true, result: { path, config: "deploy" } }),
       },
     ]);
   });

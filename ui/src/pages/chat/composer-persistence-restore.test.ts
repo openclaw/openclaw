@@ -274,6 +274,31 @@ it("captures once per restore admission while pending, settled, reset, and switc
   expectUncaptured();
 });
 
+it("retries an intentional clear against the durable revision found after a conflict", async () => {
+  const state = createState();
+  const { pending, read, persistence } = pendingRestore(state);
+  await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+  const saved = foundDraft("Previous draft", { revision: 1 });
+  read.mockResolvedValue(saved);
+  vi.mocked(write).mockResolvedValueOnce({ status: "conflict" });
+
+  state.chatMessage = "New draft";
+  persistence.schedule();
+  state.chatMessage = "";
+  persistence.schedule();
+  pending.resolve(saved);
+  await settleStorage();
+  persistence.persistNow();
+  await settleStorage();
+
+  expectWrite(ownerScope, { text: "" }, expect.objectContaining({ expectedRevision: 0 }));
+  expectWrite(
+    ownerScope,
+    { text: "", revision: persistence.draftRevision },
+    expect.objectContaining({ expectedRevision: 1 }),
+  );
+});
+
 it("keeps a synchronous reply cancellation when an older stored draft has a higher revision", async () => {
   // Scheduling must stay below the stored revision even if the test process pauses.
   vi.spyOn(Date, "now").mockReturnValue(1_000);

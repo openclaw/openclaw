@@ -77,6 +77,7 @@ import {
   commitGatewayConfigWrite,
   didActiveSharedGatewayAuthChange,
   didSharedGatewayAuthChange,
+  finishGatewayConfigWrite,
   respondConfigWriteApplicationOutcome,
   resolveGatewayConfigPath,
   resolveGatewayConfigRestartWriteResult,
@@ -580,7 +581,7 @@ async function commitConfigRestartWrite(params: {
       outcome: await writeResult.application,
       mode: params.mode,
       client: params.client,
-      respond: params.respond,
+      respond: writeResult.reply,
       success: { ok: true, path: writeResult.path, ...persistedConfig, changedPaths },
       persistedConfig,
     })
@@ -598,7 +599,7 @@ async function commitConfigRestartWrite(params: {
     invalidateGatewayRuntimeConfigSchema();
   }
   if (params.summary && noopReload) {
-    params.respond(true, { ok: true, path: writeResult.path, ...persistedConfig, changedPaths });
+    writeResult.reply(true, { ok: true, path: writeResult.path, ...persistedConfig, changedPaths });
     writeResult.queueFollowUp();
     return;
   }
@@ -613,7 +614,7 @@ async function commitConfigRestartWrite(params: {
     client: params.client,
     context: params.context,
   });
-  params.respond(
+  writeResult.reply(
     true,
     {
       ok: true,
@@ -739,7 +740,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(true, result, undefined);
     },
   ),
-  "config.set": async ({ params, respond, context }) => {
+  "config.set": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
@@ -774,26 +775,21 @@ export const configHandlers: GatewayRequestHandlers = {
       nextConfig: parsed.writeConfig,
       context,
       respond,
+      awaitRuntimeApplication: shouldAwaitGatewayConfigApplication({
+        previousConfig: snapshot.config,
+        nextConfig: parsed.config,
+      }),
     });
     if (!writeResult) {
       return;
     }
-    invalidateGatewayRuntimeConfigSchema();
-    respond(
-      true,
-      {
-        ok: true,
-        path: writeResult.path,
-        // Writers adopt the committed revision without a reload.
-        ...(writeResult.hash
-          ? { hash: context.configRevisionProjector.projectRawHash(writeResult.hash) }
-          : {}),
-        config: redactConfigObject(writeResult.config, parsed.uiHints),
-        ...preparedSecretDegradationPayload(preparedSecretsSnapshot),
-      },
-      undefined,
-    );
-    writeResult.queueFollowUp();
+    await finishGatewayConfigWrite({
+      write: writeResult,
+      context,
+      client,
+      uiHints: parsed.uiHints,
+      successDetails: preparedSecretDegradationPayload(preparedSecretsSnapshot),
+    });
   },
   "config.patch": async (options) => {
     const { params, respond, client, context } = options;

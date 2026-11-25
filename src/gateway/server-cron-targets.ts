@@ -244,15 +244,7 @@ export function createGatewayCronTargetResolver(
       return enqueue();
     }
     // A notice about a job acts for the job's requester, like the job's own runs.
-    return captureCronJobTurnTarget({ job, agentId, sessionKey, context }).then(
-      async ({ target, release }) => {
-        try {
-          return await enqueue(target);
-        } finally {
-          release();
-        }
-      },
-    );
+    return captureCronJobTurnTarget({ job, agentId, sessionKey, context }).then(enqueue);
   };
   return { resolveCronAgent, resolveCronTarget, deferSessionEvent, enqueueSessionEvent };
 }

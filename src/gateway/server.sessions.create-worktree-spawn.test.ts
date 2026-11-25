@@ -35,6 +35,7 @@ import {
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -222,10 +223,11 @@ beforeEach(async () => {
   testState.agentConfig = { workspace: defaultWorkspace };
   ({ storePath } = await createSessionStoreDir());
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const { provider, model } = resolveDefaultModelForAgent({
-    cfg: getRuntimeConfig(),
-    agentId: "main",
-  });
+  const defaultModel = resolveDefaultModelForAgent({ cfg: getRuntimeConfig(), agentId: "main" });
+  if (!defaultModel) {
+    throw new Error("gateway test config must configure a model");
+  }
+  const { provider, model } = defaultModel;
   agentDiscoveryMock.models = [
     { provider, id: model, name: "Default fixture model", reasoning: false },
   ];
@@ -250,8 +252,9 @@ test.each([
   ["registered", false],
   ["github", false],
 ] as const)(
-  "required visible spawn selects %s project (managed worktree: %s)",
+  "required visible spawn selects %s project (requested worktree: %s)",
   async (source, worktree) => {
+    const managedWorktree = worktree || source === "github";
     const { entry: parent } = await createManagedProjectParent(true);
     const projectName = worktree ? "tool-selected-project" : "sandbox-external-project";
     const otherRepository = await createRepository(state.root, projectName);
@@ -266,7 +269,7 @@ test.each([
     try {
       const result = await spawn({
         // Sandbox rejection must not await unrelated automatic title generation.
-        label: worktree ? "Selected project child" : "Rejected project child",
+        label: managedWorktree ? "Selected project child" : "Rejected project child",
         ...(source === "registered"
           ? { projectId: project.id }
           : source === "github"
@@ -294,19 +297,13 @@ test.each([
         await settleWorkspaceRuns(context, storePath, childKey);
       }
       const child = childKey ? readEntry(childKey) : undefined;
-      if (!worktree) {
-        if (source === "registered") {
-          expect(creationError).toMatchObject({
-            message: expect.stringContaining("outside the sandboxed agent workspace"),
-          });
-          expect(childKey).toBeUndefined();
-          expect(bindChild).not.toHaveBeenCalled();
-          expect(registerRun).not.toHaveBeenCalled();
-        } else {
-          expect(creationError).toBeUndefined();
-          expect(child).toMatchObject({ sandbox: "required", status: "failed" });
-          expect(child?.lastRunError).toContain("outside the sandboxed agent workspace");
-        }
+      if (!managedWorktree) {
+        expect(creationError).toMatchObject({
+          message: expect.stringContaining("outside the sandboxed agent workspace"),
+        });
+        expect(childKey).toBeUndefined();
+        expect(bindChild).not.toHaveBeenCalled();
+        expect(registerRun).not.toHaveBeenCalled();
         expect(createWorktree).not.toHaveBeenCalled();
         if (childKey) {
           expect(await managedWorktrees.findLiveByOwner("session", childKey)).toBeUndefined();
@@ -330,7 +327,11 @@ test.each([
       );
       if (source === "github") {
         expect(projectCloneMocks.materializeProjectClone).toHaveBeenCalledWith(
-          expect.objectContaining({ gitUrl: "https://github.com/example/selected.git" }),
+          expect.objectContaining({
+            gitUrl: worktree
+              ? "https://github.com/example/selected.git"
+              : "https://github.com/example/restricted.git",
+          }),
           expect.objectContaining({ signal: expect.any(AbortSignal) }),
         );
       } else {
@@ -471,10 +472,11 @@ test.for(["invocation", "configured"] as const)(
       countActiveRuns: () => 0,
     });
     const publishChild = vi.spyOn(spawnRuntime, "upsertSessionEntryCore");
-    const held = createDeferredCore<() => void>();
+    const held = createDeferredCore<() => Promise<void>>();
     const release = createDeferredCore();
-    const holder = withProjectCheckoutLifecycle(repository, {}, async (lease) => {
-      held.resolve(lease.assertOwned);
+    const custody = { context: captureOpenClawStateWorkerContext() };
+    const holder = withProjectCheckoutLifecycle(repository, custody, async (lease) => {
+      held.resolve(() => lease.assertOwned());
       await release.promise;
     });
     const operations: Promise<unknown>[] = [holder];
@@ -531,7 +533,7 @@ test.for(["invocation", "configured"] as const)(
         Promise.race([spawning.then(() => false), continued.promise.then(() => true)]),
         signal,
       );
-      assertHeld();
+      await assertHeld();
       expect(publishChild).not.toHaveBeenCalled();
       expect(await sessionAccess.listSessionEntryKeysReadOnly(scope)).toEqual(originalKeys);
       release.resolve();
@@ -727,7 +729,7 @@ test("keyed worktree creation reuses its recorded base after reopening the regis
     });
   const created = await createSession(params);
   const parent = created.entry;
-  expect(created.worktree).toMatchObject({ branch: "openclaw/release-planning" });
+  expect(created.worktree.path).toMatch(/\/release-planning-[\da-f]{6}$/);
   expect(parent).toMatchObject({
     spawnedCwd: created.worktree.path,
     sessionRoot: created.worktree.path,

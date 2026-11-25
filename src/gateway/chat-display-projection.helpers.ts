@@ -9,7 +9,10 @@ import { isToolCallContentType, isToolResultContentType } from "../chat/tool-con
 import { redactSensitiveText } from "../logging/redact.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
-import { normalizeInputProvenance } from "../sessions/input-provenance.js";
+import {
+  isCompletionReportInputProvenance,
+  normalizeInputProvenance,
+} from "../sessions/input-provenance.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
   extractAssistantPhaseText,
@@ -17,6 +20,10 @@ import {
 } from "../shared/chat-message-content.js";
 import { readRunFailureNotice, type RunFailureNotice } from "../shared/run-failure-notice.js";
 import { resolveSessionStartupErrorPresentation } from "../shared/session-startup-error-presentation.js";
+import {
+  readSubagentCompletions,
+  subagentCompletionMessage,
+} from "../shared/subagent-completion.js";
 
 export { isAssistantTextContentType };
 
@@ -322,6 +329,41 @@ function hasForwardedMessageProvenance(message: Record<string, unknown>): boolea
     (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
     isCronRunMessage(message)
   );
+}
+
+/**
+ * Called after original user-input classification; only display facts leave private inputs.
+ * The receipt replaces its wake, so it carries the wake's turn boundary.
+ */
+export function projectCompletionReportInput(
+  message: Record<string, unknown>,
+  boundary: boolean | string,
+) {
+  const completions = isCompletionReportInputProvenance(message.provenance)
+    ? readSubagentCompletions(readRecord(message["__openclaw"])?.subagentCompletions)
+    : [];
+  if (!completions.length) {
+    return message;
+  }
+  const receipt = subagentCompletionMessage(message, completions);
+  return boundary ? attachProjectedTurnBoundary(receipt, boundary) : receipt;
+}
+
+export function attachProjectedTurnBoundary(
+  message: Record<string, unknown>,
+  boundary: true | string,
+): Record<string, unknown> {
+  const metadata = readRecord(message["__openclaw"]);
+  return {
+    ...message,
+    __openclaw: {
+      ...metadata,
+      // Exec and restart rows kept `turnBoundary` for clients that read only it;
+      // the continuation fact tells the Control UI the turn goes on.
+      ...(boundary === "subagent" ? {} : { turnBoundary: true }),
+      ...(boundary === true ? {} : { continuation: { source: boundary } }),
+    },
+  };
 }
 
 /** Allow only certified failure presentation and its bounded, redacted startup cause. */

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../agents/harness/tool-authority-preparation.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
@@ -41,8 +41,7 @@ const sessionKey = "agent:main:synthetic-handoff-parent";
 const route = { provider: "openai", model: "synthetic-model" };
 const outcomes: Record<string, { status: string; reason?: string }> = {
   "optional-completion": { status: "rejected", reason: "reply_expectation_mismatch" },
-  "late-cohort-revocation": { status: "rejected", reason: "tool_authority_mismatch" },
-  "late-source-and-cohort-revocation": { status: "failed" },
+  "late-cohort-revocation": { status: "failed" },
   "accepted-cohort-revocation": { status: "indeterminate" },
 };
 afterEach(() => {
@@ -54,12 +53,10 @@ it.each([
   "plain-owner",
   "trusted-completion",
   "lower-scopes",
-  "revoked-source",
   "revoked-cohort",
   "other-profile",
   "peer-owner",
   "late-cohort-revocation",
-  "late-source-and-cohort-revocation",
   "accepted-cohort-revocation",
   "optional-completion",
 ] as const)(
@@ -88,7 +85,6 @@ it.each([
       );
     }
     let current = true;
-    let sourceCurrent = true;
     const registration = {
       sourceSessionKey: sourceSessionKeys[0],
       targetSessionKey: sessionKey,
@@ -112,16 +108,11 @@ it.each([
     const scopes = ["operator.admin", "operator.read", "operator.write"];
     const modelPolicy = prepareOperatorModelPolicy({ cfg: config, policy: {} });
     const authority = (incoming = false) =>
-      createAdmittedRunOperatorAuthority({
+      createTestOperatorAuthority({
         profileId: incoming && scenario === "other-profile" ? "synthetic-other" : "synthetic-owner",
         scopes: incoming && scenario === "lower-scopes" ? ["operator.read"] : scopes,
         gatewayAccessGrant: null,
         modelPolicy,
-        assertCurrent() {
-          if (incoming && (scenario === "revoked-source" || !sourceCurrent)) {
-            throw new Error("Synthetic incoming authority revoked");
-          }
-        },
       });
     const entry: SessionEntry = { sessionId, updatedAt: 1 };
     const incumbent = createQueueTestRun({
@@ -172,12 +163,8 @@ it.each([
               throw new Error("Expected prepared owner admission");
             },
             async queueMessageAsync(text, options, preparation) {
-              if (
-                scenario === "late-cohort-revocation" ||
-                scenario === "late-source-and-cohort-revocation"
-              ) {
+              if (scenario === "late-cohort-revocation") {
                 current = false;
-                sourceCurrent = scenario !== "late-source-and-cohort-revocation";
               }
               await withMessageInjectionAdmission(preparation.prepareCurrent, () => {
                 preparation.assertCurrent();
@@ -245,13 +232,13 @@ it.each([
           sessionKey,
           storePath,
           entry,
-          assertCurrent: () => incomingAuthority.assertCurrent(),
+          assertCurrent: () => {},
         });
         const prepare = () =>
           prepareReplyMessageContinuation({
             target,
             delivery,
-            assertCurrent: () => incomingAuthority.assertCurrent(),
+            assertCurrent: () => {},
             input: {
               kind: "continuation",
               caller,
@@ -262,11 +249,6 @@ it.each([
             },
           });
         try {
-          if (scenario === "revoked-source") {
-            await expect(prepare()).rejects.toThrow("Synthetic incoming authority revoked");
-            expect(sink).not.toHaveBeenCalled();
-            return;
-          }
           const prepared = await prepare();
           if (["other-profile", "revoked-cohort"].includes(scenario)) {
             expect(prepared.kind).not.toBe("prepared");
@@ -279,7 +261,6 @@ it.each([
           }
           try {
             const injection = await beginReplyMessageInjectionTarget(target, incoming.prompt, {
-              assertCurrent: () => incomingAuthority.assertCurrent(),
               isInboundUserMessage: true,
               terminalReplyExpectation: "required",
               toolAuthorityFingerprint: prepared.fingerprint,
@@ -297,7 +278,7 @@ it.each([
             const accepted = ["accepted", "indeterminate"].includes(expected.status);
             expect(result).toMatchObject(expected);
             if (scenario === "late-cohort-revocation") {
-              expect(result).toHaveProperty("errorMessage");
+              expect(result).toHaveProperty("error");
             }
             expect(await injection.acceptance).toBe(accepted);
             expect(sink).toHaveBeenCalledTimes(accepted ? 1 : 0);

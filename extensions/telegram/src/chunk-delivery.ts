@@ -7,7 +7,11 @@ import {
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isSafeToRetrySendError, isTelegramBadRequestError } from "./network-errors.js";
+import {
+  isSafeToRetrySendError,
+  isTelegramBadRequestError,
+  isTelegramRateLimitError,
+} from "./network-errors.js";
 import type { TelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
 
 // A missing chat/thread invalidates the route for every remaining chunk.
@@ -83,6 +87,11 @@ export function isTelegramSkippableChunkSendError(error: unknown): boolean {
     isTelegramBadRequestError(error) &&
     TELEGRAM_TERMINAL_BAD_REQUEST_RE.test(formatErrorMessage(error))
   ) {
+    return false;
+  }
+  // A flood refusal stops the remaining pages: they would wait out the same
+  // refusal, and skipping this page would send the reply out of order.
+  if (isTelegramRateLimitError(error)) {
     return false;
   }
   if (isSafeToRetrySendError(error)) {

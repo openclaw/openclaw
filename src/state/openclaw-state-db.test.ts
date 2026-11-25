@@ -55,6 +55,7 @@ import {
 } from "./openclaw-state-db-corruption.test-support.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
 import {
+  downgradeWorkerPlacementsToV7,
   expectedStateMigrationsFromV27,
   expectV2026_7_1_2CronHistoryPreserved,
   markStateDatabaseVersion,
@@ -63,6 +64,7 @@ import {
 } from "./openclaw-state-db-historical-fixtures.test-support.js";
 import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-journal.test-support.js";
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
+import * as stateRepair from "./openclaw-state-db-repair.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {
@@ -118,6 +120,9 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 });
 
 const stateDbTempDirs: string[] = [];
+const schemaRepairs = (["sync SDK", "async Doctor"] as const).flatMap((mode) =>
+  [false, true].map((readabilityFirst) => ({ mode, readabilityFirst })),
+);
 // Vitest can enter teardown while a timed-out body is still closing its native owners.
 const fixtureLifetime = createFixtureLifetime();
 const processTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -318,6 +323,7 @@ function seedV6CommitmentSchema(database: DatabaseSync): void {
       1.0, 10, 20, 'UTC', 1, 1, 0, '{}'
     );
   `);
+  database.exec("ALTER TABLE worker_session_placements DROP COLUMN confirmed_loss_recovery_json");
   markStateDatabaseVersion(database, 6);
 }
 
@@ -387,6 +393,7 @@ function seedLegacySessionWatchCursorSchema(stateDir: string) {
       DROP TABLE session_watch_cursors_v4;
       CREATE INDEX idx_session_watch_cursors_target
         ON session_watch_cursors(target_session_key);
+      ALTER TABLE worker_session_placements DROP COLUMN confirmed_loss_recovery_json;
       DROP INDEX idx_worker_session_placements_environment; PRAGMA user_version = ${LEGACY_SESSION_WATCH_SCHEMA_VERSION};
       UPDATE schema_meta
       SET schema_version = ${LEGACY_SESSION_WATCH_SCHEMA_VERSION}
@@ -460,63 +467,6 @@ function materializeCurrentStateDatabase(stateDir: string): string {
     }),
   );
   return databasePath;
-}
-
-function downgradeWorkerPlacementsToV7(db: DatabaseSync): void {
-  restorePreTemplateStateIdentifiersForTest(db);
-  addPreCutoverClientCredentialTablesForTest(db);
-  const row = db
-    .prepare(
-      "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'worker_session_placements'",
-    )
-    .get() as { sql?: unknown } | undefined;
-  if (typeof row?.sql !== "string") {
-    throw new Error("missing worker_session_placements table SQL");
-  }
-  const v8LocalClaim = `(turn_claim_owner IS 'local' AND (\n      state IN ('local', 'requested', 'failed')\n      OR (state IN ('active', 'draining') AND execution_mode IS 'remote-exec')\n    ))`;
-  const v7Create = row.sql
-    .replace("CREATE TABLE worker_session_placements", "CREATE TABLE worker_session_placements_v7")
-    .replace(
-      "\n  execution_mode TEXT CHECK (execution_mode IN ('worker-turn', 'remote-exec')),",
-      "",
-    )
-    .replace(
-      v8LocalClaim,
-      `(turn_claim_owner IS 'local' AND state IN ('local', 'requested', 'failed'))`,
-    )
-    .replace("\n      AND (execution_mode IS NULL OR execution_mode IS 'worker-turn')", "");
-  if (v7Create.includes("execution_mode")) {
-    throw new Error("failed to derive v7 worker placement schema");
-  }
-  const columns = (
-    db.prepare("PRAGMA table_xinfo(worker_session_placements)").all() as Array<{
-      hidden: number;
-      name: string;
-    }>
-  )
-    .filter((column) => column.hidden === 0 && column.name !== "execution_mode")
-    .map((column) => `"${column.name}"`)
-    .join(", ");
-  db.exec("PRAGMA foreign_keys = OFF;");
-  try {
-    db.exec(`
-      BEGIN IMMEDIATE;
-      ${v7Create};
-      INSERT INTO worker_session_placements_v7 (${columns})
-        SELECT ${columns} FROM worker_session_placements;
-      DROP TABLE worker_session_placements;
-      ALTER TABLE worker_session_placements_v7 RENAME TO worker_session_placements;
-      CREATE INDEX idx_worker_session_placements_session_key
-        ON worker_session_placements(agent_id, session_key);
-      CREATE INDEX idx_worker_session_placements_reconcile
-        ON worker_session_placements(updated_at_ms, session_id);
-      PRAGMA user_version = 7;
-      UPDATE schema_meta SET schema_version = 7 WHERE meta_key = 'primary';
-      COMMIT;
-    `);
-  } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
-  }
 }
 
 function openMaterializedCurrentStateDatabase(stateDir = createTempStateDir()): DatabaseSync {
@@ -636,68 +586,76 @@ afterAll(async () => {
 });
 
 describe("openclaw state database", () => {
-  it("requires Doctor to repair the dangling Workshop review index in schema v16", async () => {
-    const { options, databasePath } = createStateFixture((database) => {
-      restorePreTemplateStateIdentifiersForTest(database);
-      addPreCutoverClientCredentialTablesForTest(database);
-      database.exec(
-        "CREATE TABLE skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT;",
-      );
-      insertRow(database, "skill_workshop_collection_reviews", {
-        review_id: "review-preserved",
-        owner_agent_id: "main",
-        backup_id: "backup-preserved",
-        create_time: 1,
-        kept_names_json: "[]",
-        written_names_json: "[]",
-        dropped_json: "[]",
-      });
-      removePreparedWorkerOwnershipColumns(database);
-      database.exec(`
+  it.each(schemaRepairs)(
+    "repairs schema v16 ($mode, readability first: $readabilityFirst)",
+    async ({ mode, readabilityFirst }) => {
+      const { options, databasePath } = createStateFixture((database) => {
+        restorePreTemplateStateIdentifiersForTest(database);
+        addPreCutoverClientCredentialTablesForTest(database);
+        database.exec(
+          "CREATE TABLE skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT;",
+        );
+        insertRow(database, "skill_workshop_collection_reviews", {
+          review_id: "review-preserved",
+          owner_agent_id: "main",
+          backup_id: "backup-preserved",
+          create_time: 1,
+          kept_names_json: "[]",
+          written_names_json: "[]",
+          dropped_json: "[]",
+        });
+        removePreparedWorkerOwnershipColumns(database);
+        database.exec(`
         PRAGMA user_version = 16;
         UPDATE schema_meta SET schema_version = 16 WHERE meta_key = 'primary';
       `);
-    });
-    const rootpage = createDanglingSkillWorkshopReviewIndex(databasePath);
-    const defensiveProbe = openNativeDatabase(databasePath);
-    expect(hasDanglingSkillWorkshopCollectionReviewIndex(defensiveProbe)).toBe(true);
-    const schemaVersion = readSqliteNumberPragma(defensiveProbe, "schema_version");
-    defensiveProbe.exec(`PRAGMA schema_version = ${schemaVersion + 1};`);
-    expect(readSqliteNumberPragma(defensiveProbe, "schema_version")).toBe(schemaVersion);
-    defensiveProbe.close();
+      });
+      const rootpage = createDanglingSkillWorkshopReviewIndex(databasePath);
+      const defensiveProbe = openNativeDatabase(databasePath);
+      expect(hasDanglingSkillWorkshopCollectionReviewIndex(defensiveProbe)).toBe(true);
+      const schemaVersion = readSqliteNumberPragma(defensiveProbe, "schema_version");
+      defensiveProbe.exec(`PRAGMA schema_version = ${schemaVersion + 1};`);
+      expect(readSqliteNumberPragma(defensiveProbe, "schema_version")).toBe(schemaVersion);
+      defensiveProbe.close();
 
-    expect(() => openOpenClawStateDatabase(options)).toThrow(
-      /legacy-workshop-review-index.*openclaw doctor --fix/u,
-    );
-    await expect(prepareOpenClawStateDatabaseSchema(options)).rejects.toThrow(
-      /legacy-workshop-review-index.*openclaw doctor --fix/u,
-    );
-    expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toMatchObject({ rootpage });
+      const refusal = /legacy-workshop-review-index.*openclaw doctor --fix/u;
+      expect(() => openOpenClawStateDatabase(options)).toThrow(refusal);
+      await expect(prepareOpenClawStateDatabaseSchema(options)).rejects.toThrow(refusal);
+      expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toMatchObject({ rootpage });
 
-    expect(
-      await withStateMigrationBackupForTest(options, () =>
-        repairOpenClawStateDatabaseSchema(options),
-      ),
-    ).toEqual({
-      changes: expect.arrayContaining([
-        "Removed dangling legacy Skill Workshop review index",
-        "Recorded prepared worker ownership and one-use lifecycle (v17)",
-      ]),
-      warnings: [],
-    });
-
-    withReadOnlyDatabase(databasePath, (repaired) => {
-      expectRecord(
-        repaired,
-        "skill_workshop_collection_reviews WHERE review_id = 'review-preserved'",
-        { review_id: "review-preserved", backup_id: "backup-preserved" },
+      const catalogChange = "Removed dangling legacy Skill Workshop review index";
+      if (readabilityFirst) {
+        const result = await withStateMigrationBackupForTest(options, () =>
+          mode === "sync SDK"
+            ? stateRepair.repairDoctorStateSchema(options, "readability")
+            : stateRepair.repairDoctorStateSchemaAsync(options, "readability"),
+        );
+        expect(result).toEqual({ changes: [catalogChange], warnings: [] });
+      }
+      const { changes, warnings } = await withStateMigrationBackupForTest(options, () =>
+        mode === "sync SDK"
+          ? repairOpenClawStateDatabaseSchema(options)
+          : prepareOpenClawStateDatabaseSchema(options, "doctor"),
       );
-      expectRows(repaired, "PRAGMA integrity_check").toEqual([{ integrity_check: "ok" }]);
-      expectCurrentStateVersion(repaired);
-      expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toBeUndefined();
-    });
-    expect(() => openOpenClawStateDatabase(options)).not.toThrow();
-  });
+      expect(warnings).toEqual([]);
+      expect(changes).toContain("Recorded prepared worker ownership and one-use lifecycle (v17)");
+      if (!readabilityFirst) {
+        expect(changes).toContain(catalogChange);
+      }
+
+      withReadOnlyDatabase(databasePath, (repaired) => {
+        expectRecord(
+          repaired,
+          "skill_workshop_collection_reviews WHERE review_id = 'review-preserved'",
+          { review_id: "review-preserved", backup_id: "backup-preserved" },
+        );
+        expectRows(repaired, "PRAGMA integrity_check").toEqual([{ integrity_check: "ok" }]);
+        expectCurrentStateVersion(repaired);
+        expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toBeUndefined();
+      });
+      expect(() => openOpenClawStateDatabase(options)).not.toThrow();
+    },
+  );
 
   it.each([
     { refusal: "persisted", generationBound: false },
@@ -784,16 +742,10 @@ describe("openclaw state database", () => {
     const { options, databasePath } = createStateFixture();
     const rootpage = createDanglingSkillWorkshopReviewIndex(databasePath);
     const database = openNativeDatabase(databasePath);
-    const repairAdmittedSchema = prepareStateDatabaseSchemaRepair(
-      database,
-      databasePath,
-      options.env,
-    );
+    const repair = prepareStateDatabaseSchemaRepair(database, databasePath, options.env);
     expect(() =>
       runSqliteImmediateTransactionSync(database, () => {
-        expect(repairAdmittedSchema()).toEqual([
-          "Removed dangling legacy Skill Workshop review index",
-        ]);
+        expect(repair.apply()).toEqual(["Removed dangling legacy Skill Workshop review index"]);
         throw new Error("injected post-reclamation failure");
       }),
     ).toThrow("injected post-reclamation failure");
@@ -818,6 +770,7 @@ describe("openclaw state database", () => {
       });
       downgradeWorkerPlacementsToV7(legacy);
       legacy.exec(`
+      ALTER TABLE worker_session_placements DROP COLUMN confirmed_loss_recovery_json;
       ALTER TABLE worker_session_placements DROP COLUMN terminal_at_ms;
       ALTER TABLE worker_session_placements DROP COLUMN terminal_reason;
     `);
@@ -832,11 +785,13 @@ describe("openclaw state database", () => {
       session_id: "legacy-session",
       transition_generation: 3,
       execution_mode: null,
+      confirmed_loss_recovery_json: null,
     });
     const columns = migrated.db.prepare("PRAGMA table_info(worker_session_placements)").all();
-    expect(columns.map((column) => column.name).slice(-2)).toEqual([
+    expect(columns.map((column) => column.name).slice(-3)).toEqual([
       "terminal_reason",
       "terminal_at_ms",
+      "confirmed_loss_recovery_json",
     ]);
     expectMigrations(options, databasePath).excludes("worker-placement-execution-mode-v8");
   });
@@ -1297,6 +1252,7 @@ describe("openclaw state database", () => {
 
     legacy.exec(`
           DROP TABLE workspace_path_aliases;
+          ALTER TABLE worker_session_placements DROP COLUMN confirmed_loss_recovery_json;
           PRAGMA user_version = 1;
           UPDATE schema_meta SET schema_version = 1, app_version = '2026.6.35'
            WHERE meta_key = 'primary';
@@ -1338,6 +1294,7 @@ describe("openclaw state database", () => {
       "Replaced retained task indexes with ordered cron history indexes (v24)",
       "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
       "Migrated released starter tables and provenance to canonical Template names (v36)",
+      "Confirmed worker-loss predecessor metadata (v42)",
     ]);
 
     const migrated = openOpenClawStateDatabase(options);
@@ -1843,6 +1800,7 @@ describe("openclaw state database", () => {
       "Replaced retained task indexes with ordered cron history indexes (v24)",
       "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
       "Migrated released starter tables and provenance to canonical Template names (v36)",
+      "Confirmed worker-loss predecessor metadata (v42)",
     ]);
 
     const migrated = openOpenClawStateDatabase(options);
@@ -2311,101 +2269,93 @@ describe("openclaw state database", () => {
     },
   );
 
-  it.each(["sync SDK", "async Doctor"] as const)(
-    "preserves orphan delivery payload before recovery from 2026.7.1-2 (%s)",
-    async (mode) => {
+  it.each(schemaRepairs)(
+    "preserves orphan delivery payload from 2026.7.1-2 ($mode, readability first: $readabilityFirst)",
+    async ({ mode, readabilityFirst }) => {
       const stateDir = createTempStateDir();
       const databasePath = materializeV2026_7_1_2StateDatabase(stateDir).databasePath;
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const corrupted = openNativeDatabase(databasePath);
+      using corrupted = openNativeDatabase(databasePath);
+      const repair = () =>
+        mode === "sync SDK"
+          ? repairOpenClawStateDatabaseSchema(options)
+          : prepareOpenClawStateDatabaseSchema(options, "doctor");
       const payload = '  {"channel":"synthetic","to":"recover-me"}\n\u0000';
       const timestamp = 9007199254740993n;
-      try {
-        corrupted.exec(
-          "PRAGMA foreign_keys = OFF; PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;",
-        );
-        corrupted.exec(`INSERT INTO task_runs
-          (task_id,runtime,owner_key,scope_kind,task,status,delivery_status,notify_policy,created_at)
-          VALUES ('healthy-task','subagent','synthetic-owner','session','keep me','completed','delivered','silent',1);
-          INSERT INTO task_delivery_state(task_id) VALUES ('healthy-task');`);
-        const insert = corrupted.prepare(`INSERT INTO task_delivery_state
-          (task_id,requester_origin_json,last_notified_event_at) VALUES (?,?,?)`);
-        for (let index = 0; index < 18; index += 1) {
-          insert.run(`missing-task-${index}`, payload, timestamp);
-        }
-        expectIntegrity(corrupted);
-        expectRows(corrupted, "PRAGMA foreign_key_check").toHaveLength(18);
-        expect(fs.statSync(`${databasePath}-wal`).size).toBeGreaterThan(0);
-        const failure = /foreign_key_check failed.*task_delivery_state.*references task_runs/iu;
-        expect(() => openOpenClawStateDatabase(options)).toThrow(failure);
-        const checkpointCallback = vi.fn();
-        expect(() =>
-          withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
-        ).toThrow(failure);
-        expect(checkpointCallback).not.toHaveBeenCalled();
-
-        const result = await withStateMigrationBackupForTest(options, () =>
-          mode === "sync SDK"
-            ? repairOpenClawStateDatabaseSchema(options)
-            : prepareOpenClawStateDatabaseSchema(options, "doctor"),
-        );
-        expect(result.warnings).toEqual([]);
-        expect(result.changes).toContainEqual(
-          expect.stringContaining("Preserved and recovered 18 orphan task delivery rows"),
-        );
-        const recoveryDirs = recoveryArtifacts(databasePath);
-        expect(recoveryDirs).toHaveLength(1);
-        const recoveryDir = path.join(path.dirname(databasePath), recoveryDirs[0]!);
-        const backup = openNativeDatabase(path.join(recoveryDir, "database.sqlite"), {
-          readOnly: true,
-        });
-        try {
-          expectIntegrity(backup);
-          expectRows(backup, "PRAGMA foreign_key_check").toHaveLength(18);
-          const row = backup.prepare(
-            "SELECT requester_origin_json,last_notified_event_at FROM task_delivery_state WHERE task_id = ?",
-          );
-          row.setReadBigInts(true);
-          expect(row.get("missing-task-0")).toEqual({
-            requester_origin_json: payload,
-            last_notified_event_at: timestamp,
-          });
-        } finally {
-          backup.close();
-        }
-        const exported = fs
-          .readFileSync(path.join(recoveryDir, "orphan-rows.jsonl"), "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
-        expect(exported).toHaveLength(18);
-        expect(exported[0]).toMatchObject({
-          requester_origin_json: payload,
-          last_notified_event_at: timestamp.toString(),
-        });
-        const repaired = openOpenClawStateDatabase(options);
-        expectRows(repaired.db, "PRAGMA foreign_key_check").toEqual([]);
-        expectIntegrity(repaired.db);
-        expectRows(repaired.db, "SELECT task_id FROM task_delivery_state").toContainEqual({
-          task_id: "healthy-task",
-        });
-        expectRows(
-          repaired.db,
-          "SELECT 1 FROM task_delivery_state WHERE task_id LIKE 'missing-task-%'",
-        ).toEqual([]);
-        expect(
-          (
-            await withStateMigrationBackupForTest(options, () =>
-              mode === "sync SDK"
-                ? repairOpenClawStateDatabaseSchema(options)
-                : prepareOpenClawStateDatabaseSchema(options, "doctor"),
-            )
-          ).warnings,
-        ).toEqual([]);
-        expect(recoveryArtifacts(databasePath)).toEqual(recoveryDirs);
-      } finally {
-        corrupted.close();
+      corrupted.exec(
+        "PRAGMA foreign_keys = OFF; PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;",
+      );
+      corrupted.exec(`INSERT INTO task_runs
+        (task_id,runtime,owner_key,scope_kind,task,status,delivery_status,notify_policy,created_at)
+        VALUES ('healthy-task','subagent','synthetic-owner','session','keep me','completed','delivered','silent',1);
+        INSERT INTO task_delivery_state(task_id) VALUES ('healthy-task');`);
+      const insert = corrupted.prepare(`INSERT INTO task_delivery_state
+        (task_id,requester_origin_json,last_notified_event_at) VALUES (?,?,?)`);
+      for (let index = 0; index < 18; index += 1) {
+        insert.run(`missing-task-${index}`, payload, timestamp);
       }
+      expectIntegrity(corrupted);
+      expectRows(corrupted, "PRAGMA foreign_key_check").toHaveLength(18);
+      expect(fs.statSync(`${databasePath}-wal`).size).toBeGreaterThan(0);
+      const failure = /foreign_key_check failed.*task_delivery_state.*references task_runs/iu;
+      expect(() => openOpenClawStateDatabase(options)).toThrow(failure);
+      const checkpointCallback = vi.fn();
+      expect(() =>
+        withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
+      ).toThrow(failure);
+      expect(checkpointCallback).not.toHaveBeenCalled();
+
+      const result = await withStateMigrationBackupForTest(options, () =>
+        !readabilityFirst
+          ? repair()
+          : mode === "sync SDK"
+            ? stateRepair.repairDoctorStateSchema(options, "readability")
+            : stateRepair.repairDoctorStateSchemaAsync(options, "readability"),
+      );
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toContainEqual(
+        expect.stringContaining("Preserved and recovered 18 orphan task delivery rows"),
+      );
+      const recoveryDirs = recoveryArtifacts(databasePath);
+      expect(recoveryDirs).toHaveLength(1);
+      const recoveryDir = path.join(path.dirname(databasePath), recoveryDirs[0]!);
+      withReadOnlyDatabase(path.join(recoveryDir, "database.sqlite"), (backup) => {
+        expectIntegrity(backup);
+        expectRows(backup, "PRAGMA foreign_key_check").toHaveLength(18);
+        const row = backup.prepare(
+          "SELECT requester_origin_json,last_notified_event_at FROM task_delivery_state WHERE task_id = ?",
+        );
+        row.setReadBigInts(true);
+        expect(row.get("missing-task-0")).toEqual({
+          requester_origin_json: payload,
+          last_notified_event_at: timestamp,
+        });
+      });
+      const exported = fs
+        .readFileSync(path.join(recoveryDir, "orphan-rows.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(exported).toHaveLength(18);
+      expect(exported[0]).toMatchObject({
+        requester_origin_json: payload,
+        last_notified_event_at: timestamp.toString(),
+      });
+      expectRows(
+        corrupted,
+        "SELECT 1 FROM task_delivery_state WHERE task_id LIKE 'missing-task-%'",
+      ).toEqual([]);
+      if (readabilityFirst) {
+        expect((await withStateMigrationBackupForTest(options, repair)).warnings).toEqual([]);
+      }
+      const repaired = openOpenClawStateDatabase(options);
+      expectRows(repaired.db, "PRAGMA foreign_key_check").toEqual([]);
+      expectIntegrity(repaired.db);
+      expectRows(repaired.db, "SELECT task_id FROM task_delivery_state").toContainEqual({
+        task_id: "healthy-task",
+      });
+      expect((await withStateMigrationBackupForTest(options, repair)).warnings).toEqual([]);
+      expect(recoveryArtifacts(databasePath)).toEqual(recoveryDirs);
     },
   );
 
@@ -2533,7 +2483,10 @@ describe("openclaw state database", () => {
       installed_at_ms: 1234,
       updated_at_ms: 5678,
     });
-    legacyDb.exec("ALTER TABLE template_package_refs DROP COLUMN updated_at_ms");
+    legacyDb.exec(`
+      ALTER TABLE template_package_refs DROP COLUMN updated_at_ms;
+      ALTER TABLE worker_session_placements DROP COLUMN confirmed_loss_recovery_json;
+    `);
     markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();
 
@@ -2572,6 +2525,7 @@ describe("openclaw state database", () => {
     legacyDb.exec(`
       DROP INDEX idx_operator_approvals_resolution_ref;
       ALTER TABLE operator_approvals DROP COLUMN resolution_ref;
+      ALTER TABLE worker_session_placements DROP COLUMN confirmed_loss_recovery_json;
     `);
     markStateDatabaseVersion(legacyDb, 5);
     legacyDb.close();

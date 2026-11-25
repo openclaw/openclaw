@@ -15,6 +15,8 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   runSqliteImmediateTransactionSync,
+  type SqliteWorkerTransactionOptions,
+  type SynchronousSqliteCallback,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { definedFields } from "../record-fields.js";
@@ -28,6 +30,7 @@ import type {
   WorkboardCardStatsAggregate,
   WorkboardKeyedStore,
   WorkboardOwnerClaimResult,
+  WorkboardOwnerSlot,
   WorkboardPersistence,
   WorkboardSubscriptionStore,
 } from "./persistence-types.js";
@@ -64,9 +67,9 @@ export type WorkboardSqliteKernel = {
 } & {
   assertSettled(this: void): void;
   close(this: void): void;
-  withWriteTransaction<T>(
-    operation: () => T,
-    options?: Parameters<typeof runSqliteImmediateTransactionSync>[2],
+  withWriteTransaction<T, CommitResult = void>(
+    operation: SynchronousSqliteCallback<T>,
+    options?: SqliteWorkerTransactionOptions<CommitResult>,
   ): T;
 };
 
@@ -115,8 +118,7 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
     key: string,
     value: PersistedWorkboardCard,
     expectedUpdatedAt: number,
-    ownerId: string,
-    now: number,
+    { ownerId, now, limit }: WorkboardOwnerSlot,
   ): WorkboardOwnerClaimResult {
     return runSqliteImmediateTransactionSync(this.db, () => {
       const query = getNodeSqliteKysely<WorkboardCardDatabase>(this.db);
@@ -145,6 +147,7 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
             eb.and([eb("claim_json", "is not", null), eb("status", "!=", "done")]),
           ]),
         );
+      let ownerActive = 0;
       for (const row of iterateSqliteQuerySync(this.db, candidates)) {
         const card = {
           // SAFETY: insertCard persists WorkboardCard.status; this keeps readCard's required-string boundary.
@@ -159,7 +162,11 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
               }
             : undefined,
         };
-        if (workboardCardConsumesOwnerSlot(card, now) && workboardCardSlotOwner(card) === ownerId) {
+        if (
+          workboardCardConsumesOwnerSlot(card, now) &&
+          workboardCardSlotOwner(card) === ownerId &&
+          ++ownerActive >= limit
+        ) {
           return "owner_busy";
         }
       }

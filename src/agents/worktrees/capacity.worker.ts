@@ -85,6 +85,7 @@ function reserveWorktreeCapacityInDatabase(
   input: WorktreeCapacityRequest,
 ): WorktreeCapacityResult {
   const { key, owner, demands, purpose, snapshot } = input;
+  const reserve = snapshot ? 128 * 1024 ** 2 : 4 * GiB;
   const volumes = measureVolumes(demands);
   const k = getNodeSqliteKysely<Pick<DB, "state_leases">>(db);
   const rows = executeSqliteQuerySync(
@@ -130,6 +131,10 @@ function reserveWorktreeCapacityInDatabase(
       continue;
     }
     for (const reservation of reservations) {
+      // A debt-free peer with no stronger reserve cannot make this request wait.
+      if (reservation.bytes === 0 && reservation.reserve <= reserve) {
+        continue;
+      }
       const previous = pending.get(reservation.device);
       pending.set(reservation.device, {
         bytes: (previous?.bytes ?? 0) + reservation.bytes,
@@ -138,7 +143,6 @@ function reserveWorktreeCapacityInDatabase(
       });
     }
   }
-  const reserve = snapshot ? 128 * 1024 ** 2 : 4 * GiB;
   const reservations: WorktreeVolumeReservation[] = [];
   for (const [device, volume] of volumes) {
     const other = pending.get(String(device));

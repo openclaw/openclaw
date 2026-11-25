@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithSessionControllerCleanup } from "../sessions/session-controller.cleanup-context.js";
 import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
@@ -57,6 +58,12 @@ type ScheduledWork = {
 };
 
 const log = createSubsystemLogger("gateway/scheduler");
+
+function reportJobFailure(id: string, error: unknown): void {
+  const detail = error instanceof Error ? formatErrorStackWithMessage(error) : String(error);
+  log.error(`${id} failed: ${detail}`);
+}
+
 const hostClock: GatewaySchedulerClock = {
   now: () => Date.now(),
   monotonicNow: () => performance.now(),
@@ -84,6 +91,7 @@ export class GatewayScheduler {
   private readonly pending = new Set<Promise<void>>();
   private cancelTimer?: () => void;
   private dispatching = false;
+  private fenced = false;
   private readonly controller = new AbortController();
 
   constructor(
@@ -167,7 +175,7 @@ export class GatewayScheduler {
     ) {
       throw new Error(`Invalid Gateway schedule: ${params.id}`);
     }
-    const cancelled = this.signal.aborted || owner?.signal.aborted === true;
+    const cancelled = this.fenced || owner?.signal.aborted === true;
     const previous = cancelled ? undefined : this.jobs.get(params.id);
     const job: ScheduledWork = {
       id: params.id,
@@ -233,15 +241,21 @@ export class GatewayScheduler {
     }
   }
 
-  beginClose(): void {
-    this.controller.abort();
-    materializeErrorStack(this.controller.signal.reason);
+  /** Stop wakeups and admission without retiring authority held by accepted work. */
+  fence(): void {
+    this.fenced = true;
     this.cancelTimer?.();
     this.cancelTimer = undefined;
     for (const job of this.jobs.values()) {
       this.cancel(job);
     }
     this.jobs.clear();
+  }
+
+  beginClose(): void {
+    this.fence();
+    this.controller.abort();
+    materializeErrorStack(this.controller.signal.reason);
   }
 
   async stop(): Promise<void> {
@@ -259,7 +273,7 @@ export class GatewayScheduler {
   }
 
   private arm(): void {
-    if (this.signal.aborted || this.dispatching) {
+    if (this.fenced || this.dispatching) {
       return;
     }
     this.cancelTimer?.();
@@ -277,7 +291,7 @@ export class GatewayScheduler {
 
   private wake(expectedAtMs: number): Promise<void> | void {
     this.cancelTimer = undefined;
-    if (this.signal.aborted) {
+    if (this.fenced) {
       return;
     }
     const nowMs = this.now();
@@ -295,7 +309,7 @@ export class GatewayScheduler {
     try {
       for (const job of due) {
         if (
-          this.signal.aborted ||
+          this.fenced ||
           job.cancelled ||
           job.owner?.signal.aborted ||
           this.jobs.get(job.id) !== job
@@ -329,7 +343,7 @@ export class GatewayScheduler {
       job.running = undefined;
       this.pending.delete(done.promise);
       // Coalesce all missed periods, including time spent in the callback, into this one run.
-      if (job.everyMs !== undefined && !job.cancelled && !this.signal.aborted) {
+      if (job.everyMs !== undefined && !job.cancelled && !this.fenced) {
         if (job.phase === "maintenance") {
           // Advance nominal slots, including across sleep and slow async work, without replay.
           // An immediate startup pass joins the shared phase on its next iteration.
@@ -352,19 +366,21 @@ export class GatewayScheduler {
         runWithMainThreadTask(job.diagnosticName, () => work.run(job.run)),
       );
     } catch (error) {
-      log.error(`${job.id} failed: ${String(error)}`);
+      reportJobFailure(job.id, error);
     }
     if (!result && !work.hasPendingWork) {
       finish();
       return;
     }
     void Promise.resolve(result)
-      .catch((error: unknown) => log.error(`${job.id} failed: ${String(error)}`))
+      .catch((error: unknown) => reportJobFailure(job.id, error))
       .then(() =>
-        AsyncWorkScope.runWhenAllIdle(
-          () => [work],
-          () => work.drain(),
-        ),
+        work.hasPendingWork
+          ? AsyncWorkScope.runWhenAllIdle(
+              () => [work],
+              () => work.drain(),
+            )
+          : work.drain(),
       )
       .finally(finish);
     return done.promise;

@@ -400,8 +400,12 @@ struct GatewayEndpointStoreTests {
         isRemote: Bool) throws
     {
         let kind = try #require(GatewayEndpointStore.Credential(rawValue: credential))
+        var configuredAuth = [credential: "  configured-secret  "]
+        if !isRemote {
+            configuredAuth["mode"] = credential
+        }
         let root: [String: Any] = [
-            "gateway": [isRemote ? "remote" : "auth": [credential: "  configured-secret  "]],
+            "gateway": [isRemote ? "remote" : "auth": configuredAuth],
         ]
         let resolved = GatewayEndpointStore.resolveGatewayCredential(
             kind,

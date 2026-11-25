@@ -1,5 +1,5 @@
 import { render, spread } from "@solidjs/web";
-import { createSignal, onSettled, Show } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { createIdleImport } from "../../lib/idle-import.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
@@ -7,10 +7,9 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "../portaled-hovercard.ts";
-import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
-import { useIdentityAvatarView } from "./identity-avatar-view.ts";
-import type { createPersonReferenceCard } from "./person-reference.runtime.ts";
+import { PersonReferenceLabel } from "./person-reference-label.tsx";
 import "../../styles/chat/person-reference.css";
+import type { createPersonReferenceCard } from "./person-reference.runtime.ts";
 
 type ActivePersonCard = {
   host: HTMLElement;
@@ -60,19 +59,6 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
   function outside(event: Event) {
     if (!event.composedPath().some((target) => target === host || target === portal.card)) {
       close();
-    }
-  }
-
-  function escape(event: KeyboardEvent) {
-    if (event.key !== "Escape") {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    const restore = portal.card?.contains(document.activeElement);
-    close();
-    if (restore) {
-      portal.returnFocus(trigger ?? null);
     }
   }
 
@@ -131,7 +117,7 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
       listen(card, "pointerleave", portal.handleCardPointerLeave),
       listen(document, "pointerdown", outside, true),
       listen(document, "focusin", outside, true),
-      listen(document, "keydown", escape, true),
+      listen(document, "keydown", portal.handleEscape, true),
     ];
     // Navigation ends the portaled card before its retained transcript can render again.
     stopRoute = context?.router.subscribe(close);
@@ -175,12 +161,6 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
     portal.position();
   }
 
-  const avatar = useIdentityAvatarView(() => ({
-    id: profileId(),
-    identity: { type: "profile", id: profileId() },
-    name: label().replace(/^@/u, ""),
-  }));
-  const presentation = createIdentityAvatarPresentation(avatar);
   return (
     <button
       ref={(element) => {
@@ -232,30 +212,7 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
         open();
       }}
     >
-      <span
-        data-avatar-state={presentation.state()}
-        class={["markdown-person-reference__avatar", presentation.classes()]}
-        aria-hidden="true"
-        data-initials={avatar().fallback.initials}
-      >
-        <Show when={Boolean(avatar().imageUrl)}>
-          <IdentityAvatarImage
-            view={avatar()}
-            onStateChange={presentation.onStateChange}
-            ariaHidden={true}
-          />
-        </Show>
-      </span>
-      {label().startsWith("@") ? (
-        <>
-          <span class="markdown-person-reference__prefix" aria-hidden="true">
-            @
-          </span>
-          {label().slice(1)}
-        </>
-      ) : (
-        label()
-      )}
+      <PersonReferenceLabel profileId={profileId()} label={label()} />
     </button>
   );
 }

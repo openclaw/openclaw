@@ -15,6 +15,7 @@ import {
 import type { CronScratchGetResult, CronScratchSetResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -239,7 +240,9 @@ function ScratchFields(props: {
     <Loading>
       <section class="settings-section">
         <details>
-          <summary class="settings-section__heading">{t("cron.scratch.title")}</summary>
+          <summary class="settings-section__heading">
+            {t("cron.scratch.title")} <Icon name="chevronDown" class="cron-scratch-chevron" />
+          </summary>
           <p class="settings-section__desc">{t("cron.scratch.help")}</p>
           <button
             type="button"

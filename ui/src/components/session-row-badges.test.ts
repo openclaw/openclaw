@@ -61,9 +61,8 @@ it("renders outbox attention and stays quiet when empty", () => {
   expect(renderBadges({ outboxAttentionCount: 0 }).querySelector(".session-row-badges")).toBeNull();
 });
 
-it("keeps child placement badges hidden while showing PR and approval", () => {
+it("prioritizes PR and approval over healthy placement", () => {
   const container = renderBadges({
-    isChild: true,
     ...pr("open", 111532),
     hasApproval: true,
     placementState: "active",
@@ -76,16 +75,15 @@ it("keeps child placement badges hidden while showing PR and approval", () => {
 });
 
 it.each([
-  ["active", false, 3, "Placement: active · 3 workspace conflicts"],
-  ["active", false, 1, "Placement: active · 1 workspace conflict"],
-  ["reclaimed", false, 2, "Placement: reclaimed · 2 workspace conflicts"],
-  ["reclaimed", true, 2, "Placement: reclaimed · 2 workspace conflicts"],
-  [undefined, false, 2, "Cloud worker children: 2 workspace conflicts"],
+  ["active", 3, "Placement: active · 3 workspace conflicts"],
+  ["active", 1, "Placement: active · 1 workspace conflict"],
+  ["reclaimed", 2, "Placement: reclaimed · 2 workspace conflicts"],
+  [undefined, 2, "Cloud worker children: 2 workspace conflicts"],
 ] as const)(
-  "keeps conflict attention for %s placement (child: %s, count: %s)",
-  (placementState, isChild, count, label) => {
+  "keeps conflict attention for %s placement (count: %s)",
+  (placementState, count, label) => {
     const indicator = renderBadge(
-      { placementState, isChild, workspaceConflictCount: count },
+      { placementState, workspaceConflictCount: count },
       "cloud",
       label,
     );

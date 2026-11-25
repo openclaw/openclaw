@@ -84,7 +84,7 @@ it("joins accepted sandbox removal across scheduler cancellation after database 
       "Sandbox removal settled before its worker command",
     );
     expect(acceptedSignal?.aborted).toBe(false);
-    await race.close(kernel.scheduler.signal, undefined, { reason: "sandbox close" });
+    await race.close(kernel.requestEntryLifetime.signal, undefined, { reason: "sandbox close" });
     expect(acceptedSignal?.aborted).toBe(false);
     expect(shared.isOpen).toBe(true);
     expect(removeRuntime).not.toHaveBeenCalled();

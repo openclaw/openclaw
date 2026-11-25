@@ -9,7 +9,7 @@ import {
 import { createConfigIO } from "../config/io.factory.js";
 import { resolveConfigPath } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
-import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-registry.js";
+import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-preparation.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   withArtifactPreservingStateReads,
@@ -213,6 +213,8 @@ async function compareCurrentSources(
         env: params.env,
         warnings,
         requireLocalResources: true,
+        assertCurrent: check,
+        signal: params.signal,
       }),
     { env: params.env, signal: params.signal },
   );
@@ -388,6 +390,11 @@ async function compareCurrentSources(
     }
   };
   for (const [pathname, kind] of resources) {
+    // Capture records declared sidecar roots through their database image.
+    if (sidecars.has(pathname)) {
+      roots.delete(pathname);
+      continue;
+    }
     await inspect(pathname, kind);
   }
   for (const pathname of databasePaths) {

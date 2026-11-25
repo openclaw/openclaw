@@ -161,6 +161,7 @@ test.for([
     await withMainSessionStore(async () => {
       const run = async (socket: WebSocket) => {
         const idempotencyKey = `idem-chat-${field}-no-persist`;
+        mockGetReplyFromConfigOnce(async () => ({ text: "Message received." }));
         const sent = await rpcReq(socket, "chat.send", {
           sessionKey: "main",
           message,

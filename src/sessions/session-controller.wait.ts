@@ -64,13 +64,16 @@ function waitForSessionControllerEntryIdle(
 export function waitForSessionRunIdle(
   sessionKey: string,
   timeoutMs?: number | null,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; target?: SessionTarget },
 ): Promise<boolean> {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (!normalizedSessionKey) {
     return Promise.resolve(true);
   }
-  const owners = findSessionControllerEntries(normalizedSessionKey).filter((entry) => entry.active);
+  // A target narrows the wait to its physical owner instead of every store sharing the key.
+  const owners = findSessionControllerEntries(normalizedSessionKey, opts?.target).filter(
+    (entry) => entry.active,
+  );
   return Promise.all(
     owners.map((owner) => waitForSessionControllerEntryIdle(owner, timeoutMs, opts?.signal)),
   ).then((outcomes) => outcomes.every(Boolean));

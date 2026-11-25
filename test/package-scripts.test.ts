@@ -171,9 +171,9 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs dead-code reports fail-fast", () => {
+  it("runs all dead-code scopes through the shared report entrypoint", () => {
     expect(readPackageJson().scripts["deadcode:report"]).toBe(
-      "pnpm deadcode:full && pnpm deadcode:exports",
+      "node --import ./scripts/tsx.mjs scripts/check-deadcode-exports.mts --all",
     );
   });
 

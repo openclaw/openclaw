@@ -316,11 +316,15 @@ describe("cron CLI delivery suppression readback", () => {
               expect(persisted.state.lastError).toBeUndefined();
               expect(persisted.state.lastDeliveryError).toBeUndefined();
               expect(history.entries[0]?.deliveryError).toBeUndefined();
+            } else if (phase === "execution-error") {
+              // The run failed before reporting any delivery: its error is the run's, not delivery's.
+              expect(persisted.state.lastError).toContain("fixture agent execution failed");
+              expect(persisted.state.lastDeliveryError).toBeUndefined();
+              expect(history.entries[0]?.error).toContain("fixture agent execution failed");
+              expect(history.entries[0]?.deliveryError).toBeUndefined();
             } else {
               expect(persisted.state.lastDeliveryError).toContain(
-                phase === "execution-error"
-                  ? "fixture agent execution failed"
-                  : "fixture delivery route unavailable",
+                "fixture delivery route unavailable",
               );
             }
             expect(events.at(-1)?.deliverySuppressionReason).toBe(reason);

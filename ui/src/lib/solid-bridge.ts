@@ -36,6 +36,9 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     connected?: (host: SolidBridgeElement<Props, Methods>) => void;
     disconnected?: (host: SolidBridgeElement<Props, Methods>) => void;
     propertyChanged?: (host: SolidBridgeElement<Props, Methods>, key: keyof Props) => void;
+    updateComplete?: (
+      host: SolidBridgeElement<Props, Methods>,
+    ) => Promise<boolean> | boolean | undefined;
     methods?: {
       [Key in keyof Methods]: Methods[Key] extends (...args: infer Args) => infer Result
         ? (host: SolidBridgeElement<Props, Methods>, ...args: Args) => Result
@@ -92,14 +95,18 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         Object.defineProperty(this, key, {
           configurable: true,
           get: () => this.#values.get(key),
-          set: (value: unknown) => this.#write(key, value),
+          set: (value: unknown) => {
+            this.#write(key, value);
+          },
         });
       }
       this.#host = Object.assign(this, defaults, methods);
     }
 
     get updateComplete(): Promise<boolean> {
-      return this.#pending ?? Promise.resolve(true);
+      const mounted = this.#pending ?? Promise.resolve(true);
+      const complete = spec.updateComplete;
+      return complete ? mounted.then(() => complete(this.#host) ?? true) : mounted;
     }
 
     #write(key: string, value: unknown) {

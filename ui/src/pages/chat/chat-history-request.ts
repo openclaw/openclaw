@@ -1,5 +1,4 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -26,6 +25,7 @@ import {
   type ChatHistoryResetResult,
   type ChatHistoryResponse,
   isHistoryCursor,
+  attachHistoryActivity,
   resolveChatHistoryPagination,
   historySessionId,
 } from "./chat-history-snapshot.ts";
@@ -71,32 +71,6 @@ export function captureChatHistoryRun(
 // larger pages. The Gateway owns the response byte and single-message limits.
 export const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
 const CHAT_HISTORY_OLDER_PAGE_MAX_BYTES = 3 * 1024 * 1024;
-
-export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
-  if (isHistoryCursor(result) && result.kind === "reset") {
-    return result;
-  }
-  if (!result.activity || !result.messages) {
-    return result;
-  }
-  const byId = new Map(result.activity.map((entry) => [entry.messageId, entry.items]));
-  const withActivity = (message: unknown) => {
-    const record = asOptionalRecord(message);
-    const id = record?.messageId ?? asOptionalRecord(record?.["__openclaw"])?.id;
-    const activity = typeof id === "string" ? byId.get(id) : undefined;
-    return record && activity ? { ...record, activity } : message;
-  };
-  return {
-    ...result,
-    messages: result.messages.map((entry) => {
-      if (!isHistoryCursor(result)) {
-        return withActivity(entry);
-      }
-      const envelope = asOptionalRecord(entry);
-      return envelope ? { ...envelope, message: withActivity(envelope.message) } : entry;
-    }),
-  };
-}
 
 type SharedChatHistoryResponse = ChatHistoryResponse & {
   observation?: Omit<ChatHistoryObservation, "run">;
@@ -152,7 +126,7 @@ export function requestSharedHistory(
   sessions: ChatHistorySessions | null,
   ...[
     client,
-    requestKey,
+    baseRequestKey,
     method,
     sessionKey,
     requestAgentId,
@@ -173,7 +147,7 @@ export function requestSharedHistory(
     inputRunIds,
     historyState,
   );
-  requestKey += JSON.stringify(params.knownState);
+  const requestKey = baseRequestKey + JSON.stringify(params.knownState);
   let owners = sharedChatHistoryRequests.get(client);
   if (!owners) {
     owners = new WeakMap();

@@ -6,7 +6,6 @@ import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classif
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { shortenPathWithHome } from "../../../infra/home-display.js";
-import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
@@ -45,7 +44,11 @@ import {
 } from "./path-utils.js";
 import { captureLocalReadFile, readLocalFile } from "./read-file.js";
 import { createBoundedReadTextPage } from "./read-page.js";
-import { createReadTextCapture, type ReadTextCapture } from "./read-text-capture.js";
+import {
+  createReadTextCapture,
+  decodeReadTextBuffer,
+  type ReadTextCapture,
+} from "./read-text-capture.js";
 import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { readToolInputSchema, readToolOutputSchema } from "./tool-schemas.js";
@@ -126,20 +129,20 @@ async function suggestLocalReadPaths(filePath: string): Promise<string[]> {
   }
   const filename = basename(filePath);
   const requested = filename.toLowerCase();
-  const maxDistance = Math.max(1, Math.floor(requested.length * 0.4));
+  let maxDistance = Math.max(1, Math.floor(requested.length * 0.4));
   const matches: { entry: string; distance: number }[] = [];
   for (const entry of entries) {
     const distance = levenshteinDistance(requested, entry.toLowerCase(), maxDistance);
     if (entry !== filename && distance !== null) {
       matches.push({ entry, distance });
+      matches.sort(
+        (left, right) => left.distance - right.distance || left.entry.localeCompare(right.entry),
+      );
+      matches.length = Math.min(matches.length, 3);
+      maxDistance = matches[2]?.distance ?? maxDistance;
     }
   }
-  return matches
-    .toSorted(
-      (left, right) => left.distance - right.distance || left.entry.localeCompare(right.entry),
-    )
-    .slice(0, 3)
-    .map(({ entry }) => entry);
+  return matches.map(({ entry }) => entry);
 }
 
 interface CompactReadClassification {
@@ -158,11 +161,11 @@ interface ReadOperations {
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Resolve a user-supplied path for this read backend. */
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
-  /** Decode text bytes for this backend. Custom backends default to UTF-8. */
-  decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string;
+  /** Decode backend text, or retain complete UTF-8 bytes for range selection. */
+  decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string | Buffer;
   readFile: (absolutePath: string, signal?: AbortSignal) => Promise<Buffer>;
   /** Check if file is readable (throw if not) */
-  access: (absolutePath: string) => Promise<void>;
+  access: (absolutePath: string, signal?: AbortSignal) => Promise<void>;
   /** Detect image MIME type, return null or undefined for non-images */
   detectImageMimeType?: (
     absolutePath: string,
@@ -172,7 +175,7 @@ interface ReadOperations {
 
 const defaultReadOperations: ReadOperations = {
   resolvePath: resolveLocalReadPath,
-  decodeText: ({ buffer }) => decodeWindowsTextFileBuffer({ buffer }),
+  decodeText: decodeReadTextBuffer,
   readFile: readLocalFile,
   access: assertLocalReadableFile,
 };
@@ -286,9 +289,10 @@ async function resolveReadToolInputPath(
 async function resolveReadToolPathFromAbsolute(
   ops: ReadOperations,
   absolutePath: string,
+  signal?: AbortSignal,
 ): Promise<{ absolutePath: string; note?: string }> {
   try {
-    await ops.access(absolutePath);
+    await ops.access(absolutePath, signal);
     return { absolutePath };
   } catch (error) {
     if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
@@ -298,7 +302,7 @@ async function resolveReadToolPathFromAbsolute(
     const matches: string[] = [];
     for (const candidate of getReadPathVariants(absolutePath)) {
       try {
-        await ops.access(candidate);
+        await ops.access(candidate, signal);
         matches.push(candidate);
       } catch (candidateError) {
         if (!hasErrnoCode(candidateError, "ENOENT") && !hasErrnoCode(candidateError, "ENOTDIR")) {
@@ -473,7 +477,11 @@ export function createReadToolDefinition(
                 queueKeysResolution,
                 async () => {
                   const absoluteInputPath = await inputPathResolution;
-                  const resolved = await resolveReadToolPathFromAbsolute(ops, absoluteInputPath);
+                  const resolved = await resolveReadToolPathFromAbsolute(
+                    ops,
+                    absoluteInputPath,
+                    signal,
+                  );
                   assertFileToolNotAborted(signal);
                   return {
                     ...resolved,
@@ -497,6 +505,7 @@ export function createReadToolDefinition(
                         }),
                   };
                 },
+                signal,
               );
               ({ absolutePath, note, buffer, text: capturedText } = snapshot);
             } catch (error) {
@@ -561,8 +570,7 @@ export function createReadToolDefinition(
               const requestedLines =
                 limit === undefined ? undefined : normalizePositiveLimit(limit, DEFAULT_MAX_LINES);
               if (!capturedText) {
-                const decodedText =
-                  ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8");
+                const decodedText = ops.decodeText?.({ buffer, absolutePath }) ?? buffer;
                 const selected = createReadTextCapture({
                   offset: startLineDisplay,
                   cursor,
@@ -570,7 +578,9 @@ export function createReadToolDefinition(
                   maxChars: Math.min(DEFAULT_MAX_BYTES, maxBytes) + 2,
                 });
                 selected.write(
-                  decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText,
+                  typeof decodedText === "string" && decodedText.startsWith("\uFEFF")
+                    ? decodedText.slice(1)
+                    : decodedText,
                 );
                 capturedText = selected.finish();
               }

@@ -77,12 +77,11 @@ async function waitForCronRunCompletion(params: {
     // History reads share the wait deadline, but enqueue keeps its own RPC
     // timeout and a zero-duration wait still gets one immediate ledger poll.
     const pollOpts = { ...params.opts, timeout: String(pollTimeoutMs) };
-    const page = (await callGatewayFromCli(
-      "cron.runs",
-      pollOpts,
-      { id: params.jobId, runId: params.runId, limit: 1 },
-      { signal: params.signal },
-    )) as { entries?: CronRunLogEntry[] };
+    const page = (await callGatewayFromCli("cron.runs", pollOpts, {
+      id: params.jobId,
+      runId: params.runId,
+      limit: 1,
+    })) as { entries?: CronRunLogEntry[] };
     params.signal?.throwIfAborted();
     const entry = page.entries?.[0];
     if (entry?.status === "ok" || entry?.status === "error" || entry?.status === "skipped") {

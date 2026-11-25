@@ -7,8 +7,8 @@ import {
   hasPackageRuntimeDependencies,
 } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import type { NpmIntegrityDriftPayload as HookNpmIntegrityDriftParams } from "../infra/npm-integrity.js";
+import type { NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import { detectBundleManifestFormat } from "../plugins/bundle-manifest.js";
 import {
   scanPackageInstallSource,

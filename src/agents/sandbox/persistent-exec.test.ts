@@ -388,7 +388,7 @@ it.each(["stop", "exit", "retirement", "checkpoint retry", "resume retry"] as co
         ending === "checkpoint retry" ? "conflict" : "runtime resume failed",
       );
       await f.expectCustody({ phase: "stopped" });
-      expect(projection.assertCurrent).toThrow("authority changed");
+      expect(projection.assertCurrent).toThrow("workspace was released");
       if (ending === "checkpoint retry") {
         expect(await fs.readFile(path.join(canonical, "source.txt"), "utf8")).toBe("human edit\n");
         await fs.writeFile(path.join(canonical, "source.txt"), "original\n");
@@ -493,11 +493,16 @@ it("recovers removed-job custody even when orphan discovery fails", async () => 
 });
 
 it("keeps live custody acquired while orphan discovery is pending", async () => {
+  const reads = vi.spyOn(await import("./registry.js"), "readRegistry");
   vi.mocked(listDockerPersistentExecContainers).mockImplementationOnce(async () => {
     await f.seedCustody("reserved");
     return [f.receipt];
   });
-  await f.owner.recover();
+  const { maybePruneSandboxes } = await import("./prune.js");
+  await maybePruneSandboxes({
+    agents: { defaults: { sandbox: { prune: { idleHours: 0, maxAgeDays: 0 } } } },
+  });
+  expect(reads).toHaveBeenCalledOnce();
   expect(stopDockerPersistentExec).not.toHaveBeenCalled();
   await f.expectCustody({ phase: "reserved" });
 });

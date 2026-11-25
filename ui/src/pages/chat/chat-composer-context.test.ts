@@ -48,7 +48,8 @@ const part = (root: ParentNode, name: string) => root.querySelector(`.context-us
 const contextRingFor = (root: ParentNode) => root.querySelector(".context-ring");
 const compactButton = (root: ParentNode) =>
   root.querySelector<HTMLButtonElement>(".context-usage__actions .chat-context__compact");
-const statsTitle = (root: ParentNode) => part(root, "stats [title]")?.getAttribute("title");
+const statsTitle = (root: ParentNode) =>
+  part(root, 'usage [role="cell"][title]')?.getAttribute("title");
 const defaultSessions = () => ({ sessions: [], defaults: { contextTokens: 200_000 } });
 const textContents = (root: ParentNode, selector: string) =>
   [...root.querySelectorAll(selector)].map((element) => element.textContent);
@@ -156,7 +157,7 @@ describe("renderChatComposer context usage", () => {
     });
     expect(contextRingFor(container)?.getAttribute("title")).toBe("Context: 89% used");
     expect(part(container, "context-value")?.textContent).toContain("180k");
-    expect(part(container, "title")?.textContent).toBe("Prompt budget");
+    expect(part(container, "header .oc-menu-heading__label")?.textContent).toBe("Prompt budget");
     expect(contextRingFor(container)?.classList.contains("context-ring--warning")).toBe(true);
   });
 
@@ -178,7 +179,7 @@ describe("renderChatComposer context usage", () => {
 
   it.each([false, true])(
     "does not borrow the default model's capacity when session capacity is unknown (plan usage: %s)",
-    (withPlanUsage) => {
+    async (withPlanUsage) => {
       const session = sessionRow({
         modelProvider: "openai",
         model: "selected-model",
@@ -206,7 +207,7 @@ describe("renderChatComposer context usage", () => {
       const ring = contextRingFor(container);
       if (withPlanUsage) {
         expect(ring?.getAttribute("aria-label")).toBe("Usage remaining");
-        expect(part(container, "limit")?.textContent).toContain("72%");
+        await waitForSolid(() => expect(part(container, "limit")?.textContent).toContain("72%"));
       } else {
         expect(ring).toBeNull();
       }
@@ -234,15 +235,15 @@ describe("renderChatComposer context usage", () => {
         session: { modelProvider: "anthropic", estimatedCostUsd: 0.02 },
         providerUsage: planUsage([provider]),
       });
-      expect(part(container, "stats")?.textContent).not.toContain("Cost");
-      expect(part(container, "stats")?.textContent).not.toContain("$0.02");
+      expect(part(container, "usage")?.textContent).not.toContain("Cost");
+      expect(part(container, "usage")?.textContent).not.toContain("$0.02");
       if (scenario !== "no-quota" && scenario !== "expired") {
         expect(container.textContent).toContain("Quota account unknown");
       }
     },
   );
 
-  it("deduplicates provider aliases and hides cost estimates for subscriptions", () => {
+  it("deduplicates provider aliases and hides cost estimates for subscriptions", async () => {
     const resetAt = Date.now() + 2 * 3_600_000 + 45_000;
     const windows: [string, number, number?][] = [
       ["5h", 21.6, resetAt],
@@ -270,6 +271,9 @@ describe("renderChatComposer context usage", () => {
 
     expect(container.querySelectorAll(".context-usage__tray")).toHaveLength(1);
     expect(part(container, "plan-badge")?.textContent).toBe("Max (20x)");
+    await waitForSolid(() =>
+      expect(container.querySelectorAll('[role="progressbar"]')).toHaveLength(4),
+    );
     const limits = [...container.querySelectorAll(".context-usage__limit")];
     expect(textContents(container, ".context-usage__limit-label")).toEqual([
       "5-hour",
@@ -294,11 +298,11 @@ describe("renderChatComposer context usage", () => {
         ),
     ).toBe(true);
     expect(limits[3]?.querySelector(".context-usage__limit-reset")).toBeNull();
-    expect(part(container, "stats")).not.toBeNull();
-    expect(part(container, "stats")?.textContent).not.toContain("Cost");
+    expect(part(container, "usage")).not.toBeNull();
+    expect(part(container, "usage")?.textContent).not.toContain("Cost");
   });
 
-  it("keeps distinct subscription accounts separate when selecting a provider", () => {
+  it("keeps distinct subscription accounts separate when selecting a provider", async () => {
     const providers = ["anthropic", "claude-cli"].map((id, index) =>
       planProvider(id, "Claude", [["5h", 10]], {
         usage: {
@@ -315,11 +319,13 @@ describe("renderChatComposer context usage", () => {
       expect(textContents(container, ".context-usage__account")).toEqual([
         ["work@example.com", "personal@example.com"][index],
       ]);
-      expect(textContents(container, ".context-usage__limit-value")).toEqual(["10%"]);
+      await waitForSolid(() =>
+        expect(textContents(container, ".context-usage__limit-value")).toEqual(["10%"]),
+      );
     }
   });
 
-  it("omits empty or invalid subscription quotas and clamps displayed window usage", () => {
+  it("omits empty or invalid subscription quotas and clamps displayed window usage", async () => {
     const providers = [
       planProvider("anthropic", "Claude", []),
       planProvider("openrouter", "Claude", [], {
@@ -341,8 +347,10 @@ describe("renderChatComposer context usage", () => {
         session: { modelProvider },
         providerUsage: planUsage(providers),
       });
-      expect(textContents(container, ".context-usage__limit-value")).toEqual(
-        modelProvider === "openai" ? ["100%", "33%", "0%"] : [],
+      await waitForSolid(() =>
+        expect(textContents(container, ".context-usage__limit-value")).toEqual(
+          modelProvider === "openai" ? ["100%", "33%", "0%"] : [],
+        ),
       );
       expect(textContents(container, ".context-usage__limit-label")).toEqual(
         modelProvider === "openai" ? ["Weekly", "Fractional", "Negative"] : [],
@@ -382,7 +390,7 @@ describe("renderChatComposer context usage", () => {
     expect(providerNames(renderComposer(composerProps as never))).toEqual(["codex"]);
   });
 
-  it("selects the authoritative account regardless of response order", () => {
+  it("selects the authoritative account regardless of response order", async () => {
     const first = planProvider("openai", "OpenAI", [["Week", 10]], {
       usage: { authProfileId: "openai:one", accountEmail: "first@example.test" },
     });
@@ -399,7 +407,7 @@ describe("renderChatComposer context usage", () => {
         providerUsage: planUsage(providers),
       });
       expect(container.textContent).toContain("second@example.test");
-      expect(container.textContent).toContain("80%");
+      await waitForSolid(() => expect(container.textContent).toContain("80%"));
       expect(container.textContent).not.toContain("first@example.test");
     }
   });
@@ -449,6 +457,27 @@ describe("renderChatComposer context usage", () => {
     }
   });
 
+  it("leaves calls without a cache split out of the run cache rate", () => {
+    // A provider that reports prompt tokens without a cache split.
+    const unmeasured = (state: string) =>
+      assistant({
+        usage: { input: 1_000, cacheRead: 0, cacheWrite: 0, cacheTelemetry: { state } },
+      });
+    const run = (...calls: unknown[]) =>
+      part(
+        renderComposer({
+          session: { estimatedCostUsd: 0.01 },
+          messages: [{ role: "user", content: "hi" }, ...calls],
+          sessions: defaultSessions() as never,
+        }),
+        'usage [data-chat-usage-row="run"]',
+      )?.textContent;
+    const measured = assistant({ usage: { input: 10, cacheRead: 990, cacheWrite: 0 } });
+    expect(run(measured, unmeasured("available"))).toContain("49.50%");
+    expect(run(measured, unmeasured("unavailable"))).toContain("99.00%");
+    expect(run(unmeasured("unavailable"))).not.toContain("%");
+  });
+
   it("omits the cost tooltip when every recorded cost is zero", () => {
     const container = renderComposer({
       session: { estimatedCostUsd: 0 },
@@ -467,8 +496,8 @@ describe("renderChatComposer context usage", () => {
       sessions: defaultSessions() as never,
     });
 
-    expect(part(container, "stats [title]")).toBeNull();
-    expect(part(container, "stats")?.textContent).toContain("$0.00");
+    expect(part(container, 'usage [role="cell"][title]')).toBeNull();
+    expect(part(container, "usage")?.textContent).toContain("$0.00");
   });
 
   it("offers a secondary Compact beside View context in every popover state", () => {

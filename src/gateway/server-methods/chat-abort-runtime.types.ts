@@ -31,8 +31,6 @@ export type ChatSessionAbortParams = {
   controllerTargets?: readonly SessionTarget[];
   requester: ChatAbortRequester;
   assertCurrent?: () => void;
-  /** Prepare persisted request facts immediately before the synchronous cancellation effects. */
-  beforeAbort?: () => Promise<void>;
   /** Explicit user Stop: announce the stopped runs through `notifySessionRunStopped`. */
   announceRunStopped?: true;
   preserveSideRuns?: boolean;
@@ -54,4 +52,15 @@ export type ChatSessionAbortResult = {
   error?: ErrorShape;
   warning?: string;
   descendants?: Awaited<ReturnType<typeof abortControlledSubagents>>;
+};
+
+export type ChatAbortLifecycle = {
+  /** Internal composition may advance only after this exact run was cancelled. */
+  onExactRunAborted?: (runId: string) => void;
+  onDescendantsCancelled?: (
+    result: NonNullable<Awaited<ReturnType<typeof abortControlledSubagents>>>,
+  ) => void;
+  cascadeDescendants?: true;
+  yieldedRequesterRunId?: string;
+  hookContext?: SessionStopHookContext;
 };

@@ -457,7 +457,7 @@ describe("oxlint config", () => {
     expect(tsconfig.exclude ?? []).not.toContain("**/*.mts");
   });
 
-  it("disables release line limits while retaining correctness and other limits", () => {
+  it("keeps release line limits advisory and suppression checks strict", () => {
     const { root, write } = makeFixture("release-limits", {
       categories: { correctness: "off" },
       overrides: [
@@ -478,13 +478,47 @@ describe("oxlint config", () => {
       "export function f(a: number, b: number) {\n  var c = a;\n  return c + b;\n}\n",
     );
     const env = { GITHUB_ACTIONS: "false", OPENCLAW_RELEASE_CONTEXT_REF: "release/2026.11.4" };
+    const suppressed =
+      "/* oxlint-disable max-lines, max-lines-per-function -- retained size exception */\nexport function f(a: number) {\n  return a;\n}\n";
+    write("suppressed.ts", suppressed);
+    const strictSuppressions = () =>
+      runTool(
+        root,
+        [
+          oxlintRunner,
+          "--openclaw-focused-config",
+          "--report-unused-disable-directives-severity",
+          "error",
+          "--format=json",
+          "suppressed.ts",
+        ],
+        { env: { ...process.env, ...env } },
+      );
+    expect(parseReport(checked(strictSuppressions(), 0)).diagnostics).toEqual([]);
+    write(
+      "suppressed.ts",
+      suppressed + "/* oxlint-disable no-var -- unused correctness exception */\n",
+    );
+    expect(parseReport(checked(strictSuppressions(), 1)).diagnostics).toMatchObject([
+      { severity: "error" },
+    ]);
     const report = parseReport(checked(runFocused(root, ["fixture.ts"], env), 1));
-    expect(report.diagnostics.map(({ code }) => code).toSorted()).toEqual([
-      "eslint(max-params)",
-      "eslint(no-var)",
+    expect(
+      report.diagnostics
+        .map(({ code, severity }) => ({ code, severity }))
+        .toSorted((left, right) => left.code.localeCompare(right.code)),
+    ).toEqual([
+      { code: "eslint(max-lines-per-function)", severity: "warning" },
+      { code: "eslint(max-lines)", severity: "warning" },
+      { code: "eslint(max-params)", severity: "error" },
+      { code: "eslint(no-var)", severity: "error" },
     ]);
     write("fixture.ts", "export function f(a: number) {\n  const c = a;\n  return c;\n}\n");
-    expect(parseReport(checked(runFocused(root, ["fixture.ts"], env), 0)).diagnostics).toEqual([]);
+    expect(
+      parseReport(checked(runFocused(root, ["fixture.ts"], env), 0)).diagnostics.map(
+        ({ severity }) => severity,
+      ),
+    ).toEqual(["warning", "warning"]);
   });
 
   it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {

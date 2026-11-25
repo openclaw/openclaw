@@ -14,6 +14,7 @@ import {
 } from "../../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import {
@@ -24,6 +25,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
 
@@ -35,7 +37,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("session actor usage accounting", () => {
-  type UsageUpdate = Parameters<typeof prepareSessionUsageUpdate>[0];
+  type UsageUpdate = Omit<Parameters<typeof prepareSessionUsageUpdate>[0], "estimatedCostUsd"> & {
+    cfg?: OpenClawConfig;
+    agentDir?: string;
+  };
   async function usageSession(seed: Partial<SessionEntry> = {}, sessionKey = "agent:main:main") {
     const root = tempDirs.make("openclaw-usage-");
     const env = { OPENCLAW_STATE_DIR: root };
@@ -67,11 +72,24 @@ describe("session actor usage accounting", () => {
               if (!completion) {
                 throw new Error("Missing usage completion owner");
               }
-              const prepared = prepareSessionUsageUpdate({ cfg: {}, ...update });
+              const { cfg, agentDir, ...usage } = update;
+              const prepared = prepareSessionUsageUpdate({
+                ...usage,
+                estimatedCostUsd: await estimateAggregateUsageCostAsync({
+                  usage: usage.usage,
+                  prepareCost: () =>
+                    resolveModelCostConfig({
+                      config: cfg ?? {},
+                      agentDir,
+                      provider: usage.providerUsed ?? entry.modelProvider,
+                      model: usage.modelUsed ?? entry.model,
+                    }),
+                }),
+              });
               if (prepared) {
-                completion.patch((current) => ({
+                completion.patch(() => ({
                   kind: "usage",
-                  update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(current) },
+                  update: prepared,
                   updatedAt: Date.now(),
                 }));
               }
@@ -463,7 +481,10 @@ describe("session actor usage accounting", () => {
           output: 0,
           cacheRead: 0,
           cacheWrite: 0,
-          tieredPricing: [{ input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] }],
+          tieredPricing: [
+            { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, range: [0, 200_000] },
+            { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
+          ],
         }),
         usage: {
           ...(withTokens ? { input: 300_000, output: 200 } : {}),

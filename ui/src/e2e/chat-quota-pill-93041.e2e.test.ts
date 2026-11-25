@@ -363,10 +363,9 @@ suite.define(() => {
         }
         const popoverText = (await page.locator(".context-usage__popover").textContent()) ?? "";
         expectTextExcludes(popoverText, "Est. cost", "Cost by Type");
-        const latest = (await popover.locator(".context-usage__latest").textContent()) ?? "";
-        expect(latest).toContain("Latest run");
-        expect(latest).toMatch(/In\s*2.4k/);
-        expect(latest).toMatch(/Out\s*830/);
+        const latest = (await popover.locator(".context-usage__usage").textContent()) ?? "";
+        // With no cache rate or cost to show, both rows carry token columns.
+        expect(latest).toMatch(/^In\s*Out\s*Latest run\s*2\.4k\s*830/);
         expectTextExcludes(latest, "Cost", "$0.02");
       },
     );
@@ -547,10 +546,10 @@ suite.define(() => {
         sessionKey: "agent:work:main",
         agentId: "work",
       });
-      await expect.poll(async () => popover.textContent()).toContain("Work Team");
+      await expect.poll(async () => popover.textContent()).toContain("24%");
       const settledText = (await popover.textContent()) ?? "";
       expect(settledText).toContain("work@example.test");
-      expect(settledText).toContain("24%");
+      expect(settledText).toContain("Work Team");
       expectTextExcludes(settledText, "Main Pro", "main@example.test");
     });
   });

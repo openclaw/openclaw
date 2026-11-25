@@ -421,15 +421,24 @@ resolved filesystem paths (via realpath) before every read, write, mkdir, remove
 rename, rejecting mid-path symlinks. A symlink swap or a remounted local
 workspace cannot redirect file access outside the mirrored tree.
 
-Workspace synchronization excludes `.git`, `hooks`, and `git-hooks` in both
-directions. Repository credentials, history, and trusted hook code remain on
-the OpenClaw Gateway host instead of being copied into an untrusted sandbox.
+Workspace synchronization excludes `.git` files and directories at every depth,
+including nested repositories, and excludes `hooks` and `git-hooks` at the
+workspace root, in both directions. Excluded host entries and their parent
+directories survive sandbox deletions. Repository credentials, history, and
+trusted hook code remain on the OpenClaw Gateway host instead of being copied
+into an untrusted sandbox. A repository created inside a mirrored sandbox loses
+its `.git` metadata before the next command; use `remote` mode for Git workflows
+that must persist inside the sandbox. Remote-mode seeding also omits `.git` at
+every depth, so initialize or clone repositories inside that sandbox.
+If a sandbox file would replace a host directory containing repository metadata,
+synchronization reports each conflict by workspace-relative path. Download the files
+directly with the OpenShell CLI before another mirrored command discards them.
 
 Mirror synchronization never copies entries it cannot represent, such as
 symlinks, FIFOs, or Unix sockets, into either workspace. Existing host entries
 of those types remain intact at every depth, along with their parent directories,
 even if the sandbox deletes those directories or replaces them with files.
-Remote replacements that conflict with these preserved host paths are ignored.
+Direct remote replacements that conflict with these preserved host paths are ignored.
 Ordinary files and directories still receive remote changes and deletions.
 
 Local filesystem inspection errors, such as permission or I/O failures, stop the

@@ -50,7 +50,7 @@ it("bounds compiled rules across worktree churn without clearing every result", 
   expect(reloaded).toEqual(rules);
 });
 
-it("runs the packaged reducer while preserving exact file-read output", async () => {
+it("runs the packaged reducer while preserving exact reads and Code Mode results", async () => {
   const captured = capturePluginRegistration({
     id: "tokenjuice",
     contracts: manifest.contracts,
@@ -76,7 +76,12 @@ it("runs the packaged reducer while preserving exact file-read output", async ()
     args: { command, workdir: "/workspace/tokenjuice" },
     result: {
       content: [{ type: "text", text: raw }],
-      details: { status: "completed", exitCode: 0 },
+      details: {
+        status: "completed",
+        exitCode: 0,
+        aggregated: raw,
+        fullOutputPath: "/workspace/tokenjuice/full-output.txt",
+      },
     },
     isError: false,
   });
@@ -87,6 +92,29 @@ it("runs the packaged reducer while preserving exact file-read output", async ()
       text: "Changes not staged:\nM: src/alpha.ts\nM: src/beta.ts\n\n[tokenjuice compacted bash output]",
     },
   ]);
-  const preserved = await runner.applyToolResultMiddleware(event("cat README.md"));
-  expect(preserved.content).toEqual([{ type: "text", text: raw }]);
+  expect(compacted.details).toMatchObject({
+    status: "completed",
+    exitCode: 0,
+    aggregated:
+      "Changes not staged:\nM: src/alpha.ts\nM: src/beta.ts\n\n[tokenjuice compacted bash output]",
+    fullOutputPath: "/workspace/tokenjuice/full-output.txt",
+    tokenjuice: { compacted: true },
+  });
+  const exactRead = event("cat README.md");
+  expect(await runner.applyToolResultMiddleware(exactRead)).toEqual(exactRead.result);
+
+  const code = 'return { records: await catalog.search("schema") };';
+  const codeMode = event(code);
+  codeMode.args.code = code;
+  const text = JSON.stringify(
+    { records: Array.from({ length: 250 }, (_, id) => ({ id, value: `record-${id}` })) },
+    null,
+    2,
+  );
+  codeMode.result = {
+    content: [{ type: "text", text }],
+    details: { status: "completed", exitCode: 0, aggregated: text },
+  };
+  const expected = structuredClone(codeMode.result);
+  expect(await runner.applyToolResultMiddleware(codeMode)).toEqual(expected);
 });

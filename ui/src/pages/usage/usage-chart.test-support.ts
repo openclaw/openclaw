@@ -12,6 +12,7 @@ export const totals: UsageTotals = {
   cacheReadCost: 0,
   cacheWriteCost: 0,
   missingCostEntries: 0,
+  cacheUnmeasuredInput: 0,
 };
 
 export function dailyEntry(date: string, totalTokens: number, totalCost = 0): CostDailyEntry {

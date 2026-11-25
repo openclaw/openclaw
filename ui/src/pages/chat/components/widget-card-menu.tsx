@@ -1,10 +1,10 @@
 import { createMemo, createSignal, createUniqueId, mapArray } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
-import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
+import { registerChatToolWidgetsEnglish } from "../../../i18n/locales/en-chat-tool-widgets.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 
-registerEnglishCatalog(registerChatToolLabelsEnglish);
+registerEnglishCatalog(registerChatToolWidgetsEnglish);
 
 export type WidgetAction = "copy" | "download" | "raw-details";
 export type WidgetRawDetailsLabel =
@@ -66,7 +66,7 @@ export function WidgetCardMenu(props: {
       panelClass="chat-tool-card__widget-actions-panel"
       placement="bottom-end"
       label={t("chat.toolCards.widgetActions")}
-      triggerClass="btn btn--ghost btn--icon chat-tool-card__widget-actions-trigger"
+      triggerClass="oc-icon-button chat-tool-card__widget-actions-trigger"
       triggerAttributes={{ title: t("chat.toolCards.widgetActions") }}
       trigger={<Icon name="moreHorizontal" />}
       items={entries()()}

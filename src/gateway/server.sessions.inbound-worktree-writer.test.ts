@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import {
@@ -17,7 +15,7 @@ import { setupGatewaySessionsWorktreeTestHarness } from "./test/server-sessions.
 const { createArchiveWorktreeFixture } = setupGatewaySessionsWorktreeTestHarness();
 
 test.for([false, true])(
-  "inbound restore releases unrelated session writes while allocation waits (checkout already restored=%s)",
+  "inbound admission never allocates a removed workspace (explicitly restored=%s)",
   async (alreadyRestored, { signal }) => {
     const fixture = await createArchiveWorktreeFixture();
     const { key, sessionId, storePath, worktree, workspace } = fixture;
@@ -66,7 +64,6 @@ test.for([false, true])(
     });
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const restoreEntered = createDeferredCore();
     const allocation = withOpenClawStateLease(
       {
         scope: "core:managed-worktrees:create",
@@ -80,51 +77,38 @@ test.for([false, true])(
         await release.promise;
       },
     );
-    const originalRestore = captureMethodCall("restore")(ManagedWorktreeService.prototype);
-    const restore = vi
-      .spyOn(ManagedWorktreeService.prototype, "restore")
-      .mockImplementation(function (this: ManagedWorktreeService, params) {
-        restoreEntered.resolve();
-        return originalRestore(this, params);
-      });
+    using restore = vi.spyOn(ManagedWorktreeService.prototype, "restore");
     let admission: ReturnType<typeof coordinator.ensureDispatchReplyOperation> | undefined;
     let independent: ReturnType<typeof directSessionReq> | undefined;
-    let admissionDone = false;
     try {
       await waitForGate(entered.promise, allocation, "allocation lease was not acquired");
-      admission = coordinator.ensureDispatchReplyOperation("pre_dispatch").then((result) => {
-        admissionDone = true;
-        return result;
-      });
+      admission = coordinator.ensureDispatchReplyOperation("pre_dispatch");
       if (alreadyRestored) {
         await expect(withinTest(admission, signal)).resolves.toEqual({ status: "ready" });
-        expect(restore).not.toHaveBeenCalled();
       } else {
-        await waitForGate(restoreEntered.promise, admission, "restore was not attempted");
-        expect(isSessionMutationActive(storePath, [key, sessionId])).toBe(true);
+        await expect(withinTest(admission, signal)).rejects.toThrow("worktree was removed");
       }
+      expect(restore).not.toHaveBeenCalled();
       independent = patch({ key: peerKey, label: "Independent inbound peer" });
       expect(await withinTest(independent, signal)).toMatchObject({ ok: true });
       if (!alreadyRestored) {
-        expect(admissionDone).toBe(false);
-        expect(isSessionMutationActive(storePath, [key, sessionId])).toBe(true);
         expect(entry()).toMatchObject({ archivedAt: expect.any(Number) });
         await expect(fs.access(worktree.path)).rejects.toThrow();
       }
     } finally {
       release.resolve();
       await Promise.allSettled([allocation, admission, independent]);
-      restore.mockRestore();
       coordinator.completeDispatchReplyOperation();
       await coordinator.releasePreDispatchLifecycleAdmission();
     }
     await allocation;
-    await expect(admission).resolves.toEqual({ status: "ready" });
     expect(entry(peerKey)).toMatchObject({ label: "Independent inbound peer" });
-    expect(entry()?.archivedAt).toBeUndefined();
-    await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
-      "inbound restore preserves work\n",
-    );
+    if (alreadyRestored) {
+      expect(entry()?.archivedAt).toBeUndefined();
+      await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
+        "inbound restore preserves work\n",
+      );
+    }
     await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
   },
 );

@@ -30,19 +30,20 @@ export function controlUiAccentStates(
   color: string,
   hover?: string,
   foreground: string = controlUiAccentInk(color),
+  minimumNormalContrast?: number,
 ) {
   const inkLuminance = luminance(foreground);
   const contrast = (background: string) => {
     const fill = luminance(background);
     return (Math.max(fill, inkLuminance) + 0.05) / (Math.min(fill, inkLuminance) + 0.05);
   };
-  const pair = (preferred: string, amount: number) => {
+  const pair = (preferred: string, amount: number, minimumContrast = 4.5) => {
     let background = preferred;
     // Preserve authored ink too; deepen the fill only as far as readability requires.
     const target = inkLuminance > 0.179 ? 0 : 255;
     for (
       let percent = Math.round(amount * 100);
-      contrast(background) < 4.5 && percent <= 100;
+      contrast(background) < minimumContrast && percent <= 100;
       percent++
     ) {
       background = mix(color, target, percent / 100);
@@ -50,7 +51,10 @@ export function controlUiAccentStates(
     return { background, foreground };
   };
   return {
-    normal: { background: color, foreground },
+    normal:
+      minimumNormalContrast === undefined
+        ? { background: color, foreground }
+        : pair(color, 0, minimumNormalContrast),
     hover: pair(hover ?? mix(color, 255, 0.18), 0.18),
     active: pair(mix(color, 0, 0.12), 0.12),
   };

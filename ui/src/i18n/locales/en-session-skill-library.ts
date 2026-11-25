@@ -13,14 +13,6 @@ const enSessionSkillLibrary = {
     defaultLimit:
       "New sessions select up to {count} default skills. Existing sessions keep their selected revisions.",
     session: {
-      selected: "Selected for this session",
-      attachable: "Add from your libraries",
-      pin: "Selected revision {revision}",
-      read: "Read selected revision",
-      empty: "No skills selected yet. Add one from your libraries.",
-      refresh: "Refresh revision",
-      attachNamed: "Attach {name} · {owner}",
-      detach: "Detach",
       queued:
         "Skill selections updated for the next reply. A reply in progress keeps its current revision.",
       readOnly:

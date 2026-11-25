@@ -105,11 +105,11 @@ function readMode(value: unknown): FaceTimeDialMode {
 export function resolveFaceTimeDialRequest(params: {
   handle: unknown;
   mode?: unknown;
-  ownerHandles: readonly string[];
+  allowedCallers: readonly string[];
 }): FaceTimeDialRequest {
   const handle = readHandle(params.handle);
-  if (!isAuthorizedFaceTimeHandle({ handle, ownerHandles: params.ownerHandles })) {
-    throw new Error("outbound FaceTime handle is not an authorized owner handle");
+  if (!isAuthorizedFaceTimeHandle({ handle, allowedCallers: params.allowedCallers })) {
+    throw new Error("outbound FaceTime handle is not an allowed caller");
   }
   return { handle, mode: readMode(params.mode) };
 }

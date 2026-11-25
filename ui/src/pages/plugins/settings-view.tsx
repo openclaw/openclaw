@@ -1,7 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, Loading, Show, createMemo } from "solid-js";
+import { Errored, Loading, Show, createMemo, isPending } from "solid-js";
+import { isKnownCoreToolId } from "../../../../src/agents/tool-catalog.js";
+import { createToolPolicyMatcher } from "../../../../src/agents/tool-policy-match.js";
+import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
+import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
+import { flattenConfigLeafFields } from "../../components/config-form.leaf-fields.ts";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
@@ -9,20 +15,20 @@ import {
   SettingsSection,
   SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
+import { Switch } from "../../components/solid/switch.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
-import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
-import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import "./custom-elements.ts";
+import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
-  renderPluginCompatibilityNotices,
   renderPluginContentCapabilities,
   renderPluginMetadata,
   renderPluginPublisher,
@@ -35,23 +41,31 @@ import {
 } from "./plugin-row-message.tsx";
 import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 import {
-  flattenPluginSettingsFields,
   pluginSettingsNodeOptions,
   PluginSettingsEditor,
   type PluginSettingsEditorProps,
   type PluginSettingsField,
 } from "./settings-editor.tsx";
 import { PluginLifecycle } from "./settings-lifecycle.tsx";
-import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
+import {
+  pluginConfigSchema,
+  pluginEntryValue,
+  pluginHostControlsSchema,
+  type PluginSettingsEditorModel,
+} from "./settings-model.ts";
 import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { PluginToolPreview } from "./tool-preview.tsx";
 export type PluginSettingsTab = "installed" | "advanced";
+type PreparedConfigKeys = "configSchema" | "configUnsupportedPaths" | "configSecretFields";
 type SharedProps = Omit<
   PluginSettingsEditorModel,
-  "pluginId" | "configSchema" | "backHref" | "onBack"
+  "pluginId" | PreparedConfigKeys | "backHref" | "onBack"
 > & {
+  rawConfigSchema: unknown;
+  settingsContext: Parameters<typeof configSecretFields>[0];
   registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
   registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
   registerIcon?: (readId: () => string) => () => void;
@@ -73,16 +87,16 @@ type SharedProps = Omit<
 export type InventoryProps = SharedProps & {
   tab: PluginSettingsTab;
   query: string;
-  advancedSchema: JsonSchema | null;
   onTabChange: (tab: PluginSettingsTab) => void;
   onQueryChange: (query: string) => void;
   pluginHref: (pluginId: string) => string;
   onOpenPlugin: (pluginId: string) => void;
 };
 export type DetailProps = SharedProps &
-  PluginSettingsEditorModel & {
+  Pick<PluginSettingsEditorModel, "pluginId" | "backHref" | "onBack"> & {
     resolveCredential?: PluginSettingsEditorProps["resolveCredential"];
     onAskPlugin?: () => void;
+    onConnectProvider?: () => void;
     onSelectPrompt?: (prompt: string) => void;
     promptBusy?: boolean;
     promptBlockedReason?: string | null;
@@ -95,6 +109,11 @@ export type DetailProps = SharedProps &
     onAskSetting?: (field: PluginSettingsField) => void;
     skillsSection?: JSX.Element;
     tools?: PluginToolPreview[];
+    toolBlocks?: {
+      entries: readonly string[] | null;
+      saving: boolean;
+      set: (name: string, blocked: boolean) => void;
+    };
     onOpenTool?: (name: string) => void;
     settingsHref?: string;
     inspection: PluginsInspectResult | null;
@@ -103,7 +122,6 @@ export type DetailProps = SharedProps &
     catalogLoading?: boolean;
     catalogIconUrls?: Readonly<Record<string, string>>;
     catalogIconLoading?: (url: string) => boolean;
-    hostControlsSchema: JsonSchema | null;
     backLabel: string;
     tab: InstalledPluginDetailTab;
     onRetryInspection: () => void;
@@ -140,21 +158,26 @@ function PluginConnectionAction(props: {
     </>
   );
 }
-function permissionSettings(options: DetailProps): PluginSettingsEditorProps["permissions"] {
+function permissionSettings(
+  options: DetailProps,
+  model: PluginSettingsEditorModel,
+  hostControlsSchema: JsonSchema | null,
+): PluginSettingsEditorProps["permissions"] {
   if (!options.inspection) {
     return {
       fields: [],
-      loading: true,
+      known: false,
+      loading: isPending(options.inspectionRead.value),
     };
   }
-  const fields =
-    options.hostControlsSchema && options.configValue
+  const fields: PluginSettingsField[] =
+    hostControlsSchema && options.configValue
       ? resolveConfigObjectFields({
-          schema: options.hostControlsSchema,
+          schema: hostControlsSchema,
           value: pluginEntryValue(options.configValue, options.pluginId),
           path: ["plugins", "entries", options.pluginId],
-          ...pluginSettingsNodeOptions(options),
-        }).fields.flatMap((field) => flattenPluginSettingsFields(field, String(field.path.at(-1))))
+          ...pluginSettingsNodeOptions(model),
+        }).fields.flatMap((field) => flattenConfigLeafFields(field, String(field.path.at(-1))))
       : [];
   for (const field of fields) {
     const key = field.path[4];
@@ -214,19 +237,29 @@ function PluginNotices(props: DetailProps) {
       {props.error ? <PluginRetryError error={props.error} onRetry={props.onRefresh} /> : null}
       <PluginInspectionStatus {...props} />
       {plugin()?.error ? (
-        <div class="callout danger oc-banner oc-banner-error" role="alert">
-          {formatUiExternalText(plugin()!.error!)}
-        </div>
+        <InlineAlert tone="danger">{formatUiExternalText(plugin()!.error!)}</InlineAlert>
       ) : null}
       {renderPluginRowMessage(props.messages[pluginRowKey(props.pluginId)])}
-      {renderPluginCompatibilityNotices(plugin()?.compatibilityNotices, true)}
     </>
   );
 }
 export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
+  const rawConfigSchema = createMemo(() => props.rawConfigSchema);
+  const analysis = createMemo(() => analyzeConfigSchema(rawConfigSchema()), { lazy: true });
+  const model = createMemo<PluginSettingsEditorModel>(() => ({
+    ...props,
+    configSchema: pluginConfigSchema(analysis().schema, props.pluginId),
+    configUnsupportedPaths: analysis().unsupportedPaths,
+    configSecretFields: configSecretFields(props.settingsContext),
+  }));
   const plugin = createMemo(() =>
     props.result?.plugins.find((entry) => entry.id === props.pluginId),
   );
+  const canConnectProvider = () =>
+    plugin()?.enabled &&
+    props.presentedEnabled?.(props.pluginId) !== false &&
+    !props.busy[pluginRowKey(props.pluginId)] &&
+    !props.installProgress;
   return (
     <>
       {!props.connected && !props.result ? (
@@ -261,10 +294,15 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
         <SettingsPage wide={true} carapace={true}>
           <PluginNotices {...props} />
           <PluginSettingsEditor
-            model={props}
+            model={model()}
+            onConnectProvider={canConnectProvider() ? props.onConnectProvider : undefined}
             resolveCredential={props.resolveCredential}
             onAskSetting={props.onAskSetting}
-            permissions={permissionSettings(props)}
+            permissions={permissionSettings(
+              props,
+              model(),
+              pluginHostControlsSchema(analysis().schema, props.pluginId),
+            )}
           />
         </SettingsPage>
       ) : (
@@ -327,6 +365,68 @@ function PluginOverview(props: DetailProps): JSX.Element {
         (name) => ({ name }),
       ),
   );
+  function toolRow({ name, description, parameters }: PluginToolPreview) {
+    const openTool = props.onOpenTool;
+    const onOpen =
+      openTool && (description?.trim() || parameters?.length) ? () => openTool(name) : undefined;
+    const id = normalizeToolPolicyName(name);
+    // A plugin id is a group selector. Never let one row edit a wildcard, core alias or plugin-wide block.
+    if (
+      !props.toolBlocks ||
+      !/^[a-z0-9_-]+$/iu.test(name) ||
+      isKnownCoreToolId(id) ||
+      props.result?.plugins.some((p) => p.id.toLowerCase() === id)
+    ) {
+      return { name, description, onOpen };
+    }
+    const matches = (entry: string) => normalizeToolPolicyName(entry) === id;
+    const broaderBlock = createMemo(() => {
+      const others = props.toolBlocks?.entries?.filter((entry) => !matches(entry)) ?? [];
+      return (
+        others.some((entry) =>
+          ["group:plugins", props.pluginId.toLowerCase()].includes(normalizeToolPolicyName(entry)),
+        ) || !createToolPolicyMatcher({ deny: others })(id)
+      );
+    });
+    return {
+      name,
+      description,
+      trailing: (
+        <>
+          {onOpen && (
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              aria-label={t("pluginsPage.toolDetailsFor", { name })}
+              onClick={onOpen}
+            >
+              {t("pluginsPage.toolDetails")}
+            </button>
+          )}
+          {broaderBlock() ? (
+            <span class="muted">{t("pluginsPage.toolBlockedByRule")}</span>
+          ) : (
+            <Switch
+              ariaLabel={t("pluginsPage.allowTool", { name })}
+              checked={Boolean(
+                props.toolBlocks?.entries && !props.toolBlocks.entries.some(matches),
+              )}
+              pending={!props.toolBlocks?.entries && !props.configError}
+              saving={props.toolBlocks?.saving}
+              disabled={
+                !props.toolBlocks?.entries || props.configBusy || Boolean(props.configError)
+              }
+              onChange={(allowed) => {
+                props.toolBlocks?.set(id, !allowed);
+                // Keep the saved value until the gateway acknowledges this change.
+                return false;
+              }}
+            />
+          )}
+        </>
+      ),
+    };
+  }
   const signInServer = createMemo(() =>
     props.canMcpLogin && props.onMcpLogin
       ? props.inspection?.mcpAuth?.find((entry) => entry.state !== "authorized")?.serverName
@@ -335,8 +435,9 @@ function PluginOverview(props: DetailProps): JSX.Element {
   return (
     <SettingsPage wide={true} carapace={true}>
       <PluginDetailShell
-        registerRemovalHeading={props.registerRemovalHeading}
+        registerHeading={props.registerRemovalHeading}
         id={"plugin-installed-detail"}
+        rail
         name={plugin().name}
         summary={plugin().description || catalog()?.plugin.catalog.summary}
         backHref={props.backHref}
@@ -344,6 +445,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
         onBack={props.onBack}
         icon={
           <PluginArtTile
+            neutralFallback
             registerIcon={props.registerIcon}
             slug={plugin().id}
             name={plugin().name}
@@ -391,13 +493,13 @@ function PluginOverview(props: DetailProps): JSX.Element {
               />
             }
           >
+            {renderPluginAskAction(props.onAskPlugin, false)}
             <PluginInstallAction
               registerInstallAction={props.registerInstallAction}
               buttonClass="btn oc-action plugin-catalog-detail__install"
               primary={true}
               progress={props.installProgress}
             />
-            {renderPluginAskAction(props.onAskPlugin, false)}
           </Show>
         }
         sidebar={
@@ -410,9 +512,9 @@ function PluginOverview(props: DetailProps): JSX.Element {
               )
             : undefined
         }
+        notices={<PluginNotices {...props} />}
         panel={
           <>
-            <PluginNotices {...props} />
             {renderPluginCapabilitySection(
               t("pluginsPage.auth.accounts"),
               (props.inspection?.mcpAuth ?? []).map((server) => ({
@@ -457,19 +559,21 @@ function PluginOverview(props: DetailProps): JSX.Element {
                 <Icon name="key" />
               ),
             )}
+            {props.toolBlocks && props.configError ? (
+              <PluginRetryError
+                error={props.configError}
+                onRetry={
+                  props.toolBlocks.entries ? props.onConfigWriteRetry : props.onConfigReadRetry
+                }
+              />
+            ) : null}
             {renderPluginContentCapabilities({
               contracts: props.inspection?.overview?.capabilities?.contracts,
               uiCapabilities: props.inspection?.overview?.capabilities?.ui,
               skillsSection: props.skillsSection,
               skills: skills(),
-              tools: tools().map(({ name, description, parameters }) => ({
-                name,
-                description,
-                onOpen:
-                  (description?.trim() || parameters?.length) && props.onOpenTool
-                    ? () => props.onOpenTool?.(name)
-                    : undefined,
-              })),
+              tools: tools().map(toolRow),
+              toolsDescription: props.toolBlocks ? t("pluginsPage.toolBlockHint") : undefined,
               mcpServers: components()?.mcpServers ?? catalog()?.detail.mcpServers ?? [],
               mcpServerDetails: catalog()?.detail.mcpServerDetails,
               mcpDescription: mcpDescription(),

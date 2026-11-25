@@ -37,6 +37,8 @@ export type QaSuiteScenarioResult = QaReportCheck &
   QaSuiteStepOutcome & {
     // The lifecycle owner carries this through retries and post-run checks.
     evidenceOccurrenceId?: string;
+    // Canonical fixture identity is separate from redacted diagnostic text.
+    runtimeParitySessionKeys?: readonly string[];
     steps: QaReportCheck[];
     modelSwitchEvidence?: Record<string, unknown>;
     runtimeParity?: RuntimeParityResult;

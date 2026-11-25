@@ -389,7 +389,7 @@ it.each([
 );
 
 it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"] as const)(
-  "parent cancellation reports %s command cleanup and preserves an independent service",
+  "parent cancellation reports %s command cleanup; the ended task then stops its service",
   async (cleanup) => {
     const requesterSessionKey = parentKey;
     const childSessionKey = "agent:main:subagent:active-command";
@@ -605,8 +605,10 @@ it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"]
         expect(recordEvicted).toBe(true);
         expectEvicted(ordinary);
       }
-      expectServiceSurvives(service);
       expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
+      // Stop leaves the service to its owner; the hidden child's ended task then stops it.
+      await waitForExecSession(service);
+      expect(service).toMatchObject({ exited: true, exitReason: "manual-cancel" });
     } finally {
       spawnFault.mockRestore();
       controller.abort();

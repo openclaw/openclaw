@@ -172,6 +172,7 @@ export type ClawHubPackageListItem = {
   icon?: string | null;
   ownerHandle?: string | null;
   ownerOfficial?: boolean;
+  categories?: string[] | null;
   createdAt: number;
   updatedAt: number;
   latestVersion?: string | null;
@@ -376,18 +377,27 @@ export async function fetchClawHubPackageDetail(
     path: `/api/v1/packages/${encodeURIComponent(params.name)}`,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
 }
 
+export type ClawHubTemplatesOverviewOptions = ClawHubFetchOptions & {
+  limit?: number;
+  includeCategoryEntries?: boolean;
+};
+
 /** An older registry can decline the bounded overview without hiding upstream failures. */
 export async function fetchClawHubTemplatesOverview(
-  params: ClawHubFetchOptions & { limit?: number },
+  params: ClawHubTemplatesOverviewOptions,
 ): Promise<unknown> {
   try {
     return await fetchClawHubJson<unknown>({
       ...params,
       path: "/api/v1/templates/overview",
-      search: { limit: String(params.limit ?? 8) },
+      search: {
+        limit: String(params.limit ?? 8),
+        include: params.includeCategoryEntries === true ? "categoryEntries" : undefined,
+      },
     });
   } catch (error) {
     if (error instanceof ClawHubRequestError && error.status === 404) {
@@ -412,6 +422,7 @@ export async function listClawHubPackages(
     path: "/api/v1/packages",
     token: params.token,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
     search: {
       family: params.family,
       isOfficial: params.isOfficial === undefined ? undefined : String(params.isOfficial),
@@ -445,6 +456,7 @@ export async function fetchClawHubPackageVersion(
     )}`,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
 }
 
@@ -461,6 +473,7 @@ export async function fetchClawHubPackageArtifact(
     )}/artifact`,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
 }
 
@@ -477,6 +490,7 @@ export async function fetchClawHubPackageSecurity(
     )}/security`,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
   return parseClawHubPackageSecurityResponse(response);
 }
@@ -495,6 +509,7 @@ export async function searchClawHubPackages(
     path: "/api/v1/packages/search",
     token: params.token,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
     search: {
       q: params.query.trim(),
       family: params.family,

@@ -6,13 +6,7 @@ import { assert, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import {
-  exactButton,
-  polledClipboard,
-  polledCount,
-  polledText,
-  polledVisible,
-} from "./chat-presentation.test-support.ts";
+import { exactButton } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI chat error details" });
@@ -30,7 +24,6 @@ const sessionKey = "agent:main:main";
 
 const diagnosticContext = {
   viewport: { height: 900, width: 1280 },
-  permissions: ["clipboard-read", "clipboard-write"],
 };
 
 async function sendPrompt(
@@ -99,6 +92,13 @@ suite.define(() => {
         const alert = page.locator(".chat-run-failure");
         await alert.waitFor();
         await expect
+          .poll(() =>
+            alert
+              .locator(".chat-run-failure__title")
+              .evaluate((node) => node.scrollWidth <= node.clientWidth),
+          )
+          .toBe(true);
+        await expect
           .poll(() => alert.locator(".chat-run-failure__recovery").isVisible())
           .toBe(true);
         expect(await alert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
@@ -113,32 +113,6 @@ suite.define(() => {
         await captureDiagnosticProof(page, "restored-startup-canonical-details");
       },
     );
-  });
-
-  it("keeps startup recovery visible for request errors in the topbar", async () => {
-    await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
-      await installMockGateway(page, { sessionKey });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await page.locator(".agent-chat__input textarea").waitFor();
-      // Inject the notice state to verify the topbar's production CSS, independently
-      // of which request owner reports the startup failure.
-      await page.locator(".chat-pane-cache__pane--visible").evaluate((element) => {
-        const pane = element as HTMLElement & {
-          state?: { lastError: string | null };
-        };
-        if (!pane.state) {
-          throw new Error("Expected the visible chat pane's state");
-        }
-        pane.state.lastError = "thread not loaded: synthetic-thread";
-      });
-      const alert = page.locator(".chat-topbar-notices .chat-error");
-      await alert.waitFor();
-      const guidance = alert.getByText("Start a new conversation and send your request again.", {
-        exact: false,
-      });
-      await expect.poll(() => guidance.isVisible()).toBe(true);
-      await captureDiagnosticProof(page, "startup-request-context");
-    });
   });
 
   it.each([
@@ -176,19 +150,18 @@ suite.define(() => {
           title.includes("conversation") ? "startup-context" : "startup-workspace",
         );
         expect(await alert.textContent()).toContain(title);
-        await expect.poll(() => alert.getByText(guidance, { exact: false }).isVisible()).toBe(true);
-        expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
+        await expect.poll(() => alert.locator(".chat-error__recovery").isVisible()).toBe(true);
         await alert.locator("summary").click();
         expect(await alert.getByLabel("Error details", { exact: true }).textContent()).toContain(
           diagnostic,
         );
         await alert.locator("summary").click();
         await expectMobileFit(page, alert);
-        await expect.poll(() => alert.getByText(guidance, { exact: false }).isVisible()).toBe(true);
+        await expect.poll(() => alert.locator(".chat-error__recovery").isVisible()).toBe(true);
         await expect
           .poll(() =>
             alert
-              .getByText(guidance, { exact: false })
+              .locator(".chat-error__recovery")
               .evaluate((node) => node.scrollWidth <= node.clientWidth),
           )
           .toBe(true);
@@ -207,53 +180,98 @@ suite.define(() => {
     },
   );
 
-  it.each(["failed", "timeout"] as const)(
-    "shows a %s diagnostic when only the terminal session update arrives",
-    async (status) => {
-      await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
-        const diagnostic = "The configured model is unavailable. Select another model and retry.";
-        const gateway = await installMockGateway(page, { sessionKey });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const { runId } = await sendPrompt(page, gateway, "Review the project");
-        await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
-        const row = {
-          key: sessionKey,
-          kind: "direct",
-          updatedAt: Date.now(),
-          endedAt: Date.now(),
-          hasActiveRun: false,
-          activeRunIds: [],
-          lastRunId: runId,
-          status,
-          lastRunError: diagnostic,
-        };
-        await gateway.setSessionsListResponse({
-          sessions: [row],
-          count: 1,
-          path: "",
-          ts: row.updatedAt,
-          defaults: { model: "gpt-5.5", modelProvider: "openai", contextTokens: null },
-        });
-        // Deliberately omit chat.error: the canonical session update must be sufficient.
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey,
-          agentId: "main",
-          runId,
-          reason: "lifecycle",
-          phase: "error",
-          session: row,
-        });
-        await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ state: "hidden" });
-        const alert = page.locator(".chat-error");
-        await polledText(alert).toContain(diagnostic);
-        expect(await exactButton(alert, "Copy error").count()).toBe(1);
-        await page.locator(".agent-chat__input textarea").fill("Try again");
-        await page.getByRole("button", { name: "Send message" }).click();
-        await gateway.waitForRequest("chat.send", { after: 1 });
-        await polledCount(alert).toBe(0);
+  it("preserves bounded OAuth facts in the full reply error without disclosure", async () => {
+    await suite.withPage(diagnosticContext, async ({ page }) => {
+      const gateway = await installMockGateway(page, { sessionKey, historyMessages: [] });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const { runId } = await sendPrompt(page, gateway, "Check the example connection.");
+      const message =
+        "Your refresh token has already been used to generate a new access token. Please try signing in again.";
+      const diagnostic =
+        message +
+        "\n\nProvider: openai\nHTTP status: 401\nReason: refresh_token_reused\nType: invalid_request_error";
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey,
+        runId,
+        seq: 1,
+        state: "error",
+        errorMessage: message,
+        errorDetail: {
+          provider: "openai",
+          httpStatus: 401,
+          failoverReason: "refresh_token_reused",
+          providerRuntimeFailureKind: "auth_refresh",
+          providerErrorType: "invalid_request_error",
+          providerErrorMessagePreview: '{"access_token":"synthetic-oauth-response"}',
+        },
       });
-    },
-  );
+      const notice = page.locator(".chat-error--reply");
+      const detail = notice.locator(".app-toast__message");
+      await detail.waitFor();
+      expect(await detail.textContent()).toBe(diagnostic);
+      expect(await notice.textContent()).not.toContain("synthetic-oauth-response");
+      expect(
+        await notice
+          .locator("details, [aria-expanded], .lazy-view-error__detail, .report-issue-link")
+          .count(),
+      ).toBe(0);
+      await notice.getByRole("button", { name: "Open Models", exact: true }).waitFor();
+      expect(await notice.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
+      await expectMobileFit(page, notice);
+      expect(await detail.textContent()).toBe(diagnostic);
+    });
+  });
+
+  it("keeps startup failure guidance visible without inventing recovery activity", async () => {
+    await suite.withPage(diagnosticContext, async ({ page }) => {
+      const runId = "workspace-startup-failure";
+      const summary = "The request was interrupted because OpenClaw storage is busy.";
+      await installMockGateway(page, {
+        sessionKey,
+        historyMessages: [
+          {
+            role: "user",
+            content: "Help me plan today's work.",
+            timestamp: 1,
+            __openclaw: { id: "startup-user", seq: 1, runId },
+          },
+          {
+            role: "custom",
+            customType: "run-failed-before-reply",
+            content: "Your request couldn't be completed.",
+            display: true,
+            timestamp: 2,
+            openclawRunError: {
+              runId,
+              summary: "Your request couldn't be completed.",
+              desktopSummary: summary,
+            },
+            __openclaw: { id: "startup-failure", seq: 2, runId },
+          },
+        ],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const notice = page.locator(".chat-run-failure");
+      await notice.locator(".chat-run-failure__toggle").click();
+      const details = notice.locator(".chat-run-failure__log");
+      await details.waitFor();
+      expect(await details.textContent()).toBe(summary);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const directory = createControlUiE2eArtifactDir("startup-failure");
+        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [details], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(directory, "startup-failure.png"), frame.png);
+      }
+      expect(await notice.locator(".chat-run-failure__summary").count()).toBe(0);
+      expect(await notice.textContent()).not.toContain("Check any completed work");
+      expect(await notice.textContent()).not.toContain("Automatic recovery has stopped");
+      await page.reload();
+      await notice.locator(".chat-run-failure__toggle").click();
+      await details.waitFor();
+      expect(await details.textContent()).toBe(summary);
+    });
+  });
 
   it("keeps archived child failures out of the composer while paging past tool activity", async () => {
     await suite.withPage(diagnosticContext, async ({ page }) => {
@@ -351,7 +369,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps a rejected session-change message visible with recovery guidance and diagnostic details", async () => {
+  it("keeps a rejected session-change message and full redacted recovery text without disclosure", async () => {
     await suite.withPage(diagnosticContext, async ({ page }) => {
       const prompt = "Continue reviewing the example project";
       const skillPath = "/home/operator/.openclaw/projects/example/.agents/skills/review";
@@ -359,7 +377,7 @@ suite.define(() => {
       const recovery =
         "Your message didn't run because the conversation changed. Refresh the conversation, then send it again.";
       const errorMessage = `${recovery}\n\n${diagnostic}`;
-      const safeError = `Error: ${errorMessage.replace("password=synthetic-password", "password=[redacted]")}`;
+      const safeError = errorMessage.replace("password=synthetic-password", "password=[redacted]");
       const gateway = await installMockGateway(page, { sessionKey });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const { runId } = await sendPrompt(page, gateway, prompt);
@@ -382,21 +400,15 @@ suite.define(() => {
       });
       const alert = page.locator(".chat-error");
       await alert.waitFor();
-      expect(await alert.locator("summary strong").textContent()).toBe(
-        "Couldn't finish this reply. Check the conversation before trying again.",
-      );
-      expect(await alert.locator("summary").textContent()).not.toContain(skillPath);
-      expect(await alert.locator("summary").textContent()).not.toContain("INVALID_BUNDLE");
-      expect(await alert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
+      expect(await alert.locator(".app-toast__message").textContent()).toBe(safeError);
+      expect(
+        await alert
+          .locator("details, [aria-expanded], .lazy-view-error__detail, .report-issue-link")
+          .count(),
+      ).toBe(0);
+      expect(await alert.textContent()).not.toContain("synthetic-password");
       expect(await page.locator(".chat-thread").textContent()).toContain(prompt);
-      await alert.locator("summary").click();
-      const details = alert.getByLabel("Error details", { exact: true });
-      await polledVisible(details).toBe(true);
-      expect(await details.textContent()).toBe(safeError);
-      await exactButton(alert, "Copy error").click();
-      await polledClipboard(page).toBe(safeError);
       await expectMobileFit(page, alert);
-      await alert.locator("summary").click();
       const input = page.locator(".agent-chat__input textarea");
       await input.fill("A newer draft stays here");
       const historyCount = (await gateway.getRequests("chat.history")).length;

@@ -21,13 +21,6 @@ describe("tool meta formatting", () => {
     });
   });
 
-  it("wraps aggregate meta in backticks when markdown is enabled", () => {
-    withHome(() => {
-      const out = formatToolAggregate("fs", [`${home}/dir/a.txt`], { markdown: true });
-      expect(out).toContain("`~/dir/a.txt`");
-    });
-  });
-
   it("preserves path spelling and group order after raw metadata", () => {
     withHome(() => {
       expect(
@@ -49,12 +42,18 @@ describe("tool meta formatting", () => {
     });
   });
 
-  it("keeps exec flags outside markdown and moves them to the front", () => {
+  it("returns promptly for a deep path followed by a space", () => {
+    const command = `${"/a".repeat(28)}/notes file.txt --help`;
+    expect(formatToolAggregate("exec", [command])).toBe(command);
+  }, 1_000);
+
+  it("wraps meta in markdown and keeps exec flags outside it", () => {
     withHome(() => {
-      const out = formatToolAggregate("exec", [`cd ${home}/dir && gemini 2>&1 · elevated`], {
-        markdown: true,
-      });
-      expect(out).toBe("elevated · `cd ~/dir && gemini 2>&1`");
+      const markdown = { markdown: true };
+      expect(formatToolAggregate("fs", [`${home}/dir/a.txt`], markdown)).toBe("Fs: `~/dir/a.txt`");
+      expect(
+        formatToolAggregate("exec", [`cd ${home}/dir && gemini 2>&1 · elevated`], markdown),
+      ).toBe("elevated · `cd ~/dir && gemini 2>&1`");
     });
   });
 });

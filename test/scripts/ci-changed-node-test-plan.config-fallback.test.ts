@@ -9,7 +9,7 @@ import {
   resolveChangedExtensionRoots,
 } from "../../scripts/lib/ci-extension-test-shards.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
-import { isCiProofTestFile } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { isCiProofTestFile } from "../../scripts/lib/ci-test-tier-policy.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import {

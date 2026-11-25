@@ -5,6 +5,10 @@ import OSLog
 let dashboardWindowLogger = Logger(subsystem: "ai.openclaw", category: "DashboardWindow")
 
 enum DashboardWindowLayout {
+    // Compact AppKit chrome centers its traffic lights in a 40pt row.
+    static let toolbarStyle: NSWindow.ToolbarStyle = .unifiedCompact
+    static let titlebarHeight = 40
+    static let titlebarControlsGap: CGFloat = 8
     static let windowSize = NSSize(width: 1240, height: 860)
     static let windowMinSize = NSSize(width: 922, height: 620)
     static let windowFrameAutosaveName = "OpenClawDashboardWindow"
@@ -14,6 +18,7 @@ enum DashboardWindowLayout {
 /// reuses the shipped pre-web-chrome event; `commandPalette` gets a dedicated
 /// toggle event because the legacy `native-open-search` contract is open-only.
 enum DashboardNativeCommand: String {
+    case newBrowserTab = "openclaw:native-new-browser-tab"
     case newSession = "openclaw:native-new-session"
     case commandPalette = "openclaw:native-toggle-search"
 
@@ -21,7 +26,7 @@ enum DashboardNativeCommand: String {
     /// open-only legacy event when the primary event goes unhandled.
     var legacyFallbackEventName: String? {
         switch self {
-        case .newSession: nil
+        case .newBrowserTab, .newSession: nil
         case .commandPalette: "openclaw:native-open-search"
         }
     }

@@ -2,9 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createDeferred, createMemo, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { UserModelAccount } from "../../../../packages/gateway-protocol/src/index.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Picker } from "../../components/select-picker.ts";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { SettingsSectionHelp } from "../../components/solid/settings-section-help.tsx";
 import {
   LearnMoreLink,
@@ -17,6 +15,10 @@ import {
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import {
+  ModelProviderIcon,
+  useProviderDisplayLabel,
+} from "../../lib/reactive/provider-presentation.tsx";
 import type { ModelAccountsActions } from "./model-accounts-actions.ts";
 import type { ModelAccountsState } from "./model-accounts-state.ts";
 
@@ -42,6 +44,7 @@ function ProviderRow(
     linkedId: string | undefined;
   },
 ) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const state = () => props.readState();
   const name = () => providerDisplayLabel(props.provider);
   const options = createMemo(() => {
@@ -113,7 +116,7 @@ function SignInChoice(props: StateProps & { pending: boolean; cancel: JSX.Elemen
                   label: entry.label,
                 })) ?? [],
               disabled: props.pending || state().busy,
-              renderLeading: (entry) => <ProviderBrandIcon provider={entry.value} />,
+              renderLeading: (entry) => <ModelProviderIcon provider={entry.value} />,
               onChange: (value) => state().selectProvider(value),
             }}
           />

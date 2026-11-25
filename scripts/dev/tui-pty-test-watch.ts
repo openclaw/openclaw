@@ -6,7 +6,7 @@ import { CliArgumentError } from "../lib/error-format.mts";
 import { terminateManagedChild } from "../lib/managed-child-process.mts";
 import { sleep as delay } from "../lib/sleep.mjs";
 import { resolveVitestHomeSelection } from "../lib/vitest-home-selection.mts";
-import { resolveVitestNodeArgs } from "../lib/vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "../lib/vitest-node-args.mts";
 import { spawnOwnedVitestProcess } from "../lib/vitest-process.mts";
 
 type Options = {

@@ -547,7 +547,7 @@ suite.define(() => {
             const requests = observeMcpAppRequests(standalonePage);
             await standalonePage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
             let app = await findAppFrame(standalonePage);
-            // Each RPC stays below 10s; their composition must cross the former 15s HTTP cutoff.
+            // A ready connection calls known tools while its eight-second refresh is pending.
             const timingSpec = { scenario: "list8-call8", callDelayMs: 8000 };
             await fixture.configure(timingSpec);
             await app.locator("#arm-refresh").click();

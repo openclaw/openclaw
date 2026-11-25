@@ -20,7 +20,7 @@
       "hasSubcommands": true
     }
   ],
-  "catalog": { "featured": true, "order": 30 },
+  "catalog": { "featured": true, "order": 30, "sidebar": true },
   "contracts": {
     "tools": ["wiki_apply", "wiki_get", "wiki_lint", "wiki_search", "wiki_status"]
   },
@@ -290,5 +290,10 @@
       }
     }
   },
-  "commandAliases": [{ "name": "wiki" }]
+  "commandAliases": [{ "name": "wiki" }],
+  "recommendedPrompts": [
+    "Help me plan Memory Wiki setup alongside my current memory provider.",
+    "Preview how a few of my sources could become a navigable Memory Wiki.",
+    "Explore a topic in my Memory Wiki and trace claims to sources without editing pages."
+  ]
 }

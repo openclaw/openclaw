@@ -13,6 +13,7 @@ import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolu
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { formatUnsupportedChannelActionMessage } from "../../cli/error-format.js";
+import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -77,7 +78,7 @@ function detectAutoKindForPlugin(input: string, plugin: ChannelPlugin): ChannelR
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
   const entries = normalizeStringEntries(opts.entries);
   if (entries.length === 0) {
-    throw new Error(
+    throwExpectedCliError(
       `At least one entry is required. Example: ${formatCliCommand("openclaw channels resolve --channel discord <name-or-id>")}.`,
     );
   }
@@ -85,7 +86,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   const loadedRaw = await captureRuntimeConfigAsyncReader()();
   const requestedAgent = opts.agent?.trim();
   if (opts.agent !== undefined && !requestedAgent) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   const agentId = requestedAgent ? resolveConfiguredAgentId(loadedRaw, requestedAgent) : undefined;
   const { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
@@ -110,7 +111,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
       })
     : null;
   if (explicitChannel && resolvedExplicit?.catalogEntry && !resolvedExplicit.plugin) {
-    throw new Error(
+    throwExpectedCliError(
       `Channel plugin "${resolvedExplicit.catalogEntry.id}" is not installed. Run ${formatCliCommand(`openclaw channels add --channel ${resolvedExplicit.catalogEntry.id}`)} first.`,
     );
   }

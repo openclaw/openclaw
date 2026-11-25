@@ -37,6 +37,55 @@ function openWithoutFeatureSchemas() {
 }
 
 describe("user preferences", () => {
+  it.each(["git.coauthor.organization"])(
+    "requires a new disclosure choice when %s replaces previously inert consent",
+    (key) => {
+      const options = stateOptions();
+      const profileId = ensureProfileForEmail("credit@example.test", options).id;
+      setUserPreferences(profileId, { "git.coauthor.enabled": true }, options);
+      expect(
+        setUserPreferences(
+          profileId,
+          { [key]: { name: "Alice Example", email: "alice@example.test", policy: "test-policy" } },
+          { ...options, trustedProxyGitCoauthor: true },
+        ),
+      ).toMatchObject({ ok: true });
+      expect(getUserPreferences(profileId, undefined, options)).toEqual({
+        [key]: { name: "Alice Example", email: "alice@example.test", policy: "test-policy" },
+        "git.coauthor.enabled": false,
+      });
+      setUserPreferences(profileId, { "git.coauthor.enabled": true }, options);
+      setUserPreferences(
+        profileId,
+        {
+          [key]: {
+            name: "Alice Updated",
+            email: "alice.updated@example.test",
+            policy: "test-policy",
+          },
+        },
+        { ...options, trustedProxyGitCoauthor: true },
+      );
+      expect(getUserPreferences(profileId, ["git.coauthor.enabled"], options)).toEqual({
+        "git.coauthor.enabled": true,
+      });
+      setUserPreferences(
+        profileId,
+        {
+          [key]: {
+            name: "Alice Updated",
+            email: "alice.updated@example.test",
+            policy: "replacement-policy",
+          },
+        },
+        { ...options, trustedProxyGitCoauthor: true },
+      );
+      expect(getUserPreferences(profileId, ["git.coauthor.enabled"], options)).toEqual({
+        "git.coauthor.enabled": false,
+      });
+    },
+  );
+
   it("reads absent canonical preferences without creating their optional table", async () => {
     expect(await getCanonicalUserPreferences("missing", undefined, stateOptions())).toBeUndefined();
     const { db, options } = openWithoutFeatureSchemas();
@@ -207,15 +256,40 @@ describe("user preferences", () => {
     expect(get()).toEqual({});
   });
 
-  it("keeps merged profiles within the same preference cap", () => {
-    const options = stateOptions();
-    const target = preferences(options, "target");
-    const source = preferences(options, "source");
-    target.fill(127, "target");
-    expect(source.set({ "source-a": true, "source-b": true })).toMatchObject({ ok: true });
-    mergeUserPreferences(openOpenClawStateDatabase(options).db, "source", "target");
-    expect(Object.keys(target.get())).toHaveLength(128);
-    expect(target.get(["source-a", "source-b"])).toEqual({ "source-a": true });
-    expect(source.get()).toEqual({});
-  });
+  it.each([127, 128])(
+    "keeps merged profiles at the user preference cap (target keys=%s)",
+    (count) => {
+      const options = stateOptions();
+      const target = preferences(options, "target");
+      const source = preferences(options, "source");
+      target.fill(count, "target");
+      expect(source.set({ "source-a": true, "source-b": true })).toMatchObject({ ok: true });
+      expect(
+        setUserPreferences(
+          "source",
+          {
+            "git.coauthor.organization": {
+              name: "Alice",
+              email: "alice@example.test",
+              policy: "test-policy",
+            },
+          },
+          { ...options, trustedProxyGitCoauthor: true },
+        ),
+      ).toMatchObject({ ok: true });
+      mergeUserPreferences(openOpenClawStateDatabase(options).db, "source", "target");
+      expect(Object.keys(target.get())).toHaveLength(129);
+      expect(target.get(["source-a", "source-b"])).toEqual(
+        count === 127 ? { "source-a": true } : {},
+      );
+      expect(target.get(["git.coauthor.organization"])).toEqual({
+        "git.coauthor.organization": {
+          name: "Alice",
+          email: "alice@example.test",
+          policy: "test-policy",
+        },
+      });
+      expect(source.get()).toEqual({});
+    },
+  );
 });

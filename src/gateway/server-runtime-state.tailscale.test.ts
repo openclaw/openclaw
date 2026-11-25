@@ -5,6 +5,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
 async function requestStatus(options: RequestOptions): Promise<{ status: number; body: string }> {
@@ -103,7 +104,12 @@ describe("managed Tailscale gateway ingress", () => {
   it("binds a distinct private listener and rejects the same headers on the ordinary listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "serve",
-      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 1 }),
+      getReadiness: createPreparedReadinessFixture(() => ({
+        ready: true,
+        coreReady: true,
+        failing: [],
+        uptimeMs: 1,
+      })),
     });
     openServers.push(runtime);
     await runtime.startListening();
@@ -147,7 +153,12 @@ describe("managed Tailscale gateway ingress", () => {
   it("accepts tailnet and public ingress on the dedicated Funnel listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "funnel",
-      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 1 }),
+      getReadiness: createPreparedReadinessFixture(() => ({
+        ready: true,
+        coreReady: true,
+        failing: [],
+        uptimeMs: 1,
+      })),
     });
     openServers.push(runtime);
     await runtime.startListening();
@@ -297,7 +308,12 @@ describe("managed Tailscale gateway ingress", () => {
     });
     const runtime = await createGatewayRuntimeStateForTest(registry, {
       tailscaleMode: "serve",
-      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 1 }),
+      getReadiness: createPreparedReadinessFixture(() => ({
+        ready: true,
+        coreReady: true,
+        failing: [],
+        uptimeMs: 1,
+      })),
     });
     openServers.push(runtime);
     await runtime.startListening();
