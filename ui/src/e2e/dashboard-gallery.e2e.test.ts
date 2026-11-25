@@ -177,6 +177,7 @@ suite.define(() => {
     await suite.withPage(
       {
         colorScheme: mode,
+        locale: "en-US",
         viewport: { width: 1440, height: 900 },
         ...(capture
           ? { recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } } }
@@ -319,7 +320,7 @@ suite.define(() => {
     async (view) => {
       const rows = [{ ...dashboardRows[0]!, hasBoard: true }];
       await suite.withPage(
-        { colorScheme: "light", viewport: { width: 390, height: 844 } },
+        { colorScheme: "light", locale: "en-US", viewport: { width: 390, height: 844 } },
         async ({ page }) => {
           await page.route("**/dashboard-gallery-widget.html", (route) =>
             route.fulfill({ contentType: "text/html; charset=utf-8", body: widgetMarkup }),
@@ -399,7 +400,8 @@ suite.define(() => {
         label: `Author ${Math.floor(index / 2)}`,
       },
     }));
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+    const viewport = { width: 1440, height: 900 };
+    await suite.withPage({ locale: "en-US", viewport }, async ({ page }) => {
       await installMockGateway(page, { sessions: rows });
       await page.goto(`${suite.server.baseUrl}dashboards`);
       const gallery = page.locator("openclaw-dashboards-page");
@@ -498,7 +500,12 @@ suite.define(() => {
 
   it("opens a responsive gallery card without restarting its retained dashboard widgets", async () => {
     await suite.withPage(
-      { colorScheme: "dark", viewport: { width: 1440, height: 900 }, hasTouch: true },
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        viewport: { width: 1440, height: 900 },
+        hasTouch: true,
+      },
       async ({ page }) => {
         await page.route("**/dashboard-gallery-widget.html", (route) =>
           route.fulfill({
@@ -555,7 +562,7 @@ suite.define(() => {
         expect(
           await gallery
             .locator(".dashboard-card__author")
-            .getByText("Mira", { exact: true })
+            .getByText("Session: Mira", { exact: true })
             .count(),
         ).toBe(6);
         await waitForPreview(releaseCard);
@@ -634,7 +641,10 @@ suite.define(() => {
           .toEqual({ documentWidth: 390, viewportWidth: 390, columns: 1 });
 
         const cards = gallery.locator("[data-dashboard-session]");
-        const filter = gallery.getByRole("button", { name: "Filter by author", exact: true });
+        const filter = gallery.getByRole("button", {
+          name: "Filter by session attribution",
+          exact: true,
+        });
         expect(await filter.getAttribute("class")).not.toContain("active");
         await filter.click();
         const popover = page.locator("#dashboards-author-filter");
@@ -642,6 +652,11 @@ suite.define(() => {
         const mira = popover.getByRole("checkbox", { name: /Mira/ });
         await riley.check();
         await expect.poll(() => cards.count()).toBe(6);
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "phone-attribution-filter.png"),
+          });
+        }
         await mira.check();
         await expect.poll(() => cards.count()).toBe(12);
         expect(await filter.getAttribute("class")).toContain("active");
@@ -659,6 +674,14 @@ suite.define(() => {
         await displayMenu.getByLabel("Grouping").selectOption("author");
         await expect.poll(() => gallery.locator(".dashboard-row").count()).toBe(12);
         await expect.poll(() => gallery.locator(".dashboards-group__heading").count()).toBe(2);
+        expect(await gallery.locator(".dashboard-row__author").first().textContent()).toContain(
+          "Session: Riley",
+        );
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "phone-attribution-list.png"),
+          });
+        }
         await page.keyboard.press("Escape");
         // Closing the menu returns the phone keyboard outline to the trailing action.
         expect(

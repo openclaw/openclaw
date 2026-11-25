@@ -146,7 +146,7 @@ it.each([
     />
   ));
 
-  const trigger = container.querySelector('button[aria-label="Filter by author"]');
+  const trigger = container.querySelector('button[aria-label="Filter by session attribution"]');
   expect(trigger?.classList.contains("active")).toBe(active);
 });
 
@@ -160,7 +160,9 @@ it("names an agent-authored dashboard by its agent", () => {
     />
   ));
 
-  expect(container.querySelector(".dashboard-card__author-name")?.textContent).toBe("Molty");
+  expect(container.querySelector(".dashboard-card__author-name")?.textContent).toBe(
+    "Session: Molty",
+  );
 });
 
 it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (basePath) => {
