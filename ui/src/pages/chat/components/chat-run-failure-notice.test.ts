@@ -231,9 +231,6 @@ it("starts an OpenClaw update session only for a harness-update failure", async 
       connected: true,
       chatRunId: null,
       chatSending: false,
-      chatMessages: [],
-      chatMessage: "",
-      chatAttachments: [],
       handleSendChat: vi.fn(),
     },
     {
