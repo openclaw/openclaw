@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as hostMemory from "../infra/host-memory.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -87,6 +88,7 @@ const completed = (lastSuccessAtMs: number) => ({
 });
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(false);
   mocks.history.mockReset().mockResolvedValue({ nextSweepAtMs: null });
   mocks.registry
     .mockReset()
@@ -102,6 +104,19 @@ afterEach(async () => {
   vi.restoreAllMocks();
   gatewayWork.resetGatewayWorkAdmission();
   recordAgentDatabaseAdmissions([]);
+});
+
+it("defers keep-warm and retention until memory pressure clears", async () => {
+  vi.mocked(hostMemory.isMemoryPressureHigh).mockReturnValue(true);
+  start();
+  await clock.advanceBy(5_000);
+  expect(mocks.keepWarm).not.toHaveBeenCalled();
+  expect(mocks.registry).not.toHaveBeenCalled();
+  expect(scheduler.nextWakeAtMs).toBe(65_000);
+  vi.mocked(hostMemory.isMemoryPressureHigh).mockReturnValue(false);
+  await clock.advanceBy(60_000);
+  await vi.waitFor(() => expect(mocks.keepWarm).toHaveBeenCalledOnce());
+  expect(mocks.registry).toHaveBeenCalledOnce();
 });
 
 it("wakes keep-warm once after start and again when an interactive session's transcript settles", async () => {
