@@ -125,7 +125,7 @@ it("keeps long draft file choices compact and opens the exact selected file", as
     createdAtMs: 1,
   };
   const request = vi.fn(async (method: string, params: { agentId: string; filePath?: string }) => {
-    if (method === "skills.workshop.list")
+    if (method === "skills.workshop.list") {
       return {
         agentId: params.agentId,
         root: "/synthetic/workshop",
@@ -134,12 +134,16 @@ it("keeps long draft file choices compact and opens the exact selected file", as
         archived: [],
         drafts: [draft],
       };
-    if (method === "skills.workshop.changes") return { changes: [] };
-    if (method === "skills.workshop.read")
+    }
+    if (method === "skills.workshop.changes") {
+      return { changes: [] };
+    }
+    if (method === "skills.workshop.read") {
       return {
         content: params.filePath === file ? "Please review the invoice." : "Use the reminder.",
         files: ["SKILL.md", file],
       };
+    }
     throw new Error(`Unexpected method: ${method}`);
   });
   const mounted = mountSolid(() => <SkillWorkshopPage />, {
