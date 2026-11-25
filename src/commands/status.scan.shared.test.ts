@@ -194,7 +194,7 @@ describe("resolveGatewayProbeSnapshot", () => {
       gatewayProbe: {
         ok: false,
         gatewayReached: true,
-        error: warning,
+        error: `${warning}; warn`,
         auth: { capability: "connected_no_operator_scope" },
       },
     });
