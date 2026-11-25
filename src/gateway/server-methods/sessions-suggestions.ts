@@ -32,7 +32,7 @@ import {
   prepareProjectedSessionSharing,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
-import { handleChatSend } from "./chat-send-handler.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { respondError } from "./response.js";
 import {
@@ -405,7 +405,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
             const captureResponse: RespondFn = (...args) => {
               response = args;
             };
-            // The approver sends the turn; the author is credited for display only.
+            // The approver sends the turn through ordinary chat entry; the author is display credit.
             const chatClient: GatewayClient = {
               ...client,
               internal: {
@@ -498,7 +498,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
               };
             }
             try {
-              await handleChatSend({
+              await handleDirectExternalChatSend({
                 req: { ...req, method: "chat.send", params: chatParams },
                 params: chatParams,
                 client: chatClient,
