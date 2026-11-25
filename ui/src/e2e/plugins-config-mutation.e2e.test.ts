@@ -9,6 +9,7 @@ import {
 import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openAgentFallbackChain, requestRaw } from "./model-providers.test-support.ts";
 import { inspection } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -104,7 +105,8 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}settings/agents/main/overview`);
       expect(response?.status()).toBe(200);
 
-      const fallbackInput = page.locator("openclaw-multi-select.agent-fallbacks input");
+      const chain = await openAgentFallbackChain(page.locator("openclaw-agents-page"));
+      const fallbackInput = chain.getByRole("combobox", { name: "Fallback model", exact: true });
       await fallbackInput.waitFor();
       await gateway.deferNext("config.set");
       await fallbackInput.fill("anthropic/claude-sonnet-4-6");
@@ -134,6 +136,12 @@ suite.define(() => {
 
       const pendingDraft = await gateway.waitForRequest("config.set");
       expect(pendingDraft.params).toMatchObject({ baseHash: "config-hash-1" });
+      expect(requestRaw(pendingDraft).agents).toEqual({
+        defaults: { model: { primary: "openai/gpt-5" } },
+        entries: {
+          main: { model: { primary: "openai/gpt-5", fallbacks: ["anthropic/claude-sonnet-4-6"] } },
+        },
+      });
       await gateway.resolveDeferred("config.set");
 
       const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
