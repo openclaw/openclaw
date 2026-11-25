@@ -17,7 +17,7 @@ public struct ChatModelPickerSections: Sendable, Equatable {
 /// The phone picker's catalog. Unlike the menu sections, every provider keeps all of its models in catalog
 /// order, so a pinned or recent model still appears under its provider.
 public struct ChatModelPickerCatalog: Sendable, Equatable {
-    public static let maxRecents = 3
+    public static let maxRecents = 5
 
     public let favorites: [OpenClawChatModelChoice]
     public let recents: [OpenClawChatModelChoice]
@@ -115,10 +115,27 @@ public final class ChatModelPickerStore {
             providers: self.providerSections(remaining, defaultProvider: defaultProvider))
     }
 
-    /// The phone picker: favorites, at most three recents, and every provider with all of its models.
-    /// The current model always sits on the root: in Favorites when it is one, otherwise first in Recent,
-    /// whether or not it was picked on this device. With one provider the root already lists its models, so
-    /// Recent holds only what is stored. The stored recents are not changed.
+    /// Models used lately, most recent first: each chat's model as the chat list reports it, from any device,
+    /// then picks made on this device that no listed chat shows. Each model once, at most `limit`.
+    public static func recentModelIDs(
+        chats: [(selectionID: String?, activeAt: Double)],
+        picks: [String],
+        limit: Int = ChatModelPickerCatalog.maxRecents) -> [String]
+    {
+        var seen = Set<String>()
+        let fromChats = chats.enumerated()
+            .sorted {
+                $0.element.activeAt != $1.element.activeAt ? $0.element.activeAt > $1.element.activeAt : $0.offset < $1
+                    .offset
+            }
+            .compactMap(\.element.selectionID)
+        return Array((fromChats + picks).filter { !$0.isEmpty && seen.insert($0).inserted }.prefix(limit))
+    }
+
+    /// The phone picker: favorites, at most five recents, and every provider with all of its models.
+    /// The current model always sits on the root: in Favorites when it is one, otherwise first in Recent.
+    /// With one provider the root already lists its models with the check, so Recent leaves the current one
+    /// out. Models that cannot be used right now are left out of Recent. The stored recents are not changed.
     public static func catalog(
         choices: [OpenClawChatModelChoice],
         favorites: [String],
@@ -129,15 +146,21 @@ public final class ChatModelPickerStore {
         let providers = self.providerSections(
             choices.filter { $0.manualSelectionAllowed != false },
             defaultProvider: defaultProvider)
-        let current = providers.count > 1 ? current : nil
+        let recents: [String] = if let current {
+            providers.count > 1 ? [current] + recents.filter { $0 != current } : recents.filter { $0 != current }
+        } else {
+            recents
+        }
         let sections = self.sections(
             choices: choices,
             favorites: favorites,
-            recents: current.map { current in [current] + recents.filter { $0 != current } } ?? recents,
+            recents: recents,
             defaultProvider: defaultProvider)
         return ChatModelPickerCatalog(
             favorites: sections.pinned,
-            recents: Array(sections.recent.prefix(ChatModelPickerCatalog.maxRecents)),
+            recents: Array(sections.recent
+                .filter { $0.selectionID == current || $0.available != false }
+                .prefix(ChatModelPickerCatalog.maxRecents)),
             providers: providers)
     }
 

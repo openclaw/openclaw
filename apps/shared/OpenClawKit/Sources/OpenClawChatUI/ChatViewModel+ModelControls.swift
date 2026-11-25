@@ -113,13 +113,23 @@ extension OpenClawChatViewModel {
             defaultProvider: defaultProvider)
     }
 
+    /// The models of the chats in the chat list, most recently active first, merged with this device's picks.
+    public var modelPickerRecentIDs: [String] {
+        ChatModelPickerStore.recentModelIDs(
+            chats: self.sessions.filter { $0.archived != true }.map {
+                (self.sessionModelChoice(for: $0)?.selectionID, $0.lastActivityAt ?? $0.updatedAt ?? 0)
+            },
+            picks: self.modelPickerRecents)
+    }
+
     /// The phone picker's catalog: every provider with all of its models, and the current model on the root.
-    public var modelPickerCatalog: ChatModelPickerCatalog {
+    /// `recentOrder` holds Recent still while the sheet is open.
+    public func modelPickerCatalog(recentOrder: [String]? = nil) -> ChatModelPickerCatalog {
         let defaults = self.modelPickerDefault
         return ChatModelPickerStore.catalog(
             choices: self.modelChoices,
             favorites: self.modelPickerFavorites,
-            recents: self.modelPickerRecents,
+            recents: recentOrder ?? self.modelPickerRecentIDs,
             current: self.selectedModelChoice(for: self.currentSessionEntry())?.selectionID,
             defaultProvider: ChatModelPickerStore.resolvedDefaultProvider(
                 provider: defaults.provider,

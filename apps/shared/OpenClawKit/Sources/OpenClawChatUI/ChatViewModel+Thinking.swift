@@ -305,7 +305,7 @@ extension OpenClawChatViewModel {
         return self.sessionModelChoice(for: currentSession)
     }
 
-    private func sessionModelChoice(
+    func sessionModelChoice(
         for currentSession: OpenClawChatSessionEntry?) -> OpenClawChatModelChoice?
     {
         if ChatPayloadDecoding.trimmedNonEmptyString(currentSession?.model) != nil {

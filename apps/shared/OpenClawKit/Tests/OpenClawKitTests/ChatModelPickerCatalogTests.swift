@@ -40,14 +40,32 @@ struct ChatModelPickerCatalogTests {
         #expect(catalog.provider(for: choices[2])?.id == "openai")
     }
 
-    @Test func `recents stop at three and skip favorites`() {
-        let choices = ["a/1", "a/2", "a/3", "a/4", "a/5"].map { catalogModel($0) }
+    @Test func `recents stop at five and skip favorites`() {
+        let choices = ["a/1", "a/2", "a/3", "a/4", "a/5", "a/6", "a/7"].map { catalogModel($0) }
         let catalog = ChatModelPickerStore.catalog(
             choices: choices,
             favorites: ["a/2"],
-            recents: ["a/1", "a/2", "a/3", "a/4", "a/5"])
+            recents: ["a/1", "a/2", "a/3", "a/4", "a/5", "a/6", "a/7"])
 
-        #expect(catalog.recents.map(\.selectionID) == ["a/1", "a/3", "a/4"])
+        #expect(catalog.recents.map(\.selectionID) == ["a/1", "a/3", "a/4", "a/5", "a/6"])
+    }
+
+    @Test func `recent models come from every chat, newest first, then this device's picks`() {
+        let ids = ChatModelPickerStore.recentModelIDs(
+            chats: [("a/1", 10), ("b/1", 30), (nil, 40), ("a/1", 20), ("c/1", 25), ("", 50)],
+            picks: ["d/1", "b/1", "e/1", "f/1"])
+        // b/1 is newest; a/1 shows once at its newest chat; the device's picks follow; capped at five.
+        #expect(ids == ["b/1", "c/1", "a/1", "d/1", "e/1"])
+        #expect(ChatModelPickerStore.recentModelIDs(chats: [], picks: []) == [])
+    }
+
+    @Test func `models that cannot be used now leave Recent, the current one stays once`() {
+        let signedOut = OpenClawChatModelChoice(
+            modelID: "1", name: "1", provider: "b", available: false, contextWindow: nil)
+        let choices = [catalogModel("a/1"), catalogModel("a/2"), signedOut]
+        let catalog = ChatModelPickerStore.catalog(
+            choices: choices, favorites: [], recents: ["b/1", "a/2", "a/1", "a/9"], current: "a/1")
+        #expect(catalog.recents.map(\.selectionID) == ["a/1", "a/2"])
     }
 
     @Test func `the current model leads Recent unless it is a favorite, and the stored recents stay as they are`() {
@@ -58,8 +76,8 @@ struct ChatModelPickerCatalogTests {
                 .recents.map(\.selectionID)
         }
 
-        // Never picked on this device: first, and Recent still stops at three.
-        #expect(recentIDs(current: "a/1") == ["a/1", "a/2", "a/3"])
+        // Never picked on this device: first, ahead of the rest.
+        #expect(recentIDs(current: "a/1") == ["a/1", "a/2", "a/3", "a/4"])
         // Already a recent: moved to the top, not listed twice.
         #expect(recentIDs(current: "a/3") == ["a/3", "a/2", "a/4"])
         // A favorite: it stays in Favorites only.
@@ -88,9 +106,9 @@ struct ChatModelPickerCatalogTests {
 
         #expect(catalog.providers.count == 1)
         #expect(catalog.recents.map(\.selectionID) == ["a/2"])
-        // A stored recent or favorite that is current keeps its place, as before.
-        #expect(ChatModelPickerStore.catalog(choices: choices, favorites: [], recents: ["a/1"], current: "a/1")
-            .recents.map(\.selectionID) == ["a/1"])
+        // The list below holds the only check: the current model is left out of Recent, a favorite stays.
+        #expect(ChatModelPickerStore.catalog(choices: choices, favorites: [], recents: ["a/1", "a/2"], current: "a/1")
+            .recents.map(\.selectionID) == ["a/2"])
         #expect(ChatModelPickerStore.catalog(choices: choices, favorites: ["a/1"], recents: [], current: "a/1")
             .favorites.map(\.selectionID) == ["a/1"])
     }

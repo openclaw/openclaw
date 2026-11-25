@@ -26,9 +26,11 @@ struct ChatModelPickerSheet: View {
     @ScaledMetric(relativeTo: .body) private var searchClearance: CGFloat = 64
     @State private var query = ""
     @State private var isSearching = false
+    /// Recent's order when the sheet opened, so it does not reshuffle while it is open.
+    @State private var recentOrder: [String]?
 
     var body: some View {
-        let catalog = self.viewModel.modelPickerCatalog
+        let catalog = self.viewModel.modelPickerCatalog(recentOrder: self.recentOrder)
         NavigationStack {
             List {
                 self.rootContent(catalog)
@@ -65,6 +67,7 @@ struct ChatModelPickerSheet: View {
         }
         .tint(.primary)
         .accessibilityIdentifier("chat-model-picker")
+        .onAppear { self.recentOrder = self.recentOrder ?? self.viewModel.modelPickerRecentIDs }
         .presentationDetents([self.restingDetent, .large], selection: Binding(
             get: { self.detent ?? self.restingDetent },
             set: { self.detent = $0 }))
