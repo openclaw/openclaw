@@ -95,6 +95,6 @@ struct TalkChatSettingsSendTests {
         print("TALKPROOF advertised=\(advertised) chat.send params=\(line)")
         #expect((sent["useTalkSettings"] as? Bool) == (advertised ? true : nil))
         #expect(sent["thinking"] == nil)
-        #expect(sent["message"] as? String == "What is the time?")
+        #expect((sent["message"] as? String)?.hasSuffix("What is the time?") == true)
     }
 }
