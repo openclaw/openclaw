@@ -87,7 +87,7 @@ async function refreshLocalGatewaySkills(
   }
 }
 
-async function loadSkillsStatusReport(
+export async function loadSkillsStatusReport(
   agentId: string | undefined,
   signal?: AbortSignal,
 ): Promise<SkillStatusReport> {

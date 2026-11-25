@@ -36,10 +36,6 @@
 .shell {
   /* One fixed canvas shared by routes; panels keep their own reading surfaces. */
   background-color: var(--bg-content, var(--bg));
-  background-image: var(--app-background-image);
-  background-position: center;
-  background-size: cover;
-  background-repeat: no-repeat;
 
   --shell-nav-expanded-width: 258px;
   --shell-nav-width: var(--shell-nav-expanded-width);
@@ -84,13 +80,6 @@
   /* Route chrome changes atomically; only explicit sidebar resizing animates. */
   transition: grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease);
   overflow: hidden;
-}
-
-/* Once personal background placement is explicit, only its enabled pane renderer
-   may use artwork. None/custom must not resurrect theme images on Settings or
-   on an independently disabled surface, even before a pane has mounted. */
-.shell[data-background-managed] {
-  background-image: none;
 }
 
 .control-ui-environment-stripe {
@@ -393,22 +382,6 @@ html.openclaw-native-macos.openclaw-native-web-chrome
     display: none;
   }
 
-  /* Explicit personal backgrounds keep their existing pane renderer. Only the
-     default theme artwork follows the inset conversation surface. */
-  &:not([data-background-managed]) {
-    .sidebar-region > [data-region="main"] {
-      background-color: var(--sidebar-rail-surface);
-    }
-
-    .chat-main__conversation-frame {
-      background-color: var(--bg-content, var(--bg));
-      background-image: var(--app-background-image);
-      background-position: center;
-      background-size: cover;
-      background-repeat: no-repeat;
-    }
-  }
-
   /* New session has no chat header, but keeps the same native titlebar surface. */
   .content--new-session .new-session-page::before {
     flex: 0 0 var(--openclaw-native-titlebar-height, 52px);
@@ -429,12 +402,10 @@ html.openclaw-native-macos.openclaw-native-web-chrome
     top: calc((var(--openclaw-native-titlebar-height, 52px) - var(--rail-header-action-size)) / 2);
   }
   /* Keep the native drag band outside page scrollports, including Settings. */
-  background-image:
-    linear-gradient(
-      var(--sidebar-rail-surface) var(--openclaw-native-titlebar-height, 52px),
-      transparent var(--openclaw-native-titlebar-height, 52px)
-    ),
-    var(--app-background-image);
+  background-image: linear-gradient(
+    var(--sidebar-rail-surface) var(--openclaw-native-titlebar-height, 52px),
+    transparent var(--openclaw-native-titlebar-height, 52px)
+  );
 
   .content--plugin-embed .plugin-tab-embed {
     margin-top: var(--openclaw-native-titlebar-height, 52px);
@@ -3800,12 +3771,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
-}
-
-@media (forced-colors: active), (prefers-contrast: more) {
-  .shell {
-    background-image: none;
-  }
 }
 
 .content-header {

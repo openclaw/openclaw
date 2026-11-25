@@ -55,6 +55,13 @@ export type SystemAgentOperation =
   | { kind: "channel-list" }
   | { kind: "channel-info"; channel: string }
   | { kind: "gateway-status" }
+  | { kind: "gateway-status-deep" }
+  | { kind: "logs" }
+  | { kind: "channels-status"; probe?: boolean }
+  | { kind: "models-status" }
+  | { kind: "skills-check" }
+  | { kind: "plugins-doctor" }
+  | { kind: "read-install-file"; path: string }
   | { kind: "gateway-start" }
   | { kind: "gateway-stop" }
   | { kind: "gateway-restart" }

@@ -110,6 +110,29 @@ describe("operation grammar", () => {
     expect(parseOperation(input).kind).toBe("none");
   });
   it.each([
+    "logs",
+    "tail logs",
+    "read file package.json",
+    "gateway status deep",
+    "channels status probe",
+    "models status",
+    "skills check",
+    "plugins doctor",
+  ])("keeps the self-repair read %s out of the text grammar", (input) => {
+    expect(parseOperation(input).kind).toBe("none");
+  });
+  it.each([
+    { kind: "logs" },
+    { kind: "gateway-status-deep" },
+    { kind: "channels-status", probe: true },
+    { kind: "models-status" },
+    { kind: "skills-check" },
+    { kind: "plugins-doctor" },
+    { kind: "read-install-file", path: "docs/index.md" },
+  ] satisfies SystemAgentOperation[])("never treats %j as a persistent operation", (operation) => {
+    expect(isPersistentSystemAgentOperation(operation)).toBe(false);
+  });
+  it.each([
     ["create agent editor role unknown", "Unknown agent role"],
     ["plugin install git:file:///tmp/plugin.git", "requires a remote package source"],
   ])("explains rejected command %s", (input, message) => {

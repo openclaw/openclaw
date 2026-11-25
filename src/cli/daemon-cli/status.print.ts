@@ -52,8 +52,10 @@ import {
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.port-format.js";
+import type { DaemonStatusPrintOptions } from "./types.js";
 
-export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
+export function printDaemonStatus(status: DaemonStatus, opts: DaemonStatusPrintOptions) {
+  const runtime = opts.runtime ?? defaultRuntime;
   if (opts.json) {
     defaultRuntime.writeJson({
       ...status,
@@ -65,11 +67,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   const { rich, label, accent, infoText, okText, warnText, errorText } =
     createCliStatusTextStyles();
-  const spacer = () => defaultRuntime.log("");
-  const printError = (message: string) => defaultRuntime.error(errorText(message));
-  const printWarning = (message: string) => defaultRuntime.error(warnText(message));
+  const spacer = () => runtime.log("");
+  const printError = (message: string) => runtime.error(errorText(message));
+  const printWarning = (message: string) => runtime.error(warnText(message));
   const printInfo = (name: string, value: string) =>
-    defaultRuntime.log(`${label(name)} ${infoText(value)}`);
+    runtime.log(`${label(name)} ${infoText(value)}`);
   // Advice belongs to this shell, not the stored service environment or probe target.
   const installBlock = resolveDaemonInstallBlockMessage("gateway");
   const installCommand = formatCliCommand("openclaw gateway install");
@@ -88,7 +90,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       ? service.notLoadedText
       : "unknown";
   const serviceStatus = (serviceLoaded ? okText : warnText)(terminalText`${serviceText}`);
-  defaultRuntime.log(
+  runtime.log(
     `${label("Service:")} ${accent(terminalText`${service.label}`)}${managerUnavailable ? "" : ` (${serviceStatus})`}${diagnosticOnlySuffix}`,
   );
   if (
@@ -96,7 +98,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     (service.command ||
       (service.systemdInstallation && service.systemdInstallation.kind !== "none"))
   ) {
-    defaultRuntime.log(warnText("The recorded service unit is stale and was left unchanged."));
+    runtime.log(warnText("The recorded service unit is stale and was left unchanged."));
   }
   const transport = service.runtime?.systemd?.transport;
   if (opts.deep && transport) {
@@ -120,14 +122,14 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (service.command?.reloadPending) {
     const systemctl =
       service.runtime?.systemd?.scope === "system" ? "sudo systemctl --system" : "systemctl --user";
-    defaultRuntime.log(warnText(`Systemd reload: pending (run ${systemctl} daemon-reload)`));
+    runtime.log(warnText(`Systemd reload: pending (run ${systemctl} daemon-reload)`));
   }
   if (service.command?.workingDirectory) {
     printInfo("Working dir:", displayPath(service.command.workingDirectory));
   }
   const daemonEnvLines = safeDaemonEnv(service.command?.environment);
   if (daemonEnvLines.length > 0) {
-    defaultRuntime.log(
+    runtime.log(
       `${label("Service env:")} ${daemonEnvLines.map((line) => terminalText`${line}`).join(" ")}`,
     );
   }
@@ -149,7 +151,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     printWarning("Service config looks out of date or non-standard.");
     for (const issue of service.configAudit.issues) {
       const detail = issue.detail ? ` (${issue.detail})` : "";
-      defaultRuntime.error(
+      runtime.error(
         `${warnText("Service config issue:")} ${terminalText`${issue.message}${detail}`}`,
       );
     }
@@ -214,13 +216,13 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   if (status.gateway) {
     const bindHost = status.gateway.bindHost ?? "n/a";
-    defaultRuntime.log(
+    runtime.log(
       `${label("Gateway:")} bind=${infoText(terminalText`${status.gateway.bindMode}`)} (${infoText(terminalText`${bindHost}`)}), port=${infoText(String(status.gateway.port))} (${infoText(terminalText`${status.gateway.portSource}`)})`,
     );
     printInfo("Check target:", terminalText`${status.gateway.probeUrl}`);
     const controlUiEnabled = status.config?.daemon?.controlUi?.enabled ?? true;
     if (!controlUiEnabled) {
-      defaultRuntime.log(`${label("Dashboard:")} ${warnText("disabled")}`);
+      runtime.log(`${label("Dashboard:")} ${warnText("disabled")}`);
     } else {
       const links =
         status.gateway.controlUiLinks ??
@@ -277,7 +279,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       // No Gateway version came back (failed or skipped probe). Report the install the
       // service points at so a stale service behind a bare connect error stays visible.
       printInfo("Gateway service version:", serviceInstallLine);
-      defaultRuntime.log(infoText("The Gateway did not report its own version."));
+      runtime.log(infoText("The Gateway did not report its own version."));
       if (
         !status.service.installationDrift &&
         status.service.targetRole !== "diagnostic-only" &&
@@ -302,16 +304,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   );
   if (runtimeLine) {
     const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
-    defaultRuntime.log(
+    runtime.log(
       `${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}${diagnosticOnlySuffix}`,
     );
   }
   if (service.restartHandoff) {
-    defaultRuntime.log(infoText(formatGatewayRestartHandoffDiagnostic(service.restartHandoff)));
+    runtime.log(infoText(formatGatewayRestartHandoffDiagnostic(service.restartHandoff)));
   }
   if (status.gateway?.lastShutdown) {
     const { reason, completedAtMs } = status.gateway.lastShutdown;
-    defaultRuntime.log(
+    runtime.log(
       `${label("Last shutdown:")} ${infoText(terminalText`${reason ?? "unknown"}`)} at ${new Date(completedAtMs).toISOString()}`,
     );
   }
@@ -331,19 +333,19 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   ) {
     // Port ownership proves the process is listening, not that startup completed.
     if (rpc.timedOut && rpc.gatewayReached) {
-      defaultRuntime.log(
+      runtime.log(
         warnText(
           "Gateway accepted the connection, but the read check timed out. Inspect event-loop load and retry before treating the service as unreachable.",
         ),
       );
     } else if (status.health?.healthy === true && status.health.staleGatewayPids.length === 0) {
-      defaultRuntime.log(
+      runtime.log(
         warnText(
           "Gateway process is running and owns the gateway port, but readiness is not yet confirmed. Warm-up is still possible. Try openclaw gateway status --deep again shortly; check the connection credentials/config and logs if it stays unresponsive.",
         ),
       );
     } else {
-      defaultRuntime.log(
+      runtime.log(
         warnText(
           "Readiness is not confirmed. A running service process does not prove the Gateway is available; inspect the service logs and openclaw gateway status --deep.",
         ),
@@ -353,14 +355,14 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (rpc) {
     const probeLabel = rpc.kind === "read" ? "Read check:" : "Connectivity check:";
     if (rpc.ok) {
-      defaultRuntime.log(`${label(probeLabel)} ${okText("ok")}`);
+      runtime.log(`${label(probeLabel)} ${okText("ok")}`);
     } else {
       const timeoutStatus = rpc.gatewayReached
         ? rpc.eventLoop?.degraded
           ? "timed out under event-loop load"
           : "timed out after reaching Gateway"
         : "timed out before reaching Gateway";
-      defaultRuntime.error(
+      runtime.error(
         `${label(probeLabel)} ${rpc.timedOut ? warnText(timeoutStatus) : errorText("failed")}`,
       );
       if (rpc.timedOut && rpc.eventLoop) {
@@ -369,18 +371,18 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         const eventLoopLine = `${state} max=${Math.round(eventLoop.delayMaxMs)}ms p99=${Math.round(
           eventLoop.delayP99Ms,
         )}ms util=${eventLoop.utilization} cpu=${eventLoop.cpuCoreRatio}`;
-        defaultRuntime.error(`${label("Gateway event loop:")} ${warnText(eventLoopLine)}`);
+        runtime.error(`${label("Gateway event loop:")} ${warnText(eventLoopLine)}`);
       }
       if (rpc.url) {
-        defaultRuntime.error(`${label("Check target:")} ${terminalText`${rpc.url}`}`);
+        runtime.error(`${label("Check target:")} ${terminalText`${rpc.url}`}`);
       }
       const lines = (rpc.error ?? "unknown").split(/\r?\n/).filter(Boolean);
       for (const line of lines.slice(0, 12)) {
-        defaultRuntime.error(`  ${errorText(terminalText`${line}`)}`);
+        runtime.error(`  ${errorText(terminalText`${line}`)}`);
       }
     }
     if (rpc.authWarning) {
-      defaultRuntime.error(`${label("Check auth:")} ${warnText(terminalText`${rpc.authWarning}`)}`);
+      runtime.error(`${label("Check auth:")} ${warnText(terminalText`${rpc.authWarning}`)}`);
     }
     const capability = rpc.capability ? rpc.capability.replaceAll("_", "-") : null;
     if (capability) {
@@ -416,14 +418,14 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         ? ` cmd=${displayPath(connection.commandLine)}`
         : "";
       const connectionLine = terminalText`${pid}${ppid}${direction}${command}${address}${commandLine}`;
-      defaultRuntime.log(`  ${infoText(connectionLine)}`);
+      runtime.log(`  ${infoText(connectionLine)}`);
     }
     if (status.connections.established.length > 8) {
-      defaultRuntime.log(
+      runtime.log(
         `  ${infoText(`... ${status.connections.established.length - 8} more connection(s)`)}`,
       );
     }
-    defaultRuntime.log(
+    runtime.log(
       warnText(
         "If logs show protocol mismatch after rollback, stop stale OpenClaw client processes listed here and re-run gateway status.",
       ),
@@ -436,7 +438,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     : (service.runtime?.inspectionFailure?.detail ??
       (service.loadState.status === "unknown" ? service.loadState.detail : undefined));
   if (serviceInspectionDetail) {
-    defaultRuntime.error(
+    runtime.error(
       managerUnavailable
         ? warnText(terminalText`${serviceInspectionDetail}`)
         : errorText(terminalText`Service inspection failed: ${serviceInspectionDetail}`),
@@ -475,7 +477,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const recovery = installBlock ?? `Run: ${installCommand}`;
       printError(recovery);
     } else {
-      defaultRuntime.log(
+      runtime.log(
         infoText("Native service is not installed; diagnostic only, not the check target."),
       );
     }
@@ -535,8 +537,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       printWarning("Foreign launchd jobs detected (macOS).");
       printWarning(formatForeignLaunchdJobs(service.foreignLaunchdJobs));
     } else {
-      defaultRuntime.log(infoText("Other OpenClaw launchd jobs (macOS)"));
-      defaultRuntime.log(infoText(formatForeignLaunchdJobs(service.foreignLaunchdJobs)));
+      runtime.log(infoText("Other OpenClaw launchd jobs (macOS)"));
+      runtime.log(infoText(formatForeignLaunchdJobs(service.foreignLaunchdJobs)));
     }
     const restarts = service.forcedRestartSummary;
     if (shouldWarn && restarts && restarts.count > 0) {
@@ -573,7 +575,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     printError(line);
   }
   if (status.lastError) {
-    defaultRuntime.error(
+    runtime.error(
       `${errorText("Recent Gateway log error (may be from an earlier run):")} ${terminalText`${status.lastError}`}`,
     );
   }
@@ -586,7 +588,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
 
   if (status.portCli && status.portCli.port !== status.port?.port) {
-    defaultRuntime.log(
+    runtime.log(
       `${label("Note:")} CLI config resolves gateway port=${status.portCli.port} (${status.portCli.status}).`,
     );
   }
@@ -610,27 +612,25 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const logs = resolveGatewaySupervisorLogPaths(serviceEnv);
       // The plist points both launchd handles at this file, so startup crashes that
       // never reached the logger land here too; do not advertise a separate stderr.
-      defaultRuntime.error(
-        `${errorText("Logs (stdout and stderr):")} ${displayPath(logs.stdoutPath)}`,
-      );
+      runtime.error(`${errorText("Logs (stdout and stderr):")} ${displayPath(logs.stdoutPath)}`);
     }
-    defaultRuntime.error(
+    runtime.error(
       `${errorText("Restart log:")} ${displayPath(resolveGatewayRestartLogPath(serviceEnv))}`,
     );
     spacer();
   }
 
   if (extraServices.length > 0) {
-    defaultRuntime.log(warnText("Other gateway-like services detected (best effort):"));
+    runtime.log(warnText("Other gateway-like services detected (best effort):"));
     for (const svc of extraServices) {
-      defaultRuntime.log(
+      runtime.log(
         `- ${warnText(terminalText`${svc.label}`)} ${terminalText`(${svc.scope}, ${svc.detail})`}`,
       );
     }
     for (const svc of extraServices) {
       const hintLabel = svc.platform === "darwin" ? "Cleanup hint:" : "Inspection hint:";
       for (const hint of renderGatewayServiceCleanupHints([svc])) {
-        defaultRuntime.log(`${infoText(hintLabel)} ${hint}`);
+        runtime.log(`${infoText(hintLabel)} ${hint}`);
       }
     }
     spacer();
@@ -638,7 +638,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   const drift = status.pluginVersionDrift;
   if (drift && drift.drifts.length > 0) {
-    defaultRuntime.log(
+    runtime.log(
       warnText(
         terminalText`Plugin version drift: ${drift.drifts.length} active official plugin${
           drift.drifts.length === 1 ? "" : "s"
@@ -657,7 +657,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           entry.targetResolution?.status === "resolved"
             ? entry.targetResolution.version
             : drift.gatewayVersion;
-        defaultRuntime.log(
+        runtime.log(
           `- ${warnText(terminalText`${entry.pluginId}`)}${terminalText`: ${entry.installedVersion} (${sourceLabel}) → expected ${expectedVersion}${resolvedTarget}`}`,
         );
       }
@@ -672,7 +672,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           unresolvedRepairs.push(entry);
         }
         if (registryLag) {
-          defaultRuntime.log(
+          runtime.log(
             terminalText`- ${entry.pluginId}: registry version ${registryLag.registryVersion} is already installed; no release reaches ${registryLag.expectedVersion} yet, so no update command applies.`,
           );
         }
@@ -685,27 +685,27 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
             targetResolution?.status === "unresolved"
               ? targetResolution.error
               : "npm registry target was not resolved";
-          defaultRuntime.error(terminalText`- ${entry.pluginId}: ${detail}`);
+          runtime.error(terminalText`- ${entry.pluginId}: ${detail}`);
         }
         printError(
           "No install command was generated for unresolved plugin targets. Retry gateway status --deep after checking registry availability.",
         );
       }
       if (updateCommands.length === 1 && unresolvedRepairs.length === 0) {
-        defaultRuntime.log(
+        runtime.log(
           `${label("Fix:")} ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`,
         );
       } else if (updateCommands.length > 0) {
-        defaultRuntime.log(`${label("Fix:")} update each drifted plugin:`);
+        runtime.log(`${label("Fix:")} update each drifted plugin:`);
         for (const command of updateCommands) {
-          defaultRuntime.log(`- ${command}`);
+          runtime.log(`- ${command}`);
         }
         if (unresolvedRepairs.length === 0) {
-          defaultRuntime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);
+          runtime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);
         }
       }
     } else {
-      defaultRuntime.log(
+      runtime.log(
         infoText(
           `Run ${formatCliCommand("openclaw gateway status --deep")} for affected plugin ids and fix commands.`,
         ),
@@ -715,12 +715,12 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
 
   if (extraServices.length > 0 && !isGatewayExternallySupervised(process.env)) {
-    defaultRuntime.log(
+    runtime.log(
       infoText(
         "Recommendation: run a single gateway per machine for most setups. One gateway supports multiple agents (see docs: /gateway#multiple-gateways-same-host).",
       ),
     );
-    defaultRuntime.log(
+    runtime.log(
       infoText(
         "If you need multiple gateways (e.g., a rescue bot on the same host), isolate ports + config/state (see docs: /gateway#multiple-gateways-same-host).",
       ),
@@ -728,7 +728,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
-  defaultRuntime.log(`${label("Troubles:")} run ${formatCliCommand("openclaw status")}`);
-  defaultRuntime.log(`${label("Troubleshooting:")} https://docs.openclaw.ai/troubleshooting`);
-  defaultRuntime.log(`${label("Support:")} https://community.openclaw.ai/`);
+  runtime.log(`${label("Troubles:")} run ${formatCliCommand("openclaw status")}`);
+  runtime.log(`${label("Troubleshooting:")} https://docs.openclaw.ai/troubleshooting`);
+  runtime.log(`${label("Support:")} https://community.openclaw.ai/`);
 }

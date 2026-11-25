@@ -326,7 +326,8 @@ function crossQualificationTrees(data: Awaited<ReturnType<typeof fixture>>) {
     ["compare/" + data.request.workflowSha + "..." + next + "?per_page=1"]: {
       status: "ahead",
       merge_base_commit: { sha: data.request.workflowSha },
-      files: [{ filename: ".github/workflows/full-release-validation.yml", status: "modified" }],
+      // No complete path proof in this fixture: exercise authenticated tree fallback.
+      files: [],
     },
     [`git/commits/${data.request.workflowSha}`]: {
       sha: data.request.workflowSha,
@@ -348,6 +349,65 @@ function crossQualificationTrees(data: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("independent release child reuse", () => {
+  it.each([
+    "normalCi",
+    "productPerformance",
+    "releaseChecksIndependent",
+    "pluginPrereleaseIndependent",
+  ])("reuses %s after combined parent orchestration and policy repairs", async (role) => {
+    const data = await fixture(role);
+    const trees = crossQualificationTrees(data);
+    trees.current.tree.find((entry) => entry.path === "scripts")!.sha = "e".repeat(40);
+    const files = [
+      ".github/workflows/full-release-validation.yml",
+      "scripts/lib/release-validation-waivers.json",
+      "scripts/lib/full-release-child-reuse.mjs",
+      "test/scripts/full-release-child-reuse.test.ts",
+      "docs/reference/full-release-validation/stages.md",
+      "docs/reference/full-release-validation/dispatch.md",
+    ].map((filename) => ({ filename, status: "modified" }));
+    const comparison = { status: "ahead", merge_base_commit: { sha: TOOLING }, files };
+    const github = data.deps.github;
+    data.deps.github = async (endpoint) =>
+      endpoint.startsWith("compare/") ? comparison : github(endpoint);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection, data.deps.report.mock.calls.flat().join("\n")).not.toBeNull();
+    await expect(
+      validateReusableReleaseChild(selection, data.request, data.deps),
+    ).resolves.toMatchObject({
+      receipt: { workflowSha: TOOLING, targetSha: TARGET },
+    });
+    for (const filename of [
+      "scripts/run-vitest.mjs",
+      ".github/workflows/ci.yml",
+      "pnpm-lock.yaml",
+      "src/index.ts",
+    ]) {
+      files.push({ filename, status: "modified" });
+      await expect(
+        validateReusableReleaseChild(selection, data.request, data.deps),
+      ).rejects.toThrow("workload closure changed");
+      files.pop();
+    }
+    files[0]!.status = "renamed";
+    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
+      "workload closure changed",
+    );
+    files[0]!.status = "modified";
+    comparison.status = "diverged";
+    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
+      "workload closure changed",
+    );
+    comparison.status = "ahead";
+    // The GitHub compare API caps inventories at 300 files; never assume completeness at the cap.
+    while (files.length < 300) {
+      files.push({ filename: "scripts/lib/full-release-child-reuse.mjs", status: "modified" });
+    }
+    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
+      "workload closure changed",
+    );
+  });
+
   it.each(["success", "failure"])(
     "reuses raw %s execution after a Q-only grant commit",
     async (conclusion) => {

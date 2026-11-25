@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSnapshot } from "../../config/mutate.test-support.js";
-import { redactSensitiveCommandText } from "../../system-agent/operations.js";
+import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
+import {
+  isPersistentSystemAgentOperation,
+  redactSensitiveCommandText,
+} from "../../system-agent/operations.js";
 import { hashSystemAgentOperation } from "../../system-agent/operator-approval.js";
 import { withSystemAgentOverviewSources } from "../../system-agent/overview.test-support.js";
 import {
@@ -149,6 +153,58 @@ describe("openclaw tool", () => {
     ).properties.action.enum;
     expect(actionEnum).toContain("health");
     expect(tool.description).toMatch(/Read now:.*health/);
+  });
+
+  it.each<[Record<string, unknown>, SystemAgentOperation]>([
+    [{ action: "logs" }, { kind: "logs" }],
+    [{ action: "gateway_status_deep" }, { kind: "gateway-status-deep" }],
+    [{ action: "channels_status" }, { kind: "channels-status" }],
+    [
+      { action: "channels_status", probe: true },
+      { kind: "channels-status", probe: true },
+    ],
+    [{ action: "models_status", probe: true }, { kind: "models-status" }],
+    [{ action: "skills_check" }, { kind: "skills-check" }],
+    [{ action: "plugins_doctor" }, { kind: "plugins-doctor" }],
+    [
+      { action: "read_install_file", path: "docs/index.md" },
+      { kind: "read-install-file", path: "docs/index.md" },
+    ],
+  ])("runs %j as a read without staging a proposal", async (args, operation) => {
+    const { proposalRef, directiveRef, call } = gatewayFixture();
+    const text = await call(args);
+    expect(text).toBe("op-output");
+    expect(mocks.executeSystemAgentOperation).toHaveBeenCalledWith(
+      operation,
+      expect.anything(),
+      expect.objectContaining({ approved: false }),
+    );
+    expect(isPersistentSystemAgentOperation(operation)).toBe(false);
+    expect(proposalRef).toEqual({});
+    expect(directiveRef).toEqual({});
+  });
+
+  it("advertises the self-repair reads and requires a path for read_install_file", async () => {
+    const tool = createSystemAgentTool({ surface: "cli" });
+    const properties = (
+      tool.parameters as { properties: { action: { enum: string[] }; probe: unknown } }
+    ).properties;
+    for (const action of [
+      "logs",
+      "gateway_status_deep",
+      "channels_status",
+      "models_status",
+      "skills_check",
+      "plugins_doctor",
+      "read_install_file",
+    ]) {
+      expect(properties.action.enum).toContain(action);
+      expect(tool.description).toMatch(new RegExp(`Read now:.*${action}`));
+    }
+    expect(properties.probe).toBeDefined();
+    await expect(tool.execute("no-path", { action: "read_install_file" })).rejects.toThrow(
+      '"path" is required',
+    );
   });
 
   it("routes action:overview through the canonical overview executor", async () => {
