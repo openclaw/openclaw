@@ -250,6 +250,8 @@ Use `sessions_create` for independent sessions. For deliberately supervised chil
 
 If startup or registration fails, cleanup removes only the child created by that spawn. A session reset or replaced meanwhile is preserved. When cleanup cannot be confirmed, the error includes the child session key for inspection before retrying.
 
+When changing a model with `sessions` or `session_status`, pass only the model ID if the provider does not matter. If the default route is unavailable, the Gateway can choose another route for that exact model on the same runtime. Use `provider/model` to require a specific provider. If no eligible route has a usable account, the patch fails and the previous selection stays in place. Worker-local credentials are checked on the worker, not on the Gateway.
+
 An agent-selected model patch stays reversible until that selection completes a successful run. If the selected model is definitively unusable because of authentication, billing, or model-not-found failure, OpenClaw restores the previous model and writes a visible system note. Transient rate-limit, overload, timeout, network, and server failures do not undo the selection.
 
 ## Sessions versus conversations

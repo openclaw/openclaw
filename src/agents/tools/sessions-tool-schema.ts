@@ -123,7 +123,12 @@ const SessionsToolSchema = Type.Object(
     archived: Type.Optional(
       Type.Boolean({ description: "True archives without deleting; false restores the session." }),
     ),
-    model: Type.Optional(Type.String({ description: "Model override" })),
+    model: Type.Optional(
+      Type.String({
+        description:
+          "Model override. Pass only the model ID unless the user requested a specific provider; use provider/model to require it.",
+      }),
+    ),
     thinkingLevel: Type.Optional(Type.String({ description: "Thinking override" })),
     ownerType: Type.Optional(
       stringEnum(["human", "agent"] as const, {

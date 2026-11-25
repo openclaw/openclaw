@@ -1,6 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { createModelRuntimeChoiceOwnerFixture } from "../../agents/model-runtime-choice.test-support.js";
+import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
@@ -62,6 +65,7 @@ vi.mock("../../config/config.js", async () => {
 
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createGatewaySession } from "../session-create-service.js";
+import { withAgentSessionModelPatchOrigin } from "../session-model-patch-origin.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import {
@@ -304,6 +308,65 @@ registerSessionNativeRuntimeConsentTests({
 registerSessionOperatorPreparationTests({ context, profileId: () => accountOwnerId, personClient });
 
 describe("sessions.patch sticky model persistence", () => {
+  it.each(["sample-v2", "vendor/sample-v2"])(
+    "checks the session route before saving %s",
+    async (raw) => {
+      const key = "agent:main:dm:route-" + (raw.includes("/") ? "explicit" : "bare");
+      await seedSession(key, {
+        providerOverride: "vendor",
+        modelOverride: "sample-v1",
+        agentRuntimeOverride: "openclaw",
+        modelProvider: "vendor",
+        model: "sample-v1",
+      });
+      const before = readSession(key);
+      const request = context();
+      const rows = [
+        { provider: "vendor", id: "sample-v2", name: "Sample 2" },
+        { provider: "relay", id: "vendor/sample-v2-fast", name: "Sample 2" },
+        { provider: "relay", id: "vendor/sample-v2", name: "Sample 2" },
+      ];
+      cfg.agents!.defaults!.models = Object.fromEntries(
+        rows.map((row) => [row.provider + "/" + row.id, {}]),
+      );
+      const snapshot = catalogSnapshot(rows);
+      request.loadGatewayModelCatalogSnapshot.mockResolvedValue(snapshot);
+      const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+        modelCatalog: snapshot,
+      });
+      bindPreparedModelRuntimeAuth(owner, {
+        store: {
+          version: 1,
+          profiles: {
+            "relay:fixture": { type: "api_key", provider: "relay", key: "synthetic-fixture" },
+          },
+        },
+      });
+      vi.spyOn(preparedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot").mockReturnValue(
+        owner,
+      );
+      const actual = await vi.importActual<typeof import("../../agents/model-runtime-choice.js")>(
+        "../../agents/model-runtime-choice.js",
+      );
+      runtimeChoice.prepare.mockImplementation(actual.preparePublishedModelRuntimeChoice);
+      const response = await withAgentSessionModelPatchOrigin(() =>
+        patchSession({ key, model: raw }, undefined, request),
+      );
+      if (raw.includes("/")) {
+        expect(response[0]).toBe(false);
+        expect(response[2]?.message).toContain("vendor/sample-v2");
+        expect(readSession(key)).toEqual(before);
+      } else {
+        expect(response[2]).toBeUndefined();
+        expect(readSession(key)).toMatchObject({
+          providerOverride: "relay",
+          modelOverride: "vendor/sample-v2",
+          agentRuntimeOverride: "openclaw",
+          lastSubmittedModel: { provider: "vendor", model: "sample-v1" },
+        });
+      }
+    },
+  );
   it.each(["agent", "global"] as const)(
     "keeps sandbox recovery local with %s defaults",
     async (scope) => {

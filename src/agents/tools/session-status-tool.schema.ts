@@ -4,7 +4,12 @@ import { requesterProfileSchema } from "../schema/typebox.js";
 export const SessionStatusToolSchema = Type.Object({
   user: requesterProfileSchema({ defaultToTurnOwner: true }),
   sessionKey: Type.Optional(Type.String()),
-  model: Type.Optional(Type.String()),
+  model: Type.Optional(
+    Type.String({
+      description:
+        "Pass only the model ID unless the user requested a specific provider; use provider/model to require it.",
+    }),
+  ),
   changesSince: Type.Optional(Type.Integer({ minimum: 0 })),
   capabilities: Type.Optional(Type.Boolean()),
 });
