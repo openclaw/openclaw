@@ -1,6 +1,13 @@
 /// What the composer's single primary button does. The phone composer never shows Stop and Send
 /// side by side: one button in one place changes its glyph and action with the state.
 enum ChatComposerPrimaryRole: Equatable {
+    /// What Talk can be for the button: absent, ready to start, or a live conversation.
+    enum Talk: Equatable {
+        case unavailable
+        case available
+        case live
+    }
+
     case talk
     case send
     case stop
@@ -15,8 +22,13 @@ enum ChatComposerPrimaryRole: Equatable {
         hasReplyRunningElsewhere: Bool,
         hasBlockingRunActivity: Bool,
         isLocalVoiceCaptureActive: Bool,
-        hasTalkControl: Bool) -> Self
+        talk: Talk) -> Self
     {
+        // A live voice conversation owns the button in every one of its states, thinking included: it ends
+        // Talk. A Stop here would leave Talk listening; the agent's speech already stops when spoken over.
+        if talk == .live {
+            return .talk
+        }
         if hasOwnReply {
             // Decision point (F38, pending Victor): a draft that can be sent now wins over Stop, and
             // Stop returns once the field is empty. The alternative keeps Stop until the reply ends:
@@ -25,7 +37,7 @@ enum ChatComposerPrimaryRole: Equatable {
             // Sent just now: the same rule from the tap on, so Send goes straight to Stop.
             return hasDraftToSend && canSendDraft ? .send : .stop
         }
-        if hasTalkControl, OpenClawChatComposer.showsCompactTalkControl(
+        if talk == .available, OpenClawChatComposer.showsCompactTalkControl(
             hasDraftToSend: hasDraftToSend,
             hasBlockingRunActivity: hasBlockingRunActivity,
             isLocalVoiceCaptureActive: isLocalVoiceCaptureActive)

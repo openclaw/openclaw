@@ -79,7 +79,7 @@ extension OpenClawChatComposer {
                 self.viewModel.hasActiveSessionRunWithoutChatSnapshot,
             hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
             isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive,
-            hasTalkControl: self.talkControl != nil)
+            talk: self.talkControl.map { $0.isEnabled ? .live : .available } ?? .unavailable)
     }
 
     /// The reply normally registers within about a second (0.1 s live, up to 1 s through the
@@ -287,11 +287,6 @@ struct ChatComposerPrimaryButton: View {
         // Only Stop shows progress; a send never turns the button into a spinner.
         if role == .stop, self.stop.isAborting {
             ProgressView().controlSize(.mini).tint(self.ink(for: role))
-        } else if role == .talk, self.role == .talk, let talkControl, talkControl.isEnabled {
-            ChatTalkButtonGlyph(control: talkControl)
-                .font(OpenClawChatTypography.composerPrimaryGlyph)
-                .scaleEffect(0.88)
-                .foregroundStyle(self.ink(for: role))
         } else {
             Image(systemName: self.symbolName(for: role))
                 .font(self.symbolFont(for: role))
@@ -314,7 +309,8 @@ struct ChatComposerPrimaryButton: View {
 
     private func symbolName(for role: ChatComposerPrimaryRole) -> String {
         switch role {
-        case .talk: "waveform"
+        // Live, the Talk face ends the conversation: a close mark reads as that at a glance.
+        case .talk: self.talkControl?.isEnabled == true ? "xmark" : "waveform"
         case .send: "arrow.up"
         case .stop: "stop.fill"
         }
@@ -341,7 +337,7 @@ struct ChatComposerPrimaryButton: View {
         case .talk:
             guard let talkControl else { return AnyShapeStyle(OpenClawChatTheme.accent) }
             if talkControl.isEnabled {
-                return AnyShapeStyle(OpenClawChatTheme.userBubble)
+                return AnyShapeStyle(OpenClawChatTheme.accent)
             }
             return AnyShapeStyle(OpenClawChatTheme.accent.opacity(talkControl.isGatewayConnected ? 1 : 0.4))
         case .send:
