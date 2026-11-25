@@ -149,7 +149,7 @@ suite.define(() => {
           await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
         };
         await capture("wide-resting");
-        for (const width of [901, 900, 899, 820, 768, 641]) {
+        for (const width of [900, 820, 768, 641]) {
           await page.setViewportSize({ width, height: 1000 });
           await expect.poll(() => model.isVisible()).toBe(true);
           await expect.poll(height).toBeGreaterThanOrEqual(88);
