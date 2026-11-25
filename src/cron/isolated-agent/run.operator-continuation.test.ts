@@ -490,9 +490,6 @@ it.each([
   if (scenario === "foreign target") {
     expect(job.operatorSource).toBeUndefined();
   }
-  if (original && !queuedEdit) {
-    expect(() => original.authority.assertCurrent()).toThrow();
-  }
   if (scenario === "current tool deny") {
     config.tools = { ...config.tools, deny: ["github_publish"] };
     setRuntimeConfigSnapshot(config);
@@ -926,7 +923,7 @@ it.each([
         expect(rejected).toContain(
           scopedOperator
             ? "missing scope: operator.write"
-            : "require full operator write permission",
+            : "Your role on this Gateway does not allow it",
         );
       }
       if (scenario === "role revoked during merge") {

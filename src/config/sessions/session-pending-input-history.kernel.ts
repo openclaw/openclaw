@@ -14,6 +14,7 @@ import {
   hasSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { pendingInputAudienceEligibility } from "./session-pending-input-audience.js";
 import type {
   PendingInputHistoryQuery,
   PendingInputHistorySnapshot,
@@ -52,7 +53,10 @@ export function readPendingInputHistoryInDatabase(
       .selectFrom("session_pending_inputs")
       .where("session_key", "=", query.sessionKey)
       .where("session_id", "=", query.sessionId)
-      .where(pendingInputHistoryEligibility(query));
+      .where(pendingInputHistoryEligibility(query))
+      .$if(Boolean(query.audience), (selection) =>
+        selection.where(pendingInputAudienceEligibility(database, query.audience!)),
+      );
     if (hasConsumption) {
       base = base.where("consumed_event_id", "is", null);
     }
@@ -88,6 +92,9 @@ function readPendingInputPageInDatabase(
           .where("session_id", "=", query.sessionId)
           .$if(hasConsumption, (selection) => selection.where("consumed_event_id", "is", null))
           .where(pendingInputHistoryEligibility(query))
+          .$if(Boolean(query.audience), (selection) =>
+            selection.where(pendingInputAudienceEligibility(database, query.audience!)),
+          )
           .$if(query.before !== undefined, (selection) =>
             selection.where("seq", "<", query.before!),
           )

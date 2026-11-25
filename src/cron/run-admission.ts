@@ -9,6 +9,10 @@ import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
 import {
+  bindSessionMcpStoreOwner,
+  inheritSessionMcpStoreOwner,
+} from "../config/sessions/session-mcp-store-admission.js";
+import {
   composeSessionSourceAssertion,
   prepareSessionSourceAuthority,
   type SessionSourceAssertion,
@@ -39,6 +43,7 @@ export function prepareCronRunAdmission(params: {
   runId: string;
   sessionId?: string;
   sessionKey: string;
+  storeAdmission?: object;
   sourceReplySessionKey?: string;
   jobId: string;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
@@ -54,9 +59,14 @@ export function prepareCronRunAdmission(params: {
   scheduledExecution: MintedScheduledExecution;
 }) {
   const { runId, scheduledToolPolicy } = params;
-  if (!params.scheduledExecution) {
-    // Every scheduled run belongs to exactly one occurrence admitted by `admitScheduledOccurrence`.
-    throw new Error("a scheduled run requires its admitted occurrence");
+  const { result } = params.scheduledExecution;
+  if (result.status !== "ready") {
+    // A scheduled run starts only with its admitted context; the run record and the
+    // job's failure notice carry this refusal.
+    const cause = result.status === "fail" ? result.error : `its conversation is ${result.reason}`;
+    throw new Error(
+      `This automation's access could not be admitted (${cause}), so the run did not start. Recreate the automation from a chat that still has access.`,
+    );
   }
   const operationalRunInstance = createOperationalRunInstanceRef(runId);
   const resolveGatewayContext =
@@ -141,7 +151,9 @@ export function prepareCronRunAdmission(params: {
         expiresWithRun: true,
       })
     : undefined;
+  inheritSessionMcpStoreOwner(params.storeAdmission, operationalRunInstance);
   const close = () => {
+    bindSessionMcpStoreOwner(operationalRunInstance, undefined);
     params.scheduledExecution.release();
     revokeMessageActionTurnCapability(messageActionTurnCapability);
     preparedRunAdmission.close();

@@ -77,7 +77,7 @@ export function createScrollPosition(
     | {
         retain?: never;
         reset?: ScrollTarget;
-        reveal?: ScrollTarget;
+        reveal?: ScrollTarget & { block?: "start" };
         restore?: {
           identity: readonly unknown[];
           target: HTMLElement | null | undefined;
@@ -89,12 +89,15 @@ export function createScrollPosition(
     region?: () => HTMLElement;
     revealTiming?: "animation-frame";
     revealAxis?: "block" | "inline";
+    /** Wait only while a requested reveal target hasn't mounted in this subtree. */
+    waitForRevealIn?: () => HTMLElement;
   } = {},
 ) {
   let retained:
     | { identity: readonly unknown[]; target: HTMLElement; top: number; pending: boolean }
     | undefined;
   const retainedLayout = {};
+  let revealPending = false;
   createEffect(read, (next, previous) => {
     if ("retain" in next) {
       const input = next.retain;
@@ -182,14 +185,31 @@ export function createScrollPosition(
       }
     }
     const request = next.reveal;
-    if (!request || !scrollIdentityChanged(request, previous?.reveal)) {
+    if (!request) {
       return undefined;
     }
+    revealPending ||= scrollIdentityChanged(request, previous?.reveal);
+    if (!revealPending) {
+      return undefined;
+    }
+    let observer: MutationObserver | undefined;
     const reveal = () => {
       const target = request.target();
       if (!target) {
+        if (!observer && options.waitForRevealIn) {
+          observer = new MutationObserver(reveal);
+          observer.observe(options.waitForRevealIn(), {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["hidden"],
+          });
+        }
         return;
       }
+      observer?.disconnect();
+      // Consume the request only once its target exists. Reconnects must not replay a reveal.
+      revealPending = false;
       if (options.region) {
         const region = options.region();
         if (region.contains(target)) {
@@ -199,14 +219,17 @@ export function createScrollPosition(
           );
         }
       } else {
-        target.scrollIntoView?.({ block: "nearest" });
+        target.scrollIntoView?.({ block: request.block ?? "nearest" });
       }
     };
     if (options.revealTiming === "animation-frame") {
       const frame = requestAnimationFrame(reveal);
-      return () => cancelAnimationFrame(frame);
+      return () => {
+        cancelAnimationFrame(frame);
+        observer?.disconnect();
+      };
     }
     reveal();
-    return undefined;
+    return () => observer?.disconnect();
   });
 }

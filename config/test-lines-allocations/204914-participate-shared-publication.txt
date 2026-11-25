@@ -1,0 +1,19 @@
+507
+# Participate split, part 5 of 6 (participant publication through the shared
+# GitHub account): measured with check-test-lines-ratchet against the P4 branch
+# tip; 907 net lines minus the ordinary 400-line allowance. Reuses the existing
+# native handoff outcome table, attribution/action cases and child authority
+# fixtures, parameterizing linked/unlinked and local/repository cases rather
+# than duplicating fixtures. The remaining proofs cover distinct boundaries:
+# a send participant keeps its original identity across recovery without
+# lending creator or admin power, and a started attempt survives a later
+# membership downgrade while the next admission is refused; inherited
+# participant callers and task handoffs stay bound to their exact target; shared publication with and
+# without a linked personal connection; another participant's PR reuse is
+# refused before any write; workflow edits are denied on local and repository
+# backends despite operator.write; contributor credit is not PR authorship; the
+# participant's name renders as literal text in the PR body; a native
+# child-completion wake publishes with default-mode participant authority; and
+# requester records stored before participation decode and re-encode
+# byte-identically.
+# No assertion, timer, file cap or global budget is relaxed.

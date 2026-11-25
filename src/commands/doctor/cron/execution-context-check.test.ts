@@ -86,6 +86,7 @@ const roleConfig: OpenClawConfig = {
       definitions: {
         member,
         contractor: { ...member, sandbox: "required" },
+        admin: { ...member, scopes: ["operator.admin"] },
       },
     },
   },
@@ -119,6 +120,22 @@ it.each([
   expect(text ?? "").not.toMatch(
     /Doctor could not verify it|could not be evaluated|unsandboxed execution/,
   );
+});
+
+it("leaves an admin-role profile requester to admission", async () => {
+  mocks.jobs = [jobRow("current", { createdActor: profileActor })];
+  mocks.profiles = new Map([["profile-1", "admin"]]);
+  // Its agents list and access policy decide ownership at run time.
+  expect(await noteText(roleConfig)).toContain("Doctor could not verify it");
+});
+
+it("checks a transferred job's requester by its own role, not its creator's", async () => {
+  mocks.jobs = [jobRow("transferred", { createdActor: profileActor, ownerProfileId: "profile-2" })];
+  mocks.profiles = new Map([
+    ["profile-1", "admin"],
+    ["profile-2", null],
+  ]);
+  expect(await noteText(roleConfig)).toEqual(expect.stringContaining(ownerTools));
 });
 
 it("accepts a configured channel owner", async () => {

@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { parseUserChannelAuthorizationReference } from "../state/user-channel-authorization-reference.js";
 import {
@@ -96,25 +96,26 @@ function resolveChannelOperatorIdentityFacts(
   };
 }
 
+/** As on a socket: the verified login's identity scopes, capped by role; else the role's scopes. */
 function resolveLinkedOperatorScopes(
   cfg: OpenClawConfig,
   linked: UserChannelIdentityAuthorityFacts,
 ) {
-  return (
-    resolveOperatorRolePolicyForAssignment(
-      linked.profileId,
-      linked.role,
-      cfg,
-      linked.githubLogin ?? null,
-      operatorRoleSubject(linked),
-    )?.scopes ?? [
-      ...new Set(
-        linked.loginIdentities.flatMap((login) =>
-          resolveIdentityOperatorScopes(login, cfg.gateway?.auth?.identityScopes),
-        ),
+  const role = resolveOperatorRolePolicyForAssignment(
+    linked.profileId,
+    linked.role,
+    cfg,
+    linked.githubLogin ?? null,
+    operatorRoleSubject(linked),
+  )?.scopes;
+  const identity = [
+    ...new Set(
+      linked.loginIdentities.flatMap((login) =>
+        resolveIdentityOperatorScopes(login, cfg.gateway?.auth?.identityScopes),
       ),
-    ]
-  );
+    ),
+  ];
+  return identity.length ? intersectOperatorScopes(identity, role ?? identity) : (role ?? []);
 }
 
 function captureLinkedOperatorAdminIdentity(

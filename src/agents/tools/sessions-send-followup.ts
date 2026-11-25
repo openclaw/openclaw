@@ -113,7 +113,7 @@ export async function dispatchSessionsSendFollowup(
     requesterSessionKey: string;
     requesterAgentId: string;
     requesterTurnRunId?: string;
-    targetSession?: AgentStepSession;
+    targetSession?: AgentStepSession & { label?: string };
     withRequesterAuthority?: <T>(run: () => T) => T;
   },
 ) {
@@ -234,6 +234,8 @@ export async function dispatchSessionsSendFollowup(
               requesterTurnRunId: registryTurn,
               requesterOrigin: replyContext.requesterOrigin,
               task: options.message,
+              // The completion receipt names the child as its session does.
+              label: options.targetSession?.label,
               cleanup: "keep",
               spawnMode: "session",
               expectsCompletionMessage: Boolean(completionTurn),
@@ -265,7 +267,7 @@ export async function dispatchSessionsSendFollowup(
         }
         return accepted;
       };
-      const accepted = await (request ? request.custody.run(claim) : claim());
+      const accepted = await (request ? request.custody.runWithRequester(claim) : claim());
       assertCurrent();
       if (instance) {
         mergeAcceptedSessionSpawnsForRun(instance, [accepted]);

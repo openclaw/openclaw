@@ -156,7 +156,11 @@ it("reports a lost HTTP response for an accepted QA reply and reuses its request
           agentId: identity.agentId,
           sessionKey: identity.sessionKey,
           operationalRunInstance,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+          receiptAuthority: () => {
+            if (!validateAgentRunDelegatedAuthority(authority)) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
         },
         async () => {
           const runtimeIdentity = expectDefined(

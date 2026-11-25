@@ -258,7 +258,7 @@ async function prepareSourceRequest(
         }))
       : undefined;
   const registeredPaths = (registeredDatabases ?? [])
-    .filter((registered) => registered.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION)
+    .filter((registered) => registered.schemaVersion >= OPENCLAW_AGENT_SCHEMA_VERSION)
     .map((registered) => registered.path);
   if (registeredPaths.length > 0) {
     const registered = await prepareSessionStoreCandidatesInWorker({

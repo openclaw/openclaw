@@ -141,7 +141,7 @@ export function locateRows(
   let last = -1;
   for (let row = 0; row < rows; row += 1) {
     const start = block.monthStartMs + quarters[row]! * QUARTER_MS;
-    const slot = start < range.startMs || start > range.endMs ? -1 : range.slot(start);
+    const slot = start < range.startMs || start > range.endMs ? -1 : range.slot(start, block, row);
     slotOfRow[row] = slot;
     dayOfRow[row] = slot < 0 ? -1 : slot >> 8;
     if (slot >= 0) {
@@ -231,12 +231,12 @@ export function addUsageQuartersToDailyTotals(params: {
   const dayCount = range.dates.length;
   summaryScratch.days = growFloat64(summaryScratch.days, dayCount * TOTALS_WIDTH);
   const { days } = summaryScratch;
-  // Rows ascend in time, so this block's report days arrive in order.
-  const order: number[] = [];
+  // A backward transition can revisit a local date within the same UTC block.
+  const order = new Set<number>();
   for (let row = first; row <= last; row += 1) {
     const day = dayOfRow[row]!;
-    if (day >= 0 && order.at(-1) !== day) {
-      order.push(day);
+    if (day >= 0 && !order.has(day)) {
+      order.add(day);
       days.fill(0, day * TOTALS_WIDTH, (day + 1) * TOTALS_WIDTH);
     }
   }

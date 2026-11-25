@@ -8,7 +8,7 @@ import { JsonFileReadError, readJsonIfExists } from "./json-files.js";
 const log = createSubsystemLogger("install-owner");
 const InstallOwnerSchema = z.object({
   schemaVersion: z.literal(1),
-  owner: z.enum(["macos-app", "desktop-app"]),
+  owner: z.enum(["macos-app", "desktop-app", "container-image"]),
   displayName: z.string().trim().min(1),
   updateHint: z.string().trim().min(1),
 });

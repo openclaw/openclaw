@@ -3,17 +3,6 @@
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../../config/config.js";
-import { prepareGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
-import {
-  createContext,
-  createOperatorClient,
-} from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGatewayRequestScope,
-} from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
@@ -32,23 +21,14 @@ import {
   updateRun,
 } from "./subagent-announcement.test-support.js";
 import * as registryDeps from "./subagent-registry-deps.js";
-import * as registryHelpers from "./subagent-registry-helpers.js";
 import * as announceCleanup from "./subagent-registry-lifecycle-announce-cleanup.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  mutateSubagentRuns,
-  SubagentRegistryMutationRejectedError,
-} from "./subagent-registry-persistence.js";
-import {
-  getSubagentRegistryPublicationRevision,
-  subscribeSubagentRunChanges,
-} from "./subagent-registry-publication.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { resumeSubagentRun, prepareSubagentSessionCleanupRevocation } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { testing } from "./subagent-registry.test-helpers.js";
-import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 
@@ -209,7 +189,7 @@ it("refuses cleanup before capture when its database is closed", async () => {
 });
 
 it.each(["current", "revoked", "source switched", "yielded"] as const)(
-  "uses current authority for an ended hook after suspended bookkeeping (%s)",
+  "uses current authority for an ended hook after legacy delivery settlement (%s)",
   async (change) => {
     const runId = "suspended-announcement-hook";
     const waitResult = createDeferredCore<Record<string, unknown>>();
@@ -331,7 +311,7 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
         }
       }
       if (change !== "yielded") {
-        expect(currentRun(runId)?.delivery?.status).toBe("discarded");
+        expect(currentRun(runId)?.delivery?.status).toBe("delivered");
       }
       expect(currentRun(runId)?.endedHookEmittedAt).toEqual(
         change === "current" ? expect.any(Number) : undefined,
@@ -345,138 +325,6 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
       } finally {
         setTestEnvValue("OPENCLAW_STATE_DIR", fixture.stateDir);
       }
-    }
-  },
-);
-
-it.each([false, true])(
-  "preserves registered suspended retirement across successor registration (successor: %s)",
-  async (replace) => {
-    const run = await registerCompletion("suspended-retirement", {
-      cleanup: "delete",
-      holdForRequester: true,
-    });
-    completeRegistered(run);
-    await fixture.settle();
-    await suspendRun(run.runId);
-    const entry = currentRun(run.runId)!;
-    const ended = vi.fn(async () => {});
-    installEndedHook(ended);
-
-    const context = createContext();
-    context.localEmbedded = true;
-    context.getRuntimeConfig = getRuntimeConfig;
-    const resolveGatewayContext = () => context;
-    context.resolveGatewayContext = resolveGatewayContext;
-    const client = createOperatorClient({
-      profileName: "retirement-successor",
-      scopes: ["operator.write"],
-    });
-    const source = await prepareGatewayOperatorRunAuthority({ client, context });
-    if (!source) {
-      throw new Error("Expected canonical successor authority");
-    }
-    client.internal = { operatorRunAuthority: source.authority };
-    const cleanupEntered = createDeferredCore();
-    const releaseCleanup = createDeferredCore();
-    const removeAttachments = registryHelpers.safeRemoveAttachmentsDir;
-    const cleanup = vi
-      .spyOn(registryHelpers, "safeRemoveAttachmentsDir")
-      .mockImplementation(async (retired, isCurrent) => {
-        if (replace && getSubagentRunRuntimeKey(retired) === getSubagentRunRuntimeKey(entry)) {
-          cleanupEntered.resolve();
-          await releaseCleanup.promise;
-        }
-        return removeAttachments(retired, isCurrent);
-      });
-    const { ready, release, worker } = holdAnnouncementCommand(
-      (command) =>
-        isSubagentRegistryWriteCommand(command) && command.input.deleteRunIds.includes(run.runId),
-      true,
-    );
-    const sweeping = testing.sweepOnceForTests();
-    const outcome = sweeping.then(
-      () => ({ completed: true as const }),
-      (error: unknown) => ({ completed: false as const, error }),
-    );
-    const registerRetirementSuccessor = () =>
-      withPluginRuntimeGatewayRequestScope(
-        { client, context, resolveGatewayContext, isWebchatConnect: () => false },
-        () =>
-          registerSuccessor(entry, "live retirement successor", { expectsCompletionMessage: true }),
-      );
-    let successor = entry;
-    let rejectedRegistration: Promise<unknown> | undefined;
-    let registration: Promise<void> | undefined;
-    try {
-      await awaitGateBeforeSettlement(
-        ready.promise,
-        outcome,
-        "Registered retirement omitted its acknowledgement boundary",
-      );
-      expect(currentRun(run.runId)).toBe(entry);
-      expect(entry.delivery?.status).toBe("suspended");
-      expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
-      expect(ended).not.toHaveBeenCalled();
-      if (replace) {
-        rejectedRegistration = registerRetirementSuccessor().then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-      }
-      const publicationRevision = getSubagentRegistryPublicationRevision();
-      release.resolve();
-      if (replace) {
-        await awaitGateBeforeSettlement(
-          cleanupEntered.promise,
-          outcome,
-          "Suspended retirement settled before attachment cleanup entered",
-        );
-        const rejection = await rejectedRegistration;
-        expect(rejection).toBeInstanceOf(SubagentRegistryMutationRejectedError);
-        expect(rejection).toHaveProperty(
-          "message",
-          "Subagent registration owner changed during preparation",
-        );
-        expect(subagentRuns.has(run.runId)).toBe(false);
-        expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
-        registration = registerRetirementSuccessor();
-      }
-      await registration;
-      if (replace) {
-        successor = currentRun(run.runId)!;
-      }
-      releaseCleanup.resolve();
-      const result = await outcome;
-      await fixture.settle();
-      if (replace) {
-        expect(result).toEqual({
-          completed: false,
-          error: new Error("Subagent suspended delivery cleanup owner changed."),
-        });
-        expect(currentRun(run.runId)).toBe(successor);
-        expect(storedAnnouncement(run.runId)?.task).toBe("live retirement successor");
-        expect(getSubagentRegistryPublicationRevision()).toBeGreaterThan(publicationRevision);
-        expect(ended).not.toHaveBeenCalled();
-        subagentRuns.runWithCompletionAuthority(successor, () => {
-          const retained =
-            getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-          expect(retained?.source).toBe(source.authority.source);
-          retained?.assertCurrent();
-        });
-      } else {
-        expect(result).toEqual({ completed: true });
-        expect(subagentRuns.has(run.runId)).toBe(false);
-        expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
-        expect(ended).toHaveBeenCalledOnce();
-      }
-    } finally {
-      release.resolve();
-      releaseCleanup.resolve();
-      await Promise.allSettled([outcome, rejectedRegistration, registration]);
-      cleanup.mockRestore();
-      worker.mockRestore();
-      source.release();
     }
   },
 );

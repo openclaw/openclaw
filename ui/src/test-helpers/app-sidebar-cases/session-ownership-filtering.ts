@@ -330,6 +330,7 @@ describe("AppSidebar session ownership filtering", () => {
 
     const unloadedSessionKey = "agent:main:beyond-loaded-page";
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    await selectOwner(sidebar, "profile-ada");
     sidebar.sessionData.sessionCatalogs = [
       {
         id: "claude",
@@ -361,7 +362,6 @@ describe("AppSidebar session ownership filtering", () => {
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
-    await selectOwner(sidebar, "profile-ada");
     expect(sidebar.querySelector(`[data-session-key="${unloadedSessionKey}"]`)).not.toBeNull();
   });
 

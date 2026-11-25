@@ -48,7 +48,6 @@ function setup(outcome: "rejected" | "aborted" | "sent" = "sent") {
       directIdempotencyKey: `chunked-text-completion-${++nextDeliveryId}`,
       deliveryTarget: { deliver: true, channel: "discord", to: "dm:U123" },
       internalEvents: taskCompletionEvents({ result: content }),
-      contentKind: "completed_result",
       signal: controller.signal,
       onDeliveryResult,
     });
@@ -61,12 +60,15 @@ it.each(["rejected", "aborted"] as const)("settles after chunk two is %s", async
 
   expect(fixture.sendText).toHaveBeenCalledTimes(2);
   expect(fixture.received).toHaveLength(1);
-  expect(result).toMatchObject({
-    delivered: false,
-    path: "direct",
-    disposition: "permanent_failure",
-    error: expect.stringContaining(`second chunk ${outcome}`),
-  });
+  expect(result).toMatchObject(
+    outcome === "aborted"
+      ? { delivered: false, path: "none" }
+      : {
+          delivered: false,
+          path: "direct",
+          error: expect.stringContaining("second chunk rejected"),
+        },
+  );
   expect(fixture.onDeliveryResult).not.toHaveBeenCalled();
 });
 

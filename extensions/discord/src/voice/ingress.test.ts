@@ -6,7 +6,7 @@ type MockIngressInput = {
   message?: string;
   sessionKey?: string;
   runId?: string;
-  senderIsOwner?: boolean;
+  runContext?: { senderId?: string };
 };
 
 const mocks = vi.hoisted(() => ({
@@ -100,7 +100,8 @@ describe("Discord voice ingress execution correlation", () => {
     mocks.agentCommandFromIngress.mockImplementationOnce(async (input) => {
       expect(bindRun).toHaveBeenCalledWith(expect.objectContaining({ runId: input.runId }));
       expect(input.runId).toEqual(expect.any(String));
-      expect(input.senderIsOwner).toBe(owner);
+      expect(input.runContext?.senderId).toBe(owner ? "owner" : "guest");
+      expect(input).not.toHaveProperty("senderIsOwner");
       expect(release).not.toHaveBeenCalled();
       if (fail) {
         throw new Error("Agent turn failed");

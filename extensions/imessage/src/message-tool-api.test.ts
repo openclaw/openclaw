@@ -15,6 +15,12 @@ const pollSelectors = { pollPayloadMessage: true, pollVoteMessage: true };
 function cacheStatus(overrides: Partial<Parameters<typeof setCachedIMessagePrivateApiStatus>[1]>) {
   setCachedIMessagePrivateApiStatus("imsg", { ...available, ...overrides });
 }
+function schemaFor(discovery: ReturnType<typeof discover>, action: string) {
+  const schema = discovery?.schema;
+  return (Array.isArray(schema) ? schema : schema ? [schema] : []).find((entry) =>
+    entry.actions?.includes(action as never),
+  );
+}
 function discover(options: Partial<Parameters<typeof describeMessageTool>[0]> = {}) {
   return describeMessageTool({
     cfg: { channels: { imessage: { cliPath: "imsg" } } },
@@ -46,7 +52,7 @@ describe("iMessage message-tool artifact", () => {
 
     const discovery = discover({ cfg: { channels: { imessage: { cliPath } } } });
 
-    expect(discovery?.schema?.properties).toMatchObject({
+    expect(schemaFor(discovery, "poll-vote")?.properties).toMatchObject({
       pollOptionId: { description: expect.stringContaining("Required for Remote Mac") },
       pollOptionIndex: { description: expect.stringContaining("Local iMessage accounts only") },
     });
@@ -87,9 +93,20 @@ describe("iMessage message-tool artifact", () => {
     const discovery = discover();
     expect(discovery?.actions).toContain("poll");
     expect(discovery?.actions.includes("poll-vote")).toBe(supported);
-    if (!supported) {
-      expect(discovery?.schema).toBeUndefined();
-    }
+    expect(schemaFor(discovery, "poll-vote") !== undefined).toBe(supported);
+  });
+
+  it("owns effect fields only while sendWithEffect is advertised", () => {
+    cacheStatus({});
+    expect(schemaFor(discover(), "sendWithEffect")).toMatchObject({
+      visibility: "all-configured",
+      properties: { effectId: { type: "string" }, effect: { type: "string" } },
+    });
+    const withoutEffects = discover({
+      cfg: { channels: { imessage: { cliPath: "imsg", actions: { sendWithEffect: false } } } },
+    });
+    expect(withoutEffects?.actions).not.toContain("sendWithEffect");
+    expect(schemaFor(withoutEffects, "sendWithEffect")).toBeUndefined();
   });
 
   it("hides private actions when cached bridge status is unavailable", () => {

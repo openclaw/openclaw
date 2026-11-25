@@ -169,10 +169,10 @@ export class GitHubPublicationSessionChangedError extends GitHubPublicationKnown
 
 export class GitHubPublicationRequesterUnavailableError extends GitHubPublicationKnownFailure {
   constructor() {
-    super("The original GitHub publication requester is no longer authorized.", {
+    super("This requester is not authorized to publish from this conversation.", {
       code: "identity_changed",
       nextAction:
-        "Review any recorded or unconfirmed GitHub effects, then request publication again from an authorized session. Saved work and existing pull requests are retained.",
+        "Publish from a conversation you started and can write to, or ask a Gateway admin to do it. Review any recorded or unconfirmed GitHub effects first; saved work and existing pull requests are retained.",
     });
   }
 }

@@ -480,6 +480,13 @@ const enPluginManagement = {
     detailEnable: "Enable",
     detailDisable: "Disable",
     detailTools: "Tools",
+    toolBlockUnavailable: "The global tool block list is unavailable.",
+    toolBlockHint:
+      "Turn off a tool to block it for all agents. Turning it on does not override other tool rules.",
+    allowTool: "Allow {name}",
+    toolBlockedByRule: "Blocked by a global rule",
+    toolDetails: "Details",
+    toolDetailsFor: "Details for {name}",
     detailToolInputs: "Inputs",
     detailType: "Type",
     detailSecurity: "Security audit",
@@ -562,6 +569,11 @@ const enPluginManagement = {
     removeConfirmTitle: "Remove {name}?",
     removeConfirmMessage:
       "This removes the plugin package and all of its entries. Active work using this plugin finishes before removal.",
+    removeDefaultModelWarning:
+      "Your default model, {model}, will stay selected but won’t be available after removal. Choose another model in Models first.",
+    removeModelCheckUnavailable:
+      "Could not check whether your default model uses this plugin. Removing it may make that model unavailable. Your saved model selection will not change; open Models to review it first.",
+    chooseAnotherModel: "Choose another model",
     cancel: "Cancel",
     reload: "Reload",
     installSaved: "Installation of {name} was saved. {error}",

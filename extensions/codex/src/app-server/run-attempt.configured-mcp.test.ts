@@ -594,7 +594,7 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
           ? {
               ...capability,
               callerOrigin: { kind: "unknown" },
-              managementEntitlement: { source: "channel-owner", isCurrent: () => true },
+              managementEntitlement: { source: "channel-owner" },
             }
           : capability;
 

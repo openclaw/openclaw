@@ -19,12 +19,16 @@ struct ChatTranscriptSearchTests {
     @Test func `find wraps in both directions and recovers when the selected message disappears`() {
         let first = self.message("match one", role: "user")
         let second = self.message("match two")
-        let results = ChatTranscriptSearchResults(rows: [.message(first), .message(second)], query: "match")
+        let third = self.message("match three")
+        let results = ChatTranscriptSearchResults(
+            rows: [.message(first), .message(second), .message(third)], query: "match")
 
         #expect(results.selection(after: nil) == first.id)
         #expect(results.selection(after: first.id) == second.id)
-        #expect(results.selection(after: second.id) == first.id)
-        #expect(results.selection(after: first.id, backwards: true) == second.id)
+        #expect(results.selection(after: second.id) == third.id)
+        #expect(results.selection(after: third.id) == first.id)
+        #expect(results.selection(after: first.id, backwards: true) == third.id)
+        #expect(results.selection(after: second.id, backwards: true) == first.id)
         let refreshed = ChatTranscriptSearchResults(rows: [.message(first)], query: "match")
         #expect(refreshed.selection(after: second.id) == first.id)
         #expect(refreshed.selection(after: first.id) == first.id)

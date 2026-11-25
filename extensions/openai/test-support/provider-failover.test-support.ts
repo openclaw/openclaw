@@ -20,6 +20,8 @@ export function registerOpenAIFailoverTests() {
         ["ORGANIZATION_SPEND_LIMIT_EXCEEDED", "billing"],
         ["ORGANIZATION_USAGE_LIMIT_EXCEEDED", "billing"],
         ["PROJECT_SPEND_LIMIT_EXCEEDED", "billing"],
+        ["WORKSPACE_OWNER_CREDITS_DEPLETED", "billing"],
+        ["WORKSPACE_MEMBER_CREDITS_DEPLETED", "billing"],
       ]) {
         expect(
           provider.classifyFailoverReason?.({

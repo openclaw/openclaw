@@ -12,9 +12,7 @@ type AgentsViewProps = Parameters<typeof Agents>[0];
 type AgentFilesProps = Parameters<typeof AgentFiles>[0];
 
 export function primaryModelPicker(container: ParentNode) {
-  return container.querySelector<HTMLElement>(
-    'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
-  );
+  return container.querySelector<HTMLElement>("openclaw-select-picker:has(#agent-primary-model)");
 }
 
 export const inertAgentFileControls = {
@@ -131,7 +129,10 @@ export function createAgentViewTestProps(
       onModelChange: () => false,
       onDecisionModelChange: () => false,
       onUtilityModelChange: () => false,
+      onSubagentModelChange: () => false,
       onThinkingDefaultChange: () => false,
+      onFastModeDefaultChange: () => false,
+      onUtilityFallbacksChange: () => false,
       onModelFallbacksChange: () => false,
       onModelCatalogOpen: () => undefined,
       onIdentityFieldChange: () => undefined,

@@ -214,7 +214,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onComposerHoldToRecordChange?: (enabled: boolean) => void;
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
-  suggestionComposer?: boolean;
   onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
   composerControls?: Parameters<typeof ChatPaneModelControl>[0] & {
     component: typeof ChatPaneModelControl;
@@ -245,6 +244,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onUseSystemDefaultMicrophone?: () => Promise<void>;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
+  onQueueCopy?: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;

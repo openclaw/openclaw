@@ -29,12 +29,14 @@ import {
   requirePublicationCommand,
   runPublicationCommand,
 } from "./github-publication-git-transport.js";
+import { assertParticipantPullRequestReuse } from "./github-publication-inspect.js";
 import {
   findGitHubPublicationPullRequest,
   readPublishedGitHubPullRequest,
   type PublishedGitHubPullRequest,
 } from "./github-publication-pull-requests.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 import { readRepositoryGitHubPublicationInputAsync } from "./github-publication-store-async.js";
 import type { RepositoryGitHubPublicationExecutionAsync } from "./github-publication-store-async.js";
 import {
@@ -84,6 +86,8 @@ export async function executeRepositoryGitHubPublication(params: {
   signal?: AbortSignal;
   prepareIntegration?: PrepareRepositoryPublicationIntegration;
   requesterProfileId?: string;
+  participantDisplayName?: string;
+  requester?: GitHubPublicationRequesterPolicyV2;
   storePath: string;
   assertWorkspace: () => void;
   readCurrentEntry: () => InternalSessionEntry | undefined;
@@ -342,7 +346,6 @@ export async function executeRepositoryGitHubPublication(params: {
       });
     }
     const pushOwner = pushRepository.split("/")[0]!;
-    const marker = "<!-- openclaw-publication:" + row.request_id + " -->";
     const findPullRequest = () =>
       findGitHubPublicationPullRequest({
         repository,
@@ -350,7 +353,9 @@ export async function executeRepositoryGitHubPublication(params: {
         branch,
         baseBranch,
         headCommit: headCommit ?? snapshot.baseCommit,
-        marker,
+        marker: "<!-- openclaw-publication:" + row.request_id + " -->",
+        assertReuse: (url) =>
+          assertParticipantPullRequestReuse(params.requester, url, assertCurrent),
         publishedPullRequest,
         host: identity.host ?? resolveGitHubHost(),
         refreshIdentity,
@@ -425,6 +430,7 @@ export async function executeRepositoryGitHubPublication(params: {
     const content = await prepareGitHubPublicationContent({
       row,
       requesterProfileId: params.requesterProfileId,
+      participantDisplayName: params.participantDisplayName,
       storePath: params.storePath,
       accountId: identity.account.accountId,
       host: identity.host ?? resolveGitHubHost(),

@@ -320,6 +320,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
         /** Canonical provider identity for clients with bundled brand artwork. */
         brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
+        actionLabel: Type.Optional(NonEmptyString),
         hint: Type.Optional(Type.String()),
         groupLabel: Type.Optional(Type.String()),
         icon: Type.Optional(SetupInferenceHttpsUrl),
