@@ -147,13 +147,12 @@ same column so titles stay aligned when status changes or hover and keyboard
 focus reveal row actions. Shared-owner activity traces around the avatar pair;
 team mode keeps its compact status layout.
 
-A quieter ring around a session's leading icon means a background process is
-still running after its turn has finished. These sessions stay visible like active
-runs, and the ring clears when the last process exits or stops. An active turn
-uses the normal ring, and hidden subagents retain the parent's **Subagents working**
-ring. The quieter background ring appears only when neither is active. Collapsed
-sections and child toggles summarize hidden persistent rows on the right; a
-persistent child's background work does not put a ring on its idle parent.
+A ring around a session's leading icon means its turn is running or hidden
+subagents are working. When only hidden subagents are running, the ring is
+labeled **Subagents working**. Background processes left running after a turn
+ends do not count as sidebar activity; they appear in the chat under
+**Details → Processes** and in the **Processes** panel. Collapsed sections and
+child toggles summarize hidden persistent rows on the right.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
