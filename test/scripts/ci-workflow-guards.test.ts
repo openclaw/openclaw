@@ -2079,6 +2079,16 @@ AFTER_CD
     }
   });
 
+  it("collects npm debug logs from Docker smoke packaging and the Docker seed tier", () => {
+    const steps = readCiWorkflow().jobs["docker-seed-e2e"].steps;
+    const upload = requiredWorkflowStep(steps, "Upload Docker seed npm diagnostics");
+    expect(upload.if).toBe("failure()");
+    const uploadPath = expectDefined(upload.with?.path, "Docker seed npm diagnostics upload path");
+    for (const name of ["Prepare Docker smoke package", "Run Docker seed tier"]) {
+      expect(requiredWorkflowStep(steps, name).env?.npm_config_logs_dir, name).toBe(uploadPath);
+    }
+  });
+
   it.skipIf(process.platform === "win32")(
     "uses checked runtime packages only for the Docker seed tier on survivor PRs",
     () => {

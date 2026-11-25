@@ -6904,6 +6904,7 @@ jobs:
       - name: Prepare Docker smoke package
         if: github.event_name == 'pull_request' || (inputs.release_gate && needs.preflight.outputs.ci_qualification != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && github.repository == 'openclaw/openclaw')
         env:
+          npm_config_logs_dir: &docker_seed_npm_logs ${{ runner.temp }}/docker-seed-npm-logs
           DOCKER_SEED_RUNTIME_ONLY: ${{ github.event_name == 'pull_request' && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor ') }}
         run: |
           set -euo pipefail
@@ -6925,7 +6926,7 @@ jobs:
 
       - name: Run Docker seed tier
         env:
-          npm_config_logs_dir: ${{ runner.temp }}/docker-seed-npm-logs
+          npm_config_logs_dir: *docker_seed_npm_logs
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
           OPENCLAW_DOCKER_ALL_LIVE_MODE: skip
           OPENCLAW_DOCKER_ALL_FAIL_FAST: "0"
@@ -6940,7 +6941,7 @@ jobs:
         uses: *upload_artifact_v7
         with:
           name: docker-seed-npm-diagnostics
-          path: ${{ runner.temp }}/docker-seed-npm-logs
+          path: *docker_seed_npm_logs
           if-no-files-found: ignore
 
       - name: Upload sanitized upgrade survivor proof
