@@ -197,18 +197,30 @@ describe("Gateway GitHub publication boundaries", () => {
     expectNoCommands("commit-tree", "push");
   });
 
-  it("publishes a feature worktree whose base metadata is HEAD", async () => {
-    mocks.findWorktree.mockImplementation((_ownerKind, ownerId: string) =>
-      worktree({ baseRef: "HEAD", ownerId }),
-    );
-    const coordinator = createLocalCoordinator();
+  it.each([true, false])(
+    "requires a checkout for feature publication with HEAD metadata: %s",
+    async (checkoutExists) => {
+      mocks.findWorktree.mockImplementation((_ownerKind, ownerId: string) =>
+        worktree({ baseRef: "HEAD", ownerId }),
+      );
+      const coordinator = createLocalCoordinator();
 
-    await expect(publish(coordinator, "head-base-metadata")).resolves.toMatchObject({
-      status: "published",
-      branch: BRANCH,
-    });
-    expect(commands.some((argv) => argv.join(" ").includes("git/ref/heads/main"))).toBe(true);
-  });
+      if (!checkoutExists) {
+        await fs.rmdir(path.join(root, "synthetic-worktree"));
+        await expect(publish(coordinator, "missing-head-workspace")).rejects.toThrow(
+          "managed worktree checkout is missing",
+        );
+        expectNoCommands("commit-tree", "push");
+        return;
+      }
+
+      await expect(publish(coordinator, "head-base-metadata")).resolves.toMatchObject({
+        status: "published",
+        branch: BRANCH,
+      });
+      expect(commands.some((argv) => argv.join(" ").includes("git/ref/heads/main"))).toBe(true);
+    },
+  );
 
   it("rejects a local turn that starts and finishes during snapshot capture", async () => {
     const database = localDatabase();

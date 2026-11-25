@@ -86,6 +86,19 @@ vi.mock("./github-oauth-lifecycle.js", () => ({
   requestCurrentPersonalGitHubRefresh: mocks.refreshIdentity,
 }));
 
+// The synthetic Git transport uses one logical checkout path. Map only that
+// path to this case's real temporary directory for checkout-admission probes.
+vi.mock("../agents/worktrees/git.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/worktrees/git.js")>();
+  return {
+    ...actual,
+    worktreePathExists: (target: string) =>
+      actual.worktreePathExists(
+        target === "/repo/worktree" ? path.join(root, "synthetic-worktree") : target,
+      ),
+  };
+});
+
 // Git transport is synthetic in this harness; keep real SQLite lease exclusion.
 vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/worktrees/git-lock.js")>()),
@@ -560,6 +573,7 @@ export function installGitHubPublicationTestHarness(
     const syntheticIndex = path.join(root, "synthetic-index");
     await fs.writeFile(syntheticIndex, "synthetic Git transport index");
     if (!realWorktree) {
+      await fs.mkdir(path.join(root, "synthetic-worktree"));
       await insertRegistryWorktree(process.env, registryPublicationWorktree());
     }
     commands = [];
