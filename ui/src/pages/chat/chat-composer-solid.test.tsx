@@ -188,17 +188,47 @@ it("publishes submitted and restored drafts without remounting the input", () =>
 });
 
 it("retires submitted command suggestions before a delayed catalog refresh", async () => {
+  const paneId = "delayed-command-refresh";
   const refresh = createDeferred();
+  let refreshCompleted: Promise<unknown> | undefined;
+  const catchRefresh = refresh.promise.catch.bind(refresh.promise);
+  // Observe the owner's complete catch/finally chain without changing its callbacks.
+  vi.spyOn(refresh.promise, "catch").mockImplementation((onRejected) => {
+    const settled = catchRefresh(onRejected);
+    const finishRefresh = settled.finally.bind(settled);
+    vi.spyOn(settled, "finally").mockImplementation((onFinally) => {
+      const completed = finishRefresh(onFinally);
+      refreshCompleted = completed;
+      return completed;
+    });
+    return settled;
+  });
+  const onSlashIntent = vi.fn(() => refresh.promise);
   const onSend = vi.fn(() => {
     clearSubmittedComposerState(state, state.chatMessage, [], [], null);
   });
   const { state, view, input } = mountOwnedComposer({
+    paneId,
     onSend,
-    onSlashIntent: () => refresh.promise,
+    onSlashIntent,
   });
   input("/help");
+  flush();
+  const menu = getChatComposerState(paneId).slashMenu.state;
+  expect(menu.slashMenuOpen).toBe(true);
+  expect(menu.slashMenuItems.some((item) => item.name === "help")).toBe(true);
+  expect(state.chatMessage).toBe("/help");
+  expect(view.textarea().value).toBe("/help");
+  expect([view.textarea().selectionStart, view.textarea().selectionEnd]).toEqual([5, 5]);
+  expect(view.textarea().getAttribute("aria-controls")).toBe(
+    "chat-delayed-command-refresh-slash-menu-listbox",
+  );
+  // The real input starts the lazy menu import; the catalog refresh stays pending.
+  await vi.dynamicImportSettled();
   await waitForSolid(() => expect(view.query('[role="listbox"]')).not.toBeNull());
 
+  expect(onSlashIntent).toHaveBeenCalledOnce();
+  expect(refreshCompleted).toBeInstanceOf(Promise);
   findPrimaryButton(view.container).click();
   flush();
   expect(onSend).toHaveBeenCalledOnce();
@@ -208,8 +238,11 @@ it("retires submitted command suggestions before a delayed catalog refresh", asy
   expect(view.textarea().hasAttribute("aria-controls")).toBe(false);
 
   refresh.resolve();
-  await refresh.promise;
-  await waitForSolid(() => expect(view.query('[role="listbox"]')).toBeNull());
+  await refreshCompleted;
+  flush();
+  expect(menu.slashMenuOpen).toBe(false);
+  expect(view.query('[role="listbox"]')).toBeNull();
+  expect(view.textarea().hasAttribute("aria-controls")).toBe(false);
 });
 
 it("publishes a restored persisted draft and queue after adopting their revision", () => {
