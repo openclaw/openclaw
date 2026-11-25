@@ -70,10 +70,13 @@ function boundedReadRuntime(
     if (remaining <= 0) {
       return;
     }
-    const plain = stripAnsi(args.join(" ")).replace(/[\p{Cc}\p{Bidi_Control}]/gu, (control) =>
+    // Match registered values before normalization, and match again if stripping controls
+    // exposes text that was split by terminal formatting.
+    const redacted = redactToolPayloadText(args.join(" "));
+    const plain = stripAnsi(redacted).replace(/[\p{Cc}\p{Bidi_Control}]/gu, (control) =>
       control === "\n" || control === "\t" ? control : "",
     );
-    const text = redactToolPayloadText(plain);
+    const text = plain === redacted ? plain : redactToolPayloadText(plain);
     const notice = "\n… (output limit reached; narrow the request)";
     const suffix = text.length > remaining && remaining >= notice.length ? notice : "";
     sink(truncateUtf16Safe(text, remaining - suffix.length) + suffix);

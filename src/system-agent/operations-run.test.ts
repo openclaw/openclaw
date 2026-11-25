@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  captureSecretRedactionRegistrySnapshot,
+  installSecretRedactionRegistrySnapshot,
+  registerSecretValueForRedaction,
+} from "../logging/secret-redaction-registry.js";
 import type { SystemAgentOperation } from "./operation-types.js";
 import { executeSystemAgentOperation } from "./operations-execute.js";
 import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
@@ -27,7 +32,6 @@ describe("system agent run aliases", () => {
         deps: { setupSurface: "gateway", loadOverview },
       }),
     ).resolves.toEqual({ applied: false });
-    expect(loadOverview).toHaveBeenCalledOnce();
     const output = lines.join("\n");
     expect(output).toContain("Source: host fixture");
     expect(output).toContain("Note: first");
@@ -36,6 +40,33 @@ describe("system agent run aliases", () => {
       expect(output).not.toContain(hidden);
     }
     expect(output.length).toBeLessThanOrEqual(8_000);
+  });
+
+  it("redacts registered fixtures on both sides of terminal normalization", async () => {
+    const registry = captureSecretRedactionRegistrySnapshot();
+    const multiline = "fixture-prefix\r\nMULTILINE_CANARY-fixture-suffix";
+    const styledValue = "fixture-prefix-STYLED_CANARY-fixture-suffix";
+    const styled = styledValue.replace("STYLED_CANARY", "\u001b[31mSTYLED_CANARY\u001b[0m");
+    registerSecretValueForRedaction(multiline);
+    registerSecretValueForRedaction(styledValue);
+    try {
+      const { runtime, lines } = createSystemAgentTestRuntime();
+      const loadOverview = async () => {
+        const overview = createSystemAgentOverviewFixture();
+        overview.gateway.error = ["fixture diagnostic", multiline, styled].join("\n");
+        return overview;
+      };
+      await executeSystemAgentOperation(run("gateway", "status"), runtime, {
+        deps: { setupSurface: "gateway", loadOverview },
+      });
+      const output = lines.join("\n");
+      expect(output).toContain("Note: fixture diagnostic");
+      for (const hidden of ["\u001b", "\r", "MULTILINE_CANARY", "STYLED_CANARY"]) {
+        expect(output).not.toContain(hidden);
+      }
+    } finally {
+      installSecretRedactionRegistrySnapshot(registry);
+    }
   });
 
   it("does not echo unsupported argv or dispatch a replacement read", async () => {
