@@ -35,13 +35,13 @@ const cases = [
   ["no-widen-then-assert", "widen-then-assert-violation.test.ts", 3, [3, 7, 13]],
   ["no-operator-permission-read", "operator-permission-recheck-violation.ts", 4, [1, 4, 6, 8]],
   // Planted divergence: a resumed turn reads its start kind; owner status comes from
-  // destructuring defaults (source and aliased destination) and from scopes. Pass-throughs
-  // (lines 9-10) are not reported.
+  // destructuring defaults (source and aliased destination), from scopes and from defaults to
+  // owner. Pass-throughs (lines 9-10) and narrowing forms (lines 23-30) are not reported.
   [
     "no-turn-authority-derivation",
     "turn-authority-derivation-violation.ts",
-    5,
-    [11, 12, 13, 13, 18],
+    7,
+    [11, 12, 13, 13, 18, 32, 33],
   ],
   ["no-chained-type-assertions", "chained-type-assertions-violation.ts", 3],
 ] satisfies [string, string, number, number[]?][];
@@ -50,7 +50,7 @@ const cases = [
 const allowlists = [
   ["no-operator-permission-read", "", ADMISSION_FILES, 59],
   ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 19],
-  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 50],
+  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 33],
   ["no-turn-authority-derivation", "Capability module:", CAPABILITY_PROVENANCE_FILES, 4],
 ] as const;
 
