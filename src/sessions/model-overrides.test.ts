@@ -102,20 +102,31 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.liveModelSwitchPending).toBe(true);
     expectCleared(entry, ...runtimeFields);
   });
-  it("marks a profile-only switch pending", () => {
-    const entry = update(
-      { ...override, authProfileOverride: "oldprofile", authProfileOverrideSource: "user" },
-      {
-        selection: openai,
-        profileOverride: "newprofile",
-        markLiveSwitchPending: true,
-      },
-    );
-    expect(entry).toMatchObject({
-      authProfileOverride: "newprofile",
-      liveModelSwitchPending: true,
-    });
-  });
+  it.each(["oldprofile", "newprofile"])(
+    "marks model/account selections pending (%s)",
+    (profileOverride) => {
+      const entry = update(
+        {
+          ...override,
+          authProfileOverride: "oldprofile",
+          authProfileOverrideSource: "user",
+          authProfileOverrideRequired: true,
+        },
+        {
+          selection: profileOverride === "oldprofile" ? anthropic : openai,
+          profileOverride,
+          markLiveSwitchPending: true,
+        },
+      );
+      expect(entry).toMatchObject({
+        authProfileOverride: profileOverride,
+        liveModelSwitchPending: true,
+      });
+      expect(entry.authProfileOverrideRequired).toBe(
+        profileOverride === "oldprofile" ? true : undefined,
+      );
+    },
+  );
 
   it("persists an explicit default selection and clears it on a user pin", () => {
     const entry = makeEntry({

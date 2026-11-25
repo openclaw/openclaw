@@ -70,8 +70,13 @@ export function applyModelOverrideToSessionEntry(params: {
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
+  const preserveAuthProfileRequirement =
+    entry.authProfileOverrideRequired &&
+    (!profileOverride ||
+      normalizeOptionalString(profileOverride) ===
+        normalizeOptionalString(entry.authProfileOverride));
   const preserveAuthProfileOverride =
-    params.preserveAuthProfileOverride || (!profileOverride && entry.authProfileOverrideRequired);
+    params.preserveAuthProfileOverride || preserveAuthProfileRequirement;
   assertModelSelectionUnlocked(entry);
   const profileOverrideSource = params.profileOverrideSource ?? "user";
   const selectionSource = params.selectionSource ?? "user";
@@ -130,12 +135,11 @@ export function applyModelOverrideToSessionEntry(params: {
   }
   updated = profileUpdated || updated;
   if (profileOverride || !preserveAuthProfileOverride) {
-    updated =
-      clearDefinedFields(
-        entry,
-        "authProfileOverrideCompactionCount",
-        "authProfileOverrideRequired",
-      ) || updated;
+    updated = clearDefinedFields(entry, "authProfileOverrideCompactionCount") || updated;
+  }
+
+  if (!preserveAuthProfileRequirement) {
+    updated = clearDefinedFields(entry, "authProfileOverrideRequired") || updated;
   }
 
   // Clear stale fallback notice when the user explicitly switches models.

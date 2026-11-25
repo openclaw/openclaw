@@ -337,7 +337,9 @@ it.each(["canonical", "same", "concurrently changed"] as const)(
         authProfileOverride: nextProfile,
         authProfileOverrideSource: "user",
       });
-      expect(params.sessionEntry?.authProfileOverrideRequired).toBeUndefined();
+      expect(params.sessionEntry?.authProfileOverrideRequired).toBe(
+        scenario === "same" ? true : undefined,
+      );
       if (scenario === "same") {
         expect(params.sessionEntry?.authProfileOverrideCompactionCount).toBeUndefined();
       } else {
