@@ -129,6 +129,7 @@ struct ChatComposerAddSheet: View {
                                 .fontWeight(.semibold)
                         }
                         .modifier(ChatComposerProminentToolbarButton())
+                        .accessibilityLabel(Text(verbatim: Self.addPhotosLabel(self.selection.marked.count)))
                         .accessibilityIdentifier("chat-composer-add-marked")
                     }
                 }
@@ -144,10 +145,7 @@ struct ChatComposerAddSheet: View {
                         caps: caps,
                         onSwitches: { self.path.append(.skillSwitches) },
                         onSearch: { self.detent = .large },
-                        onInsert: { skill in
-                            self.viewModel.insertComposerSkill(skill)
-                            self.onClose(.focusDraft)
-                        },
+                        onUsed: { self.onClose(.focusDraft) },
                         onClose: { self.onClose(nil) })
                 case .skillSwitches:
                     ChatComposerSkillSwitchesPage(
@@ -177,7 +175,8 @@ struct ChatComposerAddSheet: View {
         // Below full height iOS draws a sheet as glass, which lets the composer's red button tint it.
         .presentationBackground(Color(uiColor: .systemGroupedBackground))
         .task(id: self.viewModel.composerCapabilityOwnerID) {
-            await self.viewModel.loadComposerCapabilities()
+            // After a failed load, opening the sheet is the "Try again".
+            await self.viewModel.loadComposerCapabilities(force: self.viewModel.composerCapabilityErrorMessage != nil)
         }
         .onAppear { self.viewModel.loadSlashCommandsIfNeeded() }
         .onChange(of: live, initial: true) { _, live in
@@ -214,6 +213,11 @@ struct ChatComposerAddSheet: View {
         let count = self.selection.marked.count
         if count == 0 { return Text("Add") }
         return Text(verbatim: Self.photoCount(count))
+    }
+
+    /// "Add 1 photo", "Add 3 photos", for VoiceOver.
+    static func addPhotosLabel(_ count: Int) -> String {
+        String(AttributedString(localized: "Add ^[\(count) photo](inflect: true)").characters)
     }
 
     /// "1 photo", "3 photos", inflected so plurals localize.
@@ -322,6 +326,12 @@ private struct ChatComposerPhotoRow: View {
                         action: { self.library.requestAccess() })
                         .accessibilityIdentifier("chat-composer-add-photos-access")
                 }
+            } else if access == .restricted {
+                HStack(spacing: Self.spacing) {
+                    self.cameraTile
+                    self.card(title: Text("No access to Photos"), detail: nil, systemImage: "lock", action: nil)
+                        .accessibilityIdentifier("chat-composer-add-photos-restricted")
+                }
             } else {
                 HStack(spacing: Self.spacing) {
                     self.cameraTile
@@ -367,7 +377,7 @@ private struct ChatComposerPhotoRow: View {
         Button { self.library.chooseMorePhotos() } label: {
             VStack(spacing: 4) {
                 Image(systemName: "plus").font(.title3)
-                Text("More photos")
+                Text(self.library.assets.isEmpty ? "Choose photos" : "More photos")
                     .font(OpenClawChatTypography.footnote)
                     .multilineTextAlignment(.center)
             }
@@ -378,7 +388,7 @@ private struct ChatComposerPhotoRow: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(Color.primary)
-        .accessibilityLabel(Text("Choose more photos"))
+        .accessibilityLabel(self.library.assets.isEmpty ? Text("Choose photos") : Text("Choose more photos"))
         .accessibilityIdentifier("chat-composer-add-more-photos")
     }
 
@@ -411,6 +421,9 @@ private struct ChatComposerPhotoRow: View {
         }
         .accessibilityLabel(Self.photoLabel(asset))
         .accessibilityAddTraits(number != nil ? .isSelected : [])
+        .accessibilityValue(number.map { Text(verbatim: String(format: String(localized: "Number %lld"), $0)) }
+            ?? Text(verbatim: ""))
+        .accessibilityHint(Text("Adds this photo. To add several, use Select."))
         .accessibilityAction(named: number == nil ? Text("Select") : Text("Deselect")) {
             self.selection.toggle(id)
         }
@@ -508,17 +521,19 @@ private struct ChatComposerSkillsPage: View {
     let caps: ChatComposerCapabilityDisplay
     let onSwitches: () -> Void
     let onSearch: () -> Void
-    let onInsert: (OpenClawChatComposerSkill) -> Void
+    let onUsed: () -> Void
     let onClose: () -> Void
 
     @State private var query = ""
     @State private var isSearching = false
     @State private var expandedOffSkill: String?
+    /// The off skill being turned on; its button shows a spinner in the same box until the change settles.
+    @State private var turningOn: String?
     @ScaledMetric(relativeTo: .body) private var searchClearance: CGFloat = 64
 
     var body: some View {
         let catalog = self.caps.facts.catalog
-        let blocked = !self.viewModel.attachments.isEmpty
+        let blocked = !self.viewModel.attachments.isEmpty || !self.viewModel.preparingAttachments.isEmpty
         let query = self.query.trimmingCharacters(in: .whitespacesAndNewlines)
         let skills = catalog.skills.filter { $0.isUsable && $0.matches(query) }
         List {
@@ -571,7 +586,8 @@ private struct ChatComposerSkillsPage: View {
         VStack(alignment: .leading, spacing: 10) {
             Button {
                 if isOn {
-                    self.onInsert(skill)
+                    self.viewModel.insertComposerSkill(skill)
+                    self.onUsed()
                 } else {
                     self.expandedOffSkill = expanded ? nil : skill.key
                 }
@@ -593,7 +609,8 @@ private struct ChatComposerSkillsPage: View {
             }
             .buttonStyle(.plain)
             .disabled(blocked)
-            .accessibilityValue(isOn ? Text(verbatim: "") : Text("Off for this chat"))
+            .accessibilityValue(isOn || expanded ? Text(verbatim: "") : Text("Off for this chat"))
+            .accessibilityHint(blocked ? Text("Remove attachments to use a skill.") : Text(verbatim: ""))
             .accessibilityIdentifier("chat-composer-skill-\(skill.key)")
             if expanded {
                 let reason = self.caps.facts.catalog.toolOverrideMutationAvailable
@@ -601,15 +618,25 @@ private struct ChatComposerSkillsPage: View {
                 if let reason {
                     Text(verbatim: reason).font(OpenClawChatTypography.settingsFootnote).foregroundStyle(.secondary)
                 } else {
+                    let busy = self.turningOn == skill.key
                     Button {
-                        self.viewModel.toggleComposerSkill(skill)
-                        self.onInsert(skill)
+                        self.turningOn = skill.key
+                        Task {
+                            let used = await self.viewModel.turnOnComposerSkillAndInsert(skill)
+                            self.turningOn = nil
+                            // A failure keeps the page open, with the error in its footer.
+                            if used { self.onUsed() }
+                        }
                     } label: {
-                        Text("Turn on and use").font(OpenClawChatTypography.settingsBody).fontWeight(.semibold)
+                        Text("Turn on and use")
+                            .font(OpenClawChatTypography.settingsBody)
+                            .fontWeight(.semibold)
+                            .opacity(busy ? 0 : 1)
+                            .overlay { if busy { ProgressView() } }
                     }
                     .buttonStyle(.bordered)
                     .buttonBorderShape(.capsule)
-                    .disabled(self.viewModel.composerCapabilityMutationDisabled)
+                    .disabled(busy || self.turningOn != nil || self.viewModel.composerCapabilityMutationDisabled)
                     .accessibilityIdentifier("chat-composer-skill-turn-on")
                 }
             }
@@ -662,8 +689,14 @@ private struct ChatComposerSkillSwitchesPage: View {
         let skills = catalog.skills.filter { $0.isUsable && $0.matches(query) }
         List {
             Section {
-                if skills.isEmpty, !query.isEmpty {
+                if !catalog.skillsAvailable, self.viewModel.composerCapabilitiesLoading {
+                    ProgressView().frame(maxWidth: .infinity)
+                } else if !catalog.skillsAvailable {
+                    Text("Skills unavailable").font(OpenClawChatTypography.settingsBody).foregroundStyle(.secondary)
+                } else if skills.isEmpty, !query.isEmpty {
                     ChatComposerNoResults(query: query)
+                } else if skills.isEmpty {
+                    Text("No skills available").font(OpenClawChatTypography.settingsBody).foregroundStyle(.secondary)
                 }
                 ForEach(skills) { skill in
                     Toggle(isOn: self.caps.binding(ChatComposerCapabilityFacts.skill(skill.key)) {
@@ -686,7 +719,9 @@ private struct ChatComposerSkillSwitchesPage: View {
                     .accessibilityIdentifier("chat-composer-skill-switch-\(skill.key)")
                 }
             } footer: {
-                ChatComposerCapabilityFooter(viewModel: self.viewModel, text: Text("Changes apply to this chat only."))
+                ChatComposerCapabilityFooter(
+                    viewModel: self.viewModel,
+                    text: skills.isEmpty ? nil : Text("Changes apply to this chat only."))
             }
         }
         .listStyle(.insetGrouped)
@@ -808,6 +843,9 @@ private struct ChatComposerConnectorPage: View {
                             }
                             .tint(OpenClawChatTheme.switchOn)
                             .disabled(!canChange || !catalog.toolAccessAvailable || !isOn)
+                            .accessibilityHint(
+                                !isOn ? Text("Turn on the connector to change its tools.")
+                                    : Text(verbatim: self.viewModel.composerToolOverrideMutationDisabledReason ?? ""))
                             .accessibilityIdentifier("chat-composer-tool-\(tool.name)")
                         }
                     } header: {

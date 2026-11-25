@@ -47,6 +47,19 @@ extension OpenClawChatViewModel {
         return command?.displayInvocation ?? "/\(key)"
     }
 
+    /// Turns an off skill on for this chat, then puts its command in front of the draft. When the change doesn't
+    /// start or fails, it returns false and the draft stays as it was; the error shows where the sheet shows it.
+    func turnOnComposerSkillAndInsert(_ skill: OpenClawChatComposerSkill) async -> Bool {
+        if !self.composerSkillEnabled(skill) {
+            let target = self.currentModelPatchTarget()
+            self.toggleComposerSkill(skill)
+            await self.waitForPendingSessionSettings(for: target)
+        }
+        guard self.composerSkillEnabled(skill) else { return false }
+        self.insertComposerSkill(skill)
+        return true
+    }
+
     /// Puts the skill's command in front of the draft. Nothing runs until the draft is sent.
     func insertComposerSkill(_ skill: OpenClawChatComposerSkill) {
         self.input = Self.draft(self.input, insertingCommand: self.composerSkillInvocation(skill))

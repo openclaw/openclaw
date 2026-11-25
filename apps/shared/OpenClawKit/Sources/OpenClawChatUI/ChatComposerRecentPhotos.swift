@@ -14,6 +14,8 @@ final class ChatRecentPhotosLibrary {
         case full
         case limited
         case denied
+        /// Screen Time or device management: the person can't grant access in Settings.
+        case restricted
     }
 
     private(set) var access: Access
@@ -66,7 +68,8 @@ final class ChatRecentPhotosLibrary {
         case .notDetermined: .notDetermined
         case .authorized: .full
         case .limited: .limited
-        case .denied, .restricted: .denied
+        case .denied: .denied
+        case .restricted: .restricted
         @unknown default: .denied
         }
     }
