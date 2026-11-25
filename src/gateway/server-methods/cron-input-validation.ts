@@ -464,6 +464,11 @@ export async function captureCronCreatorSession(
       });
     }
     const operatorAuthority = captured?.authority ?? inheritedAuthority;
+    if (operatorAuthority?.participationCeiling && job.payload.kind === "systemEvent") {
+      throw new TypeError(
+        "Participating inputs require an agentTurn automation with retained authority.",
+      );
+    }
     const parentLinked =
       callerScope &&
       loaded &&
@@ -476,7 +481,9 @@ export async function captureCronCreatorSession(
     const operatorSource =
       operatorAuthority &&
       operatorScopeSatisfied("operator.cron", operatorAuthority.scopes) &&
-      (independent || (legacyParent && job.payload.kind === "agentTurn"))
+      (independent ||
+        operatorAuthority.participationCeiling ||
+        (legacyParent && job.payload.kind === "agentTurn"))
         ? captureScheduledOperatorSource({
             authority: operatorAuthority,
             entry: creatorSession,
@@ -505,7 +512,7 @@ export async function captureCronCreatorSession(
             independent,
           })
         : undefined;
-    if (independent && !operatorSource) {
+    if ((independent || operatorAuthority?.participationCeiling) && !operatorSource) {
       throw new TypeError(
         "This requester cannot retain the authenticated execution authority for the automation.",
       );

@@ -263,6 +263,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
         }));\n`,
       );
     }
+    writeScript("ci-ui-test-plan.mts", "export {};\n");
     if (options.uiReleaseTier || options.bundledPlanner) {
       const uiTargets = [
         ...new Set([
@@ -284,6 +285,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
           ui: [{configs: ["ui/vitest.config.ts"], shard_name: "ui", includePatterns: ${JSON.stringify(uiTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
           e2e: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e", includePatterns: options.uiE2eFiles ? [...options.uiE2eFiles, ...${JSON.stringify(CI_MANIFEST_FIXTURE_TARGETS.real)}] : ${JSON.stringify(e2eTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
         });\n`,
+        "ci-ui-test-plan.mts",
       );
       if (options.uiE2eSelectorSource) {
         appendPlanner(options.uiE2eSelectorSource);
@@ -301,6 +303,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
               includePatterns: group.includePatterns.filter((file) => file === ${JSON.stringify(CI_MANIFEST_FIXTURE_TARGETS.real)}[shard - 1]),
             })).filter((group) => group.includePatterns.length > 0),
           }));\n`,
+          "ci-ui-test-plan.mts",
         );
       }
     }
@@ -615,10 +618,9 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     ]) {
       copyFixture(`.ci-harness/scripts/lib/${name}`, `scripts/lib/${name}`);
     }
-    copyFixture(
-      ".ci-harness/scripts/lib/ci-node-test-plan.mts",
-      path.join(scriptsDir, "ci-node-test-plan.mts"),
-    );
+    for (const name of ["ci-node-test-plan.mts", "ci-ui-test-plan.mts"]) {
+      copyFixture(`.ci-harness/scripts/lib/${name}`, path.join(scriptsDir, name));
+    }
     const fixtureBin = path.join(root, "bin");
     let correctionBaseSha = "";
     if (options.remoteTagRefs) {

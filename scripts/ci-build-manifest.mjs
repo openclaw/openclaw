@@ -92,6 +92,11 @@ if (!sourceChannelTestEnv) {
   };
 }
 
+const uiTestPlanPath = frozenTarget
+  ? "./lib/ci-ui-test-plan.mts"
+  : fromTarget("./scripts/lib/ci-ui-test-plan.mts");
+const uiTestPlan = await import(uiTestPlanPath);
+
 const importTargetPlan = async (targetPath) => {
   if (existsSync(targetPath)) {
     return import(fromTarget(targetPath));
@@ -753,8 +758,8 @@ let uiTestGroups =
   (runUiTests || runUiE2e || runUiRealGateway || selectedTestTargets) &&
   !compatibilityTarget &&
   (!frozenTarget || releaseGate) &&
-  typeof nodeTestPlan.createUiTestShardGroups === "function"
-    ? nodeTestPlan.createUiTestShardGroups({
+  typeof uiTestPlan.createUiTestShardGroups === "function"
+    ? uiTestPlan.createUiTestShardGroups({
         // Only edited test files opt into the release-only UI tier on automatic CI.
         includeReleaseOnlyTests: includeReleaseOnlyUiTests,
         ...(typeof nodeTestPlan.resolveUiE2ePrTestSelection === "function"
@@ -1419,15 +1424,15 @@ const encodeNodeTestGroups = (groups) => {
 if (
   selectedTestTargets &&
   runUiRealGateway &&
-  typeof nodeTestPlan.createUiRealGatewayTestShards !== "function"
+  typeof uiTestPlan.createUiRealGatewayTestShards !== "function"
 ) {
   throw new Error("Current PR CI requires target-owned real-Gateway groups");
 }
 const plannedUiRealGatewayShards =
   uiTestGroups &&
   (!frozenTarget || releaseGate) &&
-  typeof nodeTestPlan.createUiRealGatewayTestShards === "function"
-    ? nodeTestPlan.createUiRealGatewayTestShards(uiTestGroups.e2e)
+  typeof uiTestPlan.createUiRealGatewayTestShards === "function"
+    ? uiTestPlan.createUiRealGatewayTestShards(uiTestGroups.e2e)
     : selectedTestTargets
       ? []
       : [{ shard: 1, shard_count: 1, run_desktop: true, groups: uiTestGroups?.e2e }];
@@ -2295,7 +2300,7 @@ if (hybridHostedEligible) {
     "check-docs": count(manifest.run_check_docs),
     "postgres-conformance": count(
       manifest.run_postgres_conformance,
-      workflowEventName === "pull_request" ? 5 : 4,
+      workflowEventName === "pull_request" ? 7 : 6,
     ),
     "skills-python": count(manifest.run_skills_python_job),
     "checks-windows": count(

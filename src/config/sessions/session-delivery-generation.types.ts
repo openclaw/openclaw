@@ -1,5 +1,9 @@
 import type { ChatRef } from "../../sessions/chat-ref.js";
-import type { SessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
+import type {
+  SessionEntryCreationOperation,
+  SessionSharingEntry,
+} from "./session-accessor.sqlite-entry-cache.types.js";
+import type { SessionSourceAssertion } from "./session-source-authority.js";
 
 export type SessionGenerationEntry = Pick<
   SessionSharingEntry,
@@ -17,4 +21,20 @@ export type LeaseFacts = Pick<ChatRef, "agentId" | "storePath" | "sessionKey"> &
   lifecycleRevision?: string | null;
   /** A writer holds its exact transcript; a scheduled occurrence holds its incarnation. */
   exact?: "transcript" | "lifecycle";
+};
+
+export type SessionGenerationLease = {
+  assertCurrent: SessionSourceAssertion;
+  assertNativeTransactionCurrent: SessionSourceAssertion;
+  assertDeliveryCurrent: () => void;
+  readSessionSettings: () => Readonly<SessionGenerationEntry> | undefined;
+  prepareRead: () => Promise<void> | undefined;
+  release: () => void;
+  bindCreation: (
+    operation: SessionEntryCreationOperation,
+    publishBinding?: (
+      binding: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision">,
+    ) => void,
+  ) => SessionSourceAssertion;
+  isCreationAdopted: () => boolean;
 };

@@ -122,10 +122,10 @@ export async function prepareToolExecutionEnd(
       // A later successful app result supersedes the earlier launch target.
       ctx.state.latestMcpAppChannelView = channelView;
     }
-    const connectAction = readMcpConnectAction(result);
-    if (connectAction) {
-      ctx.state.latestMcpConnectAction = connectAction;
-    }
+  }
+  const connectAction = readMcpConnectAction(result);
+  if (connectAction) {
+    ctx.state.latestMcpConnectAction = connectAction;
   }
   try {
     ctx.params.onAgentToolResult?.({

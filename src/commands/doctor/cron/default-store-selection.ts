@@ -67,7 +67,7 @@ export async function maybeRepairCronStoreSelection(params: {
     storeKey,
   );
   note(
-    `Selected default cron partition ${JSON.stringify(storeKey)}. Saved pre-repair backup: ${result.backupPath}. Restart the Gateway to resume cron.`,
+    `Selected default cron partition ${JSON.stringify(storeKey)}.${result.backupPath ? ` Saved pre-repair backup: ${result.backupPath}.` : ""} Restart the Gateway to resume cron.`,
     "Doctor changes",
   );
   if (result.warnings.length > 0) {

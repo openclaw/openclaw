@@ -29,7 +29,19 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
     const reactionsEnabled = configuredAccounts.some((account) =>
       createActionGate(account.config.actions)("reactions"),
     );
-    return { actions: reactionsEnabled ? ["send", "react"] : ["send"] };
+    if (!reactionsEnabled) {
+      return { actions: ["send"] };
+    }
+    return {
+      actions: ["send", "react"],
+      // Group reactions name the reacted message's author. All-configured keeps
+      // them for Signal reactions advertised from bound or scheduled turns.
+      schema: {
+        actions: ["react"],
+        visibility: "all-configured",
+        properties: { targetAuthor: { type: "string" }, targetAuthorUuid: { type: "string" } },
+      },
+    };
   },
   supportsAction: ({ action }) => action === "react",
   prepareSendPayload: ({ ctx, payload, replyToId, replyToIdSource }) => {

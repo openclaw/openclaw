@@ -105,9 +105,9 @@ export function reconcileSessionApprovalEvent(
   event: unknown,
   sessionKey?: string,
   selectedAgentId?: string,
-  onAcceptedEvent?: (event: SessionApprovalEvent) => void,
+  onAcceptedEvent?: (event: Exclude<SessionApprovalEvent, { phase: "participant" }>) => void,
 ): ExecApprovalRequest[] | null {
-  if (!isSessionApprovalEvent(event)) {
+  if (!isSessionApprovalEvent(event) || event.phase === "participant") {
     return null;
   }
   const presentationSessionKey = sessionKey ?? event.sessionKey;

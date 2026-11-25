@@ -6,7 +6,11 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { QuestionManager, QuestionManagerError } from "../../gateway/question-manager.js";
+import {
+  QuestionManager,
+  QuestionManagerError,
+  QuestionManagerErrorCodes,
+} from "../../gateway/question-manager.js";
 import { createDeferredCore as deferred, type Deferred } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -134,6 +138,16 @@ export async function withQuestionGateway(
               } else {
                 respond(result);
               }
+            } else if (frame.method === "question.get") {
+              const request = frame.params as Protocol.QuestionGetParams;
+              const question = manager.get(request.id);
+              if (!question) {
+                throw new QuestionManagerError(
+                  QuestionManagerErrorCodes.NOT_FOUND,
+                  `question '${request.id}' was not found`,
+                );
+              }
+              respond({ question });
             } else if (frame.method === "question.list") {
               respond({ questions: manager.list() });
             } else {

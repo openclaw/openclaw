@@ -1,5 +1,8 @@
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
-import { isRuntimeTestFileIncluded, type RuntimeTestSelection } from "./ci-node-test-plan.mts";
+import {
+  isRuntimeTestFileIncluded,
+  type RuntimeTestSelection,
+} from "./ci-runtime-test-eligibility.mts";
 import { resolveVitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
 import { readWindowsTargets } from "./windows-test-targets.mts";
 

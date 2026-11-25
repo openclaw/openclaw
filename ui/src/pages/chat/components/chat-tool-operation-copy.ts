@@ -1,5 +1,9 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
+import {
+  unwrapToolCallForDisplay,
+  unwrapToolResultTextForDisplay,
+} from "../../../../../src/agents/tool-display-call.js";
 import type { IconName } from "../../../components/icon-data.ts";
 import { registerChatToolOperationsEnglish } from "../../../i18n/locales/en-chat-tool-operations.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
@@ -74,6 +78,20 @@ export function catalogToolLabel(
     return t(
       `chat.toolCards.${outcome === "running" ? "listingChats" : outcome === "succeeded" ? "listedChats" : "listChats"}`,
     );
+  }
+  // A completed tool call is not a delivery receipt. A turn can also finish without a reply.
+  if (outcome === "succeeded" && (name === "conversations_send" || name === "conversations_turn")) {
+    const status =
+      asNullableRecord(card.details)?.status ??
+      safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? ""))?.status;
+    const receipt =
+      status === "sent" ||
+      status === "queued" ||
+      status === "suppressed" ||
+      (name === "conversations_turn" && (status === "replied" || status === "timeout"))
+        ? status
+        : "unknown";
+    return t(`chat.toolCards.conversationDelivery.${receipt}`);
   }
   const labels = Object.hasOwn(catalog, name) ? catalog[name] : undefined;
   if (!labels) {

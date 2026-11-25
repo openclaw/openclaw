@@ -17,6 +17,14 @@ const enChatToolOperations = {
       searchingTools: "Searching tools",
       searchedTools: "Searched tools",
       searchTools: "Search tools",
+      conversationDelivery: {
+        sent: "Sent to conversation",
+        queued: "Message queued",
+        suppressed: "Message not sent",
+        unknown: "Delivery unconfirmed",
+        replied: "Sent · reply received",
+        timeout: "Sent · reply timed out",
+      },
       operationLabels: {
         ls: {
           default: { action: "List files", running: "Listing files", done: "Listed files" },
@@ -221,14 +229,12 @@ const enChatToolOperations = {
           default: {
             action: "Send to conversation",
             running: "Sending to conversation",
-            done: "Sent to conversation",
           },
         },
         conversations_turn: {
           default: {
-            action: "Read conversation turn",
-            running: "Reading conversation turn",
-            done: "Read conversation turn",
+            action: "Send and wait for a reply",
+            running: "Sending and waiting for a reply",
           },
         },
         github_identity_status: {

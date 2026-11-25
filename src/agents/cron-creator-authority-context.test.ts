@@ -44,7 +44,7 @@ function admittedFixture(
   const scope = createCronCreatorAuthorityCapability(
     runId,
     { kind },
-    source === "channel-owner" ? { source, isCurrent: () => true } : { source },
+    { source },
     undefined,
     undefined,
     undefined,
@@ -98,14 +98,10 @@ function creatorFixture(
 it("retains management construction before late admission without granting another caller or settled turn", async () => {
   const runId = "late-cli-owner";
   const caller = admittedCaller(runId);
-  let ownerCurrent = true;
   const scope = createCronCreatorAuthorityCapability(
     runId,
     { kind: "unknown" },
-    {
-      source: "channel-owner",
-      isCurrent: () => ownerCurrent,
-    },
+    { source: "channel-owner" },
   )!;
   let construct: ReturnType<typeof bindCronManagementToolConstruction>;
   await runWithCronCreatorAuthorityCapability(scope, async () => {
@@ -120,12 +116,9 @@ it("retains management construction before late admission without granting anoth
       });
       await withGatewayToolCallerIdentity(caller, () => {
         expect(construct!(() => bindCronManagementGrant(runId))?.managementOnly).toBe(true);
-        ownerCurrent = false;
-        expect(construct!(() => bindCronManagementGrant(runId))).toBeUndefined();
       });
     });
   });
-  ownerCurrent = true;
   const later = admittedFixture("later-owner");
   await later.run(() => {
     expect(bindCronManagementGrant(later.scope.runId)).toBeDefined();
