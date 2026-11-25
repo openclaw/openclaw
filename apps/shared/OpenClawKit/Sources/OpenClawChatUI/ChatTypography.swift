@@ -17,19 +17,43 @@ enum OpenClawChatTypography {
         body(size: 16, weight: .medium, relativeTo: .callout)
     }
 
-    // The 17 pt system body is too large for a dense transcript on a phone, and leaves the smallest
-    // Dynamic Type setting at 14 pt, the Control UI's default chat size. Chat sizes shrink by one ratio;
-    // sizes that would fall under 11 pt stop there. Dynamic Type still scales the result.
+    /// Chat text reads at the system text styles, like Messages: body is 17 pt at the default Dynamic
+    /// Type size and follows every setting, up and down. Each role names its style; `readable` keeps a
+    /// size from rendering under 11 pt at the smallest setting.
+    static let bodySize: CGFloat = 17
+
     #if os(iOS)
-    static let scale: CGFloat = 13.5 / 17.0
+    /// SF Symbol glyphs in the composer and the talk banner still draw at the compact size that chat
+    /// text used before it moved to the system styles; text never goes through this.
+    private static let glyphScale: CGFloat = 13.5 / 17.0
     #else
-    static let scale: CGFloat = 1
+    private static let glyphScale: CGFloat = 1
     #endif
-    static let bodySize: CGFloat = 17 * scale
 
     static func scaled(_ size: CGFloat) -> CGFloat {
-        max(size * self.scale, min(size, 11))
+        max(size * self.glyphScale, min(size, 11))
     }
+
+    #if os(iOS)
+    /// Nothing renders under 11 pt. A custom font follows `relativeTo:` along UIFontMetrics' curve for
+    /// custom fonts, which takes 12 pt caption text to 10 pt at the three smallest settings; a role that
+    /// would land under 11 there scales with caption2 instead, whose curve never shrinks.
+    static func readable(
+        _ size: CGFloat,
+        relativeTo textStyle: Font.TextStyle) -> (size: CGFloat, relativeTo: Font.TextStyle)
+    {
+        let size = max(size, 11)
+        let smallest = UIFontMetrics(forTextStyle: textStyle.uiTextStyle).scaledValue(
+            for: size,
+            compatibleWith: UITraitCollection(preferredContentSizeCategory: .extraSmall))
+        return (size, smallest >= 11 ? textStyle : .caption2)
+    }
+
+    private static func custom(_ name: String, size: CGFloat, relativeTo textStyle: Font.TextStyle) -> Font {
+        let readable = self.readable(size, relativeTo: textStyle)
+        return Font.custom(name, size: readable.size, relativeTo: readable.relativeTo)
+    }
+    #endif
 
     static var headline: Font {
         display(size: 17, weight: .semibold, relativeTo: .headline)
@@ -111,7 +135,7 @@ enum OpenClawChatTypography {
 
     static func body(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
-        Font.custom(self.bodyPostScriptName, size: self.scaled(size), relativeTo: textStyle).weight(weight)
+        self.custom(self.bodyPostScriptName, size: size, relativeTo: textStyle).weight(weight)
         #elseif os(macOS)
         Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle).weight(weight)
         #else
@@ -151,7 +175,7 @@ enum OpenClawChatTypography {
 
     static func display(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
-        Font.custom(self.displayPostScriptName, size: self.scaled(size), relativeTo: textStyle).weight(weight)
+        self.custom(self.displayPostScriptName, size: size, relativeTo: textStyle).weight(weight)
         #elseif os(macOS)
         Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle).weight(weight)
         #else
@@ -162,7 +186,7 @@ enum OpenClawChatTypography {
     static func mono(size: CGFloat, weight: Font.Weight = .regular, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
         let name = weight == .semibold ? Self.monoSemiBoldPostScriptName : Self.monoPostScriptName
-        return Font.custom(name, size: Self.scaled(size), relativeTo: textStyle)
+        return Self.custom(name, size: size, relativeTo: textStyle)
         #elseif os(macOS)
         return Font.custom(self.macMonospacedSystemFontName(size: size), size: size, relativeTo: textStyle)
             .weight(weight)
@@ -192,6 +216,26 @@ enum OpenClawChatTypography {
     }
     #endif
 }
+
+#if os(iOS)
+extension Font.TextStyle {
+    var uiTextStyle: UIFont.TextStyle {
+        switch self {
+        case .largeTitle: .largeTitle
+        case .title: .title1
+        case .title2: .title2
+        case .title3: .title3
+        case .headline: .headline
+        case .subheadline: .subheadline
+        case .callout: .callout
+        case .footnote: .footnote
+        case .caption: .caption1
+        case .caption2: .caption2
+        default: .body
+        }
+    }
+}
+#endif
 
 extension View {
     /// UIKit takes context action ink from the presenting view, not the item label.
