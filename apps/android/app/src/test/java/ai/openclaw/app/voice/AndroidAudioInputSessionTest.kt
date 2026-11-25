@@ -63,6 +63,25 @@ class AndroidAudioInputSessionTest {
   }
 
   @Test
+  fun endingChimeKeepsCommunicationRouteAfterRecorderStops() {
+    val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(speaker))
+    AndroidAudioInputSession.open(context, 24_000, 4_800, communication = true).use { input ->
+      input.startRecording()
+      val recorder = ReflectionHelpers.getField<AudioRecord>(input, "audioRecord")
+      checkNotNull(input.retainCommunicationForChime()).use { ending ->
+        input.close()
+        assertEquals(AudioRecord.RECORDSTATE_STOPPED, recorder.recordingState)
+        assertTrue(ending.eligible)
+        assertEquals(speaker, audioManager.communicationDevice)
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audioManager.mode)
+      }
+    }
+    assertNull(audioManager.communicationDevice)
+    assertEquals(AudioManager.MODE_NORMAL, audioManager.mode)
+  }
+
+  @Test
   fun aRecorderThatReturnsWithoutStartingCannotReportCaptureReadiness() {
     AndroidAudioInputSession.open(context, 24_000, 4_800).use { input ->
       val original = ReflectionHelpers.getField<AudioRecord>(input, "audioRecord")

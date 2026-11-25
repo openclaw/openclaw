@@ -8,6 +8,7 @@ import ai.openclaw.app.gateway.GatewayRegistryStore
 import ai.openclaw.app.gateway.GatewayStoreMigration
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.parseHexColorArgb
+import ai.openclaw.app.voice.TalkChime
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.content.Context
 import android.content.SharedPreferences
@@ -257,6 +258,14 @@ class SecurePrefs(
 
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
+  private val talkChimes = TalkChime.entries.associateWith { MutableStateFlow(plainPrefs.getBoolean(it.key, true)) }
+
+  internal fun talkChimeEnabled(cue: TalkChime): StateFlow<Boolean> = talkChimes.getValue(cue)
+
+  internal fun setTalkChimeEnabled(
+    cue: TalkChime,
+    enabled: Boolean,
+  ) = talkChimes.getValue(cue).persistBoolean(cue.key, enabled)
 
   private val _preferredCameraFacing =
     MutableStateFlow(plainPrefs.getString(preferredCameraFacingKey, null).takeIf { it == "back" } ?: "front")

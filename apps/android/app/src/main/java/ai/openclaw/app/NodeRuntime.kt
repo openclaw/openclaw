@@ -2201,6 +2201,7 @@ class NodeRuntime internal constructor(
       },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
+      isChimeEnabled = { prefs.talkChimeEnabled(it).value },
       captureRelayStopNotification = {
         val ownershipEpoch = voiceCaptureOwnershipEpoch.get()
 
@@ -3595,7 +3596,7 @@ class NodeRuntime internal constructor(
 
   internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice): Unit = talkMode.acknowledgeFailure(notice)
 
-  fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
+  fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off, userEndedTalk = !value)
 
   fun setTalkMicrophoneMuted(value: Boolean): Unit = talkMode.setMicrophoneMuted(value)
 
@@ -4053,6 +4054,7 @@ class NodeRuntime internal constructor(
   private fun setVoiceCaptureMode(
     mode: VoiceCaptureMode,
     persistManualMic: Boolean = true,
+    userEndedTalk: Boolean = false,
   ) {
     var startAfterSuppression: VoiceCaptureMode? = null
     var ownershipEpoch = 0L
@@ -4072,7 +4074,7 @@ class NodeRuntime internal constructor(
         when (captureMode) {
           VoiceCaptureMode.Off -> {
             talkMode.ttsOnAllResponses = false
-            talkMode.stopAllCapture()
+            talkMode.stopAllCapture(userEndedTalk = userEndedTalk)
             stopVoicePlayback()
             micCapture.setMicEnabled(false)
             if (persistManualMic) {

@@ -48,6 +48,7 @@ import ai.openclaw.app.ui.chat.shouldMigrateComposerDraft
 import ai.openclaw.app.ui.chat.toOutgoingAttachment
 import ai.openclaw.app.voice.AndroidAudioInputSession
 import ai.openclaw.app.voice.AudioInputDeviceOption
+import ai.openclaw.app.voice.TalkChime
 import ai.openclaw.app.voice.TalkFailureNotice
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
@@ -634,6 +635,14 @@ class MainViewModel internal constructor(
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val accessibilityControlEnabled: StateFlow<Boolean> = prefs.accessibilityControlEnabled
+
+  internal fun talkChimeEnabled(cue: TalkChime): StateFlow<Boolean> = prefs.talkChimeEnabled(cue)
+
+  internal fun setTalkChimeEnabled(
+    cue: TalkChime,
+    enabled: Boolean,
+  ) = prefs.setTalkChimeEnabled(cue, enabled)
+
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
   val preferredAudioInputDevice: StateFlow<String?> = prefs.preferredAudioInputDevice
   val voiceWakeEnabled: StateFlow<Boolean> = prefs.voiceWakeEnabled
