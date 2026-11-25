@@ -10,9 +10,12 @@ struct GatewaySwitchFailureToast: Equatable {
     let text: String
     let offersRetry: Bool
 
-    init(message: String, problemKind: GatewayConnectionProblem.Kind?, hostName: String) {
+    /// `hostName` is nil when the host has no saved name; sentences that start with it have their own wording.
+    init(message: String, problemKind: GatewayConnectionProblem.Kind?, hostName savedName: String?) {
+        let hostName = savedName ?? String(localized: "this host")
         let unreachable = String(format: String(localized: "Couldn’t reach %@."), hostName)
-        let needsSecure = String(format: String(localized: "%@ needs a secure connection."), hostName)
+        let needsSecure = savedName.map { String(format: String(localized: "%@ needs a secure connection."), $0) }
+            ?? String(localized: "This host needs a secure connection.")
         let secureTransportGuidance = GatewayConnectionController.DiscoveredGatewayConnectionAvailability
             .secureTransportRequired.guidanceText ?? ""
         switch problemKind {
@@ -23,8 +26,10 @@ struct GatewaySwitchFailureToast: Equatable {
             (self.text, self.offersRetry) = (needsSecure, false)
             return
         case .tlsPinMismatch?:
-            (self.text, self.offersRetry) = (
-                String(format: String(localized: "%@ isn’t the host you paired with."), hostName), false)
+            let notPaired = savedName.map {
+                String(format: String(localized: "%@ isn’t the host you paired with."), $0)
+            } ?? String(localized: "This isn’t the host you paired with.")
+            (self.text, self.offersRetry) = (notPaired, false)
             return
         default:
             break
@@ -266,7 +271,7 @@ struct RootSidebarGatewayControl: View {
         let toast = GatewaySwitchFailureToast(
             message: message,
             problemKind: self.appModel.gatewayPreconnectProblemKind(for: stableID),
-            hostName: entry?.name ?? String(localized: "this host"))
+            hostName: entry?.name)
         guard toast.offersRetry else {
             self.appModel.toasts.post(.failure(toast.text))
             return

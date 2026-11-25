@@ -4317,6 +4317,8 @@
     {"path":"apps/ios/Sources/RootSidebarGatewayControl.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.db35fc45e76e396d","source":"Open gateway setup and connection settings"},
     {"path":"apps/ios/Sources/RootSidebarGatewayControl.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.b2c9d6d026635722","source":"Send or clear your draft first."},
     {"path":"apps/ios/Sources/RootSidebarGatewayControl.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.e0d92ad9447fd813","source":"Switch gateway or manage saved gateways"},
+    {"path":"apps/ios/Sources/RootSidebarGatewayControl.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.45b09c86bfa26805","source":"This host needs a secure connection."},
+    {"path":"apps/ios/Sources/RootSidebarGatewayControl.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.28a51fa174051325","source":"This isn’t the host you paired with."},
     {"path":"apps/ios/Sources/RootSidebarGatewayControl.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.08f86a968ffb563d","source":"this host"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeGatewayConfig.kt","kind":"ui-call","surface":"android","id":"native.android.7407c1add3c2a2f6","source":"Native Talk: Gateway did not advertise GPT-Live relay support; using device speech recognition and configured Talk voice."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeGatewayConfig.kt","kind":"ui-call","surface":"android","id":"native.android.4580522d689b458a","source":"Native Talk: Gateway relay is unavailable for this configuration; using device speech recognition and configured Talk voice."},

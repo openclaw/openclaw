@@ -178,4 +178,17 @@ struct SidebarGatewayPickerTests {
         #expect(toast("Missing instanceId (node.instanceId). Try restarting the app.")
             == ("Couldn’t connect to Studio.", true))
     }
+
+    @Test func `a host without a saved name gets sentences that read correctly`() {
+        func toast(_ message: String, _ kind: GatewayConnectionProblem.Kind? = nil) -> String {
+            GatewaySwitchFailureToast(message: message, problemKind: kind, hostName: nil).text
+        }
+
+        #expect(toast("anything", .tlsCertificateUnavailable) == "This host needs a secure connection.")
+        #expect(toast("anything", .tlsPinMismatch) == "This isn’t the host you paired with.")
+        #expect(toast("anything", .reachabilityFailed) == "Couldn’t reach this host.")
+        #expect(toast("Couldn’t find this host on this network.") == "Couldn’t find this host on this network.")
+        #expect(toast("Missing instanceId (node.instanceId). Try restarting the app.") ==
+            "Couldn’t connect to this host.")
+    }
 }
