@@ -608,6 +608,21 @@ export const updateHandlers: GatewayRequestHandlers = {
         : handoff && "message" in handoff
           ? { origin: { nextAction: handoff.message } }
           : {}),
+    }).catch(async (error: unknown) => {
+      if (managedHandoffOwner) {
+        // The helper is still ours until sentinel persistence and ownership transfer.
+        const cancelled = await cancelManagedServiceUpdateHandoff(managedHandoffOwner).catch(
+          () => false,
+        );
+        if (cancelled !== "restored-in-process") {
+          try {
+            warn("update.run result persistence failed; handoff cancellation is unconfirmed");
+          } catch {
+            // Preserve the required ledger write failure even if its diagnostic cannot be logged.
+          }
+        }
+      }
+      throw error;
     });
     // A managed orchestrator or the replacement Gateway owns terminal success;
     // refusals and synchronous failures have no later process to finish the run.

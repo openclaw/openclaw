@@ -12,6 +12,8 @@ import {
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import * as runWrites from "../../infra/update-run-write.async.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   sentinelState,
@@ -22,6 +24,7 @@ import {
   sendGatewayLifecycleNoticeMock as sendNotice,
   scheduleGatewayRestartMock as scheduleRestart,
   captureUpdateRunPayload,
+  invokeUpdateRun,
   mockGlobalInstallSurface,
 } from "./update.test-harness.js";
 
@@ -58,6 +61,89 @@ describe("update.run handoff refusal diagnostics", () => {
     detectSupervisor.mockReturnValueOnce("launchd");
     mockGlobalInstallSurface();
   });
+  it.each([
+    "restored-in-process",
+    "restart-after-exit",
+    "unconfirmed",
+    "throws",
+    "joined",
+  ] as const)(
+    "preserves final phase write failure with handoff cancellation %s",
+    async (cancellation) => {
+      const original = new Error("Final update phase could not be recorded");
+      const recordPhase = runWrites.recordUpdateRunPhaseAsync;
+      const phase = vi
+        .spyOn(runWrites, "recordUpdateRunPhaseAsync")
+        .mockImplementation((...args) =>
+          startHandoff.mock.calls.length > 0 && args[1] === "requested"
+            ? Promise.reject(original)
+            : recordPhase(...args),
+        );
+      const cancelStarted = createDeferredCore();
+      const releaseCancel = createDeferredCore();
+      const events: string[] = [];
+      const warn = vi.fn(() => {
+        throw new Error("log unavailable");
+      });
+      const respond = vi.fn();
+      if (cancellation === "joined") {
+        startHandoff.mockResolvedValueOnce({
+          status: "joined",
+          command: "openclaw update",
+          logPath: "handoff.log",
+          handoffId: "foreign-owner",
+          message: "an update is already running",
+        });
+      } else {
+        cancelHandoff.mockImplementationOnce(async () => {
+          cancelStarted.resolve();
+          await releaseCancel.promise;
+          events.push("cancelled");
+          if (cancellation === "throws") {
+            throw new Error("cancel unavailable");
+          }
+          return cancellation === "unconfirmed" ? false : cancellation;
+        });
+      }
+      const outcome = invokeUpdateRun({}, respond, undefined, { logGateway: { warn } }).catch(
+        (error: unknown) => {
+          events.push("rejected");
+          return error;
+        },
+      );
+      try {
+        if (cancellation !== "joined") {
+          await Promise.race([cancelStarted.promise, outcome]);
+          const started = expectDefined(startHandoff.mock.calls[0]?.[0], "accepted handoff");
+          expect(cancelHandoff).toHaveBeenCalledExactlyOnceWith({
+            kind: "managed-update-handoff",
+            handoffId: started.handoffId,
+            installRoot: started.root,
+          });
+          releaseCancel.resolve();
+        }
+        expect(await outcome).toBe(original);
+        expect(events).toEqual(
+          cancellation === "joined" ? ["rejected"] : ["cancelled", "rejected"],
+        );
+        if (cancellation === "joined") {
+          expect(cancelHandoff).not.toHaveBeenCalled();
+        }
+        expect(warn).toHaveBeenCalledTimes(
+          cancellation === "restored-in-process" || cancellation === "joined" ? 0 : 1,
+        );
+        expect(sentinelState.capturedPayload).toBeUndefined();
+        expect(respond).not.toHaveBeenCalled();
+        expect(transferHandoff).not.toHaveBeenCalled();
+        expect(scheduleRestart).not.toHaveBeenCalled();
+      } finally {
+        releaseCancel.resolve();
+        await outcome;
+        phase.mockRestore();
+      }
+    },
+  );
+
   it.each(["managed-service-handoff-failed", "update-recovery-pending"])(
     "retains the helper's finalized refusal and handoff cause (%s)",
     async (reason) => {
