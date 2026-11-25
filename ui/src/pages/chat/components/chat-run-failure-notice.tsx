@@ -4,7 +4,6 @@ import {
   HARNESS_UPDATE_REQUIRED_CODE,
   type RunFailureCause,
 } from "../../../../../src/shared/run-failure-notice.js";
-import { resolveSessionStartupErrorPresentation } from "../../../../../src/shared/session-startup-error-presentation.js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
 import {
   providerDisplayLabel,
@@ -18,6 +17,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
+import { resolveChatStartupErrorPresentation } from "../session-startup-error-presentation.ts";
 
 let nextPanelId = 0;
 // A rejected key or billing problem is fixed under Models, not by another attempt.
@@ -48,7 +48,7 @@ export function ChatRunFailureNotice(props: {
   onRetry?: () => void;
   onStartNewSession?: () => void;
 }) {
-  const startup = createMemo(() => resolveSessionStartupErrorPresentation(props.summary));
+  const startup = createMemo(() => resolveChatStartupErrorPresentation(props.summary));
   const panelId = `chat-run-failure-${++nextPanelId}`;
   const [line, setLine] = createSignal<HTMLElement>();
   const [open, setOpen] = createSignal(false);
@@ -63,8 +63,7 @@ export function ChatRunFailureNotice(props: {
   const app = useOptionalApplication();
   const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
   const startNewSession = () =>
-    (props.cause?.code === HARNESS_UPDATE_REQUIRED_CODE || startup()?.newConversation) &&
-    props.onStartNewSession;
+    props.cause?.code === HARNESS_UPDATE_REQUIRED_CODE && props.onStartNewSession;
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";

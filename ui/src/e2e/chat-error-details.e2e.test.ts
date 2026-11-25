@@ -103,6 +103,9 @@ suite.define(() => {
           .toBe(true);
         expect(await alert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
         expect(await alert.getByRole("button", { name: "Try again", exact: true }).count()).toBe(0);
+        expect(
+          await alert.getByRole("button", { name: "Start a new session", exact: true }).count(),
+        ).toBe(0);
         await alert.locator(".chat-run-failure__toggle").click();
         expect(await alert.getByLabel("Error details", { exact: true }).textContent()).toContain(
           diagnostic,

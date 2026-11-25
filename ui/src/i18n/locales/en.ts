@@ -1549,6 +1549,11 @@ const startupEnglish = {
       retryingIn: "Retrying in {seconds}s",
       tryingFallback: "Trying fallback model",
       failedTitle: "Couldn’t finish this reply",
+      missingConversationTitle:
+        "OpenClaw couldn't find the saved conversation data needed to continue.",
+      missingConversationRecovery: "Start a new conversation and send your request again.",
+      workspaceSetupTitle: "Couldn't finish preparing the code workspace.",
+      workspaceSetupRecovery: "Send your request again to retry workspace setup.",
       credentialsRejected: "{provider} didn’t accept the saved credentials",
       billingProblem: "{provider} reports a billing problem",
       openModels: "Open Models",

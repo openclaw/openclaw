@@ -6,7 +6,6 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import { hasTerminalControl } from "../../../../packages/terminal-core/src/safe-text.js";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
-import { resolveSessionStartupErrorPresentation } from "../../../../src/shared/session-startup-error-presentation.js";
 import { shellEscapeBackslash as shellQuote } from "../../../../src/shared/shell-quote.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { ErrorDetails } from "../../components/config-error.tsx";
@@ -31,6 +30,7 @@ import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
 import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
 import { RemainingConflictPaths } from "./components/chat-workspace-conflict.tsx";
 import type { ChatRunError } from "./run-lifecycle.ts";
+import { resolveChatStartupErrorPresentation } from "./session-startup-error-presentation.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import {
   visibleWorkspaceConflictPaths,
@@ -316,7 +316,7 @@ function ChatErrorNotice(props: {
     props.detail === undefined
       ? (props.displayError ?? formatWebUiIconErrorText(props.error))
       : formatUiErrorDetails(props.detail);
-  const startup = createMemo(() => resolveSessionStartupErrorPresentation(props.error));
+  const startup = createMemo(() => resolveChatStartupErrorPresentation(props.error));
   // Keep an expanded diagnostic stable across unrelated session refreshes.
   const toast = createMemo(
     () => {
@@ -380,7 +380,7 @@ function ChatReplyErrorNotice(props: {
   const diagnostic = createMemo(() =>
     formatUiErrorDetails(formatWebUiIconErrorText(props.error.summary)).trim(),
   );
-  const startup = createMemo(() => resolveSessionStartupErrorPresentation(diagnostic()));
+  const startup = createMemo(() => resolveChatStartupErrorPresentation(diagnostic()));
   const message = () => startup()?.message ?? diagnostic();
   return (
     <div
