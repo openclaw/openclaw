@@ -26,7 +26,7 @@ final class ChatComposerPrimaryRoleTests: XCTestCase {
     func testIdleComposerFollowsTheDraft() {
         XCTAssertEqual(self.role(), .talk)
         XCTAssertEqual(self.role(draft: true, canSend: true), .send)
-        // A draft that cannot go out yet (offline, attachments still preparing) shows a disabled Send.
+        // A draft that cannot go out yet (offline, a tile still preparing or failed) shows a disabled Send.
         XCTAssertEqual(self.role(draft: true), .send)
         // Without Talk there is nothing to start, so the empty field shows a disabled Send.
         XCTAssertEqual(self.role(talk: false), .send)

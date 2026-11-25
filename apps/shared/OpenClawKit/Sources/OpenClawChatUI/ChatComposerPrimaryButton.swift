@@ -67,7 +67,9 @@ extension OpenClawChatComposer {
     #if os(iOS)
     var phonePrimaryRole: ChatComposerPrimaryRole {
         ChatComposerPrimaryRole.resolve(
-            hasDraftToSend: self.viewModel.hasDraftToSend,
+            // A tile, preparing or failed, keeps the button on a disabled Send instead of Talk:
+            // a voice conversation would leave the tile sitting in the composer.
+            hasDraftToSend: self.viewModel.hasDraftToSend || !self.viewModel.preparingAttachments.isEmpty,
             canSendDraft: self.canSendMessage,
             hasOwnReply: self.viewModel.pendingRunCount > 0 ||
                 (self.primaryReplyMark != nil && !self.replyMarkEnded),
