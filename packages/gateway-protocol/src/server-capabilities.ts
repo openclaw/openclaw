@@ -49,6 +49,7 @@ export const GATEWAY_SERVER_CAPS = {
   SESSION_APPROVAL_RECIPIENTS,
   SESSION_SCOPED_CHAT_METADATA: "session-scoped-chat-metadata",
   SESSION_SCOPED_MODEL_CATALOG: "session-scoped-model-catalog",
+  PERSONAL_SESSION_PINS: "personal-session-pins",
   SESSION_UNREAD_ACK_CONTRACT: "session-unread-ack-contract",
   SESSION_GOAL_START: "session-goal-start-v1",
   SESSION_SETTINGS_CONTRACT: "session-settings-contract",
