@@ -313,7 +313,8 @@ function parsePcmSampleRate(mimeType: string | undefined): number {
 }
 
 function isMulawSilence(audio: Buffer): boolean {
-  return audio.length > 0 && audio.every((sample) => sample === 0xff);
+  // G.711 mu-law encodes both positive and negative zero.
+  return audio.length > 0 && audio.every((sample) => sample === 0xff || sample === 0x7f);
 }
 
 function isPcm16Silence(audio: Buffer): boolean {
@@ -369,7 +370,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   // Native reconnect keeps the already accepted FIFO prefix stable.
   private readonly pendingAudio = createRealtimeVoiceAudioQueue("reject-newest");
   private readonly inputAudio: GoogleLiveInputAudio;
-  private consecutiveSilenceMs = 0;
+  private consecutiveSilenceBytes = 0;
   private audioStreamEnded = false;
   private responseInterrupted = false;
   private pendingFunctionNames = new Map<string, string>();
@@ -434,7 +435,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.closeNotified = false;
     this.setupCompleteReceived = false;
     this.sessionConfigured = false;
-    this.consecutiveSilenceMs = 0;
+    this.consecutiveSilenceBytes = 0;
     this.audioStreamEnded = false;
     const resumesExistingSession =
       this.config.sessionResumption !== false && Boolean(this.resumptionHandle);
@@ -562,16 +563,15 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.inputAudio.send(this.session, audio);
 
     if (!silent) {
-      this.consecutiveSilenceMs = 0;
+      this.consecutiveSilenceBytes = 0;
       this.audioStreamEnded = false;
       return;
     }
 
+    this.consecutiveSilenceBytes += audio.length;
+    const silenceMs = realtimeVoiceAudioDurationMs(this.audioFormat, this.consecutiveSilenceBytes);
     const silenceThresholdMs = this.config.silenceDurationMs ?? DEFAULT_AUDIO_STREAM_END_SILENCE_MS;
-    this.consecutiveSilenceMs += Math.round(
-      realtimeVoiceAudioDurationMs(this.audioFormat, audio.length),
-    );
-    if (!this.audioStreamEnded && this.consecutiveSilenceMs >= silenceThresholdMs) {
+    if (!this.audioStreamEnded && silenceMs >= silenceThresholdMs) {
       this.inputAudio.flush(this.session);
       this.session.sendRealtimeInput({ audioStreamEnd: true });
       this.audioStreamEnded = true;
@@ -737,7 +737,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     if (clearInputAudio) {
       this.pendingAudio.clear();
-      this.consecutiveSilenceMs = 0;
+      this.consecutiveSilenceBytes = 0;
       this.audioStreamEnded = false;
     }
     this.resetToolCallOwnership();
