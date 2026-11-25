@@ -1056,13 +1056,6 @@ function releaseProvenanceMarker(line) {
   };
 }
 
-export function releaseProvenanceMarkers(message) {
-  return message
-    .split("\n")
-    .filter((line) => /^Release provenance:/i.test(line))
-    .map(releaseProvenanceMarker);
-}
-
 export function collectReleaseProvenanceOverrides(activeCommits, releaseProvenance = []) {
   const activeCommitHashes = new Set(activeCommits.map((commit) => commit.hash));
   const overrides = new Map();

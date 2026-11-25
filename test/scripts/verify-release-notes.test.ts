@@ -34,7 +34,6 @@ import {
   pullRequestTitleFromCommitSubject,
   releaseNoteReferences,
   releasePullRequestReferencesToSuppress,
-  releaseProvenanceMarkers,
   recoverUnavailablePullRequests,
   recoverUnavailableIssues,
   loadHistoricalIssueSnapshot,
@@ -1302,7 +1301,6 @@ Release provenance for ${hash} -> #3`
     if (mode === "CLI") {
       expect(args).toEqual([payload]);
     } else {
-      expect(releaseProvenanceMarkers(body)).toEqual([{ commit: hash, pullRequests: [1, 2] }]);
       expect(resolvedReleasePullRequests([3], [], false, [1, 2])).toEqual([1, 2]);
       expect(releasePullRequestReferencesToSuppress([], "fix: subject (#3)", [1, 2], true)).toEqual(
         [3],
