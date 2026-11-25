@@ -3,6 +3,7 @@ import {
   historyKeymap,
   insertNewline,
   isolateHistory,
+  redo,
   standardKeymap,
   undo,
 } from "@codemirror/commands";
@@ -16,7 +17,14 @@ import {
   type SelectionRange,
   type StateEffect,
 } from "@codemirror/state";
-import { drawSelection, EditorView, keymap, placeholder, type ViewUpdate } from "@codemirror/view";
+import {
+  drawSelection,
+  EditorView,
+  keymap,
+  placeholder,
+  runScopeHandlers,
+  type ViewUpdate,
+} from "@codemirror/view";
 import { registerComposerEditor } from "../../../lib/composer-input.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { composerEditorTheme } from "./composer-editor-theme.ts";
@@ -207,13 +215,18 @@ export function mountComposerEditor(
         undoHistory.of(history()),
         // Textarea editing, not code editing: no auto-indent or line commands.
         keymap.of([
+          { key: "Mod-z", run: redo, shift: redo, scope: "redo", preventDefault: true },
           { key: "Enter", run: insertNewline, shift: insertNewline },
           ...standardKeymap,
           ...historyKeymap,
         ]),
         Prec.highest(
           EditorView.domEventHandlers({
-            keydown: forward,
+            keydown(event) {
+              // Caps Lock can make Shift+Z lowercase. Try redo before CM matches
+              // the printable key without Shift against its ordinary undo binding.
+              return forward(event) || (event.shiftKey && runScopeHandlers(view, event, "redo"));
+            },
             keyup: forward,
             pointerdown: forward,
             pointerup: forward,

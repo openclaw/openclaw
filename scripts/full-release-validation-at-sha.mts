@@ -231,6 +231,9 @@ always performs read-only reconciliation. --reconcile-request refuses a missing 
 --resume-request continues an admitted candidate request before its first Q workflow
 POST, reusing an exact existing Q ref after interrupted creation. After a
 qualification POST it is observation-only, never a redispatch.
+Fresh validation checks committed mock exports before dispatch. For diagnostics or
+historical candidates, --skip-local-mock-preflight logs and skips only this local check.
+Build-only and retained requests are unchanged.
 Retain the artifact until operator cleanup; its loss never proves non-execution.
 Frozen tooling must declare FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1 before a new request.
 Prints the frozen candidate/tooling, effective profile, group, and soak selection
@@ -451,6 +454,7 @@ export function parseArgs(argv: string[]) {
     specifiedInputs: [] as string[],
     pinAdmissionWorkflow: false,
     keepBranch: false,
+    skipLocalMockPreflight: false,
     dryRun: false,
     inputs,
   };
@@ -492,6 +496,10 @@ export function parseArgs(argv: string[]) {
     }
     if (arg === "--keep-branch") {
       args.keepBranch = true;
+      continue;
+    }
+    if (arg === "--skip-local-mock-preflight") {
+      args.skipLocalMockPreflight = true;
       continue;
     }
     if (arg === "--dry-run") {
@@ -1301,17 +1309,14 @@ function readActiveConcurrencyRuns(request: DispatchRequest) {
       requireDispatch(
         isJsonRecord(value) &&
           Array.isArray(value.workflow_runs) &&
+          value.workflow_runs.length <= RUN_PAGE_SIZE &&
           Number.isSafeInteger(value.total_count) &&
           Number(value.total_count) >= 0 &&
           Number(value.total_count) <= RUN_PAGE_SIZE * MAX_RUN_PAGES,
         "Active run inventory is incomplete or exceeds its bound",
       );
       total ??= Number(value.total_count);
-      requireDispatch(
-        value.total_count === total &&
-          value.workflow_runs.length === Math.min(RUN_PAGE_SIZE, total - statusCount),
-        "Active run pagination changed or is incomplete",
-      );
+      const expectedPageSize = Math.min(RUN_PAGE_SIZE, total - statusCount);
       for (const item of value.workflow_runs) {
         requireDispatch(
           isJsonRecord(item) &&
@@ -1325,25 +1330,45 @@ function readActiveConcurrencyRuns(request: DispatchRequest) {
         statusCount += 1;
       }
       const next = response.headers.get("link")?.match(/<([^>]+)>;\s*rel="next"/u)?.[1];
+      if (next) {
+        const url = new URL(next);
+        requireDispatch(
+          url.origin === "https://api.github.com" &&
+            url.pathname === `/repos/${REPOSITORY}/actions/workflows/${request.workflowId}/runs` &&
+            url.searchParams.get("page") === String(page + 1) &&
+            url.searchParams.get("event") === "workflow_dispatch" &&
+            url.searchParams.get("status") === status &&
+            url.searchParams.get("per_page") === String(RUN_PAGE_SIZE),
+          "Active run pagination changed scope",
+        );
+      }
+      if (value.total_count !== total || value.workflow_runs.length !== expectedPageSize) {
+        // Only a well-formed page can be transient: restart every status after a count change.
+        return undefined;
+      }
       if (statusCount === total) {
         requireDispatch(!next, "Active run pagination is uncertain");
         break;
       }
       requireDispatch(next, "Active run inventory omitted its next page");
-      const url = new URL(next);
-      requireDispatch(
-        url.origin === "https://api.github.com" &&
-          url.pathname === `/repos/${REPOSITORY}/actions/workflows/${request.workflowId}/runs` &&
-          url.searchParams.get("page") === String(page + 1) &&
-          url.searchParams.get("event") === "workflow_dispatch" &&
-          url.searchParams.get("status") === status &&
-          url.searchParams.get("per_page") === String(RUN_PAGE_SIZE),
-        "Active run pagination changed scope",
-      );
     }
     requireDispatch(statusCount === total, "Active run inventory exceeded its page bound");
   }
   return runs;
+}
+
+function readStableActiveConcurrencyRuns(request: DispatchRequest) {
+  for (const delay of [0, 2_000, 4_000]) {
+    if (delay > 0) {
+      console.warn("Active run pagination changed or is incomplete; rescanning before dispatch.");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+    }
+    const runs = readActiveConcurrencyRuns(request);
+    if (runs) {
+      return runs;
+    }
+  }
+  throw new Error("Active run pagination changed or is incomplete after three scans");
 }
 
 function assertNoActiveConcurrencyRun(request: DispatchRequest) {
@@ -1351,7 +1376,7 @@ function assertNoActiveConcurrencyRun(request: DispatchRequest) {
     inputs: request.inputs,
     effectiveSoak: request.effectiveSoak,
   });
-  const active = readActiveConcurrencyRuns(request).filter((workflowRun) =>
+  const active = readStableActiveConcurrencyRuns(request).filter((workflowRun) =>
     stringValue(workflowRun.head_branch).startsWith(branchPrefix),
   );
   for (const workflowRun of active) {
@@ -2289,6 +2314,19 @@ async function main() {
     : undefined;
   if (admissionWorkflowSha) {
     assertAdmissionContract(admissionWorkflowSha);
+  }
+  if (args.inputs.rerun_group !== "build-only") {
+    if (args.skipLocalMockPreflight) {
+      console.warn(
+        `Skipping local mock-export preflight for ${targetSha} (--skip-local-mock-preflight)`,
+      );
+    } else {
+      const { checkFrozenMockExports } = await import("./check-test-mock-exports.mts");
+      requireDispatch(
+        checkFrozenMockExports(process.cwd(), targetSha) === 0,
+        `Local mock-export preflight failed for ${targetSha}; no workflow was dispatched. Fix the candidate or use --skip-local-mock-preflight to defer to hosted validation.`,
+      );
+    }
   }
   if (candidateOwned) {
     warnCandidateToolingLag(workflowSha);

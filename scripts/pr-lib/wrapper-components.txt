@@ -1276,6 +1276,7 @@ src/infra/shell-env.ts
 src/infra/shell-inline-command.ts
 src/infra/shell-wrapper-resolution.ts
 src/infra/spawn-ps.ts
+src/infra/sqlite-additive-column.ts
 src/infra/sqlite-audit-record-store.async.ts
 src/infra/sqlite-audit-record-store.ts
 src/infra/sqlite-audit-record.kernel.ts

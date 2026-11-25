@@ -104,6 +104,7 @@ export function createDispatchFixture(
     toolingLagComparisonFailure?: boolean;
     unreachableContributionRecord?: boolean;
     activeConcurrencyRun?: boolean;
+    activeInventory?: "short-once" | "short-always" | "short-invalid-row" | "malformed";
     completedConcurrencyHistory?: number;
     releaseNotes?: string;
     candidateOpenPrHead?: boolean;
@@ -579,7 +580,20 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
     }
     process.stdout.write(headers + "\\r\\n");
   }
-  console.log(JSON.stringify({ total_count: runs.length, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
+  let totalCount = runs.length;
+  const activeInventory = ${JSON.stringify(options.activeInventory)};
+  if (activeInventory && concurrencyInventory && fields.get("status") === "queued") {
+    const marker = runDiscoveryIndexPath + ".short-active-read";
+    if (activeInventory === "short-invalid-row") {
+      totalCount = 2;
+      runs.push({ ...runMetadata(0), status: "queued" });
+    } else if (activeInventory === "malformed") totalCount = -1;
+    else if (activeInventory === "short-always" || !fs.existsSync(marker)) {
+      totalCount++;
+      fs.writeFileSync(marker, "short page");
+    }
+  }
+  console.log(JSON.stringify({ total_count: totalCount, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
 } else if (args[0] === "api" && endpoint.endsWith("/actions/runs/123")) {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8"));
   const state = parentRunStates[Math.max(0, Math.min(index, parentRunStates.length - 1))];

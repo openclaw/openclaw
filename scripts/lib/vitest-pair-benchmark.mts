@@ -783,8 +783,9 @@ export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<vo
                   status: unchanged ? "unchanged" : "changed",
                   ...delta,
                 });
-                if (!unchanged)
+                if (!unchanged) {
                   failure ??= new Error("Prepared workload changed during the schedule");
+                }
               } catch (error) {
                 checkOutput();
                 writeJsonAtomic(integrityFile, {
@@ -808,7 +809,9 @@ export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<vo
               });
             }
           }
-          if (failure) throw failure;
+          if (failure) {
+            throw failure;
+          }
         });
       } catch (error) {
         failure = normalizeError(error);

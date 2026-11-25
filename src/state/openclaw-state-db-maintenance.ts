@@ -27,7 +27,6 @@ import {
   getStateRuntimeSchemaAdmission,
   getStateSchemaVersionAdmission,
   adoptPeerPublishedStateSchemaVersion,
-  publishStateSchemaVersionAdmission,
 } from "./openclaw-state-db-admission.js";
 import {
   CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
@@ -241,7 +240,7 @@ export function assertOpenClawStateDatabaseForMaintenance(
   );
   const contentVersion =
     options.schemaVersions?.contentVersion ?? readStateSchemaContentVersion(database);
-  if (contentVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
+  if (contentVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
@@ -321,19 +320,15 @@ export function markCurrentStateSchemaVersion(
   db: DatabaseSync,
   options: { createMetadataIfMissing?: boolean } = {},
 ): void {
+  if (readStateSchemaContentVersion(db) > OPENCLAW_STATE_SCHEMA_VERSION) {
+    return;
+  }
   // Pre-v2 databases can legitimately predate the audit table. Leave their
   // version untouched so normal open can create the complete v2 schema first.
   if (!tableExists(db, "audit_events")) {
     return;
   }
   const version = resolveStateSchemaVersionToPublish(db);
-  if (readSqliteUserVersion(db) !== version) {
-    db.exec(`PRAGMA user_version = ${version};`);
-  }
-  publishStateSchemaVersionAdmission(db, {
-    userVersion: version,
-    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-  });
   if (
     tableExists(db, "schema_meta") &&
     ["meta_key", "schema_version", "updated_at"].every((column) =>
@@ -693,15 +688,11 @@ export function runStateSchemaMigrationTransaction<T>(
 }
 
 export function writeCurrentStateSchemaMetadata(db: DatabaseSync, now: number): void {
+  if (readStateSchemaContentVersion(db) > OPENCLAW_STATE_SCHEMA_VERSION) {
+    return;
+  }
   const kysely = getNodeSqliteKysely<Pick<DB, "schema_meta">>(db);
   const schemaVersion = resolveStateSchemaVersionToPublish(db);
-  if (readSqliteUserVersion(db) !== schemaVersion) {
-    db.exec(`PRAGMA user_version = ${schemaVersion};`);
-  }
-  publishStateSchemaVersionAdmission(db, {
-    userVersion: schemaVersion,
-    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-  });
   executeSqliteQuerySync(
     db,
     kysely

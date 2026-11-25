@@ -62,7 +62,8 @@ export function validateWorkloadDefinition(value: unknown): WorkloadDefinition {
     seed: { files: [{ path: "validation-only", bytes: 0, sha256: "0".repeat(64) }] },
   });
   if (
-    checked.lane.critical !== true ||
+    !isRecord(value.lane) ||
+    value.lane.critical !== true ||
     checked.runtime.architecture !== "x64" ||
     !inputs.some((entry) => entry.path === "package.json") ||
     !inputs.some((entry) => entry.path === "pnpm-lock.yaml") ||
