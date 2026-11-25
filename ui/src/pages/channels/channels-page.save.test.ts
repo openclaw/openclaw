@@ -318,13 +318,16 @@ describe("ChannelsPage channel links", () => {
     expect(text(page, ".channels-detail .oc-dialog__title, .channels-detail h2")).toContain(
       "Telegram",
     );
+    findButton(page, ".channels-detail .oc-dialog__close").click();
+    await settle();
+    expect(page.querySelector(".channels-detail")).toBeNull();
     await router.navigateLocation(
-      { pathname: "/channels", search: "?channel=discord", hash: "#channels.discord.token" },
+      { pathname: "/channels", search: "?channel=telegram", hash: "#channels.telegram.token" },
       source.context,
     );
     await settle();
     expect(text(page, ".channels-detail .oc-dialog__title, .channels-detail h2")).toContain(
-      "Discord",
+      "Telegram",
     );
   });
 });

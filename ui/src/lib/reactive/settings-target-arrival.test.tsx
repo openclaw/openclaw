@@ -4,10 +4,10 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { SettingsTargetArrival } from "./settings-target-arrival.ts";
 
 function hashRouter(initial: string) {
-  let hash = initial;
+  let location = { pathname: "/settings/search", search: "", hash: initial };
   const listeners = new Set<() => void>();
   const router = {
-    getState: () => ({ location: { pathname: "/settings/search", search: "", hash } }),
+    getState: () => ({ location }),
     subscribe: (listener: () => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -16,8 +16,8 @@ function hashRouter(initial: string) {
   return {
     // SAFETY: the arrival reads only the location hash and subscribes to changes.
     router: router as unknown as ApplicationContext["router"],
-    go: (next: string) => {
-      hash = next;
+    go: (hash: string, pathname = location.pathname) => {
+      location = { ...location, pathname, hash };
       listeners.forEach((listener) => listener());
     },
   };
@@ -48,6 +48,8 @@ describe("SettingsTargetArrival", () => {
     go("#tools.web.search.enabled");
     await vi.waitFor(() => expect(next).toHaveBeenCalledOnce());
     expect(late).toHaveBeenCalledOnce();
+    go("#tools.web.search.enabled", "/settings/agents/work");
+    await vi.waitFor(() => expect(next).toHaveBeenCalledTimes(2));
   });
 
   it("drops a link the reader replaced before its setting rendered", async () => {

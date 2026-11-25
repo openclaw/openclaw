@@ -1,8 +1,10 @@
+import type { RouteLocation } from "@openclaw/uirouter";
 import { createMemo, onSettled } from "solid-js";
 import {
   findControlUiSetting,
   type ControlUiSettingId,
 } from "../../../../src/shared/control-ui-settings/index.ts";
+import { sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { createPendingSettingsTarget } from "../settings-target-arrival.ts";
 import { useOptionalApplication } from "./context.ts";
@@ -29,19 +31,19 @@ export function SettingsTargetArrival(props: {
     // Rows that depend on Gateway reads render after the route does.
     const observer = new MutationObserver(() => pending.commit());
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let hash: string | undefined;
+    let previous: RouteLocation | undefined;
     const follow = () => {
-      const next = props.router.getState().location.hash;
-      // The router publishes for every loader step; only a different fragment is a new arrival.
-      if (next === hash) {
+      const next = props.router.getState().location;
+      // Ignore loader-only notifications, not another agent or panel with the same row ID.
+      if (sameRouteLocation(next, previous)) {
         return;
       }
-      hash = next;
+      previous = next;
       observer.disconnect();
       clearTimeout(timer);
       let targetId: string | null = null;
       try {
-        targetId = decodeURIComponent(next.slice(1)) || null;
+        targetId = decodeURIComponent(next.hash.slice(1)) || null;
       } catch {
         // A malformed fragment names no setting.
       }
