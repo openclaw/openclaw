@@ -33,6 +33,7 @@ import {
 import {
   prepareSessionPatchArchives,
   prepareSessionPatchArchiveTransition,
+  prepareTargetArchiveTransition,
   releaseSessionPatchArchive,
   validateSessionPatchArchiveProjection,
 } from "./sessions-patch-archive.js";
@@ -529,34 +530,16 @@ export async function executeSessionPatchMutations(params: ExecuteSessionPatchMu
                         projectedOutcomes.push({ ok: false, error: authorizationFailure });
                         continue;
                       }
-                      if (
-                        existingEntry &&
-                        typeof target.fullPatch.archived === "boolean" &&
-                        (existingEntry.worktree ||
-                          existingEntry.archivedAt !== undefined ||
-                          target.fullPatch.archived)
-                      ) {
-                        const worktreeTiming = params.diagnostics?.scope(
-                          target.fullPatch.archived ? "archivePlacement" : "worktree",
-                        );
-                        let transition: ArchiveTransition;
-                        try {
-                          transition = await prepareSessionPatchArchiveTransition({
-                            archived: target.fullPatch.archived,
-                            existingCheckoutOnly: archive.intent?.kind === "undo",
-                            entry: existingEntry,
-                            context: params.context,
-                            scope: {
-                              agentId: target.targetAgentId,
-                              sessionKey: primaryKey,
-                              storePath: target.storePath,
-                            },
-                            authorize: mutationTargets[target.index]!.commitGuard,
-                            preparation: target.archivePreparation,
-                          });
-                        } finally {
-                          worktreeTiming?.finish();
-                        }
+                      const transition = await prepareTargetArchiveTransition({
+                        target,
+                        entry: existingEntry,
+                        primaryKey,
+                        context: params.context,
+                        diagnostics: params.diagnostics,
+                        authorize: mutationTargets[target.index]!.commitGuard,
+                        existingCheckoutOnly: archive.intent?.kind === "undo",
+                      });
+                      if (transition) {
                         archiveTransitions.set(target.index, transition);
                       }
                       commitGuards.add(mutationTargets[target.index]!.commitGuard);

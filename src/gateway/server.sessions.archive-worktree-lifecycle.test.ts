@@ -300,10 +300,10 @@ test("explicit Archive Undo preserves a retired checkout while ordinary Restore 
 
   // A supported SDK writer commits after this receipt's detached snapshot, before checkout preparation.
   // Only order the two operations; the checkout service and both storage owners remain real.
-  const transition = archiveTransitions.prepareSessionPatchArchiveTransition;
+  const transition = archiveTransitions.prepareTargetArchiveTransition;
   let acceptedClear = false;
   using _ = vi
-    .spyOn(archiveTransitions, "prepareSessionPatchArchiveTransition")
+    .spyOn(archiveTransitions, "prepareTargetArchiveTransition")
     .mockImplementationOnce(async (params) => {
       await expect(sharedPin(913)).resolves.toMatchObject({
         pinnedAt: 913,

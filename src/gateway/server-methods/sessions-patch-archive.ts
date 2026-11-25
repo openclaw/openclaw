@@ -42,6 +42,7 @@ import type {
   SessionPatchArchivePreparation,
   SessionPatchArchiveTarget,
 } from "./sessions-patch-archive.types.js";
+import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import {
   sessionChangedError as archiveChangedError,
   unexpectedPatchError,
@@ -553,4 +554,43 @@ export async function prepareSessionPatchArchiveTransition(params: {
           },
         }),
   };
+}
+
+/** Times and prepares the checkout transition that Archive or Restore of this target needs. */
+export async function prepareTargetArchiveTransition(params: {
+  target: PreparedPatchTarget;
+  entry: SessionEntry | undefined;
+  primaryKey: string;
+  context: GatewayRequestContext;
+  diagnostics?: SessionPatchDiagnostics;
+  authorize: () => ErrorShape | undefined;
+  existingCheckoutOnly: boolean;
+}) {
+  const { target, entry } = params;
+  const archived = target.fullPatch.archived;
+  if (
+    !entry ||
+    typeof archived !== "boolean" ||
+    !(entry.worktree || entry.archivedAt !== undefined || archived)
+  ) {
+    return undefined;
+  }
+  const timing = params.diagnostics?.scope(archived ? "archivePlacement" : "worktree");
+  try {
+    return await prepareSessionPatchArchiveTransition({
+      archived,
+      existingCheckoutOnly: params.existingCheckoutOnly,
+      entry,
+      context: params.context,
+      scope: {
+        agentId: target.targetAgentId,
+        sessionKey: params.primaryKey,
+        storePath: target.storePath,
+      },
+      authorize: params.authorize,
+      preparation: target.archivePreparation,
+    });
+  } finally {
+    timing?.finish();
+  }
 }

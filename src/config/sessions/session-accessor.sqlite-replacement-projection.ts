@@ -25,6 +25,10 @@ import {
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { runPreparedSqliteSessionWrite } from "./session-accessor.sqlite-prepared-write.js";
+import type {
+  ReplacementProjectionOptions,
+  ReplacementProjectionParams,
+} from "./session-accessor.sqlite-replacement-projection.types.js";
 import {
   readSessionEntryReplacementState,
   type SessionEntryReplacementState,
@@ -33,8 +37,6 @@ import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sql
 import type {
   SqliteSessionEntryReplacement,
   SessionEntryReplacementCommit,
-  ReplacementProjectionOptions,
-  ReplacementProjectionParams,
 } from "./session-accessor.sqlite-replacement-types.js";
 import {
   commitSessionEntryReplacementsInWorker,
