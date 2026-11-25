@@ -64,6 +64,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     inspected: null,
     inspectPointer: null,
     evaluateUnavailable: false,
+    screenshotUnavailable: false,
     controlling: false,
     controlAvailable: false,
     urlDraft: "",
@@ -180,6 +181,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       panel.setState("pendingNewTab", false);
       // Re-probe per connection: another gateway may have evaluate enabled.
       panel.setState("evaluateUnavailable", false);
+      panel.setState("screenshotUnavailable", false);
       control.reset();
     },
 
@@ -522,6 +524,9 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
           return;
         }
         await panel.refreshView(selectedTargetId, epoch);
+        if (operations.isLive(epoch, actionClient) && panel.screenshotUnavailable) {
+          panel.syncUrlDraft(panel.tabs.find((tab) => tab.id === selectedTargetId)?.url ?? "");
+        }
         if (
           operations.isLive(epoch, actionClient) &&
           panel.activeTargetId === selectedTargetId &&
@@ -691,13 +696,6 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
           panel.addressInput?.focus();
         }
       });
-    },
-
-    resetUrlDraftFromView(): void {
-      panel.setState(
-        "urlDraft",
-        native.activeTab?.url || panel.view?.metrics?.url || panel.view?.url || "",
-      );
     },
 
     syncUrlDraft(url: string): void {

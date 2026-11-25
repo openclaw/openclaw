@@ -164,6 +164,75 @@ function expectRequest(
   expect(gateway.request).toHaveBeenCalledWith("browser.request", expect.objectContaining(request));
 }
 
+it("keeps a screenshot-free browser usable without reporting a load failure", async () => {
+  let url = "https://example.test/article";
+  const gateway = pageGateway((request) => {
+    if (request.query?.profile !== "managed") {
+      return undefined;
+    }
+    if (request.path === "/tabs") {
+      return {
+        running: true,
+        tabs: [makeTab("t1", url, "Article")],
+      };
+    }
+    if (request.path === "/screenshot" || request.path === "/screencast") {
+      throw new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: `Lightpanda does not support this browser operation (${request.path}).`,
+        details: { body: { code: "BROWSER_CAPABILITY_UNSUPPORTED", engine: "lightpanda" } },
+      });
+    }
+    return undefined;
+  }, true);
+  const panel = await mountPanel(gateway.client);
+  await waitForSolid(() => expect(panel.activeHostedTabId).toBe("t1"));
+  await flush();
+  await panel.updateComplete;
+  expect(panel.textContent).toContain("This browser does not provide a visual preview.");
+  expect(panel.textContent).not.toContain("Couldn’t load the browser");
+  expect(panel.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
+    "https://example.test/article",
+  );
+  const captures = () =>
+    requests(gateway).filter(({ path }) => path === "/screenshot" || path === "/screencast");
+  expect(captures()).toHaveLength(2);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  url = "https://example.test/next";
+  panel.preferredTab = { tab: hostTab, revision: "next-result" };
+  await panel.updateComplete;
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(captures()).toHaveLength(2);
+  expect(panel.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(url);
+
+  panel.preferredTab = { tab: nodeTab, revision: "visual-browser" };
+  await waitForTitle(panel, "work");
+  expect(panel.textContent).not.toContain("This browser does not provide a visual preview.");
+});
+
+it("catches up the address after agent navigation while the address field had focus", async () => {
+  let url = "https://example.test/first";
+  const gateway = pageGateway((request) => {
+    if (request.path === "/tabs") {
+      return { running: true, tabs: [makeTab("t1", url, url)] };
+    }
+    if (request.path === "/screenshot") {
+      return { path: "/fresh.png", url };
+    }
+    return pageResponse(request, url, url);
+  });
+  const panel = await mountPanel(gateway.client);
+  await waitForTitle(panel, url);
+  const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
+  input.focus();
+  url = "https://example.test/second";
+  panel.preferredTab = { tab: hostTab, revision: "navigated" };
+  await waitForTitle(panel, url);
+  input.blur();
+  await panel.updateComplete;
+  expect(input.value).toBe(url);
+});
+
 it("owns resize observation and wheel interception with the rendered viewport", async () => {
   const { gateway, panel } = await readyPanel();
   const viewport = panel.querySelector<HTMLElement>(".bp-viewport")!;

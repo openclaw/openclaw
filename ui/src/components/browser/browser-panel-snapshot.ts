@@ -2,6 +2,7 @@ import {
   captureBrowserScreenshot,
   fetchBrowserScreenshotDataUrl,
   isBrowserEvaluateDisabledError,
+  isBrowserCapabilityUnsupportedError,
   isBrowserNavigationBlockedError,
   listBrowserTabs,
   readBrowserPageMetrics,
@@ -22,7 +23,13 @@ import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-su
 const ACTION_REFRESH_DELAY_MS = 350;
 
 interface BrowserPanelSnapshotHost extends BrowserPanelStateWriter<
-  "running" | "canAutoResizeViewport" | "tabs" | "view" | "loading" | "evaluateUnavailable"
+  | "running"
+  | "canAutoResizeViewport"
+  | "tabs"
+  | "view"
+  | "loading"
+  | "evaluateUnavailable"
+  | "screenshotUnavailable"
 > {
   readonly host: Pick<BrowserPanelHost, "resourceBasePath" | "authToken" | "fixedTab">;
   readonly native: Pick<BrowserPanelNative, "activeTab" | "mergeRemoteTabs">;
@@ -126,7 +133,11 @@ export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost)
     ) {
       return;
     }
-    if (controller.clearUnavailableView() || controller.stream.ownsView(targetId)) {
+    if (
+      controller.clearUnavailableView() ||
+      controller.screenshotUnavailable ||
+      controller.stream.ownsView(targetId)
+    ) {
       return;
     }
     const current = controller.operations.beginCapture(
@@ -211,7 +222,9 @@ export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost)
       if (captureCurrent()) {
         // A capture denial describes the selected tab; a denied navigation
         // describes the destination and must keep the valid source screenshot.
-        if (isBrowserNavigationBlockedError(error)) {
+        if (isBrowserCapabilityUnsupportedError(error)) {
+          controller.setState("screenshotUnavailable", true);
+        } else if (isBrowserNavigationBlockedError(error)) {
           controller.setState(
             "tabs",
             controller.tabs.map((tab) =>
