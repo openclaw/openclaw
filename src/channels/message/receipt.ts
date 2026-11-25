@@ -99,7 +99,7 @@ export function createMessageReceiptFromOutboundResults(params: {
         ...part,
         index: part.index ?? partIndex,
         ...(normalizeOptionalString(part.threadId) || !threadId ? {} : { threadId }),
-        ...(part.replyToId || !params.replyToId || hasPartReplyMetadata
+        ...(part.nativeReplyAbsent || part.replyToId || !params.replyToId || hasPartReplyMetadata
           ? {}
           : { replyToId: params.replyToId }),
       }));
