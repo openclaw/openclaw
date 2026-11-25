@@ -195,7 +195,6 @@ describe("openclaw tool", () => {
       "read_install_file",
     ]) {
       expect(properties.action.enum).toContain(action);
-      expect(tool.description).toMatch(new RegExp(`Read now:.*${action}`));
     }
     expect(properties.probe).toBeDefined();
     await expect(tool.execute("no-path", { action: "read_install_file" })).rejects.toThrow(

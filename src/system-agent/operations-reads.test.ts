@@ -10,6 +10,7 @@ import { loadSkillsStatusReport } from "../cli/skills-cli.js";
 import { channelsStatusCommand } from "../commands/channels/status.js";
 import { modelsStatusCommand } from "../commands/models/list.status-command.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import { readConfiguredLogTailInWorker } from "../logging/log-tail-worker.js";
 import { executeSystemAgentOperation } from "./operations.js";
 import { readSystemAgentInstallFile } from "./read-install-file.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
@@ -28,11 +29,12 @@ vi.mock("../cli/skills-cli.format.js", () => ({ formatSkillsCheck: vi.fn() }));
 vi.mock("../commands/channels/status.js", () => ({ channelsStatusCommand: vi.fn() }));
 // mock-isolation: Fixture model output avoids auth stores and catalogs.
 vi.mock("../commands/models/list.status-command.js", () => ({ modelsStatusCommand: vi.fn() }));
+vi.mock("../logging/log-tail-worker.js", { spy: true });
 vi.mock("./read-install-file.js", { spy: true });
 
 const tempDirs = createTempDirTracker();
 const secret = "Authorization: Basic c2VjcmV0OnBhc3M=";
-const floodText = `\u001b[31mfirst\u001b[0m ${secret}\n${"lorem ".repeat(3_000)}\nUNBOUNDED_TAIL`;
+const floodText = `\u001b[31mfirst\u001b[0m ${secret}\n${"x".repeat(7_000)}\nUNBOUNDED_TAIL`;
 const writeFlood = (runtime: { log: (text: string) => void }) => {
   floodText.split("\n").forEach((line) => runtime.log(line));
 };
@@ -65,6 +67,9 @@ describe("system agent diagnostic reads", () => {
     [{ kind: "gateway-status-deep" }],
     [{ kind: "skills-check" }],
   ] as const)("runs %j read-only with bounded, redacted, plain output", async (operation) => {
+    const config = path.join(tempDirs.make("diagnostic-redaction-"), "openclaw.json");
+    await fs.writeFile(config, JSON.stringify({ logging: { redactPatterns: ["x"] } }));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", config);
     const { runtime, lines } = createSystemAgentTestRuntime();
     expect(await executeSystemAgentOperation(operation, runtime)).toEqual({ applied: false });
     const output = lines.join("\n");
@@ -73,7 +78,7 @@ describe("system agent diagnostic reads", () => {
     expect(output).not.toContain("\u001b[");
     expect(output).not.toContain("c2VjcmV0OnBhc3M=");
     expect(output).not.toContain("UNBOUNDED_TAIL");
-    expect(output.length).toBeLessThanOrEqual(8_100);
+    expect(output.length).toBeLessThanOrEqual(8_000);
   });
 
   it("passes probe only to channels_status and never to models_status", async () => {
@@ -151,13 +156,20 @@ describe("system agent diagnostic reads", () => {
       await executeSystemAgentOperation({ kind: "logs" }, runtime);
       expect(lines[0]).toMatch(/^Local CLI profile log tail.*untrusted data.*second line/su);
       expect(lines.join("")).not.toContain("c2VjcmV0OnBhc3M=");
+      const hosted = { deps: { setupSurface: "gateway" as const } };
+      const readHostLog = () => executeSystemAgentOperation({ kind: "logs" }, runtime, hosted);
+      await readHostLog();
+      expect(readConfiguredLogTailInWorker).toHaveBeenCalledExactlyOnceWith(
+        { limit: 200, maxBytes: 20_000 },
+        expect.objectContaining({ configPath: config }),
+      );
+      expect(lines[1]).toMatch(/^Gateway log tail.*second line/su);
+      expect(lines[1]).not.toContain("c2VjcmV0OnBhc3M=");
       await fs.writeFile(config, '{"gateway":{"mode":"remote"}}');
       await executeSystemAgentOperation({ kind: "logs" }, runtime);
       const privateLogDir = path.join(path.dirname(config), "logs");
       await fs.symlink(dir, privateLogDir, "junction");
       setLoggerOverride({ file: path.join(privateLogDir, path.basename(file)) });
-      const hosted = { deps: { setupSurface: "gateway" as const } };
-      const readHostLog = () => executeSystemAgentOperation({ kind: "logs" }, runtime, hosted);
       const scopeError = "outside the diagnostics read scope";
       await expect(readHostLog()).rejects.toThrow(scopeError);
       setLoggerOverride({ file });
@@ -168,7 +180,7 @@ describe("system agent diagnostic reads", () => {
         await expect(readHostLog()).rejects.toThrow(scopeError);
         await fs.unlink(file);
       }
-      expect(lines.slice(1)).toEqual([expect.stringContaining("only read diagnostic files")]);
+      expect(lines.slice(2)).toEqual([expect.stringContaining("only read diagnostic files")]);
     });
 
     it("keeps only the newest 200 lines", async () => {

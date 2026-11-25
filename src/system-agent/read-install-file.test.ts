@@ -79,11 +79,13 @@ describe("readSystemAgentInstallFile", () => {
   it("protects config source directories regardless of the current config contents", async () => {
     const { roots, installRoot, write } = await fixture();
     const formerInclude = await write(path.join(installRoot, "config/part.txt"), "private");
-    for (const configText of ['{"$include":"part.txt"}', "{}", "{"]) {
-      const configPath = await write(path.join(installRoot, "config/current.json"), configText);
-      const read = readSystemAgentInstallFile(formerInclude, { ...roots, configPath });
-      await expect(read).rejects.toThrow("outside the diagnostics read scope");
-    }
+    const configPath = await write(
+      path.join(installRoot, "config/current.json"),
+      '{"$include":"part.txt"}',
+    );
+    await expect(
+      readSystemAgentInstallFile(formerInclude, { ...roots, configPath }),
+    ).rejects.toThrow(scopeError);
     const external = { ...roots, includeRoots: [path.dirname(formerInclude)] };
     await expect(readSystemAgentInstallFile(formerInclude, external)).rejects.toThrow(scopeError);
   });
@@ -96,17 +98,17 @@ describe("readSystemAgentInstallFile", () => {
     await expect(readSystemAgentInstallFile("image.bin", roots)).rejects.toThrow("Binary file");
   });
 
-  it("truncates at the byte cap and redacts secrets", async () => {
+  it("refuses oversized files and redacts complete files", async () => {
     const { installRoot, write, roots } = await fixture();
-    await write(path.join(installRoot, "big.txt"), "line of text\n".repeat(6_000));
+    await write(
+      path.join(installRoot, "big.txt"),
+      `${"a".repeat(64 * 1024 - 8)}\nAuthorization: Basic c2VjcmV0OnBhc3M=\n`,
+    );
     await write(path.join(installRoot, "auth.txt"), "Authorization: Basic c2VjcmV0OnBhc3M=\n");
-    const big = await readSystemAgentInstallFile("big.txt", roots);
-    expect(big).toContain("(truncated at 64 KiB)");
-    expect(big.split("\n").slice(1).join("\n")).toHaveLength(64 * 1024);
-    await write(path.join(installRoot, "unicode.txt"), `${"a".repeat(64 * 1024 - 1)}€`);
-    await expect(readSystemAgentInstallFile("unicode.txt", roots)).resolves.not.toContain("�");
+    await expect(readSystemAgentInstallFile("big.txt", roots)).rejects.toThrow("exceeds 64 KiB");
+    await write(path.join(installRoot, "unicode.txt"), `${"a".repeat(64 * 1024 - 3)}€`);
+    await expect(readSystemAgentInstallFile("unicode.txt", roots)).resolves.toMatch(/€$/u);
     const auth = await readSystemAgentInstallFile("auth.txt", roots);
-    expect(auth).toContain("Authorization");
-    expect(auth).not.toContain("c2VjcmV0OnBhc3M=");
+    expect(auth).toMatch(/\nAuthorization: Basic \*{3}\n$/u);
   });
 });

@@ -23,10 +23,17 @@ serveWorkerTasks<
         import("./secret-redaction-registry.js"),
       ]);
       installSecretRedactionRegistrySnapshot(request.secrets);
+      const openFile = request.protectedPaths
+        ? (await import("./diagnostic-file-scope.js")).createDiagnosticLogOpener(
+            request.protectedPaths,
+          )
+        : undefined;
       return readLogTail(
         request.target,
         request.params,
         resolveLogTailRedactOptions({ redactPatterns: request.redactPatterns }),
+        undefined,
+        openFile,
       );
     }
     return executeFileLogIO(request);

@@ -70,13 +70,10 @@ function boundedReadRuntime(
     }
     const raw = stripAnsi(args.join(" "));
     const text = redactToolPayloadText(raw);
-    const clipped = raw.length >= remaining;
-    sink(
-      clipped
-        ? `${truncateUtf16Safe(text, remaining)}\n… (output limit reached; narrow the request)`
-        : text,
-    );
-    remaining -= raw.length + 1;
+    const notice = "\n… (output limit reached; narrow the request)";
+    const suffix = text.length > remaining && remaining >= notice.length ? notice : "";
+    sink(truncateUtf16Safe(text, remaining - suffix.length) + suffix);
+    remaining -= text.length + 1;
   };
   return {
     ...runtime,
@@ -181,16 +178,19 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "logs": {
-      const [{ readConfiguredLogTail }, { openSystemAgentDiagnosticLog }] = await Promise.all([
-        import("../logging/log-tail.js"),
-        import("./read-install-file.js"),
-      ]);
-      const tail = await readConfiguredLogTail(
-        { limit: LOG_TAIL_MAX_LINES, maxBytes: LOG_TAIL_MAX_BYTES },
-        undefined,
-        openSystemAgentDiagnosticLog,
-      );
-      const source = opts.deps?.setupSurface === "gateway" ? "Gateway" : "Local CLI profile";
+      const { createDiagnosticLogOpener, resolveProtectedDiagnosticPaths } =
+        await import("../logging/diagnostic-file-scope.js");
+      const protectedPaths = resolveProtectedDiagnosticPaths();
+      const params = { limit: LOG_TAIL_MAX_LINES, maxBytes: LOG_TAIL_MAX_BYTES };
+      const hosted = opts.deps?.setupSurface === "gateway";
+      const tail = hosted
+        ? await (
+            await import("../logging/log-tail-worker.js")
+          ).readConfiguredLogTailInWorker(params, protectedPaths)
+        : await (
+            await import("../logging/log-tail.js")
+          ).readConfiguredLogTail(params, undefined, createDiagnosticLogOpener(protectedPaths));
+      const source = hosted ? "Gateway" : "Local CLI profile";
       const sourceNote = source === "Gateway" ? "" : ` ${CLI_SERVICE_LOG_GUIDANCE}`;
       runtime.log(
         tail.lines.length === 0
