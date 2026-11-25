@@ -224,6 +224,22 @@ struct CommandCenterTabSessionFilterTests {
                 == manualLabel)
     }
 
+    @Test func `the main session and pending dashboard sessions never show their raw key`() {
+        #expect(CommandCenterTab.sessionTitle(OpenClawChatSessionEntry(key: "agent:main:main")) == "Main chat")
+        #expect(CommandCenterTab.sessionTitle(OpenClawChatSessionEntry(key: "main")) == "Main chat")
+        #expect(CommandCenterTab.sessionTitle(OpenClawChatSessionEntry(key: "agent:work:main")) == "Main chat")
+        #expect(CommandCenterTab.sessionTitle(OpenClawChatSessionEntry(key: "agent:main:main:thread:1")) != "Main chat")
+        #expect(CommandCenterTab.sessionTitle(
+            OpenClawChatSessionEntry(key: "agent:main:dashboard:0f3c2b7e-1111-4222-8333-444455556666")) ==
+            "New session")
+        // The chat header keeps its own fallback (the agent's name) for an untitled main session.
+        #expect(CommandCenterTab.sessionTitle(
+            OpenClawChatSessionEntry(key: "agent:main:main"), includesRoutingFallback: false) == nil)
+        // A real title still wins.
+        #expect(CommandCenterTab.sessionTitle(
+            OpenClawChatSessionEntry(key: "agent:main:main", label: "Daily standup")) == "Daily standup")
+    }
+
     @Test func `a key copied into the label or display name never becomes the session title`() throws {
         let sessions = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
         [

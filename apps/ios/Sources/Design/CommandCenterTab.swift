@@ -83,6 +83,16 @@ enum CommandCenterTab {
         if lowercased.hasPrefix("cron:") {
             return Self.humanizedSessionKey(String(trimmed.dropFirst("cron:".count)))
         }
+        // ui/src/lib/session-display.ts:195: the main session is named, never shown as its key; it carries
+        // the sidebar row's name.
+        if trimmed == "main" || trimmed.range(of: #"^agent:[^:]+:main$"#, options: .regularExpression) != nil {
+            return String(localized: "Main chat")
+        }
+        // ui/src/lib/session-display.ts:255: a dashboard session's title is generated later; its uuid key
+        // must not show meanwhile.
+        if trimmed.range(of: #"^agent:[^:]+:dashboard:"#, options: .regularExpression) != nil {
+            return String(localized: "New session")
+        }
         return nil
     }
 
