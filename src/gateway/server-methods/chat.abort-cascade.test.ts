@@ -154,7 +154,7 @@ describe("descendant cascade ownership", () => {
       expect(peekSystemEvents(mainIdentity.sessionKey)).toEqual([
         `${scope === "session" ? "A session Stop from a connected app" : "A Stop of your turn"} ` +
           "cancelled 1 running sub-agent: Layout research. They won't report back. Check their " +
-          "sessions before you rely on their work, and spawn them again if it's still needed.",
+          "sessions before you rely on their work, and spawn them again if the work is still needed.",
       ]);
       consumeSelectedSystemEventEntries(
         mainIdentity.sessionKey,
