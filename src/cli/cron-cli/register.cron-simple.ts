@@ -20,7 +20,7 @@ import { findCronJobByIdOrName } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
   enrichCronJsonWithStatus,
-  formatCronLookupMiss,
+  exitForCronLookupMiss,
   handleCronCliError,
   parseCronIntegerOption,
   printCronJson,
@@ -164,7 +164,7 @@ export function registerCronSimpleCommands(cron: Command) {
             includeDeliveryPreview: !opts.json,
           });
           if (!job) {
-            throw new CronCliError(formatCronLookupMiss(id));
+            exitForCronLookupMiss(id);
           }
           if (opts.json) {
             printCronJson(enrichCronJsonWithStatus(job));

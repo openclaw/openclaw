@@ -335,7 +335,7 @@ it.each([
   });
   expect(callGatewayFromCli.mock.calls[0]?.[0]).toBe(method);
   expectRuntimeErrorContaining(
-    "Automation not found: missing. Run `openclaw cron list` to see recent automation ids.",
+    "OpenClaw couldn’t find the automation “missing”. Run `openclaw cron list --all` to see IDs for enabled and disabled automations.",
   );
 });
 
