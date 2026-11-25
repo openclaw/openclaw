@@ -161,20 +161,31 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
-  it("prefers the pushed canonical release branch over a stale local branch", () => {
-    const { cwd, base } = seedRepository("openclaw-pushed-branch-", "main");
-    splitChangelog({ rootDir: cwd });
-    git(cwd, ["branch", "release/2026.7.1", base]);
-    const target = commitAll(cwd, "chore: candidate");
-    git(cwd, ["update-ref", "refs/remotes/origin/release/2026.7.1", target]);
-
-    const result = runVerifier(cwd, {
-      base: target,
-      target,
-      extraArgs: ["--release-branch", "release/2026.7.1"],
-    });
-    expect(result.status, result.stderr || result.stdout).toBe(0);
-  });
+  it.each([
+    { localAhead: false, branch: "release/2026.7.1", accepted: true },
+    { localAhead: true, branch: "release/2026.7.1", accepted: true },
+    { localAhead: true, branch: "refs/remotes/origin/release/2026.7.1", accepted: false },
+  ])(
+    "checks selected release history: $branch, local ahead=$localAhead",
+    ({ localAhead, branch, accepted }) => {
+      const { cwd, base } = seedRepository("openclaw-pushed-branch-", "main");
+      splitChangelog({ rootDir: cwd });
+      const target = commitAll(cwd, "chore: candidate");
+      git(cwd, ["branch", "release/2026.7.1", localAhead ? target : base]);
+      git(cwd, ["update-ref", "refs/remotes/origin/release/2026.7.1", localAhead ? base : target]);
+      const result = runVerifier(cwd, {
+        base: target,
+        target,
+        extraArgs: ["--release-branch", branch],
+      });
+      if (accepted) {
+        expect(result.status, result.stderr || result.stdout).toBe(0);
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("is not reachable from canonical release branch");
+      }
+    },
+  );
 
   it.each(["missing", "docs-mirror"])(
     "verifies pinned initial 11.4 notes with %s working-tree notes",

@@ -133,7 +133,7 @@ Options:
   --main-ref <ref>      Canonical mainline used to replace backport PRs.
   --release-branch <ref>
                         Canonical branch whose history must contain the generation target.
-                        Unqualified names prefer origin/<ref>, then fall back to a local ref.
+                        Unqualified names accept local or origin/<ref> history.
   --source-ref <ref>    Read initial notes from an immutable Git commit; read-only.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
@@ -3160,22 +3160,25 @@ function main() {
   }
   const rootDir = process.cwd();
   if (options.releaseBranch) {
-    let canonicalReleaseBranch = options.releaseBranch;
+    const releaseBranches = [options.releaseBranch];
     if (
-      !canonicalReleaseBranch.startsWith("refs/") &&
-      !canonicalReleaseBranch.startsWith("origin/")
+      !options.releaseBranch.startsWith("refs/") &&
+      !options.releaseBranch.startsWith("origin/")
     ) {
-      const remoteRef = `refs/remotes/origin/${canonicalReleaseBranch}`;
-      if (gitCommit(remoteRef)) {
-        canonicalReleaseBranch = remoteRef;
-      }
+      releaseBranches.push(`refs/remotes/origin/${options.releaseBranch}`);
     }
-    if (!gitIsAncestor(options.target, canonicalReleaseBranch)) {
+    if (
+      !releaseBranches.some((ref) => {
+        const commit = gitCommit(ref);
+        return commit ? gitIsAncestor(options.target, commit) : false;
+      })
+    ) {
       fail(
         `release notes target ${options.target} is not reachable from canonical release branch ${options.releaseBranch}; generate notes from that branch's frozen tip`,
       );
     }
   }
+
   if (options.historicalIssueSnapshotPath) {
     const input = realpathSync(options.historicalIssueSnapshotPath);
     const base = git(["rev-parse", options.base + "^{commit}"]);
