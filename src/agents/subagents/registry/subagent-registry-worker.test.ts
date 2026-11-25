@@ -837,6 +837,9 @@ it("retains the execution's Gateway binding through immutable metadata publicati
 
 it("releases serialized payloads while their immutable registry rows remain resident", async () => {
   await register(entry("binding-retention", { task: "synthetic retained task ".repeat(1024) }));
+  // Sample the restored row's cache binding, instead of reusing the
+  // original write command's serialization.
+  await restore();
   const resident = subagentRuns.get("binding-retention")!;
   const expected = codec.bindSubagentRunRecord(resident);
   const binding = weak(bindImmutableSubagentRun(resident));
