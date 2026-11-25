@@ -429,6 +429,21 @@ ratio. Otherwise it reports per-lane evidence without a broad improvement
 claim. Artifacts use only the trusted workflow run ID and attempt in their name;
 the exact baseline and candidate commits remain recorded inside the artifact.
 
+For the prepared Node-cache pair mode, the runner snapshots every regular file's
+bytes and permissions and every internal symlink target before and after the
+schedule. Only the workload root's Git metadata is excluded; ignored generated
+files and installed dependencies remain covered. Dangling or escaping symlinks
+and special files are rejected. Both scans use the aggregate deadline and sit
+outside individual pair measurements.
+
+`prepared-inventory.json` retains the initial inventory; `prepared-integrity.json`
+binds its digest and comparison scope and records complete added, removed, and
+changed metadata. Changed or unverified input prevents successful analysis.
+After uncertain child settlement the runner does not inspect the workload.
+This is a pre/post integrity boundary: it cannot detect a mutation that is fully
+reverted between snapshots and does not replace preparation or cache-acceptance
+qualification.
+
 #### Node compile-cache diagnostic qualification
 
 Before using native cache diagnostics to admit a benchmark, qualify their meaning
