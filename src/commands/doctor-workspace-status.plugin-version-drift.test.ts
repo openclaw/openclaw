@@ -1,4 +1,9 @@
 import { expect, it, vi } from "vitest";
+import { recordDoctorHealthWarnings } from "../flows/doctor-health-contribution.js";
+import {
+  updateRunStepsFromResultStep,
+  updateRunWarningMessages,
+} from "../infra/update-run-step.js";
 import type {
   PluginVersionDriftReport,
   PluginVersionRestartReadiness,
@@ -21,8 +26,8 @@ vi.mock("../plugins/status.js", () => ({
   },
 }));
 
-function findings(pluginVersionReadiness: PluginVersionRestartReadiness) {
-  return collectWorkspaceStatusHealthFindings({}, { pluginVersionReadiness });
+function findings(pluginVersionReadiness: PluginVersionRestartReadiness, env?: NodeJS.ProcessEnv) {
+  return collectWorkspaceStatusHealthFindings({}, { pluginVersionReadiness, env });
 }
 
 it("reports unresolved restart readiness", () => {
@@ -65,26 +70,107 @@ type Drift = PluginVersionDriftReport["drifts"][number];
 const gatewayVersion = "2026.9.4";
 const packageName = "@openclaw/whatsapp";
 const target = { packageName, requestedTarget: gatewayVersion };
-function report(source: Drift["source"], targetResolution: Drift["targetResolution"]) {
-  return findings({
-    status: "resolved",
-    report: {
-      gatewayVersion,
-      drifts: [
-        {
-          pluginId: "whatsapp",
-          installedVersion:
-            targetResolution?.status === "registry-current" ? targetResolution.version : "2026.9.2",
-          gatewayVersion,
-          source,
-          packageName,
-          spec: source === "npm" ? "@openclaw/whatsapp@2026.9.2" : "clawhub:@openclaw/whatsapp",
-          targetResolution,
-        },
-      ],
+function report(
+  source: Drift["source"],
+  targetResolution: Drift["targetResolution"],
+  env?: NodeJS.ProcessEnv,
+) {
+  return findings(
+    {
+      status: "resolved",
+      report: {
+        gatewayVersion,
+        drifts: [
+          {
+            pluginId: "whatsapp",
+            installedVersion:
+              targetResolution?.status === "registry-current"
+                ? targetResolution.version
+                : "2026.9.2",
+            gatewayVersion,
+            source,
+            packageName,
+            spec:
+              source === "npm"
+                ? targetResolution === undefined
+                  ? "@openclaw/whatsapp"
+                  : "@openclaw/whatsapp@2026.9.2"
+                : "clawhub:@openclaw/whatsapp",
+            targetResolution,
+          },
+        ],
+      },
     },
-  });
+    env,
+  );
 }
+
+const packageSwapEnv = {
+  OPENCLAW_UPDATE_IN_PROGRESS: "1",
+  OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+};
+const convergenceEnv = {
+  ...packageSwapEnv,
+  OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+};
+
+it.each([
+  undefined,
+  { ...target, status: "resolved", version: gatewayVersion },
+  { ...target, status: "unresolved", error: "target unavailable" },
+] as const)(
+  "keeps a pending npm cohort upgrade out of the completed update's warning list (%s)",
+  (targetResolution) => {
+    const ctx = { updateWarnings: ["Unrelated advisory"] };
+    const beforeConvergence = report("npm", targetResolution, packageSwapEnv);
+    recordDoctorHealthWarnings(ctx, beforeConvergence);
+    expect(beforeConvergence).toEqual([
+      expect.objectContaining({
+        severity: "info",
+        requirement: "plugin-version-drift",
+        message: expect.stringContaining("post-core plugin convergence"),
+      }),
+    ]);
+    expect(beforeConvergence[0]?.fixHint).toBeUndefined();
+    recordDoctorHealthWarnings(
+      ctx,
+      findings(
+        {
+          status: "resolved",
+          report: { gatewayVersion, drifts: [] },
+          runningGatewayVersion: gatewayVersion,
+        },
+        convergenceEnv,
+      ),
+    );
+    const steps = updateRunStepsFromResultStep({
+      name: "post-install doctor",
+      exitCode: 0,
+      warnings: ctx.updateWarnings,
+    });
+    expect(updateRunWarningMessages(steps)).toEqual(["Unrelated advisory"]);
+  },
+);
+
+it.each([
+  ["ordinary Doctor", {}, "npm", "resolved"],
+  ["post-core convergence", convergenceEnv, "npm", "resolved"],
+  ["update without a convergence promise", { OPENCLAW_UPDATE_IN_PROGRESS: "1" }, "npm", "resolved"],
+  ["target lookup failure after convergence", convergenceEnv, "npm", "unresolved"],
+  ["ClawHub drift", packageSwapEnv, "clawhub", "resolved"],
+] as const)("retains actionable version drift during %s", (_name, env, source, status) => {
+  const ctx = { updateWarnings: [] as string[] };
+  const result = report(
+    source,
+    status === "resolved"
+      ? { ...target, status, version: gatewayVersion }
+      : { ...target, status, error: "target unavailable" },
+    env,
+  );
+  expect(result).toEqual([expect.objectContaining({ severity: "warning" })]);
+  recordDoctorHealthWarnings(ctx, result);
+  expect(ctx.updateWarnings).toEqual([expect.stringContaining("Plugin whatsapp is")]);
+});
 
 // Detection, correction cohorts, and registry compatibility belong to plugin-version-drift.test.ts.
 it.each(["npm", "clawhub"] as const)("renders confirmed %s repair targets", (source) => {

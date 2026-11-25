@@ -2,7 +2,10 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
-import { resolveOpenClawReleaseCohortVersion } from "../infra/npm-registry-spec.js";
+import {
+  compareSemverStrings,
+  resolveOpenClawReleaseCohortVersion,
+} from "../infra/npm-registry-spec.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   resolvePluginVersionDriftRegistryLag,
@@ -13,6 +16,7 @@ import {
   buildPluginCompatibilityWarnings,
   buildPluginRegistrySnapshotReport,
 } from "../plugins/status.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "./doctor/shared/update-phase.js";
 
 const WORKSPACE_STATUS_CHECK_ID = "core/doctor/workspace-status";
 const PLUGIN_DIAGNOSTICS_DOCS = "https://docs.openclaw.ai/cli/plugins/inspect-and-diagnose#doctor";
@@ -41,6 +45,7 @@ function claimPluginDiagnostic(seen: Set<string>, diagnostic: WorkspacePluginDia
 
 function pluginVersionReadinessToHealthFindings(
   readiness: PluginVersionRestartReadiness | undefined,
+  deferPluginVersionDrift: boolean,
 ): HealthFinding[] {
   if (!readiness) {
     return [];
@@ -99,6 +104,12 @@ function pluginVersionReadinessToHealthFindings(
       };
     }
     const updateCommand = resolvePluginVersionDriftUpdateCommand(entry);
+    // The shipped updater owns official npm plugin convergence after the core swap.
+    // Its earlier Doctor receipt must not ask the operator to repeat a pending upgrade.
+    const pendingCohortUpgrade =
+      deferPluginVersionDrift &&
+      entry.source === "npm" &&
+      (compareSemverStrings(entry.installedVersion, drift.gatewayVersion) ?? 0) < 0;
     const targetResolution = entry.targetResolution;
     const targetError =
       entry.targetResolution?.status === "unresolved"
@@ -106,16 +117,20 @@ function pluginVersionReadinessToHealthFindings(
         : "npm registry target was not resolved";
     return {
       checkId: WORKSPACE_STATUS_CHECK_ID,
-      severity: "warning",
-      category: "fix-now",
+      severity: pendingCohortUpgrade ? "info" : "warning",
+      category: pendingCohortUpgrade ? "recommended" : "fix-now",
       docsUrl: PLUGIN_DIAGNOSTICS_DOCS,
-      message: `Plugin ${entry.pluginId} is ${entry.installedVersion}, but a Gateway restart will load OpenClaw ${drift.gatewayVersion}.${targetResolution?.status === "resolved" ? ` The confirmed plugin target is ${targetResolution.version}.` : ""}${runningGatewayVersion ? ` The running Gateway is ${runningGatewayVersion}.` : ""}${updateCommand ? "" : ` Repair target resolution failed: ${targetError}.`}`,
+      message: pendingCohortUpgrade
+        ? `Plugin ${entry.pluginId} is ${entry.installedVersion}; the current update will check it against OpenClaw ${drift.gatewayVersion} during post-core plugin convergence.${targetResolution?.status === "unresolved" ? ` Current target lookup failed: ${targetError}.` : ""}`
+        : `Plugin ${entry.pluginId} is ${entry.installedVersion}, but a Gateway restart will load OpenClaw ${drift.gatewayVersion}.${targetResolution?.status === "resolved" ? ` The confirmed plugin target is ${targetResolution.version}.` : ""}${runningGatewayVersion ? ` The running Gateway is ${runningGatewayVersion}.` : ""}${updateCommand ? "" : ` Repair target resolution failed: ${targetError}.`}`,
       path: `plugins.entries.${entry.pluginId}`,
       target: entry.pluginId,
       requirement: "plugin-version-drift",
-      fixHint: updateCommand
-        ? `${formatCliCommand(updateCommand)} && ${formatCliCommand("openclaw gateway restart")}`
-        : `No install command generated; retry openclaw doctor after checking registry availability (${targetError}).`,
+      fixHint: pendingCohortUpgrade
+        ? undefined
+        : updateCommand
+          ? `${formatCliCommand(updateCommand)} && ${formatCliCommand("openclaw gateway restart")}`
+          : `No install command generated; retry openclaw doctor after checking registry availability (${targetError}).`,
     };
   });
 }
@@ -169,6 +184,7 @@ export function collectWorkspaceStatusHealthFindings(
   cfg: OpenClawConfig,
   options: {
     pluginVersionReadiness?: PluginVersionRestartReadiness;
+    env?: NodeJS.ProcessEnv;
     runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   } = {},
 ): HealthFinding[] {
@@ -231,7 +247,10 @@ export function collectWorkspaceStatusHealthFindings(
   }
 
   return [
-    ...pluginVersionReadinessToHealthFindings(options.pluginVersionReadiness),
+    ...pluginVersionReadinessToHealthFindings(
+      options.pluginVersionReadiness,
+      shouldDeferConfiguredPluginInstallRepair(options.env ?? process.env),
+    ),
     ...workspaceFindings,
   ];
 }

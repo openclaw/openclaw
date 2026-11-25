@@ -201,6 +201,52 @@ describe("runPostCorePluginConvergence", () => {
     },
   );
 
+  it.each(["2026.10.10", "2026.11.10"])(
+    "reports only version drift remaining after plugin convergence (%s)",
+    async (installedVersion) => {
+      const stateDir = makeTempDir();
+      const packageName = "@openclaw/whatsapp";
+      const pluginId = "whatsapp";
+      const targetVersion = "2026.11.10";
+      const records: Records = {
+        [pluginId]: {
+          source: "npm",
+          spec: `${packageName}@latest`,
+          resolvedName: packageName,
+          resolvedVersion: installedVersion,
+          installPath: writeManagedNpmPlugin({
+            stateDir,
+            packageName,
+            pluginId,
+            version: installedVersion,
+          }),
+        },
+      };
+      mockRepairs(records);
+      const result = await converge(configured(pluginId), {
+        env: {
+          ...bundledEnv(path.join(stateDir, "bundled")),
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+        },
+        compatibilityHostVersion: targetVersion,
+        baselineInstallRecords: records,
+      });
+      expect(
+        result.warnings.filter((warning) => warning.reason === "plugin-version-mismatch"),
+      ).toEqual(
+        installedVersion === targetVersion
+          ? []
+          : [
+              expect.objectContaining({
+                pluginId,
+                message: expect.stringContaining(`remains at ${installedVersion}`),
+              }),
+            ],
+      );
+    },
+  );
+
   it("repairs the selected generation before smoke checks without walking stale roots", async () => {
     const stateDir = makeTempDir();
     const packageName = "@fixture/selected";

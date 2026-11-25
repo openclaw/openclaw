@@ -369,6 +369,7 @@ export async function convergeUpdatePlugins(params: {
                 ...doctorWarnings,
               ],
               {
+                pluginUpdate: postCorePluginUpdate,
                 finallyReportedPluginIds: new Set(
                   (postCorePluginUpdate.warnings ?? []).flatMap((warning) =>
                     warning.reason === "doctor-advisory" && warning.pluginId
@@ -455,7 +456,10 @@ export async function convergeUpdatePlugins(params: {
           );
         };
         appendAdvisories(normalizeUpdatePostInstallDoctorWarnings(doctorWarnings), "doctor");
-        appendAdvisories(collectPostCorePluginAdvisories(postCorePluginUpdate), "plugins");
+        appendAdvisories(
+          collectPostCorePluginAdvisories(postCorePluginUpdate, doctorWarnings),
+          "plugins",
+        );
         if (params.result.gitRuntime) {
           const observed = await readGitRuntimeArtifactIdentity(postUpdateRoot);
           assertCurrent?.();

@@ -16,6 +16,7 @@ import {
 } from "../../infra/update-install-root.js";
 import { createManagedHandoffProcessIdentityReader } from "../../infra/update-managed-service-handoff-process.js";
 import type { HandoffProcessIdentity } from "../../infra/update-managed-service-handoff-schema.js";
+import { readRetiredPluginVersionDriftWarnings } from "../../infra/update-plugin-version-warnings.js";
 import {
   POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -307,18 +308,21 @@ async function resumePostCoreUpdateInternal(
   try {
     outcome = {
       pluginUpdate: await withCommandProcessScope(async () => {
-        const doctorWarnings: PluginUpdateWarning[] = [];
-        const recordDoctorWarnings = (additionalWarnings: string[] = []) => {
+        let doctorWarnings: PluginUpdateWarning[] = [];
+        const recordDoctorWarnings = (
+          additionalWarnings: string[] = [],
+          pluginUpdate?: PostCorePluginUpdateResult,
+        ) => {
           const warnings = [
             ...additionalWarnings,
             ...doctorWarnings.map((warning) => warning.message),
           ];
-          if (!postCoreUpdate || !runId || warnings.length === 0) {
+          if (!postCoreUpdate || !runId || (warnings.length === 0 && !pluginUpdate)) {
             return;
           }
           try {
             // Settled diagnostics survive later failure without claiming candidate completion.
-            recordPostCoreUpdateEvidence(runId, { warnings });
+            recordPostCoreUpdateEvidence(runId, { warnings, pluginUpdate });
           } catch (error) {
             defaultRuntime.error(
               `Post-core update evidence could not be saved: ${formatErrorMessage(error)} Update completion may require Doctor verification.`,
@@ -413,7 +417,20 @@ async function resumePostCoreUpdateInternal(
             pluginUpdate,
           });
           pluginUpdate = completed.pluginUpdate;
-          recordDoctorWarnings(collectPostCorePluginAdvisories(pluginUpdate));
+          const retiredWarnings = readRetiredPluginVersionDriftWarnings(
+            doctorWarnings.map((warning) => warning.message),
+            pluginUpdate,
+          );
+          doctorWarnings = doctorWarnings.filter(
+            (warning) => !retiredWarnings.has(warning.message),
+          );
+          recordDoctorWarnings(
+            collectPostCorePluginAdvisories(
+              pluginUpdate,
+              doctorWarnings.map(({ message }) => message),
+            ),
+            pluginUpdate,
+          );
         }
         // Only the target process may restamp an unchanged downgrade config.
         const finalSnapshot = await readConfigFileSnapshot({ observe: false });
@@ -486,6 +503,7 @@ async function resumePostCoreUpdateInternal(
             ? await readPackageUpdateIdentity(params.root)
             : undefined,
         warnings: collectPostCorePluginAdvisories(pluginUpdate),
+        pluginUpdate,
         doctorLint: pluginUpdate.doctorLint,
       });
       if (!parentOwnsCompletion && pluginUpdate.doctorLint) {

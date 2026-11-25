@@ -299,6 +299,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             .runWithPluginMetadataSnapshot;
           return collectWorkspaceStatusHealthFindings(ctx.cfg, {
             pluginVersionReadiness,
+            ...(ctx.env ? { env: ctx.env } : {}),
             ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
           });
         },
@@ -312,6 +313,7 @@ export function resolveFinalDoctorHealthContributions(params: {
           await import("../commands/doctor-workspace-status.js");
         const findings = collectWorkspaceStatusHealthFindings(ctx.cfg, {
           pluginVersionReadiness,
+          ...(ctx.env ? { env: ctx.env } : {}),
           ...(ctx.runWithPluginMetadataSnapshot
             ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
             : {}),
