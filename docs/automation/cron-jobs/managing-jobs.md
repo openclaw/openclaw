@@ -204,7 +204,7 @@ continuation also retains `next_check`; a session key alone cannot restore it.
 
 Run-history search matches summaries, task names, and execution or delivery errors. You can search the delivery error shown on a run even when its execution status is `ok`.
 
-Run history shows a loading indicator while the selected history is unavailable. A failed request shows an error and a **Retry** button; previously loaded runs for the same selection remain visible. Empty-history guidance appears only after a successful request confirms there are no runs for the current selection and filters.
+Run history shows a loading indicator while the selected history is unavailable. A failed request shows an error in the history section. When **Retry** is available, it reloads the failed page of history without starting the automation. Previously loaded runs for the same selection remain visible. Empty-history guidance appears only after a successful request confirms there are no runs for the current selection and filters.
 
 After a temporary Gateway reconnect, Automations reopens the current selected job and run using fresh job data. Closing the panel or choosing another automation replaces that selection; reconnect does not replay a superseded link. **Show all activity** clears the linked-run selection across reconnects. Changing the Gateway identity or agent scope clears the selection.
 
